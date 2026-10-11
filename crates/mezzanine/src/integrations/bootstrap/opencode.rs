@@ -3,8 +3,9 @@
 //! Release owners: packages/schema/src/v1/session.ts (AssistantMessage) and
 //! packages/opencode/src/session/session.ts (getUsage). Upstream input excludes
 //! cache reads/writes; output excludes reasoning. Restore inclusive ledger totals
-//! with checked arithmetic. Completed snapshots use one immutable message stream:
-//! identical replay adds nothing and changed completed counters fail closed.
+//! with checked arithmetic. Legacy snapshots use immutable per-message streams;
+//! typed migration candidates retain that exact proof beside source-wide IDs
+//! and bounded model/category grouping. Producer/worker wiring remains separate.
 //! Partial revisions are not charged; the future bound plugin must qualify any
 //! correction protocol rather than invent callback-local revision numbers.
 //! This pure owner never reads transcripts, installs plugins, infers pane
@@ -168,9 +169,213 @@ pub(crate) fn completed_report(
     }))
 }
 
+/// Immutable normalized layouts for one bound completed message. Neither report
+/// grants source ownership, original-request admission or historical import.
+#[derive(Debug, Clone)]
+pub(crate) struct CompletedObservation {
+    /// Exact historical bytes/identity semantics remain owned by completed_report.
+    legacy: crate::storage::token_usage::ExternalUsageReport,
+    /// Source-wide observation identity and bounded model/category stream.
+    observation: crate::storage::token_usage::ExternalUsageReport,
+}
+
+impl CompletedObservation {
+    /// Borrows the exact legacy proof for explicit ledger receipt adoption.
+    pub(crate) fn legacy(&self) -> &crate::storage::token_usage::ExternalUsageReport {
+        &self.legacy
+    }
+    /// Borrows immutable counters and opaque identity for qualified worker use.
+    pub(crate) fn observation(&self) -> &crate::storage::token_usage::ExternalUsageReport {
+        &self.observation
+    }
+}
+
+/// Normalizes once through the existing completed-message contract. New layout
+/// IDs are the original session/message digest, never callback sequence, model,
+/// counter or time. Exact milliseconds remain in the paired legacy proof; this
+/// does not enable runtime/RPC reporting or infer a cross-process source owner.
+pub(crate) fn completed_observation(
+    release: &str,
+    bound_session: &str,
+    owner: &str,
+    project: Option<crate::storage::token_usage::AccountingProjectId>,
+    bytes: &[u8],
+) -> Result<Option<CompletedObservation>> {
+    let Some(legacy) = completed_report(release, bound_session, owner, project, bytes)? else {
+        return Ok(None);
+    };
+    let mut observation = legacy.clone();
+    observation.event_id = legacy
+        .epoch
+        .strip_prefix("opencode-message:")
+        .ok_or_else(unavailable)?
+        .into();
+    observation.mode = "observation".into();
+    observation.epoch = crate::storage::token_usage::external_observation_epoch(&observation)?;
+    Ok(Some(CompletedObservation {
+        legacy,
+        observation,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Actual normalized legacy/observation pairs must preserve exact compiled
+    /// receipt identity, opaque source-wide IDs and bounded stream grouping.
+    /// Ledger adoption conserves expense while same-second time corrections
+    /// retain one event ID and fail closed against the original receipt.
+    #[test]
+    fn opencode_completed_observation_preserves_legacy_handoff_identity() {
+        use crate::storage::token_usage::{
+            ExternalSourceKey, NativeSourceKind, NativeSourceWitness, TokenUsageStore,
+        };
+        let root = std::env::temp_dir().join(format!(
+            "mez-opencode-pair-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        let store = TokenUsageStore::new(root.join("usage.sqlite"));
+        let key = ExternalSourceKey::from_native(
+            "opencode",
+            NativeSourceWitness {
+                boot: "01234567-89ab-cdef-0123-456789abcdef",
+                uid: 42,
+                root: (100, 2),
+                producer: (101, 100, 3),
+                kind: NativeSourceKind::Socket,
+                session: "bound",
+            },
+        )
+        .unwrap();
+        let owner = store.external_source_owner(&key).unwrap();
+        let bytes = br#"{"role":"assistant","sessionID":"bound","id":"message","providerID":"provider","modelID":"model","time":{"completed":100001},"tokens":{"input":10,"output":4,"reasoning":2,"cache":{"read":3,"write":5}},"text":"PRIVATE"}"#;
+        let pair = completed_observation(RELEASE, "bound", &owner, None, bytes)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pair.legacy().event_id, "completed:100001");
+        assert_eq!(
+            pair.legacy().epoch,
+            format!("opencode-message:{}", pair.observation().event_id)
+        );
+        assert_eq!(pair.observation().mode, "observation");
+        assert_eq!(pair.observation().counters.input_tokens, 18);
+        assert_eq!(pair.observation().counters.output_tokens, 6);
+        assert!(!format!("{pair:?}").contains("PRIVATE"));
+        store.ingest_external(pair.legacy(), 100).unwrap();
+        assert!(
+            !store
+                .ingest_external_opencode_handoff(pair.observation(), pair.legacy(), 100)
+                .unwrap()
+                .applied
+        );
+        let mut changed: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        changed["time"]["completed"] = 100002.into();
+        let correction = completed_observation(
+            RELEASE,
+            "bound",
+            &owner,
+            None,
+            &serde_json::to_vec(&changed).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            correction.observation().event_id,
+            pair.observation().event_id
+        );
+        assert!(
+            store
+                .ingest_external_opencode_handoff(
+                    correction.observation(),
+                    correction.legacy(),
+                    100
+                )
+                .is_err()
+        );
+        changed["id"] = "other-message".into();
+        let other = completed_observation(
+            "any-local-version",
+            "bound",
+            &owner,
+            None,
+            &serde_json::to_vec(&changed).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_ne!(other.observation().event_id, pair.observation().event_id);
+        assert_eq!(other.observation().epoch, pair.observation().epoch);
+        for field in ["counter", "model"] {
+            let mut corrected: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+            if field == "counter" {
+                corrected["tokens"]["input"] = 11.into();
+            } else {
+                corrected["modelID"] = "other-model".into();
+            }
+            let corrected = completed_observation(
+                RELEASE,
+                "bound",
+                &owner,
+                None,
+                &serde_json::to_vec(&corrected).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                corrected.observation().event_id,
+                pair.observation().event_id
+            );
+            assert!(
+                store
+                    .ingest_external_opencode_handoff(
+                        corrected.observation(),
+                        corrected.legacy(),
+                        100
+                    )
+                    .is_err()
+            );
+        }
+        let mut ids = std::collections::HashSet::new();
+        for index in 0..4097 {
+            changed["id"] = format!("message-{index}").into();
+            let candidate = completed_observation(
+                RELEASE,
+                "bound",
+                &owner,
+                None,
+                &serde_json::to_vec(&changed).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(candidate.observation().epoch, pair.observation().epoch);
+            assert!(ids.insert(candidate.observation().event_id.clone()));
+        }
+        assert!(
+            completed_observation(RELEASE, "foreign", &owner, None, bytes)
+                .unwrap()
+                .is_none()
+        );
+        let connection = rusqlite::Connection::open(store.path()).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT sum(input_tokens) FROM token_usage_events",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            18
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM token_usage_events", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// Completed snapshots are immutable accounting observations, not deltas
     /// on every callback. Real storage must conserve expense after reopen,

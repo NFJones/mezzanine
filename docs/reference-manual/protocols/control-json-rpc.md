@@ -699,6 +699,10 @@ generic conversion, changed payloads and missing/foreign evidence reject. The
 alias commits atomically under the existing ledger writer transaction. This is
 not a new RPC, cross-owner recovery, historical-import permission or completed
 runtime/producer bounded-stream migration.
+The pure OpenCode normalizer exposes an immutable observation/legacy candidate
+pair: original message digest, inclusive counters, grouped model/category epoch
+and exact legacy completion time. This is internal migration data, not source
+authority or standalone reporting; native worker/producer wiring is separate.
 Usage admission explicitly rejects internal `observation` mode before reserving
 legacy accounting work; field-name schema validation is not a mode enum or an
 authorization substitute. Ordinary bindings remain rejected on that legacy path.

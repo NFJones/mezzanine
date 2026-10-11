@@ -1149,6 +1149,12 @@ retain the legacy stream/receipt and expense unchanged, and preserve exact
 completion-millisecond and model/counter/project conflicts. Missing/foreign
 evidence MUST reject; this primitive MUST NOT recover another owner, authorize
 historical import, enable an RPC or claim runtime bounded-stream migration.
+The pure OpenCode normalizer MAY return an immutable observation/legacy pair
+derived once from the same bound completed snapshot. Its opaque event digest
+MUST equal the legacy message-epoch digest; model/category stream grouping MUST
+exclude message IDs and payload changes MUST retain that event identity. Exact
+milliseconds MUST remain in the paired legacy proof. A normalized pair alone
+MUST NOT grant admission, enable standalone reporting or claim native migration.
 Telemetry schema 7 adds source-scoped opaque request markers with immutable
 original project/admission time and one optional observation completion link.
 `agent/external/usage-begin` MUST require an existing kernel-qualified persistent
