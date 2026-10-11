@@ -4,6 +4,102 @@
 //! configuration. Exact routing and peer authorization stay inside the helper;
 //! this fixture never installs a vendor or supplies daemon credentials.
 
+/// Bare production Copilot bootstrap resolves COPILOT_HOME, creates only its
+/// owned documented hook file, and leaves authored hook/settings/exporter data
+/// untouched. Direct exec argv containing shell metacharacters is inert; every
+/// helper outcome stays neutral without HOME/PATH/routing or session guessing.
+/// Installation remains explicitly distinct from runtime/usage availability.
+#[test]
+fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::env::temp_dir().join(format!(
+        "mez-copilot-install-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let helper = root.join("owned 'quote' $LITERAL; mez");
+    std::fs::copy(env!("CARGO_BIN_EXE_mez"), &helper).unwrap();
+    let home = root.join("home");
+    std::fs::create_dir(&home).unwrap();
+    let vendor = root.join("custom-copilot");
+    let bootstrap = |flags: &[&str]| {
+        let output = std::process::Command::new(&helper)
+            .args(["--json", "bootstrap", "copilot"])
+            .args(flags)
+            .env_clear()
+            .env("HOME", &home)
+            .env("COPILOT_HOME", &vendor)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    assert_eq!(bootstrap(&["--dry-run"])["result"], "preview");
+    assert!(!vendor.exists());
+    assert!(!home.join(".config").exists());
+    std::fs::create_dir_all(vendor.join("hooks")).unwrap();
+    std::fs::write(
+        vendor.join("settings.json"),
+        b"{\"disableAllHooks\":true,\"authoredExporter\":true}",
+    )
+    .unwrap();
+    std::fs::write(vendor.join("hooks/authored.json"), b"AUTHORED HOOK").unwrap();
+    let installed = bootstrap(&[]);
+    assert_eq!(installed["root_source"], "COPILOT_HOME");
+    assert_eq!(installed["result"], "installed");
+    assert_eq!(installed["lifecycle"], "unavailable-source-association");
+    assert_eq!(installed["usage"], "unavailable-source-association");
+    assert_eq!(bootstrap(&[])["result"], "unchanged");
+    let hooks: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(vendor.join("hooks/mezzanine.json")).unwrap())
+            .unwrap();
+    for event in ["sessionStart", "agentStop", "sessionEnd"] {
+        let hook = &hooks["hooks"][event][0];
+        assert_eq!(hook["exec"], helper.to_str().unwrap());
+        let arguments = hook["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>();
+        let mut child = std::process::Command::new(hook["exec"].as_str().unwrap())
+            .args(arguments)
+            .env_clear()
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"PRIVATE INPUT, NOT A SESSION ID OR VALID JSON")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"{}\n");
+        assert!(output.stderr.is_empty());
+    }
+    assert_eq!(bootstrap(&["--check"])["result"], "checked");
+    assert_eq!(bootstrap(&["--uninstall"])["result"], "uninstalled");
+    assert!(!vendor.join("hooks/mezzanine.json").exists());
+    assert_eq!(
+        std::fs::read(vendor.join("hooks/authored.json")).unwrap(),
+        b"AUTHORED HOOK"
+    );
+    assert_eq!(
+        std::fs::read(vendor.join("settings.json")).unwrap(),
+        b"{\"disableAllHooks\":true,\"authoredExporter\":true}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Bare production bootstrap pins its actual executable even when the path
 /// needs shell quoting. Authored hooks/disabled configuration survive, dry-run
 /// writes no vendor root, repeats are unchanged, and the installed callback is

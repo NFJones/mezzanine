@@ -718,6 +718,20 @@ state without mutation and conflict with dry-run/maintenance. Uninstall/recovery
 MUST be exclusive. Obsolete `--apply`/`--plan` MUST reject, not alias new intents.
 Missing compiled adapters MUST fail mutating intents before root discovery;
 read-only check/dry-run MUST remain unavailable diagnostics, not fake installation.
+Copilot revision1 MAY install only the compiled `hooks/mezzanine.json` user file
+under the documented COPILOT_HOME/default root, version1 direct-exec/args hook
+syntax for sessionStart/agentStop/sessionEnd and a fixed installing binary.
+It MUST NOT rewrite authored siblings/settings/exporters, disable or sandbox
+policy, credentials, instructions or policy-level hook directories. Only exact
+compiled receipt-proven generated-file edits MAY be archived before repair;
+unreceipted foreign collisions MUST reject without adoption. Exact fixed
+`copilot-hook <known-event>` argv MUST run before HOME/config/CPU startup, drain
+only bounded64KiB/250ms stdin and emit neutral JSON with no control/approval/
+continuation/session guessing. This deployment-only helper MUST make no telemetry
+exchange or claim SDK invocation session fields as classic CLI input. Bootstrap
+MUST report Copilot lifecycle/usage unavailable-source-association until actual
+qualified producer/association and metadata-only accounting contracts are wired.
+Other compiled adapters remain runtime-unverified by installation reports.
 Recovery preview MUST share version/root/compiled-intent/preimage authorization
 with recovery, without writer lock or publication. JSON MUST distinguish operation,
 dry_run, changed_paths, recovered and accepted recovery_pending. Check success

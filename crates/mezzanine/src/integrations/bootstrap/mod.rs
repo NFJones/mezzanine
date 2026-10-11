@@ -21,6 +21,8 @@ pub(crate) mod codex;
     reason = "owned hook checkpoint exposes no standalone mutation interface"
 )]
 pub(crate) mod codex_artifact;
+/// Owns documented Copilot user hook bytes, separate from runtime association.
+mod copilot_artifact;
 /// Literal no-Node original-epoch observer source; installation is adapter-owned.
 #[allow(dead_code, reason = "curated adapter installation is a separate owner")]
 pub(crate) mod curated_client;
@@ -134,6 +136,7 @@ pub(crate) fn compiled_manifest(
         "pi" => Some(pi_artifact::candidate_manifest()),
         "opencode" => Some(opencode_artifact::manifest()),
         "codex" => codex_artifact::manifest(),
+        "copilot" => copilot_artifact::manifest(),
         _ => None,
     }
 }

@@ -191,6 +191,8 @@ fn run_with_root_selector<W: Write>(
                 "adoption_planned":adoption_planned,"legacy_adopted":adoption_planned && !args.dry_run && !args.check,
                 "runtime_verification":"not-performed",
                 "support":"best-effort",
+                "lifecycle":if args.harness == "copilot" { "unavailable-source-association" } else { "unverified" },
+                "usage":if args.harness == "copilot" { "unavailable-source-association" } else { "unverified" },
                 "guidance":"Installation is observational only. Use ordinary vendor commands and preserve vendor review/disabled policy. Automatic enrollment and accounting capabilities may still be unavailable; no Mez vendor-launch wrappers exist",
             }),
         );
@@ -264,10 +266,21 @@ fn write_report<W: Write>(
                 "none"
             },
         )?;
-        writeln!(
-            stdout,
-            "Runtime enrollment/accounting not verified; vendor review and disabled policy remain unchanged."
-        )?;
+        if report["lifecycle"] == "unavailable-source-association"
+            || report["usage"] == "unavailable-source-association"
+        {
+            writeln!(
+                stdout,
+                "Runtime lifecycle: {}; accounting: {}. Vendor review and disabled policy remain unchanged.",
+                report["lifecycle"].as_str().unwrap_or("unverified"),
+                report["usage"].as_str().unwrap_or("unverified")
+            )?;
+        } else {
+            writeln!(
+                stdout,
+                "Runtime enrollment/accounting not verified; vendor review and disabled policy remain unchanged."
+            )?;
+        }
     } else {
         writeln!(stdout, "No compiled adapter; no files changed.")?;
     }
@@ -277,6 +290,28 @@ fn write_report<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Default operator output must distinguish a known absent association from
+    /// runtime-unverified installation. JSON-only honesty cannot substitute for
+    /// the default bare bootstrap report; unrelated adapter wording stays intact.
+    #[test]
+    fn bootstrap_plain_copilot_reports_known_unavailable_runtime() {
+        let mut report = serde_json::json!({"harness":"copilot","result":"installed","planned_outcome":"installed",
+            "lifecycle":"unavailable-source-association","usage":"unavailable-source-association"});
+        let mut output = Vec::new();
+        write_report(&mut output, CliOutputFormat::Plain, &report).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("Runtime lifecycle: unavailable-source-association; accounting: unavailable-source-association"));
+        assert!(!text.contains("Runtime enrollment/accounting not verified"));
+        report["lifecycle"] = "unverified".into();
+        report["usage"] = "unverified".into();
+        let mut output = Vec::new();
+        write_report(&mut output, CliOutputFormat::Plain, &report).unwrap();
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("Runtime enrollment/accounting not verified")
+        );
+    }
     use clap::Parser;
 
     /// Owns a unique physical private HOME, separate from vendor fixture roots.
@@ -777,12 +812,12 @@ mod tests {
             assert_eq!(tree_snapshot(&home.0), before);
         }
         let mut absent = args;
-        absent.harness = "copilot".into();
+        absent.harness = "cursor".into();
         let mut output = Vec::new();
         run_at_home(absent, CliOutputFormat::Plain, &mut output, &home.0).unwrap();
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "bootstrap copilot: unavailable\nNo compiled adapter; no files changed.\n"
+            "bootstrap cursor: unavailable\nNo compiled adapter; no files changed.\n"
         );
     }
 
@@ -1777,7 +1812,7 @@ mod tests {
         }
         let parsed = Fixture::try_parse_from([
             "fixture",
-            "copilot",
+            "cursor",
             "--root",
             "/missing/bootstrap/root",
             "--dry-run",
@@ -1788,7 +1823,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(value["supported"], false);
         let parsed =
-            Fixture::try_parse_from(["fixture", "copilot", "--root", "/missing/bootstrap/root"])
+            Fixture::try_parse_from(["fixture", "cursor", "--root", "/missing/bootstrap/root"])
                 .unwrap();
         assert!(run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).is_err());
         assert!(Fixture::try_parse_from(["fixture", "codex", "--check", "--dry-run"]).is_err());

@@ -88,6 +88,9 @@ mod bootstrap;
 /// Owns neutral Codex SessionStart projection and restricted native creator ingress.
 mod codex_hook;
 pub(crate) use codex_hook::run_internal_process as run_internal_codex_hook_process;
+/// Owns neutral documented Copilot callback plumbing, not runtime activation.
+mod copilot_hook;
+pub(crate) use copilot_hook::run_internal_process as run_internal_copilot_hook_process;
 /// Exposes the config module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

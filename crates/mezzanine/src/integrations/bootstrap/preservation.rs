@@ -1,6 +1,6 @@
 //! Narrow generated-file preservation, independent of vendor shared documents.
 //!
-//! Only compiled receipt-owned Claude/Pi/OpenCode destinations and the private Pi
+//! Only compiled receipt-owned Claude/Copilot/Pi/OpenCode destinations and the private Pi
 //! loader package may preserve edited whole-file preimages. Current private
 //! transactions also deduplicate exact receipt-owned shared array registrations.
 //! Shared package metadata, hooks/config and unowned slots otherwise retain strict
@@ -85,6 +85,7 @@ pub(super) fn reconcile_preserving(
         ));
     }
     let generated = match harness {
+        "copilot" => path == "hooks/mezzanine.json",
         "claude" => {
             journal_version.is_some_and(|version| version >= 8)
                 && (path == "skills/mezzanine-telemetry/.claude-plugin/plugin.json"

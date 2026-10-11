@@ -56,9 +56,12 @@ pub(super) enum CliCommand {
     /// Checks only native peer ownership on a private client-supplied descriptor.
     #[command(hide = true)]
     HarnessPeer,
-    /// Forwards one content-free Codex callback to an inherited observation socket.
+    /// Forwards a normalized Codex callback through restricted native Unix ingress.
     #[command(hide = true)]
     CodexHook,
+    /// Drains one supported Copilot hook neutrally; no telemetry association is inferred.
+    #[command(hide = true)]
+    CopilotHook(super::copilot_hook::CopilotHookArgs),
     /// Manages Mezzanine configuration.
     Config(super::config::ConfigCliArgs),
     /// Creates a fresh local or explicitly selected remote session and attaches.

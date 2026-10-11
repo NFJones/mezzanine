@@ -61,7 +61,7 @@ daemon; add
 
 `mez bootstrap <harness> [--vendor-version VERSION] [--root ABSOLUTE_ROOT]`
 accepts `claude`, `codex`, `copilot`, `opencode`, `cursor`, and `pi` as adapter
-candidates. Claude, Pi, OpenCode and the Codex hook candidate have compiled artifacts; other candidates currently
+candidates. Claude, Copilot, Pi, OpenCode and the Codex hook candidate have compiled artifacts; Cursor currently
 report unavailable installation. Bare bootstrap installs/reconciles; `--dry-run`
 previews without writes, and `--check` observes owned state. `--uninstall` and
 `--recover` are separate maintenance intents, both supporting `--dry-run`.
@@ -70,6 +70,18 @@ The old `--apply` and `--plan` flags are rejected, not aliases: scripts should
 remove `--apply` for installation and replace `--plan` with `--dry-run` for preview.
 The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
+Copilot revision1 installs only `hooks/mezzanine.json` under `COPILOT_HOME` or
+`~/.copilot`, using the documented version1 CLI hook format and direct `exec`/`args`
+for sessionStart/agentStop/sessionEnd. It pins the installing Mez executable and
+does not alter authored sibling hooks, settings.json, disableAllHooks, sandbox
+grants, policy hooks, credentials or exporters. Receipt-proven edits to that owned
+generated document are archived before repair; foreign collisions reject.
+The fixed `copilot-hook <event>` mode consumes at most64KiB/250ms of stdin before
+HOME/config/CPU discovery and returns only neutral JSON. It currently performs no
+telemetry exchange: SDK session identity is separate invocation context, not an
+evidenced classic CLI stdin association. Bootstrap reports lifecycle and usage as
+`unavailable-source-association`; installed plumbing is not active integration or
+OTel accounting. Vendor loading, trust, disable and sandbox policy still apply.
 The fixed internal `mez codex-hook` callback mode runs before HOME/config/CPU
 startup. Normalized main SessionStart startup/resume/clear/fork can make one
 restricted Unix declaration with standard MEZ routing and native creator proof,
