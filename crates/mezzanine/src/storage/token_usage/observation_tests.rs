@@ -75,6 +75,203 @@ fn external_observation_concurrent_first_publication_commits_once() {
     std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
 }
 
+/// A compiled OpenCode layout handoff must adopt its exact same-owner legacy
+/// receipt without expense. Merely changing mode/epoch currently recharges the
+/// message; the explicit path must also retain millisecond conflicts and reject
+/// missing/foreign evidence while preserving receipts, history and totals.
+#[test]
+fn external_opencode_legacy_handoff_preserves_expense_and_conflicts() {
+    let (store, report) = fixture_for("opencode");
+    let mut legacy = report.clone();
+    legacy.mode = "delta".into();
+    legacy.epoch = format!("opencode-message:{}", report.event_id);
+    legacy.event_id = "completed:100001".into();
+    let original = store.ingest_external(&legacy, 100).unwrap();
+    assert!(
+        store.ingest_external(&report, 100).is_err(),
+        "generic conversion must not bypass legacy evidence"
+    );
+    let adopted = store
+        .ingest_external_opencode_handoff(&report, &legacy, 100)
+        .unwrap();
+    assert!(
+        !adopted.applied,
+        "layout handoff must not recharge committed legacy expense"
+    );
+    assert_eq!(
+        adopted,
+        ExternalUsageCommit {
+            applied: false,
+            ..original
+        }
+    );
+    let reopened = TokenUsageStore::new(store.path());
+    assert_eq!(
+        reopened
+            .ingest_external_opencode_handoff(&report, &legacy, 100)
+            .unwrap(),
+        adopted
+    );
+    assert!(!reopened.ingest_external(&legacy, 100).unwrap().applied);
+    assert!(reopened.ingest_external(&report, 100).is_err());
+    let mut changed = legacy.clone();
+    changed.event_id = "completed:100002".into();
+    assert!(
+        reopened
+            .ingest_external_opencode_handoff(&report, &changed, 100)
+            .is_err(),
+        "same-second completion changes must conflict"
+    );
+    for field in 0..3 {
+        let mut next = report.clone();
+        match field {
+            0 => next.counters.input_tokens += 1,
+            1 => next.model.model = "other".into(),
+            _ => {
+                next.project =
+                    Some(AccountingProjectId::from_stored(new_token_usage_event_id()).unwrap())
+            }
+        }
+        let mut old = legacy.clone();
+        old.counters = next.counters;
+        old.model = next.model.clone();
+        old.project = next.project.clone();
+        assert!(
+            reopened
+                .ingest_external_opencode_handoff(&next, &old, 100)
+                .is_err()
+        );
+    }
+    let mut absent = report.clone();
+    absent.event_id = message_id(2);
+    let mut old_absent = legacy.clone();
+    old_absent.epoch = format!("opencode-message:{}", absent.event_id);
+    assert!(
+        reopened
+            .ingest_external_opencode_handoff(&absent, &old_absent, 100)
+            .is_err()
+    );
+    let mut foreign = legacy.clone();
+    foreign.owner = new_token_usage_event_id();
+    assert!(
+        reopened
+            .ingest_external_opencode_handoff(&report, &foreign, 100)
+            .is_err()
+    );
+    let connection = reopened.open().unwrap();
+    for table in [
+        "external_usage_streams",
+        "external_usage_receipts",
+        "external_usage_observations",
+        "token_usage_events",
+    ] {
+        assert_eq!(
+            connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    drop(connection);
+    std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+}
+
+/// Alias publication is atomic: an injected SQLite failure leaves no partial
+/// adoption, and concurrent exact handoffs return one unchanged legacy checkpoint
+/// without creating expense or replacing the preserved legacy replay receipt.
+#[test]
+fn external_opencode_legacy_handoff_rolls_back_and_serializes() {
+    let (store, report) = fixture_for("opencode");
+    let mut legacy = report.clone();
+    legacy.mode = "delta".into();
+    legacy.epoch = format!("opencode-message:{}", report.event_id);
+    legacy.event_id = "completed:100001".into();
+    store.ingest_external(&legacy, 100).unwrap();
+    let connection = store.open().unwrap();
+    connection.execute_batch("CREATE TRIGGER fail_handoff BEFORE INSERT ON external_usage_observations BEGIN SELECT RAISE(ABORT,'fixture handoff failure'); END;").unwrap();
+    assert!(
+        store
+            .ingest_external_opencode_handoff(&report, &legacy, 100)
+            .is_err()
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM external_usage_observations",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM token_usage_events", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    connection
+        .execute_batch("DROP TRIGGER fail_handoff;")
+        .unwrap();
+    drop(connection);
+    let barrier = std::sync::Barrier::new(4);
+    let commits = std::thread::scope(|scope| {
+        let jobs = (0..4)
+            .map(|_| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    store
+                        .ingest_external_opencode_handoff(&report, &legacy, 100)
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        jobs.into_iter()
+            .map(|job| job.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert!(
+        commits
+            .iter()
+            .all(|commit| !commit.applied && commit == &commits[0])
+    );
+    let connection = store.open().unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM external_usage_observations",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    drop(connection);
+    std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+}
+
 /// Schema5 upgrade retains the source owner and legacy stream/receipt payloads;
 /// a colliding schema object rolls back migration without changing their expense.
 #[test]
@@ -180,13 +377,18 @@ fn message_id(index: u64) -> String {
 
 /// Builds an isolated mapped source and one content-free normalized observation.
 fn fixture() -> (TokenUsageStore, ExternalUsageReport) {
+    fixture_for("pi")
+}
+
+/// Selects only a code-owned harness in an isolated synthetic mapped-source test.
+fn fixture_for(harness: &str) -> (TokenUsageStore, ExternalUsageReport) {
     let store = TokenUsageStore::new(
         std::env::temp_dir()
             .join(format!("mez-observations-{}", new_token_usage_event_id()))
             .join("usage.sqlite"),
     );
     let key = ExternalSourceKey::from_native(
-        "pi",
+        harness,
         NativeSourceWitness {
             boot: "01234567-89ab-cdef-0123-456789abcdef",
             uid: 42,
@@ -203,7 +405,7 @@ fn fixture() -> (TokenUsageStore, ExternalUsageReport) {
         ExternalUsageReport {
             owner,
             project: None,
-            harness: "pi".into(),
+            harness: harness.into(),
             epoch: "caller-epoch".into(),
             event_id: message_id(1),
             sequence: 1,

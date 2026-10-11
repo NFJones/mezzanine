@@ -1141,6 +1141,14 @@ replay remains inert at capacity. Legacy delta/cumulative fingerprints and
 uncharged baselines MUST remain unchanged. This storage checkpoint does not
 enable ordinary reporting: attachment baselines, legacy OpenCode layout handoff,
 request-origin capture and producer/RPC integration still require qualification.
+The explicit ledger-only OpenCode legacy handoff MUST require a mapped same-owner
+source and its exact compiled per-message delta checkpoint/receipt. Generic
+observation conversion encountering that checkpoint MUST reject instead of
+recharging it. Adoption MUST atomically record source-wide replay identity,
+retain the legacy stream/receipt and expense unchanged, and preserve exact
+completion-millisecond and model/counter/project conflicts. Missing/foreign
+evidence MUST reject; this primitive MUST NOT recover another owner, authorize
+historical import, enable an RPC or claim runtime bounded-stream migration.
 Telemetry schema 7 adds source-scoped opaque request markers with immutable
 original project/admission time and one optional observation completion link.
 `agent/external/usage-begin` MUST require an existing kernel-qualified persistent

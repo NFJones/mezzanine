@@ -264,7 +264,50 @@ impl TokenUsageStore {
         report: &ExternalUsageReport,
         now: u64,
     ) -> Result<ExternalUsageCommit> {
-        self.ingest_external_with_request(report, now, None)
+        self.ingest_external_with_request(report, now, None, None)
+    }
+
+    /// Adopts only exact same-owner OpenCode legacy evidence into immutable
+    /// observation replay. Native source authorization stays with the caller;
+    /// this worker-only path never recovers another owner or imports history.
+    /// Existing legacy checkpoints remain intact and adoption emits no expense.
+    #[allow(
+        dead_code,
+        reason = "ordinary adapter migration consumes explicit ledger handoff"
+    )]
+    pub(crate) fn ingest_external_opencode_handoff(
+        &self,
+        report: &ExternalUsageReport,
+        legacy: &ExternalUsageReport,
+        now: u64,
+    ) -> Result<ExternalUsageCommit> {
+        let millis = legacy
+            .event_id
+            .strip_prefix("completed:")
+            .and_then(|value| value.parse::<u64>().ok());
+        if report.harness != "opencode"
+            || report.mode != "observation"
+            || legacy.harness != report.harness
+            || legacy.owner != report.owner
+            || legacy.mode != "delta"
+            || legacy.sequence != 1
+            || legacy.baseline
+            || legacy.epoch != format!("opencode-message:{}", report.event_id)
+            || legacy.model != report.model
+            || legacy.project != report.project
+            || legacy.counters != report.counters
+            || legacy.observed_at != report.observed_at
+            || !millis.is_some_and(|value| {
+                value > 0
+                    && value / 1000 == report.observed_at
+                    && legacy.event_id == format!("completed:{value}")
+            })
+        {
+            return Err(MezError::conflict(
+                "OpenCode legacy handoff evidence changed",
+            ));
+        }
+        self.ingest_external_with_request(report, now, None, Some(legacy))
     }
 
     /// Commits one sealed original-request observation and its completion link
@@ -275,7 +318,7 @@ impl TokenUsageStore {
         request: &super::external_requests::ExternalRequestReport,
         now: u64,
     ) -> Result<ExternalUsageCommit> {
-        self.ingest_external_with_request(request.report(), now, Some(request))
+        self.ingest_external_with_request(request.report(), now, Some(request), None)
     }
 
     /// Shared legacy/native transaction owner; request binding grants no runtime
@@ -285,6 +328,7 @@ impl TokenUsageStore {
         report: &ExternalUsageReport,
         now: u64,
         request: Option<&super::external_requests::ExternalRequestReport>,
+        legacy: Option<&ExternalUsageReport>,
     ) -> Result<ExternalUsageCommit> {
         let observation = report.mode == "observation";
         crate::integrations::harness_policy::require_active_external_harness(&report.harness)?;
@@ -355,6 +399,14 @@ impl TokenUsageStore {
                 .remove("sequence");
         }
         let payload = payload.to_string();
+        // Handoff replay retains exact legacy milliseconds even though rolling
+        // observation time is seconds. Generic replay cannot bypass this domain.
+        let payload = if let Some(legacy) = legacy {
+            serde_json::to_string(&("mez-opencode-legacy-handoff/1", &payload, &legacy.event_id))
+                .map_err(|_| MezError::invalid_state("external handoff encoding failed"))?
+        } else {
+            payload
+        };
         let fingerprint = Sha256::digest(payload.as_bytes())
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -402,6 +454,54 @@ impl TokenUsageStore {
                     "external observation requires a mapped native source",
                 ));
             }
+            let legacy_stream = external_usage_stream_id(
+                &report.owner,
+                &format!("opencode-message:{}", report.event_id),
+            )?;
+            let legacy_checkpoint = if report.harness == "opencode" {
+                let state: Option<(u64, String, String)> = tx
+                    .query_row(
+                        "SELECT revision,totals,mode FROM external_usage_streams WHERE id=?1",
+                        [&legacy_stream],
+                        |row| Ok((super::store::row_u64(row, 0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()?;
+                if let Some((revision, totals, mode)) = state {
+                    let legacy = legacy.ok_or_else(|| {
+                        MezError::conflict("explicit OpenCode legacy handoff required")
+                    })?;
+                    let mut old_payload = serde_json::json!({"harness":legacy.harness,"provider":legacy.model.provider,
+                        "model":legacy.model.model,"sequence":legacy.sequence,"mode":legacy.mode,
+                        "baseline":legacy.baseline,"observed_at":legacy.observed_at,"counters":legacy.counters});
+                    if let Some(project) = &legacy.project {
+                        old_payload["project"] = serde_json::json!(project.as_str());
+                    }
+                    let expected = Sha256::digest(old_payload.to_string().as_bytes())
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>();
+                    let receipt: Option<String> = tx.query_row("SELECT fingerprint FROM external_usage_receipts WHERE stream_id=?1 AND event_id=?2",
+                        params![legacy_stream, legacy.event_id], |row| row.get(0)).optional()?;
+                    let totals = decode(&totals)?;
+                    if receipt.as_deref() != Some(expected.as_str())
+                        || mode != "delta"
+                        || revision != 1
+                        || totals != legacy.counters
+                    {
+                        return Err(MezError::conflict(
+                            "OpenCode legacy receipt payload changed or unavailable",
+                        ));
+                    }
+                    Some((revision, totals))
+                } else {
+                    if legacy.is_some() {
+                        return Err(MezError::conflict("OpenCode legacy checkpoint unavailable"));
+                    }
+                    None
+                }
+            } else {
+                None
+            };
             let previous: Option<(String,String,Option<String>)> = tx.query_row("SELECT fingerprint,stream_id,request_id FROM external_usage_observations WHERE owner=?1 AND event_id=?2",params![report.owner,report.event_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
             if let Some((old_fingerprint, old_stream, old_request)) = previous {
                 if old_request.as_deref()
@@ -444,6 +544,17 @@ impl TokenUsageStore {
                 |row| row.get(0),
             )?;
             require_observation_capacity(owner_count, total_count)?;
+            if let Some((revision, totals)) = legacy_checkpoint {
+                tx.execute("INSERT INTO external_usage_observations(owner,event_id,fingerprint,stream_id,request_id) VALUES(?1,?2,?3,?4,NULL)",
+                    params![report.owner, report.event_id, fingerprint, legacy_stream])?;
+                tx.commit()?;
+                return Ok(ExternalUsageCommit {
+                    stream_id: legacy_stream,
+                    revision,
+                    totals,
+                    applied: false,
+                });
+            }
         }
         // Each admitted report also maintains long-lived-session retention.
         // High-water checkpoints are never pruned with their raw receipts.
