@@ -68,6 +68,7 @@ pub(crate) fn module_source(helper: &std::path::Path, interval_ms: u64) -> Resul
         interval_ms,
         include_str!("curated_module.mjs"),
         true,
+        true,
     )
 }
 
@@ -129,6 +130,46 @@ pub(super) fn historical_claude_module_v1(helper: &std::path::Path) -> Result<St
         10_000,
         include_str!("history/curated_module_claude_v1.mjs"),
         false,
+        false,
+    )
+}
+
+/// Rebuilds the exact revision-2 module from its independent frozen template.
+/// Shared sources must still match the reviewed shipped inputs; no receipt path
+/// or current paired-clear template can redefine historical ownership.
+pub(super) fn historical_claude_module_v2(helper: &std::path::Path) -> Result<String> {
+    use sha2::Digest;
+    historical_claude_module_v1(helper)?;
+    for (bytes, expected) in [
+        (
+            include_bytes!("history/curated_module_claude_v2.mjs").as_slice(),
+            "e80bd972c6d20c1e6348c8aea353298ebf1bbf8963ce73feea362a4cb4c1797c",
+        ),
+        (
+            include_bytes!("claude_observer.mjs").as_slice(),
+            "22df7f5ce5b50a8ebb6866023f2e3f815a41dad2267ab5802c01465a65e6d454",
+        ),
+        (
+            include_bytes!("claude_lifecycle_runner.mjs").as_slice(),
+            "ee644ef636ca93104cc3128ea0095d4d27419c1f2abd6714295967fd59800b67",
+        ),
+    ] {
+        let actual = sha2::Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if actual != expected {
+            return Err(MezError::invalid_state(
+                "Claude historical revision-2 source changed",
+            ));
+        }
+    }
+    compose_module(
+        helper,
+        10_000,
+        include_str!("history/curated_module_claude_v2.mjs"),
+        true,
+        false,
     )
 }
 
@@ -139,8 +180,16 @@ fn compose_module(
     interval_ms: u64,
     template: &str,
     lifecycle: bool,
+    paired_clear: bool,
 ) -> Result<String> {
-    let body = session_start_owned_body(helper, interval_ms)?;
+    let body = render_body_mode(
+        helper,
+        interval_ms,
+        "mez-curated-client-1",
+        false,
+        true,
+        paired_clear,
+    )?;
     let request = request_accounting_body(helper)?;
     let (step_before, step_after) = include_str!("claude_request_step.mjs")
         .split_once("__MEZ_REQUEST_BODY__")
@@ -205,6 +254,20 @@ fn render_body(
     replacing: bool,
     owned: bool,
 ) -> Result<String> {
+    render_body_mode(helper, interval_ms, instance, replacing, owned, false)
+}
+
+/// Expands only fixed literals or code-owned module-local clear selectors.
+/// The paired mode receives no vendor object or arbitrary expression; historical
+/// and explicit standalone bodies retain their original literal substitutions.
+fn render_body_mode(
+    helper: &std::path::Path,
+    interval_ms: u64,
+    instance: &str,
+    replacing: bool,
+    owned: bool,
+    paired_clear: bool,
+) -> Result<String> {
     let path = helper
         .to_str()
         .filter(|path| helper.is_absolute() && path.len() <= 4096 && !path.contains('\0'))
@@ -241,14 +304,27 @@ fn render_body(
         ),
         ("__MEZ_INTERVAL__", period.as_str()),
         ("__MEZ_HELPER__", quoted.as_str()),
-        ("__MEZ_INSTANCE__", instance.as_str()),
+        (
+            "__MEZ_INSTANCE__",
+            if paired_clear {
+                "startInstance"
+            } else {
+                instance.as_str()
+            },
+        ),
         (
             "__MEZ_REPLACING__",
-            if replacing { "true" } else { "false" },
+            if paired_clear {
+                "previousObserver !== undefined"
+            } else if replacing {
+                "true"
+            } else {
+                "false"
+            },
         ),
         (
             "__MEZ_PREDECESSOR__",
-            if replacing {
+            if replacing || paired_clear {
                 "previousObserver"
             } else {
                 "undefined"

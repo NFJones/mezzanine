@@ -1366,6 +1366,17 @@ MUST NOT override user-pinned titles. Neutral `{}` helper success is only an
 unverified submission, never delivery, lease or accounting acknowledgment.
 Revision1 changed module/observer inputs MUST remain independently frozen and
 all other historical inputs hash-guarded, never redefined from active source.
+Claude revision3 MAY pair a completed main SessionEnd(clear) with the next
+observed main SessionStart(clear) of the same opaque ID in the same loaded module.
+It MUST consume one locally captured original public predecessor, use a fresh
+bounded instance/lifetime and require exact native daemon predecessor rotation.
+Old timers/senders MUST remain stopped. Intervening starts, failed downstream,
+missing/lost/invalid replies and delayed end completion MUST NOT restore the pair
+or fall back to initial/newest admission. Retired namespaces remain unavailable.
+Restart/reload, unpaired resume/fork and cross-process identity MUST NOT be inferred.
+This is lifecycle handoff, not historical expense attachment or no-gap billing.
+Revision2 module bytes MUST remain independently frozen with guarded shared inputs
+for same-helper upgrades; receipt/journal paths cannot authenticate relocation.
 The compiled Claude module MAY observe the documented main `turn.step` generator
 using pinned session/turnId/index identity and separate opaque SHA256 request and
 outcome domains. It MUST reserve at most16 active producers before asynchronous

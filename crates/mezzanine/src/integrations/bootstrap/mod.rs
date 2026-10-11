@@ -152,7 +152,13 @@ pub(crate) fn compiled_manifest(
 pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer::Manifest> {
     if manifest.harness == "claude" {
         return if Some(manifest) == claude_artifact::manifest().as_ref() {
-            claude_artifact::historical_manifest().into_iter().collect()
+            [
+                claude_artifact::historical_lifecycle_manifest(),
+                claude_artifact::historical_manifest(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect()
         } else {
             Vec::new()
         };

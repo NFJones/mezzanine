@@ -636,6 +636,14 @@ it on the same instance conflicts instead of reporting an unchanged registration
 a fresh instance still needs the exact predecessor generation. Successful rotation
 updates the accepted boundary with its namespace selector; failed handoff changes
 neither. This fence does not certify vendor same-ID clear/resume/fork or restart.
+The installed Claude revision3 entry has one narrower paired-clear path: one
+completed main clear end and its next observed same-ID clear start in that loaded
+module use the locally captured public predecessor with a fresh instance/lifetime.
+Native rotation still requires the exact live creator/root and predecessor. Old
+timers and delayed end completions cannot acquire the successor. Intervening or
+overlapping starts, failed/lost/invalid replies and missing predecessor remain
+unavailable without new-admission fallback. Restart/reload, resume/fork and
+historical expense attachment are not implied by this lifecycle subset.
 The Codex local profile describes exec of the fixed helper into the actual creator's
 direct child, not a retained intermediary shell or shared-server association.
 The fixed installed `codex-hook` helper now sends this exact declaration for

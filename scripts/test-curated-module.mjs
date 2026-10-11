@@ -12,8 +12,8 @@ import { captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome } from 
 const template = readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_module.mjs", import.meta.url), "utf8");
 const source = readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_client.mjs", import.meta.url), "utf8");
 const body = source.replace(/__MEZ_[A-Z]+__/g, marker => ({ __MEZ_OWNED__: "true", __MEZ_LIFETIME__: "observerLifetime",
-  __MEZ_INTERVAL__: "10000", __MEZ_HELPER__: JSON.stringify("/owned/mez"), __MEZ_INSTANCE__: JSON.stringify("mez-curated-client-1"),
-  __MEZ_REPLACING__: "false", __MEZ_PREDECESSOR__: "undefined" })[marker]);
+  __MEZ_INTERVAL__: "10000", __MEZ_HELPER__: JSON.stringify("/owned/mez"), __MEZ_INSTANCE__: "startInstance",
+  __MEZ_REPLACING__: "previousObserver !== undefined", __MEZ_PREDECESSOR__: "previousObserver" })[marker]);
 const code = template.replace(/^import .*;\n/gm, "").replace("export function register", "function register")
   .replace("__MEZ_SOURCE_BODY__", body)
   .replace("__MEZ_LIFECYCLE_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/claude_lifecycle_runner.mjs", import.meta.url), "utf8").replace("__MEZ_HELPER__", JSON.stringify("/owned/mez")))
@@ -70,6 +70,162 @@ test("curated module owns one main session and filters child or foreign end", as
   assert.equal(f.timers[0].cancelled, true);
   await f.timers[0].callback();
   assert.equal(f.calls.length, 1);
+});
+
+/** A sequential same-ID clear may rotate only using the public predecessor
+ * captured from this exact loaded module before its end stops the old lifetime.
+ * Duplicate starts coalesce, the old timer stays inert and every middleware
+ * result remains unchanged. No daemon restart or unpaired resume is inferred. */
+test("curated module pairs one completed same-ID clear with its captured predecessor", async () => {
+  const f = fixture();
+  const run = f.sdk.process.run;
+  f.sdk.process.run = async (argv, options) => {
+    const value = await run(argv, options);
+    if (argv[1] === "harness-source") {
+      const capsule = JSON.parse(argv[2]);
+      if (capsule.predecessor_generation !== undefined) {
+        assert.equal(capsule.predecessor_generation, 1);
+        assert.notEqual(capsule.observer_instance, "mez-curated-client-1");
+        const receipt = JSON.parse(value.stdout);
+        receipt.generation = 2; receipt.observer_epoch = 2; receipt.observer_witness = "b".repeat(64);
+        value.stdout = JSON.stringify(receipt);
+      }
+    }
+    return value;
+  };
+  await f.invoke(start());
+  assert.equal(await f.invoke(end()), f.result);
+  assert.equal(f.timers[0].cancelled, true);
+  const lifecycleCount = f.lifecycle.length;
+  assert.equal(await f.invoke(start("session-a", { source: "clear" })), f.result);
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.calls[1].session_boundary, "clear");
+  assert.equal(f.calls[1].predecessor_generation, 1);
+  assert.equal(f.timers.length, 2);
+  assert.equal(f.timers[1].cancelled, false);
+  assert.equal(f.lifecycle.length, lifecycleCount + 1);
+  assert.equal(f.lifecycle.at(-1).generation, 2);
+  await f.invoke(start("session-a", { source: "clear" }));
+  assert.equal(f.calls.length, 2);
+  await f.timers[0].callback();
+  assert.equal(f.calls.length, 2);
+});
+
+/** A delayed end from the original same-ID owner cannot stop or fence a newer
+ * clear successor. A second legitimate clear must consume only that successor's
+ * public predecessor, with a distinct instance and permanently inert old timer. */
+test("curated module retains only current clear predecessor after a delayed old end", async () => {
+  const f = fixture();
+  const run = f.sdk.process.run;
+  f.sdk.process.run = async (argv, options) => {
+    const value = await run(argv, options);
+    if (argv[1] === "harness-source") {
+      const capsule = JSON.parse(argv[2]);
+      if (capsule.predecessor_generation !== undefined) {
+        const generation = capsule.predecessor_generation + 1;
+        const receipt = JSON.parse(value.stdout);
+        receipt.generation = generation; receipt.observer_epoch = generation;
+        receipt.observer_witness = generation.toString(16).padStart(64, "0");
+        value.stdout = JSON.stringify(receipt);
+      }
+    }
+    return value;
+  };
+  await f.invoke(start());
+  let finishOld;
+  const oldEnd = f.invoke(end(), () => new Promise(resolve => { finishOld = resolve; }));
+  await f.invoke(end());
+  await f.invoke(start("session-a", { source: "clear" }));
+  finishOld(f.result); await oldEnd;
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.timers[1].cancelled, false);
+  await f.invoke(end());
+  await f.invoke(start("session-a", { source: "clear" }));
+  assert.equal(f.calls.length, 3);
+  assert.equal(f.calls[2].predecessor_generation, 2);
+  assert.notEqual(f.calls[2].observer_instance, f.calls[1].observer_instance);
+  assert.equal(f.timers[1].cancelled, true);
+  assert.equal(f.timers[2].cancelled, false);
+});
+
+/** Missing/mismatched predecessor or failed downstream completion must never
+ * fall back to a fresh namespace. The observed next start consumes the one-slot
+ * pair even when it cannot enroll; callback errors and return values stay exact. */
+test("curated module refuses unpaired or failed same-ID clear without fallback", async () => {
+  for (const reason of ["startup", "resume", "fork", "compact"]) {
+    const f = fixture();
+    await f.invoke(start()); await f.invoke(end());
+    await f.invoke(start("session-a", { source: reason }));
+    await f.invoke(start("session-a", { source: "clear" }));
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.timers[0].cancelled, true);
+  }
+  const f = fixture();
+  await f.invoke(start()); await f.invoke(end("session-a", { reason: "logout" }));
+  await f.invoke(start("session-a", { source: "clear" }));
+  assert.equal(f.calls.length, 1);
+  const failed = fixture();
+  await failed.invoke(start()); await failed.invoke(end());
+  const error = new Error("downstream clear failed");
+  await assert.rejects(failed.invoke(start("session-a", { source: "clear" }), async () => { throw error; }), value => value === error);
+  await failed.invoke(start("session-a", { source: "clear" }));
+  assert.equal(failed.calls.length, 1);
+});
+
+/** A native handoff may fail, expire or return an invalid public successor.
+ * The consumed pair cannot be retried as initial enrollment, and no timer or
+ * lifecycle sender is created from an unchanged generation/epoch receipt. */
+test("curated module refuses lost or invalid successor replies without re-admission", async () => {
+  for (const failure of ["unchanged", "unavailable", "throw"]) {
+    const f = fixture();
+    const run = f.sdk.process.run;
+    f.sdk.process.run = async (argv, options) => {
+      const value = await run(argv, options);
+      if (argv[1] === "harness-source" && JSON.parse(argv[2]).predecessor_generation !== undefined) {
+        if (failure === "throw") throw new Error("lost telemetry");
+        if (failure === "unavailable") value.stdout = '{"registered":false}';
+      }
+      return value;
+    };
+    await f.invoke(start()); await f.invoke(end());
+    const published = f.lifecycle.length;
+    assert.equal(await f.invoke(start("session-a", { source: "clear" })), f.result);
+    assert.equal(f.calls.length, 2);
+    assert.equal(f.timers.length, 1);
+    assert.equal(f.timers[0].cancelled, true);
+    assert.equal(f.lifecycle.length, published);
+    await f.invoke(start("session-a", { source: "clear" }));
+    assert.equal(f.calls.length, 2);
+  }
+});
+
+/** A same-ID start observed while end delivery is pending cannot later borrow
+ * that older end's public receipt. A matching end during a clear's downstream
+ * wait closes its provisional owner before any successor helper can launch. */
+test("curated module fences overlapping clear ends and starts", async () => {
+  const f = fixture();
+  await f.invoke(start());
+  const run = f.sdk.process.run;
+  let finishEnd;
+  f.sdk.process.run = (argv, options) => argv[1] === "harness-event"
+    ? new Promise(resolve => { finishEnd = () => run(argv, options).then(resolve); }) : run(argv, options);
+  const ending = f.invoke(end());
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(typeof finishEnd, "function");
+  await f.invoke(start("session-a", { source: "clear" }));
+  finishEnd(); await ending;
+  await f.invoke(start("session-a", { source: "clear" }));
+  assert.equal(f.calls.length, 1);
+
+  const pending = fixture();
+  await pending.invoke(start()); await pending.invoke(end());
+  let finishStart;
+  const starting = pending.invoke(start("session-a", { source: "clear" }), () => new Promise(resolve => { finishStart = resolve; }));
+  await pending.invoke(end());
+  finishStart(pending.result); await starting;
+  assert.equal(pending.calls.length, 1);
+  assert.equal(pending.timers.length, 1);
+  assert.equal(pending.timers[0].cancelled, true);
 });
 
 /** A delayed old end captures its own owner before next; it cannot stop the

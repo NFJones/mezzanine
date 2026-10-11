@@ -533,7 +533,14 @@ main-request counters. Revision2 adds bounded main-session classic lifecycle
 observations and a static automatic title, without forwarding prompts, messages,
 tool/error text or transcript paths. Presentation order is captured before
 downstream completion; heartbeat and expense ownership remain separate. Exact
-same-helper revision1 bundles upgrade through guarded historical source inputs.
+same-helper revision1/2 bundles upgrade through guarded historical source inputs.
+Revision3 adds a narrow same-loaded-module clear handoff: a completed main
+SessionEnd(clear) followed by the next main SessionStart(clear) for that same ID
+uses the actually captured public predecessor and a fresh observer/lifetime.
+The daemon still requires exact native creator/root and predecessor evidence;
+old timers/senders cannot revive. Failed/lost replies or intervening starts do
+not fall back to new admission. This does not qualify restart, reload, unpaired
+resume/fork, inherited expense or exhaustive accounting after the transition.
 Executable relocation remains fail-closed rather than guessed migration.
 Installation does not override `disableAllHooks`, explicit
 plugin disabling, managed policy, vendor trust review or authored statuslines and

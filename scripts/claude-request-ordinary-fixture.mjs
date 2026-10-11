@@ -8,18 +8,27 @@ import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
 const [directory] = process.argv.slice(2);
+const pairedClear = process.argv[1].endsWith('claude-clear-ordinary-fixture.mjs');
 const { register } = await import(pathToFileURL(`${directory}/register.mjs`));
 const exec = promisify(execFile), hooks = new Map();
 register((name, handler) => hooks.set(name, handler));
-let helpers = 0, cancelled = false;
+let helpers = 0, cancelled = false, fixedHelper;
+const sources = [], timers = [];
 const sdk = { process: { run: async (argv, options) => {
   helpers++;
   const execution = exec(argv[0], argv.slice(1), { timeout: options.timeoutMs, maxBuffer: 8192 });
   execution.child.stdin.end(options.stdin ?? '');
   const result = await execution;
   assert.equal(result.stderr, '');
+  if (argv[1] === 'harness-source' && JSON.parse(argv[2]).operation === undefined) {
+    const source = JSON.parse(result.stdout);
+    assert.equal(source.registered, true);
+    assert(!Object.hasOwn(source, 'launch_token'));
+    fixedHelper = argv[0];
+    sources.push(source);
+  }
   return { exitCode: 0, stdout: result.stdout };
-} }, clock: { every: () => ({ cancel() { cancelled = true; } }) } };
+} }, clock: { every: (_period, callback) => { const timer = { callback, cancelled: false, cancel() { cancelled = this.cancelled = true; } }; timers.push(timer); return timer; } } };
 const unchanged = Object.freeze({ unchanged: true });
 assert.equal(await hooks.get('classic.SessionStart')(sdk, {
   session_id: 'session-a', hook_event_name: 'SessionStart', source: 'startup',
@@ -54,4 +63,39 @@ for (const [name, extra] of [
 await hooks.get('classic.SessionEnd')(sdk, { session_id: 'session-a', hook_event_name: 'SessionEnd', reason: 'clear' }, async () => unchanged);
 assert.equal(helpers, 14);
 assert.equal(cancelled, true);
+if (pairedClear) {
+  assert.equal(await hooks.get('classic.SessionStart')(sdk, {
+    session_id: 'session-a', hook_event_name: 'SessionStart', source: 'clear',
+  }, async () => unchanged), unchanged);
+  assert.equal(helpers, 16);
+  assert.equal(sources.length, 2);
+  assert.equal(sources[1].agent_id, sources[0].agent_id);
+  assert.equal(sources[1].run_id, sources[0].run_id);
+  assert.equal(sources[1].observer_epoch, sources[0].observer_epoch + 1);
+  assert(sources[1].generation > sources[0].generation);
+  assert.notEqual(sources[1].observer_witness, sources[0].observer_witness);
+  assert.equal(timers[0].cancelled, true);
+  assert.equal(timers[1].cancelled, false);
+  await hooks.get('classic.SessionStart')(sdk, {
+    session_id: 'session-a', hook_event_name: 'SessionStart', source: 'clear',
+  }, async () => unchanged);
+  assert.equal(helpers, 16, 'coalesced clear cannot re-admit');
+  await timers[0].callback();
+  assert.equal(helpers, 16, 'old queued timer must remain inert');
+  const oldProof = await sdk.process.run([fixedHelper, 'harness-source', JSON.stringify({
+    operation: 'curated-heartbeat', external_session_id: sources[0].external_session_id,
+    generation: sources[0].generation, observer_witness: sources[0].observer_witness, sequence: 1,
+  })], { timeoutMs: 3000 });
+  assert.equal(JSON.parse(oldProof.stdout).observed, false);
+  await timers[1].callback();
+  assert.equal(helpers, 18, 'fresh timer uses the successor witness');
+  await hooks.get('classic.UserPromptSubmit')(sdk, {
+    session_id: 'session-a', hook_event_name: 'UserPromptSubmit', prompt: 'PRIVATE',
+  }, async () => unchanged);
+  await hooks.get('classic.SessionEnd')(sdk, {
+    session_id: 'session-a', hook_event_name: 'SessionEnd', reason: 'logout',
+  }, async () => unchanged);
+  assert.equal(helpers, 20);
+  assert.equal(timers[1].cancelled, true);
+}
 process.stdout.write('{"qualified":true}\n');

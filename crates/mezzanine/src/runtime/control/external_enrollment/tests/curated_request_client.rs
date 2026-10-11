@@ -38,6 +38,17 @@ async fn external_claude_bare_bootstrap_installed_module_has_native_durable_usag
         .await;
 }
 
+/// The real bare bootstrap installs the entry which observes a completed
+/// same-ID clear pair on one ordinary SDK-shaped native creator. Real helper
+/// ingress must rotate the predecessor exactly once, preserve the run/accounting
+/// owner and previously committed expense, and deliver fresh lifecycle sequence
+/// ownership without any token/PID/primary injection or vendor/provider work.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
+async fn external_claude_installed_same_id_clear_uses_captured_native_predecessor() {
+    qualify_request_client_with_install("claude-clear-ordinary-fixture.mjs", true, 20, true).await;
+}
+
 /// Shared owned fixture for the pure runner and full literal generator; only
 /// compiled source and fixed test scripts enter the ordinary creator launch.
 async fn qualify_request_client(script_name: &str, claude: bool, requests: usize) {
@@ -52,6 +63,8 @@ async fn qualify_request_client_with_install(
     requests: usize,
     installed: bool,
 ) {
+    let paired_clear = script_name == "claude-clear-ordinary-fixture.mjs";
+    assert!(!paired_clear || (installed && claude && requests == 20));
     let node = std::path::PathBuf::from(
         std::env::var_os("MEZ_TEST_NODE_BINARY").expect("explicit offline Node path"),
     );
@@ -269,9 +282,23 @@ async fn qualify_request_client_with_install(
             .presentation
             .as_ref()
             .unwrap();
-        assert_eq!(presentation.sequence, 6);
+        assert_eq!(presentation.sequence, if paired_clear { 3 } else { 6 });
         assert_eq!(presentation.state, "complete");
         assert_eq!(presentation.title.as_deref(), Some("Claude"));
+        if paired_clear {
+            assert_eq!(bindings.bindings.len(), 1);
+            let source = bindings
+                .bindings
+                .values()
+                .next()
+                .unwrap()
+                .enrollment
+                .as_ref()
+                .unwrap();
+            assert_eq!(source.epoch, 2);
+            assert!(source.usage_owner_is_durable);
+            assert_eq!(source.instances.len(), 2);
+        }
         assert!(
             fixture.service.terminal_frame_context().panes["%1"]
                 .pane_title_override
