@@ -11,7 +11,39 @@ use super::{
 
 /// Owned callback members, never ownership of the surrounding shared document.
 /// Public bootstrap supplies this manifest; installation never grants hook trust.
-pub(crate) fn manifest() -> Manifest {
+pub(crate) fn manifest() -> Option<Manifest> {
+    manifest_for_helper(&std::env::current_exe().ok()?)
+}
+
+/// Pins only an absolute bounded UTF-8 installing executable. Shell quoting
+/// preserves one inert pathname; unavailable evidence cannot select PATH or a
+/// launcher environment fallback. This helper reference grants no admission.
+fn manifest_for_helper(helper: &std::path::Path) -> Option<Manifest> {
+    let helper_text = helper.to_str()?;
+    if !helper.is_absolute()
+        || helper_text.len() > 4096
+        || helper_text.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let quoted = shlex::try_quote(helper_text).ok()?;
+    let command =
+        format!("if [ -x {quoted} ]; then exec {quoted} codex-hook; else printf '{{}}\\n'; fi");
+    Some(Manifest {
+        harness: "codex".into(), revision: 3, vendor_version: "best-effort".into(),
+        entries: vec![Entry { path: "hooks.json".into(), artifact: Artifact::JsonArrayEntries {
+            entries: ["SessionStart", "UserPromptSubmit", "Stop", "Interrupt", "SessionEnd"]
+                .into_iter().map(|name| JsonArrayMember {
+                    pointer: format!("/hooks/{name}"),
+                    value: serde_json::json!({"hooks":[{"type":"command","command":command,"timeout":1}]}),
+                }).collect(),
+        }}],
+    })
+}
+
+/// Immutable revision-2 shared members, independent of the current fixed helper
+/// path or command builder. These exact bytes qualify historical receipts only.
+pub(super) fn historical_shared_manifest() -> Manifest {
     let command = r#"if [ -n "${MEZ_CODEX_HELPER:-}" ]; then "$MEZ_CODEX_HELPER" codex-hook; else printf '{}\n'; fi"#;
     Manifest {
         harness: "codex".into(), revision: 2, vendor_version: "best-effort".into(),
@@ -43,6 +75,30 @@ pub(super) fn historical_manifest() -> Manifest {
         );
     }
     Manifest {harness:"codex".into(),revision:1,vendor_version:"best-effort".into(),entries:vec![Entry{path:"hooks.json".into(),artifact:Artifact::File{bytes:(serde_json::json!({"description":"Mezzanine observational lifecycle; review with /hooks","hooks":hooks}).to_string()+"\n").into_bytes()}}]}
+}
+
+/// Detects exact historical shared members without adopting them. Installing a
+/// new command beside an unreceipted old registration would duplicate callbacks;
+/// only receipt-qualified reconciliation may remove or replace those members.
+pub(super) fn has_historical_shared_member(bytes: &[u8]) -> crate::Result<bool> {
+    if bytes.len() > 1024 * 1024 {
+        return Err(crate::MezError::invalid_args(
+            "bootstrap destination exceeds byte limit",
+        ));
+    }
+    let document = super::strict_json::decode(bytes)?;
+    let frozen = historical_shared_manifest();
+    let Artifact::JsonArrayEntries { entries } = &frozen.entries[0].artifact else {
+        return Err(crate::MezError::invalid_state(
+            "compiled Codex shared history unavailable",
+        ));
+    };
+    Ok(entries.iter().any(|entry| {
+        document
+            .pointer(&entry.pointer)
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|values| values.contains(&entry.value))
+    }))
 }
 
 /// Projects only the exact frozen whole-file artifact into narrow shared members.
@@ -93,6 +149,57 @@ pub(super) fn historical_shared_ownership(previous: &Artifact) -> crate::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Bootstrap must resolve its own fixed executable without a launcher
+    /// helper environment or PATH search. Shell parsing must preserve that
+    /// absolute path as one inert argv element before the neutral callback.
+    #[test]
+    fn codex_artifact_command_pins_installer_without_environment() {
+        let manifest = super::super::compiled_manifest("codex", None).unwrap();
+        assert_eq!(manifest.revision, 3);
+        let Artifact::JsonArrayEntries { entries } = &manifest.entries[0].artifact else {
+            panic!("Codex must own shared hook members only");
+        };
+        for entry in entries {
+            let command = entry.value["hooks"][0]["command"].as_str().unwrap();
+            assert!(!command.contains("MEZ_CODEX_HELPER"));
+            let words = shlex::split(command).unwrap();
+            let helper = std::env::current_exe()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+            assert_eq!(words[3], helper);
+            assert_eq!(words[6], "exec");
+            assert_eq!(words[7], helper);
+            assert_eq!(words[8], "codex-hook;");
+        }
+    }
+
+    /// Executable references with spaces, quotes and shell metacharacters stay
+    /// one literal path in both test and exec. Relative/control/oversized or
+    /// non-UTF-8 evidence is unavailable rather than an interpolated fallback.
+    #[test]
+    fn codex_artifact_helper_reference_is_literal_and_bounded() {
+        use std::os::unix::ffi::OsStringExt;
+        let helper = std::path::Path::new("/tmp/owned 'quote' $NOT_A_VARIABLE; helper");
+        let manifest = manifest_for_helper(helper).unwrap();
+        let Artifact::JsonArrayEntries { entries } = &manifest.entries[0].artifact else {
+            unreachable!();
+        };
+        let command = entries[0].value["hooks"][0]["command"].as_str().unwrap();
+        let words = shlex::split(command).unwrap();
+        assert_eq!(words[3], helper.to_str().unwrap());
+        assert_eq!(words[7], helper.to_str().unwrap());
+        for path in [
+            std::path::PathBuf::from("relative/mez"),
+            std::path::PathBuf::from("/tmp/bad\nhelper"),
+            std::path::PathBuf::from(format!("/{}", "x".repeat(4096))),
+            std::path::PathBuf::from(std::ffi::OsString::from_vec(vec![b'/', 255])),
+        ] {
+            assert!(manifest_for_helper(&path).is_none());
+        }
+    }
+
     /// Candidate installation preserves authored config, refuses malformed shared
     /// documents and uses the private versioned owner, never an unrecoverable v2
     /// journal. Uninstall preserves the containing shared hooks file and trust.
@@ -108,13 +215,20 @@ mod tests {
         std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
         let root = home.join("vendor");
         std::fs::create_dir(&root).unwrap();
-        let plan = |operation| plan_private(&root, &home, &manifest(), operation);
+        let manifest = manifest().unwrap();
+        let plan = |operation| plan_private(&root, &home, &manifest, operation);
         std::fs::write(root.join("config.toml"), b"[features]\nhooks = false\n").unwrap();
         std::fs::write(root.join("hooks.json"), b"authored hooks").unwrap();
         assert!(plan(Operation::Install).is_err());
-        assert!(super::super::installer::plan(&root, &manifest(), Operation::Install).is_err());
+        assert!(super::super::installer::plan(&root, &manifest, Operation::Install).is_err());
         std::fs::remove_file(root.join("hooks.json")).unwrap();
         plan(Operation::Install).unwrap().apply().unwrap();
+        assert!(plan(Operation::Install).unwrap().changed_paths().is_empty());
+        let before = std::fs::read(root.join("hooks.json")).unwrap();
+        let unknown =
+            manifest_for_helper(std::path::Path::new("/tmp/unknown-relocated-mez")).unwrap();
+        assert!(plan_private(&root, &home, &unknown, Operation::Install).is_err());
+        assert_eq!(std::fs::read(root.join("hooks.json")).unwrap(), before);
         assert!(plan(Operation::Install).unwrap().changed_paths().is_empty());
         plan(Operation::Uninstall).unwrap().apply().unwrap();
         assert_eq!(

@@ -51,6 +51,17 @@ pub(super) fn reconcile_preserving(
     if journal_version.is_some_and(|version| version >= 5) {
         if harness == "codex"
             && path == "hooks.json"
+            && previous.is_none()
+            && matches!(desired, Some(Artifact::JsonArrayEntries { .. }))
+            && let Some(bytes) = current
+            && super::codex_artifact::has_historical_shared_member(bytes)?
+        {
+            return Err(MezError::conflict(
+                "bootstrap Codex historical hook ownership is unavailable",
+            ));
+        }
+        if harness == "codex"
+            && path == "hooks.json"
             && matches!(desired, Some(Artifact::JsonArrayEntries { .. }) | None)
             && let Some(previous) = previous
             && let Some(shared) = super::codex_artifact::historical_shared_ownership(previous)?

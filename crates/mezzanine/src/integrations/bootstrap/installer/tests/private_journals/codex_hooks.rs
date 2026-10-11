@@ -4,6 +4,7 @@
 //! no vendor callback, credential, actual user configuration or provider is used.
 
 use super::*;
+use crate::integrations::bootstrap::reconciliation::Artifact;
 
 /// Malformed JSON, ambiguous keys/types and unreceipted exact registrations
 /// never become ownership. Under a valid receipt, missing or edited members
@@ -266,82 +267,95 @@ fn bootstrap_codex_shared_hooks_install_repeat_dedup_and_uninstall() {
     );
 }
 
-/// Every effect boundary of receipt-qualified whole-file migration must recover
+/// Every effect boundary of receipt-qualified whole-file/shared-member migration must recover
 /// original new intent without deleting authored hook additions. Exact duplicates
 /// are owned only with a compiled receipt; install replaces the receipt with new
 /// array ownership and uninstall retains the shared file and sibling order.
 #[test]
 fn bootstrap_codex_shared_hooks_migrate_historical_receipt_across_every_edge() {
     let current = crate::integrations::bootstrap::compiled_manifest("codex", None).unwrap();
-    let old = crate::integrations::bootstrap::compiled_history(&current)
-        .pop()
-        .unwrap();
-    for operation in [Operation::Install, Operation::Uninstall] {
-        for boundary in 1..=2 {
-            let fixture = Fixture::new();
-            fixture
-                .plan(&old, Operation::Install)
-                .unwrap()
-                .apply()
-                .unwrap();
-            let mut document: serde_json::Value =
-                serde_json::from_slice(&fs::read(fixture.root.join("hooks.json")).unwrap())
-                    .unwrap();
-            document["description"] = "user changed description".into();
-            document["custom"] = serde_json::json!({"keep":true});
-            for name in [
-                "SessionStart",
-                "UserPromptSubmit",
-                "Stop",
-                "Interrupt",
-                "SessionEnd",
-            ] {
-                let owned = document["hooks"][name][0].clone();
-                document["hooks"][name] = serde_json::json!([authored(), owned, authored(), owned]);
-            }
-            fs::write(
-                fixture.root.join("hooks.json"),
-                serde_json::to_vec(&document).unwrap(),
-            )
-            .unwrap();
-            let before = tree_snapshot(&fixture.workspace);
-            let accepted = fixture.plan(&current, operation).unwrap();
-            assert_eq!(tree_snapshot(&fixture.workspace), before);
-            assert_eq!(accepted.changes.len(), 2);
-            assert!(accepted.intent.archives.is_empty());
-            accepted.fixture_interrupt_after(boundary);
-            assert!(accepted.apply().is_err());
-            let journal: serde_json::Value =
-                serde_json::from_slice(&fs::read(fixture.journal()).unwrap()).unwrap();
-            assert_eq!(journal["version"], 8);
-            assert!(recover_private(&fixture.root, &fixture.home, &current).unwrap());
-            assert!(!recover_private(&fixture.root, &fixture.home, &current).unwrap());
-            let after: serde_json::Value =
-                serde_json::from_slice(&fs::read(fixture.root.join("hooks.json")).unwrap())
-                    .unwrap();
-            for name in [
-                "SessionStart",
-                "UserPromptSubmit",
-                "Stop",
-                "Interrupt",
-                "SessionEnd",
-            ] {
-                let expected = if matches!(operation, Operation::Install) {
-                    serde_json::json!([authored(), document["hooks"][name][1], authored()])
-                } else {
-                    serde_json::json!([authored(), authored()])
-                };
-                assert_eq!(after["hooks"][name], expected);
-            }
-            assert_eq!(after["description"], document["description"]);
-            assert_eq!(after["custom"], document["custom"]);
-            assert!(
+    let history = crate::integrations::bootstrap::compiled_history(&current);
+    assert_eq!(
+        history.iter().map(|old| old.revision).collect::<Vec<_>>(),
+        vec![2, 1]
+    );
+    for old in history {
+        for operation in [Operation::Install, Operation::Uninstall] {
+            for boundary in 1..=2 {
+                let fixture = Fixture::new();
                 fixture
-                    .plan(&current, operation)
+                    .plan(&old, Operation::Install)
                     .unwrap()
-                    .changed_paths()
-                    .is_empty()
-            );
+                    .apply()
+                    .unwrap();
+                let mut document: serde_json::Value =
+                    serde_json::from_slice(&fs::read(fixture.root.join("hooks.json")).unwrap())
+                        .unwrap();
+                document["description"] = "user changed description".into();
+                document["custom"] = serde_json::json!({"keep":true});
+                for name in [
+                    "SessionStart",
+                    "UserPromptSubmit",
+                    "Stop",
+                    "Interrupt",
+                    "SessionEnd",
+                ] {
+                    let owned = document["hooks"][name][0].clone();
+                    document["hooks"][name] =
+                        serde_json::json!([authored(), owned, authored(), owned]);
+                }
+                fs::write(
+                    fixture.root.join("hooks.json"),
+                    serde_json::to_vec(&document).unwrap(),
+                )
+                .unwrap();
+                let before = tree_snapshot(&fixture.workspace);
+                let accepted = fixture.plan(&current, operation).unwrap();
+                assert_eq!(tree_snapshot(&fixture.workspace), before);
+                assert_eq!(accepted.changes.len(), 2);
+                assert!(accepted.intent.archives.is_empty());
+                accepted.fixture_interrupt_after(boundary);
+                assert!(accepted.apply().is_err());
+                let journal: serde_json::Value =
+                    serde_json::from_slice(&fs::read(fixture.journal()).unwrap()).unwrap();
+                assert_eq!(journal["version"], 8);
+                assert!(recover_private(&fixture.root, &fixture.home, &current).unwrap());
+                assert!(!recover_private(&fixture.root, &fixture.home, &current).unwrap());
+                let after: serde_json::Value =
+                    serde_json::from_slice(&fs::read(fixture.root.join("hooks.json")).unwrap())
+                        .unwrap();
+                for name in [
+                    "SessionStart",
+                    "UserPromptSubmit",
+                    "Stop",
+                    "Interrupt",
+                    "SessionEnd",
+                ] {
+                    let expected = if matches!(operation, Operation::Install) {
+                        let Artifact::JsonArrayEntries { entries } = &current.entries[0].artifact
+                        else {
+                            panic!("current Codex ownership must be shared members");
+                        };
+                        let member = entries
+                            .iter()
+                            .find(|entry| entry.pointer == format!("/hooks/{name}"))
+                            .unwrap();
+                        serde_json::json!([authored(), member.value, authored()])
+                    } else {
+                        serde_json::json!([authored(), authored()])
+                    };
+                    assert_eq!(after["hooks"][name], expected);
+                }
+                assert_eq!(after["description"], document["description"]);
+                assert_eq!(after["custom"], document["custom"]);
+                assert!(
+                    fixture
+                        .plan(&current, operation)
+                        .unwrap()
+                        .changed_paths()
+                        .is_empty()
+                );
+            }
         }
     }
 }

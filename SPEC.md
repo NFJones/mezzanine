@@ -598,6 +598,13 @@ and configured CPU startup, using only a bounded current-thread I/O runtime and
 nonsecret MEZ routing. Missing/invalid routing MUST drain bounded stdin and remain
 neutral; it MUST NOT guess a default daemon route. Other CLI argv keep ordinary
 configuration startup, including explicit socket-selection forms.
+Codex revision-3 shared hook members MUST pin a safely quoted absolute installing
+Mez executable, never require `MEZ_CODEX_HELPER` or search PATH. A missing or
+nonexecutable pinned helper MUST return neutral JSON. Current reconciliation MUST
+recognize exact independently frozen revision-2 shared members and revision-1
+whole-file ownership, preserve authored siblings, and replace only owned entries.
+Unknown relocated helper paths MUST NOT become historical ownership authority.
+Fixed-helper deployment alone MUST NOT imply ordinary enrollment or accounting.
 The exact fixed `mez codex-hook` argv MUST likewise run its neutral bounded
 handler before HOME/config/CPU discovery, without constructing a general
 runtime or reading user configuration. Missing or invalid inherited observation

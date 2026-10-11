@@ -133,7 +133,7 @@ pub(crate) fn compiled_manifest(
         "claude" => claude_artifact::manifest(),
         "pi" => Some(pi_artifact::candidate_manifest()),
         "opencode" => Some(opencode_artifact::manifest()),
-        "codex" => Some(codex_artifact::manifest()),
+        "codex" => codex_artifact::manifest(),
         _ => None,
     }
 }
@@ -151,8 +151,11 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
             Vec::new()
         };
     }
-    if manifest == &codex_artifact::manifest() {
-        return vec![codex_artifact::historical_manifest()];
+    if Some(manifest) == codex_artifact::manifest().as_ref() {
+        return vec![
+            codex_artifact::historical_shared_manifest(),
+            codex_artifact::historical_manifest(),
+        ];
     }
     let (mut current, revision, paths) = match manifest.harness.as_str() {
         "pi" => (

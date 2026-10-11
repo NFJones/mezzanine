@@ -4,6 +4,90 @@
 //! configuration. Exact routing and peer authorization stay inside the helper;
 //! this fixture never installs a vendor or supplies daemon credentials.
 
+/// Bare production bootstrap pins its actual executable even when the path
+/// needs shell quoting. Authored hooks/disabled configuration survive, dry-run
+/// writes no vendor root, repeats are unchanged, and the installed callback is
+/// neutral with empty routing/PATH/launcher environment and after helper loss.
+/// This tests deployment, not actual Codex loader trust, enrollment or billing.
+#[test]
+fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::env::temp_dir().join(format!(
+        "mez-codex-deploy-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let helper = root.join("owned 'quote' $NOT_A_VARIABLE; mez");
+    std::fs::copy(env!("CARGO_BIN_EXE_mez"), &helper).unwrap();
+    let home = root.join("home");
+    std::fs::create_dir(&home).unwrap();
+    let bootstrap = |flags: &[&str]| {
+        let result = std::process::Command::new(&helper)
+            .args(["--json", "bootstrap", "codex"])
+            .args(flags)
+            .env_clear()
+            .env("HOME", &home)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert!(result.stderr.is_empty(), "{result:?}");
+        serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap()
+    };
+    assert_eq!(bootstrap(&["--dry-run"])["result"], "preview");
+    let vendor = home.join(".codex");
+    assert!(!vendor.exists());
+    assert!(!home.join(".config").exists());
+    std::fs::create_dir(&vendor).unwrap();
+    let authored = serde_json::json!({"matcher":"authored","hooks":[{"type":"command","command":"user hook","timeout":7}]});
+    std::fs::write(
+        vendor.join("hooks.json"),
+        serde_json::json!({"custom":"preserve","hooks":{"SessionStart":[authored]}}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(vendor.join("config.toml"), b"[features]\nhooks = false\n").unwrap();
+    let installed = bootstrap(&[]);
+    assert_eq!(installed["manifest_revision"], 3);
+    assert_eq!(installed["result"], "installed");
+    assert_eq!(installed["runtime_verification"], "not-performed");
+    assert_eq!(bootstrap(&[])["result"], "unchanged");
+    let document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(vendor.join("hooks.json")).unwrap()).unwrap();
+    assert_eq!(document["custom"], "preserve");
+    assert_eq!(document["hooks"]["SessionStart"][0], authored);
+    assert_eq!(
+        document["hooks"]["SessionStart"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        std::fs::read(vendor.join("config.toml")).unwrap(),
+        b"[features]\nhooks = false\n"
+    );
+    let command = document["hooks"]["SessionStart"][1]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert!(!command.contains("MEZ_CODEX_HELPER"));
+    for state in ["executable", "nonexecutable", "missing"] {
+        if state == "nonexecutable" {
+            std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o600)).unwrap();
+        } else if state == "missing" {
+            std::fs::remove_file(&helper).unwrap();
+        }
+        let result = std::process::Command::new("/bin/sh")
+            .args(["-c", command])
+            .env_clear()
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(result.stdout, b"{}\n");
+        assert!(result.stderr.is_empty());
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// The fixed Codex callback helper must return neutral output before global
 /// HOME/config/CPU discovery. Neither absent configuration nor inherited legacy
 /// observer markers may turn unavailable telemetry into a vendor hook failure.

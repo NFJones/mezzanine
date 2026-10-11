@@ -539,8 +539,8 @@ mod tests {
     }
 
     /// Public Codex bootstrap merges shared authored callbacks through the same
-    /// private owner as its previews. Historical ownership upgrade can change only
-    /// the receipt while retaining byte-exact authored JSON and disabled config.
+    /// private owner as its previews. Historical ownership upgrade replaces only
+    /// owned command members and the receipt, retaining authored state/disabled config.
     /// Installation reports unverified runtime activation, never token coverage.
     #[test]
     fn bootstrap_cli_codex_shared_hooks_preserve_authored_state_and_history() {
@@ -600,9 +600,23 @@ mod tests {
         assert_eq!(output["result"], "upgraded");
         assert_eq!(
             output["changed_paths"],
-            serde_json::json!(["@mez-bootstrap-receipt/codex"])
+            serde_json::json!(["hooks.json", "@mez-bootstrap-receipt/codex"])
         );
-        assert_eq!(std::fs::read(root.join("hooks.json")).unwrap(), bytes);
+        let after = std::fs::read(root.join("hooks.json")).unwrap();
+        assert_ne!(after, bytes);
+        let document: serde_json::Value = serde_json::from_slice(&after).unwrap();
+        let crate::integrations::bootstrap::reconciliation::Artifact::JsonArrayEntries { entries } =
+            &current.entries[0].artifact
+        else {
+            panic!("current Codex ownership must remain shared members");
+        };
+        for member in entries {
+            assert_eq!(
+                document.pointer(&member.pointer).unwrap(),
+                &serde_json::json!([member.value])
+            );
+        }
+        assert_eq!(invoke(&[])["result"], "unchanged");
     }
 
     /// CLI result labels derive from accepted ownership and actual publication,
