@@ -75,6 +75,435 @@ fn external_observation_concurrent_first_publication_commits_once() {
     std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
 }
 
+/// Read-transaction groups include only same-owner aliased checkpoints, count a
+/// shared generic checkpoint once, and keep project/model/category groups apart.
+/// Unaliased legacy history is excluded rather than imported; reopen and replay
+/// preserve the absolute snapshot without expense or identity writes. Synthetic
+/// witnesses qualify storage only, never native admission or cache/reset repair.
+#[test]
+fn external_opencode_group_snapshot_preserves_unique_checkpoint_membership() {
+    let (store, report) = fixture_for("opencode");
+    assert!(
+        store
+            .opencode_observation_group_snapshot(&report)
+            .unwrap()
+            .is_none()
+    );
+    let mut legacy = report.clone();
+    legacy.mode = "delta".into();
+    legacy.epoch = format!("opencode-message:{}", report.event_id);
+    legacy.event_id = "completed:100001".into();
+    store.ingest_external(&legacy, 100).unwrap();
+    assert!(
+        store
+            .opencode_observation_group_snapshot(&report)
+            .unwrap()
+            .is_none()
+    );
+    store
+        .ingest_external_opencode_handoff(&report, &legacy, 100)
+        .unwrap();
+    for index in [2, 3] {
+        let mut next = report.clone();
+        next.event_id = message_id(index);
+        store.ingest_external(&next, 100).unwrap();
+    }
+    for variant in 0..3 {
+        let mut next = report.clone();
+        next.event_id = message_id(10 + variant);
+        match variant {
+            0 => next.model.model = "other".into(),
+            1 => next.counters.cached_input_tokens = None,
+            _ => {
+                next.project =
+                    Some(AccountingProjectId::from_stored(new_token_usage_event_id()).unwrap())
+            }
+        }
+        store.ingest_external(&next, 100).unwrap();
+        assert_eq!(
+            store
+                .opencode_observation_group_snapshot(&next)
+                .unwrap()
+                .unwrap()
+                .totals()
+                .input_tokens,
+            1
+        );
+    }
+    let expected = store
+        .opencode_observation_group_snapshot(&report)
+        .unwrap()
+        .unwrap();
+    assert_eq!(expected.members().len(), 2);
+    assert_eq!(expected.revision(), 3);
+    assert_eq!(expected.totals().input_tokens, 3);
+    assert_eq!(expected.totals().cached_input_tokens, Some(0));
+    assert_eq!(expected.totals().reasoning_tokens, None);
+    assert_eq!(
+        expected.stream_id(),
+        external_usage_stream_id(&report.owner, &external_observation_epoch(&report).unwrap())
+            .unwrap()
+    );
+    let connection = store.open().unwrap();
+    let before: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM external_usage_observations",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let reopened = TokenUsageStore::new(store.path());
+    assert_eq!(
+        reopened
+            .opencode_observation_group_snapshot(&report)
+            .unwrap()
+            .unwrap(),
+        expected
+    );
+    assert!(
+        !reopened
+            .ingest_external_opencode_handoff(&report, &legacy, 100)
+            .unwrap()
+            .applied
+    );
+    assert_eq!(
+        reopened
+            .opencode_observation_group_snapshot(&report)
+            .unwrap()
+            .unwrap(),
+        expected
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM external_usage_observations",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        6
+    );
+    let mut foreign = report.clone();
+    foreign.owner = new_token_usage_event_id();
+    assert!(
+        reopened
+            .opencode_observation_group_snapshot(&foreign)
+            .is_err()
+    );
+    drop(connection);
+    std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+}
+
+/// Missing checkpoints and alias links to another owner's otherwise valid
+/// checkpoint fail closed. Snapshot errors must not delete replay evidence or
+/// add expense; no corrupt membership becomes an accounting authority.
+#[test]
+fn external_opencode_group_snapshot_rejects_unbound_checkpoint_evidence() {
+    for missing in [false, true] {
+        let (store, report) = fixture_for("opencode");
+        let commit = store.ingest_external(&report, 100).unwrap();
+        let connection = store.open().unwrap();
+        if missing {
+            connection
+                .execute(
+                    "DELETE FROM external_usage_streams WHERE id=?1",
+                    [&commit.stream_id],
+                )
+                .unwrap();
+        } else {
+            let foreign = external_usage_stream_id(
+                "another-owner",
+                &external_observation_epoch(&report).unwrap(),
+            )
+            .unwrap();
+            connection
+                .execute(
+                    "UPDATE external_usage_streams SET id=?1 WHERE id=?2",
+                    rusqlite::params![foreign, commit.stream_id],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE external_usage_observations SET stream_id=?1 WHERE owner=?2",
+                    rusqlite::params![foreign, report.owner],
+                )
+                .unwrap();
+        }
+        assert!(store.opencode_observation_group_snapshot(&report).is_err());
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM external_usage_observations",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT sum(input_tokens) FROM token_usage_events",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        drop(connection);
+        std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+    }
+}
+
+/// SQLite TEXT slicing must not hide embedded NUL suffixes or repair padded
+/// stored model labels. Every corrupt source/alias/checkpoint field rejects
+/// without adding expense. Bounded extraction must preserve raw byte identity,
+/// including invalid UTF-8 and oversized metadata; these fixture mutations are
+/// not native reporting or an authority to rewrite private accounting evidence.
+#[test]
+fn external_opencode_group_snapshot_rejects_raw_identity_corruption() {
+    for field in [
+        "source",
+        "event",
+        "stream",
+        "harness",
+        "provider",
+        "model",
+        "mode",
+        "totals",
+        "fingerprint",
+        "padding",
+        "utf8",
+        "oversized",
+    ] {
+        let (store, report) = fixture_for("opencode");
+        let commit = store.ingest_external(&report, 100).unwrap();
+        let connection = store.open().unwrap();
+        match field {
+            "source" => {
+                connection
+                    .execute(
+                        "UPDATE external_usage_sources SET harness=?1",
+                        ["opencode\0wrong"],
+                    )
+                    .unwrap();
+            }
+            "event" => {
+                connection
+                    .execute(
+                        "UPDATE external_usage_observations SET event_id=?1",
+                        [format!("{}\0wrong", report.event_id)],
+                    )
+                    .unwrap();
+            }
+            "stream" => {
+                let changed = format!("{}\0wrong", commit.stream_id);
+                connection
+                    .execute("UPDATE external_usage_streams SET id=?1", [&changed])
+                    .unwrap();
+                connection
+                    .execute(
+                        "UPDATE external_usage_observations SET stream_id=?1",
+                        [&changed],
+                    )
+                    .unwrap();
+            }
+            "fingerprint" => {
+                connection
+                    .execute(
+                        "UPDATE external_usage_observations SET fingerprint=fingerprint||?1",
+                        ["\0wrong"],
+                    )
+                    .unwrap();
+            }
+            "totals" => {
+                connection
+                    .execute(
+                        "UPDATE external_usage_streams SET totals=totals||?1",
+                        ["\0wrong"],
+                    )
+                    .unwrap();
+            }
+            "padding" => {
+                connection
+                    .execute("UPDATE external_usage_streams SET model=?1", [" model "])
+                    .unwrap();
+            }
+            "utf8" => {
+                connection
+                    .execute(
+                        "UPDATE external_usage_streams SET model=CAST(x'ff' AS TEXT)",
+                        [],
+                    )
+                    .unwrap();
+            }
+            "oversized" => {
+                connection
+                    .execute(
+                        "UPDATE external_usage_streams SET model=?1",
+                        ["a".repeat(129)],
+                    )
+                    .unwrap();
+            }
+            _ => {
+                let value = match field {
+                    "harness" => "opencode",
+                    "provider" => "fixture",
+                    "model" => "model",
+                    _ => "observation",
+                };
+                connection
+                    .execute(
+                        &format!("UPDATE external_usage_streams SET {field}=?1"),
+                        [format!("{value}\0wrong")],
+                    )
+                    .unwrap();
+            }
+        }
+        assert!(
+            store.opencode_observation_group_snapshot(&report).is_err(),
+            "corrupt field {field} must not be canonicalized"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT sum(input_tokens) FROM token_usage_events",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        drop(connection);
+        std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+    }
+}
+
+/// Finite membership accepts the exact boundary without counting a repeated
+/// shared checkpoint multiple times, then refuses overflow. Checked aggregate
+/// totals reject SQLite-range overflow across distinct valid legacy members.
+/// Corruption is injected only into isolated private fixture state; reads never
+/// repair, prune, charge, or reinterpret it as native authority.
+#[test]
+fn external_opencode_group_snapshot_bounds_membership_and_totals() {
+    let (store, report) = fixture_for("opencode");
+    let first = store.ingest_external(&report, 100).unwrap();
+    let connection = store.open().unwrap();
+    connection
+        .execute(
+            "WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<65535)
+        INSERT INTO external_usage_observations(owner,event_id,fingerprint,stream_id)
+        SELECT ?1,printf('%064x',n),printf('%064x',0),?2 FROM ids",
+            rusqlite::params![report.owner, first.stream_id],
+        )
+        .unwrap();
+    let snapshot = store
+        .opencode_observation_group_snapshot(&report)
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.members().len(), 1);
+    assert_eq!(snapshot.revision(), 1);
+    assert_eq!(snapshot.totals().input_tokens, 1);
+    connection.execute("INSERT INTO external_usage_observations(owner,event_id,fingerprint,stream_id) VALUES(?1,printf('%064x',65536),printf('%064x',0),?2)", rusqlite::params![report.owner, first.stream_id]).unwrap();
+    assert_eq!(
+        store
+            .opencode_observation_group_snapshot(&report)
+            .unwrap_err()
+            .kind(),
+        crate::error::MezErrorKind::RateLimited
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    drop(connection);
+    std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+
+    let (store, report) = fixture_for("opencode");
+    for index in [1, 2] {
+        let mut next = report.clone();
+        next.event_id = message_id(index);
+        let mut legacy = next.clone();
+        legacy.mode = "delta".into();
+        legacy.epoch = format!("opencode-message:{}", next.event_id);
+        legacy.event_id = "completed:100001".into();
+        store.ingest_external(&legacy, 100).unwrap();
+        store
+            .ingest_external_opencode_handoff(&next, &legacy, 100)
+            .unwrap();
+    }
+    let connection = store.open().unwrap();
+    let mut huge = report.counters;
+    huge.input_tokens = i64::MAX as u64;
+    connection
+        .execute(
+            "UPDATE external_usage_streams SET totals=?1",
+            [serde_json::to_string(&huge).unwrap()],
+        )
+        .unwrap();
+    assert!(store.opencode_observation_group_snapshot(&report).is_err());
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        2
+    );
+    connection
+        .execute(
+            "UPDATE external_usage_streams SET totals=?1",
+            [serde_json::to_string(&report.counters).unwrap()],
+        )
+        .unwrap();
+    let mut generic = report.clone();
+    generic.event_id = message_id(3);
+    let commit = store.ingest_external(&generic, 100).unwrap();
+    connection
+        .execute(
+            "UPDATE external_usage_streams SET revision=?1 WHERE id=?2",
+            rusqlite::params![i64::MAX, commit.stream_id],
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .opencode_observation_group_snapshot(&report)
+            .unwrap_err()
+            .message(),
+        "OpenCode group revision exhausted"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        3
+    );
+    drop(connection);
+    std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+}
+
 /// A compiled OpenCode layout handoff must adopt its exact same-owner legacy
 /// receipt without expense. Merely changing mode/epoch currently recharges the
 /// message; the explicit path must also retain millisecond conflicts and reject

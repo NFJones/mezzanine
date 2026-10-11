@@ -17,6 +17,9 @@ use sha2::{Digest, Sha256};
 
 use super::{MezError, Result, TokenUsageStore, sqlite_i64};
 
+/// Read-transaction projection prerequisites; never another expense store.
+mod group_snapshot;
+
 /// Immutable source ID tombstones are retained, never silently evicted.
 const MAX_OBSERVATIONS_PER_SOURCE: i64 = 65_536;
 /// Total durable observation namespace capacity across all native sources.

@@ -708,6 +708,13 @@ frozen legacy report. It retains the original reservation/provenance, rechecks
 before execution and requires actual worker-published completion at settlement.
 Rejected attachment leaves work available to settle/release; it grants no new
 RPC, source authority or request marker and does not consolidate old projections.
+An internal read-transaction group snapshot derives same-owner membership from
+durable aliases and validates canonical checkpoint identities. Shared checkpoints
+count once; model/project/category coverage stays separate. Membership and field
+reads are bounded, totals/revisions use checked arithmetic, and absent evidence
+is unavailable rather than zero. Unaliased legacy history remains excluded. This
+reader writes no expense/alias evidence and grants no admission or delivery ACK;
+actor cache consolidation and reset-baseline preservation remain separate work.
 Usage admission explicitly rejects internal `observation` mode before reserving
 legacy accounting work; field-name schema validation is not a mode enum or an
 authorization substitute. Ordinary bindings remain rejected on that legacy path.
