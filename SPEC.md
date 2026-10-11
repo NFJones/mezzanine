@@ -704,7 +704,12 @@ It MUST do no socket I/O, enrollment, credential handling or vendor launch. This
 internal descriptor loan is not a normal vendor FD3/launcher prerequisite. The
 client MUST capture its bounded fixed acknowledgment and send all RPC bytes itself.
 Pi/OpenCode manifests MAY install the private client plus an explicit installing
-binary helper reference. Exact prior Pi2/OpenCode1 ownership identities MUST be
+binary helper reference.
+The fixed reference MUST use only absolute UTF-8 native installing evidence of
+at most 4096 bytes without control characters. Unsupported evidence MUST produce
+the existing inert undefined reference, never PATH, vendor payload or launcher
+fallback. Valid literal punctuation/Unicode MUST remain exact JSON string data.
+Exact prior Pi2/OpenCode1 ownership identities MUST be
 fingerprint-frozen for the shared-client addition; arbitrary receipt/current-source
 changes MUST NOT redefine historical authority. Deployment alone MUST NOT imply
 vendor entry-point activation, complete bootstrap UX or live vendor conformance.

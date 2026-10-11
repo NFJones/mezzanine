@@ -121,6 +121,13 @@ native or other harnesses is unaffected. No vendor files or user hooks are remov
 **External vendors are invoked normally, not through Mez wrappers.** The CLI
 contains no vendor-launch routes, aliases, hidden launchers or deprecated
 forwarding. Bootstrap and observation-only internal helpers do not launch vendors.
+Pi/OpenCode fixed persistent clients accept only native installing executable
+evidence that is absolute UTF-8, at most 4096 bytes and free of control characters.
+Unsupported evidence emits the existing inert undefined helper reference, never
+PATH, vendor payload or launcher fallback. Literal punctuation and Unicode are
+preserved as JSON data. This is bounded deployment evidence, not safe adoption of
+unknown relocated receipt references or proof of vendor activation.
+
 Pi/OpenCode/Codex artifacts and reducers are retained, but ordinary-command
 automatic enrollment, durable source continuity and preservation/upgrade recovery
 remain implementation work; bare install and write-free dry-run are available.

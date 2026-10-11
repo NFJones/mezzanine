@@ -12,10 +12,17 @@ use super::reconciliation::{Artifact, Entry};
 /// Builds only enumerated private siblings at a compiled adapter prefix.
 /// Versioning/upgrade reconciliation remains owned by the surrounding manifest.
 pub(super) fn entries(prefix: &str) -> Vec<Entry> {
-    let helper = std::env::current_exe()
-        .ok()
+    let executable = std::env::current_exe().ok();
+    entries_for_helper(prefix, executable.as_deref())
+}
+
+/// Compiles literal helper references from native installing evidence only.
+/// This pure boundary permits isolated path qualification without env mutation.
+fn entries_for_helper(prefix: &str, executable: Option<&std::path::Path>) -> Vec<Entry> {
+    let helper = executable
         .filter(|path| path.is_absolute())
-        .and_then(|path| path.to_str().map(str::to_owned));
+        .and_then(|path| path.to_str().map(str::to_owned))
+        .filter(|path| path.len() <= 4096 && !path.chars().any(char::is_control));
     let config = match helper {
         Some(helper) => format!("export const peerHelper = {};\n", serde_json::json!(helper)),
         None => "export const peerHelper = undefined;\n".to_string(),
@@ -45,6 +52,46 @@ pub(super) fn entries(prefix: &str) -> Vec<Entry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fixed helper references must reject unrepresentable, relative, oversized
+    /// or control-bearing evidence rather than guess PATH or emit a callable
+    /// unsafe reference. Literal punctuation/Unicode stay inert JSON data.
+    #[test]
+    fn persistent_client_helper_reference_is_bounded_and_fail_closed() {
+        use std::os::unix::ffi::OsStringExt;
+        let oversized = format!("/{}", "x".repeat(4096));
+        let oversized_unicode = format!("/{}", "λ".repeat(2048));
+        let non_utf8 = std::path::PathBuf::from(std::ffi::OsString::from_vec(vec![b'/', 255]));
+        for helper in [
+            None,
+            Some(std::path::Path::new("relative-mez")),
+            Some(std::path::Path::new("/unsafe\nmez")),
+            Some(std::path::Path::new("/unsafe\tmez")),
+            Some(std::path::Path::new("/unsafe\u{85}mez")),
+            Some(std::path::Path::new(&oversized)),
+            Some(std::path::Path::new(&oversized_unicode)),
+            Some(non_utf8.as_path()),
+        ] {
+            let entries = entries_for_helper("extensions/mezzanine", helper);
+            let Artifact::File { bytes } = &entries[1].artifact else {
+                panic!("fixed helper file");
+            };
+            assert_eq!(bytes, b"export const peerHelper = undefined;\n");
+        }
+        let exact = format!("/{}", "x".repeat(4095));
+        let exact_unicode = format!("/{}x", "λ".repeat(2047));
+        for text in ["/literal 'quote' $dollar; λ mez", &exact, &exact_unicode] {
+            let path = std::path::Path::new(text);
+            let entries = entries_for_helper("extensions/mezzanine", Some(path));
+            let Artifact::File { bytes } = &entries[1].artifact else {
+                panic!("fixed helper file");
+            };
+            assert_eq!(
+                bytes,
+                format!("export const peerHelper = {};\n", serde_json::json!(text)).as_bytes()
+            );
+        }
+    }
 
     /// Current adapter fixtures use isolated test-owned HOME/root witnesses,
     /// never a v2 journal unable to authorize new format artifacts. Historical
