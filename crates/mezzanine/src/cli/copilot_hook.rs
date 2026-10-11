@@ -7,7 +7,6 @@
 //! content, and grants no approval/continuation or daemon/native task authority.
 
 use super::{Args, Result, Write};
-use std::time::Duration;
 
 /// Fixed known argv topics supplied by compiled hook definitions only.
 #[derive(Debug, Clone, Args)]
@@ -35,43 +34,14 @@ pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u
 /// Vendor outcomes stay untouched. Input loss/time/size limits and unsupported
 /// association are neutral; only inability to write the response is an error.
 pub(super) fn run<W: Write>(stdout: &mut W) -> Result<()> {
-    let _ = drain_input_from(&std::io::stdin());
-    writeln!(stdout, "{{}}")?;
-    Ok(())
+    super::neutral_hook::run(stdout)
 }
 
 /// Consumes at most64KiB without retaining payload or reading an extra block.
 /// EOF is unnecessary at the byte cap because no payload is interpreted. The
 /// finite wall-clock deadline applies to every poll/read and interrupted retry.
-fn drain_input_from(input: &impl std::os::fd::AsFd) -> Result<()> {
-    let deadline = std::time::Instant::now() + Duration::from_millis(250);
-    let mut consumed = 0;
-    let mut buffer = zeroize::Zeroizing::new([0u8; 4096]);
-    while consumed < 64 * 1024 {
-        let remaining = deadline
-            .checked_duration_since(std::time::Instant::now())
-            .ok_or_else(|| super::MezError::invalid_state("Copilot input unavailable"))?;
-        let timeout = rustix::event::Timespec::try_from(remaining)
-            .map_err(|_| super::MezError::invalid_state("Copilot input unavailable"))?;
-        let mut fds = [rustix::event::PollFd::new(
-            input,
-            rustix::event::PollFlags::IN,
-        )];
-        match rustix::event::poll(&mut fds, Some(&timeout)) {
-            Ok(0) => return Err(super::MezError::invalid_state("Copilot input unavailable")),
-            Err(rustix::io::Errno::INTR) => continue,
-            Err(error) => return Err(std::io::Error::from(error).into()),
-            Ok(_) => {}
-        }
-        let length = buffer.len().min(64 * 1024 - consumed);
-        let count = rustix::io::read(input, &mut buffer[..length]).map_err(std::io::Error::from)?;
-        if count == 0 {
-            return Ok(());
-        }
-        consumed += count;
-    }
-    Ok(())
-}
+#[cfg(test)]
+use super::neutral_hook::drain_input_from;
 
 #[cfg(test)]
 mod tests {

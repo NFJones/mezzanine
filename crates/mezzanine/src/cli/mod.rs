@@ -91,6 +91,11 @@ pub(crate) use codex_hook::run_internal_process as run_internal_codex_hook_proce
 /// Owns neutral documented Copilot callback plumbing, not runtime activation.
 mod copilot_hook;
 pub(crate) use copilot_hook::run_internal_process as run_internal_copilot_hook_process;
+/// Owns neutral fixed Cursor lifecycle argv, not runtime association.
+mod cursor_hook;
+/// Shared strict input bound for deployment-only neutral hooks.
+mod neutral_hook;
+pub(crate) use cursor_hook::run_internal_process as run_internal_cursor_hook_process;
 /// Exposes the config module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

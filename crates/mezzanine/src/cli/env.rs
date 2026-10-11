@@ -62,6 +62,9 @@ pub(super) enum CliCommand {
     /// Drains one supported Copilot hook neutrally; no telemetry association is inferred.
     #[command(hide = true)]
     CopilotHook(super::copilot_hook::CopilotHookArgs),
+    /// Drains a fixed Cursor lifecycle hook without controls or association.
+    #[command(hide = true)]
+    CursorHook(super::cursor_hook::CursorHookArgs),
     /// Manages Mezzanine configuration.
     Config(super::config::ConfigCliArgs),
     /// Creates a fresh local or explicitly selected remote session and attaches.

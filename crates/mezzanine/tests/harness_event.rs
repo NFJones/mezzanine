@@ -4,6 +4,106 @@
 //! configuration. Exact routing and peer authorization stay inside the helper;
 //! this fixture never installs a vendor or supplies daemon credentials.
 
+/// Production Cursor bootstrap must create version1 only for an absent shared
+/// document, preserve authored callbacks/metadata/CLI policy and leave previews
+/// unchanged. Fixed shell commands execute a literal difficult helper pathname
+/// and emit no context, env, permission or follow-up output. This is deployment
+/// proof, not vendor loading, native association, token accounting or IDE parity.
+#[test]
+fn standalone_cursor_bootstrap_shared_members_and_commands_remain_neutral() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::env::temp_dir().join(format!(
+        "mez-cursor-install-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let helper = root.join("owned 'quote' $LITERAL; mez");
+    std::fs::copy(env!("CARGO_BIN_EXE_mez"), &helper).unwrap();
+    let home = root.join("home");
+    std::fs::create_dir(&home).unwrap();
+    let vendor = root.join("custom-cursor");
+    let bootstrap = |flags: &[&str]| {
+        let output = std::process::Command::new(&helper)
+            .args(["--json", "bootstrap", "cursor"])
+            .args(flags)
+            .env_clear()
+            .env("HOME", &home)
+            .env("CURSOR_CONFIG_DIR", &vendor)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    assert_eq!(bootstrap(&["--dry-run"])["result"], "preview");
+    assert!(!vendor.exists());
+    assert!(!home.join(".config").exists());
+    assert_eq!(bootstrap(&[])["result"], "installed");
+    let file = vendor.join("hooks.json");
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(document["version"], 1);
+    document["authored"] = true.into();
+    document["hooks"]["stop"].as_array_mut().unwrap().insert(
+        0,
+        serde_json::json!({"command":"AUTHORED COMMAND","matcher":".*","timeout":17}),
+    );
+    std::fs::write(&file, document.to_string()).unwrap();
+    std::fs::write(vendor.join("cli-config.json"), b"PRIVATE USER POLICY").unwrap();
+    let before = std::fs::read(&file).unwrap();
+    assert_eq!(bootstrap(&["--dry-run"])["result"], "preview");
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    let repeated = bootstrap(&[]);
+    assert_eq!(repeated["result"], "unchanged");
+    assert_eq!(repeated["root_source"], "CURSOR_CONFIG_DIR");
+    assert_eq!(repeated["lifecycle"], "unavailable-source-association");
+    assert_eq!(repeated["usage"], "unavailable-source-association");
+    for event in ["sessionStart", "stop", "sessionEnd"] {
+        let hook = document["hooks"][event]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|hook| hook["command"].as_str().unwrap().contains("cursor-hook"))
+            .unwrap();
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", hook["command"].as_str().unwrap()])
+            .env_clear()
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"PRIVATE INPUT NOT A SOURCE ID")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"{}\n");
+        assert!(output.stderr.is_empty());
+    }
+    assert_eq!(bootstrap(&["--uninstall"])["result"], "uninstalled");
+    let document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(document["version"], 1);
+    assert_eq!(document["authored"], true);
+    assert_eq!(
+        document["hooks"]["stop"],
+        serde_json::json!([{"command":"AUTHORED COMMAND","matcher":".*","timeout":17}])
+    );
+    assert_eq!(
+        std::fs::read(vendor.join("cli-config.json")).unwrap(),
+        b"PRIVATE USER POLICY"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Bare production Copilot bootstrap resolves COPILOT_HOME, creates only its
 /// owned documented hook file, and leaves authored hook/settings/exporter data
 /// untouched. Direct exec argv containing shell metacharacters is inert; every

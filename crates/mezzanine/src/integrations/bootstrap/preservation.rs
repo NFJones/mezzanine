@@ -49,6 +49,31 @@ pub(super) fn reconcile_preserving(
         ));
     }
     if journal_version.is_some_and(|version| version >= 5) {
+        if harness == "cursor"
+            && path == "hooks.json"
+            && matches!(
+                desired.or(previous),
+                Some(Artifact::JsonArrayEntries { .. })
+            )
+        {
+            if current.is_none() && desired.is_none() {
+                return Ok((None, None));
+            }
+            let document = super::cursor_artifact::document(current, desired.is_some())?;
+            let ownership = super::cursor_artifact::present_ownership(current, previous)?;
+            if ownership.is_none() && desired.is_none() {
+                return Ok((document, None));
+            }
+            return Ok((
+                super::shared_arrays::reconcile_arrays(
+                    document.as_deref(),
+                    ownership.as_ref(),
+                    desired,
+                    true,
+                )?,
+                None,
+            ));
+        }
         if harness == "codex"
             && path == "hooks.json"
             && previous.is_none()

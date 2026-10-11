@@ -170,6 +170,7 @@ async fn run_with_inner<W: Write, E: Write>(
                     | CliCommand::HarnessPeer
                     | CliCommand::CodexHook
                     | CliCommand::CopilotHook(_)
+                    | CliCommand::CursorHook(_)
                     | CliCommand::Bootstrap(_)
             )
         )
@@ -267,6 +268,7 @@ async fn run_with_inner<W: Write, E: Write>(
             super::bootstrap::run(args, output_format, stdout)?;
         }
         Some(CliCommand::CopilotHook(_)) => super::copilot_hook::run(stdout)?,
+        Some(CliCommand::CursorHook(_)) => super::cursor_hook::run(stdout)?,
         Some(CliCommand::Version) => write!(stdout, "{}", super::render_cli_version()?)?,
         Some(CliCommand::Completion(args)) => {
             let mut command = CliArgv::command();

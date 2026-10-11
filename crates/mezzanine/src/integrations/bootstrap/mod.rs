@@ -26,6 +26,8 @@ mod copilot_artifact;
 /// Literal no-Node original-epoch observer source; installation is adapter-owned.
 #[allow(dead_code, reason = "curated adapter installation is a separate owner")]
 pub(crate) mod curated_client;
+/// Owns exact Cursor shared hook members, not authored document/settings fields.
+mod cursor_artifact;
 /// Retains exact compiled historical source bytes, not active vendor entries.
 mod history;
 #[allow(
@@ -137,6 +139,7 @@ pub(crate) fn compiled_manifest(
         "opencode" => Some(opencode_artifact::manifest()),
         "codex" => codex_artifact::manifest(),
         "copilot" => copilot_artifact::manifest(),
+        "cursor" => cursor_artifact::manifest(),
         _ => None,
     }
 }

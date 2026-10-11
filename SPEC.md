@@ -732,6 +732,19 @@ exchange or claim SDK invocation session fields as classic CLI input. Bootstrap
 MUST report Copilot lifecycle/usage unavailable-source-association until actual
 qualified producer/association and metadata-only accounting contracts are wired.
 Other compiled adapters remain runtime-unverified by installation reports.
+Cursor revision1 MAY own only exact sessionStart/stop/sessionEnd array members
+in shared hooks.json under the selected CLI configuration root, using a bounded
+quoted installing helper reference and portable conditional-exec/neutral fallback.
+Version1 MUST be seeded only when an install target is absent; existing missing/
+unsupported version fields MUST reject without rewrite. Shared document metadata,
+authored member order/settings/permissions/exporters MUST remain outside ownership.
+Only exact receipt-owned duplicates MAY collapse; missing owned state MAY repair.
+Uninstall MUST retain shared documents and authored callbacks. Fixed cursor-hook
+known argv MUST reuse strict neutral nonretaining64KiB/250ms I/O before startup,
+with no environment/context/follow-up/permission output or telemetry exchange.
+CLI changelog hook support MUST NOT become an IDE-field parity, native session
+association, usage or custom-root/relocation certification claim. Cursor lifecycle
+and usage MUST remain explicit unavailable-source-association until wired.
 Recovery preview MUST share version/root/compiled-intent/preimage authorization
 with recovery, without writer lock or publication. JSON MUST distinguish operation,
 dry_run, changed_paths, recovered and accepted recovery_pending. Check success

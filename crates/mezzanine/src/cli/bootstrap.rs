@@ -191,8 +191,8 @@ fn run_with_root_selector<W: Write>(
                 "adoption_planned":adoption_planned,"legacy_adopted":adoption_planned && !args.dry_run && !args.check,
                 "runtime_verification":"not-performed",
                 "support":"best-effort",
-                "lifecycle":if args.harness == "copilot" { "unavailable-source-association" } else { "unverified" },
-                "usage":if args.harness == "copilot" { "unavailable-source-association" } else { "unverified" },
+                "lifecycle":if matches!(args.harness.as_str(), "copilot" | "cursor") { "unavailable-source-association" } else { "unverified" },
+                "usage":if matches!(args.harness.as_str(), "copilot" | "cursor") { "unavailable-source-association" } else { "unverified" },
                 "guidance":"Installation is observational only. Use ordinary vendor commands and preserve vendor review/disabled policy. Automatic enrollment and accounting capabilities may still be unavailable; no Mez vendor-launch wrappers exist",
             }),
         );
@@ -814,7 +814,15 @@ mod tests {
         let mut absent = args;
         absent.harness = "cursor".into();
         let mut output = Vec::new();
-        run_at_home(absent, CliOutputFormat::Plain, &mut output, &home.0).unwrap();
+        run_with_root_selector(
+            absent,
+            CliOutputFormat::Plain,
+            &mut output,
+            None,
+            |_, _| panic!("missing manifest must not select a root"),
+            || panic!("missing manifest must not select HOME"),
+        )
+        .unwrap();
         assert_eq!(
             String::from_utf8(output).unwrap(),
             "bootstrap cursor: unavailable\nNo compiled adapter; no files changed.\n"
@@ -1802,7 +1810,8 @@ mod tests {
 
     /// Candidates can be inspected without a daemon or filesystem mutation, but
     /// must not be installed by guessing released schemas or event field names.
-    /// The following test retains that refusal for still-unimplemented adapters.
+    /// Missing/unrepresentable compiled evidence is injected explicitly now that
+    /// all candidate names have recipes; the refusal still precedes root access.
     #[test]
     fn bootstrap_cli_refuses_uncertified_mutation_before_root_access() {
         #[derive(Parser)]
@@ -1819,13 +1828,31 @@ mod tests {
         ])
         .unwrap();
         let mut output = Vec::new();
-        run(parsed.args, CliOutputFormat::Json, &mut output).unwrap();
+        run_with_root_selector(
+            parsed.args,
+            CliOutputFormat::Json,
+            &mut output,
+            None,
+            |_, _| panic!("missing manifest must not select a root"),
+            || panic!("missing manifest must not select HOME"),
+        )
+        .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(value["supported"], false);
         let parsed =
             Fixture::try_parse_from(["fixture", "cursor", "--root", "/missing/bootstrap/root"])
                 .unwrap();
-        assert!(run(parsed.args, CliOutputFormat::Json, &mut Vec::new()).is_err());
+        assert!(
+            run_with_root_selector(
+                parsed.args,
+                CliOutputFormat::Json,
+                &mut Vec::new(),
+                None,
+                |_, _| panic!("missing manifest must not select a root"),
+                || panic!("missing manifest must not select HOME")
+            )
+            .is_err()
+        );
         assert!(Fixture::try_parse_from(["fixture", "codex", "--check", "--dry-run"]).is_err());
     }
 

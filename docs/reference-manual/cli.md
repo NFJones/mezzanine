@@ -61,8 +61,8 @@ daemon; add
 
 `mez bootstrap <harness> [--vendor-version VERSION] [--root ABSOLUTE_ROOT]`
 accepts `claude`, `codex`, `copilot`, `opencode`, `cursor`, and `pi` as adapter
-candidates. Claude, Copilot, Pi, OpenCode and the Codex hook candidate have compiled artifacts; Cursor currently
-report unavailable installation. Bare bootstrap installs/reconciles; `--dry-run`
+candidates. All six now have compiled best-effort deployment recipes; this does
+not mean all six have active lifecycle/accounting. Bare bootstrap installs/reconciles; `--dry-run`
 previews without writes, and `--check` observes owned state. `--uninstall` and
 `--recover` are separate maintenance intents, both supporting `--dry-run`.
 `--check` conflicts with maintenance/dry-run; uninstall and recovery conflict.
@@ -82,6 +82,17 @@ telemetry exchange: SDK session identity is separate invocation context, not an
 evidenced classic CLI stdin association. Bootstrap reports lifecycle and usage as
 `unavailable-source-association`; installed plumbing is not active integration or
 OTel accounting. Vendor loading, trust, disable and sandbox policy still apply.
+Cursor revision1 owns only exact sessionStart/stop/sessionEnd members of shared
+`hooks.json` under the selected CLI configuration root. A new document receives
+version1; existing unsupported versions reject without rewriting. Authored
+members/order/metadata and cli-config.json remain untouched, exact receipt-owned
+duplicates collapse and missing owned state repairs. Uninstall retains the shared
+document and authored entries. The fixed `cursor-hook <event>` uses the same
+strict neutral64KiB/250ms drain and returns no env/context/follow-up/permission
+fields. Lifecycle/usage report unavailable-source-association in plain and JSON;
+the CLI changelog establishes hook support, not precise IDE payload parity or
+actual runtime association. Loading under custom roots, vendor policy, sandbox,
+usage sources and relocated helper qualification remain best-effort/unverified.
 The fixed internal `mez codex-hook` callback mode runs before HOME/config/CPU
 startup. Normalized main SessionStart startup/resume/clear/fork can make one
 restricted Unix declaration with standard MEZ routing and native creator proof,
