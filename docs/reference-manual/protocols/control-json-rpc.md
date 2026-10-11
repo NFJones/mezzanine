@@ -619,14 +619,22 @@ derived from ancestry. Unsupported platforms stay fail-closed.
 
 #### Declared curated-command creator admission (implemented slice)
 
-`agent/external/curated-enroll` accepts only the fixed declaration
+`agent/external/curated-enroll` accepts only either exact fixed declaration:
 `harness: "claude"`, `observer_kind: "curated-command"`,
-`source_contract: "claude-curated-command/1"`, `session_boundary` one of
+`source_contract: "claude-curated-command/1"`; or `harness: "codex"`,
+`observer_kind: "command-hook"`, `source_contract: "codex-local-command/1"`.
+Crossed declaration fields reject. Each uses `session_boundary` one of
 `startup`, `resume`, `clear`, or `fork`, plus bounded `pane_id`, `version`,
 `external_session_id`, `display_name`, and `observer_instance`. Unknown extra
 fields, generic helper/server kinds, other profiles and compact-only initial
 boundaries reject. These labels are self-reported selectors/declarations—not
 vendor executable attestation, proof a mod is approved/loaded, or session billing.
+Native namespace lookup includes harness, so identical creator/root/session and
+display metadata across declarations cannot alias registration/accounting. The
+Codex local profile describes exec of the fixed helper into the actual creator's
+direct child, not a retained intermediary shell or shared-server association.
+Codex callback transport, freshness/idle renewal and usage remain unwired by
+this admission primitive; unavailable public coverage is preserved.
 The documented curated argv API identifies its direct creator contract; only
 the helper's real same-user Unix origin/current writer, native captured parent
 and exact creator/source/root lifetimes authorize that physical association.

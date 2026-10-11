@@ -311,11 +311,22 @@ metadata across evidence kinds MUST NOT authorize producer-socket capabilities,
 observer transport, idle renewal or ordinary retry/rotation namespace reuse.
 Parent lifetime facts MAY be polled/reobserved but MUST NOT allocate authority by
 construction. Persistent admission remains socket-backed. A separate declared
-`agent/external/curated-enroll` slice MAY admit only `harness: claude`,
-`observer_kind: curated-command`, exact `source_contract: claude-curated-command/1`
+`agent/external/curated-enroll` slice MAY admit only the exact declaration tuples
+(`harness: claude`, `observer_kind: curated-command`,
+`source_contract: claude-curated-command/1`) or (`harness: codex`,
+`observer_kind: command-hook`, `source_contract: codex-local-command/1`),
 and normalized SessionStart boundary startup/resume/clear/fork; compact-only
-initial allocation, generic helpers and other profiles MUST reject. Declaration
-labels/session IDs remain self-reported, not evidence that a vendor executable
+initial allocation, generic helpers and other profiles MUST reject.
+Crossed declaration fields MUST reject. Native namespace lookup MUST include
+harness as well as creator/root/session; equal public metadata across harnesses
+MUST NOT alias registration or accounting. Codex's declared local command profile
+requires the installed command to exec the fixed helper into the actual creator's
+direct child. Adapters MUST NOT use the local profile for retained shell
+intermediaries or shared/preexisting servers; native facts do not attest vendor
+executable identity or prove that claimed adapter semantics actually ran.
+This admission primitive alone MUST NOT claim installed Codex callback
+transport, idle renewal, freshness or usage; those remain separate integration work.
+Declaration labels/session IDs remain self-reported, not evidence that a vendor executable
 or approved mod ran. Kernel-qualified current helper origin/writer MUST select
 its actual native same-user direct creator, a distinct descendant of the exact
 selected pane root. Off-actor parent/source/root lifetimes and actor rechecks MUST

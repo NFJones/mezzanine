@@ -1,7 +1,8 @@
 //! Declared curated-command creator admission, distinct from generic hook helpers.
 //!
-//! The Claude curated API contract selects its native direct creator, qualified by
-//! the helper's own kernel origin/writer and retained parent/root lifetimes. The
+//! The Claude curated API and Codex local exec-command contracts select their
+//! native direct creator, qualified by the helper's own kernel origin/writer and
+//! retained parent/root lifetimes. The
 //! profile/session/event labels remain self-reported metadata, not vendor attestation.
 //! No payload PID/name/focus/route authorizes a creator. Actor commit allocates only
 //! observational registration and retains private credentials service-side; public
@@ -56,6 +57,8 @@ struct CuratedNamespace {
     producer: ProducerEvidence,
     pane_id: String,
     process: RuntimePaneProcessIdentity,
+    /// Harness metadata partitions the already-qualified native creator lifetime.
+    harness: String,
     session_id: String,
     digest: [u8; 32],
 }
@@ -102,6 +105,7 @@ impl CuratedNamespaces {
             .find(|entry| {
                 entry.pane_id == work.pane_id
                     && entry.process.same_incarnation(&work.process)
+                    && entry.harness == work.harness
                     && entry.session_id == work.session_id
                     && entry
                         .producer
@@ -131,6 +135,7 @@ impl CuratedNamespaces {
             producer: producer.clone(),
             pane_id: work.pane_id.clone(),
             process: work.process.clone(),
+            harness: work.harness.clone(),
             session_id: work.session_id.clone(),
             digest,
         });
@@ -185,21 +190,24 @@ impl CuratedAdmission {
         }
         Ok(())
     }
-    /// Accepts only the known declared no-shell creator contract and a normalized
+    /// Accepts only known declared direct-creator contracts and a normalized
     /// initial main-session boundary. Unknown/helper/server/compact declarations
     /// fail before reservation; metadata does not attest executable identity.
     pub(super) fn from_params(params: &serde_json::Value) -> Result<Self> {
-        if text(params, "harness", 64)? != "claude"
-            || text(params, "observer_kind", 64)? != "curated-command"
-            || text(params, "source_contract", 64)? != "claude-curated-command/1"
-            || !matches!(
-                text(params, "session_boundary", 32)?.as_str(),
-                "startup" | "resume" | "clear" | "fork"
-            )
-        {
+        let harness = text(params, "harness", 64)?;
+        let kind = text(params, "observer_kind", 64)?;
+        let contract = text(params, "source_contract", 64)?;
+        if !matches!(
+            (harness.as_str(), kind.as_str(), contract.as_str()),
+            ("claude", "curated-command", "claude-curated-command/1")
+                | ("codex", "command-hook", "codex-local-command/1")
+        ) || !matches!(
+            text(params, "session_boundary", 32)?.as_str(),
+            "startup" | "resume" | "clear" | "fork"
+        ) {
             return Err(MezError::new(
                 crate::error::MezErrorKind::NotImplemented,
-                "curated enrollment requires the declared Claude command creator contract",
+                "creator enrollment requires an exact declared local command contract",
             ));
         }
         Ok(Self {
@@ -315,6 +323,7 @@ impl RuntimeSessionService {
                 .as_ref()
                 .ok_or_else(|| MezError::invalid_state("curated owner missing"))?;
             if binding.retired
+                || binding.harness != work.harness
                 || !source.producer.same_owner(&original_source)
                 || !source.provenance_is_live()
                 || binding.version != work.version
