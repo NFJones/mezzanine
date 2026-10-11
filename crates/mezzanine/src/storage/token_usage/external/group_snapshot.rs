@@ -91,139 +91,149 @@ impl TokenUsageStore {
         &self,
         report: &ExternalUsageReport,
     ) -> Result<Option<ExternalUsageGroupSnapshot>> {
-        if report.harness != "opencode"
-            || report.mode != "observation"
-            || report.baseline
-            || !digest(&report.event_id)
-            || !inert(&report.owner)
-            || !inert(&report.model.provider)
-            || !inert(&report.model.model)
-        {
-            return Err(MezError::invalid_args(
-                "OpenCode group selector is not a normalized observation",
-            ));
-        }
-        report.counters.validate()?;
-        let group = external_observation_epoch(report)?;
-        let stream_id = external_usage_stream_id(&report.owner, &group)?;
         let mut connection = self.open()?;
         let tx = connection.transaction()?;
-        let harness: Option<Vec<u8>> = tx
-            .query_row(
-                "SELECT substr(CAST(harness AS BLOB),1,9) FROM external_usage_sources WHERE owner=?1",
-                [&report.owner],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if harness.as_deref() != Some(b"opencode".as_slice()) {
-            return Err(MezError::forbidden(
-                "OpenCode group requires a mapped native source",
-            ));
-        }
-        let mut members = BTreeMap::new();
-        {
-            // The extra row detects corrupted/exhausted membership without an
-            // unbounded scan. LEFT JOIN makes missing checkpoints fail closed.
-            let mut statement = tx.prepare("SELECT substr(CAST(o.event_id AS BLOB),1,65),substr(CAST(o.stream_id AS BLOB),1,65),substr(CAST(s.harness AS BLOB),1,129),substr(CAST(s.provider AS BLOB),1,129),substr(CAST(s.model AS BLOB),1,129),substr(CAST(s.mode AS BLOB),1,17),s.revision,substr(CAST(s.totals AS BLOB),1,1025),substr(CAST(s.project_id AS BLOB),1,129),substr(CAST(o.fingerprint AS BLOB),1,65)
+        let snapshot = snapshot_in_transaction(&tx, report)?;
+        tx.commit()?;
+        Ok(snapshot)
+    }
+}
+
+/// Uses the supplied read or writer transaction without committing it. An exact
+/// handoff can therefore validate coherent group evidence before alias commit;
+/// failure leaves rollback with the transaction's existing owner.
+pub(super) fn snapshot_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    report: &ExternalUsageReport,
+) -> Result<Option<ExternalUsageGroupSnapshot>> {
+    if report.harness != "opencode"
+        || report.mode != "observation"
+        || report.baseline
+        || !digest(&report.event_id)
+        || !inert(&report.owner)
+        || !inert(&report.model.provider)
+        || !inert(&report.model.model)
+    {
+        return Err(MezError::invalid_args(
+            "OpenCode group selector is not a normalized observation",
+        ));
+    }
+    report.counters.validate()?;
+    let group = external_observation_epoch(report)?;
+    let stream_id = external_usage_stream_id(&report.owner, &group)?;
+    let harness: Option<Vec<u8>> = tx
+        .query_row(
+            "SELECT substr(CAST(harness AS BLOB),1,9) FROM external_usage_sources WHERE owner=?1",
+            [&report.owner],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if harness.as_deref() != Some(b"opencode".as_slice()) {
+        return Err(MezError::forbidden(
+            "OpenCode group requires a mapped native source",
+        ));
+    }
+    let mut members = BTreeMap::new();
+    {
+        // The extra row detects corrupted/exhausted membership without an
+        // unbounded scan. LEFT JOIN makes missing checkpoints fail closed.
+        let mut statement = tx.prepare("SELECT substr(CAST(o.event_id AS BLOB),1,65),substr(CAST(o.stream_id AS BLOB),1,65),substr(CAST(s.harness AS BLOB),1,129),substr(CAST(s.provider AS BLOB),1,129),substr(CAST(s.model AS BLOB),1,129),substr(CAST(s.mode AS BLOB),1,17),s.revision,substr(CAST(s.totals AS BLOB),1,1025),substr(CAST(s.project_id AS BLOB),1,129),substr(CAST(o.fingerprint AS BLOB),1,65)
                 FROM external_usage_observations o LEFT JOIN external_usage_streams s ON s.id=o.stream_id
                 WHERE o.owner=?1 ORDER BY o.event_id LIMIT ?2")?;
-            let mut rows = statement.query(rusqlite::params![
-                report.owner,
-                MAX_OBSERVATIONS_PER_SOURCE + 1
-            ])?;
-            let mut count = 0;
-            while let Some(row) = rows.next()? {
-                count += 1;
-                if count > MAX_OBSERVATIONS_PER_SOURCE {
-                    return Err(MezError::new(
-                        crate::error::MezErrorKind::RateLimited,
-                        "OpenCode group membership capacity unavailable",
-                    ));
+        let mut rows = statement.query(rusqlite::params![
+            report.owner,
+            MAX_OBSERVATIONS_PER_SOURCE + 1
+        ])?;
+        let mut count = 0;
+        while let Some(row) = rows.next()? {
+            count += 1;
+            if count > MAX_OBSERVATIONS_PER_SOURCE {
+                return Err(MezError::new(
+                    crate::error::MezErrorKind::RateLimited,
+                    "OpenCode group membership capacity unavailable",
+                ));
+            }
+            let event = field(row, 0)?;
+            let id = field(row, 1)?;
+            let harness = optional_field(row, 2)?;
+            let fingerprint = field(row, 9)?;
+            if !digest(&event)
+                || !digest(&id)
+                || !digest(&fingerprint)
+                || harness.as_deref() != Some("opencode")
+            {
+                return Err(MezError::invalid_state(
+                    "OpenCode group checkpoint evidence unavailable",
+                ));
+            }
+            let provider = field(row, 3)?;
+            let model = field(row, 4)?;
+            let mode = field(row, 5)?;
+            let revision = super::super::store::row_u64(row, 6)?;
+            let encoded = field(row, 7)?;
+            let project = optional_field(row, 8)?;
+            if !inert(&provider)
+                || !inert(&model)
+                || revision == 0
+                || encoded.len() > 1024
+                || project.as_deref().is_some_and(|value| !inert(value))
+            {
+                return Err(MezError::invalid_state(
+                    "OpenCode group checkpoint identity invalid",
+                ));
+            }
+            let totals = decode(&encoded)?;
+            let mut checkpoint = report.clone();
+            // Stored identities are evidence, not input to normalization.
+            checkpoint.model = mez_agent::ModelTokenUsageKey { provider, model };
+            checkpoint.project = project
+                .map(super::super::AccountingProjectId::from_stored)
+                .transpose()?;
+            checkpoint.counters = totals;
+            let epoch = external_observation_epoch(&checkpoint)?;
+            let expected = match mode.as_str() {
+                "observation" => external_usage_stream_id(&report.owner, &epoch)?,
+                "delta" if revision == 1 => {
+                    external_usage_stream_id(&report.owner, &format!("opencode-message:{event}"))?
                 }
-                let event = field(row, 0)?;
-                let id = field(row, 1)?;
-                let harness = optional_field(row, 2)?;
-                let fingerprint = field(row, 9)?;
-                if !digest(&event)
-                    || !digest(&id)
-                    || !digest(&fingerprint)
-                    || harness.as_deref() != Some("opencode")
-                {
+                _ => {
                     return Err(MezError::invalid_state(
-                        "OpenCode group checkpoint evidence unavailable",
+                        "OpenCode group checkpoint mode changed",
                     ));
                 }
-                let provider = field(row, 3)?;
-                let model = field(row, 4)?;
-                let mode = field(row, 5)?;
-                let revision = super::super::store::row_u64(row, 6)?;
-                let encoded = field(row, 7)?;
-                let project = optional_field(row, 8)?;
-                if !inert(&provider)
-                    || !inert(&model)
-                    || revision == 0
-                    || encoded.len() > 1024
-                    || project.as_deref().is_some_and(|value| !inert(value))
-                {
-                    return Err(MezError::invalid_state(
-                        "OpenCode group checkpoint identity invalid",
-                    ));
-                }
-                let totals = decode(&encoded)?;
-                let mut checkpoint = report.clone();
-                // Stored identities are evidence, not input to normalization.
-                checkpoint.model = mez_agent::ModelTokenUsageKey { provider, model };
-                checkpoint.project = project
-                    .map(super::super::AccountingProjectId::from_stored)
-                    .transpose()?;
-                checkpoint.counters = totals;
-                let epoch = external_observation_epoch(&checkpoint)?;
-                let expected = match mode.as_str() {
-                    "observation" => external_usage_stream_id(&report.owner, &epoch)?,
-                    "delta" if revision == 1 => external_usage_stream_id(
-                        &report.owner,
-                        &format!("opencode-message:{event}"),
-                    )?,
-                    _ => {
-                        return Err(MezError::invalid_state(
-                            "OpenCode group checkpoint mode changed",
-                        ));
-                    }
-                };
-                if id != expected {
-                    return Err(MezError::invalid_state(
-                        "OpenCode group checkpoint source changed",
-                    ));
-                }
-                if epoch == group {
-                    members.entry(id.clone()).or_insert(ExternalUsageCommit {
-                        stream_id: id,
-                        revision,
-                        totals,
-                        applied: false,
-                    });
-                }
+            };
+            if id != expected {
+                return Err(MezError::invalid_state(
+                    "OpenCode group checkpoint source changed",
+                ));
+            }
+            if epoch == group {
+                members.entry(id.clone()).or_insert(ExternalUsageCommit {
+                    stream_id: id,
+                    revision,
+                    totals,
+                    applied: false,
+                });
             }
         }
-        tx.commit()?;
-        if members.is_empty() {
-            return Ok(None);
-        }
-        let mut totals = report.counters.zero_like();
-        let mut revision = 0u64;
-        for member in members.values() {
-            totals = totals.add(member.totals)?;
-            revision = revision
-                .checked_add(member.revision)
-                .filter(|value| *value <= i64::MAX as u64)
-                .ok_or_else(|| MezError::invalid_state("OpenCode group revision exhausted"))?;
-        }
-        totals.validate()?;
-        Ok(Some(ExternalUsageGroupSnapshot {
-            stream_id,
-            revision,
-            totals,
-            members: members.into_values().collect(),
-        }))
     }
+    if members.is_empty() {
+        return Ok(None);
+    }
+    let mut totals = report.counters.zero_like();
+    let mut revision = 0u64;
+    for member in members.values() {
+        totals = totals.add(member.totals)?;
+        revision = revision
+            .checked_add(member.revision)
+            .filter(|value| *value <= i64::MAX as u64)
+            .ok_or_else(|| MezError::invalid_state("OpenCode group revision exhausted"))?;
+    }
+    totals.validate()?;
+    Ok(Some(ExternalUsageGroupSnapshot {
+        stream_id,
+        revision,
+        totals,
+        members: members.into_values().collect(),
+    }))
 }

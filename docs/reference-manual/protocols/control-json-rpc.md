@@ -715,6 +715,13 @@ reads are bounded, totals/revisions use checked arithmetic, and absent evidence
 is unavailable rather than zero. Unaliased legacy history remains excluded. This
 reader writes no expense/alias evidence and grants no admission or delivery ACK;
 actor cache consolidation and reset-baseline preservation remain separate work.
+For admitted exact handoffs, the worker captures the group under the same
+immediate writer transaction as alias adoption and checks its exact checkpoint
+member before commit. Validation failure rolls adoption back. A single immutable
+worker publication carries commit and group after success; a second post-commit
+read is not coherent evidence. Frozen report checks fence reservation/execution/
+settlement, and rejection releases the original stream key. No new RPC, source
+recovery, actor-cache consolidation or reset-baseline migration is implied.
 Usage admission explicitly rejects internal `observation` mode before reserving
 legacy accounting work; field-name schema validation is not a mode enum or an
 authorization substitute. Ordinary bindings remain rejected on that legacy path.

@@ -99,6 +99,9 @@ fn runtime_external_opencode_handoff_requires_exact_published_worker() {
     work.set_opencode_handoff(pair.clone()).unwrap();
     let commit = work.execute().unwrap();
     assert!(!commit.applied);
+    let group = work.published_group_for_tests().unwrap();
+    assert_eq!(group.members(), std::slice::from_ref(&commit));
+    assert_eq!(group.totals(), commit.totals);
     let accepted: serde_json::Value =
         serde_json::from_str(&service.complete_external_usage(work.clone(), Ok(commit.clone())))
             .unwrap();
@@ -142,6 +145,30 @@ fn runtime_external_opencode_handoff_requires_exact_published_worker() {
         service.external_usage_reservation_counts_for_tests(),
         (0, 0)
     );
+    let mut changed = service
+        .prepare_external_usage(&request, &connection)
+        .unwrap();
+    let pair = crate::integrations::bootstrap::opencode::completed_observation(
+        "fixture",
+        "usage-run",
+        &changed.report.owner,
+        changed.report.project.clone(),
+        &bytes,
+    )
+    .unwrap()
+    .unwrap();
+    changed.set_opencode_handoff(pair).unwrap();
+    let commit = changed.execute().unwrap();
+    changed.report.owner = "changed-after-publication".into();
+    changed.report.epoch = "changed-reservation-key".into();
+    let rejected: serde_json::Value =
+        serde_json::from_str(&service.complete_external_usage(changed, Ok(commit))).unwrap();
+    assert!(rejected.get("error").is_some());
+    assert_eq!(
+        service.external_usage_reservation_counts_for_tests(),
+        (0, 0)
+    );
+    assert_eq!(external_ledger_input(&store), 10);
     service.terminate_all_pane_processes().unwrap();
 }
 

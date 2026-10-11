@@ -75,6 +75,98 @@ fn external_observation_concurrent_first_publication_commits_once() {
     std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
 }
 
+/// Alias adoption and its projection snapshot must publish from one writer
+/// transaction. A post-commit read is deliberately shown unsafe by a fixture
+/// trigger: it commits adoption before discovering corrupt group evidence.
+/// The coherent API rejects and rolls back both trigger mutation and alias,
+/// preserving the original receipt/checkpoint/expense for an exact retry.
+#[test]
+fn external_opencode_coherent_handoff_rolls_back_invalid_group() {
+    for coherent in [false, true] {
+        let (store, report) = fixture_for("opencode");
+        let mut legacy = report.clone();
+        legacy.mode = "delta".into();
+        legacy.epoch = format!("opencode-message:{}", report.event_id);
+        legacy.event_id = "completed:100001".into();
+        let original = store.ingest_external(&legacy, 100).unwrap();
+        let connection = store.open().unwrap();
+        connection.execute_batch("CREATE TRIGGER corrupt_handoff_group AFTER INSERT ON external_usage_observations BEGIN UPDATE external_usage_streams SET model=model||char(0)||'corrupt'; END;").unwrap();
+        if coherent {
+            assert!(
+                store
+                    .ingest_external_opencode_handoff_with_group(&report, &legacy, 100)
+                    .is_err()
+            );
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM external_usage_observations",
+                        [],
+                        |row| row.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                connection
+                    .query_row("SELECT model FROM external_usage_streams", [], |row| row
+                        .get::<_, String>(
+                        0
+                    ))
+                    .unwrap(),
+                report.model.model
+            );
+            connection
+                .execute_batch("DROP TRIGGER corrupt_handoff_group")
+                .unwrap();
+            let (commit, group) = store
+                .ingest_external_opencode_handoff_with_group(&report, &legacy, 100)
+                .unwrap();
+            assert_eq!(
+                commit,
+                ExternalUsageCommit {
+                    applied: false,
+                    ..original
+                }
+            );
+            assert_eq!(group.members(), std::slice::from_ref(&commit));
+            assert_eq!(group.totals(), commit.totals);
+            let replay = store
+                .ingest_external_opencode_handoff_with_group(&report, &legacy, 100)
+                .unwrap();
+            assert_eq!(replay, (commit, group));
+        } else {
+            store
+                .ingest_external_opencode_handoff(&report, &legacy, 100)
+                .unwrap();
+            assert!(store.opencode_observation_group_snapshot(&report).is_err());
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM external_usage_observations",
+                        [],
+                        |row| row.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                1,
+                "two calls cannot promise atomic publication"
+            );
+        }
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT sum(input_tokens) FROM token_usage_events",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        drop(connection);
+        std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+    }
+}
+
 /// Read-transaction groups include only same-owner aliased checkpoints, count a
 /// shared generic checkpoint once, and keep project/model/category groups apart.
 /// Unaliased legacy history is excluded rather than imported; reopen and replay

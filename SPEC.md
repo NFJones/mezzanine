@@ -1170,6 +1170,15 @@ absolute totals/revisions. Unaliased legacy history MUST remain excluded; absent
 group evidence MUST NOT become fabricated zero. This read MUST NOT publish
 expense or aliases, authorize admission, acknowledge delivery, or independently
 claim actor-cache consolidation or pane-reset baseline preservation.
+The admitted OpenCode handoff worker MAY capture its group snapshot inside the
+same immediate writer transaction as alias adoption. It MUST verify the exact
+returned checkpoint member before committing; failed group validation MUST roll
+back new alias evidence. Worker publication MUST expose commit and snapshot
+together only after successful commit, not compose a second post-commit read.
+Reservation, execution, release and settlement MUST retain/check the original
+frozen report; metadata mutation MUST NOT redirect projection or leak a reserved
+stream. This coherent evidence alone MUST NOT consolidate actor caches or reset
+baselines, authorize ordinary ingress or recover another source.
 Telemetry schema 7 adds source-scoped opaque request markers with immutable
 original project/admission time and one optional observation completion link.
 `agent/external/usage-begin` MUST require an existing kernel-qualified persistent

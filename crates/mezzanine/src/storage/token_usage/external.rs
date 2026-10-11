@@ -19,6 +19,7 @@ use super::{MezError, Result, TokenUsageStore, sqlite_i64};
 
 /// Read-transaction projection prerequisites; never another expense store.
 mod group_snapshot;
+pub(crate) use group_snapshot::ExternalUsageGroupSnapshot;
 
 /// Immutable source ID tombstones are retained, never silently evicted.
 const MAX_OBSERVATIONS_PER_SOURCE: i64 = 65_536;
@@ -267,7 +268,7 @@ impl TokenUsageStore {
         report: &ExternalUsageReport,
         now: u64,
     ) -> Result<ExternalUsageCommit> {
-        self.ingest_external_with_request(report, now, None, None)
+        self.ingest_external_with_request(report, now, None, None, None)
     }
 
     /// Adopts only exact same-owner OpenCode legacy evidence into immutable
@@ -284,6 +285,34 @@ impl TokenUsageStore {
         legacy: &ExternalUsageReport,
         now: u64,
     ) -> Result<ExternalUsageCommit> {
+        Self::require_opencode_handoff_pair(report, legacy)?;
+        self.ingest_external_with_request(report, now, None, Some(legacy), None)
+    }
+
+    /// Commits exact alias adoption and captures bounded group evidence under
+    /// the same immediate writer. Invalid group evidence rolls back adoption;
+    /// success returns only after commit. Neither result grants native authority.
+    pub(crate) fn ingest_external_opencode_handoff_with_group(
+        &self,
+        report: &ExternalUsageReport,
+        legacy: &ExternalUsageReport,
+        now: u64,
+    ) -> Result<(ExternalUsageCommit, ExternalUsageGroupSnapshot)> {
+        Self::require_opencode_handoff_pair(report, legacy)?;
+        let mut group = None;
+        let commit =
+            self.ingest_external_with_request(report, now, None, Some(legacy), Some(&mut group))?;
+        let group = group.ok_or_else(|| {
+            MezError::invalid_state("OpenCode committed group evidence unavailable")
+        })?;
+        Ok((commit, group))
+    }
+
+    /// Both handoff entry points require the identical compiled legacy proof.
+    fn require_opencode_handoff_pair(
+        report: &ExternalUsageReport,
+        legacy: &ExternalUsageReport,
+    ) -> Result<()> {
         let millis = legacy
             .event_id
             .strip_prefix("completed:")
@@ -310,7 +339,7 @@ impl TokenUsageStore {
                 "OpenCode legacy handoff evidence changed",
             ));
         }
-        self.ingest_external_with_request(report, now, None, Some(legacy))
+        Ok(())
     }
 
     /// Commits one sealed original-request observation and its completion link
@@ -321,7 +350,7 @@ impl TokenUsageStore {
         request: &super::external_requests::ExternalRequestReport,
         now: u64,
     ) -> Result<ExternalUsageCommit> {
-        self.ingest_external_with_request(request.report(), now, Some(request), None)
+        self.ingest_external_with_request(request.report(), now, Some(request), None, None)
     }
 
     /// Shared legacy/native transaction owner; request binding grants no runtime
@@ -332,6 +361,7 @@ impl TokenUsageStore {
         now: u64,
         request: Option<&super::external_requests::ExternalRequestReport>,
         legacy: Option<&ExternalUsageReport>,
+        group: Option<&mut Option<ExternalUsageGroupSnapshot>>,
     ) -> Result<ExternalUsageCommit> {
         let observation = report.mode == "observation";
         crate::integrations::harness_policy::require_active_external_harness(&report.harness)?;
@@ -524,12 +554,17 @@ impl TokenUsageStore {
                     [&old_stream],
                     |row| Ok((super::store::row_u64(row, 0)?, row.get::<_, String>(1)?)),
                 )?;
-                return Ok(ExternalUsageCommit {
-                    stream_id: old_stream,
-                    revision,
-                    totals: decode(&totals)?,
-                    applied: false,
-                });
+                return Self::finish_external_transaction(
+                    tx,
+                    report,
+                    ExternalUsageCommit {
+                        stream_id: old_stream,
+                        revision,
+                        totals: decode(&totals)?,
+                        applied: false,
+                    },
+                    group,
+                );
             }
             if request_complete {
                 return Err(MezError::invalid_state(
@@ -550,13 +585,17 @@ impl TokenUsageStore {
             if let Some((revision, totals)) = legacy_checkpoint {
                 tx.execute("INSERT INTO external_usage_observations(owner,event_id,fingerprint,stream_id,request_id) VALUES(?1,?2,?3,?4,NULL)",
                     params![report.owner, report.event_id, fingerprint, legacy_stream])?;
-                tx.commit()?;
-                return Ok(ExternalUsageCommit {
-                    stream_id: legacy_stream,
-                    revision,
-                    totals,
-                    applied: false,
-                });
+                return Self::finish_external_transaction(
+                    tx,
+                    report,
+                    ExternalUsageCommit {
+                        stream_id: legacy_stream,
+                        revision,
+                        totals,
+                        applied: false,
+                    },
+                    group,
+                );
             }
         }
         // Each admitted report also maintains long-lived-session retention.
@@ -682,12 +721,45 @@ impl TokenUsageStore {
                     normalized.cache_write_input_tokens.map(|n| sqlite_i64(n,"cache write")).transpose()?, report.harness,
                     i64::from(delta.reasoning_tokens.is_some()), report.project.as_ref().map(super::AccountingProjectId::as_str)])?;
         }
+        Self::finish_external_transaction(
+            tx,
+            report,
+            ExternalUsageCommit {
+                stream_id,
+                revision,
+                totals,
+                applied: true,
+            },
+            group,
+        )
+    }
+
+    /// Captures a coherent group before publication and verifies its exact
+    /// checkpoint member. A failed read/check/commit publishes neither result;
+    /// transaction drop retains the existing all-effects rollback boundary.
+    fn finish_external_transaction(
+        tx: rusqlite::Transaction<'_>,
+        report: &ExternalUsageReport,
+        commit: ExternalUsageCommit,
+        group: Option<&mut Option<ExternalUsageGroupSnapshot>>,
+    ) -> Result<ExternalUsageCommit> {
+        if let Some(output) = group {
+            let snapshot =
+                group_snapshot::snapshot_in_transaction(&tx, report)?.ok_or_else(|| {
+                    MezError::invalid_state("OpenCode handoff group evidence unavailable")
+                })?;
+            if !snapshot.members().iter().any(|member| {
+                member.stream_id == commit.stream_id
+                    && member.revision == commit.revision
+                    && member.totals == commit.totals
+            }) {
+                return Err(MezError::conflict(
+                    "OpenCode handoff checkpoint and group evidence changed",
+                ));
+            }
+            *output = Some(snapshot);
+        }
         tx.commit()?;
-        Ok(ExternalUsageCommit {
-            stream_id,
-            revision,
-            totals,
-            applied: true,
-        })
+        Ok(commit)
     }
 }

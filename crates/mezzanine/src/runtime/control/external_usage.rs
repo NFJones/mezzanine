@@ -15,7 +15,8 @@ use crate::error::{MezError, Result};
 use crate::runtime::processes::RuntimePaneProcessIdentity;
 use crate::runtime::{RuntimeSessionService, current_unix_seconds};
 use crate::storage::token_usage::{
-    ExternalCounters, ExternalUsageCommit, ExternalUsageReport, TokenUsageStore,
+    ExternalCounters, ExternalUsageCommit, ExternalUsageGroupSnapshot, ExternalUsageReport,
+    TokenUsageStore,
 };
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 
@@ -53,6 +54,14 @@ struct ProjectedStream {
     reset_baseline: ExternalCounters,
 }
 
+/// One worker publication; group evidence and commit become visible together.
+/// A snapshot is not a replacement commit or permission to mutate actor caches.
+#[derive(Debug, Clone)]
+struct ExternalUsagePublication {
+    commit: ExternalUsageCommit,
+    group: Option<ExternalUsageGroupSnapshot>,
+}
+
 /// Immutable admitted storage work, containing no launch credential or raw payload.
 #[derive(Debug, Clone)]
 pub(crate) struct ExternalUsageWork {
@@ -64,6 +73,8 @@ pub(crate) struct ExternalUsageWork {
     pub store: TokenUsageStore,
     /// Normalized accounting provenance and counters frozen by the actor.
     pub report: ExternalUsageReport,
+    /// Private acceptance copy fences execution, settlement and reservation release.
+    admitted_report: ExternalUsageReport,
     /// Exact originating pane, independent of later client focus.
     pane_id: String,
     /// Root incarnation required for pane-view attribution.
@@ -77,7 +88,7 @@ pub(crate) struct ExternalUsageWork {
     /// or request-marker authority is inferred from this migration candidate.
     opencode_handoff: Option<crate::integrations::bootstrap::opencode::CompletedObservation>,
     /// Only actual native storage work can publish a durable completion.
-    published: Arc<OnceLock<ExternalUsageCommit>>,
+    published: Arc<OnceLock<ExternalUsagePublication>>,
     /// Test-only worker start/release barrier, captured with immutable work.
     #[cfg(test)]
     pub worker_gate: Option<(
@@ -114,19 +125,25 @@ impl ExternalUsageWork {
     /// Runs legacy or sealed native request accounting off actor. Native work
     /// cannot replace its originally reserved project/group with current state.
     pub(crate) fn execute(&self) -> Result<ExternalUsageCommit> {
+        if self.report != self.admitted_report {
+            return Err(MezError::conflict("external admitted report changed"));
+        }
         if let Some(pair) = &self.opencode_handoff {
             if pair.legacy() != &self.report {
                 return Err(MezError::conflict(
                     "OpenCode admitted handoff report changed",
                 ));
             }
-            let commit = self.store.ingest_external_opencode_handoff(
+            let (commit, group) = self.store.ingest_external_opencode_handoff_with_group(
                 pair.observation(),
                 pair.legacy(),
                 self.now,
             )?;
             self.published
-                .set(commit.clone())
+                .set(ExternalUsagePublication {
+                    commit: commit.clone(),
+                    group: Some(group),
+                })
                 .map_err(|_| MezError::conflict("external handoff result already published"))?;
             return Ok(commit);
         }
@@ -143,7 +160,10 @@ impl ExternalUsageWork {
             }
             let commit = self.store.ingest_external_request(&frozen, self.now)?;
             self.published
-                .set(commit.clone())
+                .set(ExternalUsagePublication {
+                    commit: commit.clone(),
+                    group: None,
+                })
                 .map_err(|_| MezError::conflict("external request result already published"))?;
             Ok(commit)
         } else {
@@ -156,8 +176,14 @@ impl ExternalUsageWork {
     pub(super) fn published_result(&self) -> Result<ExternalUsageCommit> {
         self.published
             .get()
-            .cloned()
+            .map(|publication| publication.commit.clone())
             .ok_or_else(|| MezError::conflict("external request durable result unavailable"))
+    }
+
+    /// Test-only evidence access; callers cannot construct or publish a group.
+    #[cfg(test)]
+    pub(crate) fn published_group_for_tests(&self) -> Option<&ExternalUsageGroupSnapshot> {
+        self.published.get()?.group.as_ref()
     }
 }
 
@@ -301,6 +327,7 @@ impl RuntimeSessionService {
             store: self.persistence.cloned_token_usage_store().ok_or_else(|| {
                 MezError::invalid_state("durable external accounting unavailable")
             })?,
+            admitted_report: report.clone(),
             report,
             pane_id: binding.pane_id.clone(),
             process: binding.process.clone(),
@@ -439,6 +466,7 @@ impl RuntimeSessionService {
             store: self.persistence.cloned_token_usage_store().ok_or_else(|| {
                 MezError::invalid_state("durable external accounting unavailable")
             })?,
+            admitted_report: report.clone(),
             report,
             pane_id: binding.pane_id.clone(),
             process: binding.process.clone(),
@@ -458,6 +486,11 @@ impl RuntimeSessionService {
         &mut self,
         mut work: ExternalUsageWork,
     ) -> Result<ExternalUsageWork> {
+        if work.report != work.admitted_report {
+            return Err(MezError::conflict(
+                "external report changed before reservation",
+            ));
+        }
         let stream_id = crate::storage::token_usage::external_usage_stream_id(
             &work.report.owner,
             &work.report.epoch,
@@ -500,8 +533,8 @@ impl RuntimeSessionService {
             return;
         }
         if let Ok(id) = crate::storage::token_usage::external_usage_stream_id(
-            &work.report.owner,
-            &work.report.epoch,
+            &work.admitted_report.owner,
+            &work.admitted_report.epoch,
         ) && let Some(count) = projection.reservations.get_mut(&id)
         {
             *count -= 1;
@@ -527,8 +560,8 @@ impl RuntimeSessionService {
             );
         }
         if let Ok(id) = crate::storage::token_usage::external_usage_stream_id(
-            &work.report.owner,
-            &work.report.epoch,
+            &work.admitted_report.owner,
+            &work.admitted_report.epoch,
         ) && let Some(count) = projection.reservations.get_mut(&id)
         {
             *count -= 1;
@@ -536,9 +569,16 @@ impl RuntimeSessionService {
                 projection.reservations.remove(&id);
             }
         }
-        let result = if work.request_marker.is_some() || work.opencode_handoff.is_some() {
+        let result = if work.report != work.admitted_report {
+            Err(MezError::conflict(
+                "external admitted report changed before settlement",
+            ))
+        } else if work.request_marker.is_some() || work.opencode_handoff.is_some() {
             result.and_then(|commit| {
-                if work.published.get() == Some(&commit) {
+                if work.published.get().is_some_and(|publication| {
+                    publication.commit == commit
+                        && (work.opencode_handoff.is_none() || publication.group.is_some())
+                }) {
                     Ok(commit)
                 } else {
                     Err(MezError::conflict(
@@ -554,7 +594,7 @@ impl RuntimeSessionService {
                 .external_agents_mut()
                 .usage_begins
                 .origins
-                .remove(&(work.report.owner.clone(), marker.clone()));
+                .remove(&(work.admitted_report.owner.clone(), marker.clone()));
         }
         if work.request_marker.is_some() && result.is_ok() {
             for binding in self.control.external_agents_mut().bindings.values_mut() {

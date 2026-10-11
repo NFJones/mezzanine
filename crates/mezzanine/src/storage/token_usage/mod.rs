@@ -30,7 +30,9 @@ pub(crate) use projects::{
 
 pub(crate) use external::external_observation_epoch;
 pub(crate) use external::external_usage_stream_id;
-pub(crate) use external::{ExternalCounters, ExternalUsageCommit, ExternalUsageReport};
+pub(crate) use external::{
+    ExternalCounters, ExternalUsageCommit, ExternalUsageGroupSnapshot, ExternalUsageReport,
+};
 pub(crate) use external_requests::ExternalRequestOrigin;
 pub(crate) use external_sources::{ExternalSourceKey, NativeSourceKind, NativeSourceWitness};
 pub(crate) use store::{TokenUsageEvent, TokenUsageStore};
