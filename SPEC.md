@@ -649,8 +649,15 @@ infer success or clear expense/unrelated registrations. Queued old work, repeats
 and re-enrollment of that same living namespace MUST remain fenced; rotating to
 a successor MUST reject both late ends and newest-epoch adoption. This guarantee
 is current-daemon original-session retirement, not same-ID clear/resume/fork or
-restart-transition qualification. Callbacks MUST NOT renew leases, prove idle
-health or bill expense; those require separate contracts. Non-exact argv retains
+restart-transition qualification. A new changed native-authorized Codex fact MAY
+stamp original observer proof using its server-owned positive sequence. Duplicate,
+stale, failed and end facts MUST NOT refresh proof. Existing daemon maintenance MAY
+renew the 60s lease only while proof is less than 30s old AND exact creator/root
+ancestry remains live. Parent survival or replay MUST NOT renew after proof loss.
+Callbacks MUST NOT directly renew leases, bill expense or claim continuous idle
+health/no-gap delivery. Loss has the existing finite 30s proof plus 60s lease grace;
+same-ID/restart and continuous idle-source qualification remain separate work.
+Non-exact argv retains
 ordinary CLI startup and validation.
 The separate exact `mez harness-source <capsule-json>` argv MAY bridge curated
 one-shot command APIs whose stdin is closed. It MUST execute before HOME/config/

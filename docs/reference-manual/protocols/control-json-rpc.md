@@ -656,8 +656,13 @@ retires only the captured native-qualified original first epoch through the same
 ordered settlement and exact cleanup. It cannot kill the creator, infer success,
 clear expense or affect another session/successor. Late queued callbacks and
 same-lifetime re-enrollment remain fenced. This is current-daemon retirement,
-not same-ID transition or restart qualification. Idle health/renewal and usage
-remain unavailable; no callback bills or grants native task powers. Installation
+not same-ID transition or restart qualification. Changed native-authorized facts
+may stamp original proof with server sequence; duplicate/stale/failed/end facts
+cannot refresh it. The existing 30s monotonic window plus native creator/root
+liveness allows daemon maintenance (not the callback) to renew the 60s lease.
+Proof loss is connection-lost despite parent survival, with finite 30s+60s grace.
+This does not prove continuous idle observer health or no-gap delivery; usage
+remains unavailable and no callback grants native task powers. Installation
 is not proof of actual vendor loading or callback delivery.
 The documented curated argv API identifies its direct creator contract; only
 the helper's real same-user Unix origin/current writer, native captured parent

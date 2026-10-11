@@ -553,3 +553,121 @@ async fn external_codex_session_end_retires_only_original_namespace() {
             .is_empty()
     );
 }
+
+/// Fresh native-authorized callback facts provide only finite observer proof.
+/// Daemon maintenance can renew while proof is recent; creator survival or an
+/// identical replay cannot revive expired proof or claim continuous idle health.
+#[tokio::test(flavor = "current_thread")]
+async fn external_codex_callback_freshness_is_finite_and_replay_time_inert() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    let (_socket, connection) = child(&mut fixture).await;
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&declaration(), &connection)
+        .unwrap();
+    settle(&mut fixture, work, &connection).await;
+    assert_eq!(
+        fixture.service.external_agent_rows()[0]["telemetry_health"],
+        "awaiting-first-proof"
+    );
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&callback("UserPromptSubmit", "a"), &connection)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &connection).await["result"]["changed"],
+        true
+    );
+    assert_eq!(
+        fixture.service.external_agent_rows()[0]["telemetry_health"],
+        "enrolled"
+    );
+    let digest = *fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .keys()
+        .next()
+        .unwrap();
+    let short = current_unix_seconds() + 10;
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .bindings
+        .get_mut(&digest)
+        .unwrap()
+        .expires = short;
+    fixture.service.renew_connected_external_observers();
+    let renewed = fixture.service.control.external_agents().bindings[&digest].expires;
+    assert!(renewed > short);
+    let aged = Instant::now() - Duration::from_secs(31);
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .bindings
+        .get_mut(&digest)
+        .unwrap()
+        .enrollment
+        .as_mut()
+        .unwrap()
+        .curated_observer
+        .as_mut()
+        .unwrap()
+        .observed_at = Some(aged);
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&callback("UserPromptSubmit", "a"), &connection)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &connection).await["result"]["changed"],
+        false
+    );
+    let proof = fixture.service.control.external_agents().bindings[&digest]
+        .enrollment
+        .as_ref()
+        .unwrap()
+        .curated_observer
+        .as_ref()
+        .unwrap();
+    assert_eq!(proof.observed_at, Some(aged));
+    let mut failed = fixture
+        .service
+        .prepare_external_helper_presentation(
+            &callback("UserPromptSubmit", "failed-proof"),
+            &connection,
+        )
+        .unwrap();
+    failed.deadline = Instant::now();
+    assert!(
+        settle(&mut fixture, failed, &connection)
+            .await
+            .get("error")
+            .is_some()
+    );
+    assert_eq!(
+        fixture.service.control.external_agents().bindings[&digest]
+            .enrollment
+            .as_ref()
+            .unwrap()
+            .curated_observer
+            .as_ref()
+            .unwrap()
+            .observed_at,
+        Some(aged)
+    );
+    assert_eq!(
+        fixture.service.external_agent_rows()[0]["telemetry_health"],
+        "connection-lost"
+    );
+    assert!(fixture.connection.unix_origin().unwrap().is_live());
+    fixture.service.renew_connected_external_observers();
+    assert_eq!(
+        fixture.service.control.external_agents().bindings[&digest].expires,
+        renewed
+    );
+}

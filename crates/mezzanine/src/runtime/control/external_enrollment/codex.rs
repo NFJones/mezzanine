@@ -4,8 +4,8 @@
 //! actor settlement prove native writer/direct-parent/root/generation before any
 //! effect. No supplied credential, generation, title or newest-epoch discovery
 //! is admitted. Turn order is arrival-based; known retired turns stay fenced.
-//! SessionEnd retires only that exact session. Source replacement, idle proof
-//! and accounting remain separate; session end never attests creator death.
+//! SessionEnd retires only that exact session. New native facts stamp finite
+//! observer proof, not continuous idle health; end never attests creator death.
 
 use super::*;
 
@@ -207,8 +207,9 @@ impl RuntimeSessionService {
     }
 
     /// Applies a native-authorized original callback using daemon-owned sequence
-    /// and bounded turn fences. Only SessionEnd retires the exact source; no event renews, bills or proves idle
-    /// observer health, and Stop means only a ready boundary, never success.
+    /// and bounded turn fences. Only SessionEnd retires the exact source; changed
+    /// native facts stamp finite proof for existing daemon maintenance, never
+    /// direct renewal/billing/continuous idle health. Stop is ready, not success.
     pub(super) fn commit_external_codex_observation(
         &mut self,
         digest: [u8; 32],
@@ -250,6 +251,13 @@ impl RuntimeSessionService {
             .and_then(|binding| binding.enrollment.as_mut())
             .ok_or_else(|| MezError::invalid_state("Codex callback owner disappeared"))?;
         source.codex_turns.commit(event, state);
+        // Only a changed fact reached this point after native/order settlement.
+        // Replays and SessionEnd return above without extending observer proof.
+        source
+            .curated_observer
+            .as_mut()
+            .ok_or_else(|| MezError::invalid_state("Codex observer proof owner disappeared"))?
+            .observe(sequence)?;
         Ok(reply)
     }
 }

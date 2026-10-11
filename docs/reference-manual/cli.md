@@ -77,8 +77,10 @@ without fd3 or a launcher credential. Every outcome returns neutral JSON; missin
 route/input or daemon outage cannot expose errors or initialize a client.
 Prompt/Stop/Interrupt update only the original fixed first epoch through native
 callback proof and daemon sequencing. SessionEnd retires only the native-qualified
-original first-epoch session, not its creator process or a successor. Idle
-renewal/freshness and usage remain unwired. Only exact helper argv uses
+original first-epoch session, not its creator process or a successor. Changed
+native callbacks provide finite 30s proof for existing daemon 60s lease maintenance;
+replays/creator survival do not restore lost proof. Continuous idle health and
+usage remain unqualified. Only exact helper argv uses
 this boundary, not ordinary CLI commands or option-bearing variants.
 `--root` is an optional override, not a prerequisite: compiled adapters select
 their documented user root from vendor environment/defaults. Those selected roots
@@ -142,11 +144,16 @@ arrival-ordered and original-epoch fenced. Known retired turn IDs cannot repaint
 new turns; exact retries are inert, Stop is ready rather than success and later
 Stop cannot downgrade interruption. The 4096-turn run-local fence rejects
 exhaustion without eviction; unknown new prompts do not prove vendor chronology.
-Callbacks do not renew leases or prove idle observer health, so registration
-still exposes awaiting-first-proof and unavailable usage. SessionEnd uses exact
+Callbacks do not directly renew leases. A new native-qualified changed fact
+provides finite observer proof: recent proof plus live creator/root permits daemon
+maintenance to renew its 60s lease, while proof loss remains connection-lost even
+if the creator lives. Duplicate/stale/failed/end facts do not refresh proof;
+the maximum grace remains 30s proof plus 60s lease, not continuous idle certainty.
+Initial admission exposes awaiting-first-proof and usage stays unavailable.
+SessionEnd uses exact
 ordered retirement, leaves its live creator/expense/unrelated sessions untouched
 and fences queued work and same-lifetime resurrection. Same-ID transitions and
-restart attachment remain unqualified; idle renewal and broader client-session
+restart attachment remain unqualified; continuous idle-source and broader client-session
 association remain unfinished. Ownership installation is
 not proof of loaded/enrolled hooks. No token expense is inferred from hooks or
 ambiguous context/cumulative structured samples.
