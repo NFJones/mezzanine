@@ -8,6 +8,276 @@ use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionAct
 use crate::runtime::current_unix_seconds;
 use crate::storage::token_usage::TokenUsageStore;
 
+/// Group admission must not spend a slot per finalized message. Real legacy
+/// registration/admission supplies captured scope, while the mapped-source SQL
+/// and preexisting ledger expense here are explicitly synthetic fixtures, not
+/// ordinary native producer authority. Full-cache migration preserves original
+/// reset baselines; reversed snapshots and pending old replies cannot recreate
+/// members or revive reset expense, and unrelated groups reject before writes.
+#[test]
+fn runtime_external_opencode_groups_preserve_reset_and_late_member_capacity() {
+    qualify_opencode_group_projection(18, false);
+}
+
+/// A canonical-ID checkpoint may commit before migration but arrive at the
+/// actor afterward. It must become a distinct member rather than disappear or
+/// overwrite the aggregate; later versions, reset and snapshots conserve it.
+#[test]
+fn runtime_external_opencode_delayed_canonical_id_preserves_expense() {
+    qualify_opencode_group_projection(4, true);
+}
+
+/// Explicit long-session qualification drives 4,097 distinct adopted messages
+/// through the real admitted worker and actor cache, not only normalization.
+/// Native ordinary-producer association remains deliberately outside this
+/// synthetic mapped legacy fixture; expense conservation and one cache group
+/// are checked beyond the old 4,096 projection-entry bound.
+#[test]
+#[ignore = "explicit bounded 4097-member ledger/actor workload"]
+fn runtime_external_opencode_group_projection_exceeds_legacy_stream_cap() {
+    qualify_opencode_group_projection(4097, false);
+}
+
+/// Shared isolated legacy-scope fixture for short reset/order and long capacity
+/// controls. Count varies only synthetic finalized-message metadata, not scope.
+fn qualify_opencode_group_projection(count: u64, canonical: bool) {
+    let (mut service, mut connection, mut params, store) = fixture();
+    service.set_external_binding_harness_for_tests("opencode");
+    params["counters"]["cache_write_input_tokens"] = 0.into();
+    let seed_request = crate::control::parse_json_rpc_request(
+        &serde_json::json!({
+            "jsonrpc":"2.0","id":"seed","method":"agent/external/usage","params":params
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let seed = service
+        .prepare_external_usage(&seed_request, &connection)
+        .unwrap();
+    let owner = seed.report.owner.clone();
+    let project = seed.report.project.clone();
+    service.complete_external_usage(
+        seed,
+        Err(crate::error::MezError::conflict("fixture scope lookup")),
+    );
+    let now = params["observed_at"].as_u64().unwrap();
+    let sql = rusqlite::Connection::open(store.path()).unwrap();
+    sql.execute(
+        "INSERT INTO external_usage_sources(witness,harness,owner) VALUES(?1,'opencode',?2)",
+        rusqlite::params!["a".repeat(64), owner],
+    )
+    .unwrap();
+    drop(sql);
+    let make = |index: u64, model: &str| {
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "role":"assistant","sessionID":"usage-run","id":format!("group-message-{index}"),
+            "providerID":"provider","modelID":model,"time":{"completed":now*1000+index%1000},
+            "tokens":{"input":7,"output":2,"reasoning":2,"cache":{"read":3,"write":0}}
+        }))
+        .unwrap();
+        let pair = crate::integrations::bootstrap::opencode::completed_observation(
+            "fixture",
+            "usage-run",
+            &owner,
+            project.clone(),
+            &bytes,
+        )
+        .unwrap()
+        .unwrap();
+        let mut body = params.clone();
+        body["epoch"] = pair.legacy().epoch.clone().into();
+        body["event_id"] = pair.legacy().event_id.clone().into();
+        body["model"] = model.into();
+        let request = crate::control::parse_json_rpc_request(&serde_json::json!({
+            "jsonrpc":"2.0","id":format!("group-{index}"),"method":"agent/external/usage","params":body
+        }).to_string()).unwrap();
+        (request, pair)
+    };
+    let (request0, pair0) = make(0, "model");
+    let (request1, pair1) = make(1, "model");
+    for request in [&request0, &request1] {
+        let work = service
+            .prepare_external_usage(request, &connection)
+            .unwrap();
+        let commit = work.execute().unwrap();
+        let reply: serde_json::Value =
+            serde_json::from_str(&service.complete_external_usage(work, Ok(commit))).unwrap();
+        assert_eq!(reply["result"]["durable"], true);
+    }
+    assert_eq!(service.external_usage_projection_counts_for_tests(), (2, 0));
+    let generic_body = if canonical {
+        let mut body = params.clone();
+        body["epoch"] =
+            crate::storage::token_usage::external_observation_epoch(pair0.observation())
+                .unwrap()
+                .into();
+        body["event_id"] = "generic-1".into();
+        Some(body)
+    } else {
+        None
+    };
+    let generic = generic_body.as_ref().map(|body| {
+        let request = crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"generic","method":"agent/external/usage","params":body}).to_string()).unwrap();
+        let work = service.prepare_external_usage(&request, &connection).unwrap();
+        let commit = work.execute().unwrap();
+        (work, commit)
+    });
+    service.set_external_usage_stream_limit_for_tests(2);
+    let delayed = service
+        .prepare_external_usage(&request0, &connection)
+        .unwrap();
+    let delayed_commit = delayed.execute().unwrap();
+    service.reset_agent_token_usage_for_pane("%1");
+    let older = service
+        .prepare_external_opencode_handoff(&request0, &connection, pair0.clone())
+        .unwrap();
+    let newer = service
+        .prepare_external_opencode_handoff(&request1, &connection, pair1)
+        .unwrap();
+    let older_commit = older.execute().unwrap();
+    let newer_commit = newer.execute().unwrap();
+    for (work, commit) in [
+        (newer, newer_commit),
+        (older, older_commit),
+        (delayed, delayed_commit),
+    ] {
+        let reply: serde_json::Value =
+            serde_json::from_str(&service.complete_external_usage(work, Ok(commit))).unwrap();
+        assert_eq!(reply["result"]["durable"], true);
+        assert_eq!(service.external_usage_projection_counts_for_tests(), (1, 2));
+        assert_eq!(
+            service
+                .external_token_usage(Some("%1"))
+                .values()
+                .next()
+                .unwrap()
+                .input_tokens,
+            0
+        );
+    }
+    service.set_external_usage_stream_limit_for_tests(1);
+    if let Some((work, commit)) = generic {
+        let reply: serde_json::Value =
+            serde_json::from_str(&service.complete_external_usage(work, Ok(commit))).unwrap();
+        assert_eq!(reply["result"]["durable"], true);
+        assert_eq!(
+            service
+                .external_token_usage(Some("%1"))
+                .values()
+                .next()
+                .unwrap()
+                .input_tokens,
+            10,
+            "delayed canonical checkpoint must be an additional member"
+        );
+        let mut body = generic_body.unwrap();
+        body["sequence"] = 2.into();
+        body["event_id"] = "generic-2".into();
+        let request = crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"generic","method":"agent/external/usage","params":body}).to_string()).unwrap();
+        let work = service
+            .prepare_external_usage(&request, &connection)
+            .unwrap();
+        let commit = work.execute().unwrap();
+        service.complete_external_usage(work, Ok(commit));
+        assert_eq!(
+            service
+                .external_token_usage(Some("%1"))
+                .values()
+                .next()
+                .unwrap()
+                .input_tokens,
+            20
+        );
+        service.reset_agent_token_usage_for_pane("%1");
+    }
+    for index in 2..count {
+        if index % 16 == 2 {
+            let renewal =
+                serde_json::json!({"jsonrpc":"2.0","id":"renew","method":"agent/external/renew",
+                "params":{"launch_token":params["launch_token"],"generation":params["generation"],
+                    "external_session_id":params["external_session_id"]}})
+                .to_string();
+            let reply: serde_json::Value = serde_json::from_str(
+                &service.dispatch_runtime_control_body_for_connection(&renewal, &mut connection),
+            )
+            .unwrap();
+            assert!(
+                reply.get("error").is_none(),
+                "normal renewal must retain the fixture capability"
+            );
+        }
+        let (request, pair) = make(index, "model");
+        if index == 2 {
+            assert_eq!(
+                service
+                    .prepare_external_usage(&request, &connection)
+                    .unwrap_err()
+                    .kind(),
+                crate::error::MezErrorKind::RateLimited,
+                "legacy per-message admission cannot spend a new slot"
+            );
+        }
+        // Existing incurred expense, never a synthesized original request marker.
+        store.ingest_external(pair.legacy(), now).unwrap();
+        let work = service
+            .prepare_external_opencode_handoff(&request, &connection, pair)
+            .unwrap();
+        let commit = work.execute().unwrap();
+        let reply: serde_json::Value =
+            serde_json::from_str(&service.complete_external_usage(work, Ok(commit))).unwrap();
+        assert_eq!(reply["result"]["durable"], true);
+        assert_eq!(
+            service.external_usage_projection_counts_for_tests(),
+            (1, index as usize + 1 + usize::from(canonical))
+        );
+    }
+    assert_eq!(
+        service
+            .external_token_usage(Some("%1"))
+            .values()
+            .next()
+            .unwrap()
+            .input_tokens,
+        (count - 2) * 10
+    );
+    assert_eq!(
+        external_ledger_input(&store),
+        (count as i64) * 10 + if canonical { 20 } else { 0 }
+    );
+    let (other, pair) = make(count, "other-model");
+    assert_eq!(
+        service
+            .prepare_external_opencode_handoff(&other, &connection, pair)
+            .unwrap_err()
+            .kind(),
+        crate::error::MezErrorKind::RateLimited
+    );
+    assert_eq!(
+        service.external_usage_reservation_counts_for_tests(),
+        (0, 0)
+    );
+    assert_eq!(
+        external_ledger_input(&store),
+        (count as i64) * 10 + if canonical { 20 } else { 0 }
+    );
+    service.reset_agent_token_usage_for_pane("%1");
+    let work = service
+        .prepare_external_opencode_handoff(&request0, &connection, pair0)
+        .unwrap();
+    let commit = work.execute().unwrap();
+    service.complete_external_usage(work, Ok(commit));
+    assert_eq!(
+        service
+            .external_token_usage(Some("%1"))
+            .values()
+            .next()
+            .unwrap()
+            .input_tokens,
+        0
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// A typed receipt handoff may attach only to exact already-admitted legacy
 /// work. Real legacy registration supplies pane/provenance authority; the source
 /// mapping below is explicitly synthetic storage setup, not ordinary native

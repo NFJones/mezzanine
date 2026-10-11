@@ -722,6 +722,15 @@ worker publication carries commit and group after success; a second post-commit
 read is not coherent evidence. Frozen report checks fence reservation/execution/
 settlement, and rejection releases the original stream key. No new RPC, source
 recovery, actor-cache consolidation or reset-baseline migration is implied.
+Separately, internal exact-pair admission reserves the canonical group before
+capacity enforcement, reusing unchanged legacy authorization. A same-scope
+existing legacy member may supply one replacement slot; unrelated reservations
+remain conservatively counted. The actor reconciles only actual published group
+evidence, validates original scope, preserves member high-water versions and
+the sum of original reset baselines, then replaces cache entries atomically.
+Bounded routing keeps delayed member replies in their group; stale snapshots
+and replay cannot restore reset expense. This is not ordinary producer ingress,
+native source association, historical import or cross-owner continuity.
 Usage admission explicitly rejects internal `observation` mode before reserving
 legacy accounting work; field-name schema validation is not a mode enum or an
 authorization substitute. Ordinary bindings remain rejected on that legacy path.

@@ -1179,6 +1179,17 @@ Reservation, execution, release and settlement MUST retain/check the original
 frozen report; metadata mutation MUST NOT redirect projection or leak a reserved
 stream. This coherent evidence alone MUST NOT consolidate actor caches or reset
 baselines, authorize ordinary ingress or recover another source.
+An internal exact-pair preparation MAY reserve the canonical group before
+capacity enforcement under unchanged legacy capability authorization. It MAY
+credit only its existing current-scope legacy member as a replacement slot;
+unrelated reservations MUST remain conservatively counted. Actor settlement MAY
+reconcile only an actual worker-published snapshot. It MUST validate original
+pane/root/model/project scope, retain unique member high-water checkpoints and
+sum the original reset baselines before atomically replacing old entries.
+Stale/reordered snapshots and delayed legacy member completions MUST NOT create
+duplicate projections or revive reset expense. Member routing MUST remain
+bounded and never silently evicted. This internal migration MUST NOT enable
+ordinary producer reporting, historical import or cross-owner/source recovery.
 Telemetry schema 7 adds source-scoped opaque request markers with immutable
 original project/admission time and one optional observation completion link.
 `agent/external/usage-begin` MUST require an existing kernel-qualified persistent

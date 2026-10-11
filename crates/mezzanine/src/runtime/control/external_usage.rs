@@ -27,9 +27,13 @@ const MAX_IN_FLIGHT: usize = 32;
 #[derive(Debug, Default)]
 pub(super) struct ExternalUsageProjection {
     pending: BTreeSet<u64>,
-    reservations: BTreeMap<String, usize>,
+    /// Exact actor-held capacity reservations, including canonical group keys.
+    pub(super) reservations: BTreeMap<String, usize>,
     next_admission: u64,
-    streams: BTreeMap<String, ProjectedStream>,
+    /// Current absolute projections, never provider-reported completion deltas.
+    pub(super) streams: BTreeMap<String, ProjectedStream>,
+    /// Bounded routing evidence for members already consolidated into groups.
+    pub(super) member_groups: BTreeMap<String, String>,
     /// Test-only small boundary for exercising production admission logic.
     #[cfg(test)]
     stream_limit: Option<usize>,
@@ -43,15 +47,25 @@ pub(super) struct ExternalUsageProjection {
 
 /// One absolute durable checkpoint and its pane-view reset baseline.
 #[derive(Debug)]
-struct ProjectedStream {
-    pane_id: String,
-    process: RuntimePaneProcessIdentity,
-    project: Option<crate::storage::token_usage::AccountingProjectId>,
-    harness: String,
-    model: ModelTokenUsageKey,
-    revision: u64,
-    totals: ExternalCounters,
-    reset_baseline: ExternalCounters,
+pub(super) struct ProjectedStream {
+    /// Original pane, independent of later focus or account attachment.
+    pub(super) pane_id: String,
+    /// Exact original local root incarnation.
+    pub(super) process: RuntimePaneProcessIdentity,
+    /// Immutable expense attribution.
+    pub(super) project: Option<crate::storage::token_usage::AccountingProjectId>,
+    /// Immutable reporting harness.
+    pub(super) harness: String,
+    /// Immutable response provider/model group.
+    pub(super) model: ModelTokenUsageKey,
+    /// Highest absolute checkpoint or derived group revision.
+    pub(super) revision: u64,
+    /// Absolute durable expense evidence, not a newly charged delta.
+    pub(super) totals: ExternalCounters,
+    /// Actor-owned pane reset baseline.
+    pub(super) reset_baseline: ExternalCounters,
+    /// Unique member high-water evidence for a consolidated projection.
+    pub(super) members: Option<BTreeMap<String, ExternalUsageCommit>>,
 }
 
 /// One worker publication; group evidence and commit become visible together.
@@ -76,9 +90,11 @@ pub(crate) struct ExternalUsageWork {
     /// Private acceptance copy fences execution, settlement and reservation release.
     admitted_report: ExternalUsageReport,
     /// Exact originating pane, independent of later client focus.
-    pane_id: String,
+    pub(super) pane_id: String,
     /// Root incarnation required for pane-view attribution.
-    process: RuntimePaneProcessIdentity,
+    pub(super) process: RuntimePaneProcessIdentity,
+    /// Exact reserved key, captured before admission and never caller-selected.
+    projection_id: Option<String>,
     /// Acceptance clock used for retention and timestamp validation.
     pub now: u64,
     /// Original ready marker for native reports; absent for legacy streams.
@@ -209,6 +225,13 @@ impl RuntimeSessionService {
         self.control.external_agents_mut().usage.stream_limit = Some(limit);
     }
 
+    /// Reports bounded projection/index size without revealing stream identities.
+    #[cfg(test)]
+    pub(crate) fn external_usage_projection_counts_for_tests(&self) -> (usize, usize) {
+        let projection = &self.control.external_agents().usage;
+        (projection.streams.len(), projection.member_groups.len())
+    }
+
     /// Installs a deterministic off-actor storage barrier for this test service.
     #[cfg(test)]
     pub(crate) fn gate_external_usage_worker_for_tests(
@@ -225,6 +248,33 @@ impl RuntimeSessionService {
         &mut self,
         request: &JsonRpcRequest,
         connection: &ControlConnectionState,
+    ) -> Result<ExternalUsageWork> {
+        self.prepare_external_usage_report(request, connection, None)
+    }
+
+    /// Internal exact-pair migration reuses legacy authorization, but reserves
+    /// canonical group capacity before any storage work. Not an ordinary RPC or
+    /// source/request association; unmapped ledger evidence still fails closed.
+    #[allow(
+        dead_code,
+        reason = "qualified adapter migration supplies exact legacy evidence"
+    )]
+    pub(crate) fn prepare_external_opencode_handoff(
+        &mut self,
+        request: &JsonRpcRequest,
+        connection: &ControlConnectionState,
+        pair: crate::integrations::bootstrap::opencode::CompletedObservation,
+    ) -> Result<ExternalUsageWork> {
+        self.prepare_external_usage_report(request, connection, Some(pair))
+    }
+
+    /// Parses the unchanged capability-only report before accepting an optional
+    /// code-owned exact pair. Pair mismatch reserves nothing and grants no role.
+    fn prepare_external_usage_report(
+        &mut self,
+        request: &JsonRpcRequest,
+        connection: &ControlConnectionState,
+        pair: Option<crate::integrations::bootstrap::opencode::CompletedObservation>,
     ) -> Result<ExternalUsageWork> {
         self.require_live()?;
         if request.method != "agent/external/usage" || connection.initialized() {
@@ -321,6 +371,11 @@ impl RuntimeSessionService {
             ),
             counters,
         };
+        if pair.as_ref().is_some_and(|pair| pair.legacy() != &report) {
+            return Err(MezError::conflict(
+                "OpenCode handoff does not match authorized report",
+            ));
+        }
         let work = ExternalUsageWork {
             admission: 0,
             request_id: request.id.clone(),
@@ -333,7 +388,8 @@ impl RuntimeSessionService {
             process: binding.process.clone(),
             now: current_unix_seconds(),
             request_marker: None,
-            opencode_handoff: None,
+            projection_id: None,
+            opencode_handoff: pair,
             published: Arc::new(OnceLock::new()),
             #[cfg(test)]
             worker_gate: self.control.external_agents().usage.worker_gate.clone(),
@@ -472,6 +528,7 @@ impl RuntimeSessionService {
             process: binding.process.clone(),
             now,
             request_marker: Some(marker),
+            projection_id: None,
             opencode_handoff: None,
             published: Arc::new(OnceLock::new()),
             #[cfg(test)]
@@ -491,11 +548,22 @@ impl RuntimeSessionService {
                 "external report changed before reservation",
             ));
         }
-        let stream_id = crate::storage::token_usage::external_usage_stream_id(
-            &work.report.owner,
-            &work.report.epoch,
-        )?;
+        let stream_id = if let Some(pair) = &work.opencode_handoff {
+            let epoch =
+                crate::storage::token_usage::external_observation_epoch(pair.observation())?;
+            crate::storage::token_usage::external_usage_stream_id(&work.report.owner, &epoch)?
+        } else {
+            crate::storage::token_usage::external_usage_stream_id(
+                &work.report.owner,
+                &work.report.epoch,
+            )?
+        };
         let projection = &mut self.control.external_agents_mut().usage;
+        let stream_id = projection
+            .member_groups
+            .get(&stream_id)
+            .cloned()
+            .unwrap_or(stream_id);
         #[cfg(test)]
         let stream_limit = projection.stream_limit.unwrap_or(MAX_PROJECTED_STREAMS);
         #[cfg(not(test))]
@@ -507,8 +575,25 @@ impl RuntimeSessionService {
             .keys()
             .filter(|id| !projection.streams.contains_key(*id))
             .count();
+        let replaces_member = work
+            .opencode_handoff
+            .as_ref()
+            .and_then(|pair| {
+                crate::storage::token_usage::external_usage_stream_id(
+                    &pair.legacy().owner,
+                    &pair.legacy().epoch,
+                )
+                .ok()
+            })
+            .filter(|id| id != &stream_id)
+            .and_then(|id| projection.streams.get(&id))
+            .is_some_and(|stream| {
+                stream.members.is_none() && super::external_usage_group::same_scope(stream, &work)
+            });
         if projection.pending.len() >= MAX_IN_FLIGHT
-            || (!existing && projection.streams.len() + reserved_new >= stream_limit)
+            || (!existing
+                && projection.streams.len() + reserved_new - usize::from(replaces_member)
+                    >= stream_limit)
         {
             return Err(MezError::new(
                 crate::error::MezErrorKind::RateLimited,
@@ -520,6 +605,7 @@ impl RuntimeSessionService {
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("external accounting admission exhausted"))?;
         work.admission = projection.next_admission;
+        work.projection_id = Some(stream_id.clone());
         projection.pending.insert(work.admission);
         *projection.reservations.entry(stream_id).or_default() += 1;
         Ok(work)
@@ -532,14 +618,12 @@ impl RuntimeSessionService {
         if !projection.pending.remove(&work.admission) {
             return;
         }
-        if let Ok(id) = crate::storage::token_usage::external_usage_stream_id(
-            &work.admitted_report.owner,
-            &work.admitted_report.epoch,
-        ) && let Some(count) = projection.reservations.get_mut(&id)
+        if let Some(id) = &work.projection_id
+            && let Some(count) = projection.reservations.get_mut(id)
         {
             *count -= 1;
             if *count == 0 {
-                projection.reservations.remove(&id);
+                projection.reservations.remove(id);
             }
         }
     }
@@ -559,14 +643,12 @@ impl RuntimeSessionService {
                 "external accounting admission already settled",
             );
         }
-        if let Ok(id) = crate::storage::token_usage::external_usage_stream_id(
-            &work.admitted_report.owner,
-            &work.admitted_report.epoch,
-        ) && let Some(count) = projection.reservations.get_mut(&id)
+        if let Some(id) = &work.projection_id
+            && let Some(count) = projection.reservations.get_mut(id)
         {
             *count -= 1;
             if *count == 0 {
-                projection.reservations.remove(&id);
+                projection.reservations.remove(id);
             }
         }
         let result = if work.report != work.admitted_report {
@@ -611,22 +693,49 @@ impl RuntimeSessionService {
         let projection = &mut self.control.external_agents_mut().usage;
         match result {
             Ok(commit) => {
-                let stream = projection
-                    .streams
-                    .entry(commit.stream_id.clone())
-                    .or_insert_with(|| ProjectedStream {
-                        pane_id: work.pane_id,
-                        process: work.process,
-                        project: work.report.project,
-                        harness: work.report.harness,
-                        model: work.report.model,
-                        revision: 0,
-                        totals: commit.totals.zero_like(),
-                        reset_baseline: commit.totals.zero_like(),
-                    });
-                if commit.revision > stream.revision {
-                    stream.revision = commit.revision;
-                    stream.totals = commit.totals;
+                #[cfg(test)]
+                let limit = projection.stream_limit.unwrap_or(MAX_PROJECTED_STREAMS);
+                #[cfg(not(test))]
+                let limit = MAX_PROJECTED_STREAMS;
+                let projected = if let Some(group) = work
+                    .published
+                    .get()
+                    .and_then(|publication| publication.group.as_ref())
+                {
+                    super::external_usage_group::reconcile(projection, &work, group, limit)
+                        .map(|()| true)
+                } else {
+                    super::external_usage_group::complete_member(projection, &work, &commit)
+                };
+                let projected = match projected {
+                    Ok(projected) => projected,
+                    Err(error) => {
+                        return crate::runtime::runtime_json_rpc_error(
+                            &work.request_id,
+                            error.kind(),
+                            error.message(),
+                        );
+                    }
+                };
+                if !projected {
+                    let stream = projection
+                        .streams
+                        .entry(commit.stream_id.clone())
+                        .or_insert_with(|| ProjectedStream {
+                            pane_id: work.pane_id,
+                            process: work.process,
+                            project: work.report.project,
+                            harness: work.report.harness,
+                            model: work.report.model,
+                            revision: 0,
+                            totals: commit.totals.zero_like(),
+                            reset_baseline: commit.totals.zero_like(),
+                            members: None,
+                        });
+                    if commit.revision > stream.revision {
+                        stream.revision = commit.revision;
+                        stream.totals = commit.totals;
+                    }
                 }
                 serde_json::json!({"jsonrpc":"2.0","id":serde_json::from_str::<serde_json::Value>(&work.request_id).unwrap_or_default(),
                     "result":{"accepted":true,"durable":true,"applied":commit.applied,"revision":commit.revision,

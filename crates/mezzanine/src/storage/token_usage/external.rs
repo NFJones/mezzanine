@@ -119,7 +119,7 @@ impl ExternalCounters {
     }
 
     /// Adds disjoint observations with checked arithmetic and unknown fidelity.
-    fn add(self, delta: Self) -> Result<Self> {
+    pub(crate) fn add(self, delta: Self) -> Result<Self> {
         fn scalar(a: u64, b: u64) -> Result<u64> {
             a.checked_add(b)
                 .filter(|n| *n <= i64::MAX as u64)
