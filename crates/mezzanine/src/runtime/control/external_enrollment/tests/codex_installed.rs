@@ -55,8 +55,16 @@ async fn external_codex_installed_session_start_admits_native_creator_without_la
     let (handle, actor) =
         AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
     let task = tokio::spawn(actor.run());
-    for _ in 0..2 {
-        let launch = serde_json::json!({"command":command,"event":{"hook_event_name":"SessionStart","session_id":"session-a","source":"startup","prompt":"PRIVATE","transcript_path":"PRIVATE","usage":{"input_tokens":999}}}).to_string();
+    for (event, turn) in [
+        ("SessionStart", "a"),
+        ("SessionStart", "a"),
+        ("UserPromptSubmit", "a"),
+        ("Stop", "a"),
+        ("UserPromptSubmit", "b"),
+        ("Interrupt", "b"),
+        ("Stop", "a"),
+    ] {
+        let launch = serde_json::json!({"command":command,"event":{"hook_event_name":event,"session_id":"session-a","source":"startup","turn_id":turn,"stop_hook_active":false,"prompt":"PRIVATE","transcript_path":"PRIVATE","usage":{"input_tokens":999}}}).to_string();
         fixture.socket.write_all(&[9]).await.unwrap();
         fixture
             .socket
@@ -107,6 +115,15 @@ async fn external_codex_installed_session_start_admits_native_creator_without_la
     ));
     assert!(source.observers.is_empty());
     assert!(registry.enrollments.pending.is_empty());
+    let presentation = binding
+        .registration
+        .as_ref()
+        .unwrap()
+        .presentation
+        .as_ref()
+        .unwrap();
+    assert_eq!(presentation.sequence, 4);
+    assert_eq!(presentation.state, "interrupted");
     assert_eq!(
         fixture.service.external_agent_rows()[0]["telemetry_health"],
         "awaiting-first-proof"

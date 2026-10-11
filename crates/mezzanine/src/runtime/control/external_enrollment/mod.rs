@@ -36,6 +36,8 @@ const ADMISSION_BUDGET: Duration = Duration::from_secs(2);
 /// Retired instance identities remain fenced for the live run; no silent eviction.
 const MAX_OBSERVER_INSTANCES: usize = 128;
 
+mod codex;
+mod codex_order;
 mod curated;
 mod helper;
 mod helper_usage;
@@ -92,6 +94,8 @@ pub(super) struct EnrollmentBinding {
     /// Explicit recent original-epoch proof for a declared parent observer;
     /// native creator survival alone never supplies this proof.
     curated_observer: Option<curated::CuratedObserver>,
+    /// Bounded original-epoch Codex turn replay state, never billing or liveness.
+    codex_turns: codex::CodexTurns,
     /// Redacted in Debug and never persisted or placed in generic replay caches.
     token: SecretString,
 }
@@ -135,6 +139,13 @@ impl ExternalEnrollmentWork {
     /// Resolves one selected root against the exact live socket origin. This
     /// synchronous bounded reader must execute on a worker, never the actor.
     pub(crate) fn observe(&self) -> Result<()> {
+        if let Some(order) = self
+            .helper
+            .as_ref()
+            .and_then(|helper| helper.codex_order.as_ref())
+        {
+            order.wait(self.deadline)?;
+        }
         if Instant::now() >= self.deadline {
             return Err(MezError::conflict(
                 "external enrollment observation expired",
@@ -483,6 +494,11 @@ impl RuntimeSessionService {
         observed: Result<()>,
         connection: &ControlConnectionState,
     ) -> String {
+        let _order = codex_order::CodexOrderSettlement(
+            work.helper
+                .as_ref()
+                .and_then(|helper| helper.codex_order.clone()),
+        );
         let result = self.commit_external_enrollment(&work, observed, connection);
         if let Some(end) = work
             .helper
@@ -665,6 +681,7 @@ impl RuntimeSessionService {
                     instances: BTreeSet::from([work.observer_instance.clone()]),
                     observers: vec![Arc::downgrade(&work.origin)],
                     curated_observer: None,
+                    codex_turns: Default::default(),
                     token: SecretString::from(token),
                 }),
                 pi_lifecycle: None,

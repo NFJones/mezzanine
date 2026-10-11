@@ -1448,6 +1448,7 @@ impl RuntimeSessionService {
                     | "agent/external/curated-heartbeat"
                     | "agent/external/helper-presentation"
                     | "agent/external/helper-observe"
+                    | "agent/external/codex-observe"
             ) {
                 return runtime_json_rpc_error(
                     &request.id,

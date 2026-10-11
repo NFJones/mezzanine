@@ -4,7 +4,7 @@
 //! Standard MEZ routing selects a candidate, never authority; native writer/parent/
 //! root evidence remains daemon-owned. No fd3, credential, general RPC, transcript,
 //! subprocess or retry is used. Replies/errors never reach vendor output. Later
-//! lifecycle/freshness/usage callbacks are inert until their separate owners exist.
+//! SessionEnd/freshness/usage remain inert until their separate owners exist.
 
 use super::{MezError, Result, SocketSelection, Write};
 use crate::integrations::bootstrap::codex::{self, Observation};
@@ -35,26 +35,17 @@ pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u
     Some(u8::from(writeln!(stdout, "{{}}").is_err()))
 }
 
-/// Rebuilds only a normalized initial main-session declaration. The fixed
+/// Rebuilds a normalized initial declaration or original-instance turn callback. The fixed
 /// process-local instance label permits inert retry for one qualified creator,
 /// not another helper-owned namespace. Child/compact/turn/end events cannot
 /// implicitly allocate or revive a producer, and vendor content is discarded.
 fn request(bytes: &[u8], pane: &str) -> Result<Option<String>> {
-    let Some(Observation::SessionReady { session }) = codex::normalize("best-effort", bytes)?
-    else {
+    let Some(observation) = codex::normalize("best-effort", bytes)? else {
         return Ok(None);
     };
-    // The normalizer already qualified the bounded unique top-level object and
-    // main-session identity. Read only its source enum; never forward the object.
-    let value: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|_| MezError::invalid_args("Codex observation unavailable"))?;
-    let Some(boundary) = value
-        .get("source")
-        .and_then(serde_json::Value::as_str)
-        .filter(|boundary| matches!(*boundary, "startup" | "resume" | "clear" | "fork"))
-    else {
+    if matches!(observation, Observation::SessionEnded { .. }) {
         return Ok(None);
-    };
+    }
     if pane.len() < 2
         || pane.len() > 64
         || !pane.starts_with('%')
@@ -62,11 +53,47 @@ fn request(bytes: &[u8], pane: &str) -> Result<Option<String>> {
     {
         return Err(MezError::invalid_args("Codex observation unavailable"));
     }
-    let body = serde_json::json!({"jsonrpc":"2.0","id":"codex-hook","method":"agent/external/curated-enroll","params":{
-        "pane_id":pane,"harness":"codex","version":"best-effort","display_name":"Codex",
-        "external_session_id":session,"observer_kind":"command-hook","observer_instance":"codex-local-hooks-1",
-        "source_contract":"codex-local-command/1","session_boundary":boundary,
-    }}).to_string();
+    let (method, params) = match observation {
+        Observation::SessionReady { session } => {
+            // Read only the source enum after bounded unique main normalization.
+            let value: serde_json::Value = serde_json::from_slice(bytes)
+                .map_err(|_| MezError::invalid_args("Codex observation unavailable"))?;
+            let Some(boundary) = value["source"]
+                .as_str()
+                .filter(|source| matches!(*source, "startup" | "resume" | "clear" | "fork"))
+            else {
+                return Ok(None);
+            };
+            (
+                "agent/external/curated-enroll",
+                serde_json::json!({
+                    "pane_id":pane,"harness":"codex","version":"best-effort","display_name":"Codex",
+                    "external_session_id":session,"observer_kind":"command-hook","observer_instance":"codex-local-hooks-1",
+                    "source_contract":"codex-local-command/1","session_boundary":boundary,
+                }),
+            )
+        }
+        Observation::Turn {
+            session,
+            turn,
+            state,
+        } => {
+            let event = match state {
+                "running" => "UserPromptSubmit",
+                "ready" => "Stop",
+                "interrupted" => "Interrupt",
+                _ => return Ok(None),
+            };
+            (
+                "agent/external/codex-observe",
+                serde_json::json!({"pane_id":pane,"external_session_id":session,"event":event,"turn_id":turn}),
+            )
+        }
+        Observation::SessionEnded { .. } => return Ok(None),
+    };
+    let body =
+        serde_json::json!({"jsonrpc":"2.0","id":"codex-hook","method":method,"params":params})
+            .to_string();
     let parsed = crate::control::parse_json_rpc_request(&body)?;
     crate::control::validate_control_method_params_schema(&parsed)?;
     Ok(Some(body))
@@ -138,11 +165,19 @@ mod tests {
             assert_eq!(value["params"].as_object().unwrap().len(), 9);
         }
         for bytes in [
-            br#"{"hook_event_name":"Stop","session_id":"session-a","turn_id":"turn","stop_hook_active":false}"#.as_slice(),
-            br#"{"hook_event_name":"SessionStart","session_id":"session-a","source":"startup","agent_id":"child"}"#,
+            br#"{"hook_event_name":"SessionStart","session_id":"session-a","source":"startup","agent_id":"child"}"#.as_slice(),
             br#"{"hook_event_name":"SessionStart","session_id":"session-a","source":"compact"}"#,
             br#"{"hook_event_name":"SessionEnd","session_id":"session-a"}"#,
         ] { assert!(request(bytes, "%1").unwrap().is_none()); }
+        for event in ["UserPromptSubmit", "Stop", "Interrupt"] {
+            let bytes = serde_json::json!({"hook_event_name":event,"session_id":"a","turn_id":"turn","stop_hook_active":false,"prompt":"PRIVATE"}).to_string();
+            let body = request(bytes.as_bytes(), "%1").unwrap().unwrap();
+            assert!(!body.contains("PRIVATE"));
+            let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(value["method"], "agent/external/codex-observe");
+            assert_eq!(value["params"]["event"], event);
+            assert_eq!(value["params"].as_object().unwrap().len(), 4);
+        }
     }
 
     /// Duplicate identity/source fields, malformed/oversized input and invalid

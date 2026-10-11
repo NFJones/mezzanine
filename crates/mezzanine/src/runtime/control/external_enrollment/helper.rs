@@ -23,6 +23,10 @@ pub(super) struct HelperPresentation {
     usage_begin: Option<super::helper_usage::HelperUsageBegin>,
     /// Shared ledger reservation; native observation must precede execution.
     pub(super) usage_end: Option<Box<super::super::external_usage::ExternalUsageWork>>,
+    /// Metadata-only original Codex callback; daemon owns its sequence/replay fence.
+    pub(super) codex: Option<super::codex::CodexEvent>,
+    /// Holds this source's ingress ticket through complete actor settlement.
+    pub(super) codex_order: Option<Arc<super::codex_order::CodexOrderLease>>,
 }
 
 impl HelperPresentation {
@@ -47,6 +51,9 @@ impl RuntimeSessionService {
         request: &JsonRpcRequest,
         connection: &ControlConnectionState,
     ) -> Result<ExternalEnrollmentWork> {
+        if request.method == "agent/external/codex-observe" {
+            return self.prepare_external_codex_observation(request, connection);
+        }
         self.require_live()?;
         if !matches!(
             request.method.as_str(),
@@ -215,6 +222,8 @@ impl RuntimeSessionService {
                 heartbeat,
                 usage_begin,
                 usage_end: None,
+                codex: None,
+                codex_order: None,
             }),
             ancestry: Arc::new(OnceLock::new()),
             source_store: None,
@@ -324,6 +333,18 @@ impl RuntimeSessionService {
         }
         let params: serde_json::Value = serde_json::from_str(helper.params.expose_secret())
             .map_err(|_| MezError::invalid_state("external helper payload unavailable"))?;
+        if let Some(event) = &helper.codex {
+            if helper
+                .codex_order
+                .as_ref()
+                .is_none_or(|order| !order.is_serving())
+            {
+                return Err(MezError::conflict(
+                    "Codex callback is not current ingress work",
+                ));
+            }
+            return self.commit_external_codex_observation(helper.digest, &work.session_id, event);
+        }
         if helper.heartbeat {
             let sequence = params
                 .get("sequence")

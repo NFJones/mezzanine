@@ -416,6 +416,7 @@ impl RuntimeSessionService {
                     instances: BTreeSet::from([work.observer_instance.clone()]),
                     observers: Vec::new(),
                     curated_observer: Some(CuratedObserver::default()),
+                    codex_turns: Default::default(),
                     token: SecretString::from(token),
                 }),
                 pi_lifecycle: None,

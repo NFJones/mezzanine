@@ -636,9 +636,24 @@ direct child, not a retained intermediary shell or shared-server association.
 The fixed installed `codex-hook` helper now sends this exact declaration for
 normalized main SessionStart startup/resume/clear/fork over one bounded Unix
 exchange using standard route hints. It emits only neutral JSON, discards daemon
-results/errors and supplies no fd3, credentials or general role. Other events are
-inert; later lifecycle, freshness/idle renewal and usage remain unwired and
-unavailable. Installation is not proof of actual vendor loading or callback delivery.
+results/errors and supplies no fd3, credentials or general role.
+`agent/external/codex-observe` accepts only `pane_id`, `external_session_id`,
+`event` (UserPromptSubmit/Stop/Interrupt) and bounded inert `turn_id`. A unique
+indexed candidate must retain the original fixed instance at epoch1; worker and
+settlement fence its captured generation and exact native helper/source/root.
+Rotation or retirement rejects, never rebinds a callback to the newest epoch.
+Daemon presentation sequences advance only for new coarse facts. A bounded
+per-source ingress ticket remains held through actor settlement; later native
+workers wait within their existing deadlines without blocking actor work.
+Rejection/cancellation releases coalesced finite ordering holes, so independent
+worker completion cannot reorder accepted callbacks. Original wire ids survive
+the private internal helper envelope.
+The bounded 4096-turn fence retains known old IDs, rejects stale stops and exhaustion, makes
+identical retries inert and prevents Stop from downgrading interruption or
+claiming success. Unknown new prompt IDs are arrival-ordered rather than vendor
+chronology proof. SessionEnd, idle health/renewal and usage remain unavailable;
+no callback bills, retires a source or grants native task powers. Installation
+is not proof of actual vendor loading or callback delivery.
 The documented curated argv API identifies its direct creator contract; only
 the helper's real same-user Unix origin/current writer, native captured parent
 and exact creator/source/root lifetimes authorize that physical association.

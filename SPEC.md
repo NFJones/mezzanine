@@ -628,8 +628,22 @@ fd3 or launcher credential may authorize it. Native daemon writer/direct-parent/
 root/ancestry/deadline fences remain required. Every callback MUST return neutral
 JSON without raw daemon results/errors, initialize, retry, transcript reads or
 provider work. Missing route/input/runtime/outage loses telemetry only.
-This initial-admission slice MUST NOT claim later lifecycle, idle freshness/renewal
-or usage; those remain unwired and unavailable. Non-exact argv retains
+Normalized UserPromptSubmit/Stop/Interrupt MAY use `agent/external/codex-observe`
+with only pane/session/event/turn selectors. It MUST target a unique indexed
+Codex original fixed instance at epoch1, capture its generation before native
+work and reject rotation/retirement rather than adopting a newest source.
+Native helper authorization MUST precede server-owned presentation sequencing.
+Per-source ingress tickets MUST remain held through actor settlement, not merely
+native observation. Later workers MAY wait only within the original native
+admission deadline, never on actor; rejection/cancellation MUST release ordering
+with bounded coalesced holes. Native-worker completion order MUST NOT reorder
+accepted callbacks. Replies MUST preserve the original JSON-RPC id.
+Known retired turns MUST reject, identical retries MUST remain sequence/time
+inert, Stop MUST mean ready rather than success, and Interrupt MUST not be
+downgraded by Stop. A 4096-turn run-local fence MUST reject exhaustion without
+evicting old IDs. Unknown new prompt IDs are arrival-ordered, not proof of vendor
+chronology. Callbacks MUST NOT renew leases, prove idle health, bill expense or
+retire on SessionEnd; those require separate qualified contracts. Non-exact argv retains
 ordinary CLI startup and validation.
 The separate exact `mez harness-source <capsule-json>` argv MAY bridge curated
 one-shot command APIs whose stdin is closed. It MUST execute before HOME/config/

@@ -74,8 +74,10 @@ The fixed internal `mez codex-hook` callback mode runs before HOME/config/CPU
 startup. Normalized main SessionStart startup/resume/clear/fork can make one
 restricted Unix declaration with standard MEZ routing and native creator proof,
 without fd3 or a launcher credential. Every outcome returns neutral JSON; missing
-route/input or daemon outage cannot expose errors or initialize a client. Later
-lifecycle, idle renewal/freshness and usage remain unwired. Only exact helper argv uses
+route/input or daemon outage cannot expose errors or initialize a client.
+Prompt/Stop/Interrupt update only the original fixed first epoch through native
+callback proof and daemon sequencing. SessionEnd, idle renewal/freshness and usage
+remain unwired. Only exact helper argv uses
 this boundary, not ordinary CLI commands or option-bearing variants.
 `--root` is an optional override, not a prerequisite: compiled adapters select
 their documented user root from vendor environment/defaults. Those selected roots
@@ -134,9 +136,13 @@ authored callbacks. Rebootstrap at the original executable location is unchanged
 relocation qualification remains unfinished. A receipt containing an unknown
 old helper pathname is rejected rather than adopted as ownership authority.
 Ordinary-command SessionStart now reaches the native creator admission primitive
-through one bounded Unix exchange; other installed event commands are currently
-neutral/inert. Registration is initial-only and exposes awaiting-first-proof with
-unavailable usage. Later status/SessionEnd, idle renewal and broader client-session
+through one bounded Unix exchange. Prompt/Stop/Interrupt observations are coarse,
+arrival-ordered and original-epoch fenced. Known retired turn IDs cannot repaint
+new turns; exact retries are inert, Stop is ready rather than success and later
+Stop cannot downgrade interruption. The 4096-turn run-local fence rejects
+exhaustion without eviction; unknown new prompts do not prove vendor chronology.
+Callbacks do not renew leases or prove idle observer health, so registration
+still exposes awaiting-first-proof and unavailable usage. SessionEnd, idle renewal and broader client-session
 association remain unfinished. Ownership installation is
 not proof of loaded/enrolled hooks. No token expense is inferred from hooks or
 ambiguous context/cumulative structured samples.

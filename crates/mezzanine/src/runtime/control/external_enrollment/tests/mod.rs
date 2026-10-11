@@ -1303,6 +1303,7 @@ mod ancestry;
 mod claude_curated;
 mod codex_creator;
 mod codex_installed;
+mod codex_observation;
 mod creator_isolation;
 mod curated_admission;
 mod curated_heartbeat;

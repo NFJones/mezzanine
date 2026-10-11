@@ -151,6 +151,7 @@ impl AsyncRuntimeSessionActor {
                 | "agent/external/helper-presentation"
                 | "agent/external/curated-usage-end"
                 | "agent/external/helper-observe"
+                | "agent/external/codex-observe"
         ) {
             return None;
         }
@@ -162,6 +163,7 @@ impl AsyncRuntimeSessionActor {
             request.method.as_str(),
             "agent/external/helper-presentation"
                 | "agent/external/helper-observe"
+                | "agent/external/codex-observe"
                 | "agent/external/curated-heartbeat"
                 | "agent/external/curated-usage-begin"
                 | "agent/external/curated-usage-end"
