@@ -71,9 +71,11 @@ remove `--apply` for installation and replace `--plan` with `--dry-run` for prev
 The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
 The fixed internal `mez codex-hook` callback mode runs before HOME/config/CPU
-startup and returns neutral JSON when legacy observation transport is absent or
-invalid. It does not initialize a daemon/client or activate ordinary Codex
-telemetry; that migration remains unfinished. Only the exact helper argv uses
+startup. Normalized main SessionStart startup/resume/clear/fork can make one
+restricted Unix declaration with standard MEZ routing and native creator proof,
+without fd3 or a launcher credential. Every outcome returns neutral JSON; missing
+route/input or daemon outage cannot expose errors or initialize a client. Later
+lifecycle, idle renewal/freshness and usage remain unwired. Only exact helper argv uses
 this boundary, not ordinary CLI commands or option-bearing variants.
 `--root` is an optional override, not a prerequisite: compiled adapters select
 their documented user root from vendor environment/defaults. Those selected roots
@@ -130,7 +132,11 @@ shared members are retained as immutable history and replaced without deleting
 authored callbacks. Rebootstrap at the original executable location is unchanged;
 relocation qualification remains unfinished. A receipt containing an unknown
 old helper pathname is rejected rather than adopted as ownership authority.
-Ordinary-command helper admission remains unfinished. Ownership installation is
+Ordinary-command SessionStart now reaches the native creator admission primitive
+through one bounded Unix exchange; other installed event commands are currently
+neutral/inert. Registration is initial-only and exposes awaiting-first-proof with
+unavailable usage. Later status/SessionEnd, idle renewal and broader client-session
+association remain unfinished. Ownership installation is
 not proof of loaded/enrolled hooks. No token expense is inferred from hooks or
 ambiguous context/cumulative structured samples.
 

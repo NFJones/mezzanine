@@ -1,91 +1,96 @@
-//! Neutral content-free Codex command hook over an inherited observer socket.
-//! This helper owns no daemon credentials or client role. Stdin is bounded and
-//! normalized before one socket write; no transcripts, subprocesses, arbitrary
-//! RPC or retries are used. Missing descriptors/outage lose telemetry only and
-//! output remains the documented neutral JSON object.
+//! Neutral ordinary Codex SessionStart admission through fixed local telemetry.
+//!
+//! Bounded vendor stdin is projected into one exact code-owned creator declaration.
+//! Standard MEZ routing selects a candidate, never authority; native writer/parent/
+//! root evidence remains daemon-owned. No fd3, credential, general RPC, transcript,
+//! subprocess or retry is used. Replies/errors never reach vendor output. Later
+//! lifecycle/freshness/usage callbacks are inert until their separate owners exist.
 
-use crate::error::{MezError, Result};
+use super::{MezError, Result, SocketSelection, Write};
 use crate::integrations::bootstrap::codex::{self, Observation};
-use std::io::Write;
-use std::os::fd::{AsRawFd, BorrowedFd};
 use std::time::Duration;
 
-/// Runs only the exact fixed callback-helper argv before HOME/config/CPU
-/// discovery. This reuses the neutral bounded handler, grants no enrollment
-/// authority and constructs no asynchronous runtime. Other argv stays on the
-/// ordinary CLI path; only failure to write the neutral response is nonzero.
+/// Runs exact fixed argv before HOME/config/CPU discovery using only a bounded
+/// current-thread I/O runtime. Missing route/runtime/input is neutral telemetry
+/// loss, not an ordinary CLI error. Non-exact argv retains normal CLI startup.
 pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u8> {
     if arguments.len() != 2 || arguments[1] != "codex-hook" {
         return None;
     }
-    Some(u8::from(run(&mut std::io::stdout()).is_err()))
+    let mut stdout = std::io::stdout();
+    let discovery = std::env::var_os("MEZ");
+    if let Ok(Some(socket)) = super::env::socket_selection_from_mez(discovery.as_ref())
+        && let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+    {
+        let pane = std::env::var("MEZ_PANE").ok();
+        return Some(u8::from(
+            runtime
+                .block_on(run(&socket, pane.as_deref(), &mut stdout))
+                .is_err(),
+        ));
+    }
+    let _ = super::harness_event::read_input_from(&std::io::stdin(), Duration::from_millis(250));
+    Some(u8::from(writeln!(stdout, "{{}}").is_err()))
 }
 
-/// Projects only main-session inert IDs and states; raw callback data never
-/// reaches the observation socket. Output length is independently bounded.
-fn frame(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
-    let Some(item) = codex::normalize("best-effort", bytes)? else {
+/// Rebuilds only a normalized initial main-session declaration. The fixed
+/// process-local instance label permits inert retry for one qualified creator,
+/// not another helper-owned namespace. Child/compact/turn/end events cannot
+/// implicitly allocate or revive a producer, and vendor content is discarded.
+fn request(bytes: &[u8], pane: &str) -> Result<Option<String>> {
+    let Some(Observation::SessionReady { session }) = codex::normalize("best-effort", bytes)?
+    else {
         return Ok(None);
     };
-    let item = match item {
-        Observation::SessionReady { session } => {
-            serde_json::json!({"kind":"start","session":session})
-        }
-        Observation::Turn {
-            session,
-            turn,
-            state,
-        } => serde_json::json!({"kind":"turn","session":session,"turn":turn,"state":state}),
-        Observation::SessionEnded { session } => {
-            serde_json::json!({"kind":"end","session":session})
-        }
+    // The normalizer already qualified the bounded unique top-level object and
+    // main-session identity. Read only its source enum; never forward the object.
+    let value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|_| MezError::invalid_args("Codex observation unavailable"))?;
+    let Some(boundary) = value
+        .get("source")
+        .and_then(serde_json::Value::as_str)
+        .filter(|boundary| matches!(*boundary, "startup" | "resume" | "clear" | "fork"))
+    else {
+        return Ok(None);
     };
-    let mut bytes =
-        serde_json::to_vec(&item).map_err(|_| MezError::invalid_state("Codex hook unavailable"))?;
-    if bytes.len() > 1024 {
-        return Err(MezError::invalid_state("Codex hook unavailable"));
-    }
-    bytes.push(b'\n');
-    Ok(Some(bytes))
-}
-
-/// Makes one finite non-replayed write to an already authorized inherited
-/// socket. Kernel peer UID and socket type precede copying bytes. Rust process
-/// runtime's ignored SIGPIPE preserves neutral failure on a closed observer.
-fn send(fd: &impl std::os::fd::AsFd, bytes: &[u8]) -> Result<()> {
-    let stat = rustix::fs::fstat(fd).map_err(std::io::Error::from)?;
-    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::Socket {
-        return Err(MezError::invalid_state("Codex hook unavailable"));
-    }
-    crate::runtime::authenticated_unix_peer_uid(
-        fd.as_fd().as_raw_fd(),
-        crate::runtime::current_effective_uid(),
-    )?;
-    let owned = rustix::io::dup(fd).map_err(std::io::Error::from)?;
-    let mut stream = std::os::unix::net::UnixStream::from(owned);
-    stream.set_write_timeout(Some(Duration::from_millis(50)))?;
-    if stream.write(bytes)? != bytes.len() {
-        return Err(MezError::invalid_state("Codex hook unavailable"));
-    }
-    Ok(())
-}
-
-/// Vendor callbacks always receive neutral JSON. Parent-selected routing hints
-/// cannot grant daemon authority; only the observation socket is inherited.
-pub(super) fn run<W: Write>(stdout: &mut W) -> Result<()> {
-    if std::env::var("MEZ_CODEX_OBSERVER_FD").as_deref() == Ok("3")
-        // SAFETY: F_GETFD validates descriptor existence without modifying it.
-        && unsafe { libc::fcntl(3, libc::F_GETFD) } >= 0
+    if pane.len() < 2
+        || pane.len() > 64
+        || !pane.starts_with('%')
+        || !pane[1..].bytes().all(|byte| byte.is_ascii_digit())
     {
-        // SAFETY: fd3 was validated above; this helper never closes it, and send
-        // validates its socket type/peer before duplicating the observer.
-        let fd = unsafe { BorrowedFd::borrow_raw(3) };
-        if let Ok(bytes) =
-            super::harness_event::read_input_from(&std::io::stdin(), Duration::from_millis(250))
-            && let Ok(Some(bytes)) = frame(&bytes)
-        {
-            let _ = send(&fd, &bytes);
-        }
+        return Err(MezError::invalid_args("Codex observation unavailable"));
+    }
+    let body = serde_json::json!({"jsonrpc":"2.0","id":"codex-hook","method":"agent/external/curated-enroll","params":{
+        "pane_id":pane,"harness":"codex","version":"best-effort","display_name":"Codex",
+        "external_session_id":session,"observer_kind":"command-hook","observer_instance":"codex-local-hooks-1",
+        "source_contract":"codex-local-command/1","session_boundary":boundary,
+    }}).to_string();
+    let parsed = crate::control::parse_json_rpc_request(&body)?;
+    crate::control::validate_control_method_params_schema(&parsed)?;
+    Ok(Some(body))
+}
+
+/// Performs at most one same-user peer-qualified Unix exchange after finite
+/// stdin normalization. No daemon result or credentials are exposed; only
+/// writing the required neutral JSON can fail the callback process.
+pub(super) async fn run<W: Write>(
+    socket: &SocketSelection,
+    pane: Option<&str>,
+    stdout: &mut W,
+) -> Result<()> {
+    if let Ok(bytes) =
+        super::harness_event::read_input_from(&std::io::stdin(), Duration::from_millis(250))
+        && let Some(pane) = pane
+        && let Ok(Some(body)) = request(&bytes, pane)
+    {
+        let _ = super::harness_event::exchange_result(
+            super::selected_socket_path(socket),
+            &body,
+            "codex-hook",
+        )
+        .await;
     }
     writeln!(stdout, "{{}}")?;
     Ok(())
@@ -94,9 +99,10 @@ pub(super) fn run<W: Write>(stdout: &mut W) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     /// Early helper recognition is exact, not a broad CLI parser bypass. Other
-    /// commands and option-bearing forms must keep ordinary startup/validation;
-    /// no stdin, socket, configuration or stdout is touched by these cases.
+    /// commands and option-bearing forms keep normal startup/validation; none
+    /// of these inputs opens a socket or consumes stdin/configuration.
     #[test]
     fn codex_hook_internal_argv_does_not_capture_other_cli_forms() {
         for argv in [
@@ -115,41 +121,44 @@ mod tests {
         }
     }
 
-    /// Raw hook content and child IDs never escape into the inherited stream;
-    /// Stop carries an inert ready boundary rather than claimed completion.
+    /// Only genuine normalized main-session boundaries become fixed declarations.
+    /// Sensitive content, supplied credentials/PIDs and fake counters never enter
+    /// transport; Stop/child/compact callbacks are not initial-admission evidence.
     #[test]
     fn codex_hook_frames_are_neutral_and_content_free() {
-        let bytes=frame(br#"{"hook_event_name":"Stop","session_id":"session","turn_id":"turn","stop_hook_active":false,"prompt":"PRIVATE","usage":{"input_tokens":99}}"#).unwrap().unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(
-            value,
-            serde_json::json!({"kind":"turn","session":"session","turn":"turn","state":"ready"})
-        );
-        assert!(!String::from_utf8(bytes).unwrap().contains("PRIVATE"));
-        assert!(
-            frame(br#"{"hook_event_name":"Stop","session_id":"session","agent_id":"child"}"#)
-                .unwrap()
-                .is_none()
-        );
+        for boundary in ["startup", "resume", "clear", "fork"] {
+            let bytes = serde_json::json!({"hook_event_name":"SessionStart","session_id":"session-a","source":boundary,
+                "prompt":"PRIVATE","transcript_path":"PRIVATE","launch_token":"PRIVATE","pid":123,"usage":{"input_tokens":99}}).to_string();
+            let body = request(bytes.as_bytes(), "%1").unwrap().unwrap();
+            assert!(!body.contains("PRIVATE"));
+            let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(value["method"], "agent/external/curated-enroll");
+            assert_eq!(value["params"]["source_contract"], "codex-local-command/1");
+            assert_eq!(value["params"]["session_boundary"], boundary);
+            assert_eq!(value["params"].as_object().unwrap().len(), 9);
+        }
+        for bytes in [
+            br#"{"hook_event_name":"Stop","session_id":"session-a","turn_id":"turn","stop_hook_active":false}"#.as_slice(),
+            br#"{"hook_event_name":"SessionStart","session_id":"session-a","source":"startup","agent_id":"child"}"#,
+            br#"{"hook_event_name":"SessionStart","session_id":"session-a","source":"compact"}"#,
+            br#"{"hook_event_name":"SessionEnd","session_id":"session-a"}"#,
+        ] { assert!(request(bytes, "%1").unwrap().is_none()); }
     }
-    /// Test-owned socket delivery succeeds once; a closed peer or ordinary file
-    /// is rejected without retries, path writes, daemon access or secret output.
-    /// A retained peer duplicate models fork-before-exec descriptor lifetime;
-    /// closure must be established by the fixture, not assumed from one fd drop.
+
+    /// Duplicate identity/source fields, malformed/oversized input and invalid
+    /// route selectors cannot request native work. No opaque field supplies
+    /// general control authority and unsupported events never become a fallback.
     #[test]
-    fn codex_hook_socket_write_rejects_closed_and_non_socket_nodes() {
-        use std::io::Read;
-        let (socket, mut reader) = std::os::unix::net::UnixStream::pair().unwrap();
-        send(&socket, b"{}\n").unwrap();
-        let mut bytes = [0; 3];
-        reader.read_exact(&mut bytes).unwrap();
-        assert_eq!(&bytes, b"{}\n");
-        let duplicate = reader.try_clone().unwrap();
-        reader.shutdown(std::net::Shutdown::Both).unwrap();
-        drop(reader);
-        assert!(send(&socket, b"{}\n").is_err());
-        drop(duplicate);
-        let file = std::fs::File::open("/dev/null").unwrap();
-        assert!(send(&file, b"{}\n").is_err());
+    fn codex_hook_requests_reject_ambiguous_input_and_route() {
+        for bytes in [
+            br#"{"hook_event_name":"SessionStart","session_id":"a","session_id":"b","source":"startup"}"#.as_slice(),
+            br#"{"hook_event_name":"SessionStart","session_id":"a","source":"startup","source":"fork"}"#,
+            b"{}", b"[]", b"not json",
+        ] { assert!(request(bytes, "%1").is_err()); }
+        let bytes = br#"{"hook_event_name":"SessionStart","session_id":"a","source":"startup"}"#;
+        for pane in ["", "%", "../pane", "%1;command", "%x"] {
+            assert!(request(bytes, pane).is_err());
+        }
+        assert!(request(&vec![b' '; 65_537], "%1").is_err());
     }
 }

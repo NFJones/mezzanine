@@ -259,7 +259,8 @@ async fn run_with_inner<W: Write, E: Write>(
             super::harness_peer::run(stdout)?;
         }
         Some(CliCommand::CodexHook) => {
-            super::codex_hook::run(stdout)?;
+            let pane = std::env::var("MEZ_PANE").ok();
+            super::codex_hook::run(&socket_selection, pane.as_deref(), stdout).await?;
         }
         Some(CliCommand::Bootstrap(args)) => {
             super::bootstrap::run(args, output_format, stdout)?;

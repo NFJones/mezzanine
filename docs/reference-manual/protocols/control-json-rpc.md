@@ -633,8 +633,12 @@ Native namespace lookup includes harness, so identical creator/root/session and
 display metadata across declarations cannot alias registration/accounting. The
 Codex local profile describes exec of the fixed helper into the actual creator's
 direct child, not a retained intermediary shell or shared-server association.
-Codex callback transport, freshness/idle renewal and usage remain unwired by
-this admission primitive; unavailable public coverage is preserved.
+The fixed installed `codex-hook` helper now sends this exact declaration for
+normalized main SessionStart startup/resume/clear/fork over one bounded Unix
+exchange using standard route hints. It emits only neutral JSON, discards daemon
+results/errors and supplies no fd3, credentials or general role. Other events are
+inert; later lifecycle, freshness/idle renewal and usage remain unwired and
+unavailable. Installation is not proof of actual vendor loading or callback delivery.
 The documented curated argv API identifies its direct creator contract; only
 the helper's real same-user Unix origin/current writer, native captured parent
 and exact creator/source/root lifetimes authorize that physical association.

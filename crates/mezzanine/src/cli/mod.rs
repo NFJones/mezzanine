@@ -85,7 +85,7 @@ mod attach;
 mod auth;
 /// Owns daemon-free admission for certified harness installation.
 mod bootstrap;
-/// Owns neutral Codex callback normalization and inherited observation writes.
+/// Owns neutral Codex SessionStart projection and restricted native creator ingress.
 mod codex_hook;
 pub(crate) use codex_hook::run_internal_process as run_internal_codex_hook_process;
 /// Exposes the config module boundary.

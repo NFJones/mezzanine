@@ -618,10 +618,16 @@ Unknown relocated helper paths MUST NOT become historical ownership authority.
 Fixed-helper deployment alone MUST NOT imply ordinary enrollment or accounting.
 The exact fixed `mez codex-hook` argv MUST likewise run its neutral bounded
 handler before HOME/config/CPU discovery, without constructing a general
-runtime or reading user configuration. Missing or invalid inherited observation
-evidence MUST return only the neutral JSON object. This startup boundary alone
-MUST NOT claim ordinary Codex enrollment or usage; its legacy observation
-transport remains separate unfinished migration work. Non-exact argv retains
+runtime or reading user configuration. It MAY build only a bounded current-thread
+I/O runtime and send one peer-qualified restricted Unix declaration for a normalized
+main SessionStart startup/resume/clear/fork using standard nonsecret MEZ routing.
+Duplicate/child/compact/other-event input MUST NOT allocate a source. No inherited
+fd3 or launcher credential may authorize it. Native daemon writer/direct-parent/
+root/ancestry/deadline fences remain required. Every callback MUST return neutral
+JSON without raw daemon results/errors, initialize, retry, transcript reads or
+provider work. Missing route/input/runtime/outage loses telemetry only.
+This initial-admission slice MUST NOT claim later lifecycle, idle freshness/renewal
+or usage; those remain unwired and unavailable. Non-exact argv retains
 ordinary CLI startup and validation.
 The separate exact `mez harness-source <capsule-json>` argv MAY bridge curated
 one-shot command APIs whose stdin is closed. It MUST execute before HOME/config/

@@ -88,6 +88,61 @@ fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks()
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// Malformed/child/compact inputs, missing pane hints and unavailable Unix routes
+/// cannot leak vendor content or daemon errors. This actual binary never falls
+/// back to a primary, inherited descriptor or default socket on telemetry loss.
+#[test]
+fn standalone_codex_hook_invalid_callbacks_and_outage_remain_neutral() {
+    use std::io::Write;
+    let valid = r#"{"hook_event_name":"SessionStart","session_id":"a","source":"startup","prompt":"PRIVATE"}"#;
+    for (input, route, pane) in [
+        (valid, "relative", "%1"),
+        (valid, "/tmp/mez-absent-codex-helper.sock", "%1"),
+        (valid, "/tmp/mez-absent-codex-helper.sock", ""),
+        (
+            r#"{"hook_event_name":"SessionStart","session_id":"a","source":"startup","source":"fork"}"#,
+            "/tmp/mez-absent-codex-helper.sock",
+            "%1",
+        ),
+        (
+            r#"{"hook_event_name":"SessionStart","session_id":"a","source":"startup","agent_id":"child"}"#,
+            "/tmp/mez-absent-codex-helper.sock",
+            "%1",
+        ),
+        (
+            r#"{"hook_event_name":"SessionStart","session_id":"a","source":"compact"}"#,
+            "/tmp/mez-absent-codex-helper.sock",
+            "%1",
+        ),
+        (
+            "not json PRIVATE",
+            "/tmp/mez-absent-codex-helper.sock",
+            "%1",
+        ),
+    ] {
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_mez"))
+            .arg("codex-hook")
+            .env_clear()
+            .env("MEZ", route)
+            .env("MEZ_PANE", pane)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(result.stdout, b"{}\n");
+        assert!(result.stderr.is_empty());
+    }
+}
+
 /// The fixed Codex callback helper must return neutral output before global
 /// HOME/config/CPU discovery. Neither absent configuration nor inherited legacy
 /// observer markers may turn unavailable telemetry into a vendor hook failure.

@@ -246,6 +246,34 @@ fn external_enrollment_ordinary_child_fixture() {
                 socket.write_all(&[1]).unwrap();
                 continue;
             }
+            if release == [9] {
+                let mut length = [0; 4];
+                socket.read_exact(&mut length).unwrap();
+                let length = u32::from_be_bytes(length) as usize;
+                assert!(length <= 8192);
+                let mut launch = zeroize::Zeroizing::new(vec![0; length]);
+                socket.read_exact(&mut launch).unwrap();
+                let launch: serde_json::Value = serde_json::from_slice(&launch).unwrap();
+                let mut helper = std::process::Command::new("/bin/sh")
+                    .args(["-lc", launch["command"].as_str().unwrap()])
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                helper
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(launch["event"].to_string().as_bytes())
+                    .unwrap();
+                let output = helper.wait_with_output().unwrap();
+                assert!(output.status.success());
+                assert!(output.stderr.is_empty());
+                assert_eq!(output.stdout, b"{}\n");
+                socket.write_all(&[1]).unwrap();
+                continue;
+            }
             assert_eq!(release, [3]);
             socket.write_all(&[1]).unwrap();
         }
@@ -1274,6 +1302,7 @@ async fn external_enrollment_ordinary_unix_actor_roundtrip() {
 mod ancestry;
 mod claude_curated;
 mod codex_creator;
+mod codex_installed;
 mod creator_isolation;
 mod curated_admission;
 mod curated_heartbeat;
