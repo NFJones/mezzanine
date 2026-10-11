@@ -8,6 +8,163 @@ use super::curated_admission::{curated_request, enroll};
 use super::helper_presentation::{child, settle};
 use super::*;
 
+/// A changed boundary from one living creator/session/instance is not an exact
+/// admission retry and cannot certify a same-ID transition. Rejection must leave
+/// the original owner, generation, lease and presentation unchanged. A genuinely
+/// fresh observer with the exact predecessor may change boundaries; its own
+/// repeated declaration is still idempotent and cannot borrow the old boundary.
+#[tokio::test(flavor = "current_thread")]
+async fn external_curated_changed_boundary_requires_fenced_observer_handoff() {
+    for harness in ["claude", "codex"] {
+        let Some(mut fixture) = fixture("hold").await else {
+            panic!("curated boundary qualification requires native peer evidence");
+        };
+        let (_socket, connection) = child(&mut fixture).await;
+        let mut request = curated_request();
+        let mut params: serde_json::Value =
+            serde_json::from_str(request.params.as_deref().unwrap()).unwrap();
+        if harness == "codex" {
+            params["harness"] = "codex".into();
+            params["observer_kind"] = "command-hook".into();
+            params["source_contract"] = "codex-local-command/1".into();
+        }
+        request.params = Some(params.to_string());
+        let work = fixture
+            .service
+            .prepare_external_enrollment(&request, &connection)
+            .unwrap();
+        let original = settle(&mut fixture, work, &connection).await;
+        assert_eq!(original["result"]["registered"], true, "{original}");
+        let binding = fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap();
+        let owner = binding.accounting_owner.clone();
+        let generation = binding.generation;
+        let expires = binding.expires;
+        let rows = fixture.service.external_agent_rows();
+        for boundary in ["resume", "clear", "fork"] {
+            let mut changed = params.clone();
+            changed["session_boundary"] = boundary.into();
+            let mut candidate = request.clone();
+            candidate.params = Some(changed.to_string());
+            let work = fixture
+                .service
+                .prepare_external_enrollment(&candidate, &connection)
+                .unwrap();
+            let refused = settle(&mut fixture, work, &connection).await;
+            assert!(
+                refused.get("error").is_some(),
+                "{harness}/{boundary}: {refused}"
+            );
+            let registry = fixture.service.control.external_agents();
+            assert_eq!(registry.bindings.len(), 1);
+            let binding = registry.bindings.values().next().unwrap();
+            assert_eq!(binding.accounting_owner, owner);
+            assert_eq!(binding.generation, generation);
+            assert_eq!(binding.expires, expires);
+            assert_eq!(binding.enrollment.as_ref().unwrap().epoch, 1);
+            assert!(registry.enrollments.pending.is_empty());
+            assert_eq!(fixture.service.external_agent_rows(), rows);
+        }
+        let work = fixture
+            .service
+            .prepare_external_enrollment(&request, &connection)
+            .unwrap();
+        assert_eq!(settle(&mut fixture, work, &connection).await, original);
+        let mut failed = params.clone();
+        failed["observer_instance"] = "failed-module".into();
+        failed["session_boundary"] = "fork".into();
+        failed["predecessor_generation"] = (generation + 1).into();
+        let mut candidate = request.clone();
+        candidate.params = Some(failed.to_string());
+        let work = fixture
+            .service
+            .prepare_external_enrollment(&candidate, &connection)
+            .unwrap();
+        assert!(
+            settle(&mut fixture, work, &connection)
+                .await
+                .get("error")
+                .is_some()
+        );
+        let work = fixture
+            .service
+            .prepare_external_enrollment(&request, &connection)
+            .unwrap();
+        assert_eq!(settle(&mut fixture, work, &connection).await, original);
+        let binding = fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap();
+        assert_eq!(binding.generation, generation);
+        assert_eq!(binding.expires, expires);
+        assert_eq!(binding.accounting_owner, owner);
+        params["observer_instance"] = "module-b".into();
+        params["session_boundary"] = "clear".into();
+        params["predecessor_generation"] = generation.into();
+        request.params = Some(params.to_string());
+        let work = fixture
+            .service
+            .prepare_external_enrollment(&request, &connection)
+            .unwrap();
+        let successor = settle(&mut fixture, work, &connection).await;
+        assert_eq!(successor["result"]["registered"], true, "{successor}");
+        assert_eq!(successor["result"]["observer_epoch"], 2);
+        let successor_expiry = fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap()
+            .expires;
+        let work = fixture
+            .service
+            .prepare_external_enrollment(&request, &connection)
+            .unwrap();
+        assert_eq!(settle(&mut fixture, work, &connection).await, successor);
+        params["session_boundary"] = "startup".into();
+        request.params = Some(params.to_string());
+        let work = fixture
+            .service
+            .prepare_external_enrollment(&request, &connection)
+            .unwrap();
+        assert!(
+            settle(&mut fixture, work, &connection)
+                .await
+                .get("error")
+                .is_some()
+        );
+        let binding = fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap();
+        assert_eq!(binding.accounting_owner, owner);
+        assert_eq!(
+            binding.generation,
+            successor["result"]["generation"].as_u64().unwrap()
+        );
+        assert_eq!(binding.expires, successor_expiry);
+        assert_eq!(binding.enrollment.as_ref().unwrap().epoch, 2);
+        assert!(!connection.initialized());
+        assert!(connection.caller_client_id().is_none());
+    }
+}
+
 /// Distinct harness declarations sharing one genuine creator, pane root and
 /// session must not merge registrations or billing. The Codex declaration models
 /// the installed exec-based local command contract, not shared-server attribution

@@ -93,8 +93,12 @@ impl RuntimeSessionService {
                 "curated public observer identity exhausted",
             ));
         }
-        let namespace_digest = if curated.is_some() {
-            Some(registry.enrollments.curated_namespaces.digest_mut(digest)?)
+        let namespace_state = if let Some(curated) = curated {
+            let (selector, boundary) = registry
+                .enrollments
+                .curated_namespaces
+                .rotation_mut(digest)?;
+            Some((selector, boundary, curated.boundary.clone()))
         } else {
             None
         };
@@ -148,8 +152,9 @@ impl RuntimeSessionService {
         binding.enrollment = Some(enrollment);
         let pane = binding.pane_id.clone();
         registry.next_generation = generation;
-        if let Some(namespace_digest) = namespace_digest {
+        if let Some((namespace_digest, namespace_boundary, boundary)) = namespace_state {
             *namespace_digest = replacement_digest;
+            *namespace_boundary = boundary;
         }
         registry.enrollments.helper_targets.remove(
             binding.uid,

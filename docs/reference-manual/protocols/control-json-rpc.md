@@ -631,7 +631,12 @@ boundaries reject. These labels are self-reported selectors/declarations—not
 vendor executable attestation, proof a mod is approved/loaded, or session billing.
 Native namespace lookup includes harness, so identical creator/root/session and
 display metadata across declarations cannot alias registration/accounting. The
-Codex local profile describes exec of the fixed helper into the actual creator's
+accepted boundary is part of the current observer's exact retry identity. Changing
+it on the same instance conflicts instead of reporting an unchanged registration;
+a fresh instance still needs the exact predecessor generation. Successful rotation
+updates the accepted boundary with its namespace selector; failed handoff changes
+neither. This fence does not certify vendor same-ID clear/resume/fork or restart.
+The Codex local profile describes exec of the fixed helper into the actual creator's
 direct child, not a retained intermediary shell or shared-server association.
 The fixed installed `codex-hook` helper now sends this exact declaration for
 normalized main SessionStart startup/resume/clear/fork over one bounded Unix

@@ -61,6 +61,8 @@ struct CuratedNamespace {
     harness: String,
     session_id: String,
     digest: [u8; 32],
+    /// Boundary accepted for the current instance, not transition authority.
+    boundary: String,
 }
 
 impl CuratedNamespaces {
@@ -77,7 +79,12 @@ impl CuratedNamespaces {
     /// Borrows the unique active namespace selector before rotation publication.
     /// Absence/ambiguity fails before effects; changing this selector grants no
     /// new source authority and does not discard the original lifetime anchor.
-    pub(super) fn digest_mut(&mut self, digest: [u8; 32]) -> Result<&mut [u8; 32]> {
+    /// The accepted boundary shares its commit point with the rotated selector;
+    /// callers must not mutate either field before their final publication fence.
+    pub(super) fn rotation_mut(
+        &mut self,
+        digest: [u8; 32],
+    ) -> Result<(&mut [u8; 32], &mut String)> {
         if self
             .entries
             .iter()
@@ -90,7 +97,7 @@ impl CuratedNamespaces {
         self.entries
             .iter_mut()
             .find(|entry| entry.digest == digest)
-            .map(|entry| &mut entry.digest)
+            .map(|entry| (&mut entry.digest, &mut entry.boundary))
             .ok_or_else(|| MezError::conflict("curated namespace selector unavailable"))
     }
     /// Selects only the original physically qualified creator/root/session;
@@ -99,7 +106,7 @@ impl CuratedNamespaces {
         &self,
         work: &ExternalEnrollmentWork,
         producer: &ProducerEvidence,
-    ) -> Option<([u8; 32], ProducerEvidence)> {
+    ) -> Option<([u8; 32], ProducerEvidence, String)> {
         self.entries
             .iter()
             .find(|entry| {
@@ -111,7 +118,7 @@ impl CuratedNamespaces {
                         .producer
                         .matches_parent(producer.uid(), producer.identity())
             })
-            .map(|entry| (entry.digest, entry.producer.clone()))
+            .map(|entry| (entry.digest, entry.producer.clone(), entry.boundary.clone()))
     }
     /// Complete finite namespace reservation check before any new binding effect.
     fn require_capacity(&self) -> Result<()> {
@@ -129,6 +136,7 @@ impl CuratedNamespaces {
         work: &ExternalEnrollmentWork,
         producer: &ProducerEvidence,
         digest: [u8; 32],
+        boundary: &str,
     ) -> Result<()> {
         self.require_capacity()?;
         self.entries.push(CuratedNamespace {
@@ -138,6 +146,7 @@ impl CuratedNamespaces {
             harness: work.harness.clone(),
             session_id: work.session_id.clone(),
             digest,
+            boundary: boundary.into(),
         });
         Ok(())
     }
@@ -147,6 +156,8 @@ impl CuratedNamespaces {
 #[derive(Debug, Clone)]
 pub(super) struct CuratedAdmission {
     producer: Arc<OnceLock<ProducerEvidence>>,
+    /// Validated declaration metadata retained for exact retry/rotation identity.
+    pub(super) boundary: String,
 }
 
 impl CuratedAdmission {
@@ -197,14 +208,13 @@ impl CuratedAdmission {
         let harness = text(params, "harness", 64)?;
         let kind = text(params, "observer_kind", 64)?;
         let contract = text(params, "source_contract", 64)?;
+        let boundary = text(params, "session_boundary", 32)?;
         if !matches!(
             (harness.as_str(), kind.as_str(), contract.as_str()),
             ("claude", "curated-command", "claude-curated-command/1")
                 | ("codex", "command-hook", "codex-local-command/1")
-        ) || !matches!(
-            text(params, "session_boundary", 32)?.as_str(),
-            "startup" | "resume" | "clear" | "fork"
-        ) {
+        ) || !matches!(boundary.as_str(), "startup" | "resume" | "clear" | "fork")
+        {
             return Err(MezError::new(
                 crate::error::MezErrorKind::NotImplemented,
                 "creator enrollment requires an exact declared local command contract",
@@ -212,6 +222,7 @@ impl CuratedAdmission {
         }
         Ok(Self {
             producer: Arc::new(OnceLock::new()),
+            boundary,
         })
     }
 
@@ -311,7 +322,7 @@ impl RuntimeSessionService {
             .enrollments
             .curated_namespaces
             .find(work, producer);
-        if let Some((digest, original_source)) = existing {
+        if let Some((digest, original_source, boundary)) = existing {
             let binding = self
                 .control
                 .external_agents()
@@ -336,6 +347,11 @@ impl RuntimeSessionService {
             {
                 return Err(MezError::conflict(
                     "curated observer source or instance changed",
+                ));
+            }
+            if source.instance == work.observer_instance && boundary != curated.boundary {
+                return Err(MezError::conflict(
+                    "curated observer retry boundary differs; fenced handoff required",
                 ));
             }
             return self.replace_or_retry_external_observer(digest, work, connection);
@@ -430,7 +446,7 @@ impl RuntimeSessionService {
             .external_agents_mut()
             .enrollments
             .curated_namespaces
-            .remember(work, producer, digest)
+            .remember(work, producer, digest, &curated.boundary)
         {
             self.retire_external_agent_binding(digest);
             return Err(error);

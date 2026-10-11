@@ -663,6 +663,12 @@ The separate exact `mez harness-source <capsule-json>` argv MAY bridge curated
 one-shot command APIs whose stdin is closed. It MUST execute before HOME/config/
 CPU startup, never read stdin, and accept only a 4096-byte strict public capsule
 with bounded opaque ASCII session/instance IDs and a known initial boundary.
+Curated admission MUST retain the accepted boundary for each current observer
+instance. A changed boundary on the same instance MUST NOT be reported as an
+unchanged admission retry; only a fresh instance with the exact predecessor may
+replace it. Successful rotation MUST publish boundary and namespace selector
+together; rejected/stale handoff MUST leave both unchanged. Boundary text remains
+self-reported metadata, not proof of a vendor same-ID transition or restart.
 Credentials, PID/role/pane/endpoint/method selectors, arbitrary vendor data and
 general RPC MUST NOT be accepted. Code MUST fix the declared creator contract,
 method/labels and derive pane/socket ONLY from standard nonsecret routing hints;
