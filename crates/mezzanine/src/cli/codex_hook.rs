@@ -4,7 +4,7 @@
 //! Standard MEZ routing selects a candidate, never authority; native writer/parent/
 //! root evidence remains daemon-owned. No fd3, credential, general RPC, transcript,
 //! subprocess or retry is used. Replies/errors never reach vendor output. Later
-//! SessionEnd/freshness/usage remain inert until their separate owners exist.
+//! SessionEnd retires only its original session; freshness/usage remain separate.
 
 use super::{MezError, Result, SocketSelection, Write};
 use crate::integrations::bootstrap::codex::{self, Observation};
@@ -43,9 +43,6 @@ fn request(bytes: &[u8], pane: &str) -> Result<Option<String>> {
     let Some(observation) = codex::normalize("best-effort", bytes)? else {
         return Ok(None);
     };
-    if matches!(observation, Observation::SessionEnded { .. }) {
-        return Ok(None);
-    }
     if pane.len() < 2
         || pane.len() > 64
         || !pane.starts_with('%')
@@ -89,7 +86,10 @@ fn request(bytes: &[u8], pane: &str) -> Result<Option<String>> {
                 serde_json::json!({"pane_id":pane,"external_session_id":session,"event":event,"turn_id":turn}),
             )
         }
-        Observation::SessionEnded { .. } => return Ok(None),
+        Observation::SessionEnded { session } => (
+            "agent/external/codex-observe",
+            serde_json::json!({"pane_id":pane,"external_session_id":session,"event":"SessionEnd"}),
+        ),
     };
     let body =
         serde_json::json!({"jsonrpc":"2.0","id":"codex-hook","method":method,"params":params})
@@ -167,8 +167,12 @@ mod tests {
         for bytes in [
             br#"{"hook_event_name":"SessionStart","session_id":"session-a","source":"startup","agent_id":"child"}"#.as_slice(),
             br#"{"hook_event_name":"SessionStart","session_id":"session-a","source":"compact"}"#,
-            br#"{"hook_event_name":"SessionEnd","session_id":"session-a"}"#,
         ] { assert!(request(bytes, "%1").unwrap().is_none()); }
+        let end = request(br#"{"hook_event_name":"SessionEnd","session_id":"session-a","transcript_path":"PRIVATE"}"#, "%1").unwrap().unwrap();
+        let end: serde_json::Value = serde_json::from_str(&end).unwrap();
+        assert_eq!(end["params"]["event"], "SessionEnd");
+        assert_eq!(end["params"].as_object().unwrap().len(), 3);
+        assert!(end["params"].get("turn_id").is_none());
         for event in ["UserPromptSubmit", "Stop", "Interrupt"] {
             let bytes = serde_json::json!({"hook_event_name":event,"session_id":"a","turn_id":"turn","stop_hook_active":false,"prompt":"PRIVATE"}).to_string();
             let body = request(bytes.as_bytes(), "%1").unwrap().unwrap();

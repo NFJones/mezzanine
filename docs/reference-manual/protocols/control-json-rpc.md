@@ -651,8 +651,13 @@ the private internal helper envelope.
 The bounded 4096-turn fence retains known old IDs, rejects stale stops and exhaustion, makes
 identical retries inert and prevents Stop from downgrading interruption or
 claiming success. Unknown new prompt IDs are arrival-ordered rather than vendor
-chronology proof. SessionEnd, idle health/renewal and usage remain unavailable;
-no callback bills, retires a source or grants native task powers. Installation
+chronology proof. SessionEnd accepts pane/session/event only, no turn_id, and
+retires only the captured native-qualified original first epoch through the same
+ordered settlement and exact cleanup. It cannot kill the creator, infer success,
+clear expense or affect another session/successor. Late queued callbacks and
+same-lifetime re-enrollment remain fenced. This is current-daemon retirement,
+not same-ID transition or restart qualification. Idle health/renewal and usage
+remain unavailable; no callback bills or grants native task powers. Installation
 is not proof of actual vendor loading or callback delivery.
 The documented curated argv API identifies its direct creator contract; only
 the helper's real same-user Unix origin/current writer, native captured parent

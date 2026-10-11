@@ -136,6 +136,11 @@ async fn external_codex_observation_native_order_and_original_epoch_fences() {
         .prepare_external_helper_presentation(&callback("UserPromptSubmit", "late"), &connection)
         .unwrap();
     let mut rotation = declaration();
+    let end = crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"end","method":"agent/external/codex-observe","params":{"pane_id":"%1","external_session_id":"session-a","event":"SessionEnd"}}).to_string()).unwrap();
+    let stale_end = fixture
+        .service
+        .prepare_external_helper_presentation(&end, &connection)
+        .unwrap();
     let mut params: serde_json::Value =
         serde_json::from_str(rotation.params.as_deref().unwrap()).unwrap();
     params["observer_instance"] = "successor".into();
@@ -162,6 +167,27 @@ async fn external_codex_observation_native_order_and_original_epoch_fences() {
             .is_err()
     );
     assert!(!connection.initialized());
+    assert!(
+        settle(&mut fixture, stale_end, &connection)
+            .await
+            .get("error")
+            .is_some()
+    );
+    assert!(
+        fixture
+            .service
+            .prepare_external_helper_presentation(&end, &connection)
+            .is_err()
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .all(|binding| !binding.retired)
+    );
     assert!(connection.caller_client_id().is_none());
     assert!(
         fixture
@@ -379,6 +405,144 @@ async fn external_codex_observation_rejects_control_fields_and_unqualified_write
             .bindings
             .is_empty()
     );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
+    );
+}
+
+/// SessionEnd retires only its native-qualified original first-epoch session,
+/// not its live creator or another session. Later queued work and same-source
+/// re-enrollment remain fenced without manufacturing completion or billing.
+#[tokio::test(flavor = "current_thread")]
+async fn external_codex_session_end_retires_only_original_namespace() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    let store =
+        crate::storage::token_usage::TokenUsageStore::new(fixture.directory.join("usage.sqlite"));
+    fixture.service.set_token_usage_store(store.clone());
+    let (_socket, connection) = child(&mut fixture).await;
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&declaration(), &connection)
+        .unwrap();
+    settle(&mut fixture, work, &connection).await;
+    // Existing admitted accounting is seeded through the shared ledger fixture,
+    // not through Codex callbacks or provider work; retirement must conserve it.
+    let owner = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap()
+        .accounting_owner
+        .clone();
+    let marker = "a".repeat(64);
+    let now = current_unix_seconds();
+    store
+        .begin_external_request(&owner, "codex", &marker, None, now)
+        .unwrap();
+    let report = crate::storage::token_usage::ExternalUsageReport {
+        owner,
+        project: None,
+        harness: "codex".into(),
+        epoch: "fixture".into(),
+        event_id: "b".repeat(64),
+        sequence: 1,
+        mode: "observation".into(),
+        baseline: false,
+        observed_at: now,
+        model: mez_agent::ModelTokenUsageKey::new("fixture", "model"),
+        counters: crate::storage::token_usage::ExternalCounters {
+            input_tokens: 10,
+            output_tokens: 3,
+            ..Default::default()
+        },
+    };
+    let frozen = store
+        .freeze_external_request_report(&report, &marker)
+        .unwrap();
+    assert!(store.ingest_external_request(&frozen, now).unwrap().applied);
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&callback("UserPromptSubmit", "a"), &connection)
+        .unwrap();
+    settle(&mut fixture, work, &connection).await;
+    let end = crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"end","method":"agent/external/codex-observe","params":{"pane_id":"%1","external_session_id":"session-a","event":"SessionEnd"}}).to_string()).unwrap();
+    let ended = fixture
+        .service
+        .prepare_external_helper_presentation(&end, &connection)
+        .unwrap();
+    let late = fixture
+        .service
+        .prepare_external_helper_presentation(&callback("UserPromptSubmit", "late"), &connection)
+        .unwrap();
+    let reply = settle(&mut fixture, ended, &connection).await;
+    assert_eq!(reply["result"]["retired"], true, "{reply}");
+    assert!(
+        settle(&mut fixture, late, &connection)
+            .await
+            .get("error")
+            .is_some()
+    );
+    assert!(fixture.service.external_agent_rows().is_empty());
+    assert!(fixture.service.live_pane_harness_status("%1").is_none());
+    assert!(fixture.connection.unix_origin().unwrap().is_live());
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        10
+    );
+    assert!(
+        fixture
+            .service
+            .prepare_external_helper_presentation(&end, &connection)
+            .is_err()
+    );
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&declaration(), &connection)
+        .unwrap();
+    assert!(
+        settle(&mut fixture, work, &connection)
+            .await
+            .get("error")
+            .is_some()
+    );
+    let mut other = declaration();
+    let mut params: serde_json::Value =
+        serde_json::from_str(other.params.as_deref().unwrap()).unwrap();
+    params["external_session_id"] = "session-b".into();
+    other.params = Some(params.to_string());
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&other, &connection)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &connection).await["result"]["registered"],
+        true
+    );
+    assert!(
+        fixture
+            .service
+            .prepare_external_helper_presentation(&end, &connection)
+            .is_err()
+    );
+    assert_eq!(fixture.service.external_agent_rows().len(), 1);
     assert!(
         fixture
             .service

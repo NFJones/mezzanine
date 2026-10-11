@@ -4,7 +4,8 @@
 //! actor settlement prove native writer/direct-parent/root/generation before any
 //! effect. No supplied credential, generation, title or newest-epoch discovery
 //! is admitted. Turn order is arrival-based; known retired turns stay fenced.
-//! SessionEnd, source replacement, idle proof and accounting remain separate.
+//! SessionEnd retires only that exact session. Source replacement, idle proof
+//! and accounting remain separate; session end never attests creator death.
 
 use super::*;
 
@@ -25,8 +26,20 @@ impl CodexEvent {
             "UserPromptSubmit" => "UserPromptSubmit",
             "Stop" => "Stop",
             "Interrupt" => "Interrupt",
+            "SessionEnd" => "SessionEnd",
             _ => return Err(MezError::invalid_args("Codex event unavailable")),
         };
+        if kind == "SessionEnd" {
+            if params.get("turn_id").is_some() {
+                return Err(MezError::invalid_args(
+                    "Codex session end cannot supply a turn selector",
+                ));
+            }
+            return Ok(Self {
+                kind,
+                turn: String::new(),
+            });
+        }
         let turn = text(params, "turn_id", 128)?;
         if !turn
             .bytes()
@@ -194,7 +207,7 @@ impl RuntimeSessionService {
     }
 
     /// Applies a native-authorized original callback using daemon-owned sequence
-    /// and bounded turn fences. This never renews, retires, bills or proves idle
+    /// and bounded turn fences. Only SessionEnd retires the exact source; no event renews, bills or proves idle
     /// observer health, and Stop means only a ready boundary, never success.
     pub(super) fn commit_external_codex_observation(
         &mut self,
@@ -214,6 +227,10 @@ impl RuntimeSessionService {
             .as_ref()
             .and_then(|registration| registration.presentation.as_ref())
             .map_or(0, |presentation| presentation.sequence);
+        if event.kind == "SessionEnd" {
+            self.retire_external_agent_binding(digest);
+            return Ok(serde_json::json!({"retired":true,"sequence":previous}).to_string());
+        }
         let Some(state) = source.codex_turns.state_for(event)? else {
             return Ok(serde_json::json!({"changed":false,"sequence":previous}).to_string());
         };

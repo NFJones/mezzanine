@@ -63,6 +63,7 @@ async fn external_codex_installed_session_start_admits_native_creator_without_la
         ("UserPromptSubmit", "b"),
         ("Interrupt", "b"),
         ("Stop", "a"),
+        ("SessionEnd", ""),
     ] {
         let launch = serde_json::json!({"command":command,"event":{"hook_event_name":event,"session_id":"session-a","source":"startup","turn_id":turn,"stop_hook_active":false,"prompt":"PRIVATE","transcript_path":"PRIVATE","usage":{"input_tokens":999}}}).to_string();
         fixture.socket.write_all(&[9]).await.unwrap();
@@ -124,10 +125,10 @@ async fn external_codex_installed_session_start_admits_native_creator_without_la
         .unwrap();
     assert_eq!(presentation.sequence, 4);
     assert_eq!(presentation.state, "interrupted");
-    assert_eq!(
-        fixture.service.external_agent_rows()[0]["telemetry_health"],
-        "awaiting-first-proof"
-    );
+    assert!(binding.retired);
+    assert!(fixture.service.external_agent_rows().is_empty());
+    assert!(fixture.service.live_pane_harness_status("%1").is_none());
+    assert!(fixture.connection.unix_origin().unwrap().is_live());
     let database = rusqlite::Connection::open(usage).unwrap();
     assert_eq!(
         database

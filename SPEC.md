@@ -642,8 +642,15 @@ Known retired turns MUST reject, identical retries MUST remain sequence/time
 inert, Stop MUST mean ready rather than success, and Interrupt MUST not be
 downgraded by Stop. A 4096-turn run-local fence MUST reject exhaustion without
 evicting old IDs. Unknown new prompt IDs are arrival-ordered, not proof of vendor
-chronology. Callbacks MUST NOT renew leases, prove idle health, bill expense or
-retire on SessionEnd; those require separate qualified contracts. Non-exact argv retains
+chronology. SessionEnd MAY supply only pane/session/event, no fabricated turn ID,
+and retire only that native-qualified original first epoch through the same
+ordered worker/actor fences and exact cleanup owner. It MUST NOT kill the creator,
+infer success or clear expense/unrelated registrations. Queued old work, repeats
+and re-enrollment of that same living namespace MUST remain fenced; rotating to
+a successor MUST reject both late ends and newest-epoch adoption. This guarantee
+is current-daemon original-session retirement, not same-ID clear/resume/fork or
+restart-transition qualification. Callbacks MUST NOT renew leases, prove idle
+health or bill expense; those require separate contracts. Non-exact argv retains
 ordinary CLI startup and validation.
 The separate exact `mez harness-source <capsule-json>` argv MAY bridge curated
 one-shot command APIs whose stdin is closed. It MUST execute before HOME/config/
