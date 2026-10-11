@@ -703,6 +703,11 @@ The pure OpenCode normalizer exposes an immutable observation/legacy candidate
 pair: original message digest, inclusive counters, grouped model/category epoch
 and exact legacy completion time. This is internal migration data, not source
 authority or standalone reporting; native worker/producer wiring is separate.
+The internal admitted-worker bridge accepts only a pair matching the entire
+frozen legacy report. It retains the original reservation/provenance, rechecks
+before execution and requires actual worker-published completion at settlement.
+Rejected attachment leaves work available to settle/release; it grants no new
+RPC, source authority or request marker and does not consolidate old projections.
 Usage admission explicitly rejects internal `observation` mode before reserving
 legacy accounting work; field-name schema validation is not a mode enum or an
 authorization substitute. Ordinary bindings remain rejected on that legacy path.

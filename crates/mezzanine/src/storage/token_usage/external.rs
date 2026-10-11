@@ -164,7 +164,7 @@ impl ExternalCounters {
 }
 
 /// Exact actor-authorized immutable accounting report. Owner/harness are server-owned.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExternalUsageReport {
     /// Opaque server-issued accounting namespace, not client-selected identity.
     pub owner: String,

@@ -72,6 +72,10 @@ pub(crate) struct ExternalUsageWork {
     pub now: u64,
     /// Original ready marker for native reports; absent for legacy streams.
     request_marker: Option<String>,
+    /// Exact normalized proof attached only to already-reserved legacy work.
+    /// The original report/stream reservation remains unchanged; no new source
+    /// or request-marker authority is inferred from this migration candidate.
+    opencode_handoff: Option<crate::integrations::bootstrap::opencode::CompletedObservation>,
     /// Only actual native storage work can publish a durable completion.
     published: Arc<OnceLock<ExternalUsageCommit>>,
     /// Test-only worker start/release barrier, captured with immutable work.
@@ -83,9 +87,49 @@ pub(crate) struct ExternalUsageWork {
 }
 
 impl ExternalUsageWork {
+    /// Attaches one exact same-report receipt-only migration to admitted legacy
+    /// work. Failure leaves the original work/reservation available to settle or
+    /// release. This never changes its source, origin, pane, clock or stream key.
+    #[allow(
+        dead_code,
+        reason = "ordinary adapter migration uses exact admitted work"
+    )]
+    pub(crate) fn set_opencode_handoff(
+        &mut self,
+        pair: crate::integrations::bootstrap::opencode::CompletedObservation,
+    ) -> Result<()> {
+        if self.admission == 0
+            || self.request_marker.is_some()
+            || self.opencode_handoff.is_some()
+            || pair.legacy() != &self.report
+        {
+            return Err(MezError::conflict(
+                "OpenCode handoff does not match admitted legacy work",
+            ));
+        }
+        self.opencode_handoff = Some(pair);
+        Ok(())
+    }
+
     /// Runs legacy or sealed native request accounting off actor. Native work
     /// cannot replace its originally reserved project/group with current state.
     pub(crate) fn execute(&self) -> Result<ExternalUsageCommit> {
+        if let Some(pair) = &self.opencode_handoff {
+            if pair.legacy() != &self.report {
+                return Err(MezError::conflict(
+                    "OpenCode admitted handoff report changed",
+                ));
+            }
+            let commit = self.store.ingest_external_opencode_handoff(
+                pair.observation(),
+                pair.legacy(),
+                self.now,
+            )?;
+            self.published
+                .set(commit.clone())
+                .map_err(|_| MezError::conflict("external handoff result already published"))?;
+            return Ok(commit);
+        }
         if let Some(marker) = &self.request_marker {
             let frozen = self
                 .store
@@ -262,6 +306,7 @@ impl RuntimeSessionService {
             process: binding.process.clone(),
             now: current_unix_seconds(),
             request_marker: None,
+            opencode_handoff: None,
             published: Arc::new(OnceLock::new()),
             #[cfg(test)]
             worker_gate: self.control.external_agents().usage.worker_gate.clone(),
@@ -399,6 +444,7 @@ impl RuntimeSessionService {
             process: binding.process.clone(),
             now,
             request_marker: Some(marker),
+            opencode_handoff: None,
             published: Arc::new(OnceLock::new()),
             #[cfg(test)]
             worker_gate: self.control.external_agents().usage.worker_gate.clone(),
@@ -490,7 +536,7 @@ impl RuntimeSessionService {
                 projection.reservations.remove(&id);
             }
         }
-        let result = if work.request_marker.is_some() {
+        let result = if work.request_marker.is_some() || work.opencode_handoff.is_some() {
             result.and_then(|commit| {
                 if work.published.get() == Some(&commit) {
                     Ok(commit)

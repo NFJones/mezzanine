@@ -8,6 +8,143 @@ use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionAct
 use crate::runtime::current_unix_seconds;
 use crate::storage::token_usage::TokenUsageStore;
 
+/// A typed receipt handoff may attach only to exact already-admitted legacy
+/// work. Real legacy registration supplies pane/provenance authority; the source
+/// mapping below is explicitly synthetic storage setup, not ordinary native
+/// enrollment proof. Original reservations and reset baselines survive adoption,
+/// unpublished caller commits reject, and actual worker replay never recharges.
+#[test]
+fn runtime_external_opencode_handoff_requires_exact_published_worker() {
+    let (mut service, connection, mut params, store) = fixture();
+    service.set_external_binding_harness_for_tests("opencode");
+    let now = params["observed_at"].as_u64().unwrap();
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "role":"assistant", "sessionID":"usage-run", "id":"message", "providerID":"provider", "modelID":"model",
+        "time":{"completed":now*1000}, "tokens":{"input":7,"output":2,"reasoning":2,"cache":{"read":3,"write":0}}
+    })).unwrap();
+    let template = crate::integrations::bootstrap::opencode::completed_observation(
+        "fixture",
+        "usage-run",
+        "template",
+        None,
+        &bytes,
+    )
+    .unwrap()
+    .unwrap();
+    params["epoch"] = template.legacy().epoch.clone().into();
+    params["event_id"] = template.legacy().event_id.clone().into();
+    params["counters"]["cache_write_input_tokens"] = 0.into();
+    let request = crate::control::parse_json_rpc_request(
+        &serde_json::json!({
+            "jsonrpc":"2.0","id":"handoff","method":"agent/external/usage","params":params
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut work = service
+        .prepare_external_usage(&request, &connection)
+        .unwrap();
+    let pair = crate::integrations::bootstrap::opencode::completed_observation(
+        "fixture",
+        "usage-run",
+        &work.report.owner,
+        work.report.project.clone(),
+        &bytes,
+    )
+    .unwrap()
+    .unwrap();
+    let sql = rusqlite::Connection::open(store.path()).unwrap();
+    sql.execute(
+        "INSERT INTO external_usage_sources(witness,harness,owner) VALUES(?1,'opencode',?2)",
+        rusqlite::params!["a".repeat(64), work.report.owner],
+    )
+    .unwrap();
+    drop(sql);
+    let legacy = work.execute().unwrap();
+    let reservations = service.external_usage_reservation_counts_for_tests();
+    assert!(
+        work.set_opencode_handoff(template).is_err(),
+        "wrong owner must retain original work"
+    );
+    assert_eq!(
+        service.external_usage_reservation_counts_for_tests(),
+        reservations
+    );
+    let mut mismatched = work.clone();
+    mismatched.report.sequence += 1;
+    assert!(mismatched.set_opencode_handoff(pair.clone()).is_err());
+    let mut tampered = work.clone();
+    tampered.set_opencode_handoff(pair.clone()).unwrap();
+    tampered.report.model.model = "changed-after-attachment".into();
+    assert!(
+        tampered.execute().is_err(),
+        "changed work cannot publish handoff evidence"
+    );
+    assert_eq!(external_ledger_input(&store), 10);
+    work.set_opencode_handoff(pair.clone()).unwrap();
+    assert!(work.set_opencode_handoff(pair.clone()).is_err());
+    let rejected: serde_json::Value =
+        serde_json::from_str(&service.complete_external_usage(work.clone(), Ok(legacy))).unwrap();
+    assert!(
+        rejected.get("error").is_some(),
+        "unpublished handoff cannot claim durability"
+    );
+    assert_eq!(
+        service.external_usage_reservation_counts_for_tests(),
+        (0, 0)
+    );
+    let mut work = service
+        .prepare_external_usage(&request, &connection)
+        .unwrap();
+    work.set_opencode_handoff(pair.clone()).unwrap();
+    let commit = work.execute().unwrap();
+    assert!(!commit.applied);
+    let accepted: serde_json::Value =
+        serde_json::from_str(&service.complete_external_usage(work.clone(), Ok(commit.clone())))
+            .unwrap();
+    assert_eq!(accepted["result"]["durable"], true);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(
+            &service.complete_external_usage(work, Ok(commit))
+        )
+        .unwrap()
+        .get("error")
+        .is_some()
+    );
+    assert_eq!(external_ledger_input(&store), 10);
+    assert_eq!(
+        service
+            .external_token_usage(Some("%1"))
+            .values()
+            .next()
+            .unwrap()
+            .input_tokens,
+        10
+    );
+    service.reset_agent_token_usage_for_pane("%1");
+    let mut replay = service
+        .prepare_external_usage(&request, &connection)
+        .unwrap();
+    replay.set_opencode_handoff(pair).unwrap();
+    let commit = replay.execute().unwrap();
+    service.complete_external_usage(replay, Ok(commit));
+    assert_eq!(
+        service
+            .external_token_usage(Some("%1"))
+            .values()
+            .next()
+            .unwrap()
+            .input_tokens,
+        0
+    );
+    assert_eq!(external_ledger_input(&store), 10);
+    assert_eq!(
+        service.external_usage_reservation_counts_for_tests(),
+        (0, 0)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Valid legacy capabilities retain only published delta/cumulative reporting.
 /// Internal observation storage cannot reserve actor work before native request
 /// boundary and attachment contracts are enabled, regardless of schema shape.

@@ -1155,6 +1155,13 @@ MUST equal the legacy message-epoch digest; model/category stream grouping MUST
 exclude message IDs and payload changes MUST retain that event identity. Exact
 milliseconds MUST remain in the paired legacy proof. A normalized pair alone
 MUST NOT grant admission, enable standalone reporting or claim native migration.
+An internal worker attachment MUST match the entire frozen legacy report on
+already-admitted work and retain its original pane, origin, clock and stream
+reservation. Rejected attachments MUST leave that work available for settlement
+or release. Execution MUST recheck the pair and publish its actual durable
+completion; settlement MUST reject unpublished or mismatched results. This
+worker bridge MUST NOT open ordinary observation ingress, invent a request marker
+or claim consolidation of preexisting per-message projection entries.
 Telemetry schema 7 adds source-scoped opaque request markers with immutable
 original project/admission time and one optional observation completion link.
 `agent/external/usage-begin` MUST require an existing kernel-qualified persistent
