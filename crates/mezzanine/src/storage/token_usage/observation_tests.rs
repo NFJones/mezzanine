@@ -324,6 +324,144 @@ fn external_observation_schema6_migration_preserves_sources_and_legacy_replay() 
     }
 }
 
+/// Explicit legacy handoff requires retained same-owner source and receipt
+/// evidence, even when its checkpoint remains. Exhausted replay capacity must
+/// reject a new alias without changing old expense/checkpoints, while an exact
+/// already-adopted alias stays replayable at capacity. These are isolated ledger
+/// fixtures, not proof of native admission, history import or producer activation.
+#[test]
+fn external_opencode_legacy_handoff_missing_evidence_and_capacity_conserve() {
+    for scenario in ["unmapped", "missing-receipt", "capacity", "capacity-replay"] {
+        let (store, report) = fixture_for("opencode");
+        let mut legacy = report.clone();
+        legacy.mode = "delta".into();
+        legacy.epoch = format!("opencode-message:{}", report.event_id);
+        legacy.event_id = "completed:100001".into();
+        let original = store.ingest_external(&legacy, 100).unwrap();
+        if scenario == "capacity-replay" {
+            assert!(
+                !store
+                    .ingest_external_opencode_handoff(&report, &legacy, 100)
+                    .unwrap()
+                    .applied
+            );
+        }
+        let connection = store.open().unwrap();
+        match scenario {
+            "unmapped" => {
+                connection
+                    .execute(
+                        "DELETE FROM external_usage_sources WHERE owner=?1",
+                        [&report.owner],
+                    )
+                    .unwrap();
+            }
+            "missing-receipt" => {
+                connection
+                    .execute(
+                        "DELETE FROM external_usage_receipts WHERE stream_id=?1",
+                        [&original.stream_id],
+                    )
+                    .unwrap();
+            }
+            _ => {
+                let count = if scenario == "capacity-replay" {
+                    65535
+                } else {
+                    65536
+                };
+                connection.execute("WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<?3)
+                    INSERT INTO external_usage_observations(owner,event_id,fingerprint,stream_id)
+                    SELECT ?1,printf('%064x',n),printf('%064x',0),?2 FROM ids", rusqlite::params![report.owner, original.stream_id, count]).unwrap();
+            }
+        }
+        let before = connection
+            .query_row(
+                "SELECT count(*) FROM external_usage_observations WHERE owner=?1",
+                [&report.owner],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        let reopened = TokenUsageStore::new(store.path());
+        let result = reopened.ingest_external_opencode_handoff(&report, &legacy, 100);
+        if scenario == "capacity-replay" {
+            assert_eq!(
+                result.unwrap(),
+                ExternalUsageCommit {
+                    applied: false,
+                    ..original.clone()
+                }
+            );
+        } else {
+            let error = result.unwrap_err();
+            assert_eq!(
+                error.kind(),
+                match scenario {
+                    "unmapped" => crate::error::MezErrorKind::Forbidden,
+                    "missing-receipt" => crate::error::MezErrorKind::Conflict,
+                    _ => crate::error::MezErrorKind::RateLimited,
+                }
+            );
+        }
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM external_usage_observations WHERE owner=?1",
+                    [&report.owner],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            before
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT sum(input_tokens) FROM token_usage_events",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM token_usage_events", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT revision FROM external_usage_streams WHERE id=?1",
+                    [&original.stream_id],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM external_usage_streams", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM external_usage_receipts WHERE stream_id=?1",
+                    [&original.stream_id],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            if scenario == "missing-receipt" { 0 } else { 1 }
+        );
+        drop(connection);
+        std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+    }
+}
+
 /// Source-wide tombstone exhaustion fails explicitly without evicting existing
 /// observation identity. Already committed replay remains inert at capacity;
 /// plaintext/uppercase/short identifiers reject before changing any expense.
