@@ -3412,8 +3412,6 @@ fn runtime_agent_owned_pane_environment_report_does_not_require_shell_utilities(
 /// fixture-owned utility failure. The injected daemon snapshot never changes
 /// this test process's global environment or another fixture's search path.
 fn qualify_agent_owned_pane_environment(fail_report_utilities: bool) {
-    use std::os::unix::ffi::OsStrExt;
-
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -3441,14 +3439,7 @@ fn qualify_agent_owned_pane_environment(fail_report_utilities: bool) {
             fs::write(&path, "#!/bin/sh\nexit 127\n").unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let path = daemon
-            .iter_mut()
-            .find(|entry| entry.key == b"PATH")
-            .unwrap();
-        let mut value = tools.as_os_str().as_bytes().to_vec();
-        value.push(b':');
-        value.extend_from_slice(&path.value);
-        path.value = value;
+        prepend_fixture_report_tools(&mut daemon, &tools);
     }
     assert!(
         environment_forwards(&user_environment, &probe),
@@ -3657,6 +3648,62 @@ fn pane_report_wait_drains_output_and_accepts_first_delayed_report() {
     );
     process.terminate(Duration::from_millis(100)).unwrap();
     fs::remove_dir_all(root).unwrap();
+}
+
+/// Prepends owned failure tools only to the injected fixture daemon snapshot.
+/// PATH is optional native evidence; absent PATH receives the fixed system search
+/// path for this synthetic launch input, never a replacement native snapshot or
+/// global environment mutation. Existing PATH and unrelated entries are retained.
+fn prepend_fixture_report_tools(
+    daemon: &mut Vec<mez_mux::process::RawEnvironmentEntry>,
+    tools: &Path,
+) {
+    use std::os::unix::ffi::OsStrExt;
+    let mut value = tools.as_os_str().as_bytes().to_vec();
+    value.push(b':');
+    if let Some(path) = daemon.iter_mut().find(|entry| entry.key == b"PATH") {
+        value.extend_from_slice(&path.value);
+        path.value = value;
+    } else {
+        value.extend_from_slice(b"/usr/bin:/bin");
+        daemon.push(mez_mux::process::RawEnvironmentEntry {
+            key: b"PATH".to_vec(),
+            value,
+        });
+    }
+}
+
+/// A native snapshot may legitimately omit PATH. Fixture-only tool injection
+/// must handle that case without panic, preserve an existing search path exactly
+/// when present, and leave unrelated sentinel evidence unchanged.
+#[test]
+fn runtime_agent_owned_report_tools_handle_optional_path() {
+    for path in [None, Some(b"/fixture/bin:/bin".as_slice())] {
+        let sentinel = mez_mux::process::RawEnvironmentEntry {
+            key: b"SENTINEL".to_vec(),
+            value: b"fixture".to_vec(),
+        };
+        let mut daemon = vec![sentinel.clone()];
+        if let Some(value) = path {
+            daemon.push(mez_mux::process::RawEnvironmentEntry {
+                key: b"PATH".to_vec(),
+                value: value.to_vec(),
+            });
+        }
+        prepend_fixture_report_tools(&mut daemon, Path::new("/tmp/report-tools"));
+        assert_eq!(daemon[0], sentinel);
+        let expected = [
+            b"/tmp/report-tools:".as_slice(),
+            path.unwrap_or(b"/usr/bin:/bin"),
+        ]
+        .concat();
+        let paths = daemon
+            .iter()
+            .filter(|entry| entry.key == b"PATH")
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].value, expected);
+    }
 }
 
 /// Reads one pane root process's exec-time environment for pane-creation tests.
