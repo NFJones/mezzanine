@@ -10,6 +10,17 @@ use std::io::Write;
 use std::os::fd::{AsRawFd, BorrowedFd};
 use std::time::Duration;
 
+/// Runs only the exact fixed callback-helper argv before HOME/config/CPU
+/// discovery. This reuses the neutral bounded handler, grants no enrollment
+/// authority and constructs no asynchronous runtime. Other argv stays on the
+/// ordinary CLI path; only failure to write the neutral response is nonzero.
+pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u8> {
+    if arguments.len() != 2 || arguments[1] != "codex-hook" {
+        return None;
+    }
+    Some(u8::from(run(&mut std::io::stdout()).is_err()))
+}
+
 /// Projects only main-session inert IDs and states; raw callback data never
 /// reaches the observation socket. Output length is independently bounded.
 fn frame(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
@@ -83,6 +94,27 @@ pub(super) fn run<W: Write>(stdout: &mut W) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Early helper recognition is exact, not a broad CLI parser bypass. Other
+    /// commands and option-bearing forms must keep ordinary startup/validation;
+    /// no stdin, socket, configuration or stdout is touched by these cases.
+    #[test]
+    fn codex_hook_internal_argv_does_not_capture_other_cli_forms() {
+        for argv in [
+            vec![],
+            vec!["mez"],
+            vec!["mez", "version"],
+            vec!["mez", "codex-hook", "extra"],
+            vec!["mez", "--json", "codex-hook"],
+            vec!["mez", "codex-hook", "--help"],
+        ] {
+            let arguments = argv
+                .into_iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>();
+            assert_eq!(run_internal_process(&arguments), None);
+        }
+    }
+
     /// Raw hook content and child IDs never escape into the inherited stream;
     /// Stop carries an inert ready boundary rather than claimed completion.
     #[test]

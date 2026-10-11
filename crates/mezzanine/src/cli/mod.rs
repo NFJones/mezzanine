@@ -87,6 +87,7 @@ mod auth;
 mod bootstrap;
 /// Owns neutral Codex callback normalization and inherited observation writes.
 mod codex_hook;
+pub(crate) use codex_hook::run_internal_process as run_internal_codex_hook_process;
 /// Exposes the config module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

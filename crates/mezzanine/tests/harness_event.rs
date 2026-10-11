@@ -4,6 +4,28 @@
 //! configuration. Exact routing and peer authorization stay inside the helper;
 //! this fixture never installs a vendor or supplies daemon credentials.
 
+/// The fixed Codex callback helper must return neutral output before global
+/// HOME/config/CPU discovery. Neither absent configuration nor inherited legacy
+/// observer markers may turn unavailable telemetry into a vendor hook failure.
+/// No vendor, provider or daemon is started by this real-binary regression.
+#[test]
+fn standalone_codex_hook_is_neutral_without_home_or_configuration() {
+    for marked in [false, true] {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_mez"));
+        command
+            .arg("codex-hook")
+            .env_clear()
+            .stdin(std::process::Stdio::null());
+        if marked {
+            command.env("MEZ_CODEX_OBSERVER_FD", "3");
+        }
+        let result = command.output().unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(result.stdout, b"{}\n");
+        assert!(result.stderr.is_empty());
+    }
+}
+
 /// The real binary's fixed harness-event mode must not resolve global runtime
 /// CPU config before reading bounded stdin and emitting neutral output. Empty
 /// environment/no route is unavailable telemetry, not a vendor failure.

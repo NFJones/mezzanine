@@ -598,6 +598,13 @@ and configured CPU startup, using only a bounded current-thread I/O runtime and
 nonsecret MEZ routing. Missing/invalid routing MUST drain bounded stdin and remain
 neutral; it MUST NOT guess a default daemon route. Other CLI argv keep ordinary
 configuration startup, including explicit socket-selection forms.
+The exact fixed `mez codex-hook` argv MUST likewise run its neutral bounded
+handler before HOME/config/CPU discovery, without constructing a general
+runtime or reading user configuration. Missing or invalid inherited observation
+evidence MUST return only the neutral JSON object. This startup boundary alone
+MUST NOT claim ordinary Codex enrollment or usage; its legacy observation
+transport remains separate unfinished migration work. Non-exact argv retains
+ordinary CLI startup and validation.
 The separate exact `mez harness-source <capsule-json>` argv MAY bridge curated
 one-shot command APIs whose stdin is closed. It MUST execute before HOME/config/
 CPU startup, never read stdin, and accept only a 4096-byte strict public capsule

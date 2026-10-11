@@ -70,6 +70,11 @@ The old `--apply` and `--plan` flags are rejected, not aliases: scripts should
 remove `--apply` for installation and replace `--plan` with `--dry-run` for preview.
 The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
+The fixed internal `mez codex-hook` callback mode runs before HOME/config/CPU
+startup and returns neutral JSON when legacy observation transport is absent or
+invalid. It does not initialize a daemon/client or activate ordinary Codex
+telemetry; that migration remains unfinished. Only the exact helper argv uses
+this boundary, not ordinary CLI commands or option-bearing variants.
 `--root` is an optional override, not a prerequisite: compiled adapters select
 their documented user root from vendor environment/defaults. Those selected roots
 may be absent: inspection stays write-free and accepted installation creates only
