@@ -1120,6 +1120,21 @@ fn authorize_recovery(
 }
 
 #[cfg(test)]
+/// Seeds the authored nested parent required by historical-layout fixtures.
+/// Production must reject an unavailable array parent; this test-only setup
+/// supplies precisely that parent at the compiled path, never relaxes planning.
+pub(super) fn fixture_seed_nested_layout(root: &Path, manifest: &Manifest) {
+    for entry in &manifest.entries {
+        if matches!(&entry.artifact,
+            super::reconciliation::Artifact::JsoncArrayEntry { pointer, .. }
+                if pointer == "/tui/plugin")
+        {
+            std::fs::write(root.join(&entry.path), br#"{"tui":{"plugin":[]}}"#).unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
@@ -1538,7 +1553,7 @@ mod tests {
             let history = super::super::compiled_history(&current);
             assert_eq!(
                 history.len(),
-                if harness == "pi" { 7 } else { 8 },
+                if harness == "pi" { 7 } else { 14 },
                 "all frozen targets must remain qualified for {harness}"
             );
             for target in history {
@@ -1555,6 +1570,7 @@ mod tests {
                             super::super::reconciliation::Artifact::JsoncArrayEntry { .. }
                         )
                     }) {
+                        fixture_seed_nested_layout(&root, &target);
                         if matches!(operation, Operation::Uninstall) {
                             plan_private(&root, &root, &target, Operation::Install)
                                 .unwrap()

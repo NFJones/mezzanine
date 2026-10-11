@@ -291,6 +291,33 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         if let Some(revision8_client) = revision8_client {
             history.insert(0, revision8_client);
         }
+        if current_opencode {
+            // The newly effective loader layout cannot redefine which shipped
+            // predecessors are recognized. Only the four compiled JSONC-era
+            // layouts are eligible; receipt-selected paths/pointers and former
+            // helper references still supply no authority.
+            let mut alternatives = Vec::new();
+            for layout in [
+                opencode_artifact::manifest(),
+                opencode_artifact::jsonc_manifest(),
+                opencode_artifact::nested_manifest(false),
+                opencode_artifact::nested_manifest(true),
+            ] {
+                for revision in [7, 8] {
+                    let mut snapshot = layout.clone();
+                    snapshot.revision = revision;
+                    if revision == 8 {
+                        history::freeze_revision8_request_client(&mut snapshot);
+                    } else {
+                        history::freeze_pre_request_client(&mut snapshot);
+                    }
+                    if !history.contains(&snapshot) {
+                        alternatives.push(snapshot);
+                    }
+                }
+            }
+            history.splice(2..2, alternatives);
+        }
         history
     } else {
         Vec::new()

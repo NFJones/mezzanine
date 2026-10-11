@@ -564,7 +564,11 @@ file preimages/absence are captured and revalidated. Ownership is one exact
 `/plugin` member, or `/tui/plugin` when loader normalization makes an existing
 nested list effective and no root plugin field overrides it. Four fixed compiled
 variants do not authorize arbitrary custom paths. Receipt-qualified moves retain
-both documents and every authored setting; repeat is byte-exact. Token edits
+both documents and every authored setting; repeat is byte-exact. Upgrades
+recognize all four shipped revision-7/8 layouts independently of the newly
+effective filename/pointer, so an upgrade can move the owned registration without
+rejecting a known predecessor. Helper references still require exact compiled
+identity; this does not authenticate arbitrary relocated executables. Token edits
 retain comments, BOM, CRLF, Unicode and unrelated whitespace; JSONC allows trailing
 commas, not JSON5 expressions or duplicate keys. Finite parsing and final semantic
 revalidation precede publication. Genuine older strict operations stay frozen;

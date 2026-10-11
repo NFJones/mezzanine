@@ -976,6 +976,10 @@ source and MUST be preferred within the selected root. Selection MUST use accept
 pending overlays and bind both filename preimages/absence through publication.
 Receipt-proven filename transition MAY remove only the prior exact member and add
 the current exact member; neither document or unrelated plugin settings is owned.
+Upgrade/recovery MUST recognize all four shipped revision-7/8 filename/pointer
+layouts independently of the newly selected current layout, using frozen payloads
+and exact compiled helper references. Receipt-selected paths, pointers, values or
+relocated helper references MUST NOT expand historical authority.
 New JSONC identities relabelled as v2-v6 journals MUST reject, while genuine earlier
 targets retain original strict semantics. Shipped v6 payload fingerprints MUST fail
 closed on source drift until reviewed historical snapshots are supplied. Receipt

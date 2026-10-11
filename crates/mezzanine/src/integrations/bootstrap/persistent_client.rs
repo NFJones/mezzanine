@@ -211,7 +211,7 @@ mod tests {
             let current = super::super::compiled_manifest(harness, None).unwrap();
             assert_eq!(current.revision, 9);
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), if harness == "pi" { 7 } else { 8 });
+            assert_eq!(history.len(), if harness == "pi" { 7 } else { 14 });
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
             let frozen = immediate
@@ -243,6 +243,7 @@ mod tests {
                 ));
                 std::fs::create_dir(&root).unwrap();
                 std::fs::write(root.join("authored.json"), b"{\"authored\":true}\n").unwrap();
+                super::super::installer::fixture_seed_nested_layout(&root, &previous);
                 plan(&root, &previous, Operation::Install)
                     .unwrap()
                     .apply()

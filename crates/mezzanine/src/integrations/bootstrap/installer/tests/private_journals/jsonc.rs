@@ -224,6 +224,68 @@ fn bootstrap_jsonc_genuine_v6_and_invalid_authored_state_remain_strict() {
     }
 }
 
+/// Historical layout enumeration must not admit receipt-selected filenames,
+/// arbitrary pointers/values, or unknown helper source. Even a syntactically
+/// valid receipt containing such a manifest rejects both install and uninstall
+/// before changing the vendor or private state trees.
+#[test]
+fn bootstrap_jsonc_historical_layout_forgery_is_non_destructive() {
+    use crate::integrations::bootstrap::{opencode_artifact, reconciliation::Artifact};
+    let current = opencode_artifact::manifest();
+    let old = crate::integrations::bootstrap::compiled_history(&current)[0].clone();
+    for forgery in ["path", "pointer", "value", "helper"] {
+        let fixture = Fixture::new();
+        fixture
+            .plan(&old, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        let mut forged = old.clone();
+        let registration = forged
+            .entries
+            .iter_mut()
+            .find(|entry| matches!(entry.artifact, Artifact::JsoncArrayEntry { .. }))
+            .unwrap();
+        match forgery {
+            "path" => registration.path = "custom.jsonc".into(),
+            "pointer" => {
+                let Artifact::JsoncArrayEntry { pointer, .. } = &mut registration.artifact else {
+                    unreachable!()
+                };
+                *pointer = "/other/plugin".into();
+            }
+            "value" => {
+                let Artifact::JsoncArrayEntry { value, .. } = &mut registration.artifact else {
+                    unreachable!()
+                };
+                *value = serde_json::json!("./foreign-plugin.mjs");
+            }
+            "helper" => {
+                let helper = forged
+                    .entries
+                    .iter_mut()
+                    .find(|entry| entry.path.ends_with("/peer_helper.mjs"))
+                    .unwrap();
+                helper.artifact = Artifact::File {
+                    bytes: b"export const peerHelper = '/unknown/mez';\n".to_vec(),
+                };
+            }
+            _ => unreachable!(),
+        }
+        fs::write(fixture.receipt("opencode"), receipt_bytes(&forged).unwrap()).unwrap();
+        let before = tree_snapshot(&fixture.workspace);
+        for operation in [Operation::Install, Operation::Uninstall] {
+            let error = fixture.plan(&current, operation).err().unwrap();
+            assert!(
+                error
+                    .to_string()
+                    .contains("not a recognized compiled manifest revision")
+            );
+            assert_eq!(tree_snapshot(&fixture.workspace), before);
+        }
+    }
+}
+
 /// New format kinds must retain the actual strict v6 predecessor and its shipped
 /// bytes. Drift in a newer private payload cannot redefine old authority, and
 /// current filename/pointer alternatives remain compiled variants, not fake history.
@@ -232,13 +294,20 @@ fn bootstrap_jsonc_history_keeps_strict_predecessors_and_rejects_payload_drift()
     use crate::integrations::bootstrap::{opencode_artifact, reconciliation::Artifact};
     let current = opencode_artifact::manifest();
     let history = crate::integrations::bootstrap::compiled_history(&current);
-    assert_eq!(history.len(), 8);
-    assert_eq!(history[2], opencode_artifact::historical_manifest());
-    assert!(history.iter().skip(2).all(|manifest| {
+    assert_eq!(history.len(), 14);
+    assert_eq!(history[8], opencode_artifact::historical_manifest());
+    assert!(history.iter().skip(8).all(|manifest| {
         manifest
             .entries
             .iter()
             .all(|entry| !matches!(entry.artifact, Artifact::JsoncArrayEntry { .. }))
+    }));
+    assert!(history.iter().take(8).all(|manifest| {
+        [7, 8].contains(&manifest.revision)
+            && manifest
+                .entries
+                .iter()
+                .any(|entry| matches!(entry.artifact, Artifact::JsoncArrayEntry { .. }))
     }));
     let tui = include_bytes!("../../../opencode_tui.mjs");
     let client = include_bytes!("../../../history/persistent_client_v5.mjs");

@@ -121,6 +121,107 @@ pub(super) fn historical_payloads_match(tui: &[u8], client: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Every shipped JSONC-era layout must remain recognized independently of
+    /// the newly effective loader layout. Upgrades remove only the old owned
+    /// registration, retain authored fields in both documents, and become
+    /// byte-exact on repetition. This uses private publication with isolated
+    /// HOME/root witnesses, never a vendor process or real user settings.
+    #[test]
+    fn opencode_artifact_upgrades_across_historical_loader_layouts() {
+        use crate::integrations::bootstrap::installer::{Operation, plan_private};
+        use std::os::unix::fs::PermissionsExt;
+        let layouts = [
+            manifest(),
+            jsonc_manifest(),
+            nested_manifest(false),
+            nested_manifest(true),
+        ];
+        for old_layout in &layouts {
+            for revision in [7, 8] {
+                let old = super::super::compiled_history(old_layout)
+                    .into_iter()
+                    .find(|candidate| candidate.revision == revision)
+                    .unwrap();
+                for wanted in &layouts {
+                    assert!(super::super::compiled_history(wanted).contains(&old));
+                    let home = std::env::temp_dir().join(format!(
+                        "mez-opencode-layout-upgrade-{}",
+                        crate::storage::token_usage::new_token_usage_event_id()
+                    ));
+                    std::fs::create_dir(&home).unwrap();
+                    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700))
+                        .unwrap();
+                    let root = home.join("vendor");
+                    std::fs::create_dir(&root).unwrap();
+                    let registration = old
+                        .entries
+                        .iter()
+                        .find(|entry| matches!(entry.artifact, Artifact::JsoncArrayEntry { .. }))
+                        .unwrap();
+                    let document = |entry: &Entry| {
+                        let nested = matches!(&entry.artifact, Artifact::JsoncArrayEntry { pointer, .. } if pointer == "/tui/plugin");
+                        if nested {
+                            serde_json::json!({"tui":{"plugin":["user-nested"]},"theme":"authored"})
+                        } else {
+                            serde_json::json!({"plugin":["user-root"],"tui":{"plugin":["user-nested"]},"theme":"authored"})
+                        }
+                    };
+                    let mut authored = vec![(registration.path.clone(), document(registration))];
+                    std::fs::write(
+                        root.join(&registration.path),
+                        serde_json::to_vec(&authored[0].1).unwrap(),
+                    )
+                    .unwrap();
+                    plan_private(&root, &home, &old, Operation::Install)
+                        .unwrap()
+                        .apply()
+                        .unwrap();
+                    // Creating a higher-priority authored file is a genuine
+                    // loader transition. Merely asking for tui.json cannot
+                    // override an existing tui.jsonc; that remains authoritative.
+                    let requested = wanted
+                        .entries
+                        .iter()
+                        .find(|entry| matches!(entry.artifact, Artifact::JsoncArrayEntry { .. }))
+                        .unwrap();
+                    if registration.path == "tui.json" && requested.path == "tui.jsonc" {
+                        authored.push((requested.path.clone(), document(requested)));
+                        std::fs::write(
+                            root.join(&requested.path),
+                            serde_json::to_vec(&authored[1].1).unwrap(),
+                        )
+                        .unwrap();
+                    }
+                    let before =
+                        ["tui.json", "tui.jsonc"].map(|name| std::fs::read(root.join(name)).ok());
+                    let upgrade = plan_private(&root, &home, wanted, Operation::Install).unwrap();
+                    assert_eq!(
+                        before,
+                        ["tui.json", "tui.jsonc"].map(|name| std::fs::read(root.join(name)).ok())
+                    );
+                    upgrade.apply().unwrap();
+                    assert!(
+                        plan_private(&root, &home, wanted, Operation::Install)
+                            .unwrap()
+                            .changed_paths()
+                            .is_empty()
+                    );
+                    plan_private(&root, &home, wanted, Operation::Uninstall)
+                        .unwrap()
+                        .apply()
+                        .unwrap();
+                    for (name, expected) in authored {
+                        let actual: serde_json::Value =
+                            serde_json::from_slice(&std::fs::read(root.join(name)).unwrap())
+                                .unwrap();
+                        assert_eq!(actual, expected);
+                    }
+                    std::fs::remove_dir_all(home).unwrap();
+                }
+            }
+        }
+    }
+
     /// Owned plugin install/repeat/conflict/uninstall never rewrites authored
     /// settings, other plugins, dependencies or credentials in the explicit root.
     #[test]
