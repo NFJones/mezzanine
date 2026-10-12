@@ -168,6 +168,17 @@ guards kill and reap unfinished children on failure. Deterministic regressions
 cover bind-before-listen, stale sockets, child exit, and protocol-inert probes;
 successful reruns do not establish a historical startup failure's cause.
 
+The foreground serving pane-status rails/zen fixture requires its startup
+acknowledgement before terminal presentation and a current default-shell label
+in the reconstructed top pane row plus current default bottom-window actions.
+It replays accumulated PTY bytes through `TerminalScreen`: production SGR boundaries and title-only
+differential repaints need not contain a contiguous raw label. Body echoes,
+erased/stale labels, or a late/missing serving marker cannot pass. Deterministic
+tests use the production full-frame and differential encoders and arbitrary
+reader chunk boundaries. This is a fixture-only predicate correction; startup
+timeouts, command controls, and subsequent diagnostic rails/zen assertions are
+unchanged. The historical intermittent timeout's cause remains unestablished.
+
 The managed-shell recipe invokes
 `scripts/test-managed-shell-reliability.sh`. The wrapper builds each library
 test binary once with a separate

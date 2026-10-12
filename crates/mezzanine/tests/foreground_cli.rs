@@ -31,6 +31,9 @@ mod broker_attachment;
 #[path = "foreground_cli/socket_readiness.rs"]
 mod socket_readiness;
 
+#[path = "foreground_cli/startup_frame.rs"]
+mod startup_frame;
+
 /// Carries Foreground Process state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -675,9 +678,11 @@ fn foreground_serve_pane_status_explicit_rails_remain_diagnostic_in_zen() {
     let mut process = spawn_foreground_serve(&root, &home, &runtime, &socket);
     let mut output = Vec::new();
     process
-        .read_until(&mut output, Duration::from_secs(10), |text| {
-            text.contains("serving: true") && contains_default_shell_pane_frame(text)
-        })
+        .read_until(
+            &mut output,
+            Duration::from_secs(10),
+            startup_frame::contains_serving_shell_frame,
+        )
         .unwrap();
 
     output.clear();
