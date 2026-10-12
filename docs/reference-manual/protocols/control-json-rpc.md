@@ -830,6 +830,14 @@ metadata-only eviction and retired-source cleanup; durable request/deduplication
 evidence is not evicted. After completion/restart/cache miss or lost reply, retry the same
 original begin to restore its immutable metadata, then resend the same report.
 This is telemetry-only recovery, never provider/request replay or newest lookup.
+This recovery is conditional on retaining the original normalized outcome and
+readiness, and freshly qualifying the same native accounting source. Current
+client pending outcomes are process-local, not a durable outbox. A changed
+root/creator/session gets a distinct namespace, not permission to import its
+predecessor's completed history. No-gap delivery across actual process/daemon
+restart or cross-process resume/fork remains unqualified until a vendor-backed
+continuation witness and persistent outcome recovery or supported cumulative
+source are implemented; unavailable history is a gap, never a new charge.
 
 Adapters must capture begin readiness before each genuine new provider request
 and associate its exact final outcome; missing readiness is a coverage gap, not
@@ -1355,6 +1363,13 @@ receipt; accounting consumers must use their operation-specific commit evidence.
 `cached_input_tokens` and `cache_write_input_tokens` are unknown when omitted.
 Input includes cache subsets, and output includes reasoning. Invalid subsets,
 negative values, overflow and unknown payload fields are rejected.
+When both cache categories are known, their checked read-plus-write sum must
+not exceed inclusive input. An omitted category remains unknown, while the
+known category must individually fit input. The same conservation checks apply
+to cumulative attachment samples and every incurred difference, even when both
+full cumulative samples are valid. Rejection creates no receipt, checkpoint,
+request completion or expense; corrected telemetry can retry the uncommitted
+identity without rerunning provider work.
 
 Delta sequences start at 1 and are contiguous. Submit missing observations before
 advancing after a gap. Cumulative attachment requires `baseline: true` on its

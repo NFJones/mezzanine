@@ -8,6 +8,58 @@ use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionAct
 use crate::runtime::current_unix_seconds;
 use crate::storage::token_usage::TokenUsageStore;
 
+/// Invalid combined cache coverage must reject before actor reservations or
+/// durable writes, for both delta reports and uncharged cumulative attachment.
+/// The same original report identity remains usable after telemetry correction;
+/// neither failure nor successful metadata attachment implies provider replay.
+#[test]
+fn runtime_external_cache_conservation_rejects_before_reservation() {
+    for mode in ["delta", "cumulative"] {
+        let (mut service, connection, mut params, store) = fixture();
+        params["mode"] = mode.into();
+        params["baseline"] = (mode == "cumulative").into();
+        params["counters"]["cached_input_tokens"] = 6.into();
+        params["counters"]["cache_write_input_tokens"] = 5.into();
+        let request = |params: &serde_json::Value| {
+            crate::control::parse_json_rpc_request(
+                &serde_json::json!({
+                    "jsonrpc":"2.0","id":"cache","method":"agent/external/usage","params":params
+                })
+                .to_string(),
+            )
+            .unwrap()
+        };
+        assert!(
+            service
+                .prepare_external_usage(&request(&params), &connection)
+                .is_err(),
+            "{mode}"
+        );
+        assert_eq!(
+            service.external_usage_reservation_counts_for_tests(),
+            (0, 0)
+        );
+        assert_eq!(external_ledger_input(&store), 0);
+        params["counters"]["cache_write_input_tokens"] = 4.into();
+        let work = service
+            .prepare_external_usage(&request(&params), &connection)
+            .unwrap();
+        let commit = work.execute().unwrap();
+        let reply: serde_json::Value =
+            serde_json::from_str(&service.complete_external_usage(work, Ok(commit))).unwrap();
+        assert_eq!(reply["result"]["durable"], true, "{reply}");
+        assert_eq!(
+            service.external_usage_reservation_counts_for_tests(),
+            (0, 0)
+        );
+        assert_eq!(
+            external_ledger_input(&store),
+            if mode == "delta" { 10 } else { 0 }
+        );
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
 /// Group admission must not spend a slot per finalized message. Real legacy
 /// registration/admission supplies captured scope, while the mapped-source SQL
 /// and preexisting ledger expense here are explicitly synthetic fixtures, not

@@ -6,6 +6,121 @@
 use super::*;
 use mez_agent::ModelTokenUsageKey;
 
+/// Cache reads and writes are disjoint subsets of inclusive input. Individually
+/// valid categories must not hide an impossible combined total or sum overflow;
+/// absent categories remain unknown rather than becoming fabricated zeros.
+#[test]
+fn external_cache_subsets_require_checked_combined_conservation() {
+    for (input, read, write, valid) in [
+        (10, Some(6), Some(4), true),
+        (10, Some(6), Some(5), false),
+        (10, Some(10), None, true),
+        (10, None, Some(10), true),
+        (10, None, None, true),
+        (10, Some(11), None, false),
+        (10, None, Some(11), false),
+        (0, Some(0), Some(0), true),
+        (i64::MAX as u64, Some(i64::MAX as u64 - 1), Some(1), true),
+        (i64::MAX as u64, Some(i64::MAX as u64), Some(1), false),
+        (u64::MAX, Some(u64::MAX), Some(1), false),
+    ] {
+        let counters = ExternalCounters {
+            input_tokens: input,
+            cached_input_tokens: read,
+            cache_write_input_tokens: write,
+            ..Default::default()
+        };
+        assert_eq!(counters.validate().is_ok(), valid, "{counters:?}");
+        if valid {
+            assert_eq!(counters.normalized().cached_input_tokens, read);
+            assert_eq!(counters.normalized().cache_write_input_tokens, write);
+        }
+    }
+}
+
+/// Rejected delta/attachment samples cannot create receipts, checkpoints or
+/// expense. Cumulative samples can each be valid while their difference has
+/// impossible cache coverage; that failure must also roll back and leave the
+/// same sequence/event available for a corrected telemetry-only retry.
+#[test]
+fn external_cache_conservation_rejection_preserves_ledger_and_retry() {
+    for mode in ["delta", "cumulative"] {
+        let (store, mut report) = fixture();
+        store.initialize(100).unwrap();
+        report.mode = mode.into();
+        report.baseline = mode == "cumulative";
+        report.counters.cached_input_tokens = Some(6);
+        report.counters.cache_write_input_tokens = Some(5);
+        assert!(store.ingest_external(&report, 100).is_err(), "{mode}");
+        let connection = store.open().unwrap();
+        for table in [
+            "external_usage_streams",
+            "external_usage_receipts",
+            "token_usage_events",
+        ] {
+            assert_eq!(
+                connection
+                    .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0,
+                "{mode}: {table}"
+            );
+        }
+        report.counters.cache_write_input_tokens = Some(4);
+        let first = store.ingest_external(&report, 100).unwrap();
+        assert!(first.applied);
+        assert!(!store.ingest_external(&report, 100).unwrap().applied);
+        if mode == "cumulative" {
+            // Each full sample is valid, but the incurred difference is not:
+            // input increases by 10 while read/write increase by 6 each.
+            report.epoch = "difference".into();
+            report.sequence = 1;
+            report.event_id = "baseline".into();
+            report.baseline = true;
+            report.counters.input_tokens = 100;
+            report.counters.cached_input_tokens = Some(30);
+            report.counters.cache_write_input_tokens = Some(40);
+            store.ingest_external(&report, 100).unwrap();
+            let baseline = report.clone();
+            report.sequence = 2;
+            report.event_id = "next".into();
+            report.baseline = false;
+            report.counters.input_tokens = 110;
+            report.counters.cached_input_tokens = Some(36);
+            report.counters.cache_write_input_tokens = Some(46);
+            assert!(report.counters.validate().is_ok());
+            assert!(store.ingest_external(&report, 100).is_err());
+            assert_eq!(
+                connection
+                    .query_row("SELECT count(*) FROM external_usage_receipts", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                2,
+                "rejected difference must not create its receipt"
+            );
+            assert_eq!(
+                connection
+                    .query_row("SELECT count(*) FROM token_usage_events", [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0,
+                "both attachments and the rejected difference are uncharged"
+            );
+            assert_eq!(store.ingest_external(&baseline, 100).unwrap().revision, 1);
+            report.counters.input_tokens = 120;
+            let committed = store.ingest_external(&report, 100).unwrap();
+            assert_eq!(committed.totals.input_tokens, 20);
+            assert_eq!(committed.totals.cached_input_tokens, Some(6));
+            assert_eq!(committed.totals.cache_write_input_tokens, Some(6));
+            assert!(!store.ingest_external(&report, 100).unwrap().applied);
+        }
+        drop(connection);
+        std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+    }
+}
+
 /// Retirement blocks fresh and replay admission, not historical decoding.
 /// A seeded old ledger keeps expense, optional coverage and replay tombstones;
 /// Gemini-named providers/models under other harnesses remain accepted.

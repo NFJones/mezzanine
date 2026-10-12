@@ -4,6 +4,74 @@
 
 use super::*;
 
+/// Invalid combined cache coverage must fail before a native request acquires
+/// any completion link or ledger evidence. Repairing only normalized telemetry
+/// under the identical original marker/report then commits once after reopen.
+#[test]
+fn external_request_cache_conservation_rejects_without_completion() {
+    let (store, owner, marker) = fixture();
+    store
+        .begin_external_request(&owner, "pi", &marker, None, 100)
+        .unwrap();
+    let mut input = report(&owner);
+    input.counters.cached_input_tokens = Some(6);
+    input.counters.cache_write_input_tokens = Some(5);
+    assert!(
+        store
+            .freeze_external_request_report(&input, &marker)
+            .is_err()
+    );
+    let connection = store.open().unwrap();
+    assert!(
+        connection
+            .query_row(
+                "SELECT observation_id FROM external_usage_requests",
+                [],
+                |row| row.get::<_, Option<String>>(0)
+            )
+            .unwrap()
+            .is_none()
+    );
+    for table in [
+        "token_usage_events",
+        "external_usage_observations",
+        "external_usage_receipts",
+        "external_usage_streams",
+    ] {
+        assert_eq!(
+            connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    input.counters.cache_write_input_tokens = Some(4);
+    let frozen = store
+        .freeze_external_request_report(&input, &marker)
+        .unwrap();
+    assert!(store.ingest_external_request(&frozen, 101).unwrap().applied);
+    let reopened = TokenUsageStore::new(store.path());
+    assert!(
+        !reopened
+            .ingest_external_request(&frozen, 101)
+            .unwrap()
+            .applied
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        10
+    );
+    drop(connection);
+    std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+}
+
 /// Normalized report fixture; its supplied project is not trusted request
 /// provenance and must be replaced by the marker's original stored origin.
 fn report(owner: &str) -> ExternalUsageReport {

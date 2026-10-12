@@ -1191,6 +1191,12 @@ differences. Modes, model identity and optional-counter availability MUST NOT
 change within an epoch. Final cumulative observations reconcile prior expense,
 not add an aggregate on top of it. Inclusive input/cache and output/reasoning
 subsets MUST NOT be counted twice. Unknown categories MUST retain coverage facts.
+Known cache-read and cache-write categories are disjoint subsets: their checked
+sum MUST NOT exceed inclusive input, including for an attachment baseline and
+each incurred cumulative difference. One unknown category MUST remain unknown;
+the known category still MUST NOT exceed input. Invalid coverage MUST leave
+receipts, checkpoints, request completion links and expense unchanged so the
+same uncommitted identity can retry corrected telemetry, never provider work.
 Raw events and receipts have a 91-day replay horizon; durable high-water marks
 MUST prevent pruned sequences from becoming fresh expense. Pane reset MUST change
 only its view baseline, not durable checkpoints or runtime-instance totals.
@@ -1419,6 +1425,14 @@ same-marker/same-report deliveries per call. Only typed durable acknowledgment
 may establish delivery; neutral/accepted callback success is insufficient.
 Missing ticket/counters, changed source/payload and bounded-queue pressure MUST
 remain explicit unavailable/loss outcomes, never zero or provider replay.
+The current client retains pending outcomes in process memory, not a durable
+outbox. Reload or process/daemon interruption MUST NOT be advertised as a no-gap
+expense-delivery guarantee. Same-report retry requires retained normalized
+outcome/readiness and fresh admission of the same genuinely evidenced native
+source; a changed root/creator/session namespace cannot borrow its predecessor's
+owner or mint readiness for inherited completed history. Qualification of an
+actual vendor source-continuation witness and persistent pending-outcome recovery
+or a supported cumulative source remains required for broader continuity.
 Revision9 Pi/OpenCode manifests include a pure ECMAScript request-accounting
 core with bounded UTF-8 identifier byte limits, requiring neither Node Buffer
 nor DOM TextEncoder. Transport-specific adapters retain their own dependencies.

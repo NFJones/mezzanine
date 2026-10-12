@@ -60,6 +60,8 @@ pub(crate) struct ExternalCounters {
 
 impl ExternalCounters {
     /// Rejects overflow and inconsistent inclusive cache/reasoning subsets.
+    /// Known cache reads/writes are disjoint; unknown categories stay unknown
+    /// while each known category must still fit the inclusive input total.
     pub(crate) fn validate(self) -> Result<()> {
         for value in [
             Some(self.input_tokens),
@@ -82,6 +84,13 @@ impl ExternalCounters {
             || self
                 .cache_write_input_tokens
                 .is_some_and(|n| n > self.input_tokens)
+            || self
+                .cached_input_tokens
+                .zip(self.cache_write_input_tokens)
+                .is_some_and(|(read, write)| {
+                    read.checked_add(write)
+                        .is_none_or(|total| total > self.input_tokens)
+                })
         {
             return Err(MezError::invalid_args(
                 "external counters must use inclusive input/output subsets",
