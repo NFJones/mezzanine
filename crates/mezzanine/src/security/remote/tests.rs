@@ -168,15 +168,19 @@ fn endpoint_identity_lock_acquisition_survives_transient_holder() {
 /// The retry covers only a transient fork-inherited lock, so an identity that
 /// stays held past the budget must still report the documented conflict with
 /// unchanged kind and message, and must release cleanly afterwards.
+///
+/// Retain the original identity guard instead of dropping it and immediately
+/// acquiring a new raw lock for fixture setup. A duplicate descriptor models
+/// the same open-file-description lifetime as inheritance without requiring a
+/// fork schedule: it must still exclude another identity after the original
+/// guard drops. Explicit test-only unlock happens after all exclusion assertions
+/// so sibling forks cannot delay the final identity-reuse proof.
 #[test]
 fn endpoint_identity_lock_conflicts_while_holder_stays_live() {
     let root = test_root("held-lock");
     let identity = RemoteEndpointIdentity::load_or_create(&root, "session-a").unwrap();
     let endpoint_id = identity.endpoint_id().to_string();
-    drop(identity);
-
-    let holder = super::store::open_private_lock(&session_identity_lock_path(&root)).unwrap();
-    flock(&holder, FlockOperation::NonBlockingLockExclusive).unwrap();
+    let retained_description = identity.duplicate_lock_for_tests().unwrap();
 
     let started = Instant::now();
     let conflict = RemoteEndpointIdentity::load_or_create(&root, "session-a").unwrap_err();
@@ -191,7 +195,20 @@ fn endpoint_identity_lock_conflicts_while_holder_stays_live() {
         "conflict returned after {waited:?} before the retry budget elapsed"
     );
 
-    drop(holder);
+    assert_eq!(identity.endpoint_id(), endpoint_id);
+    drop(identity);
+    let retained_conflict = RemoteEndpointIdentity::load_or_create(&root, "session-a").unwrap_err();
+    assert_eq!(
+        retained_conflict.kind(),
+        crate::error::MezErrorKind::Conflict
+    );
+    assert_eq!(retained_conflict.message(), conflict.message());
+
+    // This fixture owns the descriptor and has finished proving exclusion.
+    // Unlock the shared description before drop so even a sibling fork's copy
+    // cannot retain fixture ownership during the identity-reuse assertion.
+    flock(&retained_description, FlockOperation::Unlock).unwrap();
+    drop(retained_description);
     let reacquired = RemoteEndpointIdentity::load_or_create(&root, "session-a").unwrap();
     assert_eq!(reacquired.endpoint_id(), endpoint_id);
     drop(reacquired);

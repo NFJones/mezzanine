@@ -119,6 +119,15 @@ impl RemoteEndpointIdentity {
     pub(crate) fn endpoint_id(&self) -> &str {
         &self.endpoint_id
     }
+
+    /// Duplicates only the retained lock descriptor for deterministic fixtures.
+    /// The duplicate shares the lock's open-file description, modeling its
+    /// lifetime across descriptor inheritance without forking or reading key
+    /// material. Returns the operating system's descriptor-duplication error.
+    #[cfg(test)]
+    pub(super) fn duplicate_lock_for_tests(&self) -> std::io::Result<fs::File> {
+        self._lock.try_clone()
+    }
 }
 
 /// Durable endpoint-bound trust and single-use invitation store.
