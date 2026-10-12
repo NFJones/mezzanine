@@ -541,6 +541,11 @@ The daemon still requires exact native creator/root and predecessor evidence;
 old timers/senders cannot revive. Failed/lost replies or intervening starts do
 not fall back to new admission. This does not qualify restart, reload, unpaired
 resume/fork, inherited expense or exhaustive accounting after the transition.
+An isolated production-helper fixture also qualifies exact already-committed
+main-request replay and one distinct synthetic incurred request across this
+same-creator clear: two observations retain one durable owner, without recharging
+the replay or resetting prior expense. This is not live vendor billing or evidence
+for unobserved historical/auxiliary requests or cross-process continuation.
 Executable relocation remains fail-closed rather than guessed migration.
 Installation does not override `disableAllHooks`, explicit
 plugin disabling, managed policy, vendor trust review or authored statuslines and

@@ -43,10 +43,12 @@ async fn external_claude_bare_bootstrap_installed_module_has_native_durable_usag
 /// ingress must rotate the predecessor exactly once, preserve the run/accounting
 /// owner and previously committed expense, and deliver fresh lifecycle sequence
 /// ownership without any token/PID/primary injection or vendor/provider work.
+/// Replaying that committed request across the clear must remain inert, while
+/// one distinct synthetic request commits once under the same durable owner.
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
 async fn external_claude_installed_same_id_clear_uses_captured_native_predecessor() {
-    qualify_request_client_with_install("claude-clear-ordinary-fixture.mjs", true, 20, true).await;
+    qualify_request_client_with_install("claude-clear-ordinary-fixture.mjs", true, 26, true).await;
 }
 
 /// Shared owned fixture for the pure runner and full literal generator; only
@@ -64,7 +66,7 @@ async fn qualify_request_client_with_install(
     installed: bool,
 ) {
     let paired_clear = script_name == "claude-clear-ordinary-fixture.mjs";
-    assert!(!paired_clear || (installed && claude && requests == 20));
+    assert!(!paired_clear || (installed && claude && requests == 26));
     let node = std::path::PathBuf::from(
         std::env::var_os("MEZ_TEST_NODE_BINARY").expect("explicit offline Node path"),
     );
@@ -334,7 +336,13 @@ async fn qualify_request_client_with_install(
                 |row| row.get::<_, i64>(0)
             )
             .unwrap(),
-        if claude { 16 } else { 10 }
+        if paired_clear {
+            32
+        } else if claude {
+            16
+        } else {
+            10
+        }
     );
     assert_eq!(
         database
@@ -344,6 +352,28 @@ async fn qualify_request_client_with_install(
                 |row| row.get::<_, i64>(0)
             )
             .unwrap(),
-        1
+        if paired_clear { 2 } else { 1 }
     );
+    if paired_clear {
+        assert_eq!(
+            database
+                .query_row(
+                    "SELECT count(DISTINCT owner) FROM external_usage_sources",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            database
+                .query_row(
+                    "SELECT count(DISTINCT owner) FROM external_usage_observations",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+    }
 }

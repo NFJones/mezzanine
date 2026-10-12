@@ -1375,6 +1375,11 @@ missing/lost/invalid replies and delayed end completion MUST NOT restore the pai
 or fall back to initial/newest admission. Retired namespaces remain unavailable.
 Restart/reload, unpaired resume/fork and cross-process identity MUST NOT be inferred.
 This is lifecycle handoff, not historical expense attachment or no-gap billing.
+Already-qualified immutable main-request reports MAY replay across this handoff
+under their original durable owner without a second charge; newly qualified
+distinct reports retain ordinary readiness/commit/attribution checks. This does
+not authorize importing never-observed history, changing request origin, or
+claiming exhaustive source coverage from the lifecycle transition itself.
 Revision2 module bytes MUST remain independently frozen with guarded shared inputs
 for same-helper upgrades; receipt/journal paths cannot authenticate relocation.
 The compiled Claude module MAY observe the documented main `turn.step` generator
