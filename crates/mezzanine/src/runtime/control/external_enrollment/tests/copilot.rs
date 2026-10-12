@@ -71,9 +71,9 @@ async fn external_copilot_native_lifecycle_replay_and_exact_end() {
         .expires;
     for (event, time, state, seq) in [
         ("userPromptSubmitted", 1, "running", 1),
-        ("permission_prompt", 2, "waiting", 2),
+        ("permission_prompt", 2, "approval-wait", 2),
         ("postToolUse", 3, "running", 3),
-        ("elicitation_dialog", 4, "waiting", 4),
+        ("elicitation_dialog", 4, "input-wait", 4),
         ("preToolUse", 5, "running", 5),
         ("agentStop", 6, "ready", 6),
         ("errorOccurred", 7, "interrupted", 7),

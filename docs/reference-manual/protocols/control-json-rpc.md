@@ -1137,7 +1137,7 @@ Only bounded async admission supports it; initialized/remote/general control do
 not. Fixed helper stdin is strictly bounded64KiB/250ms; loss returns neutral `{}`.
 
 Allowlisted facts are userPromptSubmitted/preToolUse/postToolUse (running),
-permission_prompt/elicitation_dialog notifications (waiting), agentStop (ready),
+permission_prompt (approval-wait), elicitation_dialog (input-wait), agentStop (ready),
 unrecoverable errorOccurred (interrupted), and sessionEnd (exact retirement).
 permissionRequest is not waiting proof. Stop with active continuation and unrelated
 notifications are inert. No title, prompt/tool/error text, transcript path,

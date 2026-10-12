@@ -42,7 +42,8 @@ impl CopilotEvent {
     /// Stop means ready, not success; permission notifications alone mean wait.
     fn state(&self) -> &'static str {
         match self.kind.as_str() {
-            "permission_prompt" | "elicitation_dialog" => "waiting",
+            "permission_prompt" => "approval-wait",
+            "elicitation_dialog" => "input-wait",
             "agentStop" => "ready",
             "errorOccurred" => "interrupted",
             _ => "running",
@@ -256,7 +257,7 @@ mod tests {
             CopilotEvent::parse(&serde_json::json!({"event":"permission_prompt","timestamp":11}))
                 .unwrap()
                 .state(),
-            "waiting"
+            "approval-wait"
         );
     }
 }
