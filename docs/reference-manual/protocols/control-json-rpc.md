@@ -1169,6 +1169,25 @@ not redirect exporters, enable capture, or create enterprise telemetry policy.
 
 #### Qualified helpers for existing ordinary producers
 
+Cursor's distinct `cursor-local-command/1` declaration uses `command-hook` and
+the literal `session-start` callback boundary, not another vendor's source enum.
+The helper projects CLI-confirmed common conversation/generation identity plus
+native session_id association; no SDK invocation field or IDE-only composer
+field replaces those selectors. A native qualified original first epoch named
+`cursor-local-hooks-1` receives `agent/external/cursor-observe` with `pane_id`,
+`external_session_id`, `event`, and—except sessionEnd—`generation_id`. Stop also
+requires status completed/aborted/error. No private credential, caller-selected
+presentation state, timestamp, title, content or counters enter this RPC.
+Generation equal to session is a known non-interactive fallback and rejects.
+Only beforeSubmitPrompt starts a new generation; old generation IDs remain
+fenced in bounded storage. Stop maps to ready/interrupted/failed, never invoice
+or process-death proof. Late activity/duplicate Stop is time-inert. SessionEnd
+has no generation/status selector and retires only its exact admitted original
+session; rotated/foreign source callbacks reject through native work settlement.
+Shared per-source ingress ordering covers observation through actor commit.
+Idle observer health, shared-server association and ordinary counters remain
+unavailable, not replaced by payload labels or a newest-generation lookup.
+
 `agent/external/helper-presentation` accepts only `launch_token`, `generation`,
 `external_session_id`, `sequence`, `state`, and optional `title`. It uses the
 generic presentation reducer below, including identical replay and stale/conflict

@@ -272,7 +272,11 @@ async fn run_with_inner<W: Write, E: Write>(
             super::copilot_hook::run(&args.event, &socket_selection, pane.as_deref(), stdout)
                 .await?;
         }
-        Some(CliCommand::CursorHook(_)) => super::cursor_hook::run(stdout)?,
+        Some(CliCommand::CursorHook(args)) => {
+            let pane = std::env::var("MEZ_PANE").ok();
+            super::cursor_hook::run(&args.event, &socket_selection, pane.as_deref(), stdout)
+                .await?;
+        }
         Some(CliCommand::Version) => write!(stdout, "{}", super::render_cli_version()?)?,
         Some(CliCommand::Completion(args)) => {
             let mut command = CliArgv::command();

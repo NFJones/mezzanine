@@ -3,7 +3,7 @@
 //! CLI changelog confirms sessionStart/sessionEnd/stop and stdin hooks. The shared
 //! hooks reference supplies version1 command entries and neutral empty outputs.
 //! Only exact members are owned; version1 is initialized only for an absent file.
-//! Installation never attests runtime session association or usage availability.
+//! Installation never attests loaded/native lifecycle or usage availability.
 
 use super::{
     installer::Manifest,
@@ -12,14 +12,36 @@ use super::{
 
 /// Compiles only a fixed installing executable, never vendor paths or PATH/env.
 pub(super) fn manifest() -> Option<Manifest> {
+    build(
+        2,
+        &[
+            "sessionStart",
+            "beforeSubmitPrompt",
+            "postToolUse",
+            "preCompact",
+            "afterAgentResponse",
+            "stop",
+            "sessionEnd",
+        ],
+    )
+}
+
+/// Independently preserves exact revision1 authority, not receipt-supplied bytes.
+pub(super) fn historical_manifest() -> Option<Manifest> {
+    build(1, &["sessionStart", "stop", "sessionEnd"])
+}
+
+/// Literal event lists define exact array-member authority; no user input joins
+/// command construction and the helper fallback remains neutral on disappearance.
+fn build(revision: u32, events: &[&str]) -> Option<Manifest> {
     let helper = std::env::current_exe().ok()?;
     let text = helper.to_str()?;
     if !helper.is_absolute() || text.len() > 4096 || text.chars().any(char::is_control) {
         return None;
     }
     let quoted = shlex::try_quote(text).ok()?;
-    Some(Manifest { harness:"cursor".into(), revision:1, vendor_version:"best-effort".into(), entries:vec![Entry {
-        path:"hooks.json".into(), artifact:Artifact::JsonArrayEntries { entries:["sessionStart","stop","sessionEnd"].into_iter().map(|event| JsonArrayMember {
+    Some(Manifest { harness:"cursor".into(), revision, vendor_version:"best-effort".into(), entries:vec![Entry {
+        path:"hooks.json".into(), artifact:Artifact::JsonArrayEntries { entries:events.iter().map(|event| JsonArrayMember {
             pointer:format!("/hooks/{event}"), value:serde_json::json!({"command":format!("test -x {quoted} && exec {quoted} cursor-hook {event} || printf '{{}}\\n'"),"timeout":1}),
         }).collect() },
     }] })
@@ -84,6 +106,67 @@ pub(super) fn present_ownership(
 
 #[cfg(test)]
 mod tests {
+    /// Independent revision1 member authority upgrades to seven current exact
+    /// members without adopting authored commands or settings. Repeat/uninstall
+    /// preserve shared document metadata, order and all foreign siblings.
+    #[test]
+    fn bootstrap_cursor_revision1_upgrades_without_author_adoption() {
+        use super::super::installer::{Operation, plan_private};
+        let home = std::env::temp_dir().join(format!(
+            "mez-cursor-upgrade-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir(&home).unwrap();
+        let root = home.join("vendor");
+        std::fs::create_dir(&root).unwrap();
+        let old = super::historical_manifest().unwrap();
+        let current = super::manifest().unwrap();
+        plan_private(&root, &home, &old, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        let file = root.join("hooks.json");
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        document["authored"] = true.into();
+        document["hooks"]["stop"]
+            .as_array_mut()
+            .unwrap()
+            .insert(0, serde_json::json!({"command":"AUTHOR"}));
+        std::fs::write(&file, document.to_string()).unwrap();
+        std::fs::write(root.join("cli-config.json"), b"PRIVATE STATUSLINE").unwrap();
+        plan_private(&root, &home, &current, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        assert!(
+            plan_private(&root, &home, &current, Operation::Install)
+                .unwrap()
+                .changed_paths()
+                .is_empty()
+        );
+        let document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(document["hooks"].as_object().unwrap().len(), 7);
+        assert_eq!(document["hooks"]["stop"][0]["command"], "AUTHOR");
+        plan_private(&root, &home, &current, Operation::Uninstall)
+            .unwrap()
+            .apply()
+            .unwrap();
+        let document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(document["authored"], true);
+        assert_eq!(
+            document["hooks"]["stop"],
+            serde_json::json!([{"command":"AUTHOR"}])
+        );
+        assert_eq!(
+            std::fs::read(root.join("cli-config.json")).unwrap(),
+            b"PRIVATE STATUSLINE"
+        );
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
     /// Public compiled Cursor hooks must initialize a new version1 document and
     /// own only exact event members. Authored siblings/metadata/order survive
     /// repeat/uninstall, while unsupported versions reject without mutation.

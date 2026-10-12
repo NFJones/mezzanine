@@ -214,8 +214,11 @@ impl CuratedAdmission {
             ("claude", "curated-command", "claude-curated-command/1")
                 | ("codex", "command-hook", "codex-local-command/1")
                 | ("copilot", "command-hook", "copilot-local-command/1")
+                | ("cursor", "command-hook", "cursor-local-command/1")
         ) || if harness == "copilot" {
             !matches!(boundary.as_str(), "startup" | "resume" | "new")
+        } else if harness == "cursor" {
+            boundary != "session-start"
         } else {
             !matches!(boundary.as_str(), "startup" | "resume" | "clear" | "fork")
         } {
@@ -438,6 +441,7 @@ impl RuntimeSessionService {
                     curated_observer: Some(CuratedObserver::default()),
                     codex_turns: Default::default(),
                     copilot_events: Default::default(),
+                    cursor_generations: Default::default(),
                     token: SecretString::from(token),
                 }),
                 pi_lifecycle: None,

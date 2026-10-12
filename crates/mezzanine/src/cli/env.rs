@@ -62,7 +62,7 @@ pub(super) enum CliCommand {
     /// Projects one classic Copilot callback neutrally into native-qualified ingress.
     #[command(hide = true)]
     CopilotHook(super::copilot_hook::CopilotHookArgs),
-    /// Drains a fixed Cursor lifecycle hook without controls or association.
+    /// Projects native interactive Cursor lifecycle with no vendor controls.
     #[command(hide = true)]
     CursorHook(super::cursor_hook::CursorHookArgs),
     /// Manages Mezzanine configuration.

@@ -91,10 +91,8 @@ pub(crate) use codex_hook::run_internal_process as run_internal_codex_hook_proce
 /// Owns neutral classic Copilot projection into native-qualified local lifecycle.
 mod copilot_hook;
 pub(crate) use copilot_hook::run_internal_process as run_internal_copilot_hook_process;
-/// Owns neutral fixed Cursor lifecycle argv, not runtime association.
+/// Owns neutral interactive Cursor projection into native-qualified lifecycle.
 mod cursor_hook;
-/// Shared strict input bound for deployment-only neutral hooks.
-mod neutral_hook;
 pub(crate) use cursor_hook::run_internal_process as run_internal_cursor_hook_process;
 /// Exposes the config module boundary.
 ///

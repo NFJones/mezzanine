@@ -40,6 +40,7 @@ mod codex;
 mod codex_order;
 mod copilot;
 mod curated;
+mod cursor;
 mod helper;
 mod helper_usage;
 mod producer;
@@ -99,6 +100,8 @@ pub(super) struct EnrollmentBinding {
     codex_turns: codex::CodexTurns,
     /// Original classic Copilot timestamp fence, never a turn or billing claim.
     copilot_events: copilot::CopilotEvents,
+    /// Original Cursor generation fences, never counters or idle health.
+    cursor_generations: cursor::CursorGenerations,
     /// Redacted in Debug and never persisted or placed in generic replay caches.
     token: SecretString,
 }
@@ -686,6 +689,7 @@ impl RuntimeSessionService {
                     curated_observer: None,
                     codex_turns: Default::default(),
                     copilot_events: Default::default(),
+                    cursor_generations: Default::default(),
                     token: SecretString::from(token),
                 }),
                 pi_lifecycle: None,

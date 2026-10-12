@@ -191,8 +191,8 @@ fn run_with_root_selector<W: Write>(
                 "adoption_planned":adoption_planned,"legacy_adopted":adoption_planned && !args.dry_run && !args.check,
                 "runtime_verification":"not-performed",
                 "support":"best-effort",
-                "lifecycle":if args.harness == "cursor" { "unavailable-source-association" } else { "unverified" },
-                "usage":if args.harness == "copilot" { "unavailable-safe-activation" } else if args.harness == "cursor" { "unavailable-source-association" } else { "unverified" },
+                "lifecycle":"unverified",
+                "usage":if args.harness == "copilot" { "unavailable-safe-activation" } else if args.harness == "cursor" { "unavailable-counter-schema" } else { "unverified" },
                 "guidance":"Installation is observational only. Use ordinary vendor commands and preserve vendor review/disabled policy. Automatic enrollment and accounting capabilities may still be unavailable; no Mez vendor-launch wrappers exist",
             }),
         );
@@ -269,6 +269,7 @@ fn write_report<W: Write>(
         if report["lifecycle"] == "unavailable-source-association"
             || report["usage"] == "unavailable-source-association"
             || report["usage"] == "unavailable-safe-activation"
+            || report["usage"] == "unavailable-counter-schema"
         {
             writeln!(
                 stdout,

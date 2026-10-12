@@ -64,9 +64,18 @@ fn standalone_cursor_bootstrap_shared_members_and_commands_remain_neutral() {
     let repeated = bootstrap(&[]);
     assert_eq!(repeated["result"], "unchanged");
     assert_eq!(repeated["root_source"], "CURSOR_CONFIG_DIR");
-    assert_eq!(repeated["lifecycle"], "unavailable-source-association");
-    assert_eq!(repeated["usage"], "unavailable-source-association");
-    for event in ["sessionStart", "stop", "sessionEnd"] {
+    assert_eq!(repeated["lifecycle"], "unverified");
+    assert_eq!(repeated["usage"], "unavailable-counter-schema");
+    assert_eq!(repeated["manifest_revision"], 2);
+    for event in [
+        "sessionStart",
+        "beforeSubmitPrompt",
+        "postToolUse",
+        "preCompact",
+        "afterAgentResponse",
+        "stop",
+        "sessionEnd",
+    ] {
         let hook = document["hooks"][event]
             .as_array()
             .unwrap()

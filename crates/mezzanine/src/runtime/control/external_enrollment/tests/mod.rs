@@ -1326,6 +1326,8 @@ mod creator_isolation;
 mod curated_admission;
 mod curated_heartbeat;
 mod curated_rotation;
+mod cursor;
+mod cursor_installed;
 mod harnesses;
 mod health;
 mod helper_discovery;

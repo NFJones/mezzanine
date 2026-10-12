@@ -102,17 +102,53 @@ and nano_aiu is AI units, neither currency. Vendor loading/trust/disable/sandbox
 policy still applies. This phase does not complete idle renewal or accounting.
 Sources: [classic hooks](https://docs.github.com/en/copilot/reference/hooks-reference)
 and [monitoring](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#opentelemetry-monitoring).
-Cursor revision1 owns only exact sessionStart/stop/sessionEnd members of shared
+Cursor revision2 owns only exact sessionStart/beforeSubmitPrompt/postToolUse/
+preCompact/afterAgentResponse/stop/sessionEnd members of shared
 `hooks.json` under the selected CLI configuration root. A new document receives
 version1; existing unsupported versions reject without rewriting. Authored
 members/order/metadata and cli-config.json remain untouched, exact receipt-owned
 duplicates collapse and missing owned state repairs. Uninstall retains the shared
-document and authored entries. The fixed `cursor-hook <event>` uses the same
-strict neutral64KiB/250ms drain and returns no env/context/follow-up/permission
-fields. Lifecycle/usage report unavailable-source-association in plain and JSON;
-the CLI changelog establishes hook support, not precise IDE payload parity or
-actual runtime association. Loading under custom roots, vendor policy, sandbox,
-usage sources and relocated helper qualification remain best-effort/unverified.
+document and authored entries. Exact receipt-owned revision1 artifacts upgrade
+automatically. Run `mez bootstrap cursor`, then ordinary `agent` in a Mez pane—no
+Mez wrapper, fd3, launcher token or forced print mode. The fixed helper consumes
+at most64KiB/250ms, projects only inert CLI session/generation enums/IDs through
+native-qualified direct-creator admission, and returns `{}` on all telemetry loss.
+It returns no env/context/follow-up/permission fields. SessionStart must carry
+matching session_id/conversation_id; child fields and ambiguous selectors drop.
+Distinct interactive prompt generations fence old Stops. Completed means ready,
+not proof of success; aborted/error mean interrupted/failed. Compact/tool/response
+activity never bills context tokens or reopens a terminal generation. Exact old
+end cannot retire a different session or rotated observer. Idle silence and a
+shared preexisting daemon lack persistent observer/client association proof.
+Bootstrap reports lifecycle `unverified`, usage `unavailable-counter-schema` in
+plain and JSON. Vendor staff confirms interactive afterAgentResponse counts and
+stop status/loop_count, but current reference documents only response text, not
+the exact ordinary CLI counter shape/inclusive subsets/stable report/request
+origin. Sanitized IDE evidence and a public observer list flat input_tokens,
+output_tokens, cache_read_tokens and cache_write_tokens; they do not prove CLI
+parity, inclusive-cache arithmetic, request multiplicity or provider identity.
+The same IDE sample repeats totals on response and Stop, so summing both is unsafe.
+The public CLI fixture corroborates session_id/conversation_id equality and the
+non-interactive generation fallback, but contains no response counters. Missing input
+is unavailable, not zero. The known non-interactive generation_id==conversation_id
+fallback is not turned into a synthetic turn; older non-interactive releases may
+omit prompt/response/stop entirely. No transcript/terminal scrape or mandatory
+headless mode substitutes for an ordinary usage source. StatusLine exists but
+its counter schema is not documented here; bootstrap leaves user footer/title
+pins untouched. Enterprise OTel is server-side admin/public-HTTPS/auth configuration,
+not safe local bootstrap activation. Retry accounting when an exact ordinary CLI
+counter/request identity contract and native original-expense mapping are available.
+This lifecycle phase does not close continuous idle/shared-daemon or usage work.
+Loading under custom roots, policy, sandbox and relocation remains best-effort;
+actual vendor/macOS acceptance is not certified by isolated fixtures.
+Sources: [CLI changelog](https://cursor.com/docs/cli/changelog.md),
+[hook schema](https://cursor.com/docs/hooks.md), and
+[vendor CLI explanation](https://forum.cursor.com/t/cursor-cli-omits-beforesubmitprompt-afteragentresponse-and-stop-hooks-loses-token-usage-and-emits-inconsistent-generation-id-values/169059/9)
+(2026.08.11 evidence, not an installation/version gate).
+Sanitized [CLI fixture](https://forum.cursor.com/uploads/short-url/iHJHbzkLkvSnQdUWTOQ6xW9dUyv.txt)
+and [IDE comparison](https://forum.cursor.com/uploads/short-url/eTwk1a31hJzz1y07lVGEsOdSpi3.txt)
+are schema evidence only, not captured/live execution prerequisites. No fixture
+prompt/response, path, email or transcript data is installed or retained.
 The fixed internal `mez codex-hook` callback mode runs before HOME/config/CPU
 startup. Normalized main SessionStart startup/resume/clear/fork can make one
 restricted Unix declaration with standard MEZ routing and native creator proof,

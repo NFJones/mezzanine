@@ -776,19 +776,41 @@ Qualified current/frozen historical Codex ownership MAY repair genuine whole-fil
 hooks.json absence using only current compiled array members. Missing-file
 uninstall MUST remain absent; this MUST NOT relax unreceipted, edited-member,
 existing missing-member, unknown-reference or forged-recovery rejection.
-Cursor revision1 MAY own only exact sessionStart/stop/sessionEnd array members
+Cursor revision2 MAY own only exact sessionStart/beforeSubmitPrompt/postToolUse/
+preCompact/afterAgentResponse/stop/sessionEnd array members
 in shared hooks.json under the selected CLI configuration root, using a bounded
 quoted installing helper reference and portable conditional-exec/neutral fallback.
 Version1 MUST be seeded only when an install target is absent; existing missing/
 unsupported version fields MUST reject without rewrite. Shared document metadata,
 authored member order/settings/permissions/exporters MUST remain outside ownership.
 Only exact receipt-owned duplicates MAY collapse; missing owned state MAY repair.
-Uninstall MUST retain shared documents and authored callbacks. Fixed cursor-hook
-known argv MUST reuse strict neutral nonretaining64KiB/250ms I/O before startup,
-with no environment/context/follow-up/permission output or telemetry exchange.
-CLI changelog hook support MUST NOT become an IDE-field parity, native session
-association, usage or custom-root/relocation certification claim. Cursor lifecycle
-and usage MUST remain explicit unavailable-source-association until wired.
+Uninstall MUST retain shared documents and authored callbacks. Exact revision1
+members MUST remain independently compiled for qualified upgrade/repair. Fixed
+cursor-hook known argv MUST use strict bounded64KiB/250ms I/O before startup,
+with no environment/context/follow-up/permission output. One bounded same-user
+exchange MAY declare cursor-local-command/1 only from documented native
+sessionStart with matching session_id/conversation_id. CLI staff-confirmed
+interactive conversation/generation semantics MUST NOT become IDE-only parity,
+vendor attestation, usage or custom-root/relocation certification. The native
+writer/direct creator/exact pane root MUST remain authority; inherited route,
+payload PID, title and generation labels MUST NOT grant it. Only original first-
+epoch callbacks MAY select their admitted session; compact/context counters MUST
+NOT bill. Generation_id equal to conversation_id is a known non-interactive
+fallback, not an interactive turn. Prompt starts MAY establish new bounded
+generations; stale generations MUST reject, replay MUST be time-inert, and late
+activity MUST NOT overwrite terminal presentation. Stop completed MUST mean
+ready, not success; aborted/error MAY mean interrupted/failed. Only exact original
+sessionEnd MAY retire. Children MUST NOT repaint parents. Hooks MUST emit only
+neutral JSON, without user continuation/approval/title/config/provider effects.
+Bootstrap MUST report lifecycle unverified and usage unavailable-counter-schema.
+Missing starts/events and silence MUST remain observable loss, not idle-renewal
+proof. Shared preexisting servers MUST NOT be associated by inherited environment.
+Usage MUST remain unavailable until exact CLI counter fields/subset semantics,
+stable request/report identity and original expense-origin correlation are
+evidenced. Staff statements that counters exist MUST NOT invent usage.input_tokens
+or provider identity; context occupancy, transcript/terminal scraping, mandatory
+print mode, admin/server-side exporters and status-line replacement MUST NOT be
+substitutes for a safe ordinary-mode producer contract.
 Recovery preview MUST share version/root/compiled-intent/preimage authorization
 with recovery, without writer lock or publication. JSON MUST distinguish operation,
 dry_run, changed_paths, recovered and accepted recovery_pending. Check success
