@@ -26,9 +26,76 @@ fn callback(session: &str, event: &str, timestamp: u64) -> JsonRpcRequest {
     crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"copilot-test","method":"agent/external/copilot-observe","params":{"pane_id":"%1","external_session_id":session,"event":event,"timestamp":timestamp}}).to_string()).unwrap()
 }
 
+/// Rotation while native lifecycle/end work is pending fences the original
+/// generation. Stateless callbacks cannot adopt the successor even with the same
+/// creator/session metadata; rejection must not retire the live replacement.
+#[tokio::test(flavor = "current_thread")]
+async fn external_copilot_rotation_rejects_pending_and_new_original_callbacks() {
+    let Some(mut fixture) = fixture("hold").await else {
+        panic!("Copilot rotation requires native evidence");
+    };
+    let (_socket, connection) = child(&mut fixture).await;
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&declaration("session-a"), &connection)
+        .unwrap();
+    let first = settle(&mut fixture, work, &connection).await;
+    assert_eq!(first["result"]["registered"], true);
+    let stale = fixture
+        .service
+        .prepare_external_helper_presentation(
+            &callback("session-a", "userPromptSubmitted", 1),
+            &connection,
+        )
+        .unwrap();
+    let stale_end = fixture
+        .service
+        .prepare_external_helper_presentation(&callback("session-a", "sessionEnd", 2), &connection)
+        .unwrap();
+    let mut rotation = declaration("session-a");
+    let mut params: serde_json::Value =
+        serde_json::from_str(rotation.params.as_deref().unwrap()).unwrap();
+    params["observer_instance"] = "successor".into();
+    params["predecessor_generation"] = first["result"]["generation"].clone();
+    rotation.params = Some(params.to_string());
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&rotation, &connection)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &connection).await["result"]["registered"],
+        true
+    );
+    for work in [stale, stale_end] {
+        assert!(
+            settle(&mut fixture, work, &connection)
+                .await
+                .get("error")
+                .is_some()
+        );
+    }
+    for event in ["agentStop", "sessionEnd"] {
+        assert!(
+            fixture
+                .service
+                .prepare_external_helper_presentation(&callback("session-a", event, 3), &connection)
+                .is_err()
+        );
+    }
+    let registry = fixture.service.control.external_agents();
+    assert_eq!(registry.bindings.len(), 1);
+    assert!(registry.bindings.values().all(|b| !b.retired));
+    assert!(registry.enrollments.pending.is_empty());
+    assert!(!connection.initialized());
+    assert!(connection.caller_client_id().is_none());
+}
+
 /// Documented classic Copilot exec hooks carry a session identifier without SDK
 /// invocation context. A genuine same-user direct creator should enroll under
 /// its own contract; a Codex or Claude declaration is not a substitute.
+///
+/// A successful declaration is only observational registration, not accounting
+/// or persistent idle observer health.
 #[tokio::test(flavor = "current_thread")]
 async fn external_copilot_classic_command_creator_is_supported() {
     let Some(mut fixture) = fixture("hold").await else {
@@ -46,6 +113,9 @@ async fn external_copilot_classic_command_creator_is_supported() {
 /// Original native callbacks conserve replay sequences, reject root/foreign
 /// writers, invalid semantics and stale/tied facts, and never grant a client role
 /// or renew leases directly. Ending an old /clear session preserves replacement.
+///
+/// Observer replacement itself is covered separately to distinguish a
+/// different session from a changed epoch of this exact original session.
 #[tokio::test(flavor = "current_thread")]
 async fn external_copilot_native_lifecycle_replay_and_exact_end() {
     let Some(mut fixture) = fixture("hold").await else {
