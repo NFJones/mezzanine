@@ -2879,9 +2879,11 @@ fn runtime_observed_compaction_retries_refreshed_only_overflow() {
         .record_transcript_entries("%1", 1)
         .unwrap();
     let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    // Include the expanded close-recovery schema and prompt overhead while
+    // keeping the large refreshed summary over budget and the short one under.
     profile
         .provider_options
-        .insert("max_input_tokens".to_string(), "17000".to_string());
+        .insert("max_input_tokens".to_string(), "18000".to_string());
     service.set_agent_turn_model_profile(turn_id.clone(), profile);
     complete_runtime_test_compaction(&mut service, "%1", &"large-summary ".repeat(600));
     assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());

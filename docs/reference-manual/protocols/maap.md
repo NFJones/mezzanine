@@ -72,7 +72,7 @@ the existing permission owners do not change with these foundational contracts.
 | `list_agents` | none | Read-only peer discovery; no approval mode prompts for it. Optional `agent_type` filters kinds. Omitted or null `scope` uses the requester's trusted project membership; explicit `session` widens to otherwise matching session identities. |
 | `wait` | none | Parks the same turn until model-originated MMP peer mail arrives. It is valid only for active inter-agent MMP coordination, must be the only executable action in its batch, and is not a general delay or external-event primitive. |
 | `spawn_agent` | `role`, `task_prompt` | Requests pane-backed delegation. Optional `session: fork | new` selects a bounded immutable parent-history snapshot or an isolated child session. Optional atomic `size` and `reasoning_effort`, advertised per configured size, select the child's model identity: they set the initial child turn and become the child's durable profile for later turns. `lifetime: persistent` is exclusively for reusable inter-agent MMP actors and requires `objective`; it must never be used for another purpose. Scope and policy remain runtime-controlled. |
-| `close_agent` | `agent_id` | Closes one live persistent child owned by the calling parent conversation. A completed close retained for that same owner succeeds as a no-op with `closed: false`; this bounded evidence lasts only for the current runtime session and grants no live authority. Unknown, foreign, stale, and non-persistent targets return one opaque unavailable result. |
+| `close_agent` | `agent_id` | Closes one live persistent child owned by the calling parent conversation. An authoritative same-owner record with an absent pane is cleaned up with `closed: false`. A completed close retained for that same owner also succeeds as a no-op without rediscovery; this bounded evidence lasts only for the current runtime session and grants no live authority. Unknown, foreign, non-persistent, and otherwise inaccessible identities return the same opaque unavailable result. Live ownership is revalidated at execution, including discovery-to-close races. |
 | `config_change` | `setting_path`, `operation`, `value` | Proposes a supported live leaf configuration mutation. Set values accept strings, signed integers, booleans, or string arrays; objects, null set-values, floats, and mixed arrays are rejected. Provider schemas carry the value as a string containing a JSON scalar or string array, while plain non-JSON text is a string value. |
 | `mcp_server_search` | `query` | Searches configured MCP directory records and persists safe results as durable action evidence. An optional `limit` is from 1 through 20. |
 | `mcp_server_get` | `server` | Retrieves one referenceable server's complete safe tool contract; retrieval is required before calling it. |
@@ -84,6 +84,31 @@ the existing permission owners do not change with these foundational contracts.
 | `issue_query` | none | Queries local issues with optional kind, state, text, limit, and refresh filters; omitted or null state means open, while `all` removes state filtering. |
 | `issue_delete` | `id` | Deletes a local project issue. |
 | `complete` | none | Marks the turn complete when exposed by a compatibility surface. |
+
+### Recovering an unavailable persistent-child close
+
+Refresh `list_agents` with `agent_type: "subagent"` or `"all"`; its default
+primary-agent view can omit children. Verify a persistent child owned by the
+current parent conversation, then retry once with a verified target. If no such
+target is verified, abandon the close and continue useful work or report a
+concrete cleanup limitation. Do not repeat an unchanged unavailable close,
+guess identifiers, widen scope, bypass ownership through another mechanism, or
+claim closure. Discovery is not authority; the executor revalidates ownership.
+
+The opaque `rejected`/`unavailable` action result remains in audit and model
+context. It is not necessarily terminal turn failure: the existing stable
+failed-action budget (`agents.action_failure_retry_limit`) and sibling safety
+gates bound synchronous and asynchronous provider correction. New action IDs
+do not reset the budget, and no close or completed sibling action is replayed
+automatically. Unsent inactive siblings may be abandoned; active external work
+or approval-blocked siblings can prevent correction until settled or cancelled.
+Both verified corrected close and changed-course normal completion are valid.
+Exhaustion settles the turn as failed. Policy/user denials and cancellation are
+not this correction case. Neither are post-dispatch checkpoint failures:
+pane removal may already have happened, so they must not be called pre-execution
+or no-effect failures. Recovery introduces no new settings or lifecycle authority.
+
+### Project-wide issue discovery
 
 For project-wide issue discovery, query explicit `in-progress` then `open`
 states with `kind: null`, `text: null`, `limit: 200`, and `refresh: false`.

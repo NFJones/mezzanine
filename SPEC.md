@@ -9648,9 +9648,15 @@ The baseline action types are:
   owner. A repeat request for a child whose completed closure is still recorded
   for that same owner MUST succeed as a no-op with `closed: false`; this bounded
   retirement evidence is runtime-session-local and grants no live authority.
+  An authoritative same-owner persistent-child record whose pane is already
+  absent MUST likewise retire its remaining runtime state and succeed with
+  `closed: false`; absence of a pane is not by itself an unavailable identity.
+  Known retained completed closures need no rediscovery.
   Malformed agent identifiers MUST return `invalid_params`; syntactically valid
-  unknown, foreign, non-persistent, and stale targets MUST return one opaque
-  unavailable result. Successful live closure MUST use the ordinary forced
+  unknown, foreign, non-persistent, and otherwise inaccessible identities MUST
+  return one opaque unavailable result. Discovery MUST NOT grant authority:
+  execution MUST revalidate live ownership even after successful discovery,
+  including discovery-to-close races. Successful live closure MUST use the ordinary forced
   pane-close lifecycle so process, turn, scope, lineage, MMP identity, and
   discovery cleanup remain centralized.
 - `config_change`: Propose a live configuration change.
@@ -10569,9 +10575,21 @@ exhausted, Mezzanine MUST settle the turn as failed.
 An opaque pre-effect `close_agent` result with `Rejected` status and `unavailable`
 error MAY enter this same bounded correction path. The rejected result MUST remain
 in audit and model context; rejection is not proof of closure. The model may
-rediscover a verified caller-owned persistent child or change course. This MUST
+refresh `list_agents` with `agent_type: "subagent"` or `"all"` (the default
+primary-agent view omits children), verify a persistent child owned by the
+current parent conversation, and retry once with that verified target. Otherwise
+it MUST abandon the close and continue useful work or report a concrete cleanup
+limitation. It MUST NOT repeat an unchanged unavailable close, guess identifiers,
+widen discovery scope, use another mechanism to bypass ownership, or falsely
+claim closure. The same opaque guidance MUST cover all unavailable identities
+without exposing inaccessible ownership or resource facts. This MUST
 NOT automatically replay close, soften ownership checks, admit policy/user denials
 or cancellation, or treat post-effect checkpoint errors as unexecuted operations.
+In particular, pane removal may already have happened before checkpoint failure;
+that failure is not this pre-close rejection. An action rejection is not a
+terminal turn failure while bounded correction and sibling safety gates permit
+a provider continuation; corrected close and changed-course completion both use
+the normal turn lifecycle in synchronous and asynchronous execution.
 Different action IDs MUST NOT reset the stable rejection correction budget.
 When one model-correctable action fails before later shell-backed sibling
 actions have reached the pane shell, those inactive unsent siblings MUST NOT

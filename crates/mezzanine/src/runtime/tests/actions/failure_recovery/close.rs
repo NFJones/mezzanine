@@ -77,6 +77,13 @@ fn runtime_unavailable_close_recovers_through_provider_cycle() {
     assert_eq!(service.session().windows().len(), windows);
     assert!(service.agent_provider_task_is_pending(&turn.turn_id));
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert!(context.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.content.contains("retry once with a verified target")
+            && block
+                .content
+                .contains("continue useful work or report a concrete cleanup limitation")
+    }));
     assert_eq!(
         context
             .blocks()
@@ -215,12 +222,22 @@ fn runtime_unavailable_close_discovers_and_corrects_owned_child() {
         .unwrap()
         .remove(0);
     assert_eq!(listed.action_results[0].status, ActionStatus::Succeeded);
-    assert!(
+    let discovery: serde_json::Value = serde_json::from_str(
         listed.action_results[0]
             .structured_content_json
             .as_deref()
-            .is_some_and(|content| content.contains(&child))
-    );
+            .unwrap(),
+    )
+    .unwrap();
+    let verified = discovery["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent_id"] == child)
+        .unwrap();
+    assert_eq!(verified["persistent"], true);
+    assert_eq!(verified["owned_by_self"], true);
+    assert_eq!(verified["parent_agent_id"], turn.agent_id);
     let mut corrected = provider("verified-child");
     if let mez_agent::AgentActionPayload::CloseAgent { agent_id } =
         &mut corrected.response.action_batch.as_mut().unwrap().actions[0].payload
@@ -234,6 +251,21 @@ fn runtime_unavailable_close_discovers_and_corrects_owned_child() {
     assert_eq!(closed.action_results[0].status, ActionStatus::Succeeded);
     assert!(service.persistent_subagent(&child).is_none());
     assert!(!service.pane_processes().contains_pane(&pane));
+    let mut finish = provider("unused");
+    finish.response.action_batch.as_mut().unwrap().actions = vec![mez_agent::AgentAction {
+        id: "finish-after-close".into(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            content_type: "text/plain".into(),
+            text: "verified child closed".into(),
+        },
+    }];
+    let completed = service
+        .poll_agent_provider_tasks_with_provider(&finish, 1)
+        .unwrap()
+        .remove(0);
+    assert_eq!(completed.terminal_state, AgentTurnState::Completed);
+    assert!(service.pending_agent_provider_tasks().is_empty());
     service.terminate_all_pane_processes().unwrap();
 }
 

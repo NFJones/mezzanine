@@ -121,6 +121,13 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
                 "Prefer a new isolated session",
                 "exclusively for reusable agents",
                 "owned by you",
+                "agent_type=subagent or all",
+                "current parent conversation",
+                "retry once with a verified target",
+                "continue useful work or report a concrete cleanup limitation",
+                "Do not repeat an unchanged unavailable close, guess identifiers, widen scope",
+                "bypass ownership, or claim closure",
+                "Discovery is not authority",
             ],
         ),
         (
