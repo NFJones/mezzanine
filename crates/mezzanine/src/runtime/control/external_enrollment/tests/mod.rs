@@ -1336,6 +1336,7 @@ mod helper_presentation;
 mod observer_epochs;
 mod parent_ancestry;
 mod persistent_client;
+mod pi_assembled;
 mod pi_observation;
 mod producer;
 mod source;

@@ -1182,6 +1182,13 @@ Exact latest replay MUST return the original bounded acknowledgment; conflicting
 older/gapped or content-bearing facts MUST NOT change state. Typed Pi and generic
 presentation sources MUST NOT mix in an observer epoch; rotation resets both.
 This lifecycle delivery is not durable usage commitment or exhaustive token support.
+Acceptance evidence MUST distinguish bare public bootstrap-to-ordinary-process
+composition from internal installer-plan or explicitly selected helper/entry
+fixtures. An offline assembled qualifier MAY use isolated HOME and source-shaped
+callbacks, but MUST retain actual installed-path discovery, native Unix writer
+admission and typed durable ACK ownership. Parent fixture gates MUST carry no
+enrollment or usage authority. Passing such a fixture MUST NOT imply real SDK,
+periodic idle renewal, registry/daemon recovery, platform or invoice completeness.
 Ordinary `mez bootstrap pi` MUST also install the supported finalized assistant
 usage producer without launcher/FD3/manual accounting enablement. Genuine
 `turn_start` opens an original request marker through native usage-begin; it MUST

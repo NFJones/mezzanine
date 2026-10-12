@@ -52,6 +52,15 @@ session teardown boundary before its observer retires. No amount is charged
 without finalized counters, and previous totals remain intact; the retained
 last running state is not manufactured into completion merely to disclose loss.
 
+The assembled offline Pi acceptance chain distinguishes admission from expense:
+three finalized reports produce three durable expense rows, while a fourth
+missing-counter request retains its original readiness marker without a linked
+observation or fabricated zero charge. It checks current `/status` and
+`:list-agents`, pinned titles and native conversation coexistence, not historical
+screenshots. Its source-shaped local process is not real SDK/manual/provider
+qualification; idle renewal and same-live-source reset/reconnect remain separate
+source-owned gaps. See the [qualification matrix](../reference-manual/cli.md).
+
 | Observation | Interpretation |
 | --- | --- |
 | `Cumulative cache hit` | Token-weighted ratio across retained provider samples, including cold starts and auxiliary routing or sizing requests. |

@@ -1323,6 +1323,14 @@ No vendor observer descriptor, launcher helper environment or forced session fla
 is required for this lifecycle path. Vendor trust/disabled-extension policy is
 not bypassed; supported Pi callback shapes remain best-effort observations.
 
+The offline [assembled Pi qualifier](../cli.md) uses actual bare bootstrap and
+child-discovered installed artifacts, then genuine `UnixOriginStream` writer
+proof through the production actor. Its marker gates carry only synthetic phase
+names, never identities, tickets, capabilities or parent-completed usage. Wire
+audit remains bounded/private and checks typed durable replies without replacing
+commit ownership. This does not qualify daemon/registry reset recovery, periodic
+idle renewal or a real vendor SDK; those boundaries require separate evidence.
+
 ### Claude source projection (not an installed integration)
 
 `claude_observer.mjs` contains pure `projectClaudeEvent(boundSession, name, event)`
