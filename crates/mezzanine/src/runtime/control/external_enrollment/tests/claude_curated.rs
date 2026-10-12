@@ -6,7 +6,9 @@
 //! without delegating to a model. HOME/config/cwd/env are isolated; compiled
 //! artifacts may be installed only in fixture roots, never user configuration.
 //! No credentials, provider request, policy bypass, supplied PID or enrollment
-//! capability is used. This is not quiescent idle, live billing, user enablement
+//! capability is used. A separate opt-in wall-clock probe requires seven real
+//! 10-second SDK proofs over a full 60-second post-return offline hold and daemon
+//! lease renewal. This is not user-quiescent idle, live billing, user enablement
 //! or complete integration qualification.
 //! A separate ordinary Node SDK shim qualifies the shared source after callback
 //! return through real native ingress; it is not real vendor idle qualification.
@@ -153,7 +155,7 @@ fn external_claude_curated_command_helper_fixture() {
     };
     let mut socket = std::os::unix::net::UnixStream::connect(path).unwrap();
     socket
-        .set_read_timeout(Some(Duration::from_secs(20)))
+        .set_read_timeout(Some(Duration::from_secs(90)))
         .unwrap();
     socket
         .set_write_timeout(Some(Duration::from_secs(10)))
@@ -277,6 +279,18 @@ async fn external_claude_curated_skills_directory_autoloads_without_plugin_flag(
 #[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; offline post-callback proof"]
 async fn external_claude_curated_heartbeat_survives_actual_callback_return() {
     qualify_curated_probe_with_autoload(true, 5, false, false, true, true, true).await;
+}
+
+/// The available local SDK must retain the compiled module's actual 10-second
+/// timers after SessionStart returns for a full 60-second wall-clock interval.
+/// Seven original-epoch proofs cross real native ingress, and daemon maintenance
+/// must keep the finite lease live beyond its initial 60 seconds. An isolated
+/// SDK-owned offline command holds the creator, answers itself, and never invokes
+/// a model; this is not synthetic clock aging or quiescent interactive idle.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_CLAUDE_BINARY and built mez; real SDK 60-second offline idle"]
+async fn external_claude_curated_real_sdk_renews_after_return_for_full_idle_window() {
+    qualify_curated_probe_with_autoload(true, 7, false, false, true, true, true).await;
 }
 
 /// Actual vendor disabling must suppress the compiled observational module,
@@ -417,11 +431,14 @@ async fn qualify_curated_probe_with_autoload(
     post_callback: bool,
 ) {
     assert!(!owned || (admission && proofs > 1 && !node_shim));
-    assert!(!autoload || (owned && proofs == 5 && !handoff));
+    assert!(!autoload || (owned && matches!(proofs, 5 | 7) && !handoff));
     assert!(!post_callback || autoload);
+    // Seven proofs use the unchanged installed 10s cadence and a bounded real
+    // wall-clock hold; all older short probes retain their previous contracts.
+    let wall_clock_idle = post_callback && proofs == 7;
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
-        serve_async_runtime_control_connection_loop,
+        run_async_runtime_timer_side_effect_service, serve_async_runtime_control_connection_loop,
     };
     let vendor = std::path::PathBuf::from(
         std::env::var_os(if node_shim {
@@ -555,7 +572,13 @@ async fn qualify_curated_probe_with_autoload(
         format!(
             "await $.process.run({argv}, {{ env: {{ MEZ_TEST_CURATED_SOCKET: {} }}, timeoutMs: {} }});",
             serde_json::to_string(path.to_str().unwrap()).unwrap(),
-            if autoload { 20_000 } else { 10_000 }
+            if wall_clock_idle {
+                90_000
+            } else if autoload {
+                20_000
+            } else {
+                10_000
+            }
         )
     };
     let (import, create, duplicate, stop) = if owned {
@@ -587,7 +610,7 @@ async fn qualify_curated_probe_with_autoload(
     } else {
         ("", "", String::new(), "")
     };
-    let source = if owned && proofs == 5 {
+    let source = if owned && matches!(proofs, 5 | 7) {
         std::fs::write(
             directory.join("plugin/hooks/claude_observer.mjs"),
             include_bytes!(concat!(
@@ -705,15 +728,42 @@ async fn qualify_curated_probe_with_autoload(
         .service
         .write_runtime_pane_input("%1", command.as_bytes())
         .unwrap();
+    let initial_lease_bound = current_unix_seconds() + 60;
     let actor = if let Some(control_listener) = control_listener {
         let service = std::mem::replace(&mut probe.service, RuntimeServiceFixture::new().build());
         let (handle, actor) =
             AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
         let task = tokio::spawn(actor.run());
+        // A bare actor only queues timer effects. The production daemon's timer
+        // worker must fire idle cleanup for real lease renewal; no direct lease
+        // mutation, synthetic time advance or per-proof renewal substitutes here.
+        let maintenance = if wall_clock_idle {
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let timer_stop = stop.clone();
+            let timer_handle = handle.clone();
+            let worker = tokio::spawn(async move {
+                run_async_runtime_timer_side_effect_service(
+                    &timer_handle,
+                    Default::default(),
+                    crate::runtime::current_unix_millis(),
+                    move |_, _| timer_stop.load(std::sync::atomic::Ordering::SeqCst),
+                )
+                .await
+            });
+            Some((stop, worker))
+        } else {
+            None
+        };
         let caller = handle.clone();
         let callback_report = directory.join("callback-returned");
-        let observed_proofs = if autoload { 1 } else { proofs };
-        let lifecycle_calls = u64::from(owned && proofs == 5);
+        let observed_proofs = if wall_clock_idle {
+            7
+        } else if autoload {
+            1
+        } else {
+            proofs
+        };
+        let lifecycle_calls = u64::from(owned && matches!(proofs, 5 | 7));
         let server = tokio::spawn(async move {
             for ordinal in 0..1 + observed_proofs + lifecycle_calls + if handoff { 2 } else { 0 } {
                 let (mut stream, _) =
@@ -746,18 +796,30 @@ async fn qualify_curated_probe_with_autoload(
                 assert!(connection.caller_client_id().is_none());
             }
         });
-        Some((handle, task, server))
+        Some((handle, task, server, maintenance))
     } else {
         None
     };
     let accepted = tokio::time::timeout(Duration::from_secs(20), listener.accept()).await;
-    if let Some((handle, task, server)) = actor {
+    let offline_hold_started = Instant::now();
+    if let Some((handle, task, server, maintenance)) = actor {
         // Recover pane ownership even if the SDK/helper fails before the hold
         // probe connects; assertions below then run under the cleanup guard.
         let server_result = if accepted.as_ref().is_ok_and(|result| result.is_ok()) {
             Some(server.await)
         } else {
             server.abort();
+            None
+        };
+        let maintenance_result = if let Some((stop, worker)) = maintenance {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            Some(
+                tokio::time::timeout(Duration::from_secs(5), worker)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            )
+        } else {
             None
         };
         let shutdown = handle.shutdown().await;
@@ -767,6 +829,17 @@ async fn qualify_curated_probe_with_autoload(
             result.unwrap();
         }
         assert_eq!(probe.service.control.external_agents().bindings.len(), 1);
+        if wall_clock_idle {
+            let report = maintenance_result.unwrap().unwrap();
+            assert!(
+                report.scheduled > 0 && report.fired > 0,
+                "real daemon timer worker did not drive idle maintenance: {report:?}"
+            );
+            assert!(
+                offline_hold_started.elapsed() >= Duration::from_secs(60),
+                "actual post-return offline hold did not span a full idle window"
+            );
+        }
     }
     let (mut socket, _) = accepted
         .expect("isolated init-only mod did not invoke curated process helper")
@@ -823,7 +896,7 @@ async fn qualify_curated_probe_with_autoload(
         assert!(owner.observers.is_empty());
         assert_eq!(owner.has_live_observer(), proofs > 0);
         assert_eq!(binding.harness, "claude");
-        if owned && proofs == 5 {
+        if owned && matches!(proofs, 5 | 7) {
             assert_eq!(owner.epoch, 1);
             assert_eq!(owner.instance, "mez-curated-client-1");
         }
@@ -836,10 +909,25 @@ async fn qualify_curated_probe_with_autoload(
         if proofs > 0 {
             assert_eq!(
                 owner.curated_observer.as_ref().unwrap().sequence,
-                if autoload { 1 } else { proofs }
+                if wall_clock_idle {
+                    7
+                } else if autoload {
+                    1
+                } else {
+                    proofs
+                }
             );
+            if wall_clock_idle {
+                assert!(!binding.retired);
+                assert!(owner.producer.is_live());
+                assert!(binding.expires > current_unix_seconds());
+                assert!(
+                    binding.expires > initial_lease_bound,
+                    "seven real SDK proofs did not trigger daemon finite-lease renewal"
+                );
+            }
             let original_expiry = binding.expires;
-            if owned && proofs == 5 {
+            if owned && matches!(proofs, 5 | 7) {
                 let presentation = binding
                     .registration
                     .as_ref()

@@ -615,6 +615,15 @@ new observer. Stop/replacement/clear/proof closure fences retained work. Exact
 revision1–4 source snapshots remain safely upgradeable. This is process-local
 retry only: no timer, durable outbox, reload/restart or cross-process continuation
 guarantee is added; absent later qualified callbacks, delivery remains unknown.
+Focused Linux acceptance qualifies the unchanged bare-installed module's terminal
+negative-proof cancellation/no-helper/no-re-admission behavior while its actual
+Node creator remains alive; deterministic proof/lease aging is not wall-clock
+expiry or actual vendor SDK cancellation. Separately, available Claude 2.1.289
+retains seven real 10-second SDK proofs after SessionStart return during a full
+60-second model-free offline command hold, with the real daemon timer worker
+renewing the finite lease. Only test command/return instrumentation is added to
+that isolated autoload graph. This is not quiescent interactive idle, reload,
+cross-process source continuity, macOS or exhaustive vendor qualification.
 An isolated production-helper fixture also qualifies exact already-committed
 main-request replay and one distinct synthetic incurred request across this
 same-creator clear: two observations retain one durable owner, without recharging
