@@ -4,7 +4,7 @@
 //! discovery helpers. It also owns the narrow bridge that lets macro-managed
 //! step traffic become ordinary agent-shell turns in a persistent child
 //! subagent session.
-use crate::integrations::macros::{discover_macro_catalog, load_macro_definition};
+use crate::integrations::macros::{discover_macro_catalog, load_macro_definition_for_project};
 use crate::runtime::agent_state::RuntimeAgentLoopCompletion;
 use crate::runtime::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, RuntimeAgentPromptTurnStart,

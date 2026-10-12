@@ -11,6 +11,7 @@ Create the smallest agent macro that satisfies the user's intent.
 
 - User scope: `<config-root>/macros/<macro-name>/MACRO.md`. If the active Mezzanine config root is unavailable, use `~/.config/mezzanine`.
 - Project scope: `<project-root>/.mezzanine/macros/<macro-name>/MACRO.md`.
+- Optional shared project placement: `<project-root>/.agents/macros/<macro-name>/MACRO.md`, using the existing Mezzanine format, not foreign command import. Native project placement wins for duplicate valid names, then shared project, user, and any built-in macro. Keep native project authoring as the default; use shared placement only when requested.
 - Default to user scope. Use project scope only when the user explicitly asks for a repo/project-scoped macro or says the macro must live with the current repository.
 
 ## Create
@@ -41,3 +42,4 @@ Create the smallest agent macro that satisfies the user's intent.
 - `MACRO.md` contains a non-empty `## Steps` ordered list.
 - Each step is a complete prompt that can be submitted to a regular agent shell.
 - The sequence can run in one persistent subagent session without relying on manual intervention between steps.
+- Shared placement requires current project trust and regular, non-symlink namespace/root/entry/document nodes. Keep the existing 256 KiB document and 128-step limits; do not add scripts, config or instructions for automatic loading, or migrate native macros during discovery.

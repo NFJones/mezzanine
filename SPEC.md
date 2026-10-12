@@ -11508,6 +11508,28 @@ Both user and project macro roots MUST use the same directory layout:
 
 - User macros: `~/.config/mezzanine/macros/<macro-name>/MACRO.md`.
 - Project macros: `<project-root>/.mezzanine/macros/<macro-name>/MACRO.md`.
+- Optional shared project placement: `<project-root>/.agents/macros/<macro-name>/MACRO.md`.
+
+Shared placement MUST use the existing Mezzanine `MACRO.md` format; it is not
+foreign command/macro import or a claim that another harness supports that format.
+For each valid name, precedence MUST be native project, shared project, user,
+then optional built-in. Discovery MUST form a deterministic sorted union, diagnose
+collisions and invalid entries, and allow lower-priority valid fallback. Native
+project authoring and default paths MUST remain `.mezzanine/macros`; discovery
+MUST NOT create, migrate or synchronize repository directories.
+
+The shared namespace, macro root, direct-child entry and `MACRO.md` MUST reject
+symlinks, traversal and special nodes using descriptor-qualified reads below the
+currently trusted project root. Complete UTF-8 document reads MUST be finite even
+after size changes, retaining the 256 KiB and 128-step parser limits. This new
+placement MUST NOT silently change legacy user/native accepted read behavior.
+Listing (inline/deferred), `#` selection and explicit invocation MUST use the same
+effective winner. Invocation MUST revalidate current deepest project trust and cwd,
+qualify the selected shared path under that root, and reload the current document
+before registering a run; in-flight runs retain their existing copied steps.
+Unknown `.agents` commands, agents, configuration, instruction files and auxiliary
+scripts MUST remain inert. No new configuration, execution or lifecycle authority
+is introduced by shared macro placement.
 
 The `MACRO.md` body MUST contain a `## Steps` section whose ordered-list items are the
 scripted prompt steps. Implementations MUST support multiline list items that are

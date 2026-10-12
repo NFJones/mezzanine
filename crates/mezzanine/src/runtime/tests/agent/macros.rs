@@ -3,6 +3,8 @@
 use super::*;
 use mez_agent::AutoSizingRoutingSelection;
 
+mod shared;
+
 /// Verifies `/list-macros` displays the effective pane macro catalog with the
 /// same `#macro` invocation syntax accepted by explicit macro prompts. This
 /// gives users a discoverable way to inspect configured prompt workflows before

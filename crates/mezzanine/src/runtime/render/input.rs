@@ -22,6 +22,9 @@ use std::sync::mpsc::TryRecvError;
 #[cfg(test)]
 mod shared_skills;
 
+#[cfg(test)]
+mod shared_macros;
+
 /// Bounded status notice for the primary prompt discarding a rejected payload.
 ///
 /// Closing the prompt drops its decoder, so the notice names that action. It

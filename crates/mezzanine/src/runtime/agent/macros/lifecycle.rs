@@ -8,7 +8,7 @@ use super::super::{
 };
 use super::{
     MacroCatalog, MacroDefinition, MacroRunPhase, MacroRunRegistration,
-    RuntimeAgentPromptTurnStart, discover_macro_catalog, load_macro_definition,
+    RuntimeAgentPromptTurnStart, discover_macro_catalog, load_macro_definition_for_project,
     macro_initial_step_prompt, macro_parent_orchestration_prompt, macro_run_state,
     macro_step_model_request, parse_macro_prompt_invocation,
 };
@@ -139,7 +139,8 @@ impl RuntimeSessionService {
                 format!("agent macro is not available: #{}", invocation.name),
             )
         })?;
-        let definition = load_macro_definition(&summary)?;
+        let project_root = self.trusted_macro_project_root_for_pane(pane_id);
+        let definition = load_macro_definition_for_project(&summary, project_root.as_deref())?;
         let controller = self
             .session
             .layout_owner_client_id()

@@ -176,6 +176,24 @@ macros live under `~/.config/mezzanine/macros/<name>/MACRO.md`; trusted project
 macros live under `.mezzanine/macros/<name>/MACRO.md`, take precedence over a
 same-named user macro, and require project trust.
 
+Optional shared project placement is `.agents/macros/<name>/MACRO.md`, using the
+existing **Mezzanine macro format**, not foreign command import or promised
+cross-harness compatibility. Per name, native project wins over shared project,
+then user, then any built-in macro. Disjoint valid names form one sorted catalog;
+invalid entries are diagnosed and skipped so a valid lower-priority entry can
+remain available. Native `.mezzanine/macros` authoring stays the default, and
+discovery never creates or migrates project directories.
+
+Shared discovery and invocation reject links at `.agents`, `macros`, the entry,
+or document, plus traversal and special nodes. Reads are descriptor-qualified
+and bounded to 256 KiB; the existing parser permits at most 128 ordered steps.
+Legacy user/native read behavior is unchanged. The current deepest trust/cwd
+decision governs catalog and invocation, including revocation and nested denial.
+`/list-macros`, the `#` selector and `#macro` invocation use the same winner;
+invocation reloads current steps, while a started run retains its copied steps.
+Unknown shared commands, agents, config/instruction files and auxiliary scripts
+are not automatically loaded or executed.
+
 Macro files use the same name and description front matter and name grammar
 as skills. Their body needs a `## Steps` section containing an ordered list of
 non-empty prompts. Use `$create-macro` to ask the built-in workflow to create

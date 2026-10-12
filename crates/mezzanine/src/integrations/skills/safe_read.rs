@@ -22,7 +22,11 @@ pub(super) fn read(root: &Path, name: &str) -> Result<String> {
 /// Reads new shared placement while anchoring `.agents` below the project base.
 /// Legacy user and native readers keep their established base-alias semantics.
 pub(super) fn read_shared(root: &Path, name: &str) -> Result<String> {
-    read_impl(root, name, true)
+    crate::integrations::shared_workflow_documents::read(
+        root,
+        name,
+        crate::integrations::shared_workflow_documents::SharedWorkflowDocument::Skill,
+    )
 }
 
 /// Opens a catalog without following protected namespace or descendant links.
@@ -67,25 +71,10 @@ fn open_root(root: &Path, shared: bool) -> Result<File> {
 /// Lists a finite shared namespace through its held directory descriptor.
 /// Symlink swaps cannot redirect enumeration outside the selected project.
 pub(super) fn shared_entry_names(root: &Path) -> Result<Vec<std::ffi::OsString>> {
-    use std::os::unix::ffi::OsStrExt;
-    let directory = open_root(root, true)?;
-    let entries = rustix::fs::Dir::read_from(&directory).map_err(std::io::Error::from)?;
-    let mut names = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(std::io::Error::from)?;
-        let name = entry.file_name().to_bytes();
-        if name == b"." || name == b".." {
-            continue;
-        }
-        if names.len() == 4096 {
-            return Err(MezError::invalid_args(
-                "shared skill catalog exceeds entry limit",
-            ));
-        }
-        names.push(std::ffi::OsStr::from_bytes(name).to_os_string());
-    }
-    names.sort();
-    Ok(names)
+    crate::integrations::shared_workflow_documents::entry_names(
+        root,
+        crate::integrations::shared_workflow_documents::SharedWorkflowDocument::Skill,
+    )
 }
 
 /// Reads one bounded regular document through the selected namespace policy.

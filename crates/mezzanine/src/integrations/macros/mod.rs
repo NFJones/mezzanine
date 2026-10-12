@@ -1,11 +1,12 @@
 //! Agent macro discovery, parsing, and prompt invocation helpers.
 //!
 //! Agent macros are ordered prompt workflows stored below the user
-//! configuration root or below a trusted project's `.mezzanine` directory. This
-//! module keeps catalog discovery deterministic and side-effect free: it reads
+//! configuration root or below a trusted project's `.mezzanine`/`.agents`
+//! directories. This module keeps catalog discovery deterministic and side-effect free: it reads
 //! `MACRO.md` metadata, validates the configured layout, parses ordered prompt
 //! steps, and never executes macro content.
 
+use super::shared_workflow_documents::{self, SharedWorkflowDocument};
 use crate::{MezError, MezErrorKind, Result};
 use include_dir::{Dir, include_dir};
 use std::fs;
@@ -50,6 +51,7 @@ pub fn discover_macro_catalog(
             MacroSource::Project,
             &mut catalog,
         );
+        discover_shared_macros_under_root(&root.join(".agents/macros"), &mut catalog);
     }
     catalog
 }
@@ -72,7 +74,16 @@ pub fn load_macro_definition(summary: &MacroSummary) -> Result<MacroDefinition> 
             )
         })?,
         MacroSource::User | MacroSource::Project => {
-            read_macro_text(&summary.path).map_err(|error| {
+            let text = if let Some(root) = shared_macro_root(summary) {
+                if summary.path != root.join(&summary.name).join(MACRO_FILE_NAME) {
+                    return Err(MezError::forbidden("shared macro path unavailable"));
+                }
+                shared_workflow_documents::read(root, &summary.name, SharedWorkflowDocument::Macro)
+                    .map_err(|error| error.to_string())
+            } else {
+                read_macro_text(&summary.path)
+            };
+            text.map_err(|error| {
                 MezError::new(
                     MezErrorKind::Io,
                     format!(
@@ -93,11 +104,90 @@ pub fn load_macro_definition(summary: &MacroSummary) -> Result<MacroDefinition> 
             error
         ))
     })?;
+    if shared_macro_root(summary).is_some() && document.name != summary.name {
+        return Err(MezError::invalid_args(
+            "shared macro name no longer matches its directory",
+        ));
+    }
     Ok(MacroDefinition {
         summary: summary.clone(),
         text,
         steps: document.steps,
     })
+}
+
+/// Loads a shared summary only under the caller's current approved project root.
+/// Catalog provenance is not live trust: runtime invocation supplies a fresh
+/// deepest-trust/cwd decision. Legacy summaries keep their established loader.
+pub(crate) fn load_macro_definition_for_project(
+    summary: &MacroSummary,
+    current_project_root: Option<&Path>,
+) -> Result<MacroDefinition> {
+    if let Some(root) = shared_macro_root(summary)
+        && current_project_root.is_none_or(|project| project.join(".agents/macros") != root)
+    {
+        return Err(MezError::forbidden(
+            "shared macro is outside the current trusted project",
+        ));
+    }
+    load_macro_definition(summary)
+}
+
+/// Identifies project-only shared provenance without reclassifying user roots.
+/// Exact entry/document spelling and format name are validated before reading.
+fn shared_macro_root(summary: &MacroSummary) -> Option<&Path> {
+    let root = summary.path.parent()?.parent()?;
+    (summary.source == MacroSource::Project
+        && root.file_name().is_some_and(|name| name == "macros")
+        && root
+            .parent()?
+            .file_name()
+            .is_some_and(|name| name == ".agents"))
+    .then_some(root)
+}
+
+/// Enumerates shared direct children through a protected descriptor. Invalid
+/// entries diagnose/skip, so native-first equal-rank winners and lower-priority
+/// valid fallback retain the existing catalog's deterministic insertion rules.
+fn discover_shared_macros_under_root(root: &Path, catalog: &mut MacroCatalog) {
+    let names = match shared_workflow_documents::entry_names(root, SharedWorkflowDocument::Macro) {
+        Ok(names) => names,
+        Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => return,
+        Err(_) => {
+            catalog.diagnostics.push(MacroDiagnostic {
+                path: root.to_path_buf(),
+                message: "shared macro root unavailable".into(),
+            });
+            return;
+        }
+    };
+    for name in names {
+        let path = root.join(&name).join(MACRO_FILE_NAME);
+        let summary = (|| {
+            let name = name
+                .to_str()
+                .filter(|name| is_valid_macro_name(name))
+                .ok_or_else(|| "shared macro directory name is invalid".to_string())?;
+            let text = shared_workflow_documents::read(root, name, SharedWorkflowDocument::Macro)
+                .map_err(|error| error.to_string())?;
+            let document =
+                parse_macro_document(&text).map_err(|error| error.message().to_string())?;
+            if document.name != name {
+                return Err("shared macro name does not match directory".to_string());
+            }
+            Ok(MacroSummary {
+                name: document.name,
+                description: document.description,
+                source: MacroSource::Project,
+                path: path.clone(),
+                step_count: document.steps.len(),
+            })
+        })();
+        match summary {
+            Ok(summary) => catalog.insert(summary),
+            Err(message) => catalog.diagnostics.push(MacroDiagnostic { path, message }),
+        }
+    }
 }
 
 /// Discovers valid direct child macro directories below one `macros` root.
@@ -291,6 +381,8 @@ mod tests {
     use super::{BUILTIN_MACROS, MacroSource, discover_macro_catalog, load_macro_definition};
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    mod shared;
 
     /// Creates a unique temporary root for macro-discovery tests without
     /// adding test-only dependencies to the production crate graph.
