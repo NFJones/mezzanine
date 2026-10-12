@@ -824,6 +824,121 @@ mod tests {
         .unwrap();
     }
 
+    /// Checks the loadable fix-issues discovery contract independently of its
+    /// virtual or synchronized filesystem source.
+    ///
+    /// The discovery examples must remain real JSON action objects with exactly
+    /// the supported fields: rationale and project selection are not filters.
+    fn assert_fix_issues_discovery_contract(text: &str) {
+        let examples = text
+            .lines()
+            .filter(|line| line.starts_with("{\"type\":\"issue_query\""))
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(examples.len(), 2, "missing broad discovery examples");
+        for (example, state) in examples.iter().zip(["in-progress", "open"]) {
+            assert_eq!(example.as_object().unwrap().len(), 6);
+            assert_eq!(example["type"], "issue_query");
+            assert_eq!(example["state"], state);
+            assert!(example.get("kind").unwrap().is_null());
+            assert!(example.get("text").unwrap().is_null());
+            assert_eq!(example["limit"], 200);
+            assert_eq!(example["refresh"], false);
+            assert!(example.get("scope").is_none());
+            assert!(example.get("project").is_none());
+            let payload = mez_agent::parse_maap_action_json(&example.to_string())
+                .unwrap()
+                .payload;
+            assert!(matches!(
+                payload,
+                mez_agent::AgentActionPayload::IssueQuery { .. }
+            ));
+        }
+        for contract in [
+            "literal substring filter",
+            "batch rationale",
+            "tasks and defects",
+            "omitted or null",
+            "query.project",
+            "pane working directory",
+            "shell `cd`",
+            "no `scope` or `project` parameter",
+            "count: 0",
+            "unchanged_issue_query",
+            "reused_action_id",
+            "execution/I/O failure",
+            "refresh: true",
+            "external-change evidence",
+            "reaches the limit",
+            "pagination",
+            "explicit single-issue",
+        ] {
+            assert!(
+                text.contains(contract),
+                "missing discovery contract: {contract}"
+            );
+        }
+    }
+
+    /// Verifies managed synchronization delivers the discovery contract through
+    /// normal catalog loading after replacing a stale managed fix-issues copy.
+    /// A valid unmarked override must instead survive byte-for-byte; this uses
+    /// temporary user roots and never touches installed user skill settings.
+    #[test]
+    fn managed_fix_issues_sync_loads_discovery_and_preserves_user_override() {
+        let root = test_temp_root("fix-issues-discovery-sync");
+        let user_root = root.join("user");
+        sync_managed_builtin_skills(&user_root).unwrap();
+        let path = user_root.join("skills/fix-issues/SKILL.md");
+        fs::write(
+            &path,
+            "---\nmez_managed_version: 0\nname: fix-issues\ndescription: stale\n---\n\nold body\n",
+        )
+        .unwrap();
+        let synced = sync_managed_builtin_skills(&user_root).unwrap();
+        assert_eq!(
+            synced
+                .entries
+                .iter()
+                .find(|entry| entry.name == "fix-issues")
+                .unwrap()
+                .status,
+            ManagedBuiltinSkillSyncStatus::ReplacedStale
+        );
+        let catalog = discover_skill_catalog(Some(&user_root), None);
+        let document =
+            load_skill_document(catalog.get(BUILTIN_FIX_ISSUES_SKILL_NAME).unwrap()).unwrap();
+        assert_eq!(document.summary.source, SkillSource::User);
+        assert_eq!(document.text, managed_builtin_skill_text("fix-issues"));
+        assert_fix_issues_discovery_contract(&document.text);
+        write_skill(
+            &user_root.join("skills"),
+            "fix-issues",
+            "Custom workflow",
+            "Keep this user's issue workflow.",
+        );
+        let original = fs::read(&path).unwrap();
+        let synced = sync_managed_builtin_skills(&user_root).unwrap();
+        assert_eq!(
+            synced
+                .entries
+                .iter()
+                .find(|entry| entry.name == "fix-issues")
+                .unwrap()
+                .status,
+            ManagedBuiltinSkillSyncStatus::PreservedOverride
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+        let catalog = discover_skill_catalog(Some(&user_root), None);
+        assert!(
+            load_skill_document(catalog.get(BUILTIN_FIX_ISSUES_SKILL_NAME).unwrap())
+                .unwrap()
+                .text
+                .contains("Keep this user's issue workflow.")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     /// Verifies managed built-in synchronization materializes user-scope
     /// copies, preserves valid user overrides, replaces stale or malformed
     /// managed entries, and never touches trusted project skill directories.
@@ -1174,6 +1289,7 @@ mod tests {
         let fix_issues_document =
             load_skill_document(catalog.get(BUILTIN_FIX_ISSUES_SKILL_NAME).unwrap()).unwrap();
         assert!(fix_issues_document.text.contains("name: fix-issues"));
+        assert_fix_issues_discovery_contract(&fix_issues_document.text);
         assert!(
             fix_issues_document
                 .text

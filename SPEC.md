@@ -15154,7 +15154,14 @@ continuation. `issue_query` MUST default to open issues when its state filter is
 omitted or null, MAY filter by open, in-progress, or resolved state, and MUST
 remove the state filter when its state is explicitly `all`. Its optional text
 filter MUST perform a case-insensitive substring match over issue ID,
-title, and body. `issue_add`
+title, and body. The built-in issue-fixing workflow MUST enumerate in-progress
+then open issues with explicit states, null kind/text, limit 200, and
+refresh=false unless the user intentionally constrains discovery. Native
+queries derive project binding from the active pane working directory's git
+root (or directory outside git); agents MUST verify returned `query.project`
+before selection or empty-catalog conclusions, MUST NOT invent scope/project
+arguments, and MUST distinguish empty snapshots, freshness skips, and failures.
+A limit-sized response MUST NOT be treated as an exhausted state. `issue_add`
 MAY set an initial state and MUST default it to open when omitted. Issues MUST
 have an integer priority from 0 through 100 inclusive and MUST default to 10
 when creation omits priority. `issue_add` MAY set the initial priority.

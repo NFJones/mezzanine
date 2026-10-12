@@ -5,6 +5,23 @@ description: Work the current project's mez issues to verified resolution in the
 
 Maintain one outer control loop for the entire run. Query `in-progress` issues first, then `open` issues. Reuse query results only until the issue store changes. Do not stop after completing or blocking one issue.
 
+## Issue discovery contract
+
+Prefer native issue actions. For ordinary project-wide discovery, execute these broad queries in order (preserve an explicit single-issue user constraint or intentionally narrow search):
+```json
+{"type":"issue_query","kind":null,"state":"in-progress","text":null,"limit":200,"refresh":false}
+{"type":"issue_query","kind":null,"state":"open","text":null,"limit":200,"refresh":false}
+```
+`kind: null` includes tasks and defects. Both states must be explicit: omitted or null state defaults to open. `text` is a literal substring filter over ID/title/body, never a description, state, or project selector; explanations belong in the batch rationale.
+
+Native queries bind automatically to the active pane working directory's git root (or the directory when outside git). Check returned `query.project` against the intended repository before selection or empty-result conclusions. A shell `cd` alone does not prove native actions rebound. `issue_query` has no `scope` or `project` parameter; use only its active schema, not another action's fields. On mismatch use supported targeting or report the concrete mismatch, not an empty catalog.
+
+Before accepting successful `count: 0`, verify returned project/state and broad `kind: null`/`text: null`. Correct an accidental filter once; do not paraphrase equivalent empty searches or scan alternate/private stores. Distinguish a successful empty snapshot from `unchanged_issue_query` (freshness-skipped: reuse `reused_action_id`) and an execution/I/O failure (not evidence of zero issues). Native issue mutations invalidate freshness normally. Use `refresh: true` only with concrete external-change evidence; it bypasses freshness, not scope or filters.
+
+If a response reaches the limit, do not claim that state is exhausted or invent pagination/unlimited arguments. Prefer native actions to CLI fallback; a failed/read-only CLI query does not prove emptiness. If fallback is needed, the supported form is `mez --json issue --project /absolute/project query --state open`. Do not change permissions/config/sandbox settings to compensate for a filter mistake.
+
+## Selection and verification loop
+
 Work one dependency-ready issue at a time. Prioritize, in order:
 1. in-progress issues related to uncommitted changes;
 2. other in-progress issues;

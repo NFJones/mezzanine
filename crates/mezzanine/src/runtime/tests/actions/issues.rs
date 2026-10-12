@@ -180,6 +180,226 @@ fn runtime_issue_query_all_state_selector_preserves_default_open_behavior() {
     assert_eq!(default_open["issues"][0]["state"], "open");
 }
 
+/// Verifies broad native discovery reports the bound project and distinguishes
+/// filtered snapshots from same-turn freshness reuse.
+///
+/// Mixed active states and kinds exercise the same native query arguments
+/// taught by fix-issues. The result descriptor must expose the bound project;
+/// a literal descriptive search, defect-only query, and freshness skip must
+/// remain observably distinct from the broad project snapshot.
+#[test]
+fn runtime_issue_query_broad_discovery_reports_project_filters_and_freshness() {
+    let mut service = test_runtime_service();
+    let config_root = temp_root("runtime-issue-broad-discovery");
+    service.set_config_root(config_root.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let project = crate::storage::issues::project_key_for_working_directory(
+        service
+            .pane_current_working_directory("%1")
+            .unwrap_or_else(|| config_root.clone()),
+    );
+    let store = crate::storage::issues::IssueStore::from_database_path(
+        crate::storage::issues::issue_database_location(&config_root, None),
+    );
+    for target in [project.as_str(), "/other-project"] {
+        for state in [
+            mez_agent::issues::IssueState::InProgress,
+            mez_agent::issues::IssueState::Open,
+        ] {
+            for kind in [
+                mez_agent::issues::IssueKind::Task,
+                mez_agent::issues::IssueKind::Defect,
+            ] {
+                store
+                    .add_issue_with_dependencies(
+                        mez_agent::issues::NewIssueRecord {
+                            project: target.to_string(),
+                            kind,
+                            state: Some(state),
+                            priority: 10,
+                            title: format!("{} {} work", state.as_str(), kind.as_str()),
+                            body: None,
+                            notes: None,
+                            depends_on: Vec::new(),
+                        },
+                        10,
+                    )
+                    .unwrap();
+            }
+        }
+    }
+    let query = |id: &str, state: Option<&str>, kind: Option<&str>, text: Option<&str>| {
+        mez_agent::AgentAction {
+            id: id.to_string(),
+            payload: mez_agent::AgentActionPayload::IssueQuery {
+                kind: kind.map(str::to_string),
+                state: state.map(str::to_string),
+                text: text.map(str::to_string),
+                limit: Some(200),
+                refresh: false,
+            },
+        }
+    };
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-issue-broad","input":"inspect project issues"}}"#, &primary);
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &RuntimeBatchProvider {
+                response: runtime_issue_response(mez_agent::MaapBatch {
+                    rationale: "Inspect broad discovery and distinguish filtered results"
+                        .to_string(),
+                    actions: vec![
+                        query("progress", Some("in-progress"), None, None),
+                        query("open", Some("open"), None, None),
+                        query(
+                            "descriptive",
+                            Some("open"),
+                            None,
+                            Some("open query with project scope"),
+                        ),
+                        query("defects", Some("open"), Some("defect"), None),
+                        query("default", None, None, None),
+                    ],
+                }),
+            },
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let results = execution
+        .action_results
+        .iter()
+        .map(|result| {
+            assert_eq!(result.status, ActionStatus::Succeeded);
+            serde_json::from_str::<serde_json::Value>(
+                result.structured_content_json.as_deref().unwrap(),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    for (result, state) in results[..2].iter().zip(["in-progress", "open"]) {
+        assert_eq!(result["count"], 2);
+        assert_eq!(result["query"]["project"], project);
+        assert_eq!(result["query"]["state"], state);
+        assert!(result["query"]["kind"].is_null());
+        assert!(result["query"]["text"].is_null());
+        assert_eq!(result["query"]["limit"], 200);
+        assert!(result["snapshot_sha256"].is_string());
+        let issues = result["issues"].as_array().unwrap();
+        assert!(
+            issues
+                .iter()
+                .all(|issue| issue["project"] == project && issue["state"] == state)
+        );
+        assert_eq!(
+            issues
+                .iter()
+                .map(|issue| issue["kind"].as_str().unwrap())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from(["task", "defect"])
+        );
+    }
+    assert_eq!(results[2]["count"], 0);
+    assert!(results[2]["snapshot_sha256"].is_string());
+    assert_eq!(results[2]["query"]["text"], "open query with project scope");
+    assert_eq!(results[3]["count"], 1);
+    assert_eq!(results[3]["issues"][0]["kind"], "defect");
+    assert_eq!(results[4]["code"], "unchanged_issue_query");
+    assert_eq!(results[4]["reused_action_id"], "open");
+    assert_eq!(results[4]["query"]["state"], "open");
+    assert!(results[4].get("count").is_none());
+    assert!(results[4].get("issues").is_none());
+}
+
+/// Verifies an issue-store I/O failure is not an empty snapshot and does not
+/// establish query freshness. Repairing the fixture path must allow the same
+/// broad query to execute without refresh, then reuse its successful snapshot.
+/// The deliberately invalid database path is confined to a temporary fixture.
+#[test]
+fn runtime_issue_query_io_failure_is_not_empty_or_fresh() {
+    let root = temp_root("runtime-issue-query-io-failure");
+    let mut service = test_runtime_service();
+    service.set_config_root(root.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let project = crate::storage::issues::project_key_for_working_directory(
+        service
+            .pane_current_working_directory("%1")
+            .unwrap_or_else(|| root.clone()),
+    );
+    let database = crate::storage::issues::issue_database_location(&root, None).into_path();
+    std::fs::create_dir_all(&database).unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-issue-io","input":"inspect project issues"}}"#, &primary);
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let mut run = |id: &str| {
+        let batch = runtime_issue_query_batch(id, false);
+        let mut execution = mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture("turn-1"),
+            action_results: vec![mez_agent::ActionResult::running(
+                &turn,
+                &batch.actions[0],
+                Vec::new(),
+                None,
+            )],
+            response: runtime_issue_response(batch),
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        };
+        service
+            .execute_running_issue_actions_for_turn(&turn, &mut execution)
+            .unwrap();
+        execution.action_results.remove(0)
+    };
+    let failed = run("query-io-failed");
+    assert_eq!(failed.status, ActionStatus::Failed);
+    assert!(failed.is_error);
+    assert!(failed.error.is_some());
+    assert!(failed.structured_content_json.is_none());
+    std::fs::remove_dir(&database).unwrap();
+    let empty = run("query-io");
+    assert_eq!(empty.status, ActionStatus::Succeeded);
+    let empty: serde_json::Value =
+        serde_json::from_str(empty.structured_content_json.as_deref().unwrap()).unwrap();
+    assert_eq!(empty["count"], 0);
+    assert_eq!(empty["query"]["project"], project);
+    assert!(empty["snapshot_sha256"].is_string());
+    let skipped = run("query-io-repeat");
+    let skipped: serde_json::Value =
+        serde_json::from_str(skipped.structured_content_json.as_deref().unwrap()).unwrap();
+    assert_eq!(skipped["code"], "unchanged_issue_query");
+    assert_eq!(skipped["reused_action_id"], "query-io");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies an issue capability grant and its causal evidence survive the
 /// provider-worker boundary after a non-final issue query.
 ///

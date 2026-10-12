@@ -85,6 +85,21 @@ the existing permission owners do not change with these foundational contracts.
 | `issue_delete` | `id` | Deletes a local project issue. |
 | `complete` | none | Marks the turn complete when exposed by a compatibility surface. |
 
+For project-wide issue discovery, query explicit `in-progress` then `open`
+states with `kind: null`, `text: null`, `limit: 200`, and `refresh: false`.
+Preserve intentional user single-issue constraints. Text is an ID/title/body
+substring filter, not query rationale. Native project binding follows the
+active pane working directory's git root (or directory outside git); inspect
+returned `query.project`, rather than assuming a shell `cd` rebound the action.
+There is no native query `scope` or `project` argument. Successful `count: 0`,
+`unchanged_issue_query` freshness skips (reuse `reused_action_id`), and execution
+failures are distinct outcomes. Native mutations invalidate freshness;
+`refresh: true` only bypasses it with external-change evidence, never broadens
+filters. A response at the limit does not prove exhaustion; no pagination or
+unlimited argument is exposed. Prefer native queries; CLI fallback uses
+`mez --json issue --project /absolute/project query --state open`, and CLI
+I/O/read-only errors are not empty-result evidence.
+
 `request_skills` and `call_skill` are optional paired actions, absent by default.
 Explicit action allowlisting plus eligible live discovery policy is required when
 capturing a new conversation. `request_skills` has no arguments and returns only

@@ -66,6 +66,68 @@ fn issue_store_adds_and_queries_by_project_and_kind() {
     assert_eq!(results, vec![defect]);
 }
 
+/// Verifies broad issue discovery includes both kinds in each active state
+/// while excluding rows belonging to another project.
+///
+/// Broad fix-issues discovery must retain tasks as well as defects in each
+/// active state. Descriptive text is a real filter, not a project selector;
+/// narrowing kind or text must not masquerade as an empty project catalog.
+#[test]
+fn issue_store_broad_discovery_keeps_mixed_kinds_and_isolates_projects() {
+    let store = temp_store("broad-discovery");
+    for project in ["/repo/current", "/repo/other"] {
+        for state in [IssueState::InProgress, IssueState::Open] {
+            for kind in [IssueKind::Task, IssueKind::Defect] {
+                store
+                    .add_issue_with_dependencies(
+                        NewIssueRecord {
+                            project: project.to_string(),
+                            kind,
+                            state: Some(state),
+                            priority: 10,
+                            title: format!("{} {} work", state.as_str(), kind.as_str()),
+                            body: None,
+                            notes: None,
+                            depends_on: Vec::new(),
+                        },
+                        10,
+                    )
+                    .unwrap();
+            }
+        }
+    }
+    for state in [IssueState::InProgress, IssueState::Open] {
+        let broad = IssueQuery::new_with_state(
+            "/repo/current".to_string(),
+            None,
+            Some(state),
+            None,
+            Some(200),
+        )
+        .unwrap();
+        let records = store.query_issues(&broad).unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(
+            records
+                .iter()
+                .all(|record| record.project == "/repo/current" && record.state == state)
+        );
+        assert!(records.iter().any(|record| record.kind == IssueKind::Task));
+        assert!(
+            records
+                .iter()
+                .any(|record| record.kind == IssueKind::Defect)
+        );
+        let mut narrow = broad.clone();
+        narrow.kind = Some(IssueKind::Defect);
+        assert_eq!(store.query_issues(&narrow).unwrap().len(), 1);
+        narrow.kind = None;
+        narrow.text = Some(format!("{} query with project scope", state.as_str()));
+        assert!(store.query_issues(&narrow).unwrap().is_empty());
+        assert_eq!(store.query_issues(&broad).unwrap(), records);
+    }
+}
+
 /// Verifies project issue text queries match full and partial UUIDs while
 /// preserving kind, state, and no-match filtering behavior.
 #[test]
