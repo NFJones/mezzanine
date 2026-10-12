@@ -1232,6 +1232,12 @@ random accounting owner, not native IDs, paths, credentials or callback content.
 Recreated ephemeral registration state may recover the same exact native source
 namespace, but mapping possession MUST NOT authorize enrollment or usage. Lookup
 MUST run off actor and actor admission MUST retain original lifetime/root fences.
+Reused numeric registration generations MUST require a fresh observer witness;
+old heartbeat/readiness/report selectors MUST remain invalid. A native curated
+component fixture qualifies owner/original-request reuse, inert committed replay
+and one distinct new report after ephemeral registry/store-handle reconstruction
+with the same still-live root/creator. It MUST NOT be described as full daemon,
+snapshot restoration, changed-root or cross-process restart qualification.
 Capacity exhaustion MUST preserve existing mappings rather than silently evict
 replay authority. Ordinary accounting remains unavailable until ordered report,
 baseline and source-replay contracts are implemented; this mapping alone MUST NOT

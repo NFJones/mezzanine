@@ -734,6 +734,12 @@ callbacks and credentials are not stored. Unavailable boot/store/capacity keeps
 lifecycle observational and usage unavailable; mappings are never silently
 evicted. Ordered-report, baseline and cross-process resume/fork continuity are
 still unfinished, so this checkpoint does not enable ordinary usage reporting.
+The curated native component suite additionally reconstructs ephemeral registry
+and ledger-handle state while retaining the same live root/creator. It qualifies
+the same durable owner and original request time, changed observer witness despite
+numeric generation reuse, rejection of old heartbeat/begin/end selectors, inert
+committed-report replay and one distinct report charged once. This is not an
+actual daemon restart, snapshot/root replacement or cross-process continuation.
 Telemetry schema 6 separately stores canonical opaque observation digests across
 model/category/project groups. Internal observations get server-derived stream
 identity and publication order; caller epoch/sequence changes cannot recharge an

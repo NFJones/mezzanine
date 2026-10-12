@@ -42,6 +42,24 @@ impl HelperPresentation {
     }
 }
 
+#[cfg(all(test, target_os = "linux"))]
+impl ExternalEnrollmentWork {
+    /// Sets a deterministic clock on one still-unpublished curated begin work.
+    /// Returns false for other action kinds; actual native observation and
+    /// publication remain mandatory before the fixture can obtain readiness.
+    pub(super) fn fixture_usage_capture_at(&mut self, now: u64) -> bool {
+        let Some(begin) = self
+            .helper
+            .as_mut()
+            .and_then(|helper| helper.usage_begin.as_mut())
+        else {
+            return false;
+        };
+        begin.fixture_capture_at(now);
+        true
+    }
+}
+
 impl RuntimeSessionService {
     /// Reserves bounded observation only for a current ordinary run candidate on
     /// uninitialized, same-user, sender-qualified Unix ingress. Supplied process

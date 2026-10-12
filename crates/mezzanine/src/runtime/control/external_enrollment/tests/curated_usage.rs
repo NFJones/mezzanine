@@ -465,6 +465,233 @@ async fn external_curated_request_end_native_commit_replay_and_wrong_parent_cons
     assert!(connection.caller_client_id().is_none());
 }
 
+/// Ephemeral registry reconstruction can reuse numeric generations but never
+/// old observer proof. The same still-live native root/creator must recover its
+/// durable accounting owner and original request origin, reject old selectors,
+/// replay an already committed report without recharge, and accept a distinct
+/// incurred report once. This is a component reset, not a real daemon/snapshot
+/// restart or cross-process continuation fixture; native observation is real.
+#[tokio::test(flavor = "current_thread")]
+async fn external_curated_registry_reset_reuses_durable_owner_not_observer_witness() {
+    use super::helper_presentation::settle;
+    let Some(mut fixture) = fixture("hold").await else {
+        panic!("registry reset qualification requires native peer evidence");
+    };
+    let path = fixture.directory.join("usage.sqlite");
+    fixture
+        .service
+        .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&path));
+    let (_socket, connection) = child(&mut fixture).await;
+    let first = enroll(&mut fixture, &connection).await;
+    assert_eq!(first["result"]["registered"], true);
+    let (digest, owner, origin) = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .iter()
+        .map(|(digest, binding)| {
+            (
+                *digest,
+                binding.accounting_owner.clone(),
+                binding.accounting_origin.clone(),
+            )
+        })
+        .next()
+        .unwrap();
+    let mut work = fixture
+        .service
+        .prepare_external_helper_presentation(&begin(&first), &connection)
+        .unwrap();
+    let original_capture = crate::runtime::current_unix_seconds().saturating_sub(500);
+    assert!(work.fixture_usage_capture_at(original_capture));
+    let ready = settle(&mut fixture, work, &connection).await;
+    assert_eq!(ready["result"]["accepted"], true, "{ready}");
+    let at = ready["result"]["admitted_at"].as_u64().unwrap();
+    assert_eq!(at, original_capture);
+    let original = end(&first, at);
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&original, &connection)
+        .unwrap();
+    let committed = settle(&mut fixture, work, &connection).await;
+    assert_eq!(committed["result"]["durable"], true, "{committed}");
+    assert_eq!(committed["result"]["applied"], true);
+    fixture.service.retire_external_agent_binding(digest);
+    *fixture.service.control.external_agents_mut() = Default::default();
+    fixture
+        .service
+        .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&path));
+    let fresh = enroll(&mut fixture, &connection).await;
+    assert_eq!(fresh["result"]["registered"], true, "{fresh}");
+    assert_eq!(fresh["result"]["generation"], first["result"]["generation"]);
+    assert_ne!(
+        fresh["result"]["observer_witness"],
+        first["result"]["observer_witness"]
+    );
+    let binding = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(binding.accounting_owner, owner);
+    assert_eq!(binding.accounting_origin, origin);
+    assert!(binding.enrollment.as_ref().unwrap().usage_owner_is_durable);
+    let heartbeat = |receipt: &serde_json::Value| {
+        crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"reset-proof","method":"agent/external/curated-heartbeat","params":{
+            "harness":"claude","generation":receipt["result"]["generation"],"observer_witness":receipt["result"]["observer_witness"],
+            "external_session_id":"session-a","sequence":1}}).to_string()).unwrap()
+    };
+    for stale in [begin(&first), original.clone(), heartbeat(&first)] {
+        let refused = match fixture
+            .service
+            .prepare_external_helper_presentation(&stale, &connection)
+        {
+            Ok(work) => settle(&mut fixture, work, &connection)
+                .await
+                .get("error")
+                .is_some(),
+            Err(_) => true,
+        };
+        assert!(
+            refused,
+            "old witness was accepted after numeric generation reuse"
+        );
+    }
+    let source = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap()
+        .enrollment
+        .as_ref()
+        .unwrap();
+    assert_eq!(source.curated_observer.as_ref().unwrap().sequence, 0);
+    assert!(
+        source
+            .curated_observer
+            .as_ref()
+            .unwrap()
+            .observed_at
+            .is_none()
+    );
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&heartbeat(&fresh), &connection)
+        .unwrap();
+    let proof = settle(&mut fixture, work, &connection).await;
+    assert_eq!(proof["result"]["observed"], true, "{proof}");
+    assert_eq!(proof["result"]["changed"], true);
+    let mut work = fixture
+        .service
+        .prepare_external_helper_presentation(&begin(&fresh), &connection)
+        .unwrap();
+    assert!(work.fixture_usage_capture_at(at + 100));
+    let replay_ready = settle(&mut fixture, work, &connection).await;
+    assert_eq!(replay_ready["result"]["accepted"], true, "{replay_ready}");
+    assert_eq!(
+        replay_ready["result"]["admitted_at"],
+        ready["result"]["admitted_at"]
+    );
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&end(&fresh, at), &connection)
+        .unwrap();
+    let replay = settle(&mut fixture, work, &connection).await;
+    assert_eq!(replay["result"]["durable"], true, "{replay}");
+    assert_eq!(replay["result"]["applied"], false);
+    let mut new_begin = begin(&fresh);
+    let mut params: serde_json::Value =
+        serde_json::from_str(new_begin.params.as_deref().unwrap()).unwrap();
+    params["request_id"] = "c".repeat(64).into();
+    new_begin.params = Some(params.to_string());
+    let mut work = fixture
+        .service
+        .prepare_external_helper_presentation(&new_begin, &connection)
+        .unwrap();
+    assert!(work.fixture_usage_capture_at(at + 200));
+    let new_ready = settle(&mut fixture, work, &connection).await;
+    assert_eq!(new_ready["result"]["accepted"], true, "{new_ready}");
+    assert_eq!(new_ready["result"]["admitted_at"], at + 200);
+    let mut new_end = end(&fresh, new_ready["result"]["admitted_at"].as_u64().unwrap());
+    let mut params: serde_json::Value =
+        serde_json::from_str(new_end.params.as_deref().unwrap()).unwrap();
+    params["request_id"] = "c".repeat(64).into();
+    params["event_id"] = "d".repeat(64).into();
+    new_end.params = Some(params.to_string());
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&new_end, &connection)
+        .unwrap();
+    let new_commit = settle(&mut fixture, work, &connection).await;
+    assert_eq!(new_commit["result"]["durable"], true, "{new_commit}");
+    assert_eq!(new_commit["result"]["applied"], true);
+    assert_eq!(
+        fixture
+            .service
+            .external_usage_reservation_counts_for_tests(),
+        (0, 0)
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
+    );
+    assert!(!connection.initialized());
+    assert!(connection.caller_client_id().is_none());
+    let database = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        20
+    );
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT count(*) FROM external_usage_observations",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT count(DISTINCT owner) FROM external_usage_sources",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT count(DISTINCT owner) FROM external_usage_observations",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+}
+
 /// Builds only a public current observer selector plus one opaque request ID.
 pub(super) fn begin(first: &serde_json::Value) -> JsonRpcRequest {
     crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"curated-request","method":"agent/external/curated-usage-begin","params":{

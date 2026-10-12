@@ -27,6 +27,15 @@ pub(super) struct HelperUsageBegin {
 }
 
 impl HelperUsageBegin {
+    /// Overrides only this unpublished fixture's captured request clock. Native
+    /// ancestry, origin qualification, store publication and actor fences still
+    /// execute normally; no production caller or RPC can access this test seam.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) fn fixture_capture_at(&mut self, now: u64) {
+        assert!(now > 0 && self.published.get().is_none());
+        self.now = now;
+    }
+
     /// Captures only an existing durably mapped declared parent namespace;
     /// unsupported sources and malformed request selectors fail before work.
     pub(super) fn capture(
