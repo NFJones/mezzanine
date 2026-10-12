@@ -315,7 +315,7 @@ producer. Pi work is independent of the retired Gemini harness, not its replacem
 Ordinary `mez bootstrap pi` now also installs finalized assistant request
 accounting. Run normal `pi` in the Mez pane; no `mez pi`, fd3, preselected session,
 `--apply`, version/root gate or separate accounting enable step is required.
-Revision 10 recognizes exact revision-9 owned bytes for upgrade/repair/repeat;
+Pi revision 11 recognizes exact revision-10 and revision-9 owned bytes for upgrade/repair/repeat;
 disabled vendor policy, authored entries and trust remain unchanged. The same
 shared-client byte update is versioned for OpenCode ownership without adding
 OpenCode usage behavior.
@@ -349,6 +349,15 @@ they leave already recorded totals and lifecycle state intact. A later successfu
 report does not erase a sticky gap within the observer epoch. Native transport
 health remains separate. Coverage disclosure/recent retry metadata is not a
 durable expense spool or an exact count of dropped reports.
+
+If a genuine new run, final agent settlement, or supported session teardown
+arrives with an unfinished request, missing finalized counters are disclosed
+before the original ticket is abandoned and before native retirement/detach.
+The callbacks remain synchronous and neutral while readiness is pending. Already
+completed reports do not gain a false loss, and an unmatched historical outcome
+cannot close the current request. This is an unknown coverage gap, not invented
+expense, zero-spend proof, or a fabricated task-completion event. Pi revision 11
+changes only this ordering; the shared transport and OpenCode revision stay at 10.
 
 Source evidence: public Pi revision
 `7bd01fb92485c06f92ecfff7ccf3197148bc16af` (`agent-session.ts`, extension

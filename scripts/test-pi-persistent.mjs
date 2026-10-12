@@ -224,3 +224,52 @@ test("ordinary Pi lost-ACK disclosure survives genuine reload without ticket tra
   replacement({ type: "turn_end", turnIndex: 0, messageEntryId: "persisted", message }); await owner.tail;
   assert.equal(records[1].begins, 0);
 });
+
+/** Genuine run/settlement/shutdown boundaries must disclose unavailable final
+ * counters before abandoning the original request and before native retirement.
+ * The callback never waits for readiness, changes vendor results, or invents cost. */
+test("ordinary unfinished Pi request discloses loss before boundary retirement", async () => {
+  for (const boundary of [{ type: "agent_start" }, { type: "agent_settled" },
+    ...["quit", "reload", "new", "resume", "fork"].map(reason => ({ type: "session_shutdown", reason }))]) {
+    const owner = {}; const events = []; let abandoned = 0; let expense = 0; let release; let entered;
+    const begun = new Promise(resolve => { entered = resolve; });
+    const main = load(owner, () => ({ async start() { return true; },
+      async piObservation(event) { events.push(event); return { delivered: true }; },
+      beginRequest(id) { entered(); return new Promise(resolve => { release = () => resolve({ request_id: id, admitted_at: 1 }); }); },
+      async endRequest() { expense++; return { delivered: true, durable: true, applied: true, revision: 1 }; },
+      abandonRequest() { events.push({ type: "abandon" }); abandoned++; }, detach() { events.push({ type: "detach" }); } }));
+    main({ type: "session_start", reason: "startup" }); await owner.tail;
+    main({ type: "agent_start" }); main({ type: "turn_start", turnIndex: 0 }); await begun;
+    main(boundary); release(); await owner.tail; await owner.tail;
+    const gap = events.findIndex(event => event.type === "usage_gap" && event.reason === "finalized-counters");
+    const retirement = events.findIndex(event => event.type === boundary.type && (event.reason === boundary.reason) && (boundary.type !== "agent_start" || events.indexOf(event) > 1));
+    assert(gap >= 0, JSON.stringify({ boundary, events }));
+    assert(gap < events.findIndex(event => event.type === "abandon"));
+    assert(gap < retirement, JSON.stringify({ boundary, events }));
+    assert.equal(abandoned, 1); assert.equal(expense, 0);
+  }
+});
+
+/** A complete finalized report must not acquire a false loss at settlement,
+ * while a reordered historical end cannot cancel the genuine current ticket. */
+test("ordinary Pi completed and reordered callbacks preserve current ticket without false boundary loss", async () => {
+  const owner = {}; const events = []; let abandoned = 0; let expense = 0;
+  const main = load(owner, () => ({ async start() { return true; },
+    async piObservation(event) { events.push(event); return { delivered: true }; },
+    async beginRequest(id) { return { request_id: id, admitted_at: 1 }; },
+    async endRequest() { expense++; return { delivered: true, durable: true, applied: true, revision: 1 }; },
+    abandonRequest() { abandoned++; }, detach() {} }));
+  main({ type: "session_start", reason: "startup" }); await owner.tail;
+  main({ type: "agent_start" }); main({ type: "turn_start", turnIndex: 0 });
+  const message = { role: "assistant", provider: "provider", model: "model", stopReason: "stop", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } };
+  main({ type: "message_end", message }); main({ type: "turn_end", turnIndex: 0, messageEntryId: "complete", message });
+  main({ type: "agent_settled" }); await owner.tail;
+  assert.equal(expense, 1); assert.equal(abandoned, 0); assert(!events.some(event => event.type === "usage_gap"));
+  main({ type: "agent_start" }); main({ type: "turn_start", turnIndex: 0 });
+  main({ type: "turn_end", turnIndex: 99, messageEntryId: "historical", message: { ...message } });
+  await owner.tail; assert.equal(abandoned, 0);
+  const current = { ...message }; main({ type: "message_end", message: current });
+  main({ type: "turn_end", turnIndex: 0, messageEntryId: "current", message: current });
+  main({ type: "agent_settled" }); await owner.tail;
+  assert.equal(expense, 2); assert.equal(abandoned, 0);
+});

@@ -1210,8 +1210,14 @@ MUST NOT transfer original client-local tickets or credentials to a successor.
 Process-owned recent metadata MUST be bounded at 128; eviction abandons only the
 original ticket with unknown-delivery semantics, never mints new authority or
 erases daemon deduplication. Unmatched historical/resume/fork callbacks MUST NOT
-allocate expense. Genuine `agent_start` may release an unfinished accounting
-slot when turn indices reset, but does not settle a lifecycle outcome. Native
+allocate expense. Before a genuine `agent_start`, `agent_settled` or supported
+session shutdown releases an unfinished accounting slot, the producer MUST queue
+the existing content-free finalized-counters gap before original-ticket
+abandonment and before lifecycle settlement/retirement/detach can revoke its
+observer. Pending readiness MUST retain this ordering. Completed/finalized
+reports MUST NOT acquire false unfinished loss, and unmatched old finalized
+events MUST NOT release the current request. This disclosure does not invent
+amounts, definite noncommit or a lifecycle outcome. Native
 stream grouping remains shared provider/model/project/category coverage, never
 one epoch or source per message. Cross-process unsent spool recovery is not
 supported; lost process-local metadata cannot be recovered by importing history.

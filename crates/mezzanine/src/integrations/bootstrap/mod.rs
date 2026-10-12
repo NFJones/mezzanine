@@ -220,11 +220,13 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         return Vec::new();
     }
     let current_pi = manifest.harness == "pi" && *manifest == pi_artifact::candidate_manifest();
-    if !current_pi && *manifest != current && !current_opencode {
+    let revision10_pi =
+        manifest.harness == "pi" && *manifest == pi_artifact::historical_usage_manifest();
+    if !current_pi && !revision10_pi && *manifest != current && !current_opencode {
         return Vec::new();
     }
     let revision8_client = if manifest.harness == "pi" || current_opencode {
-        let mut snapshot = if current_pi {
+        let mut snapshot = if current_pi || revision10_pi {
             current.clone()
         } else {
             manifest.clone()
@@ -236,7 +238,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         None
     };
     let last_current = if manifest.harness == "pi" || current_opencode {
-        let mut snapshot = if current_pi {
+        let mut snapshot = if current_pi || revision10_pi {
             current.clone()
         } else {
             manifest.clone()
@@ -324,8 +326,11 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         if let Some(revision8_client) = revision8_client {
             history.insert(0, revision8_client);
         }
-        if current_pi {
+        if current_pi || revision10_pi {
             history.insert(0, pi_artifact::historical_manifest());
+        }
+        if current_pi {
+            history.insert(0, pi_artifact::historical_usage_manifest());
         }
         if current_opencode {
             history.insert(

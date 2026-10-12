@@ -87,6 +87,16 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
   const abandon = slot => {
     if (slot) enqueue(async () => { if (slot.ticket) slot.client?.abandonRequest(slot.ticket); });
   };
+  /** A genuine run/settlement/teardown boundary ends an unfinished request.
+   * Disclose missing finalized counters first; abandonment never proves that
+   * a provider incurred no expense or that an unacknowledged report did not commit. */
+  const finishUnreported = () => {
+    if (active && !active.finalized) {
+      lose("unavailable-finalized-counters");
+      abandon(active);
+    }
+    active = undefined; bindings = new WeakMap(); aliases = new Set();
+  };
   const retain = (id, record) => {
     if (!recent.has(id) && recent.size >= 128) {
       const first = recent.keys().next().value;
@@ -116,8 +126,7 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
      * unfinished original request here; an unmatched late turn_end cannot
      * reset a currently active request or forge a new reporting boundary. */
     runStart() {
-      if (active && !active.finalized) abandon(active);
-      active = undefined; bindings = new WeakMap(); aliases = new Set();
+      finishUnreported();
     },
     turnStart(event) {
       if (event?.type !== "turn_start" || !natural(event.turnIndex)) return;
@@ -181,6 +190,6 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
       retain(projection.event_id, { slot, fingerprint });
       if (!slot.durable) send(slot);
     },
-    close() { if (active && !active.finalized) abandon(active); active = undefined; bindings = new WeakMap(); aliases = new Set(); },
+    close() { finishUnreported(); },
   });
 }

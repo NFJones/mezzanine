@@ -72,6 +72,23 @@ async fn external_enrollment_installed_ordinary_pi_usage_has_bounded_durable_str
     .await;
 }
 
+/// Real installed callbacks publish missing-finalized-counter diagnostics before
+/// new-session handoff and quit retirement. Original readiness records remain,
+/// but no observation/stream/delta or native control authority is fabricated.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built mez helper required; offline only"]
+async fn external_enrollment_installed_ordinary_pi_loss_precedes_retirement_without_expense() {
+    qualify_installed_node_entry(
+        "pi-loss-ordinary-fixture.mjs",
+        "index.mjs",
+        2,
+        2,
+        false,
+        None,
+    )
+    .await;
+}
+
 /// Runs an explicit offline installed-artifact producer through real native
 /// The installed TUI config resolves the real default {id,tui} module. A local
 /// client-selected cache/route drives native Bun-origin enrollment, exact session
@@ -216,7 +233,8 @@ async fn qualify_installed_node_entry(
     let mut service = RuntimeServiceFixture::new().control_socket(&path).build();
     let pi_usage = script_name == "pi-usage-ordinary-fixture.mjs";
     let request_accounting = script_name == "request-accounting-ordinary-fixture.mjs" || pi_usage;
-    if request_accounting {
+    let pi_loss = script_name == "pi-loss-ordinary-fixture.mjs";
+    if request_accounting || pi_loss {
         service.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
             directory.join("usage.sqlite"),
         ));
@@ -359,12 +377,59 @@ async fn qualify_installed_node_entry(
     }
     assert_eq!(
         binding.enrollment.as_ref().unwrap().epoch,
-        if typed_pi || opencode || helper_callback || request_accounting {
+        if typed_pi || opencode || helper_callback || request_accounting || pi_loss {
             1
         } else {
             2
         }
     );
+    if pi_loss {
+        assert!(
+            exit.service
+                .control
+                .external_agents()
+                .bindings
+                .values()
+                .all(|binding| {
+                    binding
+                        .pi_lifecycle
+                        .as_ref()
+                        .and_then(|projection| projection.usage_gap_coverage())
+                        == Some("unavailable-pi-usage-finalized-counters")
+                        && !binding.enrollment.as_ref().unwrap().request_reports_seen
+                })
+        );
+        assert_eq!(
+            exit.service
+                .external_token_usage(None)
+                .values()
+                .map(|usage| usage.input_tokens)
+                .sum::<u64>(),
+            0
+        );
+        let database = rusqlite::Connection::open(directory.join("usage.sqlite")).unwrap();
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM external_usage_requests", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            2
+        );
+        for table in [
+            "external_usage_observations",
+            "external_usage_streams",
+            "token_usage_events",
+        ] {
+            assert_eq!(
+                database
+                    .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+    }
     if request_accounting {
         let expected_requests = if pi_usage { 4105_u64 } else { 1 };
         let expected_input = expected_requests * 10;
@@ -476,7 +541,8 @@ async fn qualify_installed_node_entry(
             .as_ref()
             .unwrap()
             .state,
-        if opencode || helper_callback {
+        // Missing final counters do not manufacture an agent_settled fact.
+        if opencode || helper_callback || pi_loss {
             "running"
         } else {
             "complete"

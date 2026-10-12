@@ -47,6 +47,10 @@ request admission, not the callback's earlier cwd/time, freezes project origin.
 Pending/deferred and unattributable auxiliary usage are not included; process-local
 unsent reports are not a durable cross-process spool. These are supported
 observations, never a full invoice or spend-completeness guarantee.
+An unfinished Pi request is disclosed at a genuine new-run, settled-agent or
+session teardown boundary before its observer retires. No amount is charged
+without finalized counters, and previous totals remain intact; the retained
+last running state is not manufactured into completion merely to disclose loss.
 
 | Observation | Interpretation |
 | --- | --- |

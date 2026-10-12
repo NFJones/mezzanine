@@ -66,8 +66,30 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
     let previous = historical_manifest();
     let current = candidate_manifest();
     assert_eq!(previous.revision, 9);
-    assert_eq!(current.revision, 10);
+    assert_eq!(current.revision, 11);
     assert_eq!(previous.entries.len(), 10);
+    let revision10 = historical_usage_manifest();
+    assert_eq!(revision10.revision, 10);
+    assert_eq!(revision10.entries.len(), 11);
+    assert!(super::super::compiled_history(&current).contains(&revision10));
+    for (bytes, expected) in [
+        (
+            include_bytes!("../history/pi_persistent_v10.mjs").as_slice(),
+            "eb5e0bd7fc7ac984527b6d68c166375ce61e05a86feff7bea2c1b537d55a04a7",
+        ),
+        (
+            include_bytes!("../history/pi_usage_v10.mjs").as_slice(),
+            "26ae8734bd3220201acd598a7e1823917f2209cfdb4113b7e501ec69e7f2a279",
+        ),
+    ] {
+        assert_eq!(
+            sha2::Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+            expected
+        );
+    }
     assert!(super::super::compiled_history(&current).contains(&previous));
     assert_eq!(
         sha2::Sha256::digest(include_bytes!("../history/pi_persistent_v9.mjs"))
@@ -77,6 +99,10 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
         "557558488625458ddcf04e198581bda2bd7548d44755b3cc029c50df81c9950d"
     );
     plan(&root, &previous, Operation::Install)
+        .unwrap()
+        .apply()
+        .unwrap();
+    plan(&root, &revision10, Operation::Install)
         .unwrap()
         .apply()
         .unwrap();

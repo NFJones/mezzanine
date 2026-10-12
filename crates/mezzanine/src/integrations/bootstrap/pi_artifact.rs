@@ -42,10 +42,34 @@ pub(crate) fn candidate_manifest() -> Manifest {
     entries.extend(super::persistent_client::entries("extensions/mezzanine"));
     Manifest {
         harness: "pi".into(),
-        revision: 10,
+        revision: 11,
         vendor_version: super::pi::RELEASE.into(),
         entries,
     }
+}
+
+/// Exact revision-10 changed slots, independent of current loss-ordering code.
+/// Shared transport/request bytes are unchanged by revision 11.
+pub(super) fn historical_usage_manifest() -> Manifest {
+    let mut manifest = candidate_manifest();
+    manifest.revision = 10;
+    for entry in &mut manifest.entries {
+        let bytes = match entry.path.as_str() {
+            "extensions/mezzanine/pi_persistent.mjs" => {
+                Some(include_bytes!("history/pi_persistent_v10.mjs").as_slice())
+            }
+            "extensions/mezzanine/pi_usage.mjs" => {
+                Some(include_bytes!("history/pi_usage_v10.mjs").as_slice())
+            }
+            _ => None,
+        };
+        if let Some(bytes) = bytes {
+            entry.artifact = Artifact::File {
+                bytes: bytes.to_vec(),
+            };
+        }
+    }
+    manifest
 }
 
 /// Reconstructs the exact shipped revision-9 layout, with changed Pi bytes

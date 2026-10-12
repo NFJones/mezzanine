@@ -132,9 +132,11 @@ export function registerOrdinaryPiObserver(pi, options = {}) {
         if (!owned || owner().lease !== owned || ctx.sessionManager.getSessionId() !== owned.session) return;
         if (type === "session_shutdown" && !stops.has(event.reason)) return;
         if (type === "agent_start") usage.runStart();
+        // Native retirement may revoke the original observer credential. Queue
+        // content-free unfinished-request loss before settle/shutdown delivery.
+        if (type === "agent_settled" || type === "session_shutdown") usage.close();
         projected.get(type)?.(event, ctx);
         if (type === "session_shutdown") {
-          usage.close();
           const reason = event.reason;
           queue(owned, async () => {
             // Keep reload predecessor ownership until its successor is admitted.
