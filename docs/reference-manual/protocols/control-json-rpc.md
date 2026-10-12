@@ -740,6 +740,10 @@ the same durable owner and original request time, changed observer witness despi
 numeric generation reuse, rejection of old heartbeat/begin/end selectors, inert
 committed-report replay and one distinct report charged once. This is not an
 actual daemon restart, snapshot/root replacement or cross-process continuation.
+A separate real-native curated fixture calls the actual snapshot-message restore
+owner. Restored external metadata cannot revive discovery, status, queued proof,
+or heartbeat/readiness/report selectors for that living namespace, and prior
+durable expense remains intact. It does not restart the daemon or pane processes.
 Telemetry schema 6 separately stores canonical opaque observation digests across
 model/category/project groups. Internal observations get server-derived stream
 identity and publication order; caller epoch/sequence changes cannot recharge an

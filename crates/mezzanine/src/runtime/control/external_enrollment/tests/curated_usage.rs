@@ -692,6 +692,187 @@ async fn external_curated_registry_reset_reuses_durable_owner_not_observer_witne
     );
 }
 
+/// The actual snapshot-message restoration owner must retire runtime-only
+/// curated telemetry even while its native root/creator remain alive. Restored
+/// metadata, old public selectors and pre-observed queued proof cannot revive
+/// that living namespace, while already committed expense survives unchanged.
+/// This exercises message restoration, not a complete daemon/pane-root restart.
+#[tokio::test(flavor = "current_thread")]
+async fn external_curated_snapshot_message_restore_retires_proof_not_expense() {
+    use super::helper_presentation::settle;
+    let Some(mut fixture) = fixture("hold").await else {
+        panic!("snapshot curated qualification requires native peer evidence");
+    };
+    let path = fixture.directory.join("usage.sqlite");
+    fixture
+        .service
+        .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&path));
+    let (_socket, connection) = child(&mut fixture).await;
+    let first = enroll(&mut fixture, &connection).await;
+    assert_eq!(first["result"]["registered"], true);
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&begin(&first), &connection)
+        .unwrap();
+    let ready = settle(&mut fixture, work, &connection).await;
+    assert_eq!(ready["result"]["accepted"], true, "{ready}");
+    let report = end(&first, ready["result"]["admitted_at"].as_u64().unwrap());
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&report, &connection)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &connection).await["result"]["durable"],
+        true
+    );
+    let presentation = crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"snapshot-status","method":"agent/external/helper-observe","params":{
+        "harness":"claude","generation":first["result"]["generation"],"observer_witness":first["result"]["observer_witness"],
+        "external_session_id":"session-a","sequence":1,"state":"running","title":"snapshot-native-status"}}).to_string()).unwrap();
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&presentation, &connection)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &connection).await["result"]["changed"],
+        true
+    );
+    let before = fixture
+        .service
+        .runtime_agent_status_display_with_options("%1", false)
+        .unwrap();
+    assert!(before.contains("running"), "{before}");
+    let heartbeat = crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"snapshot-proof","method":"agent/external/curated-heartbeat","params":{
+        "harness":"claude","generation":first["result"]["generation"],"observer_witness":first["result"]["observer_witness"],
+        "external_session_id":"session-a","sequence":1}}).to_string()).unwrap();
+    let queued = fixture
+        .service
+        .prepare_external_helper_presentation(&heartbeat, &connection)
+        .unwrap();
+    let native = queued.clone();
+    let observed = tokio::task::spawn_blocking(move || native.observe())
+        .await
+        .unwrap();
+    assert!(observed.is_ok());
+    assert_eq!(fixture.service.external_agent_rows().len(), 1);
+    let mut payload =
+        crate::storage::snapshot::SessionSnapshotPayload::from_session(fixture.service.session());
+    payload.message_state = Some(fixture.service.message_service().snapshot_state());
+    fixture
+        .service
+        .restore_message_state_for_restored_snapshot(&payload)
+        .unwrap();
+    assert!(fixture.service.external_agent_rows().is_empty());
+    let status = fixture
+        .service
+        .runtime_agent_status_display_with_options("%1", false)
+        .unwrap();
+    assert!(
+        status.contains("No current external telemetry is observed"),
+        "{status}"
+    );
+    assert!(!status.contains("snapshot-native-status"), "{status}");
+    assert!(
+        fixture
+            .service
+            .message_service()
+            .discover_agents_filtered_session_wide(
+                None,
+                None,
+                None,
+                Some("external-harness"),
+                None,
+                &[]
+            )
+            .is_empty()
+    );
+    let refused: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_enrollment(queued, observed, &connection),
+    )
+    .unwrap();
+    assert!(
+        refused.get("error").is_some(),
+        "queued pre-restore proof revived a binding: {refused}"
+    );
+    for old in [heartbeat, begin(&first), report] {
+        assert!(
+            fixture
+                .service
+                .prepare_external_helper_presentation(&old, &connection)
+                .is_err()
+        );
+    }
+    let repeated = enroll(&mut fixture, &connection).await;
+    assert!(
+        repeated.get("error").is_some(),
+        "restored metadata revived living namespace: {repeated}"
+    );
+    assert!(fixture.connection.unix_origin().unwrap().is_live());
+    assert!(
+        !fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .curated_namespaces
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .service
+            .external_usage_reservation_counts_for_tests(),
+        (0, 0)
+    );
+    assert!(!connection.initialized());
+    assert!(connection.caller_client_id().is_none());
+    let database = rusqlite::Connection::open(path).unwrap();
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        10
+    );
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT count(*) FROM external_usage_observations",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        database
+            .query_row("SELECT count(*) FROM external_usage_sources", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
 /// Builds only a public current observer selector plus one opaque request ID.
 pub(super) fn begin(first: &serde_json::Value) -> JsonRpcRequest {
     crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"curated-request","method":"agent/external/curated-usage-begin","params":{

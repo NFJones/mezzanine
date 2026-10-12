@@ -1238,6 +1238,10 @@ component fixture qualifies owner/original-request reuse, inert committed replay
 and one distinct new report after ephemeral registry/store-handle reconstruction
 with the same still-live root/creator. It MUST NOT be described as full daemon,
 snapshot restoration, changed-root or cross-process restart qualification.
+The separate snapshot-message restoration fixture exercises the actual metadata
+replacement owner: it invalidates curated discovery/status and old queued/public
+proof while preserving committed expense and the same living namespace fence.
+That boundary MUST NOT be conflated with complete daemon/pane-process restart.
 Capacity exhaustion MUST preserve existing mappings rather than silently evict
 replay authority. Ordinary accounting remains unavailable until ordered report,
 baseline and source-replay contracts are implemented; this mapping alone MUST NOT
