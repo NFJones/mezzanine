@@ -59,6 +59,88 @@ async fn oauth_refresh_commit_timeout_and_cancel_retain_rotation() {
     }
 }
 
+/// Verifies transaction ownership ends at guard scope exit, not at the last
+/// duplicated file descriptor close. This models a sibling fork retaining the
+/// lock description without a process schedule, real credentials, or sleeps.
+/// Independent acquisition must still conflict while either transaction guard
+/// is live, but a retained duplicate must not block the next transaction after
+/// normal return or early error. The duplicate stays open through that proof.
+#[test]
+fn auth_commit_guard_scope_release_outlives_retained_descriptor() {
+    assert_auth_commit_guard_scope_release(false);
+}
+
+/// Verifies early transaction errors release ownership at the same scope
+/// boundary as success, even while an inherited-description model stays open.
+/// This runs independently so a normal-return failure cannot hide this case.
+#[test]
+fn auth_commit_guard_early_error_releases_retained_descriptor() {
+    assert_auth_commit_guard_scope_release(true);
+}
+
+/// Exercises live-owner exclusion and successor acquisition after scope return.
+fn assert_auth_commit_guard_scope_release(fail: bool) {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-guard-release-{}-{}",
+        std::process::id(),
+        rand::random::<u64>(),
+    ));
+    let mut retained_description = None;
+    let result: crate::error::Result<()> = (|| {
+        let guard = super::fs::auth_commit_lock(&root)?;
+        retained_description = Some(guard.duplicate_lock_for_tests()?);
+        assert_eq!(
+            super::fs::auth_commit_lock(&root).unwrap_err().kind(),
+            MezErrorKind::Conflict,
+        );
+        if fail {
+            return Err(crate::error::MezError::invalid_args(
+                "synthetic commit failure",
+            ));
+        }
+        Ok(())
+    })();
+    assert_eq!(result.is_err(), fail);
+    let next_guard = super::fs::auth_commit_lock(&root)
+        .expect("completed transaction must release ownership despite retained description");
+    assert_eq!(
+        super::fs::auth_commit_lock(&root).unwrap_err().kind(),
+        MezErrorKind::Conflict,
+    );
+    drop(next_guard);
+    drop(retained_description);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies unwinding a transaction scope releases commit ownership even when
+/// another descriptor still references the locked file description. Catching a
+/// synthetic panic tests RAII cleanup without real credentials or process forks;
+/// no destructor may panic or leave a completed writer blocking its successor.
+#[test]
+fn auth_commit_guard_unwind_releases_retained_descriptor() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-guard-unwind-{}-{}",
+        std::process::id(),
+        rand::random::<u64>(),
+    ));
+    let mut retained_description = None;
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let guard = super::fs::auth_commit_lock(&root).unwrap();
+        retained_description = Some(guard.duplicate_lock_for_tests().unwrap());
+        panic!("synthetic commit unwind");
+    }));
+    assert!(unwound.is_err());
+    let next_guard = super::fs::auth_commit_lock(&root)
+        .expect("unwound transaction must release ownership despite retained description");
+    assert_eq!(
+        super::fs::auth_commit_lock(&root).unwrap_err().kind(),
+        MezErrorKind::Conflict,
+    );
+    drop(next_guard);
+    drop(retained_description);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies independent stores (the CLI writer boundary) cannot mutate any
 /// auth identity while the shared commit lock is held. Acquisition is bounded
 /// and returns Conflict before secret or metadata writes, including logout.

@@ -64,6 +64,10 @@ For a named/shared ChatGPT auth profile, use
 record. If an authentication update is already committing in another process,
 retry the login or submit a new request after it completes; Mez does not wait
 indefinitely on the credential commit lock.
+The owning transaction explicitly releases that lock when its scope finishes,
+including error cleanup. An unrelated child retaining an inherited descriptor
+does not keep a completed authentication update active. Live writers still
+exclude other credential updates; refresh-generation safeguards are unchanged.
 
 Refresh workers wait asynchronously for brief credential-update contention. If
 that bounded wait expires, a new request can commit the session's retained

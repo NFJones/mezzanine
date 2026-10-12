@@ -2,6 +2,9 @@
 //!
 //! Helpers centralize private permissions, safe provider-name validation, path
 //! containment checks, executable detection, and command-output secret parsing.
+//! Authentication commit guards retain exclusive ownership through transaction
+//! completion and explicitly release the shared lock description on scope exit,
+//! so unrelated inherited descriptors cannot extend a completed transaction.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -12,10 +15,44 @@ use zeroize::Zeroizing;
 
 use crate::error::{MezError, Result};
 
+/// Owns exclusive authentication commit access for one transaction scope.
+/// The descriptor is private so callers cannot release ownership while their
+/// credential and metadata writes are still in progress.
+/// Normal return, early errors, and unwinding all release the same lock inode;
+/// no production caller can clone the guard or transfer ownership to a child.
+#[derive(Debug)]
+#[must_use = "retain the guard until credential and metadata updates finish"]
+pub(super) struct AuthCommitGuard {
+    file: fs::File,
+}
+
+impl AuthCommitGuard {
+    /// Duplicates the locked file description without accessing credential data.
+    /// Tests use this to model descriptor inheritance without a fork schedule.
+    /// Returns the operating system's descriptor-duplication error.
+    #[cfg(test)]
+    pub(super) fn duplicate_lock_for_tests(&self) -> std::io::Result<fs::File> {
+        self.file.try_clone()
+    }
+}
+
+impl Drop for AuthCommitGuard {
+    /// Releases the completed transaction's shared lock description, even if a
+    /// forked child has not yet closed an inherited descriptor. Unlock failure
+    /// must not panic during error cleanup or unwinding: ordinary field drop
+    /// still closes this descriptor, conservatively leaving any inherited lock
+    /// held until its remaining descriptors close. Never unlink the lock inode.
+    fn drop(&mut self) {
+        use rustix::fs::{FlockOperation, flock};
+        let _ = flock(&self.file, FlockOperation::Unlock);
+    }
+}
+
 /// Acquires the common auth commit lock without blocking an actor/runtime
 /// thread. The private no-follow file and OS flock serialize independent
-/// stores/processes on Linux and macOS; dropping the file releases ownership.
-pub(super) fn auth_commit_lock(root: &Path) -> Result<fs::File> {
+/// stores/processes on Linux and macOS. Retain the returned guard through every
+/// credential and metadata write; its scope exit explicitly releases ownership.
+pub(super) fn auth_commit_lock(root: &Path) -> Result<AuthCommitGuard> {
     use rustix::fs::{FlockOperation, flock};
     use std::os::unix::fs::OpenOptionsExt;
     ensure_private_dir(root)?;
@@ -43,13 +80,13 @@ pub(super) fn auth_commit_lock(root: &Path) -> Result<fs::File> {
             MezError::from(std::io::Error::from(error))
         }
     })?;
-    Ok(file)
+    Ok(AuthCommitGuard { file })
 }
 
 /// Waits asynchronously for a short credential commit without blocking actor
 /// input. The caller retains successful rotation state if the bounded wait or
 /// cancellation interrupts acquisition, so a later request can commit it.
-pub(super) async fn auth_refresh_commit_lock(root: &Path) -> Result<fs::File> {
+pub(super) async fn auth_refresh_commit_lock(root: &Path) -> Result<AuthCommitGuard> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         match auth_commit_lock(root) {

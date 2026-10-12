@@ -13357,6 +13357,13 @@ record without replacing unrelated identities or changing provider defaults.
 Credential login/logout and refresh compare-and-commit MUST share a cross-process
 serialization boundary. Lock contention MUST return a bounded retry diagnostic,
 not block session input while another process updates credentials.
+Commit ownership MUST remain held through credential and metadata mutation and
+MUST be explicitly released at the owning transaction's scope exit, including
+early errors and unwinding. Unrelated inherited descriptors MUST NOT extend a
+completed transaction's ownership. Release MUST NOT unlink or replace the lock
+inode, weaken live-writer exclusion, or bypass refresh-generation checks. An
+unexpected unlock failure MUST NOT panic; descriptor close remains the
+conservative cleanup fallback.
 
 A successful refresh rotation MUST remain available while commit ownership is
 contended. Refresh workers MAY wait asynchronously for bounded local contention;
