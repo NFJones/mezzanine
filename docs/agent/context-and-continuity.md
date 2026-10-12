@@ -139,6 +139,11 @@ next request is under its input cap. Proactive compaction needs a fresh ordinary
 response at or above that cap; prior-turn compaction and auxiliary usage are not
 triggers. Installing a summary clears the displayed usage but keeps the old
 pressure sample consumed until a new ordinary execution response arrives.
+This applies even when the summary is turn-local and no durable epoch is
+publishable. Latest-request cache reuse also becomes unknown; cumulative expense
+is conserved. Cleared display metadata is checkpointed before recovery queues
+the ordinary continuation. An immediate checkpoint error fails the waiting turn
+without admitting a continuation, rather than restoring the pre-summary sample.
 Check the error and model limits, or start `/new` with a concise, verified
 handoff. After a successful compaction, ask the agent to recheck important file
 contents and results instead of treating the summary as exact evidence.

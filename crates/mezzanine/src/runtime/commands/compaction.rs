@@ -2146,6 +2146,7 @@ impl RuntimeSessionService {
                         self.agent_turn_contexts_mut()
                             .insert(turn_id.clone(), request_candidate);
                         self.clear_agent_turn_provider_request_chain(&turn_id);
+                        self.checkpoint_compaction_replacement_usage(&task.conversation_id)?;
                         self.queue_agent_provider_recovery_task_after_compaction(
                             &turn_id,
                             "observed_input_limit_turn_local_compaction",
@@ -2154,9 +2155,6 @@ impl RuntimeSessionService {
                             pane_id,
                             "agent: observed input recovery applied turn-local model summary; raw transcript remains authoritative",
                         )?;
-                        self.restore_agent_latest_request_usage(&task.conversation_id, None);
-                        self.restore_agent_context_usage(&task.conversation_id, None, None);
-                        self.checkpoint_agent_session_metadata()?;
                         return Ok(());
                     }
                     self.persist_agent_compaction_epoch(
@@ -2168,6 +2166,7 @@ impl RuntimeSessionService {
                     )?;
                     self.agent_turn_contexts_mut()
                         .insert(turn_id.clone(), compacted.clone());
+                    self.checkpoint_compaction_replacement_usage(&task.conversation_id)?;
                     if self.refresh_running_turn_context_after_conversation_compaction(&turn_id)? {
                         self.clear_agent_turn_provider_request_chain(&turn_id);
                         self.queue_agent_provider_recovery_task_after_compaction(
@@ -2190,9 +2189,6 @@ impl RuntimeSessionService {
                             &turn_id,
                             "provider_request recovery_resuming reason=observed_input_limit_compaction_completed",
                         )?;
-                        self.restore_agent_latest_request_usage(&task.conversation_id, None);
-                        self.restore_agent_context_usage(&task.conversation_id, None, None);
-                        self.checkpoint_agent_session_metadata()?;
                         return Ok(());
                     }
                 }
@@ -2200,6 +2196,14 @@ impl RuntimeSessionService {
                 self.agent_turn_contexts_mut()
                     .insert(turn_id.clone(), compacted);
                 self.clear_agent_turn_provider_request_chain(&turn_id);
+                // Observed-input durable replacements were already checkpointed
+                // above, even if refreshing the running context found no work.
+                if matches!(
+                    trigger,
+                    RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. }
+                ) {
+                    self.checkpoint_compaction_replacement_usage(&task.conversation_id)?;
+                }
                 match trigger {
                     RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => {
                         self.queue_agent_provider_recovery_task_after_context_compaction(
@@ -2235,9 +2239,6 @@ impl RuntimeSessionService {
                 };
                 self.append_agent_status_text_to_terminal_buffer(pane_id, &status)?;
                 self.append_agent_trace_turn_event(pane_id, &turn_id, trace)?;
-                self.restore_agent_latest_request_usage(&task.conversation_id, None);
-                self.restore_agent_context_usage(&task.conversation_id, None, None);
-                self.checkpoint_agent_session_metadata()?;
                 return Ok(());
             }
             if matches!(task.target, RuntimeAgentCompactionTarget::Conversation)
@@ -2280,6 +2281,7 @@ impl RuntimeSessionService {
                 }
             }
             self.persist_agent_compaction_epoch(pane_id, &task, &summary, None, None)?;
+            self.checkpoint_compaction_replacement_usage(&task.conversation_id)?;
             if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
                 let refreshed = self
                     .refresh_running_turn_context_after_conversation_compaction(resume_turn_id)?;
@@ -2303,9 +2305,6 @@ impl RuntimeSessionService {
                     )?;
                 }
             }
-            self.restore_agent_latest_request_usage(&task.conversation_id, None);
-            self.restore_agent_context_usage(&task.conversation_id, None, None);
-            self.checkpoint_agent_session_metadata()?;
             Ok(())
         })();
         if let Err(error) = application {
@@ -2325,6 +2324,21 @@ impl RuntimeSessionService {
             }
         }
         Ok(true)
+    }
+
+    /// Invalidates execution-only presentation after an owned replacement and
+    /// checkpoints it before ordinary recovery admission or success diagnostics.
+    /// Callers must have accepted the exact generation/conversation replacement;
+    /// validation and stale/failure paths must not call this owner. A checkpoint
+    /// error leaves the accepted context's display unknown and propagates to the
+    /// existing waiting-turn failure path. Deferred persistence retains its own
+    /// generation-fenced retry. Neither cumulative expense nor consumed pressure
+    /// fences are changed here.
+    fn checkpoint_compaction_replacement_usage(&mut self, conversation_id: &str) -> Result<()> {
+        self.restore_agent_latest_request_usage(conversation_id, None);
+        self.restore_agent_context_usage(conversation_id, None, None);
+        self.checkpoint_agent_session_metadata()?;
+        Ok(())
     }
 
     /// Validates the full refreshed request, including transcript entries added

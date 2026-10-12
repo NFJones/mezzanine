@@ -2362,6 +2362,14 @@ Pane frames MUST support the following fields:
   the prior execution sample and render this field unknown until a subsequent
   execution response supplies a positive input-token count; compactor and
   other auxiliary request usage MUST NOT become the replacement sample.
+  This includes turn-local observed-input recovery without a publishable durable
+  epoch. Replacement MUST clear latest-request cache and context display metadata
+  before admitting its ordinary continuation; an immediate checkpoint error MUST
+  NOT queue that continuation. Deferred write failures MUST retry only their
+  generation-owned metadata snapshot, not provider work. Cumulative expense and
+  consumed pressure-sample ownership are independent and MUST NOT be reset by
+  display invalidation. Failed or stale completions that do not install a
+  replacement MUST retain a newer valid sample.
 - `policy.mode`: Active approval policy as `ask`, `auto-allow`, `full-access`,
   or `host-access`. `host-access` MUST use conspicuous warning styling.
 - `history.position`: Scrollback position when the pane is not at the live

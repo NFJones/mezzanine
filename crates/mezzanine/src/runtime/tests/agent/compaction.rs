@@ -7,6 +7,7 @@ use mez_agent::messaging::{Envelope, MessageScope};
 mod preparation;
 mod terminal_handoff;
 mod transport_retries;
+mod usage_invalidation;
 
 /// Valid legacy history after a durable range must continue as private
 /// turn-local recovery, preserving raw history and both model summaries.

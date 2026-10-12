@@ -40,6 +40,18 @@ runtime-instance expense and durable history intact.
 | `0.00%` | An observed zero reuse ratio; it is not by itself a continuity defect. |
 | `cache_write_input` | Provider-reported cache-write detail. For OpenAI Responses it is a subset of input, not extra tokens to add to the total. |
 
+An accepted compaction replacement clears both context percentage and latest
+request cache reuse to `unknown`, including observed-input recovery that installs
+only a turn-local summary. Cumulative token and cache expense stays recorded.
+Compactor/router usage and omitted or zero ordinary input usage do not repopulate
+these samples; the next positive ordinary execution response does. A failed or
+stale completion that never installs a replacement does not clear a newer sample.
+Display metadata is checkpointed before the ordinary continuation is admitted.
+If checkpointing reports an immediate error, the waiting turn fails rather than
+issuing another provider request; cleared in-memory display remains unknown.
+With deferred persistence, a later write error retries only the generation-owned
+metadata snapshot and does not queue another provider continuation.
+
 ## Distinguish a cold request from a continuity failure
 
 Compaction, a provider/model switch, or an exceptional recovery can change the
