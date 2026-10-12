@@ -152,13 +152,23 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
     let installed = bootstrap(&[]);
     assert_eq!(installed["root_source"], "COPILOT_HOME");
     assert_eq!(installed["result"], "installed");
-    assert_eq!(installed["lifecycle"], "unavailable-source-association");
-    assert_eq!(installed["usage"], "unavailable-source-association");
+    assert_eq!(installed["lifecycle"], "unverified");
+    assert_eq!(installed["usage"], "unavailable-safe-activation");
+    assert_eq!(installed["manifest_revision"], 2);
     assert_eq!(bootstrap(&[])["result"], "unchanged");
     let hooks: serde_json::Value =
         serde_json::from_slice(&std::fs::read(vendor.join("hooks/mezzanine.json")).unwrap())
             .unwrap();
-    for event in ["sessionStart", "agentStop", "sessionEnd"] {
+    for event in [
+        "sessionStart",
+        "userPromptSubmitted",
+        "preToolUse",
+        "postToolUse",
+        "notification",
+        "agentStop",
+        "errorOccurred",
+        "sessionEnd",
+    ] {
         let hook = &hooks["hooks"][event][0];
         assert_eq!(hook["exec"], helper.to_str().unwrap());
         let arguments = hook["args"]

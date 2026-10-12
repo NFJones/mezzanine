@@ -152,6 +152,7 @@ impl AsyncRuntimeSessionActor {
                 | "agent/external/curated-usage-end"
                 | "agent/external/helper-observe"
                 | "agent/external/codex-observe"
+                | "agent/external/copilot-observe"
         ) {
             return None;
         }
@@ -164,6 +165,7 @@ impl AsyncRuntimeSessionActor {
             "agent/external/helper-presentation"
                 | "agent/external/helper-observe"
                 | "agent/external/codex-observe"
+                | "agent/external/copilot-observe"
                 | "agent/external/curated-heartbeat"
                 | "agent/external/curated-usage-begin"
                 | "agent/external/curated-usage-end"

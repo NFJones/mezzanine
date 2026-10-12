@@ -740,19 +740,37 @@ state without mutation and conflict with dry-run/maintenance. Uninstall/recovery
 MUST be exclusive. Obsolete `--apply`/`--plan` MUST reject, not alias new intents.
 Missing compiled adapters MUST fail mutating intents before root discovery;
 read-only check/dry-run MUST remain unavailable diagnostics, not fake installation.
-Copilot revision1 MAY install only the compiled `hooks/mezzanine.json` user file
+Copilot revision2 MAY install only the compiled `hooks/mezzanine.json` user file
 under the documented COPILOT_HOME/default root, version1 direct-exec/args hook
-syntax for sessionStart/agentStop/sessionEnd and a fixed installing binary.
+syntax for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/
+agentStop/errorOccurred/sessionEnd and a fixed installing binary. Exact revision1
+bytes MUST remain independently recognized for receipt-qualified upgrade/repair.
 It MUST NOT rewrite authored siblings/settings/exporters, disable or sandbox
 policy, credentials, instructions or policy-level hook directories. Only exact
 compiled receipt-proven generated-file edits MAY be archived before repair;
 unreceipted foreign collisions MUST reject without adoption. Exact fixed
-`copilot-hook <known-event>` argv MUST run before HOME/config/CPU startup, drain
+`copilot-hook <known-event>` argv MUST run before HOME/config/CPU startup, consume
 only bounded64KiB/250ms stdin and emit neutral JSON with no control/approval/
-continuation/session guessing. This deployment-only helper MUST make no telemetry
-exchange or claim SDK invocation session fields as classic CLI input. Bootstrap
-MUST report Copilot lifecycle/usage unavailable-source-association until actual
-qualified producer/association and metadata-only accounting contracts are wired.
+continuation. Documented classic camelCase sessionId/timestamp MAY select the
+distinct copilot-local-command/1 contract; SDK invocation context MUST NOT be
+guessed as classic input. One bounded same-user exchange MUST require native
+writer/direct-creator/pane-root proof and no fd3 or launcher credential. Only
+original-epoch callbacks MAY update that exact session. Timestamp replay MUST be
+time-inert; conflicting ties/stale facts MUST fail closed. Permission notifications
+and elicitation dialogs MAY report waiting; permissionRequest alone MUST NOT.
+Stop MUST mean ready, not success, and an already active continuation MUST be
+inert. Unrecoverable error MAY report interrupted; exact sessionEnd MAY retire
+only its original session, including detached /clear ends. No payload content,
+transcript path, PID, title or counters MAY enter transport. Silence MUST NOT
+attest continuous observer health or auto-renew a parent-only lease.
+Bootstrap MUST report lifecycle unverified and accounting unavailable-safe-
+activation. Documented OTel activation is environment/VS Code/enterprise policy,
+not an owned ordinary user-hook setting; bootstrap MUST NOT fabricate settings,
+create enterprise policy, mutate parent environment, redirect an existing exporter
+or enable content capture. No unqualified loopback/session-label span MAY bill a
+run. Future accounting MUST bind native source to original request origin, choose
+chat request spans rather than aggregate+child totals, preserve unknown counters,
+and never interpret github.copilot.cost or nano_aiu as currency.
 Other compiled adapters remain runtime-unverified by installation reports.
 Qualified current/frozen historical Codex ownership MAY repair genuine whole-file
 hooks.json absence using only current compiled array members. Missing-file

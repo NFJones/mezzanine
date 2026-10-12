@@ -25,6 +25,8 @@ pub(super) struct HelperPresentation {
     pub(super) usage_end: Option<Box<super::super::external_usage::ExternalUsageWork>>,
     /// Metadata-only original Codex callback; daemon owns its sequence/replay fence.
     pub(super) codex: Option<super::codex::CodexEvent>,
+    /// Separate classic Copilot semantics; only native settlement permits effects.
+    pub(super) copilot: Option<super::copilot::CopilotEvent>,
     /// Holds this source's ingress ticket through complete actor settlement.
     pub(super) codex_order: Option<Arc<super::codex_order::CodexOrderLease>>,
 }
@@ -71,6 +73,9 @@ impl RuntimeSessionService {
     ) -> Result<ExternalEnrollmentWork> {
         if request.method == "agent/external/codex-observe" {
             return self.prepare_external_codex_observation(request, connection);
+        }
+        if request.method == "agent/external/copilot-observe" {
+            return self.prepare_external_copilot_observation(request, connection);
         }
         self.require_live()?;
         if !matches!(
@@ -241,6 +246,7 @@ impl RuntimeSessionService {
                 usage_begin,
                 usage_end: None,
                 codex: None,
+                copilot: None,
                 codex_order: None,
             }),
             ancestry: Arc::new(OnceLock::new()),
@@ -351,6 +357,22 @@ impl RuntimeSessionService {
         }
         let params: serde_json::Value = serde_json::from_str(helper.params.expose_secret())
             .map_err(|_| MezError::invalid_state("external helper payload unavailable"))?;
+        if let Some(event) = &helper.copilot {
+            if helper
+                .codex_order
+                .as_ref()
+                .is_none_or(|order| !order.is_serving())
+            {
+                return Err(MezError::conflict(
+                    "Copilot callback is not current ingress work",
+                ));
+            }
+            return self.commit_external_copilot_observation(
+                helper.digest,
+                &work.session_id,
+                event,
+            );
+        }
         if let Some(event) = &helper.codex {
             if helper
                 .codex_order

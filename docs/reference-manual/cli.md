@@ -70,18 +70,38 @@ The old `--apply` and `--plan` flags are rejected, not aliases: scripts should
 remove `--apply` for installation and replace `--plan` with `--dry-run` for preview.
 The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
-Copilot revision1 installs only `hooks/mezzanine.json` under `COPILOT_HOME` or
+Copilot revision2 installs only `hooks/mezzanine.json` under `COPILOT_HOME` or
 `~/.copilot`, using the documented version1 CLI hook format and direct `exec`/`args`
-for sessionStart/agentStop/sessionEnd. It pins the installing Mez executable and
+for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/agentStop/
+errorOccurred/sessionEnd. It upgrades exact receipt-owned revision1 artifacts,
+pins the installing Mez executable and
 does not alter authored sibling hooks, settings.json, disableAllHooks, sandbox
 grants, policy hooks, credentials or exporters. Receipt-proven edits to that owned
 generated document are archived before repair; foreign collisions reject.
-The fixed `copilot-hook <event>` mode consumes at most64KiB/250ms of stdin before
-HOME/config/CPU discovery and returns only neutral JSON. It currently performs no
-telemetry exchange: SDK session identity is separate invocation context, not an
-evidenced classic CLI stdin association. Bootstrap reports lifecycle and usage as
-`unavailable-source-association`; installed plumbing is not active integration or
-OTel accounting. Vendor loading, trust, disable and sandbox policy still apply.
+Run `mez bootstrap copilot`, then ordinary `copilot` in a Mez pane—no wrapper,
+fd3, launch token or separate accounting-enable command. The fixed helper consumes
+at most64KiB/250ms before HOME/config/CPU discovery, returning only `{}`. Classic
+documented sessionId/timestamp are projected into native-qualified direct-creator
+admission and original-session lifecycle observations. Prompt/tool/error text,
+transcript paths, credentials and counters are discarded. Permission/elicitation
+notifications report waiting; tool/prompt activity clears it; Stop reports ready,
+not success or completion. Already active Stop continuation is inert. Stale/tied
+conflicting timestamps reject; /clear old sessionEnd cannot retire a different
+replacement session. Detached callbacks work only while their genuine creator
+relationship remains provable. A preexisting shared daemon outside the pane is
+not associated by inherited environment or session labels. Idle silence loses
+observer health and may expire the lease; it is not continuous renewal proof.
+Bootstrap reports lifecycle `unverified`, usage `unavailable-safe-activation`.
+OTel is not installed/enabled: official command-reference monitoring supports
+process environment, VS Code, or enterprise managed settings, not an ordinary
+user hook setting. Bootstrap does not alter parent shell environment, enterprise
+policy, existing exporters or content capture. No unqualified receiver/source is
+accepted as billing evidence. Supported future request usage must use chat spans
+without also summing invoke_agent aggregates; github.copilot.cost is a multiplier,
+and nano_aiu is AI units, neither currency. Vendor loading/trust/disable/sandbox
+policy still applies. This phase does not complete idle renewal or accounting.
+Sources: [classic hooks](https://docs.github.com/en/copilot/reference/hooks-reference)
+and [monitoring](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#opentelemetry-monitoring).
 Cursor revision1 owns only exact sessionStart/stop/sessionEnd members of shared
 `hooks.json` under the selected CLI configuration root. A new document receives
 version1; existing unsupported versions reject without rewriting. Authored

@@ -213,8 +213,12 @@ impl CuratedAdmission {
             (harness.as_str(), kind.as_str(), contract.as_str()),
             ("claude", "curated-command", "claude-curated-command/1")
                 | ("codex", "command-hook", "codex-local-command/1")
-        ) || !matches!(boundary.as_str(), "startup" | "resume" | "clear" | "fork")
-        {
+                | ("copilot", "command-hook", "copilot-local-command/1")
+        ) || if harness == "copilot" {
+            !matches!(boundary.as_str(), "startup" | "resume" | "new")
+        } else {
+            !matches!(boundary.as_str(), "startup" | "resume" | "clear" | "fork")
+        } {
             return Err(MezError::new(
                 crate::error::MezErrorKind::NotImplemented,
                 "creator enrollment requires an exact declared local command contract",
@@ -433,6 +437,7 @@ impl RuntimeSessionService {
                     observers: Vec::new(),
                     curated_observer: Some(CuratedObserver::default()),
                     codex_turns: Default::default(),
+                    copilot_events: Default::default(),
                     token: SecretString::from(token),
                 }),
                 pi_lifecycle: None,

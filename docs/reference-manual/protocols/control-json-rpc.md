@@ -1122,6 +1122,35 @@ or `external-reported` for legacy reports (not exhaustive invoice evidence).
 `usage: "unavailable-source-continuity"` is explicit: ordinary usage RPCs are
 rejected until durable source continuity exists, not billed under fresh owners.
 
+#### Classic Copilot command callbacks
+
+`copilot-local-command/1` is a distinct `command-hook` creator declaration for
+classic CLI camelCase stdin, not an SDK invocation-context alias or Codex/Claude
+relabel. It accepts startup/resume/new boundaries only, using native direct-parent
+and pane-root proof on uninitialized same-user Unix ingress. Session and routing
+labels grant no authority. An original `copilot-local-hooks-1` first-epoch source
+can receive `agent/external/copilot-observe` with exactly `pane_id`,
+`external_session_id`, `event`, and positive safe-integer millisecond `timestamp`.
+The indexed session selects one candidate; native writer/retained original
+creator/root and current generation remain mandatory through actor settlement.
+Only bounded async admission supports it; initialized/remote/general control do
+not. Fixed helper stdin is strictly bounded64KiB/250ms; loss returns neutral `{}`.
+
+Allowlisted facts are userPromptSubmitted/preToolUse/postToolUse (running),
+permission_prompt/elicitation_dialog notifications (waiting), agentStop (ready),
+unrecoverable errorOccurred (interrupted), and sessionEnd (exact retirement).
+permissionRequest is not waiting proof. Stop with active continuation and unrelated
+notifications are inert. No title, prompt/tool/error text, transcript path,
+credential, PID, counters or caller-selected state is transported. Shared native
+ingress ordering serializes complete settlement. Identical replay is time-inert;
+stale or conflicting tied timestamps reject rather than inventing a turn ID.
+Exact old /clear end cannot retire another session. Callbacks cannot adopt rotated
+epochs or allocate a missing source. Creator death/root loss still retire through
+the shared maintenance owner. Idle silence is not continuous observer proof;
+lease expiry/shared preexisting daemon association and OTel accounting remain
+outstanding. Bootstrap reports accounting `unavailable-safe-activation` and does
+not redirect exporters, enable capture, or create enterprise telemetry policy.
+
 #### Qualified helpers for existing ordinary producers
 
 `agent/external/helper-presentation` accepts only `launch_token`, `generation`,

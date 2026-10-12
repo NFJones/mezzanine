@@ -1,9 +1,9 @@
-//! Owned metadata-only Copilot user hook document, not settings or activation.
+//! Owned metadata-only classic Copilot user hooks, not exporter/policy settings.
 //!
 //! Official hooks-reference/use-hooks document version1 JSON in COPILOT_HOME/hooks
 //! and CLI-only exec/args. A fixed installing executable receives one known hook
-//! name; no shell, prompt hook, permission decision, trust, exporter or credential
-//! is installed. Runtime session association/accounting remain explicitly absent.
+//! name; no shell, permission decision, trust, exporter or credential is installed.
+//! Classic lifecycle session identity is separately native-qualified at ingress.
 
 use super::{
     installer::Manifest,
@@ -13,6 +13,28 @@ use super::{
 /// Compiles only the documented user hook slot with exact code-owned bytes.
 /// Unrepresentable installing evidence cannot guess PATH or another user root.
 pub(super) fn manifest() -> Option<Manifest> {
+    build(
+        2,
+        &[
+            "sessionStart",
+            "userPromptSubmitted",
+            "preToolUse",
+            "postToolUse",
+            "notification",
+            "agentStop",
+            "errorOccurred",
+            "sessionEnd",
+        ],
+    )
+}
+
+/// Reconstructs exact revision1 bytes independently of new event deployment.
+pub(super) fn historical_manifest() -> Option<Manifest> {
+    build(1, &["sessionStart", "agentStop", "sessionEnd"])
+}
+
+/// Literal reviewed event lists alone determine artifact authority and revision.
+fn build(revision: u32, events: &[&str]) -> Option<Manifest> {
     let helper = std::env::current_exe().ok()?;
     let helper_text = helper.to_str()?;
     if !helper.is_absolute()
@@ -22,16 +44,16 @@ pub(super) fn manifest() -> Option<Manifest> {
         return None;
     }
     let mut hooks = serde_json::Map::new();
-    for event in ["sessionStart", "agentStop", "sessionEnd"] {
+    for event in events {
         hooks.insert(
-            event.into(),
+            (*event).into(),
             serde_json::json!([{"type":"command","exec":helper_text,
             "args":["copilot-hook",event],"timeoutSec":1}]),
         );
     }
     Some(Manifest {
         harness: "copilot".into(),
-        revision: 1,
+        revision,
         vendor_version: "best-effort".into(),
         entries: vec![Entry {
             path: "hooks/mezzanine.json".into(),
@@ -54,13 +76,24 @@ mod tests {
         let manifest =
             super::super::compiled_manifest("copilot", None).expect("compiled Copilot hooks");
         assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.revision, 2);
         assert_eq!(manifest.entries[0].path, "hooks/mezzanine.json");
         let Artifact::File { bytes } = &manifest.entries[0].artifact else {
             panic!("owned private hook document");
         };
         let document: serde_json::Value = serde_json::from_slice(bytes).unwrap();
         assert_eq!(document["version"], 1);
-        for event in ["sessionStart", "agentStop", "sessionEnd"] {
+        assert_eq!(document["hooks"].as_object().unwrap().len(), 8);
+        for event in [
+            "sessionStart",
+            "userPromptSubmitted",
+            "preToolUse",
+            "postToolUse",
+            "notification",
+            "agentStop",
+            "errorOccurred",
+            "sessionEnd",
+        ] {
             let hook = &document["hooks"][event][0];
             assert_eq!(
                 hook["exec"],
@@ -99,6 +132,52 @@ mod tests {
         std::fs::write(&file, b"FOREIGN USER HOOK").unwrap();
         assert!(plan(Operation::Install).is_err());
         assert_eq!(std::fs::read(&file).unwrap(), b"FOREIGN USER HOOK");
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// Current lifecycle hooks automatically upgrade exact independent revision1
+    /// deployment bytes and receipt. Authored siblings/settings remain untouched;
+    /// repeat and uninstall use the current manifest without adopting a foreign file.
+    #[test]
+    fn bootstrap_copilot_revision1_upgrades_and_repeats() {
+        use super::super::installer::{Operation, plan_private};
+        let home = std::env::temp_dir().join(format!(
+            "mez-copilot-upgrade-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir(&home).unwrap();
+        let root = home.join("vendor");
+        std::fs::create_dir(&root).unwrap();
+        let old = historical_manifest().unwrap();
+        let current = manifest().unwrap();
+        plan_private(&root, &home, &old, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        std::fs::write(root.join("settings.json"), b"AUTHORED EXPORTER").unwrap();
+        plan_private(&root, &home, &current, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        assert!(
+            plan_private(&root, &home, &current, Operation::Install)
+                .unwrap()
+                .changed_paths()
+                .is_empty()
+        );
+        let document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("hooks/mezzanine.json")).unwrap())
+                .unwrap();
+        assert_eq!(document["hooks"].as_object().unwrap().len(), 8);
+        assert_eq!(
+            std::fs::read(root.join("settings.json")).unwrap(),
+            b"AUTHORED EXPORTER"
+        );
+        plan_private(&root, &home, &current, Operation::Uninstall)
+            .unwrap()
+            .apply()
+            .unwrap();
+        assert!(!root.join("hooks/mezzanine.json").exists());
         std::fs::remove_dir_all(home).unwrap();
     }
 }

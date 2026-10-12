@@ -38,6 +38,7 @@ const MAX_OBSERVER_INSTANCES: usize = 128;
 
 mod codex;
 mod codex_order;
+mod copilot;
 mod curated;
 mod helper;
 mod helper_usage;
@@ -96,6 +97,8 @@ pub(super) struct EnrollmentBinding {
     curated_observer: Option<curated::CuratedObserver>,
     /// Bounded original-epoch Codex turn replay state, never billing or liveness.
     codex_turns: codex::CodexTurns,
+    /// Original classic Copilot timestamp fence, never a turn or billing claim.
+    copilot_events: copilot::CopilotEvents,
     /// Redacted in Debug and never persisted or placed in generic replay caches.
     token: SecretString,
 }
@@ -682,6 +685,7 @@ impl RuntimeSessionService {
                     observers: vec![Arc::downgrade(&work.origin)],
                     curated_observer: None,
                     codex_turns: Default::default(),
+                    copilot_events: Default::default(),
                     token: SecretString::from(token),
                 }),
                 pi_lifecycle: None,

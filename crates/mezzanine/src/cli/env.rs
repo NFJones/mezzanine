@@ -59,7 +59,7 @@ pub(super) enum CliCommand {
     /// Forwards a normalized Codex callback through restricted native Unix ingress.
     #[command(hide = true)]
     CodexHook,
-    /// Drains one supported Copilot hook neutrally; no telemetry association is inferred.
+    /// Projects one classic Copilot callback neutrally into native-qualified ingress.
     #[command(hide = true)]
     CopilotHook(super::copilot_hook::CopilotHookArgs),
     /// Drains a fixed Cursor lifecycle hook without controls or association.

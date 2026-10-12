@@ -88,7 +88,7 @@ mod bootstrap;
 /// Owns neutral Codex SessionStart projection and restricted native creator ingress.
 mod codex_hook;
 pub(crate) use codex_hook::run_internal_process as run_internal_codex_hook_process;
-/// Owns neutral documented Copilot callback plumbing, not runtime activation.
+/// Owns neutral classic Copilot projection into native-qualified local lifecycle.
 mod copilot_hook;
 pub(crate) use copilot_hook::run_internal_process as run_internal_copilot_hook_process;
 /// Owns neutral fixed Cursor lifecycle argv, not runtime association.

@@ -191,8 +191,8 @@ fn run_with_root_selector<W: Write>(
                 "adoption_planned":adoption_planned,"legacy_adopted":adoption_planned && !args.dry_run && !args.check,
                 "runtime_verification":"not-performed",
                 "support":"best-effort",
-                "lifecycle":if matches!(args.harness.as_str(), "copilot" | "cursor") { "unavailable-source-association" } else { "unverified" },
-                "usage":if matches!(args.harness.as_str(), "copilot" | "cursor") { "unavailable-source-association" } else { "unverified" },
+                "lifecycle":if args.harness == "cursor" { "unavailable-source-association" } else { "unverified" },
+                "usage":if args.harness == "copilot" { "unavailable-safe-activation" } else if args.harness == "cursor" { "unavailable-source-association" } else { "unverified" },
                 "guidance":"Installation is observational only. Use ordinary vendor commands and preserve vendor review/disabled policy. Automatic enrollment and accounting capabilities may still be unavailable; no Mez vendor-launch wrappers exist",
             }),
         );
@@ -268,6 +268,7 @@ fn write_report<W: Write>(
         )?;
         if report["lifecycle"] == "unavailable-source-association"
             || report["usage"] == "unavailable-source-association"
+            || report["usage"] == "unavailable-safe-activation"
         {
             writeln!(
                 stdout,
@@ -296,11 +297,13 @@ mod tests {
     #[test]
     fn bootstrap_plain_copilot_reports_known_unavailable_runtime() {
         let mut report = serde_json::json!({"harness":"copilot","result":"installed","planned_outcome":"installed",
-            "lifecycle":"unavailable-source-association","usage":"unavailable-source-association"});
+            "lifecycle":"unverified","usage":"unavailable-safe-activation"});
         let mut output = Vec::new();
         write_report(&mut output, CliOutputFormat::Plain, &report).unwrap();
         let text = String::from_utf8(output).unwrap();
-        assert!(text.contains("Runtime lifecycle: unavailable-source-association; accounting: unavailable-source-association"));
+        assert!(
+            text.contains("Runtime lifecycle: unverified; accounting: unavailable-safe-activation")
+        );
         assert!(!text.contains("Runtime enrollment/accounting not verified"));
         report["lifecycle"] = "unverified".into();
         report["usage"] = "unverified".into();
