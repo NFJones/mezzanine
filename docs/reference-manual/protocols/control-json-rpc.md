@@ -1003,6 +1003,29 @@ SessionStart return, a deployed adapter, module reload/new/resume handoff, full6
 wall-clock idle lifetime, or accounting. SDK timers stop on module reload; that
 is not daemon retirement or replacement authority.
 
+An opt-in Linux acceptance on locally available Claude 2.1.289 extends the
+separate model-free post-return command probe through seven actual SDK 10-second
+proofs. The autoloaded compiled graph has only its owned offline command/return
+marker added; enrollment, selectors and timer code are unchanged. SessionStart
+returns before that command holds the creator for a full 60-second wall-clock
+window. The production daemon timer side-effect worker fires normal idle cleanup,
+keeping the original native epoch and finite lease live beyond its initial 60s.
+A bare actor alone only queues timer effects and is not this maintenance workflow.
+No synthetic clock/lease mutation establishes the idle result. The command answers
+itself without provider work. This qualifies real SDK post-return timer retention
+during an offline command hold, not quiescent interactive idle, reload, cross-process
+continuity, all vendor versions/platforms, or billing.
+
+Another native acceptance uses bare bootstrap's installed module bytes unchanged
+in an ordinary Node SDK-shaped host. After callback return and one valid native
+original-epoch proof, deterministic 31s proof aging plus lease expiry retires
+telemetry while the exact creator is still alive. A later actual built helper
+returns terminal authorization rejection; the installed owner cancels its timer,
+withholds queued helpers and same-owner re-admission, and preserves middleware
+results. The living namespace remains fenced until actual producer exit, while
+the pane shell survives. This is deterministic loss/native rejection evidence,
+not real SDK cancellation/reload or wall-clock expiry evidence.
+
 An additional ordinary Node SDK-shaped fixture loads the same rendered module,
 accepts the exact unchanged middleware result and records callback return before
 any of three native proof connections. It runs normally in a pane with only

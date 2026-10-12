@@ -375,6 +375,12 @@ window plus 60s lease; source death overrides even a recent proof. Retired names
 MUST NOT revive through late heartbeat. This does not grant producer sockets,
 primary/client roles, input/approval/task rights or billing/usage commitment.
 Public callbacks MUST retain original selectors and existing native helper fences.
+Acceptance MUST distinguish actual SDK timers after callback return from held
+init-only callbacks and explicitly driven SDK shims. Full idle-window evidence
+MUST use real elapsed time and the daemon timer/maintenance owner, not forced
+expiry renewal or synthetic aging. Deterministic loss/expiry fixtures MUST retain
+the living creator long enough to prove that telemetry retirement/local timer
+cancellation is distinct from process death and final namespace cleanup.
 The reusable literal curated SDK source MUST call only a fixed absolute helper
 with a projected public session capsule, then pin the original admitted selectors.
 Its 1–10s recurring proof timer MUST serialize helpers without a pending queue,

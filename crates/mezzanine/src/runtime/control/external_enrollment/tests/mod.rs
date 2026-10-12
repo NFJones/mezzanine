@@ -1325,6 +1325,7 @@ mod copilot_installed;
 mod creator_isolation;
 mod curated_admission;
 mod curated_heartbeat;
+mod curated_idle;
 mod curated_rotation;
 mod harnesses;
 mod health;
