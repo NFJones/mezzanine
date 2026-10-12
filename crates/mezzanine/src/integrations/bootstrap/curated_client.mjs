@@ -78,6 +78,14 @@ try {
             // retry vendor work, re-enroll, or let helper output reach the user.
             if (proof.exitCode !== 0 || typeof proof.stdout !== "string" || proof.stdout.length > 128) return;
             const observed = JSON.parse(proof.stdout);
+            // Only the typed negative acknowledgment closes this local owner.
+            // Recheck its exact ticket after transport; no native retirement,
+            // newest lookup or initial admission follows a closed epoch.
+            if (owned && observed && typeof observed === "object" && !Array.isArray(observed)
+                && Object.keys(observed).length === 1 && observed.observed === false) {
+              if (lifetime.current(ticket)) lifetime.stop();
+              return;
+            }
             if (!observed || typeof observed !== "object" || Array.isArray(observed)
                 || Object.keys(observed).length !== 3 || observed.observed !== true
                 || observed.sequence !== sequence || typeof observed.changed !== "boolean") return;

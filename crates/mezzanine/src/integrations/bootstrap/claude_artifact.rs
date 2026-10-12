@@ -17,7 +17,7 @@ pub(super) fn manifest() -> Option<Manifest> {
 /// Compiles the exact private mod graph for a trusted code-owned helper path.
 /// The public CLI supplies only current_exe; tests qualify a built fixed helper.
 pub(crate) fn manifest_for_helper(helper: &std::path::Path) -> Result<Manifest> {
-    build_manifest(helper, 3)
+    build_manifest(helper, 4)
 }
 
 /// Exact revision-1 ownership for the same fixed installing executable. No
@@ -32,13 +32,20 @@ pub(super) fn historical_lifecycle_manifest() -> Option<Manifest> {
     build_manifest(&std::env::current_exe().ok()?, 2).ok()
 }
 
+/// Exact revision-3 paired-clear bundle before owned negative-proof closure.
+/// The old client snapshot cannot borrow authority from current helper bytes.
+pub(super) fn historical_paired_clear_manifest() -> Option<Manifest> {
+    build_manifest(&std::env::current_exe().ok()?, 3).ok()
+}
+
 /// Builds only current or guarded historical compiled private artifacts.
 fn build_manifest(helper: &std::path::Path, revision: u32) -> Result<Manifest> {
     let prefix = "skills/mezzanine-telemetry";
     let module = match revision {
         1 => super::curated_client::historical_claude_module_v1(helper)?,
         2 => super::curated_client::historical_claude_module_v2(helper)?,
-        3 => super::curated_client::module_source(helper, 10_000)?,
+        3 => super::curated_client::historical_claude_module_v3(helper)?,
+        4 => super::curated_client::module_source(helper, 10_000)?,
         _ => {
             return Err(crate::error::MezError::invalid_state(
                 "Claude compiled revision unavailable",
@@ -89,7 +96,7 @@ mod tests {
     #[test]
     fn bootstrap_claude_artifact_has_complete_ordinary_autoload_bundle() {
         let manifest = compiled_manifest("claude", None).expect("compiled Claude adapter");
-        assert_eq!(manifest.revision, 3);
+        assert_eq!(manifest.revision, 4);
         assert_eq!(manifest.entries.len(), 8);
         assert!(manifest.entries.iter().all(|entry| {
             entry.path.starts_with("skills/mezzanine-telemetry/")
@@ -179,6 +186,76 @@ mod tests {
         );
     }
 
+    /// Revision3 retains its exact pre-rejection client rather than borrowing
+    /// active closure behavior. Same-helper upgrade to revision4 changes only the
+    /// owned module, repeats without edits, and preserves unrelated authors.
+    /// Relocated helper bytes cannot select any current compiled history.
+    #[test]
+    fn bootstrap_claude_artifact_upgrades_guarded_revision3_exactly() {
+        let current = compiled_manifest("claude", None).unwrap();
+        let history = super::super::compiled_history(&current);
+        assert_eq!(
+            history.iter().map(|m| m.revision).collect::<Vec<_>>(),
+            [3, 2, 1]
+        );
+        let previous = &history[0];
+        let module = |manifest: &super::Manifest| {
+            manifest
+                .entries
+                .iter()
+                .find_map(|entry| {
+                    if !entry.path.ends_with("/register.mjs") {
+                        return None;
+                    }
+                    match &entry.artifact {
+                        Artifact::File { bytes } => Some(String::from_utf8(bytes.clone()).unwrap()),
+                        _ => None,
+                    }
+                })
+                .unwrap()
+        };
+        assert!(module(previous).contains("clearHandoff"));
+        assert!(!module(previous).contains("observed.observed === false"));
+        assert!(module(&current).contains("observed.observed === false"));
+        let base = std::env::temp_dir().join(format!(
+            "mez-claude-v3-upgrade-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir(&base).unwrap();
+        let home = base.join("home");
+        std::fs::create_dir(&home).unwrap();
+        let root = home.join(".claude");
+        plan_private(&root, &home, previous, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        std::fs::write(root.join("authored"), b"preserved").unwrap();
+        let upgrade = plan_private(&root, &home, &current, Operation::Install).unwrap();
+        assert_eq!(
+            upgrade.changed_paths(),
+            [
+                "skills/mezzanine-telemetry/hooks/register.mjs",
+                "@mez-bootstrap-receipt/claude",
+            ]
+        );
+        upgrade.apply().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("skills/mezzanine-telemetry/hooks/register.mjs"))
+                .unwrap(),
+            module(&current)
+        );
+        assert!(
+            plan_private(&root, &home, &current, Operation::Install)
+                .unwrap()
+                .changed_paths()
+                .is_empty()
+        );
+        assert_eq!(std::fs::read(root.join("authored")).unwrap(), b"preserved");
+        let relocated = super::manifest_for_helper(std::path::Path::new("/relocated/mez")).unwrap();
+        assert!(super::super::compiled_history(&relocated).is_empty());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     /// Shipped revision2 keeps independently frozen module bytes when paired
     /// clear changes current registration. Same-helper upgrade repairs only the
     /// owned graph, repeats exactly and preserves authored siblings; helper
@@ -186,7 +263,10 @@ mod tests {
     #[test]
     fn bootstrap_claude_artifact_upgrades_guarded_revision2_exactly() {
         let current = compiled_manifest("claude", None).unwrap();
-        let previous = super::super::compiled_history(&current).remove(0);
+        let previous = super::super::compiled_history(&current)
+            .into_iter()
+            .find(|manifest| manifest.revision == 2)
+            .unwrap();
         assert_eq!(previous.revision, 2);
         let entry = previous
             .entries
@@ -236,8 +316,11 @@ mod tests {
     fn bootstrap_claude_artifact_upgrades_guarded_revision1_exactly() {
         let current = compiled_manifest("claude", None).unwrap();
         let history = super::super::compiled_history(&current);
-        assert_eq!(history.len(), 2);
-        let previous = &history[1];
+        assert_eq!(history.len(), 3);
+        let previous = history
+            .iter()
+            .find(|manifest| manifest.revision == 1)
+            .unwrap();
         assert_eq!(previous.revision, 1);
         let base = std::env::temp_dir().join(format!(
             "mez-claude-upgrade-{}",

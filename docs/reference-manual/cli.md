@@ -541,6 +541,13 @@ The daemon still requires exact native creator/root and predecessor evidence;
 old timers/senders cannot revive. Failed/lost replies or intervening starts do
 not fall back to new admission. This does not qualify restart, reload, unpaired
 resume/fork, inherited expense or exhaustive accounting after the transition.
+Revision4 permanently closes the exact local observer owner on the bounded typed
+negative heartbeat reply: it clears the receipt, cancels its timer and withholds
+queued helpers or same-owner re-admission, while leaving vendor results neutral.
+Unavailable/malformed transport is not a terminal acknowledgment. Exact revision3
+bytes remain upgradeable through a frozen old client and guarded module recipe;
+revisions1/2 retain their original source inputs. Local closure is not daemon
+retirement, process death, renewal, executable attestation or billing evidence.
 An isolated production-helper fixture also qualifies exact already-committed
 main-request replay and one distinct synthetic incurred request across this
 same-creator clear: two observations retain one durable owner, without recharging

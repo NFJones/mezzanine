@@ -970,6 +970,13 @@ cancellation so late/queued work cannot reopen it or schedule more helpers.
 Throws/rejected cancellation and missing owner scope stay neutral. Stop is not
 daemon retirement or a process-death declaration; already-started helper work can
 still settle, subject to native generation/writer/deadline/lease fences.
+The exact bounded heartbeat acknowledgment `{"observed":false}` closes only the
+still-current owned ticket after transport: receipt removal precedes cancellation,
+queued callbacks cannot launch helpers, and later same-owner source calls cannot
+fall back to initial enrollment. Transport failure/malformed replies do not imply
+this terminal acknowledgment. Successful fresh/replay proofs keep the original
+selectors; unowned fixture cadence and vendor results remain unchanged. Installed
+Claude revision4 includes this fence with frozen revision1–3 artifact history.
 The literal module entry adds only metadata-projected main classic start/end
 wrappers. A real SDK cross-callback probe reserves/releases one exact pure ticket
 between Setup and SessionStart without allocating authority during Setup; a second

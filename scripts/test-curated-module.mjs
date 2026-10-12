@@ -72,6 +72,37 @@ test("curated module owns one main session and filters child or foreign end", as
   assert.equal(f.calls.length, 1);
 });
 
+/** The literal assembled entry cannot reuse a negatively acknowledged owner
+ * for same-ID admission or manufacture a clear predecessor from its lost
+ * receipt. Closing telemetry withholds proof/lifecycle helpers but leaves main
+ * vendor callback results and a separately admitted changed-ID owner intact. */
+test("curated module withholds same-ID helpers after negative proof", async () => {
+  const f = fixture();
+  const run = f.sdk.process.run;
+  f.sdk.process.run = (argv, options) => argv[1] === "harness-source"
+    && JSON.parse(argv[2]).operation === "curated-heartbeat"
+    ? Promise.resolve({ exitCode: 0, stdout: '{"observed":false}' }) : run(argv, options);
+  assert.equal(await f.invoke(start()), f.result);
+  const old = f.timers[0];
+  await old.callback();
+  assert.equal(old.cancelled, true);
+  const calls = f.calls.length;
+  const lifecycle = f.lifecycle.length;
+  await old.callback();
+  assert.equal(await f.invoke(start()), f.result);
+  assert.equal(await f.invoke({ hook_event_name: "UserPromptSubmit", session_id: "session-a" }), f.result);
+  assert.equal(await f.invoke(end()), f.result);
+  assert.equal(await f.invoke(start("session-a", { source: "clear" })), f.result);
+  assert.equal(f.calls.length, calls);
+  assert.equal(f.lifecycle.length, lifecycle);
+  assert.equal(f.timers.length, 1);
+  assert.equal(await f.invoke(start("session-b")), f.result);
+  assert.equal(f.timers.length, 2);
+  assert.equal(f.timers[1].cancelled, false);
+  await old.callback();
+  assert.equal(f.calls.length, calls + 1);
+});
+
 /** A sequential same-ID clear may rotate only using the public predecessor
  * captured from this exact loaded module before its end stops the old lifetime.
  * Duplicate starts coalesce, the old timer stays inert and every middleware

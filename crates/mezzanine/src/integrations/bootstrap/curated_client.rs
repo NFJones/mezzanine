@@ -69,6 +69,7 @@ pub(crate) fn module_source(helper: &std::path::Path, interval_ms: u64) -> Resul
         include_str!("curated_module.mjs"),
         true,
         true,
+        include_str!("curated_client.mjs"),
     )
 }
 
@@ -79,7 +80,7 @@ pub(super) fn historical_claude_module_v1(helper: &std::path::Path) -> Result<St
     use sha2::Digest;
     for (bytes, expected) in [
         (
-            include_bytes!("curated_client.mjs").as_slice(),
+            include_bytes!("history/curated_client_claude_v1.mjs").as_slice(),
             "1a395b002716be900ace04094ed4d1d64e64d81d598ce72a2b93d862dfa8c0bb",
         ),
         (
@@ -131,6 +132,7 @@ pub(super) fn historical_claude_module_v1(helper: &std::path::Path) -> Result<St
         include_str!("history/curated_module_claude_v1.mjs"),
         false,
         false,
+        include_str!("history/curated_client_claude_v1.mjs"),
     )
 }
 
@@ -170,6 +172,32 @@ pub(super) fn historical_claude_module_v2(helper: &std::path::Path) -> Result<St
         include_str!("history/curated_module_claude_v2.mjs"),
         true,
         false,
+        include_str!("history/curated_client_claude_v1.mjs"),
+    )
+}
+
+/// Rebuilds revision-3 paired-clear bytes with the frozen pre-rejection client.
+/// Unchanged module inputs remain fingerprint-guarded; future source changes
+/// must add their own snapshot rather than redefine installed ownership.
+pub(super) fn historical_claude_module_v3(helper: &std::path::Path) -> Result<String> {
+    use sha2::Digest;
+    historical_claude_module_v2(helper)?;
+    let actual = sha2::Sha256::digest(include_bytes!("curated_module.mjs"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    if actual != "87db659ad7a77fc35178e6cbdf3840028129f056aa7ac1e12de673b484386ae2" {
+        return Err(MezError::invalid_state(
+            "Claude historical revision-3 source changed",
+        ));
+    }
+    compose_module(
+        helper,
+        10_000,
+        include_str!("curated_module.mjs"),
+        true,
+        true,
+        include_str!("history/curated_client_claude_v1.mjs"),
     )
 }
 
@@ -181,6 +209,7 @@ fn compose_module(
     template: &str,
     lifecycle: bool,
     paired_clear: bool,
+    client_template: &str,
 ) -> Result<String> {
     let body = render_body_mode(
         helper,
@@ -189,6 +218,7 @@ fn compose_module(
         false,
         true,
         paired_clear,
+        client_template,
     )?;
     let request = request_accounting_body(helper)?;
     let (step_before, step_after) = include_str!("claude_request_step.mjs")
@@ -254,7 +284,15 @@ fn render_body(
     replacing: bool,
     owned: bool,
 ) -> Result<String> {
-    render_body_mode(helper, interval_ms, instance, replacing, owned, false)
+    render_body_mode(
+        helper,
+        interval_ms,
+        instance,
+        replacing,
+        owned,
+        false,
+        include_str!("curated_client.mjs"),
+    )
 }
 
 /// Expands only fixed literals or code-owned module-local clear selectors.
@@ -267,6 +305,7 @@ fn render_body_mode(
     replacing: bool,
     owned: bool,
     paired_clear: bool,
+    template: &str,
 ) -> Result<String> {
     let path = helper
         .to_str()
@@ -331,7 +370,6 @@ fn render_body_mode(
             },
         ),
     ];
-    let template = include_str!("curated_client.mjs");
     let mut result = String::with_capacity(template.len() + quoted.len());
     let mut end = 0;
     for (offset, _) in template.match_indices("__MEZ_") {

@@ -72,6 +72,74 @@ test("owned curated source bounds duplicate admission and stopped callbacks", as
   assert.equal(owner.receipt, undefined);
 });
 
+/** Explicit negative native proof closes only its exact local owner before
+ * cancellation, withholds queued helpers and duplicate admission, and never
+ * changes vendor results. An unrelated owner and its immutable selectors stay
+ * live; successful fresh/replayed proofs cannot rebind either original epoch. */
+test("owned curated negative proof permanently closes only its original owner", async () => {
+  const owner = createCuratedLifetime();
+  const other = createCuratedLifetime();
+  let finish;
+  const f = fixture(registration(), () => new Promise(resolve => { finish = resolve; }));
+  const liveReceipt = registration();
+  const live = fixture(liveReceipt, capsule => output({ observed: true, sequence: capsule.sequence, changed: false }));
+  let cancelled = 0;
+  f.sdk.clock.every = (delay, callback) => {
+    f.timers.push({ delay, callback });
+    return { cancel() { cancelled++; assert.equal(owner.receipt, undefined); throw new Error("timer unavailable"); } };
+  };
+  const result = { vendor: "unchanged" };
+  assert.equal(await ownedHandler(f.sdk, event(), async () => result, owner), result);
+  assert.equal(await ownedHandler(live.sdk, event(), async () => result, other), result);
+  const original = other.receipt;
+  const pending = f.timers[0].callback();
+  await f.timers[0].callback();
+  assert.equal(f.calls.length, 2);
+  finish(output({ observed: false }));
+  await pending;
+  assert.equal(owner.receipt, undefined);
+  assert.equal(cancelled, 1);
+  await f.timers[0].callback();
+  await f.timers[0].callback();
+  assert.equal(await ownedHandler(f.sdk, event(), async () => result, owner), result);
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.calls.filter(call => !call.capsule.operation).length, 1);
+  assert.equal(f.timers.length, 1);
+  liveReceipt.generation = 99;
+  for (let sequence = 1; sequence <= 2; sequence++) {
+    await live.timers[0].callback();
+    assert.equal(other.receipt, original);
+    assert.deepEqual(live.calls.at(-1).capsule, { operation: "curated-heartbeat",
+      external_session_id: "session-a", generation: 7, observer_witness: "a".repeat(64), sequence });
+  }
+});
+
+/** Transport and malformed negatives are not typed terminal acknowledgment.
+ * A valid later fresh/replay proof keeps the same receipt and original epoch,
+ * without treating a successful helper exit alone as authority or renewal. */
+test("owned curated source retains original owner after untyped proof failures", async () => {
+  const responses = [{ exitCode: 1, stdout: '{"observed":false}' },
+    { exitCode: 0, stdout: "not-json" }, { exitCode: 0, stdout: " ".repeat(129) },
+    output(null), output([]), output({ observed: 0 }), output({ observed: "false" }),
+    output({ observed: false, extra: true })];
+  for (const response of responses) {
+    const owner = createCuratedLifetime();
+    let first = true;
+    const f = fixture(registration(), capsule => {
+      if (first) { first = false; return response; }
+      return output({ observed: true, sequence: capsule.sequence, changed: false });
+    });
+    await ownedHandler(f.sdk, event(), async () => undefined, owner);
+    const original = owner.receipt;
+    await f.timers[0].callback();
+    await f.timers[0].callback();
+    assert.equal(owner.receipt, original);
+    assert.equal(f.calls.length, 3);
+    assert.equal(f.calls.at(-1).capsule.generation, 7);
+    assert.equal(f.calls.at(-1).capsule.sequence, 2);
+  }
+});
+
 /** Stopping while helper response is withheld prevents valid late registration
  * from acquiring a timer or reviving local state; native retirement is separate. */
 test("owned curated source rejects late admission after stop", async () => {
