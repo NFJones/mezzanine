@@ -744,6 +744,12 @@ A separate real-native curated fixture calls the actual snapshot-message restore
 owner. Restored external metadata cannot revive discovery, status, queued proof,
 or heartbeat/readiness/report selectors for that living namespace, and prior
 durable expense remains intact. It does not restart the daemon or pane processes.
+The pane-root replacement fixture separately terminates and starts actual roots,
+then normally invokes another creator/helper. Kernel root/creator incarnations,
+observer witness and durable owner change; old queued/public proof is refused,
+old expense survives and one distinct new request commits once under the new
+owner. This does not borrow the old namespace or qualify historical report import,
+full daemon restoration, vendor resume/fork, or cross-process replay continuity.
 Telemetry schema 6 separately stores canonical opaque observation digests across
 model/category/project groups. Internal observations get server-derived stream
 identity and publication order; caller epoch/sequence changes cannot recharge an

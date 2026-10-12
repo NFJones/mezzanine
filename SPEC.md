@@ -1242,6 +1242,11 @@ The separate snapshot-message restoration fixture exercises the actual metadata
 replacement owner: it invalidates curated discovery/status and old queued/public
 proof while preserving committed expense and the same living namespace fence.
 That boundary MUST NOT be conflated with complete daemon/pane-process restart.
+A real pane-root replacement fixture additionally terminates the old root and
+normally invokes a fresh creator beneath a new kernel root incarnation. Old
+queued/public proof MUST stay invalid; committed expense remains under its old
+owner while one distinct new report uses a new native owner. This MUST NOT be
+claimed as historical attachment or cross-process resume/replay qualification.
 Capacity exhaustion MUST preserve existing mappings rather than silently evict
 replay authority. Ordinary accounting remains unavailable until ordered report,
 baseline and source-replay contracts are implemented; this mapping alone MUST NOT

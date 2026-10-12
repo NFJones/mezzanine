@@ -3,6 +3,7 @@
 use super::*;
 mod curated_request_client;
 mod curated_usage;
+mod root_replacement;
 use crate::test_support::runtime::RuntimeServiceFixture;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -53,6 +54,29 @@ async fn fixture_with_start_directory(
     } else {
         service.start_initial_pane_process(None).unwrap();
     }
+    let Some((socket, connection)) = launch_ordinary_fixture(&mut service, &listener, mode).await
+    else {
+        service.terminate_all_pane_processes().unwrap();
+        std::fs::remove_dir_all(&directory).unwrap();
+        return None;
+    };
+    Some(Fixture {
+        service,
+        directory,
+        listener,
+        socket,
+        connection,
+    })
+}
+
+/// Normally invokes one fixture producer under the service's current pane root
+/// and accepts that producer's own native Unix origin/writer evidence. Shared by
+/// initial and root-replacement tests; no payload PID/token/FD supplies authority.
+async fn launch_ordinary_fixture(
+    service: &mut RuntimeSessionService,
+    listener: &tokio::net::UnixListener,
+    mode: &str,
+) -> Option<(tokio::net::UnixStream, ControlConnectionState)> {
     let executable = std::env::current_exe().unwrap();
     let (mode_name, launch) = if mode == "root-hold" {
         ("hold", "exec ")
@@ -76,8 +100,6 @@ async fn fixture_with_start_directory(
     let origin = match captured {
         Ok(origin) => origin,
         Err(error) if error.raw_os_error() == Some(libc::ENOPROTOOPT) => {
-            service.terminate_all_pane_processes().unwrap();
-            std::fs::remove_dir_all(&directory).unwrap();
             return None;
         }
         Err(error) => panic!("native origin capture failed: {error}"),
@@ -100,13 +122,7 @@ async fn fixture_with_start_directory(
         assert_eq!(ready, [1]);
         assert!(connection.unix_origin().unwrap().writer_confirmed());
     }
-    Some(Fixture {
-        service,
-        directory,
-        listener,
-        socket,
-        connection,
-    })
+    Some((socket, connection))
 }
 
 /// Produces strict inert lifecycle metadata; caller-supplied PIDs never occur.
