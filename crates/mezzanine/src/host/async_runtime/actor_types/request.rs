@@ -37,6 +37,16 @@ pub(in crate::host::async_runtime) enum TranscriptReceiptReply {
     ),
     /// A terminal or agent-shell command response.
     Command(oneshot::Sender<Result<String>>, Result<String>),
+    /// Textual status work whose preceding sequence mutations need receipts.
+    TerminalStatus(
+        Box<crate::runtime::RuntimeTerminalStatusWork>,
+        oneshot::Sender<Result<String>>,
+    ),
+    /// Framed status work and its ordered reply continuation after receipts.
+    StatusControl(
+        Option<Box<crate::runtime::StatusControlWork>>,
+        Box<AsyncRuntimeRequest>,
+    ),
     /// A settled asynchronous action or command result.
     Applied(oneshot::Sender<Result<bool>>, Result<bool>),
     /// Interactive terminal step whose transcript effects require a receipt.
@@ -416,6 +426,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     },
     /// Settles a captured status query and resumes the remaining control frames.
     CompleteStatusControlInput {
+        /// Lifecycle before preparation, retained even when capture fails.
+        previous_lifecycle: RuntimeLifecycleState,
         /// Authorized acceptance snapshot and exact command lease.
         work: Option<Box<crate::runtime::StatusControlWork>>,
         /// Rendered report or bounded worker error.
@@ -773,6 +785,15 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         ///
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
+        reply: oneshot::Sender<Result<String>>,
+    },
+    /// Completed textual status sequence, returned only after exact-owner settlement.
+    CompleteTerminalStatusCommand {
+        /// Acceptance-owned sequence and command leases.
+        work: Box<crate::runtime::RuntimeTerminalStatusWork>,
+        /// Off-actor rendered response or bounded worker failure.
+        result: Result<String>,
+        /// Original textual caller, never an overlay delivery capability.
         reply: oneshot::Sender<Result<String>>,
     },
     /// Represents the Refresh Provider Info case for this enumeration.
@@ -1475,6 +1496,7 @@ impl AsyncRuntimeRequest {
             | Self::HandleControlInput { .. }
             | Self::HandleControlInputWithSnapshots { .. }
             | Self::CompleteStatusControlInput { .. }
+            | Self::CompleteTerminalStatusCommand { .. }
             | Self::CompleteExternalEnrollmentInput { .. }
             | Self::CompleteExternalUsageInput { .. }
             | Self::CompleteExternalUsageBeginInput { .. }

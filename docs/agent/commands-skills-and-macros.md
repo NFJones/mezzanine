@@ -43,6 +43,12 @@ other panes and global multiplexer controls remain available.
 
 ### Check before changing state
 
+From a normal terminal shell, `Ctrl+A :` then
+`agent-status [--extended] [--project | --all-projects]` displays the same status
+without entering agent mode or creating a native conversation. Plain status is
+live; scoped/extended reports are STATIC snapshots, with durable history read
+off actor. It is read-only and has no reset, task-control, or provider authority.
+
 ```text
 /status
 /permissions

@@ -73,6 +73,8 @@ pub(crate) type RuntimeDisplayOverlay =
 pub(crate) struct RuntimeLiveOverlaySource {
     /// Typed status builder used to refresh the overlay without command replay.
     pub source: RuntimeLiveOverlaySourceKind,
+    /// Exact status pane incarnation; Iroh sources have no pane owner.
+    pub status_owner: Option<crate::runtime::commands::RuntimeStatusLiveOwner>,
     /// Refresh cadence for this source.
     pub refresh_interval_ms: u64,
     /// Earliest actor clock time when this source should next be rebuilt.

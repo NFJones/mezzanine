@@ -7,12 +7,17 @@ correctness, authorization, or a privacy guarantee.
 
 ## Prerequisites
 
-Open the affected pane's [agent shell](../using-mezzanine/agent-shell.md).
+Use `Ctrl+A :` then `agent-status` from the affected pane's normal shell, or open
+its [agent shell](../using-mezzanine/agent-shell.md) and use `/status`.
 
 ## Inspect status first
 
 Use `/status` for the active pane's model, policy, roots, context usage, and
-token information. At debug or trace logging levels, `/copy-trace-log` exports
+token information. Terminal `:agent-status` uses the same view and options without
+entering agent mode, allocating a conversation or issuing provider requests.
+Plain status is live; scoped/extended status is an acceptance-captured STATIC
+snapshot and durable history queries run off actor. Dismissed/replaced terminal
+report pagers discard stale completions. At debug or trace logging levels, `/copy-trace-log` exports
 the pane's bounded retained diagnostic trace. Review it before sharing: task
 and action diagnostics can be sensitive, and trace output is not the audit log.
 

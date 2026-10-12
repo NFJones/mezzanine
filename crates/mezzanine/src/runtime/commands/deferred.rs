@@ -67,7 +67,7 @@ pub(crate) fn off_actor_command_family(
     input: &str,
 ) -> Option<RuntimeAgentCommandFamily> {
     match command {
-        "status" => Some(RuntimeAgentCommandFamily::Status),
+        "status" | "agent-status" => Some(RuntimeAgentCommandFamily::Status),
         "list-skills" | "list-macros" => Some(RuntimeAgentCommandFamily::Catalog),
         "auth-status" => Some(RuntimeAgentCommandFamily::AuthStatus),
         "issue" => Some(RuntimeAgentCommandFamily::IssueStore),
@@ -116,6 +116,11 @@ impl RuntimeSessionService {
     /// inline path, so the user still receives a synchronous body instead of an
     /// acknowledgement that nothing ever settles.
     pub(crate) fn should_defer_agent_shell_command(&self, command: &str, input: &str) -> bool {
+        // Terminal admission already validated typed tokens and captured the
+        // report. This alias has no slash grammar or agent-mode authority.
+        if command == "agent-status" {
+            return true;
+        }
         // An unknown name defaults to Deferred for classification but must
         // never gain off-actor admission without explicit prepared inputs.
         if !super::disposition::command_execution_metadata(command)
@@ -244,7 +249,9 @@ impl RuntimeSessionService {
             .get(pane_id)
             .filter(|session| session.visibility == AgentShellVisibility::Visible)
             .map(|session| session.session_id.as_str());
-        if command != "status" && current_conversation != Some(conversation_id) {
+        if !matches!(command, "status" | "agent-status")
+            && current_conversation != Some(conversation_id)
+        {
             self.take_pending_record_browser_overlay_claim_stack(pane_id, claim_generation);
             self.agent
                 .cancel_matching_agent_command(pane_id, conversation_id, claim_generation);
@@ -1069,6 +1076,9 @@ impl RuntimeSessionService {
                 return Ok(false);
             }
             self.presentation.activate_client_state(&report.client);
+            if report.terminal {
+                return self.complete_terminal_status_report(work, report, outcome);
+            }
         }
         let current_conversation = self
             .agent_shell_store()

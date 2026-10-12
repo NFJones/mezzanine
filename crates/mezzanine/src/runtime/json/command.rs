@@ -51,6 +51,16 @@ pub(crate) fn runtime_command_outcome_json(outcome: &CommandOutcome) -> String {
         CommandOutcome::LiveDisplay {
             command,
             body,
+            source: crate::ui::command::CommandDisplaySource::AgentStatus { pane_id },
+        } => format!(
+            r#"{{"command":"{}","kind":"display","body":"{}","live_source":{{"kind":"agent_status","pane_id":"{}"}}}}"#,
+            json_escape(command),
+            json_escape(body),
+            json_escape(pane_id)
+        ),
+        CommandOutcome::LiveDisplay {
+            command,
+            body,
             source: crate::ui::command::CommandDisplaySource::IrohStatus { client_id },
         } => format!(
             r#"{{"command":"{}","kind":"display","body":"{}","live_source":{{"kind":"iroh_status","client_id":"{}"}}}}"#,

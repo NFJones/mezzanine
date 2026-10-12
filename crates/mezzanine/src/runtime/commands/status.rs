@@ -18,7 +18,8 @@ use crate::storage::token_usage::TOKEN_USAGE_WINDOWS_DAYS;
 use crate::ui::command::auth_status_store_table_row;
 
 mod report;
-pub(crate) use report::RuntimeStatusReportWork;
+mod terminal;
+pub(crate) use report::{RuntimeStatusLiveOwner, RuntimeStatusReportWork};
 
 /// Builds the `/auth-status` display from a provider set and credential store.
 ///

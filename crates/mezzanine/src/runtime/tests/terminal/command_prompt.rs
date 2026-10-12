@@ -3,6 +3,42 @@
 use super::*;
 use crate::config::CURRENT_CONFIG_SCHEMA_VERSION;
 
+/// The production command prompt must display shared harness diagnostics in a
+/// normal shell without enrolling a native conversation, starting provider work,
+/// or borrowing the pane-layout diagnostic command. This fails before terminal
+/// agent-status registration and exercises the actual Enter dispatch path.
+#[test]
+fn terminal_agent_status_prompt_is_read_only_without_native_conversation() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let expected = service.runtime_agent_status_display("%1").unwrap();
+    service
+        .enter_primary_command_prompt("agent-status")
+        .unwrap();
+    service
+        .apply_primary_prompt_input(&primary, b"\r", false)
+        .unwrap();
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(overlay.live_source.is_some());
+    assert!(expected.starts_with("## Harness Status"));
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("Harness Status"))
+    );
+    assert!(service.agent_shell_store().get("%1").is_none());
+    assert!(
+        service
+            .agent_turn_ledger()
+            .latest_turn_for_pane("%1")
+            .is_none()
+    );
+    assert!(service.primary_prompt_input().is_none());
+}
+
 /// Verifies that agent-scoped operations with slash-command equivalents are no
 /// longer accepted through the live terminal command prompt. These workflows
 /// belong in pane-local agent slash commands, while the terminal command

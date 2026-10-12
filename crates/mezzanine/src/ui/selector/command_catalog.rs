@@ -295,6 +295,13 @@ pub(super) fn mezzanine_argument_candidates(command: &str) -> Vec<SelectorCandid
         "show-pane-status" => {
             candidates.extend(flag_candidates(&["-t"]));
         }
+        "agent-status" => {
+            candidates.extend(flag_candidates(&[
+                "--extended",
+                "--project",
+                "--all-projects",
+            ]));
+        }
         "paste-buffer" | "create-buffer" | "delete-buffer" | "save-buffer" | "choose-buffer" => {
             candidates.extend(flag_candidates(&[
                 "-b",

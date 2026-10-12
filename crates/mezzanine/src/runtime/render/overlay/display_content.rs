@@ -310,11 +310,19 @@ pub(crate) fn runtime_command_display_overlay_content(
         line_copy_texts: Vec::new(),
         actions: Vec::new(),
     };
+    let display_count = outcomes
+        .iter()
+        .filter(|outcome| {
+            outcome.get("kind").and_then(serde_json::Value::as_str) == Some("display")
+        })
+        .count();
     for outcome in outcomes {
         if outcome.get("kind").and_then(serde_json::Value::as_str) != Some("display") {
             continue;
         }
-        if content.live_source.is_none() {
+        // Refreshing a sole display preserves sequence feedback. Multiple
+        // display bodies remain a static aggregate rather than losing rows.
+        if display_count == 1 {
             content.live_source = runtime_live_overlay_source_from_json(outcome.get("live_source"));
         }
         if content.command.is_none() {
@@ -380,7 +388,7 @@ pub(super) fn terminal_command_display_body_is_markdown(command: Option<&str>, b
             "list-buffers" | "list-clients" | "list-groups" | "list-key-presets" | "list-panes"
             | "list-sessions" | "list-themes" | "list-windows",
         ) => body.trim_start().starts_with('|'),
-        Some("show-iroh-status") => body.trim_start().starts_with('#'),
+        Some("show-iroh-status" | "agent-status") => body.trim_start().starts_with('#'),
         _ => false,
     }
 }

@@ -252,6 +252,15 @@ impl RuntimeSessionService {
         } else {
             self.present_runtime_command_display_content(content)?;
         }
+        if matches!(outcomes.last(), Some(CommandOutcome::Display { command, .. }) if command == "agent-status")
+        {
+            let pane = self.session.active_pane_for(client)?.id.to_string();
+            self.agent.bind_terminal_status_overlay(
+                client,
+                &pane,
+                self.presentation.primary_display_overlay_generation,
+            );
+        }
         Ok(output)
     }
 }

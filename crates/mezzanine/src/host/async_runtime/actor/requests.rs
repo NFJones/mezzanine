@@ -15,6 +15,80 @@ use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
 use crate::host::terminal::AttachedTerminalClientStepPlan;
 
 impl AsyncRuntimeSessionActor {
+    /// Drains immediate sequence effects through the ordinary terminal host lane.
+    fn admit_terminal_status_sequence_effects(&mut self) -> crate::Result<()> {
+        self.queue_deferred_pane_io_side_effects_from_service()?;
+        self.queue_command_pane_pipe_health_timer_side_effects()?;
+        self.queue_shell_lifecycle_timer_side_effects()?;
+        self.queue_pending_provider_dispatch_side_effects()?;
+        self.queue_pending_deferred_agent_command_side_effects()?;
+        Ok(())
+    }
+
+    /// Starts textual status only after the immediate sequence receipts settle.
+    fn dispatch_terminal_status_query(
+        &self,
+        work: Box<crate::runtime::RuntimeTerminalStatusWork>,
+        reply: tokio::sync::oneshot::Sender<crate::Result<String>>,
+    ) {
+        let sender = self.sender.clone();
+        tokio::spawn(async move {
+            #[cfg(test)]
+            if let (Some(started), Some(release)) = &work.worker_gate {
+                started.notify_one();
+                release.notified().await;
+            }
+            let render_work = work.clone();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                tokio::task::spawn_blocking(move || render_work.render()),
+            )
+            .await
+            .map_err(|_| MezError::invalid_state("terminal status deadline exceeded"))
+            .and_then(|joined| {
+                joined.map_err(|_| MezError::invalid_state("terminal status worker failed"))
+            })
+            .and_then(|result| result);
+            let _ = sender
+                .send(AsyncRuntimeRequestEnvelope::new(
+                    AsyncRuntimeRequest::CompleteTerminalStatusCommand {
+                        work,
+                        result,
+                        reply,
+                    },
+                ))
+                .await;
+        });
+    }
+
+    /// Admits mixed control effects and receipts before starting a report worker.
+    fn admit_status_control_query(
+        &mut self,
+        previous_id: u64,
+        work: Option<Box<crate::runtime::StatusControlWork>>,
+        mut completion: AsyncRuntimeRequest,
+    ) {
+        if let Err(error) = self.admit_terminal_status_sequence_effects() {
+            if let AsyncRuntimeRequest::CompleteStatusControlInput { result, .. } = &mut completion
+            {
+                *result = Err(error);
+            }
+            self.dispatch_control_continuation(Box::new(completion));
+            return;
+        }
+        if let Some(TranscriptReceiptReply::StatusControl(work, completion)) = self
+            .start_transcript_receipt_admission(
+                previous_id,
+                TranscriptReceiptReply::StatusControl(work, Box::new(completion)),
+            )
+        {
+            match work {
+                Some(work) => self.dispatch_status_control_query(*work, *completion),
+                None => self.dispatch_control_continuation(completion),
+            }
+        }
+    }
+
     /// Runs a finite status history query off actor and retains ordered RPC reply ownership.
     fn dispatch_status_control_query(
         &self,
@@ -28,10 +102,9 @@ impl AsyncRuntimeSessionActor {
                 started.notify_one();
                 release.notified().await;
             }
-            let report = work.report.clone();
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
-                tokio::task::spawn_blocking(move || report.render()),
+                tokio::task::spawn_blocking(move || work.render()),
             )
             .await
             .map_err(|_| MezError::invalid_state("status history deadline exceeded"))
@@ -1114,6 +1187,8 @@ impl AsyncRuntimeSessionActor {
                 retain_connection_cleanup,
                 reply,
             } => {
+                let status_previous_id = self.side_effect_routes.next_transcript_claim_id();
+                let status_previous_lifecycle = self.service.lifecycle_state();
                 if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
                     && let Some(prepared) =
                         self.service.prepare_status_control_work(&body, &connection)
@@ -1129,12 +1204,19 @@ impl AsyncRuntimeSessionActor {
                                 remaining_input: input[consumed..].to_vec(),
                                 max_content_length,
                                 snapshots: None,
+                                previous_lifecycle: status_previous_lifecycle,
                                 reply,
                             };
-                            self.dispatch_status_control_query(work, completion);
+                            self.admit_status_control_query(
+                                status_previous_id,
+                                Some(Box::new(work)),
+                                completion,
+                            );
                         }
                         Err(body) => {
-                            self.dispatch_control_continuation(Box::new(
+                            self.admit_status_control_query(
+                                status_previous_id,
+                                None,
                                 AsyncRuntimeRequest::CompleteStatusControlInput {
                                     work: None,
                                     result: Ok(body),
@@ -1144,9 +1226,10 @@ impl AsyncRuntimeSessionActor {
                                     max_content_length,
                                     snapshots: None,
                                     connection,
+                                    previous_lifecycle: status_previous_lifecycle,
                                     reply,
                                 },
-                            ));
+                            );
                         }
                     }
                     return false;
@@ -1346,6 +1429,8 @@ impl AsyncRuntimeSessionActor {
                 snapshots,
                 reply,
             } => {
+                let status_previous_id = self.side_effect_routes.next_transcript_claim_id();
+                let status_previous_lifecycle = self.service.lifecycle_state();
                 if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
                     && let Some(prepared) =
                         self.service.prepare_status_control_work(&body, &connection)
@@ -1361,12 +1446,19 @@ impl AsyncRuntimeSessionActor {
                                 remaining_input: input[consumed..].to_vec(),
                                 max_content_length,
                                 snapshots: Some(snapshots),
+                                previous_lifecycle: status_previous_lifecycle,
                                 reply,
                             };
-                            self.dispatch_status_control_query(work, completion);
+                            self.admit_status_control_query(
+                                status_previous_id,
+                                Some(Box::new(work)),
+                                completion,
+                            );
                         }
                         Err(body) => {
-                            self.dispatch_control_continuation(Box::new(
+                            self.admit_status_control_query(
+                                status_previous_id,
+                                None,
                                 AsyncRuntimeRequest::CompleteStatusControlInput {
                                     work: None,
                                     result: Ok(body),
@@ -1376,9 +1468,10 @@ impl AsyncRuntimeSessionActor {
                                     max_content_length,
                                     snapshots: Some(snapshots),
                                     connection,
+                                    previous_lifecycle: status_previous_lifecycle,
                                     reply,
                                 },
-                            ));
+                            );
                         }
                     }
                     return false;
@@ -1687,6 +1780,7 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             AsyncRuntimeRequest::CompleteStatusControlInput {
+                previous_lifecycle,
                 work,
                 result,
                 connection,
@@ -1698,6 +1792,7 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 let body = match work {
+                    // Report settlement itself grants no presentation authority.
                     Some(work) => self.service.complete_status_control_work(*work, result),
                     None => result.unwrap_or_else(|error| {
                         crate::runtime::runtime_json_rpc_error(
@@ -1708,15 +1803,24 @@ impl AsyncRuntimeSessionActor {
                     }),
                 };
                 output_prefix.extend_from_slice(&encode_control_body(&body));
-                if remaining_input.is_empty() {
-                    let _ = reply.send(Ok(AsyncControlInputResult {
-                        output: output_prefix,
-                        consumed: consumed_prefix,
-                        connection,
-                        connection_cleanup: None,
-                        terminal_lifecycle_flush: None,
-                    }));
-                } else {
+                // The terminal transition owns the reply flush even with later
+                // pipelined frames. Never admit a successor after that fence.
+                let mut response = Ok(AsyncControlInputResult {
+                    output: output_prefix,
+                    consumed: consumed_prefix,
+                    connection,
+                    connection_cleanup: None,
+                    terminal_lifecycle_flush: None,
+                });
+                let lifecycle_deferred = self.defer_terminal_lifecycle_until_response_flush(
+                    previous_lifecycle,
+                    &mut response,
+                );
+                if lifecycle_deferred || remaining_input.is_empty() {
+                    let _ = reply.send(response);
+                } else if let Ok(response) = response {
+                    let mut output_prefix = response.output;
+                    let connection = response.connection;
                     if let Some(snapshots) = snapshots {
                         self.dispatch_control_continuation(Box::new(
                             AsyncRuntimeRequest::HandleControlInputWithSnapshots {
@@ -1761,6 +1865,9 @@ impl AsyncRuntimeSessionActor {
                     }
                 }
                 self.notify_event_delivery();
+                if !lifecycle_deferred {
+                    self.notify_lifecycle_state_if_changed(previous_lifecycle);
+                }
                 false
             }
             AsyncRuntimeRequest::CompleteSnapshotControlInput {
@@ -2173,6 +2280,50 @@ impl AsyncRuntimeSessionActor {
             } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let previous_id = self.side_effect_routes.next_transcript_claim_id();
+                if let Some(prepared) = self
+                    .service
+                    .prepare_terminal_status_work(&primary_client_id, &input)
+                {
+                    let effects = self.admit_terminal_status_sequence_effects();
+                    let prepared = match (prepared, effects) {
+                        (Ok(work), Err(error)) => {
+                            let error = self
+                                .service
+                                .complete_terminal_status_work(&work, Err(error))
+                                .err()
+                                .unwrap_or_else(|| {
+                                    MezError::invalid_state("terminal status admission failed")
+                                });
+                            Err(error)
+                        }
+                        (prepared, _) => prepared,
+                    };
+                    match prepared {
+                        Err(error) => {
+                            if let Some(TranscriptReceiptReply::Command(reply, result)) = self
+                                .start_transcript_receipt_admission(
+                                    previous_id,
+                                    TranscriptReceiptReply::Command(reply, Err(error)),
+                                )
+                            {
+                                let _ = reply.send(result);
+                            }
+                        }
+                        Ok(work) => {
+                            if let Some(TranscriptReceiptReply::TerminalStatus(work, reply)) = self
+                                .start_transcript_receipt_admission(
+                                    previous_id,
+                                    TranscriptReceiptReply::TerminalStatus(Box::new(work), reply),
+                                )
+                            {
+                                self.dispatch_terminal_status_query(work, reply);
+                            }
+                        }
+                    }
+                    self.notify_event_delivery();
+                    self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                    return false;
+                }
                 let result = self
                     .service
                     .execute_terminal_command_async(&primary_client_id, &input)
@@ -2196,6 +2347,16 @@ impl AsyncRuntimeSessionActor {
                     self.notify_event_delivery();
                 }
                 self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                false
+            }
+            AsyncRuntimeRequest::CompleteTerminalStatusCommand {
+                work,
+                result,
+                reply,
+            } => {
+                let result = self.service.complete_terminal_status_work(&work, result);
+                let _ = reply.send(result);
+                self.notify_event_delivery();
                 false
             }
             AsyncRuntimeRequest::RefreshProviderInfo { reply } => {
@@ -2988,6 +3149,34 @@ impl AsyncRuntimeSessionActor {
                             Some(error) if result.is_ok() => Err(error),
                             _ => result,
                         });
+                    }
+                    TranscriptReceiptReply::TerminalStatus(work, reply) => {
+                        if let Some(error) = failure {
+                            let result = self
+                                .service
+                                .complete_terminal_status_work(&work, Err(error));
+                            let _ = reply.send(result);
+                        } else {
+                            self.dispatch_terminal_status_query(work, reply);
+                        }
+                    }
+                    TranscriptReceiptReply::StatusControl(work, mut completion) => {
+                        if let Some(error) = failure {
+                            if let AsyncRuntimeRequest::CompleteStatusControlInput {
+                                result, ..
+                            } = &mut *completion
+                            {
+                                *result = Err(error);
+                            }
+                            self.dispatch_control_continuation(completion);
+                        } else {
+                            match work {
+                                Some(work) => {
+                                    self.dispatch_status_control_query(*work, *completion)
+                                }
+                                None => self.dispatch_control_continuation(completion),
+                            }
+                        }
                     }
                     TranscriptReceiptReply::Applied(sender, result) => {
                         let _ = sender.send(match failure {

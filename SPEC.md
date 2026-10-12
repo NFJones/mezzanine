@@ -3212,6 +3212,7 @@ The command language MUST include commands equivalent to:
 - `show-messages`
 - `show-metrics`
 - `show-iroh-status`
+- `agent-status`
 - `list-keys`
 - `list-key-presets`
 - `list-themes`
@@ -11997,6 +11998,31 @@ The baseline command capabilities are:
   conversation and immutable project origin; pane totals require the original
   root incarnation. Auxiliary title usage MUST NOT replace ordinary context/cache
   samples, and accounting failure MUST NOT replay a provider request.
+  Terminal `:agent-status` MUST present this same status formatter and accept
+  `[--extended] [--project | --all-projects]` through the shared option grammar,
+  preserving parsed terminal token boundaries (a quoted multi-flag operand MUST
+  NOT become multiple flags). Its target is the invoking attached primary's
+  pane at acceptance, not subsequent focus. It MUST work from a normal shell,
+  with a retained hidden native conversation or external-only pane, without
+  entering agent mode, creating a conversation, starting provider work, resetting
+  accounting, changing focus, or modifying an agent draft/history. It MUST NOT
+  substitute pane-layout/provider diagnostics from `show-pane-status`.
+  Plain terminal status MUST reuse the typed live overlay, shared Markdown
+  rendering and refresh cadence, preserving search/copy/scroll/resize behavior.
+  Closure, native-conversation replacement or shell-root rebind MUST invalidate
+  its accepted live owner. Interactive scoped/extended reports MUST be captured
+  at acceptance and executed through the bounded off-actor report worker; a
+  replaced or dismissed waiting pager MUST NOT be resurrected at completion.
+  These presentation identities MUST be caller-local, including when another
+  primary or a source-bound observer is rendered in the interim. Configured
+  bindings and terminal sequences MUST use the same handoff; only a final
+  report outcome may own the interactive waiting pager. Textual async terminal
+  and authenticated framed `terminal/command` requests MUST return completed
+  snapshot sequence outcomes without installing an overlay, preserve control
+  framing/replay, and fence every reported pane/project/command owner. Baseline
+  dispatch without a live runtime MUST report runtime required, never fabricated
+  totals. Synchronous textual APIs without the worker continuation MUST refuse
+  snapshot sequences before mutation rather than querying SQLite inline.
   `/status` MUST accept `[--extended] [--project | --all-projects]` in either
   flag order, rejecting duplicates, conflicting scopes, values and operands.
   Unqualified status MUST preserve overall totals and memory-only live display.

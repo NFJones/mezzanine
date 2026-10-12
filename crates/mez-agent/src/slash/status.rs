@@ -29,8 +29,17 @@ pub struct StatusOptions {
 
 /// Parses both flag orders, rejecting duplicates, operands and value-bearing flags.
 pub fn parse_status_options(args: &str) -> Result<StatusOptions, &'static str> {
+    parse_status_option_tokens(args.split_whitespace())
+}
+
+/// Parses already-tokenized arguments without splitting quoted terminal operands.
+/// Both ingress grammars use this one validator; joining terminal tokens would
+/// incorrectly turn a quoted operand containing multiple flags into valid flags.
+pub fn parse_status_option_tokens<'a>(
+    args: impl IntoIterator<Item = &'a str>,
+) -> Result<StatusOptions, &'static str> {
     let mut options = StatusOptions::default();
-    for arg in args.split_whitespace() {
+    for arg in args {
         match arg {
             "--extended" if !options.extended => options.extended = true,
             "--project" if options.scope == StatusScope::Overall => {
@@ -53,6 +62,11 @@ mod tests {
     /// conflicting and value-bearing flags never silently select overall totals.
     #[test]
     fn status_options_share_strict_scope_grammar() {
+        assert_eq!(
+            parse_status_option_tokens(["--extended --project"]),
+            Err(STATUS_USAGE)
+        );
+        assert_eq!(parse_status_option_tokens([""]), Err(STATUS_USAGE));
         for (args, scope, extended) in [
             ("", StatusScope::Overall, false),
             ("--extended", StatusScope::Overall, true),

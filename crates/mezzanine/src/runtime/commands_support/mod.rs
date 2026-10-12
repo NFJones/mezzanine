@@ -4,6 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 mod agent_export;
+mod agent_status;
 mod buffers;
 mod config;
 mod displays;
@@ -28,6 +29,7 @@ use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 use std::collections::BTreeMap;
 
 pub(super) use agent_export::*;
+pub(crate) use agent_status::{RuntimeTerminalStatusWork, terminal_status_options};
 pub(super) use buffers::*;
 pub(super) use config::*;
 use displays::{
@@ -57,6 +59,16 @@ pub(super) fn execute_runtime_command_sequence(
     primary_client_id: &mez_core::ids::ClientId,
     input: &str,
 ) -> Result<Vec<CommandOutcome>> {
+    if parse_command_sequence(input)?.iter().any(|command| {
+        command.name == "agent-status"
+            && terminal_status_options(&command.args).is_ok_and(|options| {
+                options.extended || options.scope != mez_agent::slash::StatusScope::Overall
+            })
+    }) {
+        return Err(MezError::invalid_state(
+            "agent status snapshots require the off-actor terminal runtime",
+        ));
+    }
     execute_runtime_command_sequence_with_agent_browser(service, primary_client_id, input)
         .map(|(outcomes, _)| outcomes)
 }
@@ -74,6 +86,12 @@ pub(super) fn execute_runtime_command_sequence_with_agent_browser(
     let mut active_client_id = primary_client_id.clone();
     let mut browser = None;
     for command in &plan {
+        if matches!(outcomes.last(), Some(CommandOutcome::Display { command, .. }) if command == "agent-status")
+        {
+            service
+                .agent
+                .cancel_pending_terminal_status_for_client(primary_client_id);
+        }
         browser = None;
         outcomes.push(execute_runtime_planned_terminal_command_with_browser(
             service,
@@ -391,6 +409,27 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_show_metrics_display(service),
         })),
+        "agent-status" => {
+            let options = terminal_status_options(&invocation.args)?;
+            let pane = service
+                .session
+                .active_pane_for(primary_client_id)?
+                .id
+                .to_string();
+            if options.extended || options.scope != mez_agent::slash::StatusScope::Overall {
+                service.dispatch_terminal_status_report(primary_client_id, &pane, options)?;
+                Ok(Some(CommandOutcome::Display {
+                    command: invocation.name.clone(),
+                    body: "## Agent Status\n\nPreparing accounting snapshot…".into(),
+                }))
+            } else {
+                Ok(Some(CommandOutcome::LiveDisplay {
+                    command: invocation.name.clone(),
+                    body: service.runtime_agent_status_display_with_options(&pane, false)?,
+                    source: crate::ui::command::CommandDisplaySource::AgentStatus { pane_id: pane },
+                }))
+            }
+        }
         "show-pane-status" => {
             let target = match invocation.args.as_slice() {
                 [] => None,

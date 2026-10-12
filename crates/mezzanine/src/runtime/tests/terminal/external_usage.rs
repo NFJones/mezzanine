@@ -575,6 +575,13 @@ fn runtime_harness_status_external_only_does_not_create_native_session() {
         .unwrap();
     assert!(response.contains("codex"), "{response}");
     assert!(service.agent_shell_store().get("%1").is_none());
+    let terminal = service
+        .execute_terminal_command(&client, "agent-status")
+        .unwrap();
+    let slash: serde_json::Value = serde_json::from_str(&response).unwrap();
+    let terminal: serde_json::Value = serde_json::from_str(&terminal).unwrap();
+    assert_eq!(terminal["outcomes"][0]["body"], slash["body"]);
+    assert!(service.agent_shell_store().get("%1").is_none());
     let report = service
         .prepare_status_report(
             &client,

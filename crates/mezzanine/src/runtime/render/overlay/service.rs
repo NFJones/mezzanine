@@ -2260,6 +2260,10 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         self.require_live()?;
         self.presentation.overlay_action_registry.begin_generation();
+        self.presentation.primary_display_overlay_generation = self
+            .presentation
+            .overlay_action_registry
+            .current_generation();
         self.presentation.primary_display_overlay = if lines.is_empty() {
             None
         } else {
@@ -2308,6 +2312,12 @@ impl RuntimeSessionService {
         let should_open_overlay = runtime_command_display_should_open_overlay(&content);
         if should_open_overlay {
             let live_source = content.live_source.clone();
+            let status_owner = live_source.as_ref().and_then(|source| match source {
+                RuntimeLiveOverlaySourceKind::AgentStatus { pane_id, .. } => {
+                    Some(self.status_live_owner(pane_id))
+                }
+                _ => None,
+            });
             let available_width = runtime_command_overlay_available_width(
                 usize::from(self.session.authoritative_size.columns),
                 !content.actions.is_empty(),
@@ -2331,6 +2341,7 @@ impl RuntimeSessionService {
                 const LIVE_STATUS_REFRESH_INTERVAL_MS: u64 = 1_000;
                 overlay.live_source = Some(RuntimeLiveOverlaySource {
                     source,
+                    status_owner,
                     refresh_interval_ms: LIVE_STATUS_REFRESH_INTERVAL_MS,
                     next_due_ms: current_unix_millis()
                         .saturating_add(LIVE_STATUS_REFRESH_INTERVAL_MS),
@@ -2434,6 +2445,15 @@ impl RuntimeSessionService {
         };
         if now_ms < live_source.next_due_ms {
             return Ok(false);
+        }
+        if live_source
+            .status_owner
+            .as_ref()
+            .is_some_and(|owner| !self.status_live_owner_is_current(owner))
+        {
+            self.presentation.primary_display_overlay = None;
+            self.presentation.capture_projected_client_state();
+            return Ok(true);
         }
         let terminal_width = usize::from(self.session.authoritative_size.columns).max(1);
         let prose_width = terminal_width
