@@ -207,6 +207,27 @@ or certify a live Codex process. Its release reference is
 That reference is evidence, not a compatibility gate. The fixed internal helper
 normalizes at most 64 KiB/250 ms of stdin and remains neutral on unavailable
 telemetry; it never starts Codex, initializes a primary or bypasses vendor trust.
+Further source inspection at upstream `openai/codex` commit `0c329ad2` confirms
+ordinary hook schemas have lifecycle IDs/selected model but no usage counters.
+This is not a blanket absence of ordinary-mode counters: OTEL completion events
+and response spans expose input/output/cache-read/cache-write/reasoning counters.
+TUI `last_token_usage` can mean active context occupancy, while `total_token_usage`
+is accumulated session usage; neither is an independently qualified new request.
+No OTEL accounting receiver or metadata-only exporter activation is installed by
+this adapter. The inspected completion-log method does not take a response/request
+ID or request-frozen origin; OTLP trace/span correlation and native requesting
+client association, especially with a shared daemon, still require qualification.
+Conversation labels, exporter peers and timestamps cannot select billing owners.
+Codex selects one exporter per signal, not an appendable sink list. Replacing an
+authored exporter would change its destinations/privacy contract; detailed logs
+also include account/email and optional content. A future source must preserve
+authored exporters, filter allowlisted metadata, retain unknown versus zero,
+qualify response model/category/original expense origin, and provide typed durable
+same-report acknowledgments without transcript reads or provider replay.
+Same-ID startup retries are not clear/resume/fork transitions. The neutral fixed
+hook discards admission replies and retains no exact predecessor; changed boundary
+is fenced rather than silently rotating/recharging. Actual source handoff and
+durable pending recovery or cumulative attachment remain explicit unfinished work.
 The revision-4 hook candidate owns only exact compiled members of five lifecycle
 event arrays in shared `hooks.json`. Authored callbacks/matchers/timeouts, unrelated
 events, metadata, disabled policy and `config.toml` survive install and uninstall.

@@ -127,6 +127,37 @@ pub(super) async fn run<W: Write>(
 mod tests {
     use super::*;
 
+    /// The installed helper's allowlisted lifecycle envelope cannot promote
+    /// OTEL completion counters, context occupancy, selected model or supplied
+    /// request/source/project selectors into accounting authority. Standalone
+    /// completion telemetry is not a callback and produces no control request.
+    #[test]
+    fn codex_hook_source_safety_never_forwards_unqualified_usage() {
+        for event in ["UserPromptSubmit", "Stop", "Interrupt"] {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "hook_event_name":event,"session_id":"session-a","turn_id":"turn-a",
+                "stop_hook_active":false,"model":"selected-model","permission_mode":"default",
+                "event.name":"codex.sse_event","event.kind":"response.completed",
+                "input_token_count":"121","output_token_count":"13","cached_token_count":32,
+                "cache_write_token_count":4,"reasoning_token_count":2,
+                "last_token_usage":{"total_tokens":5000},"total_token_usage":{"total_tokens":6000},
+                "request_id":"PRIVATE","source_witness":"PRIVATE","project":"PRIVATE",
+                "last_assistant_message":"PRIVATE","user.email":"PRIVATE","usage":{"input_tokens":999}
+            })).unwrap();
+            let body = request(&bytes, "%1").unwrap().unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(parsed["method"], "agent/external/codex-observe");
+            assert_eq!(
+                parsed["params"],
+                serde_json::json!({
+                    "pane_id":"%1","external_session_id":"session-a","event":event,"turn_id":"turn-a"
+                })
+            );
+            assert!(!body.contains("PRIVATE"));
+        }
+        assert!(request(br#"{"event.name":"codex.sse_event","event.kind":"response.completed","conversation.id":"session-a","input_token_count":"121"}"#, "%1").is_err());
+    }
+
     /// Early helper recognition is exact, not a broad CLI parser bypass. Other
     /// commands and option-bearing forms keep normal startup/validation; none
     /// of these inputs opens a socket or consumes stdin/configuration.

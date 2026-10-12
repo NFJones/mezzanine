@@ -1,10 +1,13 @@
 //! Content-free best-effort lifecycle projection from documented Codex fields.
 //!
-//! Source: codex-rs/hooks/schema/generated at the released tag. Hook input is
-//! observational data, not pane/registration authority. A launcher must privately
-//! bind a main session and serialize presentation sequences before forwarding.
-//! No transcripts, prompt text, tool payloads, credentials or counters leave this
-//! owner. This component is not a certified installed adapter or usage tap.
+//! Sources: released codex-rs/hooks/schema/generated and upstream hook schema,
+//! telemetry emission and TUI token models inspected at 0c329ad2. Ordinary hook
+//! inputs contain lifecycle selectors, not counters. OTEL response completion
+//! counters exist separately; TUI last-token totals may describe context occupancy.
+//! Neither source is reporting authority or original-request accounting readiness.
+//! Native admission and presentation sequencing belong to the runtime/helper,
+//! never a session label, daemon exporter or launcher claim. No transcripts,
+//! prompts, tool payloads, credentials or counters leave this lifecycle owner.
 
 use crate::error::{MezError, Result};
 
@@ -14,7 +17,7 @@ pub(crate) const RELEASE: &str = "0.160.0";
 /// Observed lifecycle fact; no executable action or registration credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Observation {
-    /// A main session began/resumed; binding still needs trusted launch authority.
+    /// A main session began/resumed; binding still needs native source admission.
     SessionReady { session: String },
     /// Coarse active/ended/interrupted turn presentation, not process death.
     Turn {
@@ -153,6 +156,47 @@ pub(crate) fn normalize_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Actual ordinary Stop fields expose selected model/lifecycle metadata,
+    /// not request usage. Unqualified completion telemetry and TUI context/session
+    /// aggregates supplied alongside a hook must remain inert: equality, zero,
+    /// resets and arbitrary extra counters cannot turn status into billed expense.
+    /// A standalone OTEL completion is not a hook or an original request boundary.
+    #[test]
+    fn codex_hook_source_safety_excludes_completion_and_context_counters() {
+        for version in [RELEASE, "0.162.1", "any-local-version"] {
+            for input in [0, 121, 999] {
+                let bytes = serde_json::to_vec(&serde_json::json!({
+                    "hook_event_name":"Stop","session_id":"session-a","turn_id":"turn-a",
+                    "stop_hook_active":false,"model":"selected-model","permission_mode":"default",
+                    "last_assistant_message":"PRIVATE","transcript_path":"PRIVATE","cwd":"PRIVATE",
+                    "event.name":"codex.sse_event","event.kind":"response.completed",
+                    "conversation.id":"unrelated-session","event.timestamp":"2026-10-12T00:00:00.000Z",
+                    "input_token_count":input.to_string(),"output_token_count":"13",
+                    "cached_token_count":32,"cache_write_token_count":4,"reasoning_token_count":2,
+                    "user.email":"PRIVATE","user.account_id":"PRIVATE",
+                    "total_token_usage":{"input_tokens":5000,"total_tokens":6000},
+                    "last_token_usage":{"input_tokens":input,"total_tokens":input},
+                    "usage":{"input_tokens":input,"output_tokens":13}
+                })).unwrap();
+                let projected = normalize_bound(version, "session-a", &bytes)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    projected,
+                    Observation::Turn {
+                        session: "session-a".into(),
+                        turn: "turn-a".into(),
+                        state: "ready"
+                    }
+                );
+                assert!(!format!("{projected:?}").contains("PRIVATE"));
+            }
+            let telemetry = br#"{"event.name":"codex.sse_event","event.kind":"response.completed","conversation.id":"session-a","model":"model","input_token_count":"121","output_token_count":"13","cached_token_count":32,"cache_write_token_count":4,"reasoning_token_count":2,"user.email":"PRIVATE"}"#;
+            let error = normalize(version, telemetry).unwrap_err();
+            assert!(!error.message().contains("PRIVATE"));
+        }
+    }
 
     /// Exact member limits and metadata/binding boundaries remain enforced even
     /// when unknown vendor fields are otherwise inert and content-free.

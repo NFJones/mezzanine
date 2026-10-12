@@ -1120,6 +1120,25 @@ status. Stop MUST remain a ready/turn boundary, not success proof, because later
 hook decisions may continue execution. Interrupt and SessionEnd observations
 MUST NOT imply vendor process death. This projection alone MUST NOT enable an
 installed adapter or imply exact token coverage.
+Ordinary Codex hook fields MUST NOT be treated as request accounting: the inspected
+SessionStart/UserPromptSubmit/Stop/SessionEnd schemas provide lifecycle IDs and
+selected-model metadata, not token counters. Separate OTEL `response.completed`
+events and response spans do expose completion input/output/cache/reasoning
+counters; this available source MUST NOT be described as absent merely because
+hooks lack usage. TUI `last_token_usage` context occupancy and accumulated session
+totals MUST NOT be billed as new expense or summed together. OTEL ingestion remains
+unqualified until stable immutable report/request correlation, actual native
+client/source ownership (including ordinary daemon topology), original expense
+origin and model/category semantics are established. Conversation IDs, timestamps,
+exporter peers and trace/span labels alone MUST NOT borrow a pane accounting owner.
+Bootstrap MUST preserve authored per-signal exporters and privacy policy; the
+inspected single-exporter selection MUST NOT be overwritten as if it were an
+additional sink. Detailed OTEL logs may include account/email and separately
+opted-in content; trace-safe emission is not general content-free ingress proof.
+Native same-ID admission retries MUST retain their original boundary, while
+clear/resume/fork handoff requires independently captured original predecessor
+evidence. The fixed neutral command hook retains no such predecessor. No fresh
+namespace, inherited-history import or no-gap restart guarantee may be inferred.
 Fixed observation-only Codex helpers MUST remain bounded and neutral without
 launching vendors, initializing primaries or modifying approval/trust policy.
 Ordinary-command enrollment and exact shared-hook reconciliation remain separate

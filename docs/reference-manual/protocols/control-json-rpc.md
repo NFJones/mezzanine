@@ -677,6 +677,29 @@ Proof loss is connection-lost despite parent survival, with finite 30s+60s grace
 This does not prove continuous idle observer health or no-gap delivery; usage
 remains unavailable and no callback grants native task powers. Installation
 is not proof of actual vendor loading or callback delivery.
+Ordinary Codex usage remains unqualified, not fabricated zero. Source inspection
+at `openai/codex` commit `0c329ad2c9d5a2592128a1d536c66e16f9397e46` found no
+token counters in the installed lifecycle hook schemas, but separate OTEL
+`sse_event_completed(usage, ttft_ms)` and response-span completion do emit actual
+input/output/cache/reasoning counters. The completion-log signature/shared metadata
+provide no original-request origin or response/request ID argument. OTLP trace/span
+correlation is a possible separate source, not proof of native client/pane ownership
+or ready-marker provenance. A collector must establish those facts, preserve response
+model/category and immutable report identity, bound retry/retention and freeze origin
+before charging. TUI last/context and cumulative totals are not additional deltas.
+Current Codex configuration selects one exporter per signal; bootstrap cannot
+silently replace an authored exporter or promise a metadata-only additional sink.
+Detailed log macros include account/email; trace-safe events omit those common log
+fields, but that alone does not qualify all exported payloads or native provenance.
+No receiver/exporter rewrite or alternate accounting RPC is enabled here. Tests
+qualify that completion-like extra fields remain absent from fixed lifecycle
+envelopes and create no request markers, observations, receipts, checkpoints or
+expense even when a real native source mapping exists.
+The original fixed command-hook instance coalesces only its exact boundary. A
+same-ID resume/clear/fork boundary is not an identical retry and requires a fresh
+observer with captured predecessor evidence; the neutral helper retains none.
+Retired source namespaces remain fenced. This is a deliberate fail-closed gap,
+not qualification of actual transitions or cross-process restart/replay continuity.
 The documented curated argv API identifies its direct creator contract; only
 the helper's real same-user Unix origin/current writer, native captured parent
 and exact creator/source/root lifetimes authorize that physical association.

@@ -10,6 +10,9 @@ use super::*;
 /// with no fd3 or launcher secret. Real Unix ingress must register only its
 /// qualified native creator, preserve identity on retry, retain unavailable
 /// freshness/usage and never initialize a client or allocate provider work.
+/// Real-shaped selected-model, OTEL completion and context-total fields remain
+/// inert even alongside the admitted hook: a durable source namespace does not
+/// grant request readiness, import unqualified telemetry or produce expense.
 /// The test requires a freshly built binary and does not run actual Codex.
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires freshly built sibling mez binary; real installed Codex helper qualification"]
@@ -65,7 +68,11 @@ async fn external_codex_installed_session_start_admits_native_creator_without_la
         ("Stop", "a"),
         ("SessionEnd", ""),
     ] {
-        let launch = serde_json::json!({"command":command,"event":{"hook_event_name":event,"session_id":"session-a","source":"startup","turn_id":turn,"stop_hook_active":false,"prompt":"PRIVATE","transcript_path":"PRIVATE","usage":{"input_tokens":999}}}).to_string();
+        let launch = serde_json::json!({"command":command,"event":{"hook_event_name":event,"session_id":"session-a","source":"startup","turn_id":turn,"stop_hook_active":false,"prompt":"PRIVATE","transcript_path":"PRIVATE","usage":{"input_tokens":999},
+            "model":"selected-not-response","permission_mode":"default","last_assistant_message":"PRIVATE",
+            "event.name":"codex.sse_event","event.kind":"response.completed","conversation.id":"unrelated-session",
+            "input_token_count":"121","output_token_count":"13","cached_token_count":32,"cache_write_token_count":4,"reasoning_token_count":2,
+            "user.email":"PRIVATE","total_token_usage":{"input_tokens":5000,"total_tokens":6000},"last_token_usage":{"input_tokens":1000,"total_tokens":1000}}}).to_string();
         fixture.socket.write_all(&[9]).await.unwrap();
         fixture
             .socket
@@ -110,6 +117,7 @@ async fn external_codex_installed_session_start_admits_native_creator_without_la
     assert_eq!(binding.harness, "codex");
     let source = binding.enrollment.as_ref().unwrap();
     assert!(source.usage_owner_is_durable);
+    assert!(!source.request_reports_seen);
     assert!(source.producer.matches_parent(
         fixture.connection.unix_origin().unwrap().uid(),
         fixture.connection.unix_origin().unwrap().identity
@@ -144,4 +152,20 @@ async fn external_codex_installed_session_start_admits_native_creator_without_la
             .unwrap(),
         1
     );
+    for table in [
+        "external_usage_requests",
+        "external_usage_observations",
+        "external_usage_receipts",
+        "external_usage_streams",
+    ] {
+        assert_eq!(
+            database
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0,
+            "unqualified callback counters cannot allocate {table}"
+        );
+    }
 }
