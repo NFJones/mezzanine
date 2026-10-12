@@ -428,6 +428,15 @@ async fn post_token_form(token_endpoint: &str, form: &BTreeMap<&str, String>) ->
         MezError::invalid_state(format!("MCP OAuth token response read failed: {error}"))
     })?;
     if !status.is_success() {
+        if form
+            .get("grant_type")
+            .is_some_and(|grant| grant == "refresh_token")
+            && super::refresh::rejected(status.as_u16(), &body)
+        {
+            return Err(MezError::forbidden(
+                "MCP refresh credential rejected; authentication required",
+            ));
+        }
         return Err(MezError::invalid_state(format!(
             "MCP OAuth token endpoint returned status {}",
             status.as_u16()

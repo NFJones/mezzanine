@@ -249,6 +249,9 @@ pub(crate) fn auth_status_store_table_row(provider: &str, status: AuthStatus) ->
             (credential_store_kind_name(store).to_string(), "available")
         }
         crate::security::auth::AuthCredentialState::LoggedOut => ("none".to_string(), "logged-out"),
+        crate::security::auth::AuthCredentialState::AuthenticationRequired => {
+            ("none".to_string(), "authentication-required")
+        }
         crate::security::auth::AuthCredentialState::MissingSecret { .. } => {
             ("none".to_string(), "missing-secret")
         }

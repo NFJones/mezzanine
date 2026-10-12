@@ -201,6 +201,20 @@ pub(super) async fn parse_provider_response_async<T: for<'de> Deserialize<'de>>(
     let status = response.status();
     let text = response.text().await.map_err(provider_transport_error)?;
     if !status.is_success() {
+        if label == "OpenAI token refresh" {
+            if super::super::refresh::rejected(status.as_u16(), &text) {
+                return Err(MezError::forbidden(
+                    "OpenAI refresh credential rejected; authentication required",
+                ));
+            }
+            return Err(MezError::new(
+                MezErrorKind::Io,
+                format!(
+                    "OpenAI token refresh failed with status {}",
+                    status.as_u16()
+                ),
+            ));
+        }
         return Err(MezError::new(
             MezErrorKind::Io,
             format!(
@@ -209,7 +223,16 @@ pub(super) async fn parse_provider_response_async<T: for<'de> Deserialize<'de>>(
             ),
         ));
     }
-    serde_json::from_str(&text).map_err(provider_parse_error)
+    serde_json::from_str(&text).map_err(|error| {
+        if label == "OpenAI token refresh" {
+            MezError::new(
+                MezErrorKind::Io,
+                "OpenAI token refresh response could not be decoded",
+            )
+        } else {
+            provider_parse_error(error)
+        }
+    })
 }
 
 /// Runs the async http client operation for this subsystem.

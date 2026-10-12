@@ -139,8 +139,16 @@ pub async fn refresh_openai_provider_credential_async(
         ));
     }
     let issuer = openai_auth_issuer();
+    refresh_credential_with_issuer(&issuer, refresh_token).await
+}
+
+/// Refreshes against the resolved issuer; tests may inject a local endpoint.
+pub(in crate::security::auth) async fn refresh_credential_with_issuer(
+    issuer: &str,
+    refresh_token: &str,
+) -> Result<OpenAiProviderCredential> {
     Ok(provider_credential_from_tokens(
-        refresh_tokens_async(&issuer, refresh_token).await?,
+        refresh_tokens_async(issuer, refresh_token).await?,
     ))
 }
 

@@ -36,6 +36,8 @@ mod metadata;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod openai_oauth;
+/// Secret-safe OAuth rejection classification and session-local refresh fencing.
+mod refresh;
 /// Exposes the secret service module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -175,6 +177,9 @@ impl AuthProfileCredentialSource<'_> {
 #[cfg(test)]
 use types::SECRET_TOOL_PROGRAM;
 
+/// Isolated local-endpoint refresh rejection, rotation and cancellation tests.
+#[cfg(test)]
+mod refresh_tests;
 /// Exposes the tests module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

@@ -12,6 +12,58 @@ use zeroize::Zeroizing;
 
 use crate::error::{MezError, Result};
 
+/// Acquires the common auth commit lock without blocking an actor/runtime
+/// thread. The private no-follow file and OS flock serialize independent
+/// stores/processes on Linux and macOS; dropping the file releases ownership.
+pub(super) fn auth_commit_lock(root: &Path) -> Result<fs::File> {
+    use rustix::fs::{FlockOperation, flock};
+    use std::os::unix::fs::OpenOptionsExt;
+    ensure_private_dir(root)?;
+    let path = root.join("auth-commit.lock");
+    reject_existing_symlink_components(&path)?;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(&path)?;
+    if !file.metadata()?.is_file() {
+        return Err(MezError::forbidden(
+            "auth commit lock is not a regular file",
+        ));
+    }
+    flock(&file, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
+        if error == rustix::io::Errno::WOULDBLOCK {
+            MezError::conflict(
+                "authentication update is in progress; retry the login or next request",
+            )
+        } else {
+            MezError::from(std::io::Error::from(error))
+        }
+    })?;
+    Ok(file)
+}
+
+/// Waits asynchronously for a short credential commit without blocking actor
+/// input. The caller retains successful rotation state if the bounded wait or
+/// cancellation interrupts acquisition, so a later request can commit it.
+pub(super) async fn auth_refresh_commit_lock(root: &Path) -> Result<fs::File> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match auth_commit_lock(root) {
+            Err(error)
+                if error.kind() == crate::error::MezErrorKind::Conflict
+                    && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            result => return result,
+        }
+    }
+}
+
 /// Runs the ensure private dir operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

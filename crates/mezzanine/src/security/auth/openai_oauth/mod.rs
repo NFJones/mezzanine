@@ -17,6 +17,8 @@ use crate::error::{MezError, MezErrorKind, Result};
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
+#[cfg(test)]
+pub(super) use browser_flow::refresh_credential_with_issuer;
 /// Defines the DEFAULT CLIENT ID const used by this subsystem.
 ///
 /// This is an intentionally public native-app OAuth client identifier for the

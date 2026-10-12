@@ -2547,6 +2547,16 @@ impl AsyncRuntimeSessionActor {
                         self.service
                             .claim_configured_agent_provider_task(&agent_id, &turn_id)
                     });
+                // Preparation failures belong to the turn, just like claim
+                // failures. Letting them escape stops the supervised provider
+                // service and can tear down an otherwise usable attachment.
+                let result = match result {
+                    Ok(dispatch) => Ok(dispatch),
+                    Err(error) => self
+                        .service
+                        .fail_configured_agent_provider_task(&turn_id, &error)
+                        .map(|_| None),
+                };
                 let result = result.and_then(|dispatch| {
                     if let Some(mut dispatch) = dispatch {
                         self.timers.next_provider_claim_generation =

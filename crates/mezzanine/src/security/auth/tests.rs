@@ -1,5 +1,56 @@
 //! Unit tests for auth metadata, credential stores, and auth-store orchestration.
 
+/// Verifies named ChatGPT profiles cannot alias access/refresh secret names in
+/// the common OS backend keyspace. Both a suffix collision and the default
+/// openai-refresh identity must preserve every previously written token.
+#[test]
+fn named_chatgpt_profiles_have_disjoint_os_credential_keys() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-os-names-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = AuthStore::new(AuthPaths::under_config_root(&root));
+    let runner = FakeCredentialRunner::available();
+    let backend = CommandBackedCredentialStore::secret_tool_with_runner(runner.clone());
+    let mut records = Vec::new();
+    for identity in ["openai", "openai-refresh", "shared", "shared-refresh"] {
+        let access = format!("synthetic-access-{identity}");
+        let refresh = format!("synthetic-refresh-{identity}");
+        let credential = OpenAiProviderCredential {
+            api_key: access.clone(),
+            refresh_token: Some(refresh.clone()),
+            account_id: None,
+            organization_id: None,
+            token_expires_at: Some("4102444800".into()),
+        };
+        let metadata = store
+            .login_chatgpt_profile_credential(identity, "default", credential, &backend)
+            .unwrap();
+        records.push((metadata, access, refresh));
+    }
+    for (metadata, access, refresh) in records {
+        assert_eq!(
+            backend
+                .load_secret(metadata.credential_store_ref.as_deref().unwrap())
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            access
+        );
+        assert_eq!(
+            backend
+                .load_secret(metadata.refresh_credential_store_ref.as_deref().unwrap())
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            refresh
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 use super::{
     AuthCredentialKind, AuthCredentialState, AuthMetadata, AuthMethod, AuthPaths,
     AuthProfileCredentialSource, AuthStore, CommandBackedCredentialStore, CredentialCommandOutput,
@@ -1416,7 +1467,7 @@ fn openai_refresh_needed_only_when_expiry_is_inside_leeway_and_refresh_exists() 
     assert!(!super::store::openai_refresh_needed_at(&metadata, 100, 9));
 
     metadata.refresh_credential_store_ref = None;
-    assert!(!super::store::openai_refresh_needed_at(&metadata, 100, 10));
+    assert!(super::store::openai_refresh_needed_at(&metadata, 100, 10));
 
     metadata.refresh_credential_store_ref = Some("file:/tmp/refresh".to_string());
     metadata.provider = "other".to_string();

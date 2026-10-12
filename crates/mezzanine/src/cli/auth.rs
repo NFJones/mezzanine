@@ -53,6 +53,17 @@ pub(super) async fn run_auth<W: Write>(
             let provider = login.provider.clone();
             let selected_profile = login.profile.clone();
             let credential_store = login.credential_store.clone();
+            let auth_profile = login
+                .auth_profile
+                .clone()
+                .unwrap_or_else(|| "openai".to_string());
+            if login.auth_profile.is_some()
+                && (provider != "openai" || method == AuthMethod::ApiKey)
+            {
+                return Err(MezError::invalid_args(
+                    "--auth-profile is supported only for OpenAI ChatGPT browser/device-code login",
+                ));
+            }
             match method {
                 AuthMethod::ApiKey => {
                     if let Some(path) = login.api_key_file.as_ref() {
@@ -132,9 +143,11 @@ pub(super) async fn run_auth<W: Write>(
                         let store = store.clone();
                         let selected_profile = selected_profile.to_string();
                         let credential_store = credential_store.clone();
+                        let auth_profile = auth_profile.clone();
                         move || {
                             login_openai_provider_credential_for_cli(
                                 &store,
+                                &auth_profile,
                                 &selected_profile,
                                 credential_store.as_deref(),
                                 credential,
@@ -142,7 +155,9 @@ pub(super) async fn run_auth<W: Write>(
                         }
                     })
                     .await?;
-                    persist_authenticated_provider_defaults(&paths, &metadata)?;
+                    if auth_profile == "openai" {
+                        persist_authenticated_provider_defaults(&paths, &metadata)?;
+                    }
                     write_auth_login(stdout, output_format, &metadata)?;
                 }
                 AuthMethod::DeviceCode => {
@@ -156,9 +171,11 @@ pub(super) async fn run_auth<W: Write>(
                         let store = store.clone();
                         let selected_profile = selected_profile.to_string();
                         let credential_store = credential_store.clone();
+                        let auth_profile = auth_profile.clone();
                         move || {
                             login_openai_provider_credential_for_cli(
                                 &store,
+                                &auth_profile,
                                 &selected_profile,
                                 credential_store.as_deref(),
                                 credential,
@@ -166,7 +183,9 @@ pub(super) async fn run_auth<W: Write>(
                         }
                     })
                     .await?;
-                    persist_authenticated_provider_defaults(&paths, &metadata)?;
+                    if auth_profile == "openai" {
+                        persist_authenticated_provider_defaults(&paths, &metadata)?;
+                    }
                     write_auth_login(stdout, output_format, &metadata)?;
                 }
             }
@@ -212,6 +231,9 @@ pub(super) struct AuthLoginCliArgs {
     /// Provider kind to authenticate against.
     #[arg(long, default_value = "openai")]
     provider: String,
+    /// Explicit credential identity for a named/shared ChatGPT auth profile.
+    #[arg(long)]
+    auth_profile: Option<String>,
     /// Selects API-key authentication.
     #[arg(long)]
     api_key: bool,
@@ -342,11 +364,13 @@ pub(super) fn login_provider_api_key_for_cli(
 /// on duplicated control-flow logic.
 fn login_openai_provider_credential_for_cli(
     store: &AuthStore,
+    auth_profile: &str,
     selected_profile: &str,
     credential_store: Option<&str>,
     credential: OpenAiProviderCredential,
 ) -> Result<crate::security::auth::AuthMetadata> {
-    store.login_openai_provider_credential_with_selected_store(
+    store.login_chatgpt_profile_credential_with_selected_store(
+        auth_profile,
         selected_profile,
         credential,
         credential_store,
@@ -478,6 +502,62 @@ pub(super) fn auth_status_json(
 #[cfg(test)]
 mod tests {
     use super::run_auth_store_operation;
+
+    /// Verifies the exact recovery command emitted for a shared ChatGPT profile
+    /// is accepted by the CLI and persists only that selected identity through
+    /// the browser/device credential completion helper, without network login.
+    #[test]
+    fn auth_named_profile_recovery_command_and_persistence() {
+        super::super::parse_cli_arg_group::<super::AuthCliArgs>(
+            "mez auth",
+            &[
+                "login",
+                "--provider",
+                "openai",
+                "--auth-profile",
+                "shared-chatgpt",
+                "--device-code",
+            ]
+            .map(str::to_string),
+        )
+        .unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "mez-cli-named-auth-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = super::AuthStore::new(super::AuthPaths::under_config_root(&root));
+        let credential = super::OpenAiProviderCredential {
+            api_key: "synthetic-access".into(),
+            refresh_token: Some("synthetic-refresh".into()),
+            account_id: None,
+            organization_id: None,
+            token_expires_at: Some("4102444800".into()),
+        };
+        let metadata = super::login_openai_provider_credential_for_cli(
+            &store,
+            "shared-chatgpt",
+            "default",
+            Some("file"),
+            credential,
+        )
+        .unwrap();
+        assert_eq!(metadata.provider, "shared-chatgpt");
+        assert!(
+            store
+                .status_for_provider("shared-chatgpt")
+                .unwrap()
+                .authenticated
+        );
+        assert!(
+            store
+                .read_metadata_for_provider("openai")
+                .unwrap()
+                .is_none()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// Verifies auth store operations run on a blocking thread rather than a
     /// Tokio runtime worker. Native secret-store adapters may start and drive

@@ -705,6 +705,8 @@ pub struct AuthStatus {
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthCredentialState {
+    /// A session-observed permanent refresh rejection requires explicit login.
+    AuthenticationRequired,
     /// Represents the Logged Out case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path

@@ -39,6 +39,13 @@ mez auth login --provider anthropic --api-key --api-key-file /secure/path/anthro
 For OpenAI, a device-code flow is also available with
 `mez auth login --device-code`.
 
+For a named or shared ChatGPT credential identity selected by a provider's
+`auth_profile`, use `mez auth login --provider openai --auth-profile <identity>`.
+It supports browser login or `--device-code`, persists only the named record,
+and does not alter provider defaults. Invalid refresh credentials fail only the
+affected request with sign-in guidance; replacing them lets a new request run
+in the same session without replaying the failed request or actions.
+
 DeepSeek also supports API-key authentication:
 
 ```sh

@@ -49,6 +49,27 @@ as authenticated. For MCP, use `/list-mcp` to inspect a server's enabled,
 unavailable, or session-blacklisted state; fix its configured executable,
 endpoint, credential reference, or network reachability before retrying.
 
+An invalid, revoked, expired or reused OAuth refresh token fails only the
+affected request, not the Mez session. Follow `mez auth login --provider <name>`
+for the selected provider, or `mez mcp login <server>` for MCP. The session
+suppresses further refresh attempts for the same rejected credential; replacing
+it with a successful login lets a new request proceed without restarting Mez.
+Other providers, panes and terminal commands remain available. Failed requests
+and actions are not replayed, and transient network/server failures do not mark
+the credential permanently rejected.
+
+For a named/shared ChatGPT auth profile, use
+`mez auth login --provider openai --auth-profile <identity>` (optionally
+`--device-code`). This replaces that credential record, not the default OpenAI
+record. If an authentication update is already committing in another process,
+retry the login or submit a new request after it completes; Mez does not wait
+indefinitely on the credential commit lock.
+
+Refresh workers wait asynchronously for brief credential-update contention. If
+that bounded wait expires, a new request can commit the session's retained
+rotation without refreshing the old single-use token again. Keep the session
+running while retrying; no provider request or action is replayed automatically.
+
 Provider SSE streams require a recognized terminal event such as
 `response.completed`, `response.failed`, `response.incomplete`, `[DONE]`, or
 Anthropic `message_stop`. If the HTTP peer closes first, Mez treats the EOF as

@@ -1013,6 +1013,7 @@ fn mcp_setting_json(id: &str, changed: bool, reload_required: bool) -> Result<St
 fn mcp_credential_state_name(state: &AuthCredentialState) -> &'static str {
     match state {
         AuthCredentialState::LoggedOut => "logged-out",
+        AuthCredentialState::AuthenticationRequired => "authentication-required",
         AuthCredentialState::MissingSecret { .. } => "missing-secret",
         AuthCredentialState::Available { .. } => "available",
     }

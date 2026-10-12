@@ -43,11 +43,6 @@ use super::types::{
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const OPENAI_PROVIDER: &str = "openai";
-/// Defines the OPENAI REFRESH CREDENTIAL NAME const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-const OPENAI_REFRESH_CREDENTIAL_NAME: &str = "openai-refresh";
 /// Monotonic suffix for staged MCP credential names within this process.
 static NEXT_MCP_CREDENTIAL_STAGE_ID: AtomicU64 = AtomicU64::new(1);
 /// Defines the DEFAULT PROVIDER AUTH REFRESH LEEWAY SECONDS const used by this subsystem.
@@ -60,13 +55,18 @@ pub const DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS: u64 = 24 * 60 * 60;
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct AuthStore {
     /// Stores the paths value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     paths: AuthPaths,
+    /// Shared rejection state for this session, never persisted or logged.
+    refresh_fences: super::refresh::RefreshFences,
+    /// Isolated local OAuth issuer for real-path regression tests.
+    #[cfg(test)]
+    refresh_issuer: Option<String>,
 }
 
 impl AuthStore {
@@ -76,7 +76,19 @@ impl AuthStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn new(paths: AuthPaths) -> Self {
-        Self { paths }
+        Self {
+            paths,
+            refresh_fences: Default::default(),
+            #[cfg(test)]
+            refresh_issuer: None,
+        }
+    }
+
+    /// Injects a local refresh issuer without changing process environment.
+    #[cfg(test)]
+    pub(crate) fn with_refresh_issuer(mut self, issuer: String) -> Self {
+        self.refresh_issuer = Some(issuer);
+        self
     }
 
     /// Runs the paths operation for this subsystem.
@@ -309,7 +321,14 @@ impl AuthStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn write_metadata(&self, metadata: &AuthMetadata) -> Result<PathBuf> {
+        let _commit = super::fs::auth_commit_lock(self.paths.root())?;
+        self.write_metadata_locked(metadata)
+    }
+
+    /// Writes provider metadata while the caller owns the auth commit lock.
+    fn write_metadata_locked(&self, metadata: &AuthMetadata) -> Result<PathBuf> {
         metadata.validate_non_secret()?;
         let mut existing = self.read_all_metadata()?;
         existing.insert(metadata.provider.clone(), metadata.clone());
@@ -326,7 +345,14 @@ impl AuthStore {
     }
 
     /// Writes non-secret MCP auth metadata without storing token material.
+    #[cfg(test)]
     pub fn write_mcp_metadata(&self, metadata: &McpAuthMetadata) -> Result<PathBuf> {
+        let _commit = super::fs::auth_commit_lock(self.paths.root())?;
+        self.write_mcp_metadata_locked(metadata)
+    }
+
+    /// Writes MCP metadata while the caller owns the auth commit lock.
+    fn write_mcp_metadata_locked(&self, metadata: &McpAuthMetadata) -> Result<PathBuf> {
         metadata.validate_non_secret()?;
         let mut existing = self.read_all_mcp_metadata()?;
         existing.insert(metadata.server_id.clone(), metadata.clone());
@@ -464,6 +490,7 @@ impl AuthStore {
         credential: McpOAuthCredential,
         credential_store: &dyn CredentialStore,
     ) -> Result<McpAuthMetadata> {
+        let _commit = super::fs::auth_commit_lock(self.paths.root())?;
         validate_safe_name(
             &metadata.server_id,
             "MCP server id is not credential-store safe",
@@ -507,7 +534,7 @@ impl AuthStore {
         metadata.resource = credential.resource;
         metadata.authorization_endpoint = credential.authorization_endpoint;
         metadata.token_endpoint = credential.token_endpoint;
-        if let Err(error) = self.write_mcp_metadata(&metadata) {
+        if let Err(error) = self.write_mcp_metadata_locked(&metadata) {
             return Err(rollback_staged_mcp_credentials(
                 credential_store,
                 &staged_references,
@@ -573,6 +600,7 @@ impl AuthStore {
         token: String,
         credential_store: &dyn CredentialStore,
     ) -> Result<McpAuthMetadata> {
+        let _commit = super::fs::auth_commit_lock(self.paths.root())?;
         validate_safe_name(
             &metadata.server_id,
             "MCP server id is not credential-store safe",
@@ -593,7 +621,7 @@ impl AuthStore {
         metadata.resource = None;
         metadata.authorization_endpoint = None;
         metadata.token_endpoint = None;
-        self.write_mcp_metadata(&metadata)?;
+        self.write_mcp_metadata_locked(&metadata)?;
         Ok(metadata)
     }
 
@@ -725,6 +753,10 @@ impl AuthStore {
         server_id: &str,
     ) -> Result<bool> {
         validate_safe_name(server_id, "MCP server id is not credential-store safe")?;
+        let fence = self
+            .refresh_fences
+            .for_identity(format!("mcp:{server_id}"))?;
+        let mut rejected = fence.lock().await;
         let Some(mut metadata) = self.read_mcp_metadata_for_server(server_id)? else {
             return Ok(false);
         };
@@ -735,20 +767,54 @@ impl AuthStore {
             return Ok(false);
         };
         let Some(refresh_token) = self.load_secret(refresh_reference)? else {
-            return Ok(false);
+            return Err(super::refresh::required(server_id, true));
         };
+        let generation = super::refresh::fingerprint(&metadata, refresh_token.expose_secret());
+        if rejected.rejected == Some(generation) {
+            return Err(super::refresh::required(server_id, true));
+        }
         let token_endpoint = metadata
             .token_endpoint
             .clone()
             .ok_or_else(|| MezError::invalid_state("MCP auth metadata has no token endpoint"))?;
-        let credential = refresh_mcp_oauth_credential_async(
-            &token_endpoint,
-            refresh_token.expose_secret(),
-            metadata.client_id.as_deref(),
-            metadata.resource.as_deref(),
-        )
-        .await?;
+        let result = if let Some((pending_generation, credential)) = &rejected.mcp_rotation
+            && *pending_generation == generation
+        {
+            Ok(credential.clone())
+        } else {
+            refresh_mcp_oauth_credential_async(
+                &token_endpoint,
+                refresh_token.expose_secret(),
+                metadata.client_id.as_deref(),
+                metadata.resource.as_deref(),
+            )
+            .await
+        };
+        let credential = match result {
+            Ok(credential) => credential,
+            Err(error) if error.kind() == crate::error::MezErrorKind::Forbidden => {
+                rejected.rejected = Some(generation);
+                return Err(super::refresh::required(server_id, true));
+            }
+            Err(error) => return Err(error),
+        };
+        rejected.mcp_rotation = Some((generation, credential.clone()));
+        let _commit = super::fs::auth_refresh_commit_lock(self.paths.root()).await?;
+        if self.read_mcp_metadata_for_server(server_id)?.as_ref() != Some(&metadata)
+            || self
+                .load_secret(refresh_reference)?
+                .as_ref()
+                .map(|s| s.expose_secret())
+                != Some(refresh_token.expose_secret())
+        {
+            rejected.mcp_rotation = None;
+            return Err(MezError::conflict(
+                "MCP credential changed during refresh; retry discovery",
+            ));
+        }
         self.update_mcp_oauth_credential(&mut metadata, credential)?;
+        rejected.mcp_rotation = None;
+        rejected.rejected = None;
         Ok(true)
     }
 
@@ -795,7 +861,7 @@ impl AuthStore {
         if credential.token_endpoint.is_some() {
             metadata.token_endpoint = credential.token_endpoint;
         }
-        self.write_mcp_metadata(metadata)?;
+        self.write_mcp_metadata_locked(metadata)?;
         Ok(())
     }
 
@@ -811,6 +877,7 @@ impl AuthStore {
         api_key: &str,
         credential_store: &dyn CredentialStore,
     ) -> Result<AuthMetadata> {
+        let _commit = super::fs::auth_commit_lock(self.paths.root())?;
         validate_safe_name(provider, "provider name is not credential-store safe")?;
         if api_key.trim().is_empty() {
             return Err(MezError::invalid_args("provider API key must not be empty"));
@@ -820,7 +887,7 @@ impl AuthStore {
         let mut metadata = AuthMetadata::new(provider, selected_model_profile);
         metadata.credential_kind = AuthCredentialKind::ApiKey;
         metadata.credential_store_ref = Some(reference);
-        self.write_metadata(&metadata)?;
+        self.write_metadata_locked(&metadata)?;
         Ok(metadata)
     }
 
@@ -990,22 +1057,95 @@ impl AuthStore {
         credential: OpenAiProviderCredential,
         credential_store: &dyn CredentialStore,
     ) -> Result<AuthMetadata> {
+        self.login_chatgpt_profile_credential(
+            OPENAI_PROVIDER,
+            selected_model_profile,
+            credential,
+            credential_store,
+        )
+    }
+
+    /// Stores ChatGPT OAuth credentials under the explicitly selected auth
+    /// identity, without overwriting unrelated profiles or sharing secret names.
+    pub fn login_chatgpt_profile_credential(
+        &self,
+        auth_profile: &str,
+        selected_model_profile: &str,
+        credential: OpenAiProviderCredential,
+        credential_store: &dyn CredentialStore,
+    ) -> Result<AuthMetadata> {
+        validate_safe_name(auth_profile, "auth profile is not credential-store safe")?;
+        let _commit = super::fs::auth_commit_lock(self.paths.root())?;
         let access_secret = SecretString::from(credential.api_key);
-        let mut metadata = AuthMetadata::new(OPENAI_PROVIDER, selected_model_profile);
+        let mut metadata = AuthMetadata::new(auth_profile, selected_model_profile);
         metadata.credential_kind = AuthCredentialKind::ChatGpt;
-        metadata.credential_store_ref =
-            Some(credential_store.store_secret(OPENAI_PROVIDER, &access_secret)?);
+        metadata.credential_store_ref = Some(
+            credential_store
+                .store_secret(&chatgpt_secret_name(auth_profile, false), &access_secret)?,
+        );
         if let Some(refresh_token) = credential.refresh_token {
             let refresh_secret = SecretString::from(refresh_token);
             metadata.refresh_credential_store_ref = Some(
-                credential_store.store_secret(OPENAI_REFRESH_CREDENTIAL_NAME, &refresh_secret)?,
+                credential_store
+                    .store_secret(&chatgpt_secret_name(auth_profile, true), &refresh_secret)?,
             );
         }
         metadata.account_id = credential.account_id;
         metadata.organization_id = credential.organization_id;
         metadata.token_expires_at = credential.token_expires_at;
-        self.write_metadata(&metadata)?;
+        self.write_metadata_locked(&metadata)?;
         Ok(metadata)
+    }
+
+    /// Resolves the selected secret backend for explicit named ChatGPT login.
+    pub fn login_chatgpt_profile_credential_with_selected_store(
+        &self,
+        auth_profile: &str,
+        selected_model_profile: &str,
+        credential: OpenAiProviderCredential,
+        selected_store: Option<&str>,
+    ) -> Result<AuthMetadata> {
+        if auth_profile == OPENAI_PROVIDER {
+            return self.login_openai_provider_credential_with_selected_store(
+                selected_model_profile,
+                credential,
+                selected_store,
+            );
+        }
+        let selected = Self::selected_credential_store_kind(selected_store)?;
+        let file = selected == Some(CredentialStoreKind::PrivateFileFallback)
+            || (selected.is_none()
+                && matches!(
+                    self.credential_store_plan(auth_profile),
+                    CredentialStorePlan::PrivateFileFallback { .. }
+                ));
+        if file {
+            return self.login_chatgpt_profile_credential(
+                auth_profile,
+                selected_model_profile,
+                credential,
+                &self.file_credential_store(auth_profile)?,
+            );
+        }
+        let native = NativeSecretServiceCredentialStore::new();
+        if matches!(
+            native.availability(),
+            CredentialStoreAvailability::Available
+        ) {
+            self.login_chatgpt_profile_credential(
+                auth_profile,
+                selected_model_profile,
+                credential,
+                &native,
+            )
+        } else {
+            self.login_chatgpt_profile_credential(
+                auth_profile,
+                selected_model_profile,
+                credential,
+                &CommandBackedCredentialStore::secret_tool(),
+            )
+        }
     }
 
     /// Stores an OpenAI provider credential through a selected or preferred store.
@@ -1165,6 +1305,10 @@ impl AuthStore {
         auth_profile: &str,
         leeway_seconds: u64,
     ) -> Result<bool> {
+        let fence = self
+            .refresh_fences
+            .for_identity(format!("provider:{auth_profile}"))?;
+        let mut rejected = fence.lock().await;
         let Some(mut metadata) = self.read_metadata_for_provider(auth_profile)? else {
             return Ok(false);
         };
@@ -1172,14 +1316,62 @@ impl AuthStore {
             return Ok(false);
         }
         let Some(refresh_reference) = metadata.refresh_credential_store_ref.as_deref() else {
-            return Ok(false);
+            return Err(super::refresh::required(auth_profile, false));
         };
         let Some(refresh_token) = self.load_secret(refresh_reference)? else {
-            return Ok(false);
+            return Err(super::refresh::required(auth_profile, false));
         };
-        let credential =
-            refresh_openai_provider_credential_async(refresh_token.expose_secret()).await?;
+        let generation = super::refresh::fingerprint(&metadata, refresh_token.expose_secret());
+        if rejected.rejected == Some(generation) {
+            return Err(super::refresh::required(auth_profile, false));
+        }
+        let result = if let Some((pending_generation, credential)) = &rejected.provider_rotation
+            && *pending_generation == generation
+        {
+            Ok(credential.clone())
+        } else {
+            #[cfg(test)]
+            let result = if let Some(issuer) = &self.refresh_issuer {
+                super::openai_oauth::refresh_credential_with_issuer(
+                    issuer,
+                    refresh_token.expose_secret(),
+                )
+                .await
+            } else {
+                refresh_openai_provider_credential_async(refresh_token.expose_secret()).await
+            };
+            #[cfg(not(test))]
+            let result =
+                refresh_openai_provider_credential_async(refresh_token.expose_secret()).await;
+            result
+        };
+        let credential = match result {
+            Ok(credential) => credential,
+            Err(error) if error.kind() == crate::error::MezErrorKind::Forbidden => {
+                rejected.rejected = Some(generation);
+                return Err(super::refresh::required(auth_profile, false));
+            }
+            Err(error) => return Err(error),
+        };
+        // Login during refresh owns the newer credential generation. Never
+        // overwrite it with a stale rotation result.
+        rejected.provider_rotation = Some((generation, credential.clone()));
+        let _commit = super::fs::auth_refresh_commit_lock(self.paths.root()).await?;
+        if self.read_metadata_for_provider(auth_profile)?.as_ref() != Some(&metadata)
+            || self
+                .load_secret(refresh_reference)?
+                .as_ref()
+                .map(|s| s.expose_secret())
+                != Some(refresh_token.expose_secret())
+        {
+            rejected.provider_rotation = None;
+            return Err(MezError::conflict(
+                "provider credential changed during refresh; retry the next request",
+            ));
+        }
         self.update_openai_provider_credential(&mut metadata, credential)?;
+        rejected.provider_rotation = None;
+        rejected.rejected = None;
         Ok(true)
     }
 
@@ -1199,7 +1391,7 @@ impl AuthStore {
             .ok_or_else(|| MezError::invalid_state("auth metadata has no credential reference"))?;
         metadata.credential_store_ref = Some(self.store_secret_like_reference(
             &access_reference,
-            &metadata.provider,
+            &chatgpt_secret_name(&metadata.provider, false),
             &credential.api_key,
         )?);
         metadata.credential_kind = AuthCredentialKind::ChatGpt;
@@ -1210,7 +1402,7 @@ impl AuthStore {
                 .unwrap_or(access_reference.as_str());
             metadata.refresh_credential_store_ref = Some(self.store_secret_like_reference(
                 refresh_anchor,
-                OPENAI_REFRESH_CREDENTIAL_NAME,
+                &chatgpt_secret_name(&metadata.provider, true),
                 &refresh_token,
             )?);
         }
@@ -1223,7 +1415,7 @@ impl AuthStore {
         metadata.token_expires_at = credential
             .token_expires_at
             .or(metadata.token_expires_at.take());
-        self.write_metadata(metadata)?;
+        self.write_metadata_locked(metadata)?;
         Ok(())
     }
 
@@ -1314,6 +1506,7 @@ impl AuthStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn logout(&self) -> Result<bool> {
+        let _commit = super::fs::auth_commit_lock(self.paths.root())?;
         let metadata_entries = self.read_all_metadata()?;
         let mut changed = false;
         for metadata in metadata_entries.values() {
@@ -1333,6 +1526,7 @@ impl AuthStore {
 
     /// Removes stored MCP OAuth secrets and metadata for one configured server.
     pub fn logout_mcp_server(&self, server_id: &str) -> Result<bool> {
+        let _commit = super::fs::auth_commit_lock(self.paths.root())?;
         validate_safe_name(server_id, "MCP server id is not credential-store safe")?;
         let mut metadata_entries = self.read_all_mcp_metadata()?;
         let Some(metadata) = metadata_entries.remove(server_id) else {
@@ -1383,6 +1577,15 @@ impl AuthStore {
         let Some(metadata) = metadata else {
             return Ok(AuthCredentialState::LoggedOut);
         };
+        if let Some(reference) = metadata.refresh_credential_store_ref.as_deref()
+            && let Some(token) = self.load_secret(reference)?
+            && self.refresh_fences.is_rejected(
+                format!("mcp:{}", metadata.server_id),
+                super::refresh::fingerprint(metadata, token.expose_secret()),
+            )?
+        {
+            return Ok(AuthCredentialState::AuthenticationRequired);
+        }
         let Some(reference) = metadata.credential_store_ref.as_deref() else {
             return Ok(AuthCredentialState::MissingSecret { reference: None });
         };
@@ -1408,6 +1611,15 @@ impl AuthStore {
         let Some(metadata) = metadata else {
             return Ok(AuthCredentialState::LoggedOut);
         };
+        if let Some(reference) = metadata.refresh_credential_store_ref.as_deref()
+            && let Some(token) = self.load_secret(reference)?
+            && self.refresh_fences.is_rejected(
+                format!("provider:{}", metadata.provider),
+                super::refresh::fingerprint(metadata, token.expose_secret()),
+            )?
+        {
+            return Ok(AuthCredentialState::AuthenticationRequired);
+        }
         let Some(reference) = metadata.credential_store_ref.as_deref() else {
             return Ok(AuthCredentialState::MissingSecret { reference: None });
         };
@@ -1529,6 +1741,22 @@ impl AuthStore {
     }
 }
 
+/// Separates named ChatGPT secret types in the shared OS keyspace. The default
+/// identity retains its established names; arbitrary named identities are
+/// hashed into disjoint access/refresh domains, even when named openai-refresh.
+fn chatgpt_secret_name(identity: &str, refresh: bool) -> String {
+    if identity == OPENAI_PROVIDER {
+        return if refresh { "openai-refresh" } else { "openai" }.to_string();
+    }
+    let digest = sha2::Sha256::digest(identity.as_bytes());
+    let digest = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let kind = if refresh { "refresh" } else { "access" };
+    format!("mez-chatgpt-{kind}-{digest}")
+}
+
 /// Runs the openai refresh needed at operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -1539,9 +1767,7 @@ pub(super) fn openai_refresh_needed_at(
     now_unix_seconds: u64,
     leeway_seconds: u64,
 ) -> bool {
-    if metadata.credential_kind != AuthCredentialKind::ChatGpt
-        || metadata.refresh_credential_store_ref.is_none()
-    {
+    if metadata.credential_kind != AuthCredentialKind::ChatGpt {
         return false;
     }
     let Some(expires_at) = metadata

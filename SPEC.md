@@ -13198,6 +13198,35 @@ already expired. Startup MUST NOT block on that refresh attempt. Mezzanine MUST
 also check and, when needed, complete provider access-token refresh before the
 first provider API request of every agent turn.
 
+Provider credential preparation MUST refresh only the selected provider's auth
+identity, not every configured provider. Rejected, revoked, expired or reused
+refresh credentials MUST settle the affected turn with a bounded authentication-
+required diagnostic and sign-in guidance, without terminating the provider
+service, session actor, daemon or attached terminal. Other panes, shell input
+and provider identities MUST remain usable. Permanent OAuth rejection MUST be
+distinguished from transient transport/server failures and MUST NOT repeatedly
+refresh the same rejected credential within the session. Explicit replacement
+of credentials MUST permit a subsequent request without restarting the session;
+failed requests and actions MUST NOT be replayed automatically. Missing refresh
+secrets MUST NOT permit dispatch with known expired credentials. Refresh errors
+MUST NOT include raw OAuth response bodies, tokens or credential-store references.
+MCP refresh rejection MUST remain scoped to the affected server and provide
+`mez mcp login <server>` recovery guidance. Rotation results MUST NOT overwrite
+credentials replaced while refresh was in flight.
+
+`mez auth login --provider openai --auth-profile <identity>` MUST support
+browser/device-code reauthentication of an explicit named/shared ChatGPT auth
+record without replacing unrelated identities or changing provider defaults.
+Credential login/logout and refresh compare-and-commit MUST share a cross-process
+serialization boundary. Lock contention MUST return a bounded retry diagnostic,
+not block session input while another process updates credentials.
+
+A successful refresh rotation MUST remain available while commit ownership is
+contended. Refresh workers MAY wait asynchronously for bounded local contention;
+on wait timeout or cancellation the session MUST retain the returned rotation
+for a subsequent commit attempt rather than refreshing the consumed token again.
+Named ChatGPT access and refresh secrets MUST use disjoint OS credential names.
+
 Mezzanine MUST provide a logout command that revokes, deletes, or invalidates
 locally persisted credentials to the extent permitted by the provider.
 

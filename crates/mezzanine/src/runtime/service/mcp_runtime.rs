@@ -234,7 +234,17 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("provider preparation turn is unavailable"))?;
         let allow_stdio = self.effective_agent_shell_mode_for_pane(&pane_id)
             != crate::runtime::config::ShellMode::Native;
-        self.prepare_external_provider_work(true, allow_stdio)
+        let profile = self.agent_turn_model_profile(turn_id).ok_or_else(|| {
+            MezError::invalid_state("provider preparation model profile is unavailable")
+        })?;
+        let provider = self
+            .provider_registry()
+            .provider(&profile.provider)
+            .ok_or_else(|| MezError::config("provider preparation provider is not configured"))?;
+        let identity = provider_auth_refresh_identity(provider);
+        let mut work = self.prepare_external_provider_work(true, allow_stdio)?;
+        work.provider_auth_refresh_profiles = vec![identity];
+        Ok(work)
     }
 
     /// Extracts MCP-only discovery work for commands that do not need provider auth refresh.
@@ -253,14 +263,9 @@ impl RuntimeSessionService {
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let auth_store = self.integration.auth_store().cloned();
         let leeway_seconds = self.provider_auth_refresh_leeway_seconds();
-        let provider_auth_refresh_profiles = self
-            .provider_registry()
-            .providers
-            .values()
-            .map(provider_auth_refresh_identity)
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        // Provider preparation fills only the selected turn identity. MCP-only
+        // discovery must never refresh unrelated provider credentials.
+        let provider_auth_refresh_profiles = Vec::new();
         let mut registry = std::mem::take(self.integration.mcp_registry_mut());
         let result = (|| {
             let server_ids = runtime_mcp_pending_discovery_server_ids(&registry, |server| {

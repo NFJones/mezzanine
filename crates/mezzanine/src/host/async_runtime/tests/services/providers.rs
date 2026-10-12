@@ -3,6 +3,7 @@
 use super::super::*;
 use crate::host::async_runtime::run_async_agent_command_service;
 
+mod auth_refresh;
 mod compaction;
 mod patch_recovery;
 
