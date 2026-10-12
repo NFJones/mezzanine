@@ -1070,6 +1070,28 @@ fn runtime_close_agent_retires_owned_persistent_child_runtime_state() {
     assert_eq!(unavailable.0, ActionStatus::Rejected);
     assert_eq!(unavailable.1.as_deref(), Some("unavailable"));
     assert_eq!(unavailable.3, None);
+    // The same actionable message must cover every inaccessible identity below;
+    // no target, ownership detail, or post-dispatch effect claim may leak into it.
+    let guidance = &foreign_execution.action_results[0]
+        .error
+        .as_ref()
+        .unwrap()
+        .message;
+    for meaning in [
+        "agent_type=subagent or all",
+        "current parent conversation",
+        "retry once with a verified target",
+        "continue useful work or report a concrete cleanup limitation",
+        "Do not repeat an unchanged unavailable close, guess identifiers, widen scope",
+        "bypass ownership, or claim closure",
+    ] {
+        assert!(
+            guidance.contains(meaning),
+            "missing close guidance: {meaning}"
+        );
+    }
+    assert!(!guidance.contains(&child_agent_id));
+    assert!(!guidance.contains("foreign-parent-conversation"));
 
     for target in [parent_turn.agent_id.as_str(), "agent-%999"] {
         let denied = execute_close_agent_for_test(&mut service, &parent_turn, target);

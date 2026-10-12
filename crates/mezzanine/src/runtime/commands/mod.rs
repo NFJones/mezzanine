@@ -85,7 +85,7 @@ mod shell_mode;
 mod show_records;
 mod slash;
 mod status;
-pub(crate) use status::RuntimeStatusReportWork;
+pub(crate) use status::{RuntimeStatusLiveOwner, RuntimeStatusReportWork};
 
 #[cfg(test)]
 pub(crate) use show_records::read_context_browser_for_command;
@@ -378,6 +378,24 @@ impl RuntimeSessionService {
             return Err(MezError::forbidden(
                 "operation requires an attached primary client",
             ));
+        }
+        // The host actor intercepts snapshot sequences before awaiting this
+        // method. Standalone async callers also get off-thread queries, without
+        // requiring a provider worker or granting an interactive overlay.
+        if let Some(prepared) = self.prepare_terminal_status_work(primary_client_id, input) {
+            let work = prepared?;
+            let render_work = work.clone();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                tokio::task::spawn_blocking(move || render_work.render()),
+            )
+            .await
+            .map_err(|_| MezError::invalid_state("terminal status deadline exceeded"))
+            .and_then(|joined| {
+                joined.map_err(|_| MezError::invalid_state("terminal status worker failed"))
+            })
+            .and_then(|result| result);
+            return self.complete_terminal_status_work(&work, result);
         }
         let outcomes =
             execute_runtime_command_sequence_async(self, primary_client_id, input).await?;

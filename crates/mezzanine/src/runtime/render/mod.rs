@@ -459,6 +459,8 @@ struct RuntimeClientPresentationState {
     primary_prompt_input: Option<RuntimePrimaryPromptInput>,
     primary_prefix_key_pending: bool,
     primary_display_overlay: Option<RuntimeDisplayOverlay>,
+    /// Exact pager replacement identity retained separately for each client.
+    primary_display_overlay_generation: u32,
     zen_focus_labels: RuntimeZenFocusLabelState,
     agent_prompt_inputs: RuntimeAgentPromptInputs,
     active_copy_modes: std::collections::BTreeMap<(String, PaneSurfaceKind), CopyMode>,
@@ -702,6 +704,8 @@ pub(crate) struct RuntimePresentationComponent {
     primary_prefix_key_pending: bool,
     /// Active primary-client modal display overlay.
     primary_display_overlay: Option<RuntimeDisplayOverlay>,
+    /// Pager identity for the projected client, never another client's registry.
+    primary_display_overlay_generation: u32,
     /// Transient candidate cycle for a record-browser Save path prompt.
     record_browser_save_completion: Option<RuntimeRecordBrowserSaveCompletion>,
     /// Product-owned typed targets for the current display-overlay generation.
@@ -1464,6 +1468,12 @@ fn presentation_render_invalidation_priority(reason: RenderInvalidationReason) -
 }
 
 impl RuntimePresentationComponent {
+    /// Checks only the projected client's retained waiting pager identity.
+    pub(crate) fn terminal_status_overlay_is_current(&self, generation: u32) -> bool {
+        self.primary_display_overlay.is_some()
+            && self.primary_display_overlay_generation == generation
+    }
+
     /// Returns the actor-local durable source generation for one conversation.
     pub(crate) fn agent_presentation_source_revision(&mut self, conversation_id: &str) -> u64 {
         self.agent_presentation_replay_cache
@@ -1525,6 +1535,7 @@ impl RuntimePresentationComponent {
         self.primary_prompt_input = state.primary_prompt_input;
         self.primary_prefix_key_pending = state.primary_prefix_key_pending;
         self.primary_display_overlay = state.primary_display_overlay;
+        self.primary_display_overlay_generation = state.primary_display_overlay_generation;
         self.agent_prompt_inputs = state.agent_prompt_inputs;
         self.copy.active_copy_modes = state.active_copy_modes;
         self.copy.scrollback_copy_mode_panes = state.scrollback_copy_mode_panes;
@@ -1560,6 +1571,7 @@ impl RuntimePresentationComponent {
             primary_prompt_input: self.primary_prompt_input.clone(),
             primary_prefix_key_pending: self.primary_prefix_key_pending,
             primary_display_overlay: self.primary_display_overlay.clone(),
+            primary_display_overlay_generation: self.primary_display_overlay_generation,
             zen_focus_labels: previous.zen_focus_labels.clone(),
             agent_prompt_inputs: self.agent_prompt_inputs.clone(),
             active_copy_modes: self.copy.active_copy_modes.clone(),

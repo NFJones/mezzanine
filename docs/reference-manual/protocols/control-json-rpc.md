@@ -897,6 +897,22 @@ labelled `unavailable`, reasoning unknown, and response model comes from usage.
 Null/missing/unsafe usage remains unavailable; SDK explicit zeros are retained.
 The first admitted request timestamp keeps immutable replay stable. Module source
 support is not bootstrap installation, vendor enablement or exhaustive billing.
+Claude revision5 shares sixteen slots across active request producers and pending
+final normalized outcomes. After both immediate ACK attempts fail, a later genuine
+main step retries at most one retained original report before its own delegate.
+Failures rotate without eviction; pending retries serialize and repeated markers
+cannot multiply obligations or change their payload. Pressure refuses only new
+telemetry, never vendor delegation. Original readiness/source/time/origin and the
+exact still-live observer are retained; changed readiness cannot select a new
+source. Child/unknown callbacks do not retry, missing/cancelled usage creates no
+pending final report, and stopped/replaced/clear/negative-proof epochs cannot
+carry outcomes to their successors. Only normalized counters/selectors are kept,
+not answers/chunks/tools. No timer or durable outbox is added; without a later
+qualified main step or after owner/process/reload loss, delivery remains unknown.
+Public SDK `session.start` marks load/reload, not clear/resume/branch; session IDs
+and the plugin JSON store do not attest native cross-process source ownership.
+Actual restart/resume/fork continuation and durable outcome recovery remain
+unqualified, rather than importing inherited history under a fresh namespace.
 The installed revision-9 shared client exposes `beginRequest(id)`,
 `endRequest(ticket, normalizedObservation)` and `abandonRequest(ticket)`.
 The injected request core requires neither Node Buffer nor DOM TextEncoder and

@@ -766,7 +766,7 @@ fn maap_close_agent_action_schema() -> serde_json::Value {
             "agent_id",
             serde_json::json!({
                 "type": "string",
-                "description": "Runtime agent id of one persistent child spawned by the calling parent conversation. Discover the target through list_agents first. A known completed close for this same parent conversation succeeds as a no-op; unknown, non-persistent, foreign-owned, and stale targets return the same unavailable result."
+                "description": "Runtime agent id of one persistent child spawned by the current parent conversation. Discover children through list_agents with agent_type=subagent or all. After unavailable rejection, verify a persistent child owned by the current parent conversation and retry once with a verified target; otherwise abandon the close and continue useful work or report a concrete cleanup limitation. Do not repeat an unchanged unavailable close, guess identifiers, widen scope, bypass ownership, or claim closure. Discovery is not authority: execution revalidates live ownership, including discovery-to-close races. An authoritative same-owner record with an absent pane is cleaned up successfully with closed=false; a retained completed close for that owner succeeds as a no-op without rediscovery. Retained no-op evidence is bounded and runtime-session-local, not live authority. Unknown, non-persistent, foreign-owned, and otherwise inaccessible identities return the same opaque unavailable result."
             }),
         )],
         &["agent_id"],

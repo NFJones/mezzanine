@@ -71,7 +71,7 @@ arguments and runtime requirements.
   `paste-clipboard`, `paste-buffer`, `create-buffer`, `list-buffers`,
   `choose-buffer`, `delete-buffer`, `save-buffer`, `clear-history`,
   `search-history`, and `export-history`.
-- **Agent and diagnostics:** `agent-shell`, `list-agents`, `show-messages`, `show-metrics`,
+- **Agent and diagnostics:** `agent-shell`, `agent-status`, `list-agents`, `show-messages`, `show-metrics`,
   `show-iroh-status`, and `show-pane-status`.
 
 Some commands require an active runtime, control endpoint, configuration store,
@@ -219,6 +219,34 @@ before choosing a recovery workflow.
 configuration paths, including purpose, type, and constrained value or format
 guidance. `show-options` remains the separate view of effective configured
 values and their source layers.
+
+### Agent status from the terminal
+
+Use `:agent-status [--extended] [--project | --all-projects]` from `Ctrl+A :`
+to inspect the same status view as agent `/status`, without entering agent mode.
+The invoking primary's current pane is captured when the command is accepted.
+It works in a normal shell, with a retained native conversation, or with only
+external harness observations. It does not create a conversation, submit vendor
+input, start a provider, change focus, reset counters, or modify an agent draft.
+
+Plain `:agent-status` is a live Markdown pager with the same refresh cadence,
+search, copy, scroll and resize behavior as `/status`. It remains bound to the
+accepted pane if focus changes; closing or rebinding that owner invalidates it.
+`--project` and `--all-projects` select STATIC accounting snapshots; add
+`--extended` in either order for durable rolling history, queried off actor.
+`--project` accepts no path and reports unavailable project evidence rather than
+falling back to overall totals. All-project reports include registered zero-use
+projects, historical partitions and the unattributed remainder. Unknown usage
+coverage or unavailable storage is not an observed zero.
+
+The same command can be used in configured bindings and command sequences.
+Only a final report outcome owns the interactive waiting pager; dismissing or
+replacing it drops stale worker output. Async textual/control commands return
+completed reports without opening a pager. Offline baseline execution says the
+live runtime is required; synchronous textual APIs without a worker continuation
+refuse snapshot sequences rather than reading the database in terminal input.
+Duplicate, conflicting, unknown and value-bearing flags or operands are errors.
+No target syntax or new configuration is introduced.
 
 ### Pane status and providers
 

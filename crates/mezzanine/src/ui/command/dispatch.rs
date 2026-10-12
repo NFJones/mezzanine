@@ -723,6 +723,20 @@ pub fn execute_command(
             command: invocation.name.clone(),
             body: "pane status diagnostics require the live runtime".to_string(),
         }),
+        "agent-status" => {
+            mez_agent::slash::parse_status_option_tokens(
+                invocation.args.iter().map(String::as_str),
+            )
+            .map_err(|_| {
+                MezError::invalid_args(
+                    "usage: agent-status [--extended] [--project | --all-projects]",
+                )
+            })?;
+            Ok(CommandOutcome::Display {
+                command: invocation.name.clone(),
+                body: "agent status requires the live runtime".to_string(),
+            })
+        }
         "show-iroh-status" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: "Iroh connection status requires the live runtime".to_string(),

@@ -65,6 +65,7 @@ fn help_command_describes_mezzanine_command_set() {
     assert!(help.contains("show-metrics"), "{help}");
     assert!(help.contains("show-iroh-status"), "{help}");
     assert!(help.contains("show-pane-status"), "{help}");
+    assert!(help.contains("agent-status"), "{help}");
     assert!(help.contains("rebalance-window"), "{help}");
     assert!(
         help.contains("|  | `rename-pane` | rename the active or target pane. |"),
@@ -129,6 +130,15 @@ fn help_command_describes_mezzanine_command_set() {
         .unwrap(),
     );
     assert_eq!(fallback, "pane status diagnostics require the live runtime");
+    let status = display_body(
+        execute_command(
+            &mut session,
+            &primary,
+            &parse_command_sequence("agent-status --extended --all-projects").unwrap()[0],
+        )
+        .unwrap(),
+    );
+    assert_eq!(status, "agent status requires the live runtime");
     let mut trailing_lines = help.lines().rev();
     assert_eq!(trailing_lines.next(), Some("```"), "{help}");
     let last_binding = trailing_lines.next().unwrap_or_default();

@@ -4,6 +4,10 @@
 //! configuration. Exact routing and peer authorization stay inside the helper;
 //! this fixture never installs a vendor or supplies daemon credentials.
 
+#[path = "harness_event/helper_publication.rs"]
+mod helper_publication;
+use helper_publication::copy_fixture_helper;
+
 /// Production Cursor bootstrap must create version1 only for an absent shared
 /// document, preserve authored callbacks/metadata/CLI policy and leave previews
 /// unchanged. Fixed shell commands execute a literal difficult helper pathname
@@ -21,7 +25,7 @@ fn standalone_cursor_bootstrap_shared_members_and_commands_remain_neutral() {
     std::fs::create_dir(&root).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     let helper = root.join("owned 'quote' $LITERAL; mez");
-    std::fs::copy(env!("CARGO_BIN_EXE_mez"), &helper).unwrap();
+    copy_fixture_helper(std::path::Path::new(env!("CARGO_BIN_EXE_mez")), &helper).unwrap();
     let home = root.join("home");
     std::fs::create_dir(&home).unwrap();
     let vendor = root.join("custom-cursor");
@@ -121,7 +125,7 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
     std::fs::create_dir(&root).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     let helper = root.join("owned 'quote' $LITERAL; mez");
-    std::fs::copy(env!("CARGO_BIN_EXE_mez"), &helper).unwrap();
+    copy_fixture_helper(std::path::Path::new(env!("CARGO_BIN_EXE_mez")), &helper).unwrap();
     let home = root.join("home");
     std::fs::create_dir(&home).unwrap();
     let vendor = root.join("custom-copilot");
@@ -226,7 +230,7 @@ fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks()
     std::fs::create_dir(&root).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     let helper = root.join("owned 'quote' $NOT_A_VARIABLE; mez");
-    std::fs::copy(env!("CARGO_BIN_EXE_mez"), &helper).unwrap();
+    copy_fixture_helper(std::path::Path::new(env!("CARGO_BIN_EXE_mez")), &helper).unwrap();
     let home = root.join("home");
     std::fs::create_dir(&home).unwrap();
     let bootstrap = |flags: &[&str]| {

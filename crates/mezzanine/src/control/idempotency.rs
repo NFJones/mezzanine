@@ -71,6 +71,8 @@ pub struct CachedControlResponse {
 /// structured runtime state without parsing display text.
 #[derive(Debug)]
 pub struct ControlIdempotencyCache {
+    /// Bounded keys reserved by asynchronous requests before any mutation.
+    pending: BTreeMap<String, (String, Option<String>)>,
     /// Stores the completed value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -111,6 +113,7 @@ impl ControlIdempotencyCache {
     /// on duplicated control-flow logic.
     pub fn with_limits(max_entries: usize, max_bytes: usize) -> Self {
         Self {
+            pending: BTreeMap::new(),
             completed: BTreeMap::new(),
             insertion_order: VecDeque::new(),
             entry_bytes: BTreeMap::new(),
@@ -161,6 +164,15 @@ impl ControlIdempotencyCache {
         method: &str,
         params: &Option<String>,
     ) -> Result<Option<String>> {
+        if let Some((pending_method, pending_params)) = self.pending.get(cache_key) {
+            return Err(MezError::conflict(
+                if pending_method == method && pending_params == params {
+                    "idempotent request is still in progress"
+                } else {
+                    "idempotency key was reused with different request data"
+                },
+            ));
+        }
         let Some(cached) = self.completed.get(cache_key) else {
             return Ok(None);
         };
@@ -171,6 +183,43 @@ impl ControlIdempotencyCache {
                 "idempotency key was reused with different request data",
             ))
         }
+    }
+
+    /// Reserves an asynchronous replay identity before executing any mutations.
+    /// In-flight retries conflict without re-execution; completion clears it.
+    pub(crate) fn reserve_request(
+        &mut self,
+        key: &str,
+        method: &str,
+        params: &Option<String>,
+    ) -> Result<()> {
+        self.ensure_default_limits();
+        if self.cached_response(key, method, params)?.is_some() {
+            return Err(MezError::conflict("idempotent request already completed"));
+        }
+        let bytes = key
+            .len()
+            .saturating_add(method.len())
+            .saturating_add(params.as_ref().map_or(0, String::len));
+        let pending_bytes: usize = self
+            .pending
+            .iter()
+            .map(|(key, (method, params))| {
+                key.len()
+                    .saturating_add(method.len())
+                    .saturating_add(params.as_ref().map_or(0, String::len))
+            })
+            .sum();
+        if self.pending.len() >= self.max_entries
+            || pending_bytes.saturating_add(bytes) > self.max_bytes
+        {
+            return Err(MezError::conflict(
+                "asynchronous idempotency capacity unavailable",
+            ));
+        }
+        self.pending
+            .insert(key.into(), (method.into(), params.clone()));
+        Ok(())
     }
 
     /// Runs the remember response operation for this subsystem.
@@ -187,6 +236,7 @@ impl ControlIdempotencyCache {
     ) {
         self.ensure_default_limits();
         let cache_key = cache_key.into();
+        self.pending.remove(&cache_key);
         let entry = CachedControlResponse {
             method: method.into(),
             params,

@@ -1168,6 +1168,41 @@ fn close_agent_round_trips_and_rejects_malformed_agent_ids() {
 }
 
 #[test]
+/// Protects the close action's own recovery contract, rather than matching words
+/// elsewhere in the action catalog. Discovery must include children and cannot
+/// confer ownership; unavailable feedback must offer one verified retry or a
+/// useful changed course without weakening opaque denial or no-op provenance.
+fn close_agent_schema_explains_verified_recovery_and_cleanup() {
+    let schema = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]);
+    let close = schema["properties"]["actions"]["items"]["anyOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["properties"]["type"]["enum"][0] == "close_agent")
+        .unwrap();
+    let guidance = close["properties"]["agent_id"]["description"]
+        .as_str()
+        .unwrap();
+    for meaning in [
+        "agent_type=subagent or all",
+        "current parent conversation",
+        "retry once with a verified target",
+        "continue useful work or report a concrete cleanup limitation",
+        "Do not repeat an unchanged unavailable close, guess identifiers, widen scope",
+        "bypass ownership, or claim closure",
+        "revalidates live ownership",
+        "authoritative same-owner record with an absent pane",
+        "runtime-session-local",
+        "same opaque unavailable result",
+    ] {
+        assert!(
+            guidance.contains(meaning),
+            "missing close contract: {meaning}"
+        );
+    }
+}
+
+#[test]
 /// Verifies `wait` is an argument-free MMP-only action whose schema and batch
 /// validation prevent it from becoming a generic delay or mixed-action barrier.
 fn wait_round_trips_with_strict_mmp_only_batch_contract() {

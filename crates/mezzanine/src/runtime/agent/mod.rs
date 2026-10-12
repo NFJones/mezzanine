@@ -1020,6 +1020,38 @@ impl RuntimeAgentComponent {
             .insert((pane.to_string(), generation), report);
     }
 
+    /// Discards earlier queued terminal snapshots superseded inside a sequence.
+    /// Claimed workers and other clients' reports are never cancelled here.
+    pub(crate) fn cancel_pending_terminal_status_for_client(
+        &mut self,
+        client: &mez_core::ids::ClientId,
+    ) {
+        let pending = self
+            .pending_status_reports
+            .iter()
+            .filter(|(_, report)| report.terminal && report.client == *client)
+            .map(|((pane, generation), report)| (pane.clone(), *generation, report.command_owner()))
+            .collect::<Vec<_>>();
+        for (pane, generation, conversation) in pending {
+            self.cancel_matching_agent_command(&pane, &conversation, generation);
+            self.pending_status_reports.remove(&(pane, generation));
+        }
+    }
+
+    /// Binds queued snapshots to their caller's exact waiting pager identity.
+    pub(crate) fn bind_terminal_status_overlay(
+        &mut self,
+        client: &mez_core::ids::ClientId,
+        pane: &str,
+        overlay_generation: u32,
+    ) {
+        for report in self.pending_status_reports.values_mut() {
+            if report.terminal && report.client == *client && report.pane == pane {
+                report.terminal_overlay_generation = Some(overlay_generation);
+            }
+        }
+    }
+
     /// Consumes the exact snapshot associated with a deferred status claim.
     pub(crate) fn take_status_report(
         &mut self,

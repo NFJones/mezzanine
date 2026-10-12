@@ -18,6 +18,8 @@ pub(crate) struct StatusControlWork {
     pub(crate) request: JsonRpcRequest,
     /// Acceptance-owned counters, scope and delivery evidence.
     pub(crate) report: crate::runtime::commands::RuntimeStatusReportWork,
+    /// Ordered terminal snapshots and immediate outcomes, absent for slash input.
+    terminal_work: Option<crate::runtime::commands_support::RuntimeTerminalStatusWork>,
     /// Exact conversation owning the command lease.
     conversation: String,
     /// Exact pane command generation consumed on settlement.
@@ -42,16 +44,36 @@ impl RuntimeSessionService {
         connection: &ControlConnectionState,
     ) -> Option<std::result::Result<StatusControlWork, String>> {
         let request = crate::control::parse_json_rpc_request(body).ok()?;
-        if request.method != "agent/shell/command" || !connection.initialized() {
+        if !matches!(
+            request.method.as_str(),
+            "agent/shell/command" | "terminal/command"
+        ) || !connection.initialized()
+        {
             return None;
         }
         let input = super::runtime_json_string_field(request.params.as_deref()?, "input")?;
-        let slash = mez_agent::slash::parse_slash_command(&input).ok()??;
-        if slash.name != "status" {
-            return None;
-        }
-        let options = mez_agent::slash::parse_status_options(&slash.args).ok()?;
-        if !options.extended {
+        let terminal = request.method == "terminal/command";
+        let options = if terminal {
+            let commands = mez_mux::command::parse_command_sequence(&input).ok()?;
+            commands
+                .iter()
+                .filter(|command| command.name == "agent-status")
+                .filter_map(|command| {
+                    crate::runtime::commands_support::terminal_status_options(&command.args).ok()
+                })
+                .find(|options| {
+                    options.extended || options.scope != mez_agent::slash::StatusScope::Overall
+                })?
+        } else {
+            let slash = mez_agent::slash::parse_slash_command(&input).ok()??;
+            if slash.name != "status" {
+                return None;
+            }
+            mez_agent::slash::parse_status_options(&slash.args).ok()?
+        };
+        if !options.extended
+            && (!terminal || options.scope == mez_agent::slash::StatusScope::Overall)
+        {
             return None;
         }
         let authorized = (|| -> Result<()> {
@@ -108,6 +130,54 @@ impl RuntimeSessionService {
                 MezError::invalid_args("mutating control request requires idempotency_key")
             })?;
             let cache_key = format!("{client}:{key}");
+            if terminal {
+                self.control.idempotency_mut().reserve_request(
+                    &cache_key,
+                    &request.method,
+                    &request.params,
+                )?;
+                let prepared = self
+                    .prepare_terminal_status_work(client, &input)
+                    .unwrap_or_else(|| {
+                        Err(MezError::invalid_state(
+                            "terminal status preparation unavailable",
+                        ))
+                    });
+                let terminal_work = match prepared {
+                    Ok(work) => work,
+                    Err(error) => {
+                        let response = crate::runtime::runtime_json_rpc_error(
+                            &request.id,
+                            error.kind(),
+                            error.message(),
+                        );
+                        self.control.idempotency_mut().remember_response(
+                            cache_key,
+                            request.method.clone(),
+                            request.params.clone(),
+                            response,
+                        );
+                        return Err(error);
+                    }
+                };
+                let report = terminal_work
+                    .reports
+                    .first()
+                    .ok_or_else(|| MezError::invalid_state("terminal status snapshot unavailable"))?
+                    .1
+                    .clone();
+                return Ok(StatusControlWork {
+                    request: request.clone(),
+                    report,
+                    terminal_work: Some(terminal_work),
+                    conversation: String::new(),
+                    generation: 0,
+                    input,
+                    cache_key,
+                    #[cfg(test)]
+                    worker_gate: self.integration.deferred_agent_command_probe(),
+                });
+            }
             let pane = self.session.active_pane_for(client)?.id.to_string();
             let report = self.prepare_status_report(client, &pane, options)?;
             let conversation = report.command_owner();
@@ -123,6 +193,7 @@ impl RuntimeSessionService {
             Ok(StatusControlWork {
                 request: request.clone(),
                 report,
+                terminal_work: None,
                 conversation,
                 generation,
                 input,
@@ -142,6 +213,29 @@ impl RuntimeSessionService {
         work: StatusControlWork,
         result: Result<String>,
     ) -> String {
+        if let Some(terminal_work) = &work.terminal_work {
+            let authorized =
+                authorize_control_request(&self.session, &work.report.client, &work.request);
+            let result = self.complete_terminal_status_work(terminal_work, authorized.and(result));
+            let response = match result {
+                Ok(result) => format!(
+                    "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{result}}}",
+                    work.request.id
+                ),
+                Err(error) => crate::runtime::runtime_json_rpc_error(
+                    &work.request.id,
+                    error.kind(),
+                    error.message(),
+                ),
+            };
+            self.control.idempotency_mut().remember_response(
+                work.cache_key,
+                work.request.method,
+                work.request.params,
+                response.clone(),
+            );
+            return response;
+        }
         let current = self.status_report_is_current(&work.report)
             && authorize_control_request(&self.session, &work.report.client, &work.request).is_ok()
             && self.agent.agent_command_is_claimed(
@@ -197,5 +291,15 @@ impl RuntimeSessionService {
             response.clone(),
         );
         response
+    }
+}
+
+impl StatusControlWork {
+    /// Renders owned slash or terminal sequence input only outside actor ownership.
+    pub(crate) fn render(&self) -> Result<String> {
+        match &self.terminal_work {
+            Some(work) => work.render(),
+            None => self.report.render(),
+        }
     }
 }

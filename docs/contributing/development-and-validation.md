@@ -156,6 +156,18 @@ responsiveness qualification, not an oversubscribed debug test harness.
 Run platform-specific shell and PTY changes on both Linux and macOS when
 available. To reproduce the macOS CI shape, run the full test suite serially.
 
+Detached foreground CLI fixtures wait for a bounded nonblocking Unix connection
+and check child health before attaching, not merely for a socket pathname. A
+pathname may already exist before `listen` or remain after daemon exit. The
+readiness probe sends no bytes and performs no control initialization,
+authentication, or role selection; the real attach still owns those contracts
+and its initial terminal frame. Each attempt and the whole wait are bounded,
+including full-backlog cases. Failures distinguish child exit, connect errors,
+and timeout with child status/error codes only, never child output. Owned process
+guards kill and reap unfinished children on failure. Deterministic regressions
+cover bind-before-listen, stale sockets, child exit, and protocol-inert probes;
+successful reruns do not establish a historical startup failure's cause.
+
 The managed-shell recipe invokes
 `scripts/test-managed-shell-reliability.sh`. The wrapper builds each library
 test binary once with a separate

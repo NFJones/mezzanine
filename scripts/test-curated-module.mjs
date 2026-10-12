@@ -418,6 +418,283 @@ const stepInput = (extra = {}) => ({ turnId: "turn-a", index: 0, model: "selecte
 const stepResult = (extra = {}) => ({ turnId: "turn-a", index: 0, answer: "PRIVATE", toolUses: [], stopReason: "end_turn",
   usage: { model: "response", input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 4 }, ...extra });
 
+/** Both immediate ACK attempts can fail after expense already committed. A
+ * later genuine main step must resend the retained original normalized report,
+ * never run its delegate again, reuse new readiness, or retain answer/chunks. */
+test("Claude pending outcome survives failed ACK and retries on a later main step", async () => {
+  const f = fixture(); await f.invoke(start());
+  const run = f.sdk.process.run;
+  let outage = true, delegates = 0;
+  f.sdk.process.run = async (argv, options) => {
+    const response = await run(argv, options);
+    return JSON.parse(argv[2]).operation === "curated-usage-end" && outage
+      ? { exitCode: 0, stdout: "{}" } : response;
+  };
+  const original = stepInput(), final = stepResult();
+  const stream = f.hooks.get("turn.step")(f.sdk, original, async function* (passed) {
+    assert.equal(passed, original); delegates++; return final;
+  });
+  assert.equal((await stream.next()).value, final);
+  const endings = () => f.calls.filter(call => call.operation === "curated-usage-end");
+  assert.equal(endings().length, 2);
+  const report = endings()[0];
+  assert.deepEqual(endings()[1], report);
+  outage = false;
+  const nextInput = stepInput({ turnId: "turn-b" }), nextFinal = stepResult({ turnId: "turn-b" });
+  const next = f.hooks.get("turn.step")(f.sdk, nextInput, async function* (passed) {
+    assert.equal(passed, nextInput); delegates++;
+    assert.equal(endings().length, 3, "retained expense retries before the new delegate");
+    assert.deepEqual(endings()[2], report, "source/time/origin/report identity stays original");
+    return nextFinal;
+  });
+  assert.equal((await next.next()).value, nextFinal);
+  assert.equal(delegates, 2, "one delegate per genuine request, never delivery retry");
+  assert.equal(endings().length, 4);
+  assert.notEqual(endings()[3].event_id, report.event_id);
+  assert(!JSON.stringify(f.calls).includes("PRIVATE"));
+});
+
+/** Repeated callbacks for one locally retained marker cannot multiply pending
+ * obligations or replace its original normalized payload. Retry still uses
+ * exact original readiness; each callback delegates unchanged once. */
+test("Claude pending marker replay does not duplicate obligations or replace counters", async () => {
+  const f = fixture(); await f.invoke(start());
+  const run = f.sdk.process.run;
+  f.sdk.process.run = async (argv, options) => {
+    const response = await run(argv, options);
+    return JSON.parse(argv[2]).operation === "curated-usage-end" ? { exitCode: 0, stdout: "{}" } : response;
+  };
+  for (let index = 0; index < 20; index++) {
+    const outcome = stepResult({ usage: { ...stepResult().usage, input_tokens: 10 + index } });
+    const stream = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () { return outcome; });
+    assert.equal((await stream.next()).value, outcome);
+  }
+  const endings = f.calls.filter(call => call.operation === "curated-usage-end");
+  assert.equal(endings.length, 40, "only the first report plus one retry call per later step");
+  assert(endings.every(call => JSON.stringify(call) === JSON.stringify(endings[0])));
+  const before = f.calls.length;
+  f.sdk.process.run = run;
+  const distinct = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 1 }), async function* () { return stepResult({ index: 1 }); });
+  await distinct.next();
+  assert.equal(f.calls.slice(before).filter(call => call.operation === "curated-usage-end").length, 2,
+    "one original retained obligation and one distinct new report");
+});
+
+/** Simultaneous callback replay can acquire readiness before either result is
+ * known, but one original marker must still own only one retained obligation.
+ * Mixed active/pending pressure must refuse a new marker without evicting it. */
+test("Claude concurrent replay and mixed pending active capacity conserve obligations", async () => {
+  const f = fixture(); await f.invoke(start());
+  const run = f.sdk.process.run;
+  let outage = true;
+  f.sdk.process.run = async (argv, options) => {
+    const response = await run(argv, options);
+    return JSON.parse(argv[2]).operation === "curated-usage-end" && outage
+      ? { exitCode: 0, stdout: "{}" } : response;
+  };
+  const streams = [];
+  for (let index = 0; index < 2; index++) {
+    const stream = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () {
+      yield "unchanged"; return stepResult();
+    });
+    await stream.next(); streams.push(stream);
+  }
+  for (const stream of streams) await stream.next();
+  outage = false;
+  const before = f.calls.length;
+  const distinct = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 1 }), async function* () { return stepResult({ index: 1 }); });
+  await distinct.next();
+  assert.equal(f.calls.slice(before).filter(call => call.operation === "curated-usage-end").length, 2,
+    "one coalesced retained marker and one new report");
+  outage = true;
+  for (let index = 2; index < 10; index++) {
+    const stream = f.hooks.get("turn.step")(f.sdk, stepInput({ index }), async function* () { return stepResult({ index }); });
+    await stream.next();
+  }
+  const active = [];
+  for (let index = 10; index < 18; index++) {
+    const stream = f.hooks.get("turn.step")(f.sdk, stepInput({ index }), async function* () { yield "unchanged"; });
+    await stream.next(); active.push(stream);
+  }
+  const prior = f.calls.length;
+  const overflow = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 18 }), async function* () { return "unchanged"; });
+  assert.equal((await overflow.next()).value, "unchanged");
+  assert.equal(f.calls.slice(prior).filter(call => call.operation === "curated-usage-begin").length, 2,
+    "eight active plus eight pending leaves only original retry readiness, no new marker");
+  for (const stream of active) await stream.return();
+});
+
+/** One in-flight pending retry cannot be duplicated by overlapping main steps.
+ * A changed observer fences its late ACK and original marker; both delegates
+ * still run once and return exact results without borrowing successor proof. */
+test("Claude pending retry serializes overlapping steps and fences late replacement", async () => {
+  const f = fixture(); await f.invoke(start());
+  const run = f.sdk.process.run;
+  let lost = 0, release, issued;
+  const started = new Promise(resolve => { issued = resolve; });
+  f.sdk.process.run = async (argv, options) => {
+    const response = await run(argv, options);
+    if (JSON.parse(argv[2]).operation === "curated-usage-end") {
+      if (lost++ < 2) return { exitCode: 0, stdout: "{}" };
+      if (lost === 3) { issued(); return new Promise(resolve => { release = () => resolve(response); }); }
+    }
+    return response;
+  };
+  const initial = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () { return stepResult(); });
+  await initial.next();
+  const slowFinal = stepResult({ index: 1 });
+  const slow = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 1 }), async function* () { return slowFinal; });
+  const completing = slow.next();
+  await started;
+  const fastFinal = stepResult({ index: 2 });
+  const fast = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 2 }), async function* () { return fastFinal; });
+  assert.equal((await fast.next()).value, fastFinal);
+  const original = f.calls.find(call => call.operation === "curated-usage-end");
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-end" && call.event_id === original.event_id).length, 3);
+  await f.invoke(start("session-b"));
+  release();
+  assert.equal((await completing).value, slowFinal);
+  const before = f.calls.length;
+  const fresh = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () { return stepResult(); });
+  await fresh.next();
+  const sends = f.calls.slice(before).filter(call => call.operation === "curated-usage-end");
+  assert.equal(sends.length, 1); assert.equal(sends[0].external_session_id, "session-b");
+});
+
+/** Active requests and retained outcomes share sixteen slots. Outage pressure
+ * cannot evict prior expense to admit a seventeenth marker; subsequent main
+ * steps retry one pending report at a time and eventually acknowledge every
+ * original immutable obligation without a provider/delegate replay. */
+test("Claude pending outcomes bound active plus retained work without eviction", async () => {
+  const f = fixture(); await f.invoke(start());
+  const run = f.sdk.process.run;
+  let outage = true, delegates = 0;
+  f.sdk.process.run = async (argv, options) => {
+    const response = await run(argv, options);
+    return JSON.parse(argv[2]).operation === "curated-usage-end" && outage
+      ? { exitCode: 0, stdout: "{}" } : response;
+  };
+  const perform = async index => {
+    const outcome = stepResult({ index });
+    const stream = f.hooks.get("turn.step")(f.sdk, stepInput({ index }), async function* () {
+      delegates++; return outcome;
+    });
+    assert.equal((await stream.next()).value, outcome);
+  };
+  for (let index = 0; index < 16; index++) await perform(index);
+  const original = new Map(f.calls.filter(call => call.operation === "curated-usage-end")
+    .map(call => [call.event_id, call]));
+  assert.equal(original.size, 16);
+  const begins = f.calls.filter(call => call.operation === "curated-usage-begin").length;
+  const ends = f.calls.filter(call => call.operation === "curated-usage-end").length;
+  await perform(16);
+  assert.equal(delegates, 17);
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-begin").length, begins + 2,
+    "at pressure only the existing pending obligation may restore readiness");
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, ends + 2);
+  assert.equal(new Set(f.calls.filter(call => call.operation === "curated-usage-end").map(call => call.event_id)).size, 16);
+  outage = false;
+  const recovered = new Set();
+  for (let index = 17; index < 33; index++) {
+    const before = f.calls.length;
+    await perform(index);
+    const delivered = f.calls.slice(before).filter(call => call.operation === "curated-usage-end");
+    assert.equal(delivered.length, 2, "one retained and one new report per main step");
+    assert.deepEqual(delivered[0], original.get(delivered[0].event_id));
+    recovered.add(delivered[0].event_id);
+  }
+  assert.equal(recovered.size, 16, "none of the incurred obligations was evicted");
+});
+
+/** Unknown/child steps never trigger pending delivery. Cancelled or missing
+ * outcomes acquire no retained final report. Observer replacement, same-ID
+ * clear, end and typed proof closure cannot move old expense to a new receipt. */
+test("Claude pending reports remain fenced across unavailable outcomes and observer replacement", async () => {
+  for (const boundary of ["new", "clear", "end", "proof"]) {
+    const f = fixture(); await f.invoke(start());
+    const run = f.sdk.process.run;
+    f.sdk.process.run = async (argv, options) => {
+      const response = await run(argv, options);
+      return JSON.parse(argv[2]).operation === "curated-usage-end"
+        ? { exitCode: 0, stdout: "{}" } : response;
+    };
+    const initial = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () { return stepResult(); });
+    await initial.next();
+    const before = f.calls.length;
+    for (const event of [{}, stepInput({ agentId: "child" }), stepInput({ agentId: null })]) {
+      const unknown = f.hooks.get("turn.step")(f.sdk, event, async function* () { return "unchanged"; });
+      assert.equal((await unknown.next()).value, "unchanged");
+    }
+    assert.equal(f.calls.length, before);
+    let cancelled = false;
+    const stream = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 1 }), async function* () {
+      try { yield "unchanged"; } finally { cancelled = true; }
+    });
+    await stream.next(); await stream.return("cancelled");
+    assert.equal(cancelled, true);
+    const missing = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 2 }), async function* () { return stepResult({ index: 2, usage: null }); });
+    await missing.next();
+    assert.equal(new Set(f.calls.filter(call => call.operation === "curated-usage-end").map(call => call.event_id)).size, 1);
+    if (boundary === "new") await f.invoke(start("session-b"));
+    else if (boundary === "clear") {
+      await f.invoke(end());
+      const originalRun = f.sdk.process.run;
+      f.sdk.process.run = async (argv, options) => {
+        const response = await originalRun(argv, options);
+        if (JSON.parse(argv[2]).operation === undefined) {
+          return { exitCode: 0, stdout: JSON.stringify({ ...JSON.parse(response.stdout), generation: 2,
+            observer_witness: "b".repeat(64), observer_epoch: 2 }) };
+        }
+        return response;
+      };
+      await f.invoke(start("session-a", { source: "clear" }));
+    }
+    else if (boundary === "end") await f.invoke(end("session-a", { reason: "logout" }));
+    else {
+      f.sdk.process.run = (argv, options) => JSON.parse(argv[2]).operation === "curated-heartbeat"
+        ? Promise.resolve({ exitCode: 0, stdout: '{"observed":false,"terminal":true}' }) : run(argv, options);
+      await f.timers[0].callback();
+    }
+    f.sdk.process.run = run;
+    const current = f.calls.length;
+    const next = f.hooks.get("turn.step")(f.sdk, stepInput({ turnId: "next" }), async function* () { return stepResult({ turnId: "next" }); });
+    await next.next();
+    const delivered = f.calls.slice(current).filter(call => call.operation === "curated-usage-end");
+    assert.equal(delivered.length, ["end", "proof"].includes(boundary) ? 0 : 1, boundary);
+    assert(delivered.every(call => call.turnId === undefined && call.event_id !== f.calls.find(call => call.operation === "curated-usage-end").event_id));
+  }
+});
+
+/** Restoring the same marker with changed native source evidence cannot send
+ * its retained final outcome, even when the coarse time/origin still match.
+ * No report mutates to a fresh ticket; reinstating original evidence allows
+ * only the identical original report, followed by a genuine new request. */
+test("Claude pending report refuses changed source readiness without rebinding", async () => {
+  const f = fixture(); await f.invoke(start());
+  const run = f.sdk.process.run;
+  let outage = true, changed = false;
+  f.sdk.process.run = async (argv, options) => {
+    const response = await run(argv, options);
+    const operation = JSON.parse(argv[2]).operation;
+    if (operation === "curated-usage-end" && outage) return { exitCode: 0, stdout: "{}" };
+    if (operation === "curated-usage-begin" && changed) {
+      return { exitCode: 0, stdout: JSON.stringify({ ...JSON.parse(response.stdout), source_witness: "d".repeat(64) }) };
+    }
+    return response;
+  };
+  const initial = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () { return stepResult(); });
+  await initial.next();
+  const original = f.calls.find(call => call.operation === "curated-usage-end");
+  outage = false; changed = true;
+  const changedStep = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 1 }), async function* () { return stepResult({ index: 1, usage: null }); });
+  await changedStep.next();
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 2);
+  changed = false;
+  const recovered = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 2 }), async function* () { return stepResult({ index: 2 }); });
+  await recovered.next();
+  assert.deepEqual(f.calls.filter(call => call.operation === "curated-usage-end")[2], original);
+});
+
 /** The literal generator delegates once, exposes each unchanged chunk as soon
  * as it arrives, and returns the exact final object. Only final request usage is
  * charged; timestamps and opaque IDs remain identical on callback replay. */

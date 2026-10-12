@@ -103,6 +103,11 @@ pub enum CommandOutcome {
 /// Product-owned sources supported by live terminal-command displays.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandDisplaySource {
+    /// Shared agent status for the pane captured at command acceptance.
+    AgentStatus {
+        /// Stable pane identity, independent of subsequent focus changes.
+        pane_id: String,
+    },
     /// Exact-client Iroh connection status.
     IrohStatus {
         /// Client whose authenticated connection details are displayed.
@@ -225,6 +230,7 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "show-metrics",
     "show-iroh-status",
     "show-pane-status",
+    "agent-status",
     "list-keys",
     "list-key-presets",
     "list-themes",
@@ -261,7 +267,9 @@ fn baseline_command_status(name: &str) -> BaselineCommandStatus {
         | "list-buffers" | "choose-buffer" | "delete-buffer" | "capture-pane" | "save-buffer"
         | "clear-history" | "search-history" | "export-history" | "pipe-pane"
         | "refresh-client" | "show-metrics" | "show-iroh-status" | "show-pane-status"
-        | "agent-shell" | "pane-settings" | "list-agents" => BaselineCommandStatus::RuntimeRequired,
+        | "agent-shell" | "pane-settings" | "list-agents" | "agent-status" => {
+            BaselineCommandStatus::RuntimeRequired
+        }
         "bind-key" | "unbind-key" | "set-key-preset" | "set-theme" | "set-option"
         | "source-file" | "mark-pane-ready" => BaselineCommandStatus::StoreRequired,
         "zen" => BaselineCommandStatus::RuntimeRequired,

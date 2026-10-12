@@ -911,7 +911,7 @@ impl RuntimeSessionService {
                 action,
                 ActionStatus::Rejected,
                 "unavailable",
-                "persistent child is unavailable; refresh list_agents before retrying",
+                "persistent child is unavailable; refresh list_agents with agent_type=subagent or all; verify a persistent child owned by the current parent conversation and retry once with a verified target; otherwise abandon the close and continue useful work or report a concrete cleanup limitation. Do not repeat an unchanged unavailable close, guess identifiers, widen scope, bypass ownership, or claim closure. Discovery is not authority; execution revalidates live ownership.",
             )
         };
         let Some(persistent) = self.persistent_subagent(agent_id).cloned() else {

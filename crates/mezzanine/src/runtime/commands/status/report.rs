@@ -14,6 +14,18 @@ use crate::storage::token_usage::{
 use mez_agent::slash::{StatusOptions, StatusScope};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Live pager ownership without counters, storage handles or refresh authority.
+/// Unknown shell-process evidence is retained as unknown, never a native session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeStatusLiveOwner {
+    /// Pane whose diagnostics were accepted, independent of focus.
+    pane: String,
+    /// Exact native conversation and visibility, if one was already retained.
+    conversation: Option<(String, mez_agent::AgentShellVisibility)>,
+    /// Shell root incarnation, when available without a native conversation.
+    process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
+}
+
 /// Acceptance-owned report and delivery evidence, independent of worker timing.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeStatusReportWork {
@@ -23,6 +35,14 @@ pub(crate) struct RuntimeStatusReportWork {
     pub(crate) pane: String,
     /// Conversation owning the pane at acceptance, including visibility checks.
     conversation: Option<String>,
+    /// Terminal reports retain hidden/native visibility instead of requiring a
+    /// slash prompt. None preserves the stricter existing slash-command fence.
+    terminal_visibility: Option<mez_agent::AgentShellVisibility>,
+    /// Exact interactive overlay generation after the terminal handoff. A
+    /// replacement/dismissal must never resurrect a finished worker's pager.
+    pub(crate) terminal_overlay_generation: Option<u32>,
+    /// Terminal-origin reports may never apply through agent prompt mutation.
+    pub(crate) terminal: bool,
     /// Exact external-only pane root; a native conversation uses its own fence.
     process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
     /// Canonical cwd evidence retained by the actor; never reread by the worker.
@@ -122,6 +142,45 @@ pub(super) fn table(
 }
 
 impl RuntimeSessionService {
+    /// Captures live status ownership without querying durable accounting.
+    pub(crate) fn status_live_owner(&self, pane: &str) -> RuntimeStatusLiveOwner {
+        let conversation = self
+            .agent_shell_store()
+            .get(pane)
+            .map(|session| (session.session_id.clone(), session.visibility));
+        let process = if conversation.is_none() {
+            self.pane_process_identity(pane).ok()
+        } else {
+            None
+        };
+        RuntimeStatusLiveOwner {
+            pane: pane.into(),
+            conversation,
+            process,
+        }
+    }
+
+    /// Rejects closed/replaced native or shell owners before refreshing rows.
+    pub(crate) fn status_live_owner_is_current(&self, owner: &RuntimeStatusLiveOwner) -> bool {
+        if self.find_pane_descriptor(&owner.pane).is_none() {
+            return false;
+        }
+        let current = self
+            .agent_shell_store()
+            .get(&owner.pane)
+            .map(|session| (session.session_id.clone(), session.visibility));
+        if current != owner.conversation {
+            return false;
+        }
+        if current.is_some() {
+            return true;
+        }
+        match &owner.process {
+            Some(process) => self.pane_process_identity_is_current(&owner.pane, process),
+            None => self.pane_process_identity(&owner.pane).is_err(),
+        }
+    }
+
     /// Retains one acceptance snapshot, dropping superseded snapshots for its pane.
     pub(crate) fn retain_pending_status_report(
         &mut self,
@@ -180,6 +239,9 @@ impl RuntimeSessionService {
             client: client.clone(),
             pane: pane.to_string(),
             conversation,
+            terminal_visibility: None,
+            terminal_overlay_generation: None,
+            terminal: false,
             process,
             cwd: self.pane_current_working_directory(pane),
             active_project,
@@ -203,7 +265,10 @@ impl RuntimeSessionService {
                         .get(&work.pane)
                         .is_some_and(|session| {
                             session.session_id == conversation
-                                && session.visibility == mez_agent::AgentShellVisibility::Visible
+                                && session.visibility
+                                    == work
+                                        .terminal_visibility
+                                        .unwrap_or(mez_agent::AgentShellVisibility::Visible)
                         })
                 }
                 None => {
@@ -219,6 +284,16 @@ impl RuntimeSessionService {
 }
 
 impl RuntimeStatusReportWork {
+    /// Marks terminal origin without changing a native conversation or prompt.
+    pub(crate) fn for_terminal(
+        mut self,
+        visibility: Option<mez_agent::AgentShellVisibility>,
+    ) -> Self {
+        self.terminal_visibility = visibility;
+        self.terminal = true;
+        self
+    }
+
     /// Supplies an opaque command-lease owner without allocating a native session.
     pub(crate) fn command_owner(&self) -> String {
         self.conversation

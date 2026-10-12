@@ -570,6 +570,15 @@ outcome. Transport/malformed/deadline/other errors remain the neutral retryable
 bytes remain upgradeable through a frozen old client and guarded module recipe;
 revisions1/2 retain their original source inputs. Local closure is not daemon
 retirement, process death, renewal, executable attestation or billing evidence.
+Revision5 retains failed final normalized request reports under the same live
+observer. Active requests plus pending outcomes are bounded to sixteen; pressure
+withholds new telemetry without evicting expense or altering the vendor request.
+A later genuine main request retries at most one original pending report through
+the existing finite typed-ACK client, never reruns the old request or borrows a
+new observer. Stop/replacement/clear/proof closure fences retained work. Exact
+revision1–4 source snapshots remain safely upgradeable. This is process-local
+retry only: no timer, durable outbox, reload/restart or cross-process continuation
+guarantee is added; absent later qualified callbacks, delivery remains unknown.
 Focused Linux acceptance qualifies the unchanged bare-installed module's terminal
 negative-proof cancellation/no-helper/no-re-admission behavior while its actual
 Node creator remains alive; deterministic proof/lease aging is not wall-clock

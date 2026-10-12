@@ -74,6 +74,14 @@ Replacing or removing that owner closes or fences its persistent children;
 they are not daemons that survive an unrelated `/new` task. Omit `lifetime`
 for ordinary one-task delegation.
 
+An authoritative same-owner persistent-child record with an already absent pane
+is cleaned up successfully with `closed: false`. A retained completed close for
+that owner also succeeds as a no-op without rediscovery. Retained no-op evidence
+is bounded and runtime-session-local: it does not grant live authority, survive
+identity reuse, or authorize a different parent conversation. Unknown, foreign,
+non-persistent, and otherwise inaccessible identities share one opaque
+unavailable result; an absent pane alone is not an unavailable identity.
+
 ## Coordinate peers safely
 
 Agents use the read-only `list_agents` action before sending messages. Its
@@ -85,9 +93,24 @@ so a truncated result is not a complete census.
 An unavailable persistent-child close can offer bounded same-turn correction;
 the rejected result does not mean the child was closed. Rediscover children with
 `agent_type: "subagent"` or `"all"`, verify current parent-conversation ownership,
-then choose a corrected close or continue useful work. Do not replay an unchanged
-unavailable target or bypass ownership. Exhaustion ends the turn truthfully;
-policy/user denials and post-close checkpoint failures are not this pre-effect case.
+and persistent lifetime, then retry once with a verified target. Otherwise abandon
+the close and continue useful work or report a concrete cleanup limitation. Do
+not repeat an unchanged unavailable close, guess identifiers, widen scope, use
+another mechanism to bypass ownership, or claim closure. Discovery is not
+authority: execution revalidates live ownership, including discovery-to-close
+races. No inaccessible ownership details are exposed by the rejection.
+
+Action rejection is not terminal turn failure while the existing
+`agents.action_failure_retry_limit` budget and sibling safety gates permit
+correction. Changing action IDs does not reset that stable-signature budget.
+Synchronous and asynchronous continuation allow both verified corrected close
+and changed-course normal completion, never automatic replay. Settled siblings
+are not replayed; inactive unsent siblings may be abandoned, while active or
+approval-blocked work may prevent correction until it settles or is cancelled.
+Exhaustion ends the turn truthfully. Policy/user denials, cancellation, and
+post-close checkpoint failures are not this pre-effect case: pane removal may
+already have happened before checkpoint failure. There are no new settings or
+ownership privileges for close recovery.
 
 Published objectives describe current work. Set `/objective <text>` to override
 the generated objective for the current conversation; `/objective --clear`

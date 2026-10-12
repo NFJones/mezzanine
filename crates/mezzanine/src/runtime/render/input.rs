@@ -1248,6 +1248,13 @@ impl RuntimeSessionService {
             }
             RuntimeAgentShellDisplayOutput::Overlay(content) => {
                 let live_source = content.live_source.clone();
+                let status_owner = live_source.as_ref().and_then(|source| match source {
+                    crate::runtime::service_state::RuntimeLiveOverlaySourceKind::AgentStatus {
+                        pane_id,
+                        ..
+                    } => Some(self.status_live_owner(pane_id)),
+                    _ => None,
+                });
                 let record_browser = content.command.as_ref().and_then(|command| {
                     let key = (pane_id.to_string(), command.clone());
                     let source = self
@@ -1290,6 +1297,7 @@ impl RuntimeSessionService {
                     const LIVE_STATUS_REFRESH_INTERVAL_MS: u64 = 1_000;
                     overlay.live_source = Some(RuntimeLiveOverlaySource {
                         source,
+                        status_owner,
                         refresh_interval_ms: LIVE_STATUS_REFRESH_INTERVAL_MS,
                         next_due_ms: current_unix_millis()
                             .saturating_add(LIVE_STATUS_REFRESH_INTERVAL_MS),

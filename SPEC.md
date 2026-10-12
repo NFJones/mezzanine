@@ -1452,6 +1452,20 @@ them. Expense/report time uses the immutable admitted request boundary for exact
 replay. Old owners, child loops and pressure MUST never borrow a newest binding.
 This source capability does not install/enable the mod or certify exhaustive,
 auxiliary, cross-process resumed/forked or invoice coverage.
+Claude revision5 MUST share sixteen slots between active producers and retained
+unacknowledged normalized outcomes. Failed durable delivery MUST retain only the
+original report, client-local readiness ticket and exact still-live observer;
+callback replay MUST NOT replace its payload or multiply pending obligations.
+A later genuine main step MAY retry at most one retained report before its own
+delegate, using the existing two-attempt same-report transport contract. Pending
+retry MUST be serialized, failures rotated without eviction, and pressure MUST
+refuse new telemetry rather than discard prior expense or block vendor delegation.
+Stopped/replaced/clear/negative-proof epochs MUST NOT carry pending reports into
+a successor. Unknown/child callbacks MUST NOT trigger retry; missing/cancelled
+final usage MUST NOT fabricate a retained outcome. No timer, store persistence,
+provider replay or no-gap process/reload/restart guarantee is introduced. Exact
+revision1–4 module/client/step inputs MUST remain independently frozen or guarded
+for same-helper upgrades; receipt paths cannot authenticate executable relocation.
 The installed shared request client MUST retain only validated content-free
 reports and client-local tickets captured before genuine new requests. It MUST
 refuse beyond128 active tickets without silently evicting unacknowledged expense,
@@ -3218,6 +3232,7 @@ The command language MUST include commands equivalent to:
 - `show-messages`
 - `show-metrics`
 - `show-iroh-status`
+- `agent-status`
 - `list-keys`
 - `list-key-presets`
 - `list-themes`
@@ -9654,9 +9669,15 @@ The baseline action types are:
   owner. A repeat request for a child whose completed closure is still recorded
   for that same owner MUST succeed as a no-op with `closed: false`; this bounded
   retirement evidence is runtime-session-local and grants no live authority.
+  An authoritative same-owner persistent-child record whose pane is already
+  absent MUST likewise retire its remaining runtime state and succeed with
+  `closed: false`; absence of a pane is not by itself an unavailable identity.
+  Known retained completed closures need no rediscovery.
   Malformed agent identifiers MUST return `invalid_params`; syntactically valid
-  unknown, foreign, non-persistent, and stale targets MUST return one opaque
-  unavailable result. Successful live closure MUST use the ordinary forced
+  unknown, foreign, non-persistent, and otherwise inaccessible identities MUST
+  return one opaque unavailable result. Discovery MUST NOT grant authority:
+  execution MUST revalidate live ownership even after successful discovery,
+  including discovery-to-close races. Successful live closure MUST use the ordinary forced
   pane-close lifecycle so process, turn, scope, lineage, MMP identity, and
   discovery cleanup remain centralized.
 - `config_change`: Propose a live configuration change.
@@ -10575,9 +10596,21 @@ exhausted, Mezzanine MUST settle the turn as failed.
 An opaque pre-effect `close_agent` result with `Rejected` status and `unavailable`
 error MAY enter this same bounded correction path. The rejected result MUST remain
 in audit and model context; rejection is not proof of closure. The model may
-rediscover a verified caller-owned persistent child or change course. This MUST
+refresh `list_agents` with `agent_type: "subagent"` or `"all"` (the default
+primary-agent view omits children), verify a persistent child owned by the
+current parent conversation, and retry once with that verified target. Otherwise
+it MUST abandon the close and continue useful work or report a concrete cleanup
+limitation. It MUST NOT repeat an unchanged unavailable close, guess identifiers,
+widen discovery scope, use another mechanism to bypass ownership, or falsely
+claim closure. The same opaque guidance MUST cover all unavailable identities
+without exposing inaccessible ownership or resource facts. This MUST
 NOT automatically replay close, soften ownership checks, admit policy/user denials
 or cancellation, or treat post-effect checkpoint errors as unexecuted operations.
+In particular, pane removal may already have happened before checkpoint failure;
+that failure is not this pre-close rejection. An action rejection is not a
+terminal turn failure while bounded correction and sibling safety gates permit
+a provider continuation; corrected close and changed-course completion both use
+the normal turn lifecycle in synchronous and asynchronous execution.
 Different action IDs MUST NOT reset the stable rejection correction budget.
 When one model-correctable action fails before later shell-backed sibling
 actions have reached the pane shell, those inactive unsent siblings MUST NOT
@@ -11985,6 +12018,31 @@ The baseline command capabilities are:
   conversation and immutable project origin; pane totals require the original
   root incarnation. Auxiliary title usage MUST NOT replace ordinary context/cache
   samples, and accounting failure MUST NOT replay a provider request.
+  Terminal `:agent-status` MUST present this same status formatter and accept
+  `[--extended] [--project | --all-projects]` through the shared option grammar,
+  preserving parsed terminal token boundaries (a quoted multi-flag operand MUST
+  NOT become multiple flags). Its target is the invoking attached primary's
+  pane at acceptance, not subsequent focus. It MUST work from a normal shell,
+  with a retained hidden native conversation or external-only pane, without
+  entering agent mode, creating a conversation, starting provider work, resetting
+  accounting, changing focus, or modifying an agent draft/history. It MUST NOT
+  substitute pane-layout/provider diagnostics from `show-pane-status`.
+  Plain terminal status MUST reuse the typed live overlay, shared Markdown
+  rendering and refresh cadence, preserving search/copy/scroll/resize behavior.
+  Closure, native-conversation replacement or shell-root rebind MUST invalidate
+  its accepted live owner. Interactive scoped/extended reports MUST be captured
+  at acceptance and executed through the bounded off-actor report worker; a
+  replaced or dismissed waiting pager MUST NOT be resurrected at completion.
+  These presentation identities MUST be caller-local, including when another
+  primary or a source-bound observer is rendered in the interim. Configured
+  bindings and terminal sequences MUST use the same handoff; only a final
+  report outcome may own the interactive waiting pager. Textual async terminal
+  and authenticated framed `terminal/command` requests MUST return completed
+  snapshot sequence outcomes without installing an overlay, preserve control
+  framing/replay, and fence every reported pane/project/command owner. Baseline
+  dispatch without a live runtime MUST report runtime required, never fabricated
+  totals. Synchronous textual APIs without the worker continuation MUST refuse
+  snapshot sequences before mutation rather than querying SQLite inline.
   `/status` MUST accept `[--extended] [--project | --all-projects]` in either
   flag order, rejecting duplicates, conflicting scopes, values and operands.
   Unqualified status MUST preserve overall totals and memory-only live display.

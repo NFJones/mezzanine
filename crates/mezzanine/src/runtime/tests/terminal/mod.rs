@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod agent_status;
+mod agent_status_delivery;
 mod command_prompt;
 mod control_integrations;
 mod copy_mode;
