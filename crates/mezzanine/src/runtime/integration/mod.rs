@@ -59,6 +59,9 @@ pub(crate) struct RuntimeIntegrationComponent {
     remote_trust_store: Option<RemoteTrustStore>,
     remote_endpoint_addr: tokio::sync::watch::Sender<Option<iroh::EndpointAddr>>,
     remote_iroh_diagnostics: Option<RuntimeIrohDiagnostics>,
+    /// Session-local invitation creation time; never overrides redemption time.
+    #[cfg(test)]
+    remote_invitation_now_unix_seconds: Option<u64>,
     /// One-shot dedicated theme settlement fault, isolated to this fixture.
     #[cfg(test)]
     theme_selection_fault: Option<&'static str>,
@@ -102,6 +105,8 @@ impl RuntimeIntegrationComponent {
             remote_trust_store: None,
             remote_endpoint_addr,
             remote_iroh_diagnostics: None,
+            #[cfg(test)]
+            remote_invitation_now_unix_seconds: None,
             #[cfg(test)]
             theme_selection_fault: None,
             #[cfg(test)]
@@ -282,6 +287,25 @@ impl RuntimeIntegrationComponent {
     /// Replaces the optional project configuration root.
     pub(crate) fn set_config_root(&mut self, root: Option<PathBuf>) {
         self.config_root = root;
+    }
+
+    /// Sets a fixture-local invitation timestamp without changing global time,
+    /// remote authentication, or any other runtime session. `None` restores the
+    /// production wall-clock source; the override exists only in test builds.
+    #[cfg(test)]
+    pub(crate) fn set_remote_invitation_time_for_tests(&mut self, now: Option<u64>) {
+        self.remote_invitation_now_unix_seconds = now;
+    }
+
+    /// Samples invitation creation time once at the remote integration boundary.
+    /// Production uses Unix wall time; deterministic fixtures may replace only
+    /// this sample. TTL arithmetic and expiration validation stay in the store.
+    pub(crate) fn remote_invitation_unix_seconds(&self) -> u64 {
+        #[cfg(test)]
+        if let Some(now) = self.remote_invitation_now_unix_seconds {
+            return now;
+        }
+        crate::runtime::current_unix_seconds()
     }
 
     /// Loads or creates and then retains the per-session remote endpoint lock.

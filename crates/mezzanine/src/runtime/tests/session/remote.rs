@@ -237,6 +237,13 @@ fn runtime_remote_invite_rejects_undialable_addresses_without_persistence() {
 
 /// Verifies invitation creation uses the configured Iroh lifetime only when
 /// the request does not provide an explicit expiration override.
+///
+/// The session-local clock moves backwards between distinct invitations and
+/// forwards before replay. Exact expirations must use each creation sample,
+/// while an idempotent replay must keep the original token and expiration.
+/// Persisted trust is checked at and after expiry, including role and single-use
+/// rejection; separate before/after wall-clock bounds cannot prove this contract
+/// when the operating system clock changes during a request.
 #[test]
 fn runtime_remote_invite_resolves_configured_and_explicit_ttl() {
     let root = temp_root("remote-configured-invite-ttl-runtime");
@@ -254,7 +261,14 @@ fn runtime_remote_invite_resolves_configured_and_explicit_ttl() {
         .unwrap();
     let mut local = local_owner_connection(&mut service);
 
-    let before_default = super::super::super::current_unix_seconds();
+    let configured_now = 20_000;
+    service
+        .integration
+        .set_remote_invitation_time_for_tests(Some(configured_now));
+    assert_eq!(
+        service.integration.remote_invitation_unix_seconds(),
+        configured_now
+    );
     let configured = request(
         &mut service,
         &mut local,
@@ -264,10 +278,12 @@ fn runtime_remote_invite_resolves_configured_and_explicit_ttl() {
         .pointer("/result/expires_at_unix_seconds")
         .and_then(serde_json::Value::as_u64)
         .unwrap();
-    assert!(configured_expiry >= before_default + 120);
-    assert!(configured_expiry <= super::super::super::current_unix_seconds() + 120);
+    assert_eq!(configured_expiry, configured_now + 120);
 
-    let before_override = super::super::super::current_unix_seconds();
+    let overridden_now = 10_000;
+    service
+        .integration
+        .set_remote_invitation_time_for_tests(Some(overridden_now));
     let overridden = request(
         &mut service,
         &mut local,
@@ -277,10 +293,131 @@ fn runtime_remote_invite_resolves_configured_and_explicit_ttl() {
         .pointer("/result/expires_at_unix_seconds")
         .and_then(serde_json::Value::as_u64)
         .unwrap();
-    assert!(overridden_expiry >= before_override + 45);
-    assert!(overridden_expiry <= super::super::super::current_unix_seconds() + 45);
+    assert_eq!(overridden_expiry, overridden_now + 45);
+
+    service
+        .integration
+        .set_remote_invitation_time_for_tests(Some(100_000));
+    let configured_replay = request(
+        &mut service,
+        &mut local,
+        r#"{"jsonrpc":"2.0","id":"configured","method":"remote/invite","params":{"role":"observer","idempotency_key":"configured-invite"}}"#,
+    );
+    let overridden_replay = request(
+        &mut service,
+        &mut local,
+        r#"{"jsonrpc":"2.0","id":"overridden","method":"remote/invite","params":{"role":"observer","expires_seconds":45,"idempotency_key":"overridden-invite"}}"#,
+    );
+    // Avoid printing responses containing bearer tokens on assertion failure.
+    assert!(configured_replay == configured);
+    assert!(overridden_replay == overridden);
+    assert_invitation_expiry_authority(&mut service, &configured, configured_now + 120);
+    assert_invitation_expiry_authority(&mut service, &overridden, overridden_now + 45);
 
     let _ = fs::remove_dir_all(root);
+}
+
+/// Checks the persisted invitation, not just the JSON expiration projection.
+/// An observer invitation remains valid at the inclusive expiry second, rejects
+/// escalation and the following second without creating trust, and cannot be
+/// consumed by a second endpoint after its successful boundary redemption.
+fn assert_invitation_expiry_authority(
+    service: &mut RuntimeSessionService,
+    response: &serde_json::Value,
+    expires_at: u64,
+) {
+    let token = secrecy::SecretString::from(
+        response
+            .pointer("/result/token")
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+            .to_string(),
+    );
+    let server_endpoint_id = response
+        .pointer("/result/server_endpoint_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap();
+    let client_endpoint_id = SecretKey::generate().public().to_string();
+    let session_id = service.session().id.to_string();
+    let store = service
+        .integration
+        .ensure_remote_trust_store(&session_id)
+        .unwrap();
+    let records_before = store.list_records().unwrap().len();
+    let expired = store
+        .prepare_invitation(
+            &token,
+            server_endpoint_id,
+            &client_endpoint_id,
+            "ttl-boundary",
+            RequestedRole::Observer,
+            expires_at + 1,
+        )
+        .unwrap_err();
+    assert_eq!(expired.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(expired.message().contains("expired"));
+    let escalated = store
+        .prepare_invitation(
+            &token,
+            server_endpoint_id,
+            &client_endpoint_id,
+            "ttl-boundary",
+            RequestedRole::Primary,
+            expires_at,
+        )
+        .unwrap_err();
+    assert_eq!(escalated.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(store.list_records().unwrap().len(), records_before);
+    let prepared = store
+        .prepare_invitation(
+            &token,
+            server_endpoint_id,
+            &client_endpoint_id,
+            "ttl-boundary",
+            RequestedRole::Observer,
+            expires_at,
+        )
+        .unwrap();
+    assert_eq!(
+        prepared.principal().role_ceiling,
+        RemoteRoleCeiling::Observer
+    );
+    store.commit_invitation(prepared, expires_at).unwrap();
+    assert_eq!(store.list_records().unwrap().len(), records_before + 1);
+    let duplicate = store
+        .prepare_invitation(
+            &token,
+            server_endpoint_id,
+            &SecretKey::generate().public().to_string(),
+            "second-endpoint",
+            RequestedRole::Observer,
+            expires_at,
+        )
+        .unwrap_err();
+    assert_eq!(duplicate.kind(), crate::error::MezErrorKind::Conflict);
+    assert_eq!(store.list_records().unwrap().len(), records_before + 1);
+}
+
+/// Verifies deterministic invitation samples belong to one integration owner,
+/// rather than a global clock shared by concurrently running runtime fixtures.
+/// Changing one session in either direction must leave the other unchanged.
+#[test]
+fn runtime_remote_invitation_clock_is_session_local() {
+    let mut first = test_runtime_service();
+    let mut second = test_runtime_service();
+    first
+        .integration
+        .set_remote_invitation_time_for_tests(Some(20_000));
+    second
+        .integration
+        .set_remote_invitation_time_for_tests(Some(30_000));
+    for now in [10_000, 100_000] {
+        first
+            .integration
+            .set_remote_invitation_time_for_tests(Some(now));
+        assert_eq!(first.integration.remote_invitation_unix_seconds(), now);
+        assert_eq!(second.integration.remote_invitation_unix_seconds(), 30_000);
+    }
 }
 
 /// Verifies endpoint identity alone cannot initialize and an invitation becomes

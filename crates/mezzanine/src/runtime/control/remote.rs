@@ -571,15 +571,13 @@ impl RuntimeSessionService {
                     ));
                 }
                 let endpoint_addr = foreign_machine_invitation_addr(endpoint_addr, &policy)?;
-                let invitation = self
+                let store = self
                     .integration
                     .ensure_remote_trust_store(&session_id)?
-                    .create_invitation(
-                        &endpoint_id,
-                        role,
-                        ttl_seconds,
-                        super::current_unix_seconds(),
-                    )?;
+                    .clone();
+                let now_unix_seconds = self.integration.remote_invitation_unix_seconds();
+                let invitation =
+                    store.create_invitation(&endpoint_id, role, ttl_seconds, now_unix_seconds)?;
                 Ok(serde_json::json!({
                     "format_version": 1,
                     "invitation_id": invitation.invitation_id,
