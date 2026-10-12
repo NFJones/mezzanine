@@ -1523,6 +1523,13 @@ SQLite schema v2 migrates legacy rows to harness `mez` without counter backfill.
 The ledger stores harness/model counters and opaque stream identities, not prompt,
 transcript or pane paths. Native latest-request samples remain separate. Pane
 reset changes only the external view baseline; session and durable expense remain.
+Ordinary Pi's normalized `usage_gap` observation carries only a fixed allowlisted
+reason. It uses the existing capability/native-producer/session/generation and
+contiguous observation sequence. It latches coverage metadata for `/status`, not
+expense or lifecycle state; no amount, raw callback content, source identity,
+control, reset or continuation is granted. The legacy inherited lifecycle stream
+refuses this ordinary accounting metadata. A reporting gap leaves previous
+expense intact and is not proof that an unacknowledged report failed to commit.
 Native `agent/list` reports the existing `compacting` status whenever an exact
 compaction operation owns the pane's current conversation. Manual preparation
 may therefore report `compacting` with `last_turn_id: null`; it does not invent

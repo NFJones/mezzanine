@@ -294,21 +294,33 @@ fn bootstrap_jsonc_history_keeps_strict_predecessors_and_rejects_payload_drift()
     use crate::integrations::bootstrap::{opencode_artifact, reconciliation::Artifact};
     let current = opencode_artifact::manifest();
     let history = crate::integrations::bootstrap::compiled_history(&current);
-    assert_eq!(history.len(), 14);
-    assert_eq!(history[8], opencode_artifact::historical_manifest());
-    assert!(history.iter().skip(8).all(|manifest| {
-        manifest
-            .entries
-            .iter()
-            .all(|entry| !matches!(entry.artifact, Artifact::JsoncArrayEntry { .. }))
-    }));
-    assert!(history.iter().take(8).all(|manifest| {
-        [7, 8].contains(&manifest.revision)
-            && manifest
+    assert_eq!(history.len(), 18);
+    assert!(history.contains(&opencode_artifact::historical_manifest()));
+    let jsonc = history
+        .iter()
+        .filter(|manifest| {
+            manifest
                 .entries
                 .iter()
                 .any(|entry| matches!(entry.artifact, Artifact::JsoncArrayEntry { .. }))
-    }));
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(jsonc.len(), 12);
+    assert_eq!(history.len() - jsonc.len(), 6);
+    for revision in [7, 8, 9] {
+        assert_eq!(
+            jsonc
+                .iter()
+                .filter(|manifest| manifest.revision == revision)
+                .count(),
+            4
+        );
+    }
+    assert!(
+        jsonc
+            .iter()
+            .all(|manifest| [7, 8, 9].contains(&manifest.revision))
+    );
     let tui = include_bytes!("../../../opencode_tui.mjs");
     let client = include_bytes!("../../../history/persistent_client_v5.mjs");
     assert!(opencode_artifact::historical_payloads_match(tui, client));

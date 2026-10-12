@@ -37,6 +37,17 @@ not create a native conversation, and external reports never replace native
 latest-request/context samples. Pane reset leaves cumulative stream checkpoints,
 runtime-instance expense and durable history intact.
 
+Normal Pi sessions report supported finalized assistant-request counters after
+one ordinary `mez bootstrap pi` installation. Input includes Pi cache read/write
+partitions once; output already includes reasoning. `unavailable-pi-usage-*` in
+External Telemetry records a sticky content-free coverage gap (for example,
+missing finalized counters/correlation or a lost durable ACK), even after earlier
+expense was recorded. It does not erase totals or prove zero/lost expense. Native
+request admission, not the callback's earlier cwd/time, freezes project origin.
+Pending/deferred and unattributable auxiliary usage are not included; process-local
+unsent reports are not a durable cross-process spool. These are supported
+observations, never a full invoice or spend-completeness guarantee.
+
 | Observation | Interpretation |
 | --- | --- |
 | `Cumulative cache hit` | Token-weighted ratio across retained provider samples, including cold starts and auxiliary routing or sizing requests. |

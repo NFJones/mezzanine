@@ -24,6 +24,10 @@ function piFact(input) {
     if (!input || typeof input !== "object" || Array.isArray(input) || !Object.hasOwn(input, "type")) return;
     const type = input.type;
     if (["agent_start", "agent_settled"].includes(type)) return { type };
+    if (type === "usage_gap") {
+      const reason = Object.hasOwn(input, "reason") ? input.reason : undefined;
+      if (["request-readiness", "report-clock", "finalized-counters", "response-correlation", "unmatched-finalized-event", "immutable-observation-conflict", "durable-acknowledgment", "overlapping-turn"].includes(reason)) return { type, reason };
+    }
     if (["session_start", "session_shutdown"].includes(type)) {
       const allowed = type === "session_start" ? ["startup", "reload", "new", "resume", "fork"] : ["quit", "reload", "new", "resume", "fork"];
       const reason = Object.hasOwn(input, "reason") ? input.reason : undefined;

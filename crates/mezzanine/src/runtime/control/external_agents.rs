@@ -92,6 +92,13 @@ impl LaunchBinding {
     /// Distinguishes actually observed request reports from source unavailability.
     /// Legacy externally reported accounting is not a completeness/invoice claim.
     fn usage_coverage(&self) -> &'static str {
+        if let Some(reason) = self
+            .pi_lifecycle
+            .as_ref()
+            .and_then(|projection| projection.usage_gap_coverage())
+        {
+            return reason;
+        }
         if self
             .enrollment
             .as_ref()

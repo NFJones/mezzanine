@@ -54,6 +54,24 @@ async fn external_enrollment_installed_ordinary_pi_entry_uses_daemon_reducer() {
     .await;
 }
 
+/// The installed ordinary Pi producer sends finalized error/abort/success
+/// expense through real native readiness and typed durable ACK, not parent
+/// completion. More than 4096 messages retain one source/model/category stream;
+/// early counters, tool totals and replay never inflate durable expense.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built mez helper required; offline only"]
+async fn external_enrollment_installed_ordinary_pi_usage_has_bounded_durable_stream() {
+    qualify_installed_node_entry(
+        "pi-usage-ordinary-fixture.mjs",
+        "index.mjs",
+        1,
+        1,
+        false,
+        None,
+    )
+    .await;
+}
+
 /// Runs an explicit offline installed-artifact producer through real native
 /// The installed TUI config resolves the real default {id,tui} module. A local
 /// client-selected cache/route drives native Bun-origin enrollment, exact session
@@ -196,7 +214,8 @@ async fn qualify_installed_node_entry(
             .is_empty()
     );
     let mut service = RuntimeServiceFixture::new().control_socket(&path).build();
-    let request_accounting = script_name == "request-accounting-ordinary-fixture.mjs";
+    let pi_usage = script_name == "pi-usage-ordinary-fixture.mjs";
+    let request_accounting = script_name == "request-accounting-ordinary-fixture.mjs" || pi_usage;
     if request_accounting {
         service.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
             directory.join("usage.sqlite"),
@@ -303,9 +322,10 @@ async fn qualify_installed_node_entry(
         }
         handle.shutdown().await.unwrap();
     };
-    let ((), mut exit) = tokio::time::timeout(Duration::from_secs(25), async {
-        tokio::join!(server, actor.run())
-    })
+    let ((), mut exit) = tokio::time::timeout(
+        Duration::from_secs(if pi_usage { 300 } else { 25 }),
+        async { tokio::join!(server, actor.run()) },
+    )
     .await
     .unwrap();
     assert_eq!(exit.service.session().clients().len(), clients);
@@ -346,6 +366,8 @@ async fn qualify_installed_node_entry(
         }
     );
     if request_accounting {
+        let expected_requests = if pi_usage { 4105_u64 } else { 1 };
+        let expected_input = expected_requests * 10;
         assert!(binding.enrollment.as_ref().unwrap().request_reports_seen);
         assert_eq!(
             exit.service
@@ -353,7 +375,7 @@ async fn qualify_installed_node_entry(
                 .values()
                 .map(|usage| usage.input_tokens)
                 .sum::<u64>(),
-            10
+            expected_input
         );
         assert_eq!(
             exit.service.external_usage_reservation_counts_for_tests(),
@@ -368,7 +390,7 @@ async fn qualify_installed_node_entry(
                     |row| row.get::<_, i64>(0)
                 )
                 .unwrap(),
-            10
+            expected_input as i64
         );
         assert_eq!(
             database
@@ -376,7 +398,7 @@ async fn qualify_installed_node_entry(
                     row.get::<_, i64>(0)
                 })
                 .unwrap(),
-            1
+            expected_requests as i64
         );
         assert_eq!(
             database
@@ -386,8 +408,46 @@ async fn qualify_installed_node_entry(
                     |row| row.get::<_, i64>(0)
                 )
                 .unwrap(),
-            1
+            expected_requests as i64
         );
+        if pi_usage {
+            assert_eq!(
+                database
+                    .query_row("SELECT count(*) FROM external_usage_streams", [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                database
+                    .query_row("SELECT count(*) FROM external_usage_sources", [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+            assert!(exit.service.agent_shell_store().get("%1").is_none());
+            let status = exit.service.runtime_agent_status_display("%1").unwrap();
+            assert!(status.contains("pi-offline-provider"));
+            assert!(status.contains("actual-model"));
+            assert!(!status.contains("selected-model"));
+            assert!(!status.contains("PRIVATE_CALLBACK_CONTENT"));
+            let reopened =
+                crate::storage::token_usage::TokenUsageStore::new(directory.join("usage.sqlite"));
+            let snapshot = reopened
+                .history_snapshot(
+                    crate::runtime::current_unix_seconds(),
+                    &[1],
+                    &Default::default(),
+                )
+                .unwrap();
+            assert_eq!(
+                snapshot.windows[&1]
+                    .values()
+                    .map(|usage| usage.usage.input_tokens)
+                    .sum::<u64>(),
+                expected_input
+            );
+        }
     }
     if typed_pi {
         assert!(

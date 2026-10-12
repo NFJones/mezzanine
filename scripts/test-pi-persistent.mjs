@@ -100,6 +100,38 @@ test("outside Mez and invalid/stale context stay neutral without opening a clien
   assert.equal(opened, 0);
 });
 
+/** Persisted turn_end, not early message_end, supplies actual request expense.
+ * The real ordinary callback entry must obtain readiness first and project only
+ * normalized inert counters; lifecycle settlement remains a separate event. */
+test("ordinary finalized Pi request emits checked inclusive usage with stable identity", async () => {
+  const owner = {};
+  const reports = [];
+  let starts = 0;
+  const main = load(owner, () => ({
+    async start() { return true; },
+    async piObservation() { return { delivered: true }; },
+    async beginRequest(id) { starts++; return Object.freeze({ request_id: id, admitted_at: 1, source_witness: "a".repeat(64), origin: "unattributed" }); },
+    async endRequest(ticket, report) { reports.push({ ticket, report }); return { delivered: true, durable: true, applied: reports.length === 1, revision: 1 }; },
+    abandonRequest() {}, detach() {},
+  }));
+  main({ type: "session_start", reason: "startup" });
+  await owner.tail;
+  main({ type: "turn_start", turnIndex: 0, timestamp: 1000 });
+  await owner.tail;
+  const message = { role: "assistant", provider: "actual-provider", model: "requested-model", responseModel: "concrete-model", stopReason: "error", usage: { input: 5, output: 7, cacheRead: 2, cacheWrite: 3, reasoning: 4, cacheWrite1h: 1 }, content: [{ type: "text", text: "PRIVATE" }], errorMessage: "PRIVATE" };
+  main({ type: "message_end", message });
+  assert.equal(reports.length, 0);
+  main({ type: "turn_end", turnIndex: 0, messageEntryId: "persisted-id-a", message, toolResults: [{ private: "PRIVATE" }] });
+  await owner.tail;
+  assert.equal(starts, 1);
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].report.provider, "actual-provider");
+  assert.equal(reports[0].report.model, "concrete-model");
+  assert.deepEqual(reports[0].report.counters, { input_tokens: 10, output_tokens: 7, cached_input_tokens: 2, cache_write_input_tokens: 3, reasoning_tokens: 4 });
+  assert.match(reports[0].report.event_id, /^[a-f0-9]{64}$/);
+  assert(!JSON.stringify(reports).includes("PRIVATE"));
+});
+
 test("lost replacement reply retains exact attempted instance for next genuine reload", async () => {
   const owner = {};
   const records = [];
@@ -166,4 +198,29 @@ test("overflow during asynchronous activation disposes transport and publishes n
   assert.equal(stopped, true, "canceled activation retained a transport");
   assert.deepEqual(events, [], "canceled activation published fresh telemetry");
   assert.equal(owner.pending, 0);
+});
+
+/** Failed durable usage reporting remains disclosed after genuine reload. The
+ * successor re-publishes only the sticky reason, never inherits/replays an old
+ * client ticket or uses lifecycle settlement as accounting acknowledgment. */
+test("ordinary Pi lost-ACK disclosure survives genuine reload without ticket transfer", async () => {
+  const owner = {}; const records = [];
+  const create = options => {
+    const record = { options, events: [], begins: 0 }; records.push(record);
+    return { async start() { return true; }, async piObservation(event) { record.events.push(event); return { delivered: true }; },
+      async beginRequest(id) { record.begins++; return { request_id: id, admitted_at: 1 }; },
+      async endRequest() { return { delivered: false, durable: false }; }, abandonRequest() {}, detach() {},
+      successor(instance) { return create({ ...options, instance }); } };
+  };
+  const main = load(owner, create); main({ type: "session_start", reason: "startup" }); await owner.tail;
+  main({ type: "agent_start" }); main({ type: "turn_start", turnIndex: 0 });
+  const message = { role: "assistant", provider: "provider", model: "model", stopReason: "error", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } };
+  main({ type: "message_end", message }); main({ type: "turn_end", turnIndex: 0, messageEntryId: "persisted", message });
+  await owner.tail; await owner.tail;
+  assert(records[0].events.some(event => event.type === "usage_gap" && event.reason === "durable-acknowledgment"));
+  main({ type: "session_shutdown", reason: "reload" });
+  const replacement = load(owner, create); replacement({ type: "session_start", reason: "reload" }); await owner.tail;
+  assert.deepEqual(records[1].events, [{ type: "session_start", reason: "reload" }, { type: "usage_gap", reason: "durable-acknowledgment" }]);
+  replacement({ type: "turn_end", turnIndex: 0, messageEntryId: "persisted", message }); await owner.tail;
+  assert.equal(records[1].begins, 0);
 });

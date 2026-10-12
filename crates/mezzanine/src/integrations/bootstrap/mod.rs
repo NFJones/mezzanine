@@ -193,7 +193,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     }
     let (mut current, revision, paths) = match manifest.harness.as_str() {
         "pi" => (
-            pi_artifact::candidate_manifest(),
+            pi_artifact::historical_manifest(),
             2,
             [
                 "extensions/mezzanine/persistent_client.mjs",
@@ -219,11 +219,16 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     {
         return Vec::new();
     }
-    if *manifest != current && !current_opencode {
+    let current_pi = manifest.harness == "pi" && *manifest == pi_artifact::candidate_manifest();
+    if !current_pi && *manifest != current && !current_opencode {
         return Vec::new();
     }
     let revision8_client = if manifest.harness == "pi" || current_opencode {
-        let mut snapshot = manifest.clone();
+        let mut snapshot = if current_pi {
+            current.clone()
+        } else {
+            manifest.clone()
+        };
         snapshot.revision = 8;
         history::freeze_revision8_request_client(&mut snapshot);
         Some(snapshot)
@@ -231,7 +236,11 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         None
     };
     let last_current = if manifest.harness == "pi" || current_opencode {
-        let mut snapshot = manifest.clone();
+        let mut snapshot = if current_pi {
+            current.clone()
+        } else {
+            manifest.clone()
+        };
         snapshot.revision = 7;
         history::freeze_pre_request_client(&mut snapshot);
         Some(snapshot)
@@ -315,7 +324,14 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         if let Some(revision8_client) = revision8_client {
             history.insert(0, revision8_client);
         }
+        if current_pi {
+            history.insert(0, pi_artifact::historical_manifest());
+        }
         if current_opencode {
+            history.insert(
+                0,
+                opencode_artifact::historical_request_manifest(manifest.clone()),
+            );
             // The newly effective loader layout cannot redefine which shipped
             // predecessors are recognized. Only the four compiled JSONC-era
             // layouts are eligible; receipt-selected paths/pointers and former
@@ -327,10 +343,12 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
                 opencode_artifact::nested_manifest(false),
                 opencode_artifact::nested_manifest(true),
             ] {
-                for revision in [7, 8] {
+                for revision in [7, 8, 9] {
                     let mut snapshot = layout.clone();
                     snapshot.revision = revision;
-                    if revision == 8 {
+                    if revision == 9 {
+                        history::freeze_revision9_transport(&mut snapshot);
+                    } else if revision == 8 {
                         history::freeze_revision8_request_client(&mut snapshot);
                     } else {
                         history::freeze_pre_request_client(&mut snapshot);

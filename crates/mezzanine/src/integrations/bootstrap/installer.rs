@@ -1281,7 +1281,13 @@ mod tests {
                 super::super::compiled_manifest(harness, None).unwrap()
             };
             let mut targets = super::super::compiled_history(&current);
-            assert_eq!(targets.len(), if harness == "pi" { 7 } else { 5 });
+            assert_eq!(targets.len(), if harness == "pi" { 8 } else { 5 });
+            if harness == "pi" {
+                assert!(
+                    (2..=9)
+                        .all(|revision| targets.iter().any(|target| target.revision == revision))
+                );
+            }
             targets.push(current.clone());
             for target in targets {
                 for original in [Operation::Install, Operation::Uninstall] {
@@ -1553,9 +1559,10 @@ mod tests {
             let history = super::super::compiled_history(&current);
             assert_eq!(
                 history.len(),
-                if harness == "pi" { 7 } else { 14 },
+                if harness == "pi" { 8 } else { 18 },
                 "all frozen targets must remain qualified for {harness}"
             );
+            assert!(history.iter().any(|target| target.revision == 9));
             for target in history {
                 for operation in [Operation::Install, Operation::Uninstall] {
                     let root = std::env::temp_dir().join(format!(

@@ -207,3 +207,105 @@ async fn external_pi_observation_rejects_content_aliases_and_mixed_sources() {
             .is_ok()
     );
 }
+
+/// A native-authorized ordinary Pi gap is visible after prior reported usage,
+/// but cannot change recorded expense, lifecycle state or control authority.
+/// This is a reducer/status unit fixture, not installed-producer qualification.
+#[tokio::test(flavor = "current_thread")]
+async fn external_pi_usage_gap_is_visible_without_billing_or_lifecycle_effects() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    let enrollment = enroll(&mut fixture).await;
+    let early = observation(
+        &enrollment,
+        1,
+        serde_json::json!({"type":"usage_gap","reason":"finalized-counters"}),
+    );
+    assert!(
+        fixture
+            .service
+            .dispatch_external_agent_request(&early, &fixture.connection)
+            .is_err()
+    );
+    for (sequence, event) in [
+        (
+            1,
+            serde_json::json!({"type":"session_start","reason":"startup"}),
+        ),
+        (2, serde_json::json!({"type":"agent_start"})),
+    ] {
+        fixture
+            .service
+            .dispatch_external_agent_request(
+                &observation(&enrollment, sequence, event),
+                &fixture.connection,
+            )
+            .unwrap();
+    }
+    // Only the already-enrolled metadata flag is seeded; no expense is invented.
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .bindings
+        .values_mut()
+        .next()
+        .unwrap()
+        .enrollment
+        .as_mut()
+        .unwrap()
+        .request_reports_seen = true;
+    let before = fixture.service.external_token_usage(None);
+    let gap = observation(
+        &enrollment,
+        3,
+        serde_json::json!({"type":"usage_gap","reason":"finalized-counters"}),
+    );
+    let response = fixture
+        .service
+        .dispatch_external_agent_request(&gap, &fixture.connection)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .dispatch_external_agent_request(&gap, &fixture.connection)
+            .unwrap(),
+        response
+    );
+    let rows = fixture.service.external_agent_rows();
+    assert_eq!(rows[0]["status"], "running");
+    assert_eq!(
+        rows[0]["usage_coverage"],
+        "unavailable-pi-usage-finalized-counters"
+    );
+    assert_eq!(rows[0]["controls"], serde_json::json!([]));
+    assert_eq!(fixture.service.external_token_usage(None), before);
+    assert!(
+        fixture
+            .service
+            .runtime_agent_status_display("%1")
+            .unwrap()
+            .contains("unavailable-pi-usage-finalized-counters")
+    );
+    assert!(fixture.service.agent_shell_store().get("%1").is_none());
+    for event in [
+        serde_json::json!({"type":"usage_gap","reason":"PRIVATE"}),
+        serde_json::json!({"type":"usage_gap","reason":"report-clock","amount":10}),
+        serde_json::json!({"type":"usage_gap","reason":"report-clock","prompt":"PRIVATE"}),
+    ] {
+        assert!(
+            fixture
+                .service
+                .dispatch_external_agent_request(
+                    &observation(&enrollment, 4, event),
+                    &fixture.connection
+                )
+                .is_err()
+        );
+    }
+    assert_eq!(
+        fixture.service.external_agent_rows()[0]["usage_coverage"],
+        "unavailable-pi-usage-finalized-counters"
+    );
+}

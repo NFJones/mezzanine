@@ -48,6 +48,41 @@ pub(crate) enum Event {
     Settled {},
     #[serde(rename = "session_shutdown")]
     Shutdown { reason: StopReason },
+    /// Content-free ordinary accounting loss; never a lifecycle operation.
+    #[serde(rename = "usage_gap")]
+    UsageGap { reason: UsageGapReason },
+}
+
+/// Exact disclosure reasons, never arbitrary callback diagnostics or amounts.
+#[derive(Debug, Clone, Copy, Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum UsageGapReason {
+    RequestReadiness,
+    ReportClock,
+    FinalizedCounters,
+    ResponseCorrelation,
+    UnmatchedFinalizedEvent,
+    ImmutableObservationConflict,
+    DurableAcknowledgment,
+    OverlappingTurn,
+}
+
+impl UsageGapReason {
+    /// Returns a fixed status label without echoing payload content.
+    pub(crate) fn coverage(self) -> &'static str {
+        match self {
+            Self::RequestReadiness => "unavailable-pi-usage-request-readiness",
+            Self::ReportClock => "unavailable-pi-usage-report-clock",
+            Self::FinalizedCounters => "unavailable-pi-usage-finalized-counters",
+            Self::ResponseCorrelation => "unavailable-pi-usage-response-correlation",
+            Self::UnmatchedFinalizedEvent => "unavailable-pi-usage-unmatched-finalized-event",
+            Self::ImmutableObservationConflict => {
+                "unavailable-pi-usage-immutable-observation-conflict"
+            }
+            Self::DurableAcknowledgment => "unavailable-pi-usage-durable-acknowledgment",
+            Self::OverlappingTurn => "unavailable-pi-usage-overlapping-turn",
+        }
+    }
 }
 
 /// Known released session activation reasons, not authority to rebind a session.
@@ -122,6 +157,9 @@ pub(crate) fn observation(session: &str, bytes: &[u8]) -> Result<pi::Observation
             let _ = reason;
         }
         Event::Running {} | Event::Settled {} => {}
+        // Legacy private lifecycle streams cannot consume ordinary accounting
+        // metadata or reinterpret it as a Present/Retire operation.
+        Event::UsageGap { .. } => return Err(unavailable()),
     }
     pi::normalize(pi::RELEASE, session, session, bytes)
         .map_err(|_| unavailable())?

@@ -1182,6 +1182,46 @@ Exact latest replay MUST return the original bounded acknowledgment; conflicting
 older/gapped or content-bearing facts MUST NOT change state. Typed Pi and generic
 presentation sources MUST NOT mix in an observer epoch; rotation resets both.
 This lifecycle delivery is not durable usage commitment or exhaustive token support.
+Ordinary `mez bootstrap pi` MUST also install the supported finalized assistant
+usage producer without launcher/FD3/manual accounting enablement. Genuine
+`turn_start` opens an original request marker through native usage-begin; it MUST
+NOT delay or authorize provider work. Origin is the actual qualified native begin
+admission cwd/time, not an earlier callback cwd claim. `message_end` may establish
+only current-request identity, never expense. `turn_end` MUST require the actual
+context session and persisted `messageEntryId` after extension modification.
+Expense identity MUST be an opaque digest of session and persisted entry, not
+turn index, callback time, selected model or provider response ID. When preceding
+extensions replace the message object, only a preserved, unambiguous digest of
+actual provider/responseId observed during the current request may correlate it;
+missing object/native correlation MUST disclose unavailable coverage, not borrow
+the latest turn ticket. Raw content, tool/error text, paths, costs and transcript
+entries MUST NOT be read or imported for accounting.
+Pi inclusive input MUST be checked `input + cacheRead + cacheWrite`; output
+already includes optional reasoning. `cacheWrite1h` is only a cacheWrite subset.
+Required missing partitions, nonfinite/negative/fractional/unsafe integers,
+overflow and inconsistent subsets MUST NOT become zero expense. Absent reasoning
+remains unknown, while explicit zero remains known. Finalized error/abort/length
+attempts with attributable counters are incurred observations; pending/deferred
+outcomes and unsupported auxiliary/tool/compaction/branch/cache-warming counters
+remain uncharged coverage gaps, never invoice-completeness claims.
+The immutable normalized report and reporting-publication UTC MUST be frozen
+once after readiness and reused on every telemetry-only retry. Observer reload
+MUST NOT transfer original client-local tickets or credentials to a successor.
+Process-owned recent metadata MUST be bounded at 128; eviction abandons only the
+original ticket with unknown-delivery semantics, never mints new authority or
+erases daemon deduplication. Unmatched historical/resume/fork callbacks MUST NOT
+allocate expense. Genuine `agent_start` may release an unfinished accounting
+slot when turn indices reset, but does not settle a lifecycle outcome. Native
+stream grouping remains shared provider/model/project/category coverage, never
+one epoch or source per message. Cross-process unsent spool recovery is not
+supported; lost process-local metadata cannot be recovered by importing history.
+The existing capability-scoped Pi observation lane MAY accept a typed
+`usage_gap` with an allowlisted content-free reason. It MUST update only sticky
+observer-epoch coverage diagnostics shown in `/status`, including after prior
+usage reports, and MUST NOT change amounts, source ownership, permissions,
+native task/conversation, focus, counters/reset, or lifecycle Present/Retire
+operations. Amount/content/unknown fields and arbitrary reasons MUST be rejected.
+Transport loss remains visible independently; coverage gaps never erase expense.
 The Pi capability-only Unix transport MUST consume explicitly supplied private
 authority without initializing a primary or minting a launch. One 500 ms total
 deadline MUST cover connect, write and strict bounded reply decoding. Only a

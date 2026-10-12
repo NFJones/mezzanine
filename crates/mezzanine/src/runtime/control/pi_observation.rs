@@ -51,6 +51,15 @@ struct Receipt {
 pub(super) struct PiLifecycleProjection {
     owner: LifecycleOwner,
     latest: Option<Receipt>,
+    /// Sticky loss disclosure within this observer epoch, never expense state.
+    usage_gap: Option<pi_ipc::UsageGapReason>,
+}
+
+impl PiLifecycleProjection {
+    /// Projects only a fixed coverage reason for status, with no billing effect.
+    pub(super) fn usage_gap_coverage(&self) -> Option<&'static str> {
+        self.usage_gap.map(pi_ipc::UsageGapReason::coverage)
+    }
 }
 
 impl RuntimeSessionService {
@@ -111,6 +120,7 @@ impl RuntimeSessionService {
             None => PiLifecycleProjection {
                 owner: LifecycleOwner::new(&input.external_session_id)?,
                 latest: None,
+                usage_gap: None,
             },
         };
         let expected = projection
@@ -122,12 +132,21 @@ impl RuntimeSessionService {
                 "Pi observation is stale, conflicting or has a gap",
             ));
         }
-        let fact = pi_ipc::observation(&input.external_session_id, &event)?;
-        projection.owner.observe(
-            projection.owner.observer_epoch(),
-            &input.external_session_id,
-            fact,
-        )?;
+        if let pi_ipc::Event::UsageGap { reason } = &input.event {
+            if projection.latest.is_none() {
+                return Err(MezError::conflict(
+                    "Pi usage gap requires current started observer",
+                ));
+            }
+            projection.usage_gap = Some(*reason);
+        } else {
+            let fact = pi_ipc::observation(&input.external_session_id, &event)?;
+            projection.owner.observe(
+                projection.owner.observer_epoch(),
+                &input.external_session_id,
+                fact,
+            )?;
+        }
         let mut retired = false;
         while let Some(delivery) = projection.owner.pending().cloned() {
             match delivery.operation {

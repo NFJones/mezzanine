@@ -209,9 +209,10 @@ mod tests {
         use super::super::installer::Operation;
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
-            assert_eq!(current.revision, 9);
+            assert_eq!(current.revision, 10);
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), if harness == "pi" { 7 } else { 14 });
+            assert_eq!(history.len(), if harness == "pi" { 8 } else { 18 });
+            assert!(history.iter().any(|manifest| manifest.revision == 8));
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
             let frozen = immediate
@@ -233,8 +234,16 @@ mod tests {
             assert_eq!(
                 request.artifact,
                 Artifact::File {
-                    bytes: include_bytes!("history/request_accounting_v8.mjs").to_vec()
+                    bytes: include_bytes!("request_accounting.mjs").to_vec()
                 }
+            );
+            use sha2::Digest;
+            assert_eq!(
+                sha2::Sha256::digest(include_bytes!("request_accounting.mjs"))
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+                "43788869b5404f5a098513da7bba66463fd084731b7bd6f76bd9809eff134053"
             );
             for previous in history {
                 let root = std::env::temp_dir().join(format!(

@@ -5,6 +5,7 @@
  * transcript access, forced session selectors or credential environment. */
 import { randomUUID } from "node:crypto";
 import { createPiObserver } from "./pi_observer.mjs";
+import { createPiUsageObserver } from "./pi_usage.mjs";
 import { createPersistentTelemetryClient, discoverPersistentRoute } from "./persistent_client.mjs";
 
 const ownerKey = Symbol.for("mezzanine.pi.ordinary-owner.v1");
@@ -20,6 +21,7 @@ export function registerOrdinaryPiObserver(pi, options = {}) {
   let state = options.owner;
   let lease;
   let projected;
+  let usage;
   let retired = false;
   const owner = () => state ??= globalThis[ownerKey] ??= {};
   const disconnect = client => {
@@ -66,6 +68,8 @@ export function registerOrdinaryPiObserver(pi, options = {}) {
       lease = owned;
       projected = new Map();
       createPiObserver(session, forward)({ on(type, callback) { projected.set(type, callback); } });
+      state.usageRecent ??= new Map();
+      usage = createPiUsageObserver(owned, operation => queue(owned, operation), state.usageRecent, options.now, reason => { state.usageGap = reason; });
       queue(owned, async () => {
         if (owned.cancelled) return;
         let previous = state.client;
@@ -101,17 +105,36 @@ export function registerOrdinaryPiObserver(pi, options = {}) {
         if (!started) { owned.failed = true; return; }
         const result = await client.piObservation({ type: "session_start", reason });
         if (!result?.delivered) owned.failed = true;
+        if (!owned.failed && state.usageGap) {
+          const gap = await client.piObservation({ type: "usage_gap", reason: state.usageGap });
+          if (!gap?.delivered) owned.failed = true;
+          owned.lastUsageGap = state.usageGap;
+        }
       });
     } catch { /* invalid/stale context does not alter Pi */ }
   });
+  for (const type of ["turn_start", "message_start", "message_update", "message_end", "turn_end"]) {
+    pi.on(type, (event, ctx) => {
+      try {
+        const owned = lease;
+        if (!owned || owner().lease !== owned || owned.failed || ctx.sessionManager.getSessionId() !== owned.session) return;
+        if (type === "turn_start") usage.turnStart(event);
+        else if (type === "message_start" || type === "message_update") usage.messageIdentity(event);
+        else if (type === "message_end") usage.messageEnd(event);
+        else usage.turnEnd(event);
+      } catch { /* accounting observation cannot modify a Pi request/boundary */ }
+    });
+  }
   for (const type of ["agent_start", "ui_prompt_start", "ui_prompt_end", "agent_before_settle", "agent_settled", "session_shutdown"]) {
     pi.on(type, (event, ctx) => {
       try {
         const owned = lease;
         if (!owned || owner().lease !== owned || ctx.sessionManager.getSessionId() !== owned.session) return;
         if (type === "session_shutdown" && !stops.has(event.reason)) return;
+        if (type === "agent_start") usage.runStart();
         projected.get(type)?.(event, ctx);
         if (type === "session_shutdown") {
+          usage.close();
           const reason = event.reason;
           queue(owned, async () => {
             // Keep reload predecessor ownership until its successor is admitted.

@@ -3,13 +3,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:net";
-import { mkdtempSync, chmodSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, chmodSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPersistentTelemetryClient, discoverPersistentRoute } from "../crates/mezzanine/src/integrations/bootstrap/persistent_client.mjs";
 
-const helper = resolve(fileURLToPath(new URL("../target/debug/mez", import.meta.url)));
+const helper = process.env.MEZ_TEST_HELPER_BINARY ?? resolve(fileURLToPath(new URL("../target/debug/mez", import.meta.url)));
+assert(isAbsolute(helper) && existsSync(helper), "offline shared-client fixture requires an existing absolute built mez helper (MEZ_TEST_HELPER_BINARY)");
 
 /** Owns one short private socket tree, bounded request captures and all peers. */
 async function fixture(respond) {
@@ -81,6 +82,7 @@ test("lifecycle pressure refuses accounting explicitly, then retries its same fr
   const client = createPersistentTelemetryClient(f.options);
   try {
     const ticket = await client.beginRequest("a".repeat(64));
+    assert(ticket, "native helper preflight/readiness must succeed before waiting for a presentation RPC");
     const queued = [client.presentation("running")];
     await started;
     for (let index = 0; index < 15; index++) queued.push(client.presentation("running"));
@@ -364,6 +366,15 @@ test("Pi fact transport captures getter selectors once and isolates generic sour
     assert(!JSON.stringify(f.requests).includes("PRIVATE"));
     assert.equal((await client.presentation("running")).delivered, false);
     assert.equal((await client.piObservation({ type: "agent_end" })).delivered, false);
+    let gapReads = 0;
+    assert.equal((await client.piObservation({ type: "usage_gap", prompt: "PRIVATE", amount: 999,
+      get reason() { return ++gapReads === 1 ? "durable-acknowledgment" : "PRIVATE"; } })).delivered, true);
+    assert.equal(gapReads, 1);
+    assert.deepEqual(f.requests.at(-1).params.event, { type: "usage_gap", reason: "durable-acknowledgment" });
+    assert(!JSON.stringify(f.requests).includes("PRIVATE"));
+    const count = f.requests.length;
+    assert.equal((await client.piObservation({ type: "usage_gap", reason: "PRIVATE" })).delivered, false);
+    assert.equal(f.requests.length, count);
   } finally { client.detach(); await f.close(); }
 });
 

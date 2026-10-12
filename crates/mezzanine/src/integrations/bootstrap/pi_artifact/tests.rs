@@ -16,7 +16,7 @@ fn pi_artifact_candidate_owned_install_repeat_conflict_and_uninstall() {
     std::fs::write(root.join("settings.json"), b"{\"authored\":true}\n").unwrap();
     let manifest = candidate_manifest();
     assert!(crate::integrations::bootstrap::compiled_manifest("pi", Some("any-version")).is_some());
-    assert_eq!(manifest.entries.len(), 10);
+    assert_eq!(manifest.entries.len(), 11);
     plan(&root, &manifest, Operation::Install)
         .unwrap()
         .apply()
@@ -47,6 +47,64 @@ fn pi_artifact_candidate_owned_install_repeat_conflict_and_uninstall() {
     assert_eq!(
         std::fs::read(root.join("extensions/unrelated.js")).unwrap(),
         b"authored extension"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Revision-9 producer and shared transport bytes are independent of active
+/// revision 10. Upgrade/repair/repeat preserves authored configuration and only
+/// replaces recognized owned slots, including the newly installed projector.
+#[test]
+fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
+    use sha2::Digest;
+    let root = std::env::temp_dir().join(format!(
+        "mez-pi-usage-upgrade-{}",
+        crate::storage::token_usage::new_token_usage_event_id()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("settings.json"), b"{\"authored\":true}\n").unwrap();
+    let previous = historical_manifest();
+    let current = candidate_manifest();
+    assert_eq!(previous.revision, 9);
+    assert_eq!(current.revision, 10);
+    assert_eq!(previous.entries.len(), 10);
+    assert!(super::super::compiled_history(&current).contains(&previous));
+    assert_eq!(
+        sha2::Sha256::digest(include_bytes!("../history/pi_persistent_v9.mjs"))
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+        "557558488625458ddcf04e198581bda2bd7548d44755b3cc029c50df81c9950d"
+    );
+    plan(&root, &previous, Operation::Install)
+        .unwrap()
+        .apply()
+        .unwrap();
+    plan(&root, &current, Operation::Install)
+        .unwrap()
+        .apply()
+        .unwrap();
+    assert!(root.join("extensions/mezzanine/pi_usage.mjs").is_file());
+    assert!(
+        plan(&root, &current, Operation::Install)
+            .unwrap()
+            .changed_paths()
+            .is_empty()
+    );
+    std::fs::remove_file(root.join("extensions/mezzanine/pi_usage.mjs")).unwrap();
+    plan(&root, &current, Operation::Install)
+        .unwrap()
+        .apply()
+        .unwrap();
+    assert!(
+        plan(&root, &current, Operation::Install)
+            .unwrap()
+            .changed_paths()
+            .is_empty()
+    );
+    assert_eq!(
+        std::fs::read(root.join("settings.json")).unwrap(),
+        b"{\"authored\":true}\n"
     );
     std::fs::remove_dir_all(root).unwrap();
 }

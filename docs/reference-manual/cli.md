@@ -301,7 +301,7 @@ finalized assistant messages with complete evidenced counters, excluding tool
 parts/auxiliary calls and invoice costs. Vendor pure/disabled behavior is unchanged.
 Offline checks: `timeout 120s node --test scripts/test-opencode-*.mjs`.
 
-The Pi coding-agent `1.0.2` component projects content-free lifecycle facts only
+The Pi coding-agent lifecycle component projects content-free lifecycle facts
 for an explicitly bound context session. `agent_end` and `turn_end` are not final
 settlement; `agent_before_settle` supplies only a provisional outcome, and
 `agent_settled` reports final settlement without inventing a successful outcome.
@@ -311,6 +311,56 @@ This component does not install an extension, deliver credentials, renew leases,
 rebind sessions or certify live usage. Sources are the installed
 `@earendil-works/pi-coding-agent` `1.0.2` extension declarations and agent-session
 producer. Pi work is independent of the retired Gemini harness, not its replacement.
+
+Ordinary `mez bootstrap pi` now also installs finalized assistant request
+accounting. Run normal `pi` in the Mez pane; no `mez pi`, fd3, preselected session,
+`--apply`, version/root gate or separate accounting enable step is required.
+Revision 10 recognizes exact revision-9 owned bytes for upgrade/repair/repeat;
+disabled vendor policy, authored entries and trust remain unchanged. The same
+shared-client byte update is versioned for OpenCode ownership without adding
+OpenCode usage behavior.
+
+The producer observes genuine `turn_start` readiness, then persisted `turn_end`
+assistant entries. `message_end` is not charged: other extensions may still
+replace the outcome before persistence. A same-object pairing or preserved
+provider/responseId correlation links only the original request ticket. Missing
+correlation is unavailable rather than a guessed current turn. Response attribution
+uses the actual provider and concrete `responseModel` when available, not selected
+model UI. Input is `input + cacheRead + cacheWrite`; reasoning is an output subset
+and one-hour cache writes are a write subset. Required missing counters or invalid
+numeric/subset data are not zero; absent reasoning stays unknown. Finalized
+errors/aborts with counters can record incurred usage, not successful task proof.
+
+Only a typed durable ACK commits reporting. Retry retains the same marker,
+persisted-entry digest, normalized payload and once-frozen reporting UTC, and
+never retries a provider. Native begin captures actual admission cwd/time; the
+asynchronous callback queue does not guarantee earlier callback-time attribution.
+The callback queue is bounded at 32 and recent metadata at 128; capacity eviction
+abandons the original unknown-delivery ticket without claiming it did not commit.
+Genuine reload reuses process-owned replay evidence, but successor credentials
+cannot inherit old tickets. Unmatched restored/history events are dropped.
+
+Known limits: pending/deferred responses, compaction/branch/tool/cache-warming
+auxiliary calls without a stable current-request counter contract, and durable
+cross-process unsent-report recovery are unsupported. No transcript backfill or
+invoice/full-spend claim is made. Fixed `unavailable-pi-usage-*` reasons disclose
+missing counters, correlation, readiness, clock or durable ACK through `/status`;
+they leave already recorded totals and lifecycle state intact. A later successful
+report does not erase a sticky gap within the observer epoch. Native transport
+health remains separate. Coverage disclosure/recent retry metadata is not a
+durable expense spool or an exact count of dropped reports.
+
+Source evidence: public Pi revision
+`7bd01fb92485c06f92ecfff7ccf3197148bc16af` (`agent-session.ts`, extension
+`types.ts`/`runner.ts`, agent loop, and Pi-ai usage types) establishes callback
+ordering, persisted IDs and subset semantics. It is evidence, not a version gate.
+Offline tests: `timeout 120s node scripts/test-pi-persistent.mjs`,
+`timeout 120s node scripts/test-pi-usage.mjs`. Explicit installed producer/native
+qualification uses `MEZ_TEST_NODE_BINARY=/absolute/node timeout 600s cargo test
+-p mezzanine --lib --all-features --quiet
+external_enrollment_installed_ordinary_pi_usage_has_bounded_durable_stream -- --ignored`.
+This runs synthetic source-shaped callbacks through the real installed default
+producer/Unix peer/ledger, not a live vendor or provider.
 
 Offline callback qualification is available with explicit trusted local paths:
 `MEZ_PI_NODE=/absolute/node MEZ_PI_PACKAGE=/absolute/pi-coding-agent timeout 180s cargo test -p mezzanine --lib --quiet pi_lifecycle_released_loader -- --ignored`.
