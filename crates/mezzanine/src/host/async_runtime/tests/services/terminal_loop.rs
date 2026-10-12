@@ -1257,9 +1257,18 @@ async fn async_attached_terminal_loop_routes_agent_shell_input_non_modally() {
 /// frame in the same attached-terminal loop pass. Without this refresh, the
 /// submitted prompt text stayed visible until a later agent state change caused
 /// the next render, which made queued follow-up prompts feel blocked.
+///
+/// History preparation is held at its worker gate: paused Tokio time does not
+/// settle real blocking history reads. The one refreshed frame must show the
+/// accepted user prompt and exact preparing state with an already cleared draft,
+/// without waiting for provider work. Settled history is covered separately.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_loop_clears_agent_prompt_on_submit() {
     let mut service = test_service();
+    let history_started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let history_release = std::sync::Arc::new(tokio::sync::Notify::new());
+    service
+        .set_prompt_history_preparation_probe_for_tests(history_started.clone(), history_release);
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
@@ -1329,7 +1338,19 @@ async fn async_attached_terminal_loop_clears_agent_prompt_on_submit() {
         assert!(
             refreshed
                 .iter()
-                .any(|line| line.contains("guide this task") && line.contains("thinking")),
+                .any(|line| line.trim() == "│ user> list files"),
+            "{refreshed:?}"
+        );
+        assert!(
+            refreshed
+                .iter()
+                .any(|line| { line.trim() == "│ agent: preparing conversation history" }),
+            "{refreshed:?}"
+        );
+        assert!(
+            refreshed
+                .iter()
+                .any(|line| line.trim() == "command running"),
             "{refreshed:?}"
         );
         assert!(refreshed.iter().any(|line| line.trim_end() == "⟩"));
@@ -1339,6 +1360,16 @@ async fn async_attached_terminal_loop_clears_agent_prompt_on_submit() {
                 .any(|line| line.trim_end() == "⟩ list files"),
             "{refreshed:?}"
         );
+        tokio::time::timeout(Duration::from_secs(2), history_started.notified())
+            .await
+            .expect("prompt history worker must reach its gate before shutdown");
+        assert!(
+            handle
+                .pending_agent_provider_tasks()
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running
@@ -1347,7 +1378,8 @@ async fn async_attached_terminal_loop_clears_agent_prompt_on_submit() {
 
     let ((), exit) = tokio::join!(client, actor.run());
 
-    assert_eq!(exit.service.pending_agent_provider_tasks().len(), 1);
+    assert!(exit.service.pending_agent_provider_tasks().is_empty());
+    assert!(exit.service.agent_command_is_active("%1"));
     let pane_text = exit
         .service
         .pane_screen("%1")
@@ -1356,6 +1388,93 @@ async fn async_attached_terminal_loop_clears_agent_prompt_on_submit() {
         .join("\n");
     assert!(pane_text.contains("user> list files"), "{pane_text}");
     assert!(exit.commands_processed >= 4);
+}
+
+/// Verifies the settled half of prompt redraw without racing a blocking history
+/// worker. The same deferred attached-step admission is completed explicitly
+/// before rendering, so the active-task thinking footer remains a strict
+/// contract rather than an alternative allowed by the preparing-frame test.
+/// The accepted prompt must remain visible, its draft must stay cleared, and
+/// exactly one provider task must own the settled turn.
+#[test]
+fn attached_agent_prompt_redraw_after_history_settles() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (application, _) = service
+        .apply_attached_terminal_step_transition(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"list files\r".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(application.agent_prompt_inputs_applied, 1);
+    assert!(service.agent_command_is_active("%1"));
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    let mut dispatches = service.take_pending_agent_prompt_history();
+    assert_eq!(dispatches.len(), 1);
+    let dispatch = dispatches.pop().unwrap();
+    assert!(service.claim_agent_prompt_history_preparation(&dispatch));
+    let history =
+        crate::runtime::execute_runtime_agent_prompt_history_work(dispatch.history_work.clone());
+    assert!(
+        service
+            .complete_agent_prompt_history_preparation(&dispatch, history)
+            .unwrap()
+    );
+    assert!(!service.agent_command_is_active("%1"));
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+
+    let settled = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(80, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        settled
+            .lines
+            .iter()
+            .any(|line| line.contains("guide this task") && line.contains("thinking")),
+        "{:?}",
+        settled.lines
+    );
+    assert!(
+        settled
+            .lines
+            .iter()
+            .any(|line| line.trim() == "│ user> list files")
+    );
+    assert!(settled.lines.iter().any(|line| line.trim_end() == "⟩"));
+    assert!(
+        !settled
+            .lines
+            .iter()
+            .any(|line| line.trim_end() == "⟩ list files"),
+        "{:?}",
+        settled.lines
+    );
+    assert!(
+        !settled
+            .lines
+            .iter()
+            .any(|line| line.trim() == "command running")
+    );
 }
 
 /// Verifies that leaving pane-local agent mode invalidates the attached
