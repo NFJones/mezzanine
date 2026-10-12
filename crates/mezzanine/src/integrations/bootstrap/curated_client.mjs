@@ -82,7 +82,8 @@ try {
             // Recheck its exact ticket after transport; no native retirement,
             // newest lookup or initial admission follows a closed epoch.
             if (owned && observed && typeof observed === "object" && !Array.isArray(observed)
-                && Object.keys(observed).length === 1 && observed.observed === false) {
+                && Object.keys(observed).length === 2 && observed.observed === false
+                && observed.terminal === true) {
               if (lifetime.current(ticket)) lifetime.stop();
               return;
             }

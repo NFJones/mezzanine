@@ -81,7 +81,7 @@ test("curated module withholds same-ID helpers after negative proof", async () =
   const run = f.sdk.process.run;
   f.sdk.process.run = (argv, options) => argv[1] === "harness-source"
     && JSON.parse(argv[2]).operation === "curated-heartbeat"
-    ? Promise.resolve({ exitCode: 0, stdout: '{"observed":false}' }) : run(argv, options);
+    ? Promise.resolve({ exitCode: 0, stdout: '{"observed":false,"terminal":true}' }) : run(argv, options);
   assert.equal(await f.invoke(start()), f.result);
   const old = f.timers[0];
   await old.callback();

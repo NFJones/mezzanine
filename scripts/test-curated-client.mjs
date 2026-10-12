@@ -95,7 +95,7 @@ test("owned curated negative proof permanently closes only its original owner", 
   const pending = f.timers[0].callback();
   await f.timers[0].callback();
   assert.equal(f.calls.length, 2);
-  finish(output({ observed: false }));
+  finish(output({ observed: false, terminal: true }));
   await pending;
   assert.equal(owner.receipt, undefined);
   assert.equal(cancelled, 1);
@@ -121,7 +121,8 @@ test("owned curated source retains original owner after untyped proof failures",
   const responses = [{ exitCode: 1, stdout: '{"observed":false}' },
     { exitCode: 0, stdout: "not-json" }, { exitCode: 0, stdout: " ".repeat(129) },
     output(null), output([]), output({ observed: 0 }), output({ observed: "false" }),
-    output({ observed: false, extra: true })];
+    output({ observed: false }), output({ observed: false, terminal: false }),
+    output({ observed: false, terminal: true, extra: true })];
   for (const response of responses) {
     const owner = createCuratedLifetime();
     let first = true;

@@ -53,6 +53,13 @@ fn harness_source_heartbeat_capsule_and_receipt_are_fixed_public_proof() {
     assert!(proof.request().contains("agent/external/curated-heartbeat"));
     let valid = serde_json::json!({"observed":true,"sequence":1,"changed":false});
     assert_eq!(proof.receipt(&valid), Some(valid.clone()));
+    for negative in [
+        serde_json::json!({"observed":false}),
+        serde_json::json!({"observed":false,"terminal":true}),
+        serde_json::json!({"observed":true,"sequence":2,"changed":false}),
+    ] {
+        assert!(proof.receipt(&negative).is_none());
+    }
     let mut extra = valid;
     extra["launch_token"] = "private".into();
     assert!(proof.receipt(&extra).is_none());

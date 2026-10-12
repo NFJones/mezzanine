@@ -942,7 +942,11 @@ The fixed `harness-source` argv helper also accepts a strict public proof capsul
 with `operation:"curated-heartbeat"`, session/generation/witness/sequence. It fixes
 the heartbeat RPC/harness, never accepts TTL/role/credential/method selectors, and
 strictly projects a matching observed/sequence/change receipt or
-`{"observed":false}` on unavailable delivery. An isolated real SDK `$.clock.after`
+`{"observed":false}` on unavailable delivery. Only an exact UID-authenticated,
+matching-ID forbidden error envelope is projected as
+`{"observed":false,"terminal":true}`; transport/deadline, malformed/ambiguous,
+rate-limited and other errors remain unavailable, without raw daemon diagnostics.
+Other helper consumers remain success-only. An isolated real SDK `$.clock.after`
 fixture pins original public fields directly after actual conversation admission,
 runs outside callback cadence and drives the built helper/native actor freshness
 path. A second isolated fixture runs the shared rendered source through actual
@@ -970,11 +974,16 @@ cancellation so late/queued work cannot reopen it or schedule more helpers.
 Throws/rejected cancellation and missing owner scope stay neutral. Stop is not
 daemon retirement or a process-death declaration; already-started helper work can
 still settle, subject to native generation/writer/deadline/lease fences.
-The exact bounded heartbeat acknowledgment `{"observed":false}` closes only the
+The exact bounded heartbeat rejection `{"observed":false,"terminal":true}` closes only the
 still-current owned ticket after transport: receipt removal precedes cancellation,
 queued callbacks cannot launch helpers, and later same-owner source calls cannot
 fall back to initial enrollment. Transport failure/malformed replies do not imply
-this terminal acknowledgment. Successful fresh/replay proofs keep the original
+this terminal acknowledgment; the helper's plain `{"observed":false}` fallback is
+retryable and preserves the owner/timer. A production-built-helper/client fixture
+qualifies absent sockets, malformed public receipts and rate-limited errors,
+followed by valid original-epoch proofs with no re-admission, then explicit
+forbidden closure; it is reply-handling evidence, not native/vendor attestation.
+Successful fresh/replay proofs keep the original
 selectors; unowned fixture cadence and vendor results remain unchanged. Installed
 Claude revision4 includes this fence with frozen revision1–3 artifact history.
 The literal module entry adds only metadata-projected main classic start/end

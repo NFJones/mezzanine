@@ -45,8 +45,9 @@ impl Heartbeat {
             "harness":"claude","external_session_id":self.external_session_id,"generation":self.generation,
             "observer_witness":self.observer_witness,"sequence":self.sequence}}).to_string()
     }
-    /// Rebuilds only the matching observed/sequence/change receipt. Unknown,
-    /// private or content fields fail closed; no raw daemon result is echoed.
+    /// Rebuilds only the matching observed/sequence/change receipt. Negative
+    /// result objects cannot impersonate typed RPC authorization rejection.
+    /// Unknown/private/content fields fail closed; no daemon text is echoed.
     pub(super) fn receipt(&self, value: &serde_json::Value) -> Option<serde_json::Value> {
         let object = value.as_object()?;
         if object.len() != 3

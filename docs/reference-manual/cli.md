@@ -542,9 +542,11 @@ old timers/senders cannot revive. Failed/lost replies or intervening starts do
 not fall back to new admission. This does not qualify restart, reload, unpaired
 resume/fork, inherited expense or exhaustive accounting after the transition.
 Revision4 permanently closes the exact local observer owner on the bounded typed
-negative heartbeat reply: it clears the receipt, cancels its timer and withholds
+authorization rejection (`{"observed":false,"terminal":true}`): it clears the receipt, cancels its timer and withholds
 queued helpers or same-owner re-admission, while leaving vendor results neutral.
-Unavailable/malformed transport is not a terminal acknowledgment. Exact revision3
+Only a strict matching-ID authenticated forbidden control error supplies this
+outcome. Transport/malformed/deadline/other errors remain the neutral retryable
+`{"observed":false}` and cannot close the owner. Exact revision3
 bytes remain upgradeable through a frozen old client and guarded module recipe;
 revisions1/2 retain their original source inputs. Local closure is not daemon
 retirement, process death, renewal, executable attestation or billing evidence.

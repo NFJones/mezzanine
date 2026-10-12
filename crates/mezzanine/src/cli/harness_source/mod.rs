@@ -205,17 +205,31 @@ pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u
             .enable_all()
             .build()
             .ok()?;
+        let socket = super::selected_socket_path(&socket);
+        if let Some(heartbeat) = &heartbeat {
+            return match runtime
+                .block_on(super::harness_event::exchange_heartbeat_result(
+                    socket, &body,
+                ))
+                .ok()?
+            {
+                super::harness_event::HeartbeatExchange::Forbidden => {
+                    Some(serde_json::json!({"observed":false,"terminal":true}))
+                }
+                super::harness_event::HeartbeatExchange::Observed(response) => {
+                    heartbeat.receipt(&response)
+                }
+            };
+        }
         let response = runtime
             .block_on(super::harness_event::exchange_result(
-                super::selected_socket_path(&socket),
+                socket,
                 &body,
                 "harness-source",
             ))
             .ok()?;
         if let Some(usage) = &usage {
             usage.receipt(&response)
-        } else if let Some(heartbeat) = &heartbeat {
-            heartbeat.receipt(&response)
         } else {
             capsule.as_ref()?.receipt(&response)
         }

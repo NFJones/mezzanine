@@ -404,11 +404,15 @@ inspecting a resource or invoking its cancellation. Only the exact stopped ticke
 late creation result; closed-ticket/handle cleanup evidence MUST remain one-slot.
 Permanent stop MUST close ownership before cancellation, reject late publication
 and attachment, and guard queued callbacks before helper launch.
-An owned proof's bounded typed negative acknowledgment (`{"observed":false}`)
+An owned proof's bounded typed authorization rejection (`{"observed":false,"terminal":true}`)
 MUST permanently stop only its still-current exact local ticket, clear its public
 receipt and cancel its attached timer. Queued callbacks and later same-owner
-admission MUST remain inert; malformed/unavailable replies are not this terminal
-acknowledgment. Positive fresh/replay proofs MUST retain original selectors.
+admission MUST remain inert. The fixed helper MUST distinguish an exact bounded
+UID-authenticated, matching-ID control forbidden error from absent transport,
+malformed/ambiguous receipts, deadlines and other daemon errors. Those unavailable
+outcomes retain the neutral `{"observed":false}` fallback and MUST NOT close the
+local owner. Existing success-only helper consumers MUST remain unchanged.
+Positive fresh/replay proofs MUST retain original selectors.
 Local closure is not native retirement, process death, lease renewal or billing
 acknowledgment, and MUST NOT change vendor results or unowned fixture cadence.
 Cancellation failure MUST remain neutral and MUST NOT restore the owner. Timer

@@ -210,6 +210,58 @@ pub(super) async fn exchange_result(
     body: &str,
     expected_id: &str,
 ) -> Result<serde_json::Value> {
+    match exchange_result_mode(socket, body, expected_id, false).await? {
+        HeartbeatExchange::Observed(value) => Ok(value),
+        HeartbeatExchange::Forbidden => Err(MezError::invalid_state("event rejected")),
+    }
+}
+
+/// Internal typed evidence keeps a validated error separate from daemon results.
+pub(super) enum HeartbeatExchange {
+    /// Ordinary RPC success still requires the caller's exact receipt validation.
+    Observed(serde_json::Value),
+    /// Only a strict matching-ID authenticated forbidden envelope supplies this.
+    Forbidden,
+}
+
+/// Heartbeat-only exchange distinguishes a strict authenticated forbidden
+/// envelope from transport/malformed/other errors. It exposes no daemon text,
+/// changes no native guard, and leaves existing success-only consumers intact.
+pub(super) async fn exchange_heartbeat_result(
+    socket: &std::path::Path,
+    body: &str,
+) -> Result<HeartbeatExchange> {
+    exchange_result_mode(socket, body, "harness-source", true).await
+}
+
+/// Recognizes only the exact bounded control authorization-error schema.
+/// Other errors, mismatched IDs, ambiguous fields and mixed result/error replies
+/// are unavailable evidence, never terminal local-owner authority.
+fn heartbeat_forbidden(value: &serde_json::Value, expected_id: &str) -> bool {
+    value.as_object().is_some_and(|object| object.len() == 3)
+        && value["jsonrpc"] == "2.0"
+        && value["id"] == expected_id
+        && value["error"]
+            .as_object()
+            .is_some_and(|error| error.len() == 3)
+        && value["error"]["code"].as_i64() == Some(-32002)
+        && value["error"]["message"]
+            .as_str()
+            .is_some_and(|text| text.len() <= 4096)
+        && value["error"]["data"]
+            .as_object()
+            .is_some_and(|data| data.len() == 1)
+        && value["error"]["data"]["mezzanine_code"] == "forbidden"
+}
+
+/// Shares the same single-frame UID-authenticated total deadline and byte bound.
+/// Only the fixed heartbeat caller enables terminal authorization classification.
+async fn exchange_result_mode(
+    socket: &std::path::Path,
+    body: &str,
+    expected_id: &str,
+    heartbeat: bool,
+) -> Result<HeartbeatExchange> {
     tokio::time::timeout(EXCHANGE_DEADLINE, async {
         let mut stream = tokio::net::UnixStream::connect(socket).await?;
         crate::runtime::authenticated_unix_peer_uid(
@@ -237,6 +289,9 @@ pub(super) async fn exchange_result(
                 }
                 let value = crate::protocol::strict_json::decode(body.as_bytes())
                     .map_err(|_| MezError::invalid_state("event reply unavailable"))?;
+                if heartbeat && heartbeat_forbidden(&value, expected_id) {
+                    return Ok(HeartbeatExchange::Forbidden);
+                }
                 if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
                     || value.get("id").and_then(serde_json::Value::as_str) != Some(expected_id)
                     || !value
@@ -246,7 +301,7 @@ pub(super) async fn exchange_result(
                 {
                     return Err(MezError::invalid_state("event rejected"));
                 }
-                return Ok(value["result"].clone());
+                return Ok(HeartbeatExchange::Observed(value["result"].clone()));
             }
         }
     })
@@ -268,6 +323,116 @@ pub(super) async fn run<W: Write>(socket: &SocketSelection, stdout: &mut W) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the exact fixed authorization-error schema can supply terminal
+    /// heartbeat evidence. No text, generic result, other code, mismatched ID,
+    /// additional field or mixed envelope can impersonate that outcome.
+    #[test]
+    fn harness_heartbeat_forbidden_requires_exact_control_error() {
+        let valid = serde_json::json!({"jsonrpc":"2.0","id":"harness-source","error":{
+            "code":-32002,"message":"PRIVATE","data":{"mezzanine_code":"forbidden"}}});
+        assert!(heartbeat_forbidden(&valid, "harness-source"));
+        for (pointer, value) in [
+            ("/id", serde_json::json!("foreign")),
+            ("/jsonrpc", serde_json::json!("1.0")),
+            ("/error/code", serde_json::json!(-32011)),
+            ("/error/code", serde_json::json!(-32002.0)),
+            ("/error/message", serde_json::json!({})),
+            ("/error/message", serde_json::json!("x".repeat(4097))),
+            (
+                "/error/data/mezzanine_code",
+                serde_json::json!("rate_limited"),
+            ),
+        ] {
+            let mut invalid = valid.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(!heartbeat_forbidden(&invalid, "harness-source"));
+        }
+        for pointer in ["", "/error", "/error/data"] {
+            let mut invalid = valid.clone();
+            invalid
+                .pointer_mut(pointer)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert("extra".into(), serde_json::json!("PRIVATE"));
+            assert!(!heartbeat_forbidden(&invalid, "harness-source"));
+        }
+        let mut mixed = valid.clone();
+        mixed["result"] = serde_json::json!({"observed":false,"terminal":true});
+        assert!(!heartbeat_forbidden(&mixed, "harness-source"));
+    }
+
+    /// A genuine same-user socket uses the heartbeat-only classification while
+    /// all existing result consumers still reject the same forbidden envelope.
+    /// Neither transient errors nor ambiguous replies supply terminal evidence,
+    /// and raw result objects remain a distinct type requiring receipt validation.
+    #[tokio::test(flavor = "current_thread")]
+    async fn harness_heartbeat_exchange_keeps_rejection_distinct_from_results() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-proof-reply-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        for (reply, terminal) in [
+            (
+                r#"{"jsonrpc":"2.0","id":"harness-source","error":{"code":-32002,"message":"PRIVATE","data":{"mezzanine_code":"forbidden"}}}"#,
+                true,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":"harness-source","error":{"code":-32011,"message":"PRIVATE","data":{"mezzanine_code":"rate_limited"}}}"#,
+                false,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":"foreign","error":{"code":-32002,"message":"PRIVATE","data":{"mezzanine_code":"forbidden"}}}"#,
+                false,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":"harness-source","error":{"code":-32002,"code":-32002,"message":"PRIVATE","data":{"mezzanine_code":"forbidden"}}}"#,
+                false,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":"harness-source","error":{"code":-32002,"message":"PRIVATE","data":{"mezzanine_code":"forbidden"}},"result":{}}"#,
+                false,
+            ),
+        ] {
+            for heartbeat in [false, true] {
+                let server = async {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut bytes = [0; 4096];
+                    assert_ne!(stream.read(&mut bytes).await.unwrap(), 0);
+                    stream
+                        .write_all(&crate::control::encode_control_body(reply))
+                        .await
+                        .unwrap();
+                };
+                let (result, ()) = tokio::join!(
+                    exchange_result_mode(&socket, "{}", "harness-source", heartbeat),
+                    server
+                );
+                assert_eq!(
+                    matches!(result, Ok(HeartbeatExchange::Forbidden)),
+                    heartbeat && terminal
+                );
+                if let Err(error) = result {
+                    assert!(!error.message().contains("PRIVATE"));
+                }
+            }
+        }
+        let server = async {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            assert_ne!(stream.read(&mut bytes).await.unwrap(), 0);
+            stream.write_all(&crate::control::encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"harness-source","result":{"observed":false,"terminal":true}}"#
+            )).await.unwrap();
+        };
+        let (result, ()) = tokio::join!(exchange_heartbeat_result(&socket, "{}"), server);
+        assert!(matches!(result, Ok(HeartbeatExchange::Observed(_))));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// EOF completes bounded input, but a silent or slow producer cannot extend
     /// the total deadline; oversized input fails before normalized forwarding.
