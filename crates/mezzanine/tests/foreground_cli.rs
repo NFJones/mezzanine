@@ -28,6 +28,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[path = "foreground_cli/broker_attachment.rs"]
 mod broker_attachment;
 
+#[path = "foreground_cli/socket_readiness.rs"]
+mod socket_readiness;
+
 /// Carries Foreground Process state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -474,7 +477,7 @@ fn foreground_zen_focus_label_expires_without_input() {
     .unwrap();
     let socket = runtime.join("focus.sock");
     let mut daemon = spawn_detached_serve(&home, &runtime, &socket);
-    wait_for_path(&socket, Duration::from_secs(10)).unwrap();
+    socket_readiness::wait_for_socket(&mut daemon, &socket, Duration::from_secs(10)).unwrap();
     let mut process = spawn_foreground_attach(&root, &home, &runtime, &socket);
     let mut output = Vec::new();
     process
@@ -881,7 +884,7 @@ fn foreground_attach_exits_cleanly_without_broken_pipe_error() {
     let socket = runtime.join("attach.sock");
 
     let mut daemon = spawn_detached_serve(&home, &runtime, &socket);
-    wait_for_path(&socket, Duration::from_secs(10)).unwrap();
+    socket_readiness::wait_for_socket(&mut daemon, &socket, Duration::from_secs(10)).unwrap();
     let mut process = spawn_foreground_attach(&root, &home, &runtime, &socket);
     let mut output = Vec::new();
     process
@@ -916,7 +919,7 @@ fn foreground_attach_mux_exit_acknowledges_and_exits_cleanly() {
     let socket = runtime.join("attach.sock");
 
     let mut daemon = spawn_detached_serve(&home, &runtime, &socket);
-    wait_for_path(&socket, Duration::from_secs(10)).unwrap();
+    socket_readiness::wait_for_socket(&mut daemon, &socket, Duration::from_secs(10)).unwrap();
     let mut process = spawn_foreground_attach(&root, &home, &runtime, &socket);
     let mut output = Vec::new();
     process
@@ -986,8 +989,8 @@ done
     fs::set_permissions(&pager, fs::Permissions::from_mode(0o700)).unwrap();
 
     let mut daemon = spawn_detached_serve(&home, &runtime, &socket);
-    wait_for_path(&socket, Duration::from_secs(10)).unwrap();
-    wait_for_path(&event_socket, Duration::from_secs(10)).unwrap();
+    socket_readiness::wait_for_socket(&mut daemon, &socket, Duration::from_secs(10)).unwrap();
+    socket_readiness::wait_for_socket(&mut daemon, &event_socket, Duration::from_secs(10)).unwrap();
     let mut process = spawn_foreground_attach(&root, &home, &runtime, &socket);
     let mut output = Vec::new();
     process
@@ -1287,22 +1290,6 @@ fn spawn_detached_serve(home: &Path, runtime: &Path, socket: &Path) -> DetachedS
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     DetachedServeProcess(command.spawn().unwrap())
-}
-
-/// Runs the wait for path operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn wait_for_path(path: &Path, timeout: Duration) -> Result<(), String> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if path.exists() {
-            return Ok(());
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    Err(format!("timed out waiting for {}", path.display()))
 }
 
 /// Waits until a fixture has published one complete positive process id.
