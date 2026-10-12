@@ -70,6 +70,7 @@ pub(crate) fn module_source(helper: &std::path::Path, interval_ms: u64) -> Resul
         true,
         true,
         include_str!("curated_client.mjs"),
+        include_str!("claude_request_step.mjs"),
     )
 }
 
@@ -84,7 +85,7 @@ pub(super) fn historical_claude_module_v1(helper: &std::path::Path) -> Result<St
             "1a395b002716be900ace04094ed4d1d64e64d81d598ce72a2b93d862dfa8c0bb",
         ),
         (
-            include_bytes!("claude_request_step.mjs").as_slice(),
+            include_bytes!("history/claude_request_step_v4.mjs").as_slice(),
             "f438a048fa4fb1de35812a8a04ba138bd0de3629eb44949f77e15df28c35ce92",
         ),
         (
@@ -133,6 +134,7 @@ pub(super) fn historical_claude_module_v1(helper: &std::path::Path) -> Result<St
         false,
         false,
         include_str!("history/curated_client_claude_v1.mjs"),
+        include_str!("history/claude_request_step_v4.mjs"),
     )
 }
 
@@ -173,6 +175,7 @@ pub(super) fn historical_claude_module_v2(helper: &std::path::Path) -> Result<St
         true,
         false,
         include_str!("history/curated_client_claude_v1.mjs"),
+        include_str!("history/claude_request_step_v4.mjs"),
     )
 }
 
@@ -182,7 +185,7 @@ pub(super) fn historical_claude_module_v2(helper: &std::path::Path) -> Result<St
 pub(super) fn historical_claude_module_v3(helper: &std::path::Path) -> Result<String> {
     use sha2::Digest;
     historical_claude_module_v2(helper)?;
-    let actual = sha2::Sha256::digest(include_bytes!("curated_module.mjs"))
+    let actual = sha2::Sha256::digest(include_bytes!("history/curated_module_claude_v4.mjs"))
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
@@ -194,10 +197,37 @@ pub(super) fn historical_claude_module_v3(helper: &std::path::Path) -> Result<St
     compose_module(
         helper,
         10_000,
-        include_str!("curated_module.mjs"),
+        include_str!("history/curated_module_claude_v4.mjs"),
         true,
         true,
         include_str!("history/curated_client_claude_v1.mjs"),
+        include_str!("history/claude_request_step_v4.mjs"),
+    )
+}
+
+/// Reconstructs shipped revision-4 negative-proof closure independently of
+/// current retention/client changes. Earlier recipes validate shared inputs;
+/// the frozen final revision-4 client preserves transient versus terminal proof.
+pub(super) fn historical_claude_module_v4(helper: &std::path::Path) -> Result<String> {
+    use sha2::Digest;
+    historical_claude_module_v3(helper)?;
+    let actual = sha2::Sha256::digest(include_bytes!("history/curated_client_claude_v4.mjs"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    if actual != "1376398079a8c98804ca77902589ce1fb875cff28d63ceb383e6aabfef2b15e0" {
+        return Err(MezError::invalid_state(
+            "Claude historical revision-4 source changed",
+        ));
+    }
+    compose_module(
+        helper,
+        10_000,
+        include_str!("history/curated_module_claude_v4.mjs"),
+        true,
+        true,
+        include_str!("history/curated_client_claude_v4.mjs"),
+        include_str!("history/claude_request_step_v4.mjs"),
     )
 }
 
@@ -210,6 +240,7 @@ fn compose_module(
     lifecycle: bool,
     paired_clear: bool,
     client_template: &str,
+    step_template: &str,
 ) -> Result<String> {
     let body = render_body_mode(
         helper,
@@ -221,7 +252,7 @@ fn compose_module(
         client_template,
     )?;
     let request = request_accounting_body(helper)?;
-    let (step_before, step_after) = include_str!("claude_request_step.mjs")
+    let (step_before, step_after) = step_template
         .split_once("__MEZ_REQUEST_BODY__")
         .ok_or_else(|| MezError::invalid_state("Claude request runner marker unavailable"))?;
     let step = format!("{step_before}{request}{step_after}");

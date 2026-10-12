@@ -1,0 +1,106 @@
+/** Literal curated SDK client body, rendered inside classic.SessionStart.
+ * Only original public selectors cross the fixed helper; no Node APIs, vendor
+ * content, credentials or configurable RPC. next(e) has already completed and
+ * result remains untouched. Timer loss is telemetry loss, not vendor failure.
+ * Reload stops SDK timers. Explicit handoff keeps one native run, never revives
+ * a retired namespace or falls back to admission when prior evidence is lost. */
+{
+let lifetime;
+let ticket;
+try {
+  const owned = __MEZ_OWNED__;
+  lifetime = __MEZ_LIFETIME__;
+  if (owned && !lifetime) throw new Error("observer lifetime unavailable");
+  const identifier = value => typeof value === "string" && value.length > 0
+    && value.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(value);
+  const positive = value => Number.isSafeInteger(value) && value > 0;
+  const witness = value => typeof value === "string" && value.length === 64 && /^[a-f0-9]{64}$/.test(value);
+  const instance = __MEZ_INSTANCE__;
+  const replacing = __MEZ_REPLACING__;
+  const prior = __MEZ_PREDECESSOR__;
+  const previous = replacing && prior ? Object.freeze({ external_session_id: prior.external_session_id,
+    generation: prior.generation, observer_witness: prior.observer_witness, run_id: prior.run_id,
+    observer_epoch: prior.observer_epoch, agent_id: prior.agent_id }) : undefined;
+  const session = e.session_id;
+  const boundary = e.source;
+  if (identifier(session) && ["startup", "resume", "clear", "fork"].includes(boundary)
+      && (!replacing || (previous && previous.external_session_id === session
+        && positive(previous.generation) && positive(previous.run_id) && positive(previous.observer_epoch)
+        && Number.isSafeInteger(previous.observer_epoch + 1) && witness(previous.observer_witness)
+        && identifier(previous.agent_id)))) {
+    const declaration = { external_session_id: session, observer_instance: instance, session_boundary: boundary };
+    if (replacing) declaration.predecessor_generation = previous.generation;
+    if (owned) {
+      ticket = lifetime.begin(session);
+      if (!ticket) throw new Error("observer lifetime unavailable");
+    }
+    const response = await $.process.run([__MEZ_HELPER__, "harness-source", JSON.stringify(declaration)], { timeoutMs: 3000 });
+    if (response.exitCode === 0 && typeof response.stdout === "string" && response.stdout.length <= 4096) {
+      const receipt = JSON.parse(response.stdout);
+      const fields = ["protocol", "registered", "controls", "agent_id", "generation",
+        "observer_witness", "run_id", "observer_epoch", "observer_instance",
+        "external_session_id", "usage", "observer_transport", "expires_at_unix_seconds", "lease_seconds"];
+      if (receipt && typeof receipt === "object" && !Array.isArray(receipt)
+          && Object.keys(receipt).length === fields.length
+          && Object.keys(receipt).every(key => fields.includes(key))
+          && receipt.protocol === "external-agent/1" && receipt.registered === true
+          && Array.isArray(receipt.controls) && receipt.controls.length === 0
+          && identifier(receipt.agent_id) && positive(receipt.generation)
+          && positive(receipt.run_id) && positive(receipt.observer_epoch)
+          && positive(receipt.expires_at_unix_seconds) && receipt.lease_seconds === 60
+          && receipt.external_session_id === session
+          && receipt.observer_instance === instance
+          && receipt.usage === "unavailable-source-continuity"
+          && receipt.observer_transport === "unavailable-curated-freshness"
+          && witness(receipt.observer_witness)
+          && (!replacing || (receipt.generation > previous.generation
+            && receipt.observer_witness !== previous.observer_witness
+            && receipt.run_id === previous.run_id && receipt.agent_id === previous.agent_id
+            && receipt.observer_epoch === previous.observer_epoch + 1))
+          && (!owned || lifetime.publish(ticket, { external_session_id: receipt.external_session_id,
+            generation: receipt.generation, observer_witness: receipt.observer_witness,
+            run_id: receipt.run_id, observer_epoch: receipt.observer_epoch, agent_id: receipt.agent_id }))) {
+        const original = Object.freeze({ external_session_id: receipt.external_session_id,
+          generation: receipt.generation, observer_witness: receipt.observer_witness });
+        let sequence = 0;
+        let busy = false;
+        const timer = $.clock.every(__MEZ_INTERVAL__, async () => {
+          if (owned && !lifetime.current(ticket)) return;
+          if (busy || !Number.isSafeInteger(sequence + 1)) return;
+          busy = true;
+          try {
+            const proof = await $.process.run([__MEZ_HELPER__, "harness-source", JSON.stringify({
+              operation: "curated-heartbeat", external_session_id: original.external_session_id,
+              generation: original.generation, observer_witness: original.observer_witness,
+              sequence: ++sequence,
+            })], { timeoutMs: 3000 });
+            // A callback/exit is not acknowledgment or lease renewal. Do not
+            // retry vendor work, re-enroll, or let helper output reach the user.
+            if (proof.exitCode !== 0 || typeof proof.stdout !== "string" || proof.stdout.length > 128) return;
+            const observed = JSON.parse(proof.stdout);
+            // Only the typed negative acknowledgment closes this local owner.
+            // Recheck its exact ticket after transport; no native retirement,
+            // newest lookup or initial admission follows a closed epoch.
+            if (owned && observed && typeof observed === "object" && !Array.isArray(observed)
+                && Object.keys(observed).length === 2 && observed.observed === false
+                && observed.terminal === true) {
+              if (lifetime.current(ticket)) lifetime.stop();
+              return;
+            }
+            if (!observed || typeof observed !== "object" || Array.isArray(observed)
+                || Object.keys(observed).length !== 3 || observed.observed !== true
+                || observed.sequence !== sequence || typeof observed.changed !== "boolean") return;
+          } catch { /* unavailable telemetry cannot change vendor behavior */ }
+          finally { busy = false; }
+        });
+        if (owned && !lifetime.attachTimer(ticket, timer)) lifetime.stop();
+      }
+    }
+  }
+} catch {
+  // Failure after publication may have created a timer whose handle was lost.
+  // Stop before any queued callback can launch another helper, not re-admit.
+  try { if (ticket && lifetime.current(ticket)) lifetime.stop(); } catch { /* telemetry loss */ }
+}
+finally { try { if (ticket) lifetime.release(ticket); } catch { /* telemetry loss */ } }
+}

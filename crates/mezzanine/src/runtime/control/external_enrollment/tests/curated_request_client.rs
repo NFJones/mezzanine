@@ -38,6 +38,18 @@ async fn external_claude_bare_bootstrap_installed_module_has_native_durable_usag
         .await;
 }
 
+/// Installed revision5 must retain a finalized normalized report after both
+/// immediate durable replies are lost. A later genuine main step resends the
+/// same original readiness/report through real native helper ingress, recovers
+/// the existing ledger ACK without recharge, and bills one distinct request.
+/// This is process-local same-observer retry, not daemon/vendor restart proof.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
+async fn external_claude_installed_pending_outcome_recovers_lost_durable_replies() {
+    qualify_request_client_with_install("claude-pending-ordinary-fixture.mjs", true, 17, true)
+        .await;
+}
+
 /// The real bare bootstrap installs the entry which observes a completed
 /// same-ID clear pair on one ordinary SDK-shaped native creator. Real helper
 /// ingress must rotate the predecessor exactly once, preserve the run/accounting
@@ -66,7 +78,9 @@ async fn qualify_request_client_with_install(
     installed: bool,
 ) {
     let paired_clear = script_name == "claude-clear-ordinary-fixture.mjs";
+    let pending_recovery = script_name == "claude-pending-ordinary-fixture.mjs";
     assert!(!paired_clear || (installed && claude && requests == 26));
+    assert!(!pending_recovery || (installed && claude && requests == 17));
     let node = std::path::PathBuf::from(
         std::env::var_os("MEZ_TEST_NODE_BINARY").expect("explicit offline Node path"),
     );
@@ -336,7 +350,7 @@ async fn qualify_request_client_with_install(
                 |row| row.get::<_, i64>(0)
             )
             .unwrap(),
-        if paired_clear {
+        if paired_clear || pending_recovery {
             32
         } else if claude {
             16
@@ -352,9 +366,13 @@ async fn qualify_request_client_with_install(
                 |row| row.get::<_, i64>(0)
             )
             .unwrap(),
-        if paired_clear { 2 } else { 1 }
+        if paired_clear || pending_recovery {
+            2
+        } else {
+            1
+        }
     );
-    if paired_clear {
+    if paired_clear || pending_recovery {
         assert_eq!(
             database
                 .query_row(

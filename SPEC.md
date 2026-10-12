@@ -1446,6 +1446,20 @@ them. Expense/report time uses the immutable admitted request boundary for exact
 replay. Old owners, child loops and pressure MUST never borrow a newest binding.
 This source capability does not install/enable the mod or certify exhaustive,
 auxiliary, cross-process resumed/forked or invoice coverage.
+Claude revision5 MUST share sixteen slots between active producers and retained
+unacknowledged normalized outcomes. Failed durable delivery MUST retain only the
+original report, client-local readiness ticket and exact still-live observer;
+callback replay MUST NOT replace its payload or multiply pending obligations.
+A later genuine main step MAY retry at most one retained report before its own
+delegate, using the existing two-attempt same-report transport contract. Pending
+retry MUST be serialized, failures rotated without eviction, and pressure MUST
+refuse new telemetry rather than discard prior expense or block vendor delegation.
+Stopped/replaced/clear/negative-proof epochs MUST NOT carry pending reports into
+a successor. Unknown/child callbacks MUST NOT trigger retry; missing/cancelled
+final usage MUST NOT fabricate a retained outcome. No timer, store persistence,
+provider replay or no-gap process/reload/restart guarantee is introduced. Exact
+revision1–4 module/client/step inputs MUST remain independently frozen or guarded
+for same-helper upgrades; receipt paths cannot authenticate executable relocation.
 The installed shared request client MUST retain only validated content-free
 reports and client-local tickets captured before genuine new requests. It MUST
 refuse beyond128 active tickets without silently evicting unacknowledged expense,
