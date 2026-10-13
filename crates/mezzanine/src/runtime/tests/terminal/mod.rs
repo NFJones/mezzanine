@@ -13,3 +13,4 @@ mod external_usage;
 mod input;
 mod overlays;
 mod rendering;
+mod scoped_browser;
