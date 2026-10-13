@@ -15,6 +15,10 @@
 //! cannot be upgraded. Only a genuinely missing binding uses durable namespace
 //! recovery and its fresh-projection acknowledgment. Captured mode, currentness
 //! revision and native evidence are rechecked before either path can publish.
+//! Maintenance retires a broken held ancestry chain without treating it as
+//! creator/root death. It releases only owned proof references; the original
+//! source/instance fence remains absorbing under diagnostic refresh, and
+//! independently admitted expense keeps its original accounting settlement.
 
 use super::*;
 use crate::runtime::control::external_agents::{MAX_BINDINGS, Registration};
@@ -217,6 +221,27 @@ impl LiveSourceAnchors {
 }
 
 impl RuntimeSessionService {
+    /// Reports only test-owned fence state: retired, revision, held ancestry and
+    /// accepted-input presence. This grants no source or transport authority.
+    #[cfg(test)]
+    pub(super) fn external_source_anchor_fence_for_tests(
+        &self,
+        owner: &str,
+    ) -> Option<(bool, u64, bool, bool)> {
+        self.control
+            .external_sources()
+            .anchors
+            .get(owner)
+            .map(|anchor| {
+                (
+                    anchor.retired,
+                    anchor.revision,
+                    anchor.ancestry.is_some(),
+                    anchor.accepted_resume.is_some(),
+                )
+            })
+    }
+
     /// Confirms the retained original binding, not merely a present numeric
     /// generation. This is lifecycle authority already published by the actor;
     /// it never restores an accounting namespace or upgrades disabled reporting.
@@ -294,8 +319,10 @@ impl RuntimeSessionService {
             .ancestry_budget = budget;
     }
 
-    /// Drops only actually ended native source/root lifetimes. Active or retired
-    /// instances with live original witnesses are never evicted to free capacity.
+    /// Drops only actually ended native source/root lifetimes. A dead retained
+    /// ancestry chain retires authority and releases only this owner's proof;
+    /// surviving creator/root facts and instance fences remain inert until end.
+    /// Nonblocking lifetime polls perform no new ancestry walk or storage I/O.
     pub(in crate::runtime::control) fn prune_external_source_anchors(&mut self) {
         let ended = self
             .control
@@ -311,6 +338,21 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         for owner in ended {
             self.control.external_sources_mut().anchors.remove(&owner);
+        }
+        // Registry loss may leave this anchor as the only ancestry owner. A
+        // vanished intermediate ancestor is not producer/root death and must
+        // not evict replay/instance fences or allow a fresh-label takeover.
+        for anchor in self.control.external_sources_mut().anchors.values_mut() {
+            if anchor
+                .ancestry
+                .as_ref()
+                .is_some_and(|ancestry| !ancestry.is_live())
+            {
+                anchor.retired = true;
+                anchor.revision = anchor.revision.saturating_add(1);
+                anchor.accepted_resume = None;
+                anchor.ancestry = None;
+            }
         }
     }
 
@@ -332,6 +374,12 @@ impl RuntimeSessionService {
         registration.presentation = None;
         let owner = binding.accounting_owner.clone();
         let prior = self.control.external_sources().anchors.get(&owner);
+        // An unreconciled binding may still retain a dead shared proof. Its
+        // diagnostics cannot undo source retirement or reattach that ancestry;
+        // independently admitted expense settlement remains outside this owner.
+        if prior.is_some_and(|prior| prior.retired) {
+            return;
+        }
         let revision = prior.map_or(1, |prior| {
             if prior.digest == digest && !prior.retired {
                 prior.revision

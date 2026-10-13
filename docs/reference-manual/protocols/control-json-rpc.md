@@ -1130,6 +1130,14 @@ instance label), missing service anchors, mismatched sources, root/producer
 replacement and stale/expired writer evidence fail closed. Source anchors are
 memory-only, bounded at 256, share the existing descriptor budget and are fenced
 synchronously by all ordinary rotations and central retirements.
+An exact retained ancestor exit also retires the source and drops only the
+anchor's ancestry reference, even if disposable registrations already vanished.
+The surviving creator/root identity and retired-instance fence stay inert until
+actual endpoint end: a new label cannot revive them, and no durable mapping or
+expense is deleted. Diagnostic refresh cannot undo retirement or reattach proof.
+Shared bindings/work may still hold descriptors; quota is released only on the
+last legitimate reference drop. Cleanup uses existing nonblocking native polls,
+not actor-side native walks/SQLite or an expiry-equals-death inference.
 Snapshot/session replacement invalidates every retained source, including one
 whose registration was already lost; it cannot use registry-only resume. The
 single checked control-service generation allocator covers socket/curated

@@ -13,7 +13,7 @@ const home = process.env.HOME;
 const mode = readFileSync(join(home, "replay-mode"), "utf8");
 assert(["connected", "registry", "unknown"].includes(mode));
 for (const key of ["PI_CODING_AGENT_DIR", "MEZ_HARNESS_SESSION", "MEZ_HARNESS_OBSERVER_FD", "MEZ_HARNESS_HELPER", "MEZ_EXTERNAL_LAUNCH_TOKEN"])
-  assert.equal(process.env[key], undefined, "fixture received an activation input");
+  assert(process.env[key] === undefined, "fixture received an activation input");
 const root = join(home, ".pi", "agent", "extensions");
 const factories = [];
 for (const child of readdirSync(root, { withFileTypes: true })) {
@@ -84,6 +84,17 @@ const finalizedRequest = async index => {
 };
 const lifetime = setTimeout(() => { process.exitCode = 1; }, 45000);
 try {
+  // Test-only fixed scalar control. No activation input, callback or replay
+  // metadata is supplied; the real producer fails only after parent-seen EOF.
+  const lateAssertion = async () => {
+    let requested;
+    try { requested = readFileSync(join(home, "replay-failure"), "utf8"); } catch { return; }
+    assert.equal(requested, "post-eof-assertion");
+    globalThis[ownerKey]?.client?.detach();
+    await checkpoint("post-eof");
+    writeFileSync(join(home, "replay-failure-stage"), "assertion");
+    assert.fail("intentional post-EOF fixture assertion");
+  };
   emit({ type: "session_start", reason: "startup" });
   let owner = await settle();
   assert.equal(owner.lease.failed, false);
@@ -103,6 +114,7 @@ try {
     assert.equal(owner.client.status().usage, "unavailable-source-continuity");
     assert.equal(starts, 1); assert.equal(finalized, 1);
     await checkpoint("refused");
+    await lateAssertion();
     publish("complete");
     process.stdout.write("PI_NATIVE_REPLAY_REFUSED\n");
   } else if (owner.lease.failed || owner.lease.usageCoverage !== "finalized-assistant-external-reported") {
@@ -121,6 +133,7 @@ try {
     emit({ type: "agent_before_settle", outcome: "completed" });
     emit({ type: "agent_settled" }); await settle();
     emit({ type: "session_shutdown", reason: "quit" }); await globalThis[ownerKey].tail;
+    await lateAssertion();
     publish("complete");
     process.stdout.write("PI_NATIVE_REPLAY_COMPLETE\n");
   }

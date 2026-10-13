@@ -6,3 +6,5 @@ mod command_prompt;
 mod editing;
 mod lifecycle;
 mod readiness;
+mod selector_context;
+mod window_titles;

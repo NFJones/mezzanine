@@ -4359,6 +4359,9 @@ impl RuntimeSessionService {
         let transition = self
             .session
             .close_exited_pane_with_effects(descriptor.pane_id.as_str())?;
+        // Actual membership removal precedes fallible survivor resize. Keep
+        // the generated title truthful even if those later effects fail.
+        self.refresh_subagent_window_names_after_pane_removal()?;
         self.sync_pane_resize_effects(&transition.effects)?;
         self.cleanup_removed_pane_runtime_state(descriptor.pane_id.as_str())?;
         if remove_recorded_process {
@@ -4768,9 +4771,15 @@ impl RuntimeSessionService {
     /// model first, then call this helper to clear prompt, readiness, screen,
     /// deferred I/O, and subagent bookkeeping that would otherwise make a
     /// closed pane appear partially alive to later agent/session surfaces.
+    /// Generated bucket titles are repaired only when membership is absent,
+    /// before later fallible cleanup: stopped-but-open children remain named,
+    /// and an already committed removal is never replayed to repair a title.
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) -> Result<()> {
         self.reconcile_external_agent_registrations();
         let pane_present = self.find_pane_descriptor(pane_id).is_some();
+        if !pane_present {
+            self.refresh_subagent_window_names_after_pane_removal()?;
+        }
         let agent_id = format!("agent-{pane_id}");
         if pane_present {
             // A live pane at a reused pane-derived identity supersedes any

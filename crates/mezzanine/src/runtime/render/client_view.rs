@@ -704,10 +704,18 @@ impl RuntimeSessionService {
         view: &mut RenderedClientView,
         prompt_input: &RuntimePrimaryPromptInput,
     ) {
+        let mut prompt = prompt_input.prompt.clone();
+        if prompt.kind == ReadlinePromptKind::Command {
+            prompt.set_selector_working_directory(
+                self.active_pane_id()
+                    .ok()
+                    .and_then(|pane_id| self.pane_current_working_directory(&pane_id)),
+            );
+        }
         let presentation = compose_prompt_overlay_presentation_with_styles(
             &view.lines,
             &view.line_style_spans,
-            &prompt_input.prompt,
+            &prompt,
             view.authoritative_size,
             &self.presentation.settings.ui_theme,
         );
@@ -1113,18 +1121,29 @@ impl RuntimeSessionService {
             return unreserved();
         }
         let pane_context = TerminalPaneFrameContext {
-            agent_prompt: (!self.agent_command_is_active(pane_id)).then(|| {
-                self.presentation
-                    .agent_prompt_inputs
-                    .get(pane_id)
-                    .map(|input| input.prompt.clone())
-                    .unwrap_or_else(|| ReadlinePrompt::new(ReadlinePromptKind::Agent))
-            }),
+            agent_prompt: (!self.agent_command_is_active(pane_id))
+                .then(|| self.agent_prompt_for_render(pane_id)),
             agent_composer: Some(self.agent_composer_context(pane_id)),
             agent_display_lines: self.runtime_agent_prompt_display_lines_for_pane(pane_id),
             ..TerminalPaneFrameContext::default()
         };
         crate::host::terminal::agent_composer_layout(width, body_rows, Some(&pane_context))
+    }
+
+    /// Projects the retained draft with the pane's current completion cwd.
+    ///
+    /// Idle cwd observations must affect hints before another input byte arrives.
+    /// The clone shares existing nonblocking discovery/cache owners but cannot
+    /// mutate the retained draft or carry selection into another prompt owner.
+    fn agent_prompt_for_render(&self, pane_id: &str) -> ReadlinePrompt {
+        let mut prompt = self
+            .presentation
+            .agent_prompt_inputs
+            .get(pane_id)
+            .map(|input| input.prompt.clone())
+            .unwrap_or_else(|| ReadlinePrompt::new(ReadlinePromptKind::Agent));
+        prompt.set_selector_working_directory(self.pane_current_working_directory(pane_id));
+        prompt
     }
 
     /// Captures submission/decoder facts and effective editor dispatch without
@@ -2154,13 +2173,7 @@ impl RuntimeSessionService {
                         agent_prompt: (agent_session.is_some_and(|session| {
                             matches!(session.visibility, AgentShellVisibility::Visible)
                         }) && !self.agent_command_is_active(pane_id.as_str()))
-                        .then(|| {
-                            self.presentation
-                                .agent_prompt_inputs
-                                .get(&pane_id)
-                                .map(|input| input.prompt.clone())
-                                .unwrap_or_else(|| ReadlinePrompt::new(ReadlinePromptKind::Agent))
-                        }),
+                        .then(|| self.agent_prompt_for_render(&pane_id)),
                         agent_display_lines: self
                             .runtime_agent_prompt_display_lines_for_pane(&pane_id),
                     },
