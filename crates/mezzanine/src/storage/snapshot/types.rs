@@ -33,6 +33,9 @@ pub(crate) const MAX_UNSETTLED_PEER_PRESENTATION_PAYLOAD_BYTES: usize = 256 * 10
 pub struct SnapshotUnsettledPeerPresentation {
     /// Stable recipient-scoped receipt identity embedded in the presentation source.
     pub identity: String,
+    /// Original receive-commit time; legacy outbox records remain unknown.
+    #[serde(default)]
+    pub occurrence: mez_core::presentation::PresentationOccurrence,
     /// Authoritative recipient MMP identity.
     pub recipient_agent_id: String,
     /// Destination pane that owns the receiver-only row.
@@ -72,6 +75,7 @@ impl SnapshotUnsettledPeerPresentation {
             ));
         };
         if self.identity.trim().is_empty()
+            || !self.occurrence.is_valid()
             || self.recipient_agent_id.trim().is_empty()
             || self.pane_id.trim().is_empty()
             || self.conversation_id.trim().is_empty()

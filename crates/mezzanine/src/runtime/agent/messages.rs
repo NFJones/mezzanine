@@ -417,29 +417,32 @@ impl RuntimeSessionService {
     /// one-time live row has been installed.
     fn echo_received_peer_message_presentation_to_pane(
         &mut self,
-        pane_id: &str,
+        receipt: &super::RuntimeReceivedPeerMessagePresentation,
         receive_identity: &str,
-        peer_label: &str,
-        direct_parent: bool,
-        content_type: &str,
-        payload: &str,
     ) -> Result<()> {
-        if direct_parent {
-            self.append_committed_received_direct_parent_message_to_terminal_buffer(
-                pane_id,
-                receive_identity,
-                content_type,
-                payload,
-            )
-        } else {
-            self.append_committed_received_peer_message_to_terminal_buffer(
-                pane_id,
-                receive_identity,
-                peer_label,
-                content_type,
-                payload,
-            )
-        }
+        let entry = mez_core::presentation::PresentationEntry {
+            id: receive_identity.to_string(),
+            occurrence: receipt.occurrence,
+            first_row: true,
+        };
+        self.with_presentation_entry(&receipt.pane_id, entry, |service| {
+            if receipt.direct_parent {
+                service.append_committed_received_direct_parent_message_to_terminal_buffer(
+                    &receipt.pane_id,
+                    receive_identity,
+                    &receipt.content_type,
+                    &receipt.payload,
+                )
+            } else {
+                service.append_committed_received_peer_message_to_terminal_buffer(
+                    &receipt.pane_id,
+                    receive_identity,
+                    &receipt.peer_label,
+                    &receipt.content_type,
+                    &receipt.payload,
+                )
+            }
+        })
     }
 
     /// Returns the stable receiver-owned identity for one accepted MMP delivery.
@@ -521,6 +524,16 @@ impl RuntimeSessionService {
     ) {
         let identity =
             Self::received_peer_message_presentation_id(&recipient_agent_id, sequence, &envelope);
+        if self
+            .agent
+            .received_peer_message_presentations
+            .contains_key(&identity)
+        {
+            return;
+        }
+        let occurrence = self.capture_presentation_occurrence(
+            mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+        );
         let direct_parent = self.runtime_peer_message_sender_is_direct_parent(
             recipient_agent_id.as_str(),
             envelope.sender.agent_id.as_str(),
@@ -537,6 +550,7 @@ impl RuntimeSessionService {
             .entry(identity)
             .or_insert(super::RuntimeReceivedPeerMessagePresentation {
                 recipient_agent_id,
+                occurrence,
                 pane_id: turn.pane_id.clone(),
                 conversation_id: turn.conversation_id.clone(),
                 turn_id: turn.turn_id.clone(),
@@ -569,6 +583,7 @@ impl RuntimeSessionService {
             .map(|(identity, receipt)| {
                 crate::storage::snapshot::SnapshotUnsettledPeerPresentation {
                     identity: identity.clone(),
+                    occurrence: receipt.occurrence,
                     recipient_agent_id: receipt.recipient_agent_id.to_string(),
                     pane_id: receipt.pane_id.clone(),
                     conversation_id: receipt.conversation_id.clone(),
@@ -605,6 +620,7 @@ impl RuntimeSessionService {
                 .entry(entry.identity.clone())
                 .or_insert(super::RuntimeReceivedPeerMessagePresentation {
                     recipient_agent_id,
+                    occurrence: entry.occurrence,
                     pane_id: entry.pane_id.clone(),
                     conversation_id: entry.conversation_id.clone(),
                     turn_id: entry.turn_id.clone(),
@@ -713,6 +729,7 @@ impl RuntimeSessionService {
                         identity,
                         super::RuntimeReceivedPeerMessagePresentation {
                             recipient_agent_id: recipient.clone(),
+                            occurrence: Default::default(),
                             pane_id: pane_id.clone(),
                             conversation_id: conversation_id.clone(),
                             turn_id: String::new(),
@@ -800,12 +817,8 @@ impl RuntimeSessionService {
             if self.persistence.transcript_store().is_none() {
                 if !receipt.presentation_attempted {
                     self.echo_received_peer_message_presentation_to_pane(
-                        &receipt.pane_id,
+                        &receipt,
                         identity.as_str(),
-                        &receipt.peer_label,
-                        receipt.direct_parent,
-                        &receipt.content_type,
-                        &receipt.payload,
                     )?;
                 }
                 self.agent
@@ -827,19 +840,26 @@ impl RuntimeSessionService {
                     .persistence
                     .presentation_write_pending(&receipt.conversation_id)
                 {
-                    self.persist_received_peer_message_presentation_only(
-                        &receipt.pane_id,
-                        &receipt.conversation_id,
-                        &receipt.turn_id,
-                        &crate::runtime::render::PeerMessagePresentation {
-                            receive_identity: Some(identity.as_str()),
-                            peer_label: &receipt.peer_label,
-                            content_type: Some(&receipt.content_type),
-                            payload: &receipt.payload,
-                            direct_parent: receipt.direct_parent,
-                            presentation_eligible: receipt.presentation_eligible,
-                        },
-                    )?;
+                    let entry = mez_core::presentation::PresentationEntry {
+                        id: identity.clone(),
+                        occurrence: receipt.occurrence,
+                        first_row: true,
+                    };
+                    self.with_presentation_entry(&receipt.pane_id, entry, |service| {
+                        service.persist_received_peer_message_presentation_only(
+                            &receipt.pane_id,
+                            &receipt.conversation_id,
+                            &receipt.turn_id,
+                            &crate::runtime::render::PeerMessagePresentation {
+                                receive_identity: Some(identity.as_str()),
+                                peer_label: &receipt.peer_label,
+                                content_type: Some(&receipt.content_type),
+                                payload: &receipt.payload,
+                                direct_parent: receipt.direct_parent,
+                                presentation_eligible: receipt.presentation_eligible,
+                            },
+                        )
+                    })?;
                     if self.received_peer_message_presentation_is_persisted(
                         &receipt.conversation_id,
                         identity.as_str(),
@@ -851,14 +871,7 @@ impl RuntimeSessionService {
                 }
                 continue;
             }
-            self.echo_received_peer_message_presentation_to_pane(
-                &receipt.pane_id,
-                identity.as_str(),
-                &receipt.peer_label,
-                receipt.direct_parent,
-                &receipt.content_type,
-                &receipt.payload,
-            )?;
+            self.echo_received_peer_message_presentation_to_pane(&receipt, identity.as_str())?;
             if let Some(receipt) = self
                 .agent
                 .received_peer_message_presentations

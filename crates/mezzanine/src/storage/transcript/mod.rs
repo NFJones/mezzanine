@@ -25,6 +25,9 @@ pub(crate) mod activity;
 /// Exact settled steering occurrences, never pending execution input.
 pub(crate) mod steering;
 
+/// Immutable transcript-only fallback evidence in the existing presentation log.
+pub(crate) mod fallback;
+
 /// Source-proven terminal handoffs for accepted turn-local model summaries.
 pub(crate) mod compaction_handoff;
 /// Exposes the encoding module boundary.

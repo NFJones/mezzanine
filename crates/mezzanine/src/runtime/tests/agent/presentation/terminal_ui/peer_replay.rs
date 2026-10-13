@@ -415,6 +415,7 @@ fn runtime_agent_legacy_peer_message_record_still_replays() {
         .clone();
     let legacy_peer_entry =
         |sequence: u64, source: &str| crate::storage::transcript::AgentPresentationEntry {
+            presentation: None,
             conversation_id: conversation_id.clone(),
             sequence,
             created_at_unix_seconds: 1,
@@ -526,6 +527,7 @@ fn runtime_agent_peer_message_replay_skips_malformed_source() {
         "application/vnd.mezzanine.agent-presentation.peer-message+json; charset=utf-8";
     let peer_entry =
         |sequence: u64, source: String| crate::storage::transcript::AgentPresentationEntry {
+            presentation: None,
             conversation_id: conversation_id.clone(),
             sequence,
             created_at_unix_seconds: 1,

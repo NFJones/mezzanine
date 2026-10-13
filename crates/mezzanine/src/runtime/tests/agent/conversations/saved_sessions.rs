@@ -2571,6 +2571,7 @@ fn runtime_resume_omits_presentation_only_conversations() {
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-presentation-only"));
     transcript_store
         .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            presentation: None,
             conversation_id: "presentation-only".to_string(),
             sequence: 1,
             created_at_unix_seconds: 10,
@@ -3461,6 +3462,7 @@ fn runtime_resume_objective_metadata_failure_restores_prior_binding_and_identity
         .unwrap();
     transcript_store
         .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            presentation: None,
             conversation_id: "resume-target".to_string(),
             sequence: 1,
             created_at_unix_seconds: 10,
@@ -3696,6 +3698,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
             conversation_id: "saved".to_string(),
             sequence: 1,
             created_at_unix_seconds: 3,
+            presentation: None,
             pane_id: "%9".to_string(),
             turn_id: Some("turn-old".to_string()),
             terminal_width: 80,
@@ -3721,6 +3724,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
             conversation_id: "saved".to_string(),
             sequence: 2,
             created_at_unix_seconds: 4,
+            presentation: None,
             pane_id: "%9".to_string(),
             turn_id: Some("turn-old".to_string()),
             terminal_width: 80,
@@ -4103,6 +4107,7 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
             text: line.clone(),
             style_spans: view.line_style_spans[row].clone(),
             copy_text: None,
+            presentation: None,
         },
         start.saturating_sub(1),
     );
@@ -4111,6 +4116,7 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
             text: line.clone(),
             style_spans: view.line_style_spans[row].clone(),
             copy_text: None,
+            presentation: None,
         },
         start,
     );

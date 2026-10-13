@@ -240,13 +240,34 @@ impl RuntimeSessionService {
                     .unwrap_or_else(|| AGENT_COPY_SKIP_LINE.to_string())
             })
             .collect::<Vec<_>>();
-        self.append_agent_terminal_rendered_lines_to_buffer(
-            pane,
-            AgentTerminalPresentationStyle::UserPrompt,
-            &lines,
-            &copies,
-            Some((&encoded, crate::storage::transcript::steering::CONTENT_TYPE)),
-        )
+        let entry = mez_core::presentation::PresentationEntry {
+            id: source.receipt.id.clone(),
+            occurrence: source.receipt.occurrence,
+            first_row: true,
+        };
+        let entry = if self
+            .presentation
+            .agent_presentation_replay_panes
+            .contains(pane)
+        {
+            self.presentation
+                .occurrence_override
+                .as_deref()
+                .filter(|(owner, _)| owner == pane)
+                .map(|(_, entry)| entry.clone())
+                .unwrap_or(entry)
+        } else {
+            entry
+        };
+        self.with_presentation_entry(pane, entry, |service| {
+            service.append_agent_terminal_rendered_lines_to_buffer(
+                pane,
+                AgentTerminalPresentationStyle::UserPrompt,
+                &lines,
+                &copies,
+                Some((&encoded, crate::storage::transcript::steering::CONTENT_TYPE)),
+            )
+        })
     }
 
     /// Reconciles receipt status without acknowledging input or replaying effects.
@@ -346,15 +367,30 @@ impl RuntimeSessionService {
         )
         .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
         .max(1);
-        let mut lines = pending
+        let (mut lines, mut row_entries): (Vec<_>, Vec<_>) = pending
             .iter()
             .flat_map(|entry| {
                 wrapped_prefixed_agent_terminal_lines("user> [pending] ", &entry.display, width)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, line)| {
+                        (
+                            line,
+                            Some(mez_core::presentation::PresentationEntry {
+                                id: entry.id.clone(),
+                                occurrence: entry.occurrence,
+                                first_row: index == 0,
+                            }),
+                        )
+                    })
+                    .collect::<Vec<_>>()
             })
-            .collect::<Vec<_>>();
+            .unzip();
         if lines.len() > budget {
             let hidden_rows = lines.len().saturating_sub(budget.saturating_sub(1));
             let tail = lines.split_off(hidden_rows);
+            let retained_entries = row_entries.split_off(hidden_rows);
+            row_entries = std::iter::once(None).chain(retained_entries).collect();
             lines = wrapped_prefixed_agent_terminal_lines(
                 "user> [pending] ",
                 &format!(
@@ -406,7 +442,9 @@ impl RuntimeSessionService {
         } else {
             bytes.push_str("\r\n");
         }
-        for line in &lines {
+        let mut occurrence_ranges = Vec::new();
+        for (line, entry) in lines.iter().zip(row_entries) {
+            let start = bytes.len();
             append_styled_agent_terminal_rendered_line(
                 &mut bytes,
                 AgentTerminalPresentationStyle::UserPrompt,
@@ -414,10 +452,14 @@ impl RuntimeSessionService {
                 self.ui_theme(),
             );
             bytes.push_str("\x1b[0m\r\n");
+            if let Some(entry) = entry {
+                occurrence_ranges.push((start..bytes.len(), entry));
+            }
         }
-        Self::feed_agent_terminal_screen(
+        Self::feed_presentation_ranges(
             &mut screen,
             bytes.as_bytes(),
+            &occurrence_ranges,
             "projecting pending steering",
         )?;
         let copies = lines

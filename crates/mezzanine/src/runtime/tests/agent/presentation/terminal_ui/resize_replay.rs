@@ -215,6 +215,7 @@ fn runtime_agent_async_resize_completion_rebuilds_source_backed_presentation() {
         .clone();
     transcript_store
         .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            presentation: None,
             conversation_id,
             sequence: 1,
             created_at_unix_seconds: 1,

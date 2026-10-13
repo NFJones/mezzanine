@@ -1241,7 +1241,7 @@ where
                     let source = crate::storage::transcript::steering::Source::decode(
                         entry.source_text.as_deref().unwrap_or_default(),
                     )?;
-                    let result = store.append_presentation_many_async(&[entry]).await;
+                    let result = store.append_presentation_many_async(&[*entry]).await;
                     let success = result.is_ok();
                     if let Ok(bytes) = result {
                         report.completed = report.completed.saturating_add(1);

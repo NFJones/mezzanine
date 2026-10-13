@@ -188,12 +188,14 @@ impl RuntimeSessionService {
         }
         if completed {
             for (action_index, source, row) in &preview.finals {
-                self.persist_agent_presentation_entry(
+                self.persist_streamed_presentation(
                     pane_id,
-                    vec![row.style.clone(); row.rendered_lines.len()],
-                    row.rendered_lines.clone(),
-                    row.copy_lines.clone(),
-                    String::new(),
+                    source.entry.clone(),
+                    (
+                        vec![row.style.clone(); row.rendered_lines.len()],
+                        row.rendered_lines.clone(),
+                        row.copy_lines.clone(),
+                    ),
                     Some((source.text.as_str(), source.content_type.as_str())),
                 );
                 self.presentation

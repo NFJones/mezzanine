@@ -87,14 +87,18 @@ fn runtime_streaming_rationale_and_command_fallback_retains_only_rationale() {
         "completed provisional projection must match static display text"
     );
     assert_eq!(
-        streaming
-            .agent_pane_screen("%1")
-            .unwrap()
-            .normal_styled_content_lines(),
-        static_render
-            .agent_pane_screen("%1")
-            .unwrap()
-            .normal_styled_content_lines(),
+        agent_visual_rows(
+            streaming
+                .agent_pane_screen("%1")
+                .unwrap()
+                .normal_styled_content_lines()
+        ),
+        agent_visual_rows(
+            static_render
+                .agent_pane_screen("%1")
+                .unwrap()
+                .normal_styled_content_lines()
+        ),
         "completed provisional projection must match static styling"
     );
 

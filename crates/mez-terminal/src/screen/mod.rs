@@ -45,9 +45,9 @@ impl PartialEq for RenderGeneration {
 impl Eq for RenderGeneration {}
 
 pub use crate::{
-    GraphicRendition, MAX_OSC_STRING_BYTES, TerminalColor, TerminalCursorState, TerminalModeState,
-    TerminalOscEvent, TerminalSavedDecPrivateMode, TerminalSavedState, TerminalScreenConfigError,
-    TerminalStyleSpan, TerminalStyledLine, tracked_dec_private_mode,
+    GraphicRendition, MAX_OSC_STRING_BYTES, PresentationEntry, TerminalColor, TerminalCursorState,
+    TerminalModeState, TerminalOscEvent, TerminalSavedDecPrivateMode, TerminalSavedState,
+    TerminalScreenConfigError, TerminalStyleSpan, TerminalStyledLine, tracked_dec_private_mode,
 };
 
 /// Returns the display width of one scalar under an explicit screen policy.
@@ -306,6 +306,7 @@ fn bounded_restored_line(
     }
     let mut bounded = TerminalStyledLine::plain(String::new());
     bounded.copy_text = line.copy_text.clone();
+    bounded.presentation = line.presentation.clone();
     let mut source_column = 0usize;
     let mut destination_column = 0usize;
     for grapheme in terminal_graphemes(&line.text) {
@@ -368,6 +369,8 @@ pub(super) struct SavedNormalScreenState {
     pub(super) line_wraps: Vec<bool>,
     /// Stored copy-mode text overrides for the normal screen.
     pub(super) line_copy_texts: Vec<Option<String>>,
+    /// Stored presentation annotations aligned with the normal-screen rows.
+    pub(super) line_presentations: Vec<Option<PresentationEntry>>,
     /// Stored visible cursor position for the normal screen.
     pub(super) cursor: Cursor,
     /// Stored cursor visibility requested by the pane application.
@@ -668,6 +671,11 @@ pub struct TerminalScreen {
     /// Entries are kept parallel to `cells` and `renditions`; `None` means copy
     /// mode should use the presented line text.
     pub(super) line_copy_texts: Vec<Option<String>>,
+    /// Presentation annotations are retained alongside each visible row, not
+    /// in an event store. Terminal writes clear them with copy overrides.
+    pub(super) line_presentations: Vec<Option<PresentationEntry>>,
+    /// Scoped producer annotation during semantic feed; absent for arbitrary PTY.
+    pub(super) active_presentation: Option<PresentationEntry>,
     /// Optional styled line prefix repeated on soft-wrapped continuation rows.
     ///
     /// The prefix is presentation policy supplied by the product layer. The
@@ -921,6 +929,7 @@ fn styled_line_from_row_with_copy_text(
     cells: &[TerminalScreenCell],
     renditions: &[GraphicRendition],
     copy_text: Option<String>,
+    presentation: Option<PresentationEntry>,
     emoji_width: TerminalEmojiWidth,
 ) -> TerminalStyledLine {
     let visible_columns = cells
@@ -983,6 +992,7 @@ fn styled_line_from_row_with_copy_text(
         text,
         style_spans,
         copy_text,
+        presentation,
     }
 }
 
@@ -1077,6 +1087,18 @@ fn merge_wrapped_physical_lines(
             });
         }
         let current_line = current.get_or_insert_with(|| TerminalStyledLine::plain(String::new()));
+        if starts_logical_line {
+            current_line.presentation = row.line.presentation.clone();
+        } else if !current_line
+            .presentation
+            .as_ref()
+            .zip(row.line.presentation.as_ref())
+            .is_some_and(|(first, next)| first.id == next.id && first.occurrence == next.occurrence)
+        {
+            // A raw edit or conflicting owner invalidates the entire logical row.
+            // Reflow must not resurrect provenance from its unedited prefix.
+            current_line.presentation = None;
+        }
         let source_line = if !starts_logical_line && current_has_continuation_prefix {
             continuation_prefix
                 .and_then(|prefix| {
@@ -1165,6 +1187,7 @@ fn reflow_one_logical_line(
     let mut source_column = 0usize;
     let mut current = TerminalStyledLine::plain(String::new());
     current.copy_text = line.copy_text.clone();
+    current.presentation = line.presentation.clone();
     let mut current_width = 0usize;
     for grapheme in terminal_graphemes(&line.text) {
         let width = terminal_grapheme_width(grapheme, emoji_width);
@@ -1178,6 +1201,10 @@ fn reflow_one_logical_line(
                 wraps_to_next: true,
             });
             current = TerminalStyledLine::plain(String::new());
+            current.presentation = line.presentation.clone().map(|mut entry| {
+                entry.first_row = false;
+                entry
+            });
             current_width = 0;
             if let Some(prefix) = continuation_prefix.as_deref() {
                 push_styled_prefix(&mut current, prefix, emoji_width);
@@ -1263,6 +1290,7 @@ fn strip_continuation_prefix_from_styled_line(
         text,
         style_spans,
         copy_text: line.copy_text.clone(),
+        presentation: line.presentation.clone(),
     })
 }
 

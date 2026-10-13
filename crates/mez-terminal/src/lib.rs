@@ -48,7 +48,10 @@ pub use history::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, HistoryConfigError,
 };
 
-pub use style::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
+pub use style::{
+    GraphicRendition, PresentationEntry, PresentationOccurrence, PresentationOccurrenceBasis,
+    TerminalColor, TerminalStyleSpan, TerminalStyledLine,
+};
 
 pub use width::{
     TerminalEmojiWidth, active_terminal_grapheme_width, active_terminal_text_width,

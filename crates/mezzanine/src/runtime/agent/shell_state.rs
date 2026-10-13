@@ -710,7 +710,13 @@ impl RuntimeSessionService {
                 || self.agent_verbose_enabled(&turn.pane_id))
         {
             if let Some(execution) = execution {
-                self.queue_ordered_provider_command(&turn.pane_id, execution, action, command)?;
+                self.queue_ordered_provider_transaction_command(
+                    &turn.pane_id,
+                    execution,
+                    action,
+                    command,
+                    &marker_id,
+                )?;
             } else {
                 self.append_agent_command_preview_to_terminal_buffer(&turn.pane_id, command)?;
             }
@@ -989,6 +995,7 @@ impl RuntimeSessionService {
                 )?;
             }
         }
+        let marker = runtime_marker_for_action(turn, &action.id)?;
         if !preview_already_presented
             && !is_internal_apply_patch_write_phase
             && (is_model_shell_command
@@ -996,12 +1003,17 @@ impl RuntimeSessionService {
                 || self.agent_verbose_enabled(&turn.pane_id))
         {
             if let Some(execution) = execution {
-                self.queue_ordered_provider_command(&turn.pane_id, execution, action, command)?;
+                self.queue_ordered_provider_transaction_command(
+                    &turn.pane_id,
+                    execution,
+                    action,
+                    command,
+                    marker.as_str(),
+                )?;
             } else {
                 self.append_agent_command_preview_to_terminal_buffer(&turn.pane_id, command)?;
             }
         }
-        let marker = runtime_marker_for_action(turn, &action.id)?;
         let mut transaction = ShellTransaction::new(
             marker.clone(),
             &turn.turn_id,

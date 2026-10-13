@@ -24,7 +24,10 @@ impl RuntimePersistenceComponent {
             entry: existing, ..
         }) = self.steering_presentation_writes.get(&key)
         {
-            if existing.source_text != entry.source_text || existing.turn_id != entry.turn_id {
+            if existing.source_text != entry.source_text
+                || existing.turn_id != entry.turn_id
+                || existing.presentation != entry.presentation
+            {
                 return Err(MezError::invalid_state("conflicting steering publication"));
             }
             return Ok(());
@@ -43,7 +46,7 @@ impl RuntimePersistenceComponent {
         let effect = RuntimeSideEffect::PersistSteeringPresentation {
             store,
             path,
-            entry,
+            entry: Box::new(entry),
             generation,
             retry_attempt: 0,
         };

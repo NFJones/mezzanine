@@ -7729,8 +7729,10 @@ reconstruct receipts after transfer, settlement or bounded evidence eviction.
 Pre-history compaction queues MUST settle exact not-sent receipt evidence when
 discarded on conversation replacement, pane removal, stale epoch or shutdown.
 Teardown MUST consume queue ownership without rejoining or redispatching input.
-Session metadata version 5 MUST retain bounded typed steering occurrence evidence
-and producer-assigned acceptance order separately from canonical model history.
+Session metadata version 6 MUST retain bounded typed steering occurrence evidence,
+immutable local acceptance-time provenance, and producer-assigned acceptance order
+separately from canonical model history. Version 5 receipts MUST decode with
+explicitly unknown occurrence time; checkpoint or resume time MUST NOT replace it.
 Version 4 migration MUST preserve stored array order without claiming that it
 recovers original cross-owner acceptance order. Version 3 and older metadata MUST
 decode with no invented receipt evidence. Restored pending evidence MUST become admission
@@ -15096,6 +15098,62 @@ append latency, but once that tail exceeds a bounded threshold they SHOULD
 compress it into concatenated zstd frames in the same saved-session directory.
 Readers of presentation logs MUST treat the concatenated zstd history and the
 active cleartext tail as one ordered presentation stream.
+
+Presentation occurrence provenance MUST remain separate from persistence/catalog
+creation time. One independently presented semantic component is one entry;
+authored newlines, Markdown blocks/table rows, grouped result preview rows and
+physical wrapping MUST NOT create additional occurrences. Producers MUST capture
+an immutable local wall-clock instant once at first observed streamed component
+or local acceptance (input, steering, result/status or MMP receive commit). The
+basis MUST distinguish local observation, local acceptance, coarse legacy record
+time and unknown time. Command intent/preview time is not execution start, local
+assistant observation is not remote generation, and message acceptance is not
+remote receipt. Equal or backward clocks MUST NOT reorder, deduplicate or identify
+entries; existing conversation/turn/response/action/attempt/component and receipt
+ownership MUST remain authoritative.
+
+Provenance MUST be typed presentation-only metadata, not timestamp text inserted
+into authored source, copy text, model context, action arguments or MMP payloads.
+Existing terminal rows/history and source/receipt owners MUST retain it when
+display is hidden, persistence is absent, or the conversation is ephemeral.
+Streaming promotion, settlement, persistence-only retry, geometry reconstruction,
+history pruning and fork MUST retain the original stamp. A first-row marker MUST
+identify the original entry boundary; pruning/cropping MUST NOT promote a retained
+continuation into a new boundary. Opaque ANSI/process output without proven
+semantic boundaries MUST remain untagged. Render workers MUST NOT sample clocks,
+read files, or create a second mutable event history.
+
+Presentation encoding `mez-agent-presentation/3` MUST preserve explicit signed
+Unix milliseconds and basis alongside entry identity. Source-backed version-2
+records MAY retain their original seconds-precision record time as `LegacyRecord`,
+never as observed occurrence proof. Version-1/opaque records without safe entry
+proof MUST retain unknown/unavailable provenance. Missing or unrepresentable times
+MUST NOT become epoch zero, file mtime, resume time or a fresh clock guess. Transcript
+fallback MUST retain proven per-record boundaries and coarse record basis rather
+than assign one time to flattened history. Fork/catalog creation time semantics
+MUST remain unchanged while occurrence metadata and receipt identity are preserved.
+Transcript-only forks MUST retain their original bounded record evidence in the
+existing presentation channel before replacing transcript creation times. The
+version-one transcript-fallback source envelope MAY contain multiple original
+records or typed projected rows, but MUST NOT treat that envelope as one semantic
+occurrence. Each decoded record MUST retain its original identity/time; resume
+chrome MUST remain explicitly untagged. Original records MUST pass the canonical
+transcript codec and malformed envelopes MUST fail closed, not render raw model
+history. Replay nesting MUST preserve existing persistence-suppression ownership.
+Exact validated streamed components MUST retain first-observation provenance even
+when missing rationale or projection/geometry ownership requires static fallback;
+source mismatches MUST NOT borrow a provisional component's occurrence evidence.
+Snapshot payload version 7 MUST retain the original receive-commit stamp in the
+existing unsettled peer-presentation outbox; version 6 missing stamps decode as
+unknown. Process-screen snapshots MUST remain process-only. Ephemeral/no-store
+agent history has in-memory provenance, not a new restart-persistence guarantee;
+restart recovery is limited to existing durable presentation, steering checkpoints
+and peer outbox channels. These encoding versions are not configuration versions.
+This foundation does not introduce timestamp display, formatting or a toggle.
+Suppressed executor progress MUST retain provenance on its existing component or
+promotion receipt for that owner's bounded lifecycle. This MUST NOT resurrect
+deliberately filtered content or promise durable replay of undisplayed progress
+after the existing owner retires.
 
 The parent agent-session directory MUST also contain structured active-session
 metadata checkpoints. New writers MUST isolate these by Mezzanine session id

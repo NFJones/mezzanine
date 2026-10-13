@@ -372,6 +372,7 @@ impl RuntimeSessionService {
                             .cloned()
                             .unwrap_or_default(),
                         copy_text: None,
+                        presentation: None,
                     })
                     .collect::<Vec<_>>();
                 let visible_lines = pane
@@ -386,6 +387,7 @@ impl RuntimeSessionService {
                             .cloned()
                             .unwrap_or_default(),
                         copy_text: None,
+                        presentation: None,
                     })
                     .collect::<Vec<_>>();
                 screen.restore_normal_styled_history_content(&history_lines, &visible_lines);

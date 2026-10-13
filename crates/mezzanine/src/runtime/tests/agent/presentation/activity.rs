@@ -53,6 +53,7 @@ fn activity_large_keyboard_export_preserves_exact_destination_and_history() {
     };
     store
         .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            presentation: None,
             conversation_id: conversation.clone(),
             sequence: 1,
             created_at_unix_seconds: 1,
@@ -690,6 +691,7 @@ fn activity_fork_preserves_response_identity_and_exact_source() {
         };
         store
             .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+                presentation: None,
                 conversation_id: "source".into(),
                 sequence: index as u64 + 1,
                 created_at_unix_seconds: 1,

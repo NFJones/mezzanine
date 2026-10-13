@@ -201,13 +201,14 @@ fn build_direct_resume_projection(
     if !projection
         .replay_agent_presentation_entries_to_terminal_buffer(&work.pane_id, presentation_entries)?
     {
-        projection.set_agent_prompt_display_lines(
+        projection.replay_agent_transcript_fallback_to_terminal_buffer(
             &work.pane_id,
-            RuntimeSessionService::runtime_resume_transcript_display(
+            RuntimeSessionService::runtime_resume_transcript_presentation(
                 &saved.summary.conversation_id,
                 saved.summary.entries,
                 entries,
             ),
+            false,
         )?;
     }
     let screen = projection
@@ -772,13 +773,14 @@ impl RuntimeSessionService {
                     presentation_entries.as_deref().unwrap_or_default(),
                 )?
             {
-                self.set_agent_prompt_display_lines(
+                self.replay_agent_transcript_fallback_to_terminal_buffer(
                     pane_id,
-                    Self::runtime_resume_transcript_display(
+                    Self::runtime_resume_transcript_presentation(
                         &summary.conversation_id,
                         summary.entries,
                         &entries,
                     ),
+                    true,
                 )?;
             }
             self.restore_agent_resume_directory(
@@ -1326,24 +1328,27 @@ impl RuntimeSessionService {
         sections.join("\n\n")
     }
 
-    /// Formats a resumed transcript as prompt display lines so the user can
-    /// pick up the saved conversation with visible context in the pane.
-    pub(crate) fn runtime_resume_transcript_display(
+    /// Preserves each proven transcript row boundary with original coarse record
+    /// evidence. Resume chrome is untagged; no time or source boundary is guessed.
+    pub(crate) fn runtime_resume_transcript_presentation(
         conversation_id: &str,
         transcript_entries: usize,
         entries: &[TranscriptEntry],
-    ) -> Vec<String> {
-        let mut lines = vec!["Resumed Agent Session".to_string()];
+    ) -> Vec<(String, Option<mez_core::presentation::PresentationEntry>)> {
+        let mut lines = vec![("Resumed Agent Session".to_string(), None)];
         if entries.is_empty() {
-            lines.push("No saved transcript entries were found.".to_string());
+            lines.push(("No saved transcript entries were found.".to_string(), None));
             return lines;
         }
-        lines.push(format!(
-            "Conversation ID: {} | Entries: {} | Resumed: yes",
-            json_escape(conversation_id),
-            transcript_entries
+        lines.push((
+            format!(
+                "Conversation ID: {} | Entries: {} | Resumed: yes",
+                json_escape(conversation_id),
+                transcript_entries
+            ),
+            None,
         ));
-        lines.push(String::new());
+        lines.push((String::new(), None));
         for entry in entries {
             let content = Self::runtime_resume_entry_display_content(entry);
             if content.trim().is_empty() {
@@ -1355,10 +1360,15 @@ impl RuntimeSessionService {
                 TranscriptRole::Tool => "agent: ",
                 TranscriptRole::System => "system> ",
             };
-            lines.push(format!(
-                "{}{}",
-                prefix,
-                Self::runtime_resume_entry_preview(&content)
+            lines.push((
+                format!("{}{}", prefix, Self::runtime_resume_entry_preview(&content)),
+                Some(mez_core::presentation::PresentationEntry {
+                    id: format!("transcript:{}:{}", entry.conversation_id, entry.sequence),
+                    occurrence: mez_core::presentation::PresentationOccurrence::legacy_record(
+                        entry.created_at_unix_seconds,
+                    ),
+                    first_row: true,
+                }),
             ));
         }
         lines

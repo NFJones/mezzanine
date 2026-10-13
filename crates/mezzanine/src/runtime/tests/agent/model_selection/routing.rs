@@ -585,6 +585,7 @@ fn runtime_routed_worker_presents_child_prompt_status_and_output() {
     assert_ne!(child_conversation_id, "routed-turn-1-worker");
     transcript_store
         .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            presentation: None,
             conversation_id: child_conversation_id,
             sequence: 1,
             created_at_unix_seconds: 1,

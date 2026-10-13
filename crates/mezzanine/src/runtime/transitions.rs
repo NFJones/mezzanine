@@ -1183,7 +1183,7 @@ pub enum RuntimeSideEffect {
         store: AgentTranscriptStore,
         path: PathBuf,
         /// Identity-bearing source; never pending input.
-        entry: crate::storage::transcript::AgentPresentationEntry,
+        entry: Box<crate::storage::transcript::AgentPresentationEntry>,
         /// Actor-owned attempt fence and bounded retry count.
         generation: u64,
         retry_attempt: u8,

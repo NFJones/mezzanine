@@ -548,13 +548,21 @@ impl RuntimeSessionService {
                     .get(&pane_id)
                     .and_then(|session| session.running_turn_id.as_ref())
                     .is_some());
+        let prompt_entry = (is_prompt && !receipt_prompt).then(|| {
+            self.presentation_entry(
+                &pane_id,
+                mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+            )
+        });
         self.persist_agent_prompt_history_entry(
             &pane_id,
             &history_entry,
             queue_external_effects_for_adapter,
         )?;
-        if is_prompt && !receipt_prompt {
-            self.append_agent_user_prompt_to_terminal_buffer(&pane_id, display_input)?;
+        if let Some(entry) = prompt_entry {
+            self.with_presentation_entry(&pane_id, entry, |service| {
+                service.append_agent_user_prompt_to_terminal_buffer(&pane_id, display_input)
+            })?;
         }
         if is_prompt
             && origin.is_authenticated_primary_input()

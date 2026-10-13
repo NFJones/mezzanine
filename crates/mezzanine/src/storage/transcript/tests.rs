@@ -4,6 +4,8 @@
 mod active_metadata;
 /// Regression coverage for shared, saturating failure-injection countdowns.
 mod failure_countdowns;
+/// Immutable presentation occurrence encoding and fork provenance.
+mod occurrence;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1524,6 +1526,7 @@ fn presentation(conversation_id: &str, sequence: u64) -> AgentPresentationEntry 
         conversation_id: conversation_id.to_string(),
         sequence,
         created_at_unix_seconds: 20 + sequence,
+        presentation: None,
         pane_id: "%1".to_string(),
         turn_id: Some(format!("turn-{sequence}")),
         terminal_width: 80,
@@ -4268,7 +4271,7 @@ fn agent_session_metadata_decoder_accepts_pre_pane_identity_rows() {
     assert!(appended_field.is_empty());
 
     let legacy_row = legacy_row.replacen(
-        "mez-agent-session-metadata/5",
+        "mez-agent-session-metadata/6",
         "mez-agent-session-metadata/1",
         1,
     );
@@ -4297,7 +4300,7 @@ fn agent_session_metadata_round_trips_project_partitions() {
         usage,
     }];
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
-    assert!(encoded.starts_with("mez-agent-session-metadata/5\t"));
+    assert!(encoded.starts_with("mez-agent-session-metadata/6\t"));
     assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
     metadata.project_token_usage[0].usage.input_tokens += 1;
     assert!(encode_agent_session_metadata(&metadata).is_err());
@@ -4311,6 +4314,7 @@ fn agent_session_metadata_steering_recovery_round_trip_and_v3_migration() {
     use mez_agent::transcript::{SteeringRecoveryReceipt, SteeringRecoveryStatus};
     let mut metadata = agent_session_metadata("$recovery", "recovery-conversation");
     metadata.steering_recovery = vec![SteeringRecoveryReceipt {
+        occurrence: Default::default(),
         id: "occurrence".into(),
         acceptance_order: 1,
         turn_id: Some("turn".into()),
@@ -4322,7 +4326,7 @@ fn agent_session_metadata_steering_recovery_round_trip_and_v3_migration() {
     assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
     let (legacy, _) = encoded.rsplit_once('\t').unwrap();
     let legacy = legacy.replacen(
-        "mez-agent-session-metadata/5",
+        "mez-agent-session-metadata/6",
         "mez-agent-session-metadata/3",
         1,
     );
@@ -4344,7 +4348,7 @@ fn agent_session_metadata_steering_recovery_round_trip_and_v3_migration() {
     let legacy = format!(
         "{}\t{}",
         prefix.replacen(
-            "mez-agent-session-metadata/5",
+            "mez-agent-session-metadata/6",
             "mez-agent-session-metadata/4",
             1
         ),

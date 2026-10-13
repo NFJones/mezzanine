@@ -1980,9 +1980,10 @@ impl AgentTranscriptStore {
                     let source = super::steering::Source::decode(
                         entry.source_text.as_deref().unwrap_or_default(),
                     )?;
-                    if let Some(previous) =
-                        steering_sources.insert(source.receipt.id.clone(), source.clone())
-                        && previous != source
+                    if let Some(previous) = steering_sources.insert(
+                        source.receipt.id.clone(),
+                        (source.clone(), entry.presentation.clone()),
+                    ) && previous != (source, entry.presentation)
                     {
                         return Err(MezError::invalid_state(
                             "conflicting durable steering occurrence",
@@ -2003,14 +2004,21 @@ impl AgentTranscriptStore {
                     entry.source_text.as_deref().unwrap_or_default(),
                 )?;
                 if let Some(previous) = steering_sources.get(&source.receipt.id) {
-                    if previous != &source {
+                    if previous.0 != source
+                        || (previous.1.is_some()
+                            && entry.presentation.is_some()
+                            && previous.1 != entry.presentation)
+                    {
                         return Err(MezError::invalid_state(
                             "conflicting steering occurrence retry",
                         ));
                     }
                     continue;
                 }
-                steering_sources.insert(source.receipt.id.clone(), source);
+                steering_sources.insert(
+                    source.receipt.id.clone(),
+                    (source, entry.presentation.clone()),
+                );
             }
             encoded.push_str(&entry.encode()?);
             encoded.push('\n');
@@ -3701,6 +3709,13 @@ impl AgentTranscriptStore {
                 "source conversation has no entries",
             ));
         }
+        let presentations = self.inspect_presentation(source_conversation_id)?;
+        let fallback_source = if presentations.is_empty() {
+            Some(super::fallback::Source::from_records(&entries)?.encode()?)
+        } else {
+            None
+        };
+        let fallback_pane = entries[0].pane_id.clone();
         let fork_result = (|| {
             for entry in entries {
                 let forked = TranscriptEntry {
@@ -3710,7 +3725,29 @@ impl AgentTranscriptStore {
                 };
                 self.append(&forked)?;
             }
-            for presentation in self.inspect_presentation(source_conversation_id)? {
+            // Transcript creation time remains fork-local. Only a genuinely
+            // transcript-only source needs original bounded record evidence in
+            // the existing presentation channel; later forks copy it unchanged.
+            if let Some(source) = fallback_source {
+                self.append_presentation(&AgentPresentationEntry {
+                    conversation_id: target_conversation_id.to_string(),
+                    sequence: 1,
+                    created_at_unix_seconds,
+                    presentation: None,
+                    pane_id: fallback_pane,
+                    turn_id: None,
+                    // This source-only record has no sampled terminal geometry.
+                    // The nonzero encoding placeholder is never replay authority.
+                    terminal_width: 1,
+                    style_names: vec!["assistant".to_string()],
+                    display_lines: vec!["Resumed Agent Session".to_string()],
+                    copy_lines: Vec::new(),
+                    ansi_text: None,
+                    source_text: Some(source),
+                    source_content_type: Some(super::fallback::CONTENT_TYPE.to_string()),
+                })?;
+            }
+            for presentation in presentations {
                 let mut forked = AgentPresentationEntry {
                     conversation_id: target_conversation_id.to_string(),
                     created_at_unix_seconds,
@@ -3724,6 +3761,13 @@ impl AgentTranscriptStore {
                     )?;
                     activity.conversation_id = target_conversation_id.to_string();
                     forked.source_text = Some(activity.encode()?);
+                }
+                if forked.source_content_type.as_deref() == Some(super::steering::CONTENT_TYPE) {
+                    let mut source = super::steering::Source::decode(
+                        forked.source_text.as_deref().unwrap_or_default(),
+                    )?;
+                    source.conversation_id = target_conversation_id.to_string();
+                    forked.source_text = Some(source.encode()?);
                 }
                 self.append_presentation(&forked)?;
             }

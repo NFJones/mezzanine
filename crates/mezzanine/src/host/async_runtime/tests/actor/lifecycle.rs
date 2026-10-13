@@ -194,6 +194,7 @@ async fn async_actor_startup_arms_peer_delivery_timer_for_restored_v6_receipt() 
     service
         .restore_snapshot_unsettled_received_peer_message_presentations(&[
             crate::storage::snapshot::SnapshotUnsettledPeerPresentation {
+                occurrence: Default::default(),
                 identity: format!(
                     "peer-message recipient={} sequence={} id=restored-v6-receipt",
                     recipient.agent_id, delivery.sequence

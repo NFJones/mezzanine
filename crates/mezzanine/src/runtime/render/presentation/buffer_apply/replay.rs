@@ -17,6 +17,7 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         self.validate_agent_presentation_replay_target(pane_id, entries)?;
+        let previous_occurrence = self.presentation.occurrence_override.take();
         self.presentation
             .agent_presentation_replay_panes
             .insert(pane_id.to_string());
@@ -24,6 +25,40 @@ impl RuntimeSessionService {
             let mut sorted_entries = entries.iter().collect::<Vec<_>>();
             sorted_entries.sort_by_key(|entry| entry.sequence);
             for entry in sorted_entries {
+                if entry.source_content_type.as_deref()
+                    == Some(crate::storage::transcript::fallback::CONTENT_TYPE)
+                {
+                    use crate::storage::transcript::fallback::{Content, Source};
+                    let source = Source::decode(entry.source_text.as_deref().unwrap_or_default())?;
+                    let lines = match source.content {
+                        Content::Records {
+                            transcript_entries,
+                            records,
+                        } => Self::runtime_resume_transcript_presentation(
+                            &entry.conversation_id,
+                            transcript_entries,
+                            &Source::entries(&records)?,
+                        ),
+                        Content::Rows { lines } => lines,
+                    };
+                    self.replay_agent_transcript_fallback_to_terminal_buffer(
+                        pane_id, lines, false,
+                    )?;
+                    continue;
+                }
+                self.presentation.occurrence_override = entry.source_text.as_ref().map(|_| {
+                    Box::new((
+                        pane_id.to_string(),
+                        entry.presentation.clone().unwrap_or_else(|| {
+                            mez_core::presentation::PresentationEntry {
+                                id: format!("replay:{}:{}", entry.conversation_id, entry.sequence),
+                                occurrence: mez_core::presentation::PresentationOccurrence::default(
+                                ),
+                                first_row: true,
+                            }
+                        }),
+                    ))
+                });
                 if entry.source_content_type.as_deref()
                     == Some(crate::storage::transcript::steering::CONTENT_TYPE)
                 {
@@ -96,6 +131,7 @@ impl RuntimeSessionService {
                             if encoded.direction == "sent" {
                                 let source = RuntimeStreamingMessageSource {
                                     recipient: encoded.peer.clone(),
+                                    entry: None,
                                     recipient_label: encoded.peer.clone(),
                                     direct_parent: encoded.direct_parent,
                                     content_type: encoded
@@ -250,25 +286,98 @@ impl RuntimeSessionService {
             state.display_lines.clear();
             Ok(true)
         })();
+        self.presentation.occurrence_override = previous_occurrence;
         self.presentation
             .agent_presentation_replay_panes
             .remove(pane_id);
         result
     }
 
-    /// Replays synthesized transcript fallback lines without persisting them as new presentation.
+    /// Projects proven transcript rows with original record provenance. Manual
+    /// resume retains its durable fallback publication; restart/worker replay
+    /// does not write. Chrome is explicitly untagged rather than sampled now.
     pub(crate) fn replay_agent_transcript_fallback_to_terminal_buffer(
         &mut self,
         pane_id: &str,
-        display_lines: Vec<String>,
+        display_lines: Vec<(String, Option<mez_core::presentation::PresentationEntry>)>,
+        persist: bool,
     ) -> Result<()> {
-        self.presentation
+        let plain_lines = display_lines
+            .iter()
+            .map(|(line, _)| line.clone())
+            .collect::<Vec<_>>();
+        let style = if crate::runtime::render::presentation::text::agent_display_lines_are_error(
+            &plain_lines,
+        ) {
+            AgentTerminalPresentationStyle::Error
+        } else {
+            AgentTerminalPresentationStyle::Assistant
+        };
+        let visible = style == AgentTerminalPresentationStyle::Error
+            || self.agent_verbose_enabled(pane_id)
+            || !crate::runtime::render::presentation::text::agent_display_lines_are_low_level_status(&plain_lines);
+        let source = if persist && visible && !display_lines.is_empty() {
+            Some(
+                crate::storage::transcript::fallback::Source::from_rows(display_lines.clone())
+                    .encode()?,
+            )
+        } else {
+            None
+        };
+        let previous = self.presentation.occurrence_override.take();
+        // Inner fallback replay must not clear a caller's suppression guard.
+        // Per-row projections never publish; explicit typed source publishes once.
+        let inserted = self
+            .presentation
             .agent_presentation_replay_panes
             .insert(pane_id.to_string());
-        let result = self.set_agent_prompt_display_lines(pane_id, display_lines);
-        self.presentation
-            .agent_presentation_replay_panes
-            .remove(pane_id);
+        let result = (|| {
+            for (line, entry) in display_lines.into_iter().filter(|_| visible) {
+                let entry = entry.unwrap_or(mez_core::presentation::PresentationEntry {
+                    id: String::new(),
+                    occurrence: Default::default(),
+                    first_row: false,
+                });
+                self.presentation.occurrence_override =
+                    Some(Box::new((pane_id.to_string(), entry)));
+                self.append_agent_terminal_lines_to_buffer(pane_id, &[line], style)?;
+            }
+            self.presentation
+                .agent_prompt_inputs
+                .entry(pane_id.to_string())
+                .or_insert_with(|| default_runtime_agent_prompt_input().into())
+                .display_lines
+                .clear();
+            Ok(())
+        })();
+        self.presentation.occurrence_override = previous;
+        if inserted {
+            self.presentation
+                .agent_presentation_replay_panes
+                .remove(pane_id);
+        }
+        if result.is_ok()
+            && let Some(source) = source
+        {
+            // Outer metadata is intentionally absent: the source carries every
+            // proven boundary plus explicit chrome. Never sample a group stamp.
+            let untagged = mez_core::presentation::PresentationEntry {
+                id: String::new(),
+                occurrence: Default::default(),
+                first_row: false,
+            };
+            self.with_presentation_entry(pane_id, untagged, |service| {
+                service.persist_agent_presentation_entry(
+                    pane_id,
+                    vec![style.persistence_name().to_string(); plain_lines.len()],
+                    plain_lines,
+                    Vec::new(),
+                    String::new(),
+                    Some((&source, crate::storage::transcript::fallback::CONTENT_TYPE)),
+                );
+                Ok(())
+            })?;
+        }
         result
     }
 

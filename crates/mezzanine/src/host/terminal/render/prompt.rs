@@ -1107,6 +1107,7 @@ fn themed_full_width_line(
             .into_iter()
             .collect(),
         copy_text: None,
+        presentation: None,
     }
 }
 
@@ -1126,6 +1127,7 @@ fn themed_text_line(line: &str, width: usize, rendition: GraphicRendition) -> Te
             .into_iter()
             .collect(),
         copy_text: None,
+        presentation: None,
     }
 }
 
@@ -1143,6 +1145,7 @@ fn agent_live_footer_styled_line(
         text,
         style_spans,
         copy_text: None,
+        presentation: None,
     }
 }
 

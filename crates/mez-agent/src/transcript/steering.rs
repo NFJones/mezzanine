@@ -36,6 +36,9 @@ pub struct SteeringRecoveryReceipt {
     pub id: String,
     /// Producer-assigned occurrence order, independent of request/event sequence.
     pub acceptance_order: u64,
+    /// Immutable local acceptance time; legacy checkpoints remain explicitly unknown.
+    #[serde(default)]
+    pub occurrence: mez_core::presentation::PresentationOccurrence,
     /// Exact original turn when bound; absent during pre-turn compaction work.
     pub turn_id: Option<String>,
     /// Exact canonical event identity when bound, never a snapshot high-water.
@@ -53,6 +56,7 @@ impl SteeringRecoveryReceipt {
             !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
         };
         if !identity(&self.id)
+            || !self.occurrence.is_valid()
             || self.acceptance_order == 0
             || self
                 .turn_id
@@ -118,6 +122,7 @@ mod tests {
     #[test]
     fn steering_recovery_restart_preserves_occurrences_and_uncertainty() {
         let first = SteeringRecoveryReceipt {
+            occurrence: Default::default(),
             id: "first".into(),
             acceptance_order: 1,
             turn_id: Some("turn".into()),
@@ -147,6 +152,7 @@ mod tests {
     #[test]
     fn steering_recovery_rejects_invalid_evidence_and_budgets() {
         let mut receipt = SteeringRecoveryReceipt {
+            occurrence: Default::default(),
             id: "receipt".into(),
             acceptance_order: 1,
             turn_id: None,

@@ -71,6 +71,7 @@ pub(in crate::host::terminal::render) fn styled_group_frame_line(
         text: row.text,
         style_spans,
         copy_text: None,
+        presentation: None,
     })
 }
 
@@ -164,6 +165,7 @@ pub(in crate::host::terminal::render) fn styled_window_pillbox_line(
         text: row.text,
         style_spans,
         copy_text: None,
+        presentation: None,
     }
 }
 
@@ -264,6 +266,7 @@ pub(in crate::host::terminal::render) fn styled_pane_frame_line(
         text: layout.text,
         style_spans,
         copy_text: None,
+        presentation: None,
     }
 }
 

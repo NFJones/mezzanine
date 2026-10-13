@@ -28,16 +28,24 @@ impl RuntimeSessionService {
             source.content_type.as_str(),
             source.direct_parent,
         );
-        self.append_agent_terminal_rendered_lines_to_buffer(
-            pane_id,
-            projection.style,
-            &projection.rendered_lines,
-            &projection.copy_lines,
-            Some((
-                persisted_source.as_str(),
-                AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE,
-            )),
-        )
+        let entry = source.entry.clone().unwrap_or_else(|| {
+            self.presentation_entry(
+                pane_id,
+                mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+            )
+        });
+        self.with_presentation_entry(pane_id, entry, |service| {
+            service.append_agent_terminal_rendered_lines_to_buffer(
+                pane_id,
+                projection.style,
+                &projection.rendered_lines,
+                &projection.copy_lines,
+                Some((
+                    persisted_source.as_str(),
+                    AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE,
+                )),
+            )
+        })
     }
 
     /// Persists an accepted sender-side source without writing another live row.
@@ -60,16 +68,21 @@ impl RuntimeSessionService {
             source.content_type.as_str(),
             source.direct_parent,
         );
-        self.persist_agent_presentation_entry(
+        self.persist_streamed_presentation(
             pane_id,
-            vec![projection.style.persistence_name().to_string(); projection.rendered_lines.len()],
-            projection
-                .rendered_lines
-                .iter()
-                .map(|line| line.display.clone())
-                .collect(),
-            projection.copy_lines,
-            String::new(),
+            source.entry.clone(),
+            (
+                vec![
+                    projection.style.persistence_name().to_string();
+                    projection.rendered_lines.len()
+                ],
+                projection
+                    .rendered_lines
+                    .iter()
+                    .map(|line| line.display.clone())
+                    .collect(),
+                projection.copy_lines,
+            ),
             Some((
                 persisted_source.as_str(),
                 AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE,
@@ -162,8 +175,35 @@ impl RuntimeSessionService {
                 .insert(identity);
             return Ok(());
         }
+        let retained_entry = self
+            .agent_turn_executions()
+            .get(turn_id)
+            .filter(|execution| {
+                execution
+                    .response
+                    .action_batch
+                    .as_ref()
+                    .and_then(|batch| batch.actions.get(action_index))
+                    == Some(action)
+            })
+            .map(|execution| {
+                self.retained_provider_component_entry(
+                    pane_id,
+                    execution,
+                    Some(action_index),
+                    "message",
+                )
+            })
+            .transpose()?
+            .flatten();
         let source = RuntimeStreamingMessageSource {
             recipient: recipient.clone(),
+            entry: Some(retained_entry.unwrap_or_else(|| {
+                self.presentation_entry(
+                    pane_id,
+                    mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+                )
+            })),
             recipient_label: fallback_recipient_label,
             direct_parent,
             content_type,

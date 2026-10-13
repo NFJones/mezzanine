@@ -943,6 +943,7 @@ fn runtime_restart_objective_metadata_failure_restores_prior_pane_state() {
         .unwrap();
     transcript_store
         .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            presentation: None,
             conversation_id: "restore-target".to_string(),
             sequence: 1,
             created_at_unix_seconds: 1,
@@ -1125,6 +1126,7 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
         .unwrap();
     transcript_store
         .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            presentation: None,
             conversation_id: conversation_id.clone(),
             sequence: 1,
             created_at_unix_seconds: 1,

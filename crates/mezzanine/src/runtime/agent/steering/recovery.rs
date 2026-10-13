@@ -20,6 +20,7 @@ fn project(receipt: &Receipt, turn: Option<&str>) -> SteeringRecoveryReceipt {
     SteeringRecoveryReceipt {
         id: receipt.id.clone(),
         acceptance_order: receipt.acceptance_order,
+        occurrence: receipt.occurrence,
         turn_id: turn.map(str::to_string),
         event_sequence: turn.map(|_| receipt.sequence),
         display: receipt.display.clone(),

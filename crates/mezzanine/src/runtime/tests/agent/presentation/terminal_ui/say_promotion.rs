@@ -218,14 +218,18 @@ fn runtime_streaming_say_prefixes_match_static_rich_renderers() {
                 "case {case_index} prefix {source:?} display must match static rendering"
             );
             assert_eq!(
-                streaming
-                    .agent_pane_screen("%1")
-                    .unwrap()
-                    .normal_styled_content_lines(),
-                static_render
-                    .agent_pane_screen("%1")
-                    .unwrap()
-                    .normal_styled_content_lines(),
+                agent_visual_rows(
+                    streaming
+                        .agent_pane_screen("%1")
+                        .unwrap()
+                        .normal_styled_content_lines()
+                ),
+                agent_visual_rows(
+                    static_render
+                        .agent_pane_screen("%1")
+                        .unwrap()
+                        .normal_styled_content_lines()
+                ),
                 "case {case_index} prefix {source:?} styles must match static rendering"
             );
         }
@@ -242,6 +246,8 @@ fn runtime_streaming_say_prefixes_match_static_rich_renderers() {
 #[test]
 fn runtime_streaming_say_promotes_rich_output_without_replay() {
     let mut service = test_runtime_service();
+    // First local observation must survive a much later accepted/persisted row.
+    service.presentation.occurrence_clock_millis = Some(Some(1_000));
     let transcript_store = AgentTranscriptStore::new(temp_root("streaming-say-promotion"));
     service
         .attach_primary("primary", true, Size::new(40, 12).unwrap(), 120)
@@ -369,6 +375,7 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
         terminal_state: AgentTurnState::Completed,
     };
 
+    service.presentation.occurrence_clock_millis = Some(Some(9_000));
     assert_eq!(
         service
             .reconcile_agent_streaming_say_completion("%1", "turn-1", &execution)
@@ -378,6 +385,21 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
     service
         .present_agent_response_actions_to_terminal_buffer("%1", &execution)
         .unwrap();
+    let occurrence = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines()
+        .into_iter()
+        .find(|line| line.text.contains("streamed output"))
+        .unwrap()
+        .presentation;
+    assert_eq!(
+        occurrence
+            .as_ref()
+            .and_then(|entry| entry.occurrence.unix_millis),
+        Some(1_000),
+        "promotion must retain the original locally observed occurrence"
+    );
     assert_eq!(
         service
             .agent_pane_screen("%1")
@@ -393,6 +415,15 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
         .filter(|entry| entry.source_text.as_deref() == Some(source))
         .collect::<Vec<_>>();
     assert_eq!(matching.len(), 1, "{entries:?}");
+    assert_eq!(
+        matching[0]
+            .presentation
+            .as_ref()
+            .unwrap()
+            .occurrence
+            .unix_millis,
+        Some(1_000)
+    );
     assert_eq!(
         matching[0].source_content_type.as_deref(),
         Some(mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE)
@@ -885,7 +916,7 @@ fn runtime_validated_say_settlement_matches_with_and_without_progress() {
                     "{case}: {entries:?}"
                 );
                 settled.push((
-                    rows,
+                    agent_visual_rows(rows),
                     entries
                         .into_iter()
                         .filter(|entry| {

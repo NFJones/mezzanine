@@ -146,7 +146,7 @@ impl RuntimeSessionService {
             .action_headers
             .iter()
             .map(|(action_index, header)| {
-                let header = streaming_action_execution_display_header(header);
+                let header = streaming_action_execution_display_header(&header.header);
                 let rendered_lines = wrap_rich_text_line_to_width_with_source_ranges_hard(
                     agent_action_execution_rendered_line(&header, &work.ui_theme),
                     work.frame_width,
@@ -177,7 +177,9 @@ impl RuntimeSessionService {
             bytes.push_str("\r\n");
         }
         let mut first_line = true;
+        let mut occurrence_ranges = Vec::new();
         if let Some(projection) = rationale_projection.as_ref() {
+            let start = bytes.len();
             for line in &projection.rendered_lines {
                 if !first_line {
                     bytes.push_str("\r\n");
@@ -190,6 +192,13 @@ impl RuntimeSessionService {
                 );
                 bytes.push_str("\x1b[0m");
                 first_line = false;
+            }
+            if let Some(entry) = work
+                .rationale
+                .as_ref()
+                .and_then(|source| source.entry.clone())
+            {
+                occurrence_ranges.push((start..bytes.len(), entry));
             }
         }
         let mut projection_copy_lines = Vec::new();
@@ -207,13 +216,54 @@ impl RuntimeSessionService {
             let say = say_projections.iter().find_map(|(candidate, projection)| {
                 (*candidate == action_index).then_some(projection)
             });
-            for projection in say
+            for (projection, entry) in say
                 .into_iter()
-                .chain(outbound_message_projections.get(&action_index))
-                .chain(summary_projections.get(&action_index))
-                .chain(header_projections.get(&action_index))
-                .chain(command_projections.get(&action_index))
+                .map(|projection| {
+                    (
+                        projection,
+                        work.actions
+                            .get(&action_index)
+                            .and_then(|source| source.entry.clone()),
+                    )
+                })
+                .chain(
+                    outbound_message_projections
+                        .get(&action_index)
+                        .map(|projection| {
+                            (
+                                projection,
+                                work.outbound_messages
+                                    .get(&action_index)
+                                    .and_then(|source| source.entry.clone()),
+                            )
+                        }),
+                )
+                .chain(summary_projections.get(&action_index).map(|projection| {
+                    (
+                        projection,
+                        work.shell_summaries
+                            .get(&action_index)
+                            .and_then(|source| source.entry.clone()),
+                    )
+                }))
+                .chain(header_projections.get(&action_index).map(|projection| {
+                    (
+                        projection,
+                        work.action_headers
+                            .get(&action_index)
+                            .and_then(|source| source.entry.clone()),
+                    )
+                }))
+                .chain(command_projections.get(&action_index).map(|projection| {
+                    (
+                        projection,
+                        work.shell_commands
+                            .get(&action_index)
+                            .and_then(|source| source.entry.clone()),
+                    )
+                }))
             {
+                let start = bytes.len() + if first_line { 0 } else { 2 };
                 for line in &projection.rendered_lines {
                     if !first_line {
                         bytes.push_str("\r\n");
@@ -227,6 +277,9 @@ impl RuntimeSessionService {
                     bytes.push_str("\x1b[0m");
                     first_line = false;
                 }
+                if let Some(entry) = entry.filter(|_| start < bytes.len()) {
+                    occurrence_ranges.push((start..bytes.len(), entry));
+                }
                 if projection.copy_lines.is_empty() {
                     projection_copy_lines.extend(std::iter::repeat_n(
                         AGENT_COPY_SKIP_LINE.to_string(),
@@ -238,9 +291,10 @@ impl RuntimeSessionService {
                 }
             }
         }
-        Self::feed_agent_terminal_screen(
+        Self::feed_presentation_ranges(
             &mut candidate,
             bytes.as_bytes(),
+            &occurrence_ranges,
             "projecting streaming say output",
         )?;
         if has_projection_copy_lines {

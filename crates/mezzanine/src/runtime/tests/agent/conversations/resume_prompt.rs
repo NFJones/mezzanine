@@ -471,6 +471,7 @@ fn runtime_agent_prompt_resume_installs_before_concurrent_presentation_append() 
         writer_started.send(()).unwrap();
         writer_store
             .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+                presentation: None,
                 conversation_id: writer_conversation_id,
                 sequence: 1,
                 created_at_unix_seconds: 2,

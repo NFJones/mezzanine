@@ -111,7 +111,7 @@ pub(super) fn streaming_sources_match_batch(
             let Some(action) = batch.actions.get(*index) else {
                 return false;
             };
-            match (header, &action.payload) {
+            match (&header.header, &action.payload) {
                 (
                     mez_agent::StreamingActionHeader::WebSearch { query: streamed },
                     mez_agent::AgentActionPayload::WebSearch {
@@ -158,6 +158,87 @@ impl RuntimeSessionService {
         else {
             return Ok(Default::default());
         };
+        // Screen/context fallback must not discard independently validated
+        // source observations. Transfer metadata only: promotion and execution
+        // still pass through the existing settlement checks below.
+        if presentation.turn_id == turn_id
+            && execution.request.turn_id == turn_id
+            && self
+                .agent_shell_store()
+                .get(pane_id)
+                .is_some_and(|session| session.session_id == presentation.conversation_id)
+            && let Some(batch) = execution.response.action_batch.as_ref()
+        {
+            let mut entries = Vec::new();
+            let mut retain =
+                |ordinal,
+                 component: &str,
+                 entry: &Option<mez_core::presentation::PresentationEntry>| {
+                    if let Some(entry) = entry.as_ref().filter(|entry| entry.is_valid()) {
+                        entries.push(((ordinal, component.to_string()), entry.clone()));
+                    }
+                };
+            if let Some(source) = presentation
+                .rationale
+                .as_ref()
+                .filter(|source| source.complete && source.text == batch.rationale)
+            {
+                retain(None, "rationale", &source.entry);
+            }
+            for (index, source) in &presentation.actions {
+                if batch.actions.get(*index).is_some_and(|action| matches!(&action.payload,
+                    AgentActionPayload::Say { status, text, content_type }
+                    if source.complete && source.status == *status && source.text == *text
+                        && source.content_type == mez_agent::normalize_agent_output_content_type(Some(content_type))))
+                {
+                    retain(Some(*index), "say", &source.entry);
+                }
+            }
+            for (index, source) in &presentation.outbound_messages {
+                if batch.actions.get(*index).is_some_and(|action| matches!(&action.payload,
+                    AgentActionPayload::SendMessage { recipient, content_type, payload, .. }
+                    if source.complete && source.recipient == *recipient && source.text == *payload
+                        && source.content_type == mez_agent::normalize_maap_message_content_type(content_type)))
+                {
+                    retain(Some(*index), "message", &source.entry);
+                }
+            }
+            for (sources, component) in [
+                (&presentation.shell_commands, "command"),
+                (&presentation.shell_summaries, "summary"),
+            ] {
+                for (index, source) in sources {
+                    if batch.actions.get(*index).is_some_and(|action| matches!(&action.payload,
+                        AgentActionPayload::ShellCommand { command, summary, .. }
+                        if source.complete && source.text == *if component == "command" { command } else { summary }))
+                    {
+                        retain(Some(*index), component, &source.entry);
+                    }
+                }
+            }
+            for (index, source) in &presentation.action_headers {
+                if batch.actions.get(*index).is_some_and(|action| {
+                    match (&source.header, &action.payload) {
+                        (
+                            mez_agent::StreamingActionHeader::WebSearch { query: streamed },
+                            AgentActionPayload::WebSearch { query, .. },
+                        ) => streamed == query,
+                        (
+                            mez_agent::StreamingActionHeader::FetchUrl { url: streamed },
+                            AgentActionPayload::FetchUrl { url, .. },
+                        ) => streamed == url,
+                        (
+                            mez_agent::StreamingActionHeader::Action { action: streamed },
+                            accepted,
+                        ) => &streamed.payload == accepted,
+                        _ => false,
+                    }
+                }) {
+                    retain(Some(*index), "header", &source.entry);
+                }
+            }
+            self.retain_validated_stream_entries(pane_id, execution, entries)?;
+        }
         self.settle_captured_streaming_presentation(pane_id, turn_id, execution, presentation)
     }
 
@@ -358,7 +439,12 @@ impl RuntimeSessionService {
             self.persist_activity_rationale_projection(
                 pane_id,
                 execution,
-                (row.style, row.rendered_lines, row.copy_lines),
+                (
+                    row.style,
+                    row.rendered_lines,
+                    row.copy_lines,
+                    rationale.entry.clone(),
+                ),
                 &rationale.text,
             )?;
             promoted.insert(STREAMED_RATIONALE_PRESENTED_MARKER);
@@ -394,7 +480,7 @@ impl RuntimeSessionService {
                         self.persist_activity_action_projection(
                             pane_id, execution,
                             (projected.action_index, crate::storage::transcript::activity::ActivityComponentKind::Summary),
-                            (AgentTerminalPresentationStyle::Status.persistence_name().to_string(), lines, Vec::new()),
+                            (AgentTerminalPresentationStyle::Status.persistence_name().to_string(), lines, Vec::new(), summary.entry.clone()),
                             (&summary.text, AGENT_PRESENTATION_THINKING_CONTENT_TYPE),
                         )?;
                     }
@@ -418,16 +504,25 @@ impl RuntimeSessionService {
                         projected.style.clone(),
                         projected.rendered_lines,
                         projected.copy_lines,
+                        presentation
+                            .shell_commands
+                            .get(&projected.action_index)
+                            .and_then(|source| source.entry.clone()),
                     ),
                     (source, content_type),
                 )?;
             } else {
-                self.persist_agent_presentation_entry(
+                self.persist_streamed_presentation(
                     pane_id,
-                    vec![projected.style.clone(); projected.rendered_lines.len()],
-                    projected.rendered_lines,
-                    projected.copy_lines,
-                    String::new(),
+                    presentation
+                        .actions
+                        .get(&projected.action_index)
+                        .and_then(|source| source.entry.clone()),
+                    (
+                        vec![projected.style.clone(); projected.rendered_lines.len()],
+                        projected.rendered_lines,
+                        projected.copy_lines,
+                    ),
                     Some((source, content_type)),
                 );
             }

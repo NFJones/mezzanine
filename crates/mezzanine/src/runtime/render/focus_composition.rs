@@ -300,6 +300,7 @@ mod tests {
             let pill = TerminalStyledLine {
                 text: "x".to_string(),
                 copy_text: None,
+                presentation: None,
                 style_spans: Vec::new(),
             };
             paint_pill(&mut line, &mut spans, column, &pill);

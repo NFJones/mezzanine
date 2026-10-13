@@ -40,6 +40,7 @@ fn activity_long_history_has_bounded_snapshot_and_stable_reflow() {
                 intent: Default::default(),
             };
             crate::storage::transcript::AgentPresentationEntry {
+                presentation: None,
                 conversation_id: "history".into(),
                 sequence,
                 created_at_unix_seconds: 1,

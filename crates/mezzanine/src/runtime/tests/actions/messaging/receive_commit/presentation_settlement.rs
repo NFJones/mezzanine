@@ -482,6 +482,7 @@ fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
     let root = temp_root("runtime-receipt-failed-persistence-restart");
     let store = AgentTranscriptStore::new(root.clone());
     let mut service = test_runtime_service();
+    service.presentation.occurrence_clock_millis = Some(Some(1234));
     service.set_agent_transcript_store(store.clone());
     service.use_transcript_effect_adapter();
     service
@@ -589,6 +590,8 @@ fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
         .find(|receipt| receipt.identity == identity)
         .expect("committed receiver receipt");
     assert_eq!(captured_receipt.peer_label, "captured sender name");
+    assert_eq!(captured_receipt.occurrence.unix_millis, Some(1234));
+    service.presentation.occurrence_clock_millis = Some(Some(9000));
     let effects = service
         .drain_transcript_persistence_transition()
         .side_effects;
@@ -711,6 +714,16 @@ fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
             _ => None,
         })
         .expect("normal-mode persistence retry for verbose-committed receipt");
+    assert!(
+        retry_entries
+            .iter()
+            .filter(|entry| entry
+                .source_text
+                .as_deref()
+                .is_some_and(|source| source.contains(identity.as_str())))
+            .all(|entry| entry.presentation.as_ref().unwrap().occurrence
+                == captured_receipt.occurrence)
+    );
     let retry_bytes = store.append_presentation_many(&retry_entries).unwrap();
     service
         .apply_persistence_transition(crate::runtime::PersistenceEvent::PresentationCompleted {
@@ -977,6 +990,7 @@ fn runtime_peer_presentation_settlement_ignores_identity_embedded_in_other_paylo
         .expect("message B presentation effect");
     store
     .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+        presentation: None,
         conversation_id: conversation_id.clone(),
         sequence: 1,
         created_at_unix_seconds: 1,
@@ -1065,6 +1079,7 @@ fn runtime_partial_presentation_drain_defers_and_deduplicates_receipt_retry() {
                 version: 1,
                 conversation_id: conversation_id.clone(),
                 receipt: mez_agent::transcript::SteeringRecoveryReceipt {
+                    occurrence: Default::default(),
                     id: "exhausted-steering".into(),
                     acceptance_order: 1,
                     turn_id: None,

@@ -7,4 +7,7 @@
 /// Stable opaque identifiers shared across Mezzanine subsystems.
 pub mod ids;
 
+/// Execution-inert provenance shared by presentation rows and recovery receipts.
+pub mod presentation;
+
 pub use ids::{AgentId, ClientId, IdFactory, PaneId, SessionId, StableId, WindowGroupId, WindowId};
