@@ -1941,6 +1941,12 @@ impl RuntimeSessionService {
             payload: payload.to_json(),
             extension_fields,
         };
+        #[cfg(test)]
+        if std::mem::take(&mut self.agent.fail_next_subagent_result_accept) {
+            return Err(MezError::invalid_state(
+                "injected terminal bridge acceptance failure",
+            ));
+        }
         self.control.message_service_mut().accept_at_with_scope(
             &child_identity.agent_id,
             envelope,
@@ -1949,6 +1955,12 @@ impl RuntimeSessionService {
         )?;
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         Ok(())
+    }
+
+    /// Resolves one explicit joined dependency against a terminal child turn.
+    #[cfg(test)]
+    pub(crate) fn fail_next_subagent_result_accept_for_tests(&mut self) {
+        self.agent.fail_next_subagent_result_accept = true;
     }
 
     /// Resolves one explicit joined dependency against a terminal child turn.

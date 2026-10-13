@@ -742,6 +742,9 @@ pub(crate) struct RuntimeAgentComponent {
     /// Test-only one-shot failure injected before a peer-message turn commits.
     #[cfg(test)]
     fail_next_peer_message_turn_commit: bool,
+    /// Test-only bridge acceptance fault after local failure receipt retention.
+    #[cfg(test)]
+    fail_next_subagent_result_accept: bool,
     /// Test-only one-shot failure injected after receive context storage.
     #[cfg(test)]
     fail_next_peer_message_receive_after_context_storage: bool,

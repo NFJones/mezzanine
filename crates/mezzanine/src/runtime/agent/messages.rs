@@ -1296,6 +1296,13 @@ impl RuntimeSessionService {
         {
             stored.committed_turn_id = Some(turn_id.clone());
         }
+        // A locally retained failure can recover this exact turn after any
+        // subsequent cursor/presentation fault. Charge its normal receive
+        // admission once at the same infallible context/receipt boundary.
+        if failure.is_some() {
+            self.set_agent_peer_message_turn_count(&agent_id, started_turns.saturating_add(1));
+            self.clear_agent_peer_message_limit_reported(&agent_id);
+        }
         for (sequence, envelope) in delivered_messages.iter().cloned() {
             self.register_received_peer_message_presentation(
                 recipient.clone(),
@@ -1321,8 +1328,10 @@ impl RuntimeSessionService {
                 "injected peer-message idle-turn failure after cursor advancement",
             ));
         }
-        self.set_agent_peer_message_turn_count(&agent_id, started_turns.saturating_add(1));
-        self.clear_agent_peer_message_limit_reported(&agent_id);
+        if failure.is_none() {
+            self.set_agent_peer_message_turn_count(&agent_id, started_turns.saturating_add(1));
+            self.clear_agent_peer_message_limit_reported(&agent_id);
+        }
         self.admit_owned_child_failure_context_turn(&turn)?;
         let _ = self.flush_received_peer_message_presentations();
         #[cfg(test)]

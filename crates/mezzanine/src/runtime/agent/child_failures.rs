@@ -62,6 +62,7 @@ impl RuntimeSessionService {
             outcome,
             AgentTurnState::Failed | AgentTurnState::Interrupted
         ) || !self.subagent_lineage_has_live_parent_authority(&child.agent_id)
+            || self.pane_is_closing(&child.pane_id)
             || child.cooperation_mode.as_deref().is_some_and(|mode| {
                 matches!(mode, "routed-worker" | "macro-step" | "macro-orchestration")
             })
@@ -219,7 +220,7 @@ impl RuntimeSessionService {
                     self.agent_peer_message_turn_count(&receipt.parent_agent_id)
                         < self.agent_peer_message_loop_limit()
                 }
-                AgentTurnState::Running => false,
+                AgentTurnState::Running => receipt.committed_turn_id.is_none(),
                 _ => true,
             }
         })
@@ -257,7 +258,8 @@ impl RuntimeSessionService {
                         turn.state,
                         AgentTurnState::Failed | AgentTurnState::Interrupted
                     )
-                    || (!receipt.parent_was_idle && turn.state == AgentTurnState::Completed)
+                    || (turn.state == AgentTurnState::Completed
+                        && (!receipt.parent_was_idle || receipt.committed_turn_id.is_some()))
             })
             || self.subagent_descendant_is_fenced(&receipt.child_agent_id)
             || self
