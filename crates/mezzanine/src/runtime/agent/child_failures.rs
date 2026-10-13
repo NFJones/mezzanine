@@ -186,6 +186,44 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Recovers only the exact active parent's references before accepting a
+    /// provider completion. Unrelated handoff faults cannot fail this parent.
+    pub(super) fn recover_owned_child_failure_context_for_turn(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        let receipts = self
+            .agent
+            .owned_child_failures
+            .iter()
+            .filter(|(_, receipt)| {
+                receipt.parent_agent_id == turn.agent_id
+                    && receipt.parent_conversation_id == turn.conversation_id
+                    && receipt.parent_origin_turn_id == turn.turn_id
+            })
+            .map(|(id, receipt)| (id.clone(), receipt.clone()))
+            .collect::<Vec<_>>();
+        for (identity, receipt) in receipts {
+            self.recover_owned_child_failure(&identity, &receipt, super::current_unix_millis())?;
+        }
+        Ok(())
+    }
+
+    /// Reports a proven exact-parent reference still awaiting context commit.
+    /// Mere task-result payloads and receipts for other owners never qualify.
+    pub(super) fn owned_child_failure_context_pending_for_turn(
+        &self,
+        turn: &AgentTurnRecord,
+    ) -> bool {
+        self.agent.owned_child_failures.values().any(|receipt| {
+            receipt.parent_agent_id == turn.agent_id
+                && receipt.parent_conversation_id == turn.conversation_id
+                && receipt.parent_origin_turn_id == turn.turn_id
+                && receipt.committed_turn_id.is_none()
+                && !receipt.wake_admitted
+        })
+    }
+
     /// Injects one recoverable offline local-reference fault before admission.
     #[cfg(test)]
     pub(crate) fn fail_next_owned_child_failure_context_commit_for_tests(&mut self) {
@@ -355,10 +393,10 @@ impl RuntimeSessionService {
                     })
                 })
         {
-            if self.resume_parked_peer_wait(&parent)? {
-                if let Some(stored) = self.agent.owned_child_failures.get_mut(identity) {
-                    stored.wake_admitted = true;
-                }
+            if self.resume_parked_peer_wait(&parent)?
+                && let Some(stored) = self.agent.owned_child_failures.get_mut(identity)
+            {
+                stored.wake_admitted = true;
             }
         } else if parent.state == AgentTurnState::Queued {
             self.admit_owned_child_failure_context_turn(&parent)?;
@@ -377,10 +415,11 @@ impl RuntimeSessionService {
             .agent_turn_ledger()
             .turn(&parent.turn_id)
             .map_or(parent.state, |turn| turn.state);
-        if receipt.parent_was_idle && parent.state == AgentTurnState::Running {
-            if let Some(stored) = self.agent.owned_child_failures.get_mut(identity) {
-                stored.wake_admitted = true;
-            }
+        if receipt.parent_was_idle
+            && parent.state == AgentTurnState::Running
+            && let Some(stored) = self.agent.owned_child_failures.get_mut(identity)
+        {
+            stored.wake_admitted = true;
         }
         Ok(())
     }

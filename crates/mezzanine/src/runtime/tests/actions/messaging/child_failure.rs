@@ -626,6 +626,7 @@ fn runtime_owned_child_failure_does_not_resurrect_terminal_or_replaced_parent() 
             }
             _ => unreachable!(),
         }
+        service.remove_pending_agent_provider_task(&parent.turn_id);
         let before = service.agent_turn_ledger().turns().len();
         // Fenced provider application must be rejected, but the lifecycle
         // fallback still exercises the non-wake ownership gate.
@@ -689,12 +690,11 @@ fn runtime_owned_child_requested_pane_and_window_close_remain_nonwake() {
             .clone();
         if window_close {
             let descriptor = service.find_pane_descriptor(&child.pane_id).unwrap();
-            service
-                .dispatch_runtime_window_close(
-                    &primary,
-                    &format!(r#"{{"window_id":"{}","force":true}}"#, descriptor.window_id),
-                )
-                .unwrap();
+            let result = service.dispatch_runtime_control_body(
+                &format!(r#"{{"jsonrpc":"2.0","id":"close-owned-window","method":"window/close","params":{{"window_id":"{}","force":true,"idempotency_key":"owned-window-close"}}}}"#, descriptor.window_id),
+                &primary,
+            );
+            assert!(!result.contains("\"error\""), "{result}");
         } else {
             service
                 .dispatch_runtime_pane_close(
@@ -756,82 +756,110 @@ fn runtime_owned_child_idle_failure_respects_receive_loop_limit() {
 /// No manual recovery sweep or fabricated model reply supplies the wake.
 #[tokio::test]
 async fn runtime_owned_child_bridge_fault_timer_fences_pre_failure_request() {
-    let (mut service, parent, child) = owned_child_fixture(false);
-    let high_water = service
-        .agent_turn_contexts()
-        .get(&parent.turn_id)
-        .unwrap()
-        .event_sequence_high_water_mark();
-    service
-        .record_claimed_agent_provider_context_for_tests(&parent.turn_id, high_water)
-        .unwrap();
-    service.fail_next_subagent_result_accept_for_tests();
-    service.fail_next_owned_child_failure_context_commit_for_tests();
-    fail_owned_child(&mut service, &child);
-    assert_eq!(owned_failure_count(&service, &parent), 0);
-    assert!(service.subagent_task_parent(&child.turn_id).is_none());
-    let now = current_unix_millis();
-    let armed = service.peer_message_delivery_timer_transition(false, 77, now);
-    assert_eq!(
-        armed.side_effects.len(),
-        1,
-        "local uncommitted receipt must arm delivery despite failed bridge acceptance"
-    );
-    service.apply_peer_message_delivery_timer(now, 77).unwrap();
-    assert_eq!(owned_failure_count(&service, &parent), 1);
-    let response =
-        runtime_say_response(&parent.turn_id, "obsolete failure-unaware completion", true);
-    let action = response.action_batch.as_ref().unwrap().actions[0].clone();
-    let execution = mez_agent::AgentTurnExecution {
-        request: runtime_model_request_fixture(&parent.turn_id),
-        response,
-        latest_response_usage: Default::default(),
-        routing_token_usage_by_model: Default::default(),
-        action_results: vec![mez_agent::ActionResult::succeeded(
-            &parent,
-            &action,
-            vec!["obsolete failure-unaware completion".into()],
-            None,
-        )],
-        final_turn: true,
-        terminal_state: AgentTurnState::Completed,
-    };
-    service
-        .apply_agent_provider_completed_event(
-            &AgentId::opaque(parent.agent_id.clone()).unwrap(),
-            &parent.turn_id,
-            execution,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        service
-            .agent_turn_ledger()
-            .turn(&parent.turn_id)
-            .unwrap()
-            .state,
-        AgentTurnState::Running
-    );
-    assert!(
-        !service
+    for completion_first in [false, true] {
+        let (mut service, parent, child) = owned_child_fixture(false);
+        let high_water = service
             .agent_turn_contexts()
             .get(&parent.turn_id)
             .unwrap()
-            .blocks()
-            .iter()
-            .any(|block| block
-                .content
-                .contains("obsolete failure-unaware completion"))
-    );
-    assert_eq!(
+            .event_sequence_high_water_mark();
         service
-            .pending_agent_provider_tasks()
-            .iter()
-            .filter(|task| task.turn_id == parent.turn_id)
-            .count(),
-        1
-    );
-    service.terminate_all_pane_processes().unwrap();
+            .record_claimed_agent_provider_context_for_tests(&parent.turn_id, high_water)
+            .unwrap();
+        service.fail_next_subagent_result_accept_for_tests();
+        service.fail_next_owned_child_failure_context_commit_for_tests();
+        fail_owned_child(&mut service, &child);
+        assert_eq!(owned_failure_count(&service, &parent), 0);
+        assert!(service.subagent_task_parent(&child.turn_id).is_none());
+        let now = current_unix_millis();
+        let armed = service.peer_message_delivery_timer_transition(false, 77, now);
+        assert_eq!(
+            armed.side_effects.len(),
+            1,
+            "local uncommitted receipt must arm delivery despite failed bridge acceptance"
+        );
+        if !completion_first {
+            service.apply_peer_message_delivery_timer(now, 77).unwrap();
+            assert_eq!(owned_failure_count(&service, &parent), 1);
+        }
+        let response =
+            runtime_say_response(&parent.turn_id, "obsolete failure-unaware completion", true);
+        let action = response.action_batch.as_ref().unwrap().actions[0].clone();
+        let execution = mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture(&parent.turn_id),
+            response,
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: Default::default(),
+            action_results: vec![mez_agent::ActionResult::succeeded(
+                &parent,
+                &action,
+                vec!["obsolete failure-unaware completion".into()],
+                None,
+            )],
+            final_turn: true,
+            terminal_state: AgentTurnState::Completed,
+        };
+        service
+            .apply_agent_provider_completed_event(
+                &AgentId::opaque(parent.agent_id.clone()).unwrap(),
+                &parent.turn_id,
+                execution,
+            )
+            .await
+            .unwrap();
+        assert_eq!(owned_failure_count(&service, &parent), 1);
+        service.apply_peer_message_delivery_timer(now, 77).unwrap();
+        assert_eq!(
+            service
+                .agent_turn_ledger()
+                .turn(&parent.turn_id)
+                .unwrap()
+                .state,
+            AgentTurnState::Running
+        );
+        assert!(
+            !service
+                .agent_turn_contexts()
+                .get(&parent.turn_id)
+                .unwrap()
+                .blocks()
+                .iter()
+                .any(|block| block
+                    .content
+                    .contains("obsolete failure-unaware completion"))
+        );
+        assert_eq!(
+            service
+                .pending_agent_provider_tasks()
+                .iter()
+                .filter(|task| task.turn_id == parent.turn_id)
+                .count(),
+            1
+        );
+        // A fresh actual offline request now observes the failure and may choose
+        // to wait for a different answer. Duplicate fallback cannot re-wake it.
+        park_owned_parent(&mut service, &parent);
+        service
+            .emit_subagent_task_result_for_state(&child, AgentTurnState::Failed)
+            .unwrap();
+        service.apply_peer_message_delivery_timer(now, 77).unwrap();
+        assert_eq!(
+            service
+                .agent_turn_ledger()
+                .turn(&parent.turn_id)
+                .unwrap()
+                .state,
+            AgentTurnState::Blocked
+        );
+        assert_eq!(owned_failure_count(&service, &parent), 1);
+        assert!(
+            !service
+                .pending_agent_provider_tasks()
+                .iter()
+                .any(|task| task.turn_id == parent.turn_id)
+        );
+        service.terminate_all_pane_processes().unwrap();
+    }
 }
 
 /// The production transport-neutral provider-failed ingress carries terminal
@@ -990,4 +1018,243 @@ fn runtime_owned_child_reused_task_has_distinct_failure_occurrence() {
         1
     );
     service.terminate_all_pane_processes().unwrap();
+}
+
+/// A current unexpected child primary-process exit traverses the actual async
+/// process-event ingress, unlike a direct Failed fallback. It must commit the
+/// exact task failure before retiring the child pane and wake the parent once.
+/// A mismatched prior process event remains inert before the genuine exit.
+#[test]
+fn runtime_owned_child_unexpected_process_exit_resumes_wait() {
+    let (mut service, parent, child) = owned_child_wait_fixture();
+    let pid = service
+        .pane_processes()
+        .primary_pid(&child.pane_id)
+        .unwrap();
+    let status = mez_mux::process::PaneExitStatus {
+        code: Some(1),
+        signal: None,
+        success: false,
+    };
+    assert!(
+        service
+            .apply_pane_process_exit_event(&child.pane_id, pid.saturating_add(1), status)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(owned_failure_count(&service, &parent), 0);
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Blocked
+    );
+    assert!(
+        service
+            .apply_pane_process_exit_event(&child.pane_id, pid, status)
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(owned_failure_count(&service, &parent), 1);
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    assert_eq!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .filter(|task| task.turn_id == parent.turn_id)
+            .count(),
+        1
+    );
+    assert!(service.find_pane_descriptor(&child.pane_id).is_none());
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Two current owned tasks can fail while queue pressure prevents any parent
+/// continuation. Both exact references must commit, but freeing capacity must
+/// settle only the one retained wait and enqueue one original-turn response.
+#[test]
+fn runtime_owned_children_failures_coalesce_one_wait_continuation() {
+    let (mut service, parent, first) = owned_child_fixture(false);
+    let mut spawn =
+        runtime_spawn_agent_action("second-owned-reviewer", "send another explicit answer");
+    let mez_agent::AgentActionPayload::SpawnAgent {
+        lifetime,
+        objective,
+        ..
+    } = &mut spawn.payload
+    else {
+        unreachable!()
+    };
+    *lifetime = mez_agent::SubagentLifetime::Persistent;
+    *objective = Some("Review the second bounded slice".into());
+    let result = service
+        .execute_spawn_action_for_turn(&parent, &spawn)
+        .unwrap();
+    let result: serde_json::Value =
+        serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+    let id = result["spawn"]["agent"]["id"].as_str().unwrap();
+    let second = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == id)
+        .unwrap()
+        .clone();
+    park_owned_parent(&mut service, &parent);
+    service
+        .configure_agent_scheduler_queue_limits(1, usize::MAX)
+        .unwrap();
+    service
+        .agent_scheduler_mut()
+        .enqueue(ScheduledWork {
+            turn_id: "two-failures-queue-holder".into(),
+            conversation_id: "two-failures-queue-holder".into(),
+            agent_id: "agent-two-failures-holder".into(),
+            pane_id: None,
+            kind: mez_agent::ScheduledWorkKind::BackgroundTask,
+        })
+        .unwrap();
+    service
+        .emit_subagent_task_result_for_state(&first, AgentTurnState::Failed)
+        .unwrap();
+    service
+        .emit_subagent_task_result_for_state(&second, AgentTurnState::Failed)
+        .unwrap();
+    assert_eq!(owned_failure_count(&service, &parent), 2);
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Blocked
+    );
+    service
+        .agent_scheduler_mut()
+        .cancel("two-failures-queue-holder")
+        .unwrap();
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &first,
+            AgentTurnState::Failed,
+            "first actual terminal fallback",
+        )
+        .unwrap();
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &second,
+            AgentTurnState::Failed,
+            "second actual terminal fallback",
+        )
+        .unwrap();
+    service
+        .deliver_pending_runtime_agent_messages(current_unix_millis())
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    assert_eq!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .filter(|task| task.turn_id == parent.turn_id)
+            .count(),
+        1
+    );
+    assert_eq!(
+        service
+            .agent_turn_executions()
+            .get(&parent.turn_id)
+            .unwrap()
+            .action_results
+            .iter()
+            .filter(
+                |result| result.action_type == "wait" && result.status == ActionStatus::Succeeded
+            )
+            .count(),
+        1
+    );
+    assert_eq!(owned_failure_count(&service, &parent), 2);
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// An unavailable OS incarnation recheck is not permission to wake under
+/// uncertainty; the local receipt remains recoverable when the same process is
+/// observed again. A positively replaced process instead retires that receipt
+/// without transferring its wait obligation into another incarnation.
+#[test]
+fn runtime_owned_child_failure_fences_uncertain_or_replaced_parent_process() {
+    use crate::runtime::processes::{
+        RuntimePaneProcessIdentityInjection, RuntimePaneProcessIdentityUnavailable,
+    };
+    for replaced in [false, true] {
+        let (mut service, parent, child) = owned_child_wait_fixture();
+        let process = service.pane_process_identity(&parent.pane_id).unwrap();
+        let identity = |token| RuntimePaneProcessIdentityInjection::Identity {
+            role: process.role,
+            generation: process.generation,
+            process_id: process.process_id,
+            start_token: token,
+            executable_path: process.executable_path.clone(),
+            live_start_token: None,
+        };
+        service
+            .inject_pane_process_identity_for_tests(&parent.pane_id, identity(process.start_token));
+        for _ in 0..2 {
+            service.inject_pane_process_identity_for_tests(
+                &parent.pane_id,
+                if replaced {
+                    identity(process.start_token.saturating_add(1))
+                } else {
+                    RuntimePaneProcessIdentityInjection::Unavailable(
+                        RuntimePaneProcessIdentityUnavailable::ExecutableUnreadable,
+                    )
+                },
+            );
+        }
+        fail_owned_child(&mut service, &child);
+        assert_eq!(
+            service
+                .agent_turn_ledger()
+                .turn(&parent.turn_id)
+                .unwrap()
+                .state,
+            AgentTurnState::Blocked
+        );
+        assert_eq!(owned_failure_count(&service, &parent), 0);
+        service
+            .deliver_pending_runtime_agent_messages(current_unix_millis())
+            .unwrap();
+        assert_eq!(
+            service
+                .agent_turn_ledger()
+                .turn(&parent.turn_id)
+                .unwrap()
+                .state,
+            if replaced {
+                AgentTurnState::Blocked
+            } else {
+                AgentTurnState::Running
+            }
+        );
+        assert_eq!(
+            owned_failure_count(&service, &parent),
+            usize::from(!replaced)
+        );
+        service.terminate_all_pane_processes().unwrap();
+    }
 }

@@ -12,6 +12,15 @@ use super::{
     runtime_pane_by_id, runtime_unrecovered_failure_reason,
 };
 
+/// Product-owned pane terminal cause, independent of display diagnostic text.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PaneShutdownCause {
+    /// Explicit close, supervisor teardown or unavailable-pane cleanup.
+    Requested,
+    /// A current pane primary process exited without a prior close request.
+    UnexpectedProcessExit,
+}
+
 impl RuntimeSessionService {
     /// Runs the start agent turn operation for this subsystem.
     ///
@@ -752,6 +761,41 @@ impl RuntimeSessionService {
         pane_ids: &[String],
         reason: &str,
     ) -> Result<usize> {
+        self.fail_agent_turns_for_pane_shutdown_with_cause(
+            pane_ids,
+            reason,
+            PaneShutdownCause::Requested,
+        )
+    }
+
+    /// Settles an unexpected primary-process exit before marking its pane
+    /// closing, so locally owned failure evidence reaches its parent. An
+    /// already-closing pane remains intentional teardown and cannot notify.
+    pub(crate) fn fail_agent_turns_for_unexpected_pane_exit(
+        &mut self,
+        pane_ids: &[String],
+    ) -> Result<usize> {
+        let unexpected = pane_ids
+            .iter()
+            .filter(|pane| !self.pane_is_closing(pane))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.fail_agent_turns_for_pane_shutdown_with_cause(
+            &unexpected,
+            "pane primary process exited",
+            PaneShutdownCause::UnexpectedProcessExit,
+        )
+    }
+
+    /// Runs shared terminal cleanup with an explicit locally selected cause.
+    /// Requested shutdown fences notifications before settlement; unexpected
+    /// process exit commits owned failure first, then retires the pane.
+    fn fail_agent_turns_for_pane_shutdown_with_cause(
+        &mut self,
+        pane_ids: &[String],
+        reason: &str,
+        cause: PaneShutdownCause,
+    ) -> Result<usize> {
         let pane_ids = pane_ids
             .iter()
             .map(String::as_str)
@@ -763,8 +807,10 @@ impl RuntimeSessionService {
             let parent_agent_id = format!("agent-{pane_id}");
             self.close_subagent_descendants_for_parent_agent(&parent_agent_id, reason)?;
         }
-        for pane_id in &pane_ids {
-            self.mark_pane_closing(*pane_id);
+        if cause == PaneShutdownCause::Requested {
+            for pane_id in &pane_ids {
+                self.mark_pane_closing(*pane_id);
+            }
         }
         let turns = self
             .agent_turn_ledger()
@@ -820,6 +866,9 @@ impl RuntimeSessionService {
                 ),
             )?;
             failed = failed.saturating_add(1);
+        }
+        for pane_id in &pane_ids {
+            self.mark_pane_closing(*pane_id);
         }
         self.start_ready_agent_turns()?;
         Ok(failed)

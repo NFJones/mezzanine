@@ -85,7 +85,7 @@ pub(crate) use component::RuntimeControlComponent;
 #[cfg(test)]
 pub(in crate::runtime) use context::runtime_agent_transcript_context;
 pub(crate) use context::{
-    PEER_MESSAGE_TURN_CONTEXT_HINT, PEER_MESSAGE_TURN_CONTEXT_LABEL,
+    PEER_MESSAGE_TRUST_GUIDANCE, PEER_MESSAGE_TURN_CONTEXT_HINT, PEER_MESSAGE_TURN_CONTEXT_LABEL,
     runtime_bridge_extension_fields, runtime_bridge_initial_spawn_extension_fields,
     runtime_owned_bridge_message, runtime_peer_message_block_label,
     runtime_peer_message_context_content, runtime_peer_message_logged_payload,

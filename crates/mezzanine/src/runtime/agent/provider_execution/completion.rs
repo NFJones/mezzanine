@@ -155,12 +155,29 @@ impl RuntimeSessionService {
             .claimed_agent_provider_tasks
             .get(turn_id)
             .and_then(|claim| claim.provider_owner.clone());
+        // A context-commit fault may outlive terminal bridge delivery while an
+        // older request is in flight. Recover the exact local reference before
+        // high-water validation; if it still cannot commit, retain the receipt
+        // and use the existing stale-response path rather than settle old work.
+        if let Err(error) = self.recover_owned_child_failure_context_for_turn(&turn) {
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                turn_id,
+                &format!(
+                    "owned_child_failure context_commit_pending error={}",
+                    super::super::runtime_agent_terminal_preview(error.message()),
+                ),
+            )?;
+        }
+        let owned_child_context_pending = self.owned_child_failure_context_pending_for_turn(&turn);
         let current_high_water_mark = self
             .agent_turn_contexts()
             .get(turn_id)
             .map(mez_agent::AgentContext::event_sequence_high_water_mark)
             .unwrap_or_default();
-        if consumed_high_water_mark.is_some_and(|consumed| current_high_water_mark > consumed) {
+        if owned_child_context_pending
+            || consumed_high_water_mark.is_some_and(|consumed| current_high_water_mark > consumed)
+        {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             self.agent.claimed_agent_provider_tasks.remove(turn_id);
             self.ingest_provider_log(

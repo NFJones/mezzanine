@@ -4350,10 +4350,7 @@ impl RuntimeSessionService {
         self.process
             .pane_terminal_progress
             .remove(process.pane_id.as_str());
-        self.fail_agent_turns_for_pane_shutdown(
-            std::slice::from_ref(&process.pane_id),
-            "pane primary process exited",
-        )?;
+        self.fail_agent_turns_for_unexpected_pane_exit(std::slice::from_ref(&process.pane_id))?;
         self.settle_dead_pane_managed_shell_ownership(&process.pane_id);
         self.process.pane_exit_records.insert(
             process.pane_id.clone(),
