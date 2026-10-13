@@ -236,7 +236,12 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         manifest.harness == "pi" && *manifest == pi_artifact::historical_loss_manifest();
     let revision12_pi =
         manifest.harness == "pi" && *manifest == pi_artifact::historical_resume_manifest();
-    if !current_pi && !revision10_pi && !revision11_pi && !revision12_pi && *manifest != current && !opencode_history
+    if !current_pi
+        && !revision10_pi
+        && !revision11_pi
+        && !revision12_pi
+        && *manifest != current
+        && !opencode_history
     {
         return Vec::new();
     }

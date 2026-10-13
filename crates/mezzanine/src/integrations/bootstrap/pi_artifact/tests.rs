@@ -181,10 +181,19 @@ fn pi_revision13_history_preserves_frozen_slots_and_rejects_tampered_authority()
     let revision12 = historical_resume_manifest();
     let revision11 = historical_loss_manifest();
     assert_eq!(current.entries.len(), revision12.entries.len());
-    let changed = current.entries.iter().zip(&revision12.entries)
+    let changed = current
+        .entries
+        .iter()
+        .zip(&revision12.entries)
         .filter_map(|(active, frozen)| (active != frozen).then_some(active.path.as_str()))
         .collect::<Vec<_>>();
-    assert_eq!(changed, ["extensions/mezzanine/pi_persistent.mjs", "extensions/mezzanine/pi_usage.mjs"]);
+    assert_eq!(
+        changed,
+        [
+            "extensions/mezzanine/pi_persistent.mjs",
+            "extensions/mezzanine/pi_usage.mjs"
+        ]
+    );
     for (old, frozen) in revision11.entries.iter().zip(&revision12.entries) {
         assert_eq!(old.path, frozen.path);
         if !old.path.ends_with("/persistent_client.mjs") {
@@ -193,13 +202,19 @@ fn pi_revision13_history_preserves_frozen_slots_and_rejects_tampered_authority()
     }
     let history = super::super::compiled_history(&current);
     assert_eq!(history.len(), 11);
-    assert_eq!(history.iter().map(|item| item.revision).collect::<Vec<_>>(), (2..=12).rev().collect::<Vec<_>>());
+    assert_eq!(
+        history.iter().map(|item| item.revision).collect::<Vec<_>>(),
+        (2..=12).rev().collect::<Vec<_>>()
+    );
     for manifest in std::iter::once(current).chain(history) {
         for index in 0..manifest.entries.len() {
             let mut altered = manifest.clone();
             if let Artifact::File { bytes } = &mut altered.entries[index].artifact {
                 bytes.push(0);
-                assert!(super::super::compiled_history(&altered).is_empty(), "changed artifact bytes granted compiled historical authority");
+                assert!(
+                    super::super::compiled_history(&altered).is_empty(),
+                    "changed artifact bytes granted compiled historical authority"
+                );
             }
         }
     }
