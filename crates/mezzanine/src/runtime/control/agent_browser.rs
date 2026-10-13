@@ -39,7 +39,9 @@ pub(crate) enum AgentBrowserQuery {
     /// Every current session registration, uncapped and not saved conversations.
     All,
     /// Exact current trusted root membership for one captured invoking owner.
-    CurrentProject(AgentBrowserOrigin),
+    /// Out-of-line immutable evidence bounds the enclosing overlay/actor layout;
+    /// All stays allocation-free. Clone/equality retain the same exact owner.
+    CurrentProject(Box<AgentBrowserOrigin>),
 }
 
 /// Captured client/pane ownership, not a model-supplied project expression.
@@ -119,17 +121,19 @@ impl RuntimeSessionService {
                 "agent management requires attached primary",
             ));
         }
-        Ok(AgentBrowserQuery::CurrentProject(AgentBrowserOrigin {
-            client: client.clone(),
-            pane: pane.to_string(),
-            process: self
-                .find_pane_descriptor(pane)
-                .and_then(|_| self.pane_process_identity(pane).ok()),
-            conversation: self
-                .agent_shell_store()
-                .get(pane)
-                .map(|session| session.session_id.clone()),
-        }))
+        Ok(AgentBrowserQuery::CurrentProject(Box::new(
+            AgentBrowserOrigin {
+                client: client.clone(),
+                pane: pane.to_string(),
+                process: self
+                    .find_pane_descriptor(pane)
+                    .and_then(|_| self.pane_process_identity(pane).ok()),
+                conversation: self
+                    .agent_shell_store()
+                    .get(pane)
+                    .map(|session| session.session_id.clone()),
+            },
+        )))
     }
 
     /// Checks the same preferred process incarnation and conversation owner.
