@@ -1258,3 +1258,94 @@ fn runtime_owned_child_failure_fences_uncertain_or_replaced_parent_process() {
         service.terminate_all_pane_processes().unwrap();
     }
 }
+
+/// The first executable observation can fail before any OS baseline exists.
+/// Unreadable and StartTokenChanged must remain typed uncertainty, never a
+/// process-free bypass. Independent local root PID/epoch/kernel lifetime anchors
+/// permit later same-root recovery but reject a replacement's first identity.
+#[test]
+fn runtime_owned_child_initial_process_uncertainty_requires_same_root_proof() {
+    use crate::runtime::processes::{
+        RuntimePaneProcessIdentityInjection, RuntimePaneProcessIdentityUnavailable,
+    };
+    for reason in [
+        RuntimePaneProcessIdentityUnavailable::ExecutableUnreadable,
+        RuntimePaneProcessIdentityUnavailable::StartTokenChanged,
+        RuntimePaneProcessIdentityUnavailable::ProcessUnavailable,
+    ] {
+        for replaced in [false, true] {
+            let (mut service, parent, child) = owned_child_wait_fixture();
+            let pid = service
+                .pane_processes()
+                .primary_pid(&parent.pane_id)
+                .unwrap();
+            let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+            // First capture plus both immediate recovery boundaries fail.
+            // No successful pane executable identity is injected beforehand.
+            for _ in 0..3 {
+                service.inject_pane_process_identity_for_tests(
+                    &parent.pane_id,
+                    RuntimePaneProcessIdentityInjection::Unavailable(reason),
+                );
+            }
+            fail_owned_child(&mut service, &child);
+            assert_eq!(
+                service
+                    .agent_turn_ledger()
+                    .turn(&parent.turn_id)
+                    .unwrap()
+                    .state,
+                AgentTurnState::Blocked
+            );
+            assert_eq!(owned_failure_count(&service, &parent), 0);
+            assert!(
+                !service
+                    .pending_agent_provider_tasks()
+                    .iter()
+                    .any(|task| task.turn_id == parent.turn_id)
+            );
+            service.inject_pane_process_identity_for_tests(
+                &parent.pane_id,
+                RuntimePaneProcessIdentityInjection::Identity {
+                    role: crate::runtime::processes::RuntimePaneProcessRole::AdapterOwnedRoot,
+                    generation: None,
+                    process_id: pid,
+                    start_token: if replaced {
+                        token.saturating_add(1)
+                    } else {
+                        token
+                    },
+                    executable_path: PathBuf::from("/bin/sh"),
+                    live_start_token: None,
+                },
+            );
+            service
+                .apply_peer_message_delivery_timer(current_unix_millis(), 88)
+                .unwrap();
+            assert_eq!(
+                service
+                    .agent_turn_ledger()
+                    .turn(&parent.turn_id)
+                    .unwrap()
+                    .state,
+                if replaced {
+                    AgentTurnState::Blocked
+                } else {
+                    AgentTurnState::Running
+                }
+            );
+            assert_eq!(
+                owned_failure_count(&service, &parent),
+                usize::from(!replaced)
+            );
+            service
+                .apply_peer_message_delivery_timer(current_unix_millis(), 88)
+                .unwrap();
+            assert_eq!(
+                owned_failure_count(&service, &parent),
+                usize::from(!replaced)
+            );
+            service.terminate_all_pane_processes().unwrap();
+        }
+    }
+}

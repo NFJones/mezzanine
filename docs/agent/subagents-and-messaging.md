@@ -145,6 +145,10 @@ expected answer, it retains bounded failure evidence and fairly resumes the
 same parent's exact wait after committing that evidence. A failed-looking MMP
 payload or bridge extension is not proof. Duplicate observations, cursor
 advancement and queue pressure do not lose or repeat the handoff. The parent
+is not woken while its process incarnation is uncertain: an unavailable initial
+OS observation retains the receipt, and later evidence must match the captured
+runtime root PID, adapter epoch and kernel lifetime rather than a replacement.
+Unavailable observation is never treated as a process-free pane. The parent
 must reassess because the expected reply may never arrive; no retry, reassignment,
 review verdict, approval or replay of partial child effects happens automatically.
 Routine status, success, requested child teardown and joined/routed/macro

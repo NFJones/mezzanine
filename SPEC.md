@@ -14424,6 +14424,11 @@ occurrence MUST bind the parent conversation/incarnation and originating task,
 and the exact child agent/task attempt and Failed or unexpected Interrupted
 outcome. Requested cancellation/closure/teardown, stale or restored lineage,
 and joined/routed/macro settlement MUST NOT create this independent wake.
+Initial OS observation failure MUST remain typed uncertainty, not process
+absence. Runtime-owned root PID, adapter epoch and available kernel lifetime
+MUST fence later observation; unknown ownership retains the receipt without
+waking until the same root is proven. A positively replaced root retires the
+old occurrence. Process-free ownership requires explicit local non-live topology.
 Bounded failure reference evidence MUST commit before fair same-turn wait
 settlement; it MUST explain that the expected answer may never arrive and the
 model must reassess. It MUST remain untrusted reference evidence, never an

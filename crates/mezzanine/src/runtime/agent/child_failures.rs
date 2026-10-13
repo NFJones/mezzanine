@@ -13,10 +13,34 @@
 //! evidence; older requests cannot. Joined, routed and macro owners are separate.
 
 use super::{AgentTurnRecord, AgentTurnState, Result, RuntimeSessionService};
-use crate::runtime::processes::RuntimePaneProcessIdentity;
+use crate::runtime::processes::{
+    RuntimePaneProcessIdentity, RuntimePaneProcessIdentityUnavailable,
+};
 
 /// Maximum diagnostic characters retained for one terminal occurrence.
 const FAILURE_DIAGNOSTIC_CHARS: usize = 4096;
+
+/// Typed initial OS observation; uncertainty never means a process-free pane.
+#[derive(Debug, Clone)]
+enum ParentProcessObservation {
+    /// A legitimately non-live pane has no runtime-owned root process.
+    ProcessFree,
+    /// OS-backed incarnation captured at terminal child settlement.
+    Observed(RuntimePaneProcessIdentity),
+    /// The initial observation failed; exact root anchoring must precede wake.
+    Unknown(RuntimePaneProcessIdentityUnavailable),
+}
+
+/// Runtime root anchors captured independently of executable observation.
+#[derive(Debug, Clone)]
+struct ParentRootIncarnation {
+    /// Current manager/adapter-owned root PID, never a payload-supplied PID.
+    process_id: u32,
+    /// Exact adapter epoch when process ownership has moved out of the manager.
+    generation: Option<u64>,
+    /// Kernel root lifetime when readable independently of its executable.
+    start_token: Option<u64>,
+}
 
 /// One locally proven unexpected terminal occurrence and its parent handoff.
 #[derive(Debug, Clone)]
@@ -29,8 +53,10 @@ pub(super) struct OwnedChildFailure {
     pub(super) parent_origin_turn_id: String,
     /// Whether normal idle admission, rather than same-turn settlement, is due.
     pub(super) parent_was_idle: bool,
-    /// OS-backed pane root incarnation when a process is present.
-    parent_process: Option<RuntimePaneProcessIdentity>,
+    /// Typed initial observation, distinguishing unavailable from process-free.
+    parent_process: ParentProcessObservation,
+    /// Local root PID/adapter epoch/kernel lifetime captured even on OS error.
+    parent_root: Option<ParentRootIncarnation>,
     /// Exact local child identity and lifecycle task attempt.
     child_agent_id: String,
     /// Immutable child task id (provider transport retries remain this task).
@@ -155,12 +181,34 @@ impl RuntimeSessionService {
             super::runtime_agent_turn_state_name(outcome),
             crate::runtime::control::PEER_MESSAGE_TRUST_GUIDANCE,
         );
+        let parent_root = self
+            .primary_pid_for_live_pane_process(parent_pane)
+            .map(|process_id| ParentRootIncarnation {
+                process_id,
+                generation: self
+                    .adapter_owned_pane_process_instance(parent_pane)
+                    .map(|instance| instance.generation),
+                start_token: mez_mux::process::process_start_token_for_pid(process_id),
+            });
+        let parent_process = if parent_root.is_none()
+            && self
+                .find_pane_descriptor(parent_pane)
+                .is_some_and(|pane| !pane.live)
+        {
+            ParentProcessObservation::ProcessFree
+        } else {
+            match self.pane_process_identity(parent_pane) {
+                Ok(process) => ParentProcessObservation::Observed(process),
+                Err(reason) => ParentProcessObservation::Unknown(reason),
+            }
+        };
         let receipt = OwnedChildFailure {
             parent_agent_id: parent_agent_id.clone(),
             parent_conversation_id,
             parent_origin_turn_id: parent.turn_id.clone(),
             parent_was_idle: parent.state == AgentTurnState::Completed,
-            parent_process: self.pane_process_identity(parent_pane).ok(),
+            parent_process,
+            parent_root,
             child_agent_id: child.agent_id.clone(),
             child_turn_id: child.turn_id.clone(),
             label,
@@ -320,17 +368,8 @@ impl RuntimeSessionService {
             self.agent.owned_child_failures.remove(identity);
             return Ok(());
         }
-        if let Some(process) = &receipt.parent_process {
-            match self.pane_process_identity(pane) {
-                Ok(current) if process.same_incarnation(&current) => {}
-                Ok(_) => {
-                    self.agent.owned_child_failures.remove(identity);
-                    return Ok(());
-                }
-                // An unavailable observation is not proof of a replacement;
-                // retain the handoff without admitting work under uncertainty.
-                Err(_) => return Ok(()),
-            }
+        if !self.revalidate_owned_child_failure_parent_process(identity, receipt, pane) {
+            return Ok(());
         }
         let Some(mut parent) = latest_parent else {
             return Ok(());
@@ -422,5 +461,83 @@ impl RuntimeSessionService {
             stored.wake_admitted = true;
         }
         Ok(())
+    }
+
+    /// Validates the initial root anchor before interpreting a later OS
+    /// observation. Unknown capture can recover only the same locally owned
+    /// PID/epoch/lifetime, never adopt a replacement as its missing baseline.
+    fn revalidate_owned_child_failure_parent_process(
+        &mut self,
+        identity: &str,
+        receipt: &OwnedChildFailure,
+        pane: &str,
+    ) -> bool {
+        let retire = |service: &mut Self| {
+            service.agent.owned_child_failures.remove(identity);
+            false
+        };
+        if let Some(root) = &receipt.parent_root {
+            if self.primary_pid_for_live_pane_process(pane) != Some(root.process_id)
+                || (root.generation.is_some()
+                    && self
+                        .adapter_owned_pane_process_instance(pane)
+                        .map(|instance| instance.generation)
+                        != root.generation)
+            {
+                return retire(self);
+            }
+            if let Some(token) = root.start_token {
+                match mez_mux::process::process_start_token_for_pid(root.process_id) {
+                    Some(current) if current == token => {}
+                    Some(_) => return retire(self),
+                    None => return false,
+                }
+            }
+        }
+        match &receipt.parent_process {
+            ParentProcessObservation::ProcessFree => {
+                if self.primary_pid_for_live_pane_process(pane).is_some()
+                    || self
+                        .find_pane_descriptor(pane)
+                        .is_some_and(|pane| pane.live)
+                {
+                    retire(self)
+                } else {
+                    true
+                }
+            }
+            ParentProcessObservation::Observed(process) => match self.pane_process_identity(pane) {
+                Ok(current) if process.same_incarnation(&current) => true,
+                Ok(_) => retire(self),
+                Err(_) => false,
+            },
+            ParentProcessObservation::Unknown(reason) => {
+                // Preserve the typed reason rather than treating any failure
+                // (including StartTokenChanged) as absence. A root without a
+                // kernel lifetime or adapter epoch cannot prove a later match.
+                let _initial_observation_failure = reason;
+                let Some(root) = &receipt.parent_root else {
+                    return false;
+                };
+                if root.start_token.is_none() && root.generation.is_none() {
+                    return false;
+                }
+                let Ok(current) = self.pane_process_identity(pane) else {
+                    return false;
+                };
+                if current.process_id != root.process_id
+                    || root
+                        .start_token
+                        .is_some_and(|token| current.start_token != token)
+                    || (root.generation.is_some() && current.generation != root.generation)
+                {
+                    return retire(self);
+                }
+                if let Some(stored) = self.agent.owned_child_failures.get_mut(identity) {
+                    stored.parent_process = ParentProcessObservation::Observed(current);
+                }
+                true
+            }
+        }
     }
 }
