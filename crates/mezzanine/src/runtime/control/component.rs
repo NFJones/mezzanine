@@ -6,6 +6,10 @@
 //! anchors and the single accounting projection/readiness owners. Losing only
 //! registrations cannot reset expense baselines or accounting reservations;
 //! reconstructing this whole component invalidates all live activation authority.
+//! Retained source/accounting owners have one heap allocation each to keep
+//! by-value runtime service and async actor/test future moves below debug stack
+//! limits. Boxing changes placement only: no projection/source copies, capability
+//! persistence, extra authority or accounting-memory quota is introduced.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -30,12 +34,14 @@ pub(crate) struct RuntimeControlComponent {
     approval_bindings: BTreeMap<String, ApprovalBinding>,
     unix_event_bindings: BTreeMap<[u8; 32], UnixEventBinding>,
     external_agents: super::external_agents::ExternalAgentRegistry,
+    /// One monotonic presentation/credential generation owner survives registry loss.
+    external_agent_generation: u64,
     /// Same-service native authority survives disposable registration loss only.
-    external_sources: super::external_enrollment::LiveSourceAnchors,
+    external_sources: Box<super::external_enrollment::LiveSourceAnchors>,
     /// Single accounting owner survives registration loss; no shadow expense.
-    external_usage: super::external_usage::ExternalUsageProjection,
+    external_usage: Box<super::external_usage::ExternalUsageProjection>,
     /// Original readiness reservations/cache, distinct from lifecycle credentials.
-    external_usage_begins: super::external_usage_requests::ExternalUsageBegins,
+    external_usage_begins: Box<super::external_usage_requests::ExternalUsageBegins>,
 }
 
 /// Exact-client authority retained for one short-lived Unix event handshake.
@@ -80,9 +86,9 @@ impl RuntimeControlComponent {
             message_service.retire_observational_identity(&identity.agent_id);
         }
         let external_agents = super::external_agents::ExternalAgentRegistry::default();
-        let external_sources = super::external_enrollment::LiveSourceAnchors::new(
+        let external_sources = Box::new(super::external_enrollment::LiveSourceAnchors::new(
             external_agents.enrollments.ancestry_budget.clone(),
-        );
+        ));
         Self {
             idempotency,
             message_service,
@@ -90,6 +96,7 @@ impl RuntimeControlComponent {
             approval_bindings: BTreeMap::new(),
             unix_event_bindings: BTreeMap::new(),
             external_agents,
+            external_agent_generation: 0,
             external_sources,
             external_usage: Default::default(),
             external_usage_begins: Default::default(),
@@ -106,6 +113,29 @@ impl RuntimeControlComponent {
         &mut self,
     ) -> &mut super::external_agents::ExternalAgentRegistry {
         &mut self.external_agents
+    }
+
+    /// Returns the service's current external presentation-generation high water.
+    pub(super) fn external_agent_generation(&self) -> u64 {
+        self.external_agent_generation
+    }
+
+    /// Borrows publication state and its distinct service-owned generation counter.
+    /// Callers check increment/limits before publication; failed admissions do not
+    /// advance it. Numeric selectors never replace native source/witness proof.
+    pub(super) fn external_agents_and_generation_mut(
+        &mut self,
+    ) -> (&mut super::external_agents::ExternalAgentRegistry, &mut u64) {
+        (
+            &mut self.external_agents,
+            &mut self.external_agent_generation,
+        )
+    }
+
+    /// Sets only a fixture overflow boundary, never a production setting.
+    #[cfg(test)]
+    pub(super) fn set_external_agent_generation_for_tests(&mut self, generation: u64) {
+        self.external_agent_generation = generation;
     }
 
     /// Returns memory-only source authority, never reconstructed from storage.

@@ -30,7 +30,6 @@ const TOMBSTONE_SECONDS: u64 = 300;
 #[derive(Debug, Default)]
 pub(super) struct ExternalAgentRegistry {
     pub(super) bindings: BTreeMap<[u8; 32], LaunchBinding>,
-    pub(super) next_generation: u64,
     pub(super) enrollments: super::external_enrollment::EnrollmentAdmissions,
 }
 
@@ -219,18 +218,17 @@ impl RuntimeSessionService {
             .map(mez_agent::messaging::ProjectMembership::from_canonical_root)
             .map(|membership| membership.scope_id());
         let accounting_origin = self.capture_accounting_origin_for_pane(&pane_id);
-        let registry = self.control.external_agents_mut();
+        let (registry, next_generation) = self.control.external_agents_and_generation_mut();
         if registry.bindings.len() >= MAX_BINDINGS {
             return Err(MezError::new(
                 crate::error::MezErrorKind::RateLimited,
                 "external launch registry is full",
             ));
         }
-        let generation = registry
-            .next_generation
+        let generation = next_generation
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("external launch generation exhausted"))?;
-        registry.next_generation = generation;
+        *next_generation = generation;
         let mut bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut bytes);
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
@@ -598,6 +596,8 @@ impl RuntimeSessionService {
     /// Retires runtime-only external identities after snapshot replacement.
     /// No capability survives restart, so restored metadata cannot revive a run.
     pub(crate) fn retire_unbound_external_message_identities(&mut self) {
+        self.retire_all_external_source_anchors();
+        self.invalidate_external_enrollment_admissions();
         let identities = self
             .control
             .message_service()

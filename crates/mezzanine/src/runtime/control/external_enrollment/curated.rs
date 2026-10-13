@@ -377,7 +377,7 @@ impl RuntimeSessionService {
             .map(mez_agent::messaging::ProjectMembership::from_canonical_root)
             .map(|membership| membership.scope_id());
         let accounting_origin = self.capture_accounting_origin_for_pane(&work.pane_id);
-        let registry = self.control.external_agents_mut();
+        let (registry, next_generation) = self.control.external_agents_and_generation_mut();
         if registry.bindings.len() >= super::super::external_agents::MAX_BINDINGS {
             return Err(MezError::new(
                 crate::error::MezErrorKind::RateLimited,
@@ -394,8 +394,7 @@ impl RuntimeSessionService {
                 "curated evidence expired before allocation",
             ));
         }
-        let generation = registry
-            .next_generation
+        let generation = next_generation
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("curated generation exhausted"))?;
         if generation > 9_007_199_254_740_991 {
@@ -407,7 +406,7 @@ impl RuntimeSessionService {
         rand::rng().fill_bytes(&mut bytes);
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
         let digest = Sha256::digest(token.as_bytes()).into();
-        registry.next_generation = generation;
+        *next_generation = generation;
         registry.bindings.insert(
             digest,
             LaunchBinding {

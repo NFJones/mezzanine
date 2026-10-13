@@ -245,8 +245,7 @@ async fn external_curated_observer_late_native_evidence_and_overflow_have_no_eff
     fixture
         .service
         .control
-        .external_agents_mut()
-        .next_generation = 9_007_199_254_740_991;
+        .set_external_agent_generation_for_tests(9_007_199_254_740_991);
     assert!(
         submit(&mut fixture, &connection, &request)
             .await
@@ -266,7 +265,10 @@ async fn external_curated_observer_late_native_evidence_and_overflow_have_no_eff
     );
     assert_eq!(enroll(&mut fixture, &connection).await, first);
     let registry = fixture.service.control.external_agents();
-    assert_eq!(registry.next_generation, 9_007_199_254_740_991);
+    assert_eq!(
+        fixture.service.control.external_agent_generation(),
+        9_007_199_254_740_991
+    );
     assert_eq!(registry.bindings.len(), 1);
     assert_eq!(
         registry.bindings.values().next().unwrap().generation,
@@ -304,7 +306,7 @@ async fn external_curated_rotated_namespace_survives_gc_and_snapshot_cleanup() {
         let old = first["result"]["generation"].as_u64().unwrap();
         let second = submit(&mut fixture, &connection, &successor("module-b", old)).await;
         assert!(second.get("error").is_none());
-        let generation = fixture.service.control.external_agents().next_generation;
+        let generation = fixture.service.control.external_agent_generation();
         if snapshot {
             fixture.service.retire_unbound_external_message_identities();
         } else {
@@ -357,7 +359,7 @@ async fn external_curated_rotated_namespace_survives_gc_and_snapshot_cleanup() {
                 .is_some()
         );
         assert_eq!(
-            fixture.service.control.external_agents().next_generation,
+            fixture.service.control.external_agent_generation(),
             generation
         );
         assert!(

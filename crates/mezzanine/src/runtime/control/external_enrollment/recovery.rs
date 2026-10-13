@@ -201,6 +201,20 @@ impl LiveSourceAnchors {
 }
 
 impl RuntimeSessionService {
+    /// Snapshot/session replacement invalidates every retained source, including
+    /// one whose disposable registration already disappeared. Keep retired
+    /// lifetime fences, but release ancestry and any accepted transition input.
+    pub(in crate::runtime::control) fn retire_all_external_source_anchors(&mut self) {
+        for anchor in self.control.external_sources_mut().anchors.values_mut() {
+            if !anchor.retired {
+                anchor.retired = true;
+                anchor.revision = anchor.revision.saturating_add(1);
+                anchor.ancestry = None;
+                anchor.accepted_resume = None;
+            }
+        }
+    }
+
     /// Sets only a fixture memory quota; no production setting or authority exists.
     #[cfg(test)]
     pub(super) fn external_source_anchor_limit_for_tests(&mut self, limit: usize) {
@@ -521,9 +535,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("source resume observer epoch exhausted"))?;
         let generation = self
             .control
-            .external_agents()
-            .next_generation
-            .max(anchor.generation)
+            .external_agent_generation()
             .checked_add(1)
             .filter(|generation| *generation <= MAX_SAFE_SELECTOR)
             .ok_or_else(|| MezError::invalid_state("source resume generation exhausted"))?;
@@ -601,7 +613,7 @@ impl RuntimeSessionService {
                 .ok_or_else(|| MezError::invalid_state("source resume owner disappeared"))?,
             &work.session_id,
         );
-        let registry = self.control.external_agents_mut();
+        let (registry, next_generation) = self.control.external_agents_and_generation_mut();
         registry.bindings.remove(&anchor.digest);
         registry.enrollments.helper_targets.remove(
             binding.uid,
@@ -615,7 +627,7 @@ impl RuntimeSessionService {
             &work.session_id,
             digest,
         );
-        registry.next_generation = generation;
+        *next_generation = generation;
         registry.bindings.insert(digest, binding);
         self.record_external_source_anchor(digest);
         self.presentation.set_pane_harness_status(

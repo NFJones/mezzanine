@@ -23,7 +23,7 @@ impl RuntimeSessionService {
         work: &ExternalEnrollmentWork,
         connection: &ControlConnectionState,
     ) -> Result<String> {
-        let registry = self.control.external_agents_mut();
+        let (registry, next_generation) = self.control.external_agents_and_generation_mut();
         let binding = registry
             .bindings
             .get_mut(&digest)
@@ -85,8 +85,7 @@ impl RuntimeSessionService {
             .epoch
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("external observer epoch exhausted"))?;
-        let generation = registry
-            .next_generation
+        let generation = next_generation
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("external observer generation exhausted"))?;
         if curated.is_some()
@@ -156,7 +155,7 @@ impl RuntimeSessionService {
         };
         binding.enrollment = Some(enrollment);
         let pane = binding.pane_id.clone();
-        registry.next_generation = generation;
+        *next_generation = generation;
         if let Some((namespace_digest, namespace_boundary, boundary)) = namespace_state {
             *namespace_digest = replacement_digest;
             *namespace_boundary = boundary;
