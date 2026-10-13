@@ -572,6 +572,11 @@ impl RuntimeSessionService {
             prompt_input
                 .prompt
                 .set_selector_extra_candidates(self.runtime_command_selector_extra_candidates());
+            prompt_input.prompt.set_selector_working_directory(
+                self.active_pane_id()
+                    .ok()
+                    .and_then(|pane_id| self.pane_current_working_directory(&pane_id)),
+            );
         }
         self.presentation.primary_prompt_input = Some(prompt_input);
         Ok(())

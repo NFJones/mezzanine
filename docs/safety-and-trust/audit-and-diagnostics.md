@@ -111,6 +111,11 @@ new durable recovery acknowledgment is created. An already recovered handle's
 idempotent retry preserves its original receipt without resetting the projection.
 Missing-registration recovery still
 requires the original durable mapping and retained native service authority.
+If a retained ancestor exits, cleanup releases that unusable proof while keeping
+the surviving creator's retired source/instance fence. This is not new-source
+admission, process-death inference or accounting deletion. Diagnostic refresh
+cannot resurrect it; already-admitted expense still settles under its original
+owner. Descriptor budget is released when all legitimate shared references end.
 
 Recovery is limited to disposable registry/actor-task loss while the same service,
 actual creator and pane root remain alive. Complete service/OS-daemon replacement,
