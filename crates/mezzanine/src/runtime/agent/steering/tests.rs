@@ -13,6 +13,7 @@ fn steering_receipts_live_settlement_survives_recovery_history_pressure() {
             let (mut service, turn) = fixture();
             let history = if bytes {
                 vec![SteeringRecoveryReceipt {
+                    occurrence: Default::default(),
                     id: "old-large".into(),
                     acceptance_order: 1,
                     turn_id: None,
@@ -23,6 +24,7 @@ fn steering_receipts_live_settlement_survives_recovery_history_pressure() {
             } else {
                 (1..=128)
                     .map(|order| SteeringRecoveryReceipt {
+                        occurrence: Default::default(),
                         id: format!("old-{order}"),
                         acceptance_order: order,
                         turn_id: None,
@@ -49,10 +51,13 @@ fn steering_receipts_live_settlement_survives_recovery_history_pressure() {
             ));
             let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
             service.set_agent_transcript_store(store.clone());
+            service.presentation.occurrence_clock_millis = Some(Some(1234));
             service
                 .inject_agent_steering_with_display("%1", "fresh input", "fresh display")
                 .unwrap();
             let occurrence = service.steering_receipts_for_tests(&turn.turn_id)[0].clone();
+            assert_eq!(occurrence.occurrence.unix_millis, Some(1234));
+            service.presentation.occurrence_clock_millis = Some(Some(9000));
             if admitted {
                 service
                     .agent
@@ -87,8 +92,13 @@ fn steering_receipts_live_settlement_survives_recovery_history_pressure() {
                     )
                     .unwrap();
                     if source.receipt.id == occurrence.id {
+                        assert_eq!(source.receipt.occurrence, occurrence.occurrence);
+                        assert_eq!(
+                            entry.presentation.as_ref().unwrap().occurrence,
+                            occurrence.occurrence
+                        );
                         published += 1;
-                        store.append_presentation_many(&[entry]).unwrap();
+                        store.append_presentation_many(&[*entry]).unwrap();
                     }
                 }
             }
@@ -233,7 +243,7 @@ fn steering_receipts_promoted_write_fences_async_resize_until_settlement() {
         unreachable!();
     };
     store
-        .append_presentation_many(std::slice::from_ref(&entry))
+        .append_presentation_many(std::slice::from_ref(entry.as_ref()))
         .unwrap();
     let source =
         crate::storage::transcript::steering::Source::decode(entry.source_text.as_deref().unwrap())

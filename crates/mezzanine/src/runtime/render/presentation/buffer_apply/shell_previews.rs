@@ -49,7 +49,18 @@ impl RuntimeSessionService {
         let visual_rows = ordered
             .into_iter()
             .flat_map(|preview| {
-                shell_output_preview_visual_rows(&preview.lines, content_columns, max_visual_rows)
+                let rows =
+                    shell_output_preview_visual_rows(&preview.lines, content_columns, usize::MAX);
+                let omitted = rows.len().saturating_sub(max_visual_rows);
+                rows.into_iter()
+                    .enumerate()
+                    .skip(omitted)
+                    .map(|(index, line)| {
+                        let mut entry = preview.entry.clone();
+                        entry.first_row = preview.starts_at_entry && index == 0;
+                        (line, entry)
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
         let start = visual_rows
@@ -68,10 +79,12 @@ impl RuntimeSessionService {
             bytes.push_str("\r\n");
         }
         let mut first_line = true;
-        for line in visual_rows.into_iter().skip(start) {
+        let mut occurrence_ranges = Vec::new();
+        for (line, entry) in visual_rows.into_iter().skip(start) {
             if !first_line {
                 bytes.push_str("\r\n");
             }
+            let occurrence_start = bytes.len();
             first_line = false;
             physical_rows = physical_rows.saturating_add(1);
             let rendition =
@@ -92,11 +105,17 @@ impl RuntimeSessionService {
                 ui_theme,
             );
             bytes.push_str("\x1b[0m");
+            occurrence_ranges.push((occurrence_start..bytes.len(), entry));
         }
         if first_line {
             return Ok(0);
         }
-        Self::feed_agent_terminal_screen(screen, bytes.as_bytes(), "projecting shell previews")?;
+        Self::feed_presentation_ranges(
+            screen,
+            bytes.as_bytes(),
+            &occurrence_ranges,
+            "projecting shell previews",
+        )?;
         Ok(physical_rows)
     }
 
@@ -281,17 +300,31 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Updates one action-owned transient preview for a hidden shell command.
+    /// Exercises a tail-only preview without producer start-boundary proof.
     ///
     /// The full preview set is rebuilt from a preview-free baseline. Exact
     /// installed-screen lineage prevents a delayed update from replacing any
     /// durable output that appeared after the previous projection.
+    #[cfg(test)]
     pub(crate) fn update_agent_shell_output_preview(
         &mut self,
         pane_id: &str,
         owner: RuntimeAgentShellPreviewOwner,
         revision: u64,
         lines: &[String],
+    ) -> Result<()> {
+        self.update_agent_shell_output_preview_with_boundary(pane_id, owner, revision, lines, false)
+    }
+
+    /// Retains explicit producer start/crop evidence; bounded tails alone cannot
+    /// prove an original row boundary. Identity and clock survive every revision.
+    pub(crate) fn update_agent_shell_output_preview_with_boundary(
+        &mut self,
+        pane_id: &str,
+        owner: RuntimeAgentShellPreviewOwner,
+        revision: u64,
+        lines: &[String],
+        starts_at_entry: bool,
     ) -> Result<()> {
         if self.agent_shell_view_enabled(pane_id) || lines.is_empty() {
             return Ok(());
@@ -334,7 +367,8 @@ impl RuntimeSessionService {
             .agent_streaming_say_presentations
             .get(pane_id)
             .filter(|streaming| {
-                streaming.conversation_id == conversation_id
+                !streaming.layout_retired
+                    && streaming.conversation_id == conversation_id
                     && streaming.installed_lineage == current_lineage
             })
             .map(|streaming| streaming.provider_screen.as_ref().clone())
@@ -384,10 +418,22 @@ impl RuntimeSessionService {
                 presentation.next_order = presentation.next_order.saturating_add(1);
                 order
             });
+        let entry = presentation
+            .previews
+            .get(&owner)
+            .map(|preview| preview.entry.clone())
+            .unwrap_or_else(|| {
+                self.presentation_entry(
+                    pane_id,
+                    mez_core::presentation::PresentationOccurrenceBasis::LocalObservation,
+                )
+            });
         presentation.previews.insert(
             owner,
             RuntimeAgentShellPreview {
                 first_seen_order,
+                entry,
+                starts_at_entry,
                 revision,
                 lines,
             },
@@ -418,7 +464,8 @@ impl RuntimeSessionService {
             .agent_streaming_say_presentations
             .get_mut(pane_id)
             .filter(|streaming| {
-                streaming.conversation_id == conversation_id
+                !streaming.layout_retired
+                    && streaming.conversation_id == conversation_id
                     && streaming.installed_lineage == current_lineage
             })
         {

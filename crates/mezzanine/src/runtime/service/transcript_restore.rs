@@ -426,11 +426,12 @@ impl RuntimeSessionService {
                 {
                     self.replay_agent_transcript_fallback_to_terminal_buffer(
                         &pane_id,
-                        Self::runtime_resume_transcript_display(
+                        Self::runtime_resume_transcript_presentation(
                             &conversation_id,
                             usize::try_from(metadata.transcript_entries).unwrap_or(usize::MAX),
                             &transcript_fallback_entries,
                         ),
+                        false,
                     )?;
                 }
                 self.record_pane_transcript_ref(

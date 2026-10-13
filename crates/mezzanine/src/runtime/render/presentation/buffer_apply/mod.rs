@@ -8,6 +8,7 @@
 //! identity before it can replace visible rows or publish accepted sources.
 
 mod geometry;
+mod occurrence;
 mod outbound_messages;
 mod pending_steering;
 mod replay;
@@ -50,8 +51,9 @@ use super::{
 use crate::runtime::render::{
     ActionResult, AgentPresentationEntry, MezError, Result, RuntimeAgentShellPreviewOwner,
     RuntimeSessionService, RuntimeStreamingMessageSource, RuntimeStreamingSayAction,
-    RuntimeStreamingSayPresentation, RuntimeStreamingSayProjectionContext, Size, TerminalScreen,
-    current_unix_seconds, default_runtime_agent_prompt_input,
+    RuntimeStreamingSayPresentation, RuntimeStreamingSayProjectionContext,
+    RuntimeStreamingTextSource, Size, TerminalScreen, current_unix_seconds,
+    default_runtime_agent_prompt_input,
 };
 use crate::runtime::{
     PeerMessageLogMode, runtime_agent_peer_message_log_mode_from_config,
@@ -977,6 +979,13 @@ impl RuntimeSessionService {
             conversation_id: conversation_id.to_string(),
             sequence: 0,
             created_at_unix_seconds: current_unix_seconds().max(1),
+            presentation: self
+                .presentation
+                .occurrence_override
+                .as_deref()
+                .filter(|(owner, _)| owner == pane_id)
+                .map(|(_, entry)| entry.clone())
+                .filter(mez_core::presentation::PresentationEntry::is_valid),
             pane_id: pane_id.to_string(),
             turn_id: (!turn_id.is_empty()).then(|| turn_id.to_string()),
             terminal_width,
@@ -1041,6 +1050,7 @@ impl RuntimeSessionService {
         let projection = self.streaming_say_projection(
             &RuntimeStreamingSayAction {
                 status: mez_agent::SayStatus::Final,
+                entry: None,
                 content_type: content_type.to_string(),
                 text: text.to_string(),
                 complete: true,
@@ -1063,7 +1073,12 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         execution: &mez_agent::AgentTurnExecution,
-        rows: (String, Vec<String>, Vec<String>),
+        rows: (
+            String,
+            Vec<String>,
+            Vec<String>,
+            Option<mez_core::presentation::PresentationEntry>,
+        ),
         text: &str,
     ) -> Result<()> {
         let encoded = self
@@ -1078,12 +1093,10 @@ impl RuntimeSessionService {
                         crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE,
                     )
                 });
-        self.persist_agent_presentation_entry(
+        self.persist_streamed_presentation(
             pane_id,
-            vec![rows.0; rows.1.len()],
-            rows.1,
-            rows.2,
-            String::new(),
+            rows.3,
+            (vec![rows.0; rows.1.len()], rows.1, rows.2),
             Some(source),
         );
         Ok(())
@@ -1099,7 +1112,12 @@ impl RuntimeSessionService {
             usize,
             crate::storage::transcript::activity::ActivityComponentKind,
         ),
-        rows: (String, Vec<String>, Vec<String>),
+        rows: (
+            String,
+            Vec<String>,
+            Vec<String>,
+            Option<mez_core::presentation::PresentationEntry>,
+        ),
         source: (&str, &str),
     ) -> Result<()> {
         let encoded = self
@@ -1111,12 +1129,10 @@ impl RuntimeSessionService {
                 crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE,
             )
         });
-        self.persist_agent_presentation_entry(
+        self.persist_streamed_presentation(
             pane_id,
-            vec![rows.0; rows.1.len()],
-            rows.1,
-            rows.2,
-            String::new(),
+            rows.3,
+            (vec![rows.0; rows.1.len()], rows.1, rows.2),
             Some(source),
         );
         Ok(())
@@ -1170,6 +1186,13 @@ impl RuntimeSessionService {
             conversation_id,
             sequence: 0,
             created_at_unix_seconds: current_unix_seconds().max(1),
+            presentation: self
+                .presentation
+                .occurrence_override
+                .as_deref()
+                .filter(|(owner, _)| owner == pane_id)
+                .map(|(_, entry)| entry.clone())
+                .filter(mez_core::presentation::PresentationEntry::is_valid),
             pane_id: pane_id.to_string(),
             turn_id: running_turn_id,
             terminal_width,
@@ -1689,7 +1712,7 @@ impl RuntimeSessionService {
             .agent_streaming_say_presentations
             .contains_key(pane_id)
         {
-            self.discard_agent_streaming_say_presentation(pane_id, None)?;
+            self.retire_agent_streaming_layout(pane_id)?;
         }
         if let Some(preview) = self
             .presentation
@@ -1723,6 +1746,33 @@ impl RuntimeSessionService {
     /// Appends ordinary styled rows with an explicit identity-bearing source
     /// when supplied by their producer. Replay and legacy rows use the same UI.
     pub(in crate::runtime) fn append_agent_terminal_styled_lines_with_source(
+        &mut self,
+        pane_id: &str,
+        styled_lines: &[(AgentTerminalPresentationStyle, String)],
+        source_override: Option<(&str, &str)>,
+    ) -> Result<()> {
+        if !self.has_presentation_boundary(pane_id) {
+            return self.append_agent_terminal_styled_lines_with_entry(
+                pane_id,
+                styled_lines,
+                source_override,
+            );
+        }
+        let entry = self.presentation_entry(
+            pane_id,
+            mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+        );
+        self.with_presentation_entry(pane_id, entry, |service| {
+            service.append_agent_terminal_styled_lines_with_entry(
+                pane_id,
+                styled_lines,
+                source_override,
+            )
+        })
+    }
+
+    /// Applies one grouped semantic styled entry with already captured provenance.
+    fn append_agent_terminal_styled_lines_with_entry(
         &mut self,
         pane_id: &str,
         styled_lines: &[(AgentTerminalPresentationStyle, String)],
@@ -1774,13 +1824,24 @@ impl RuntimeSessionService {
             } else {
                 bytes.push_str("\r\n");
             }
+            let prefix_len = bytes.len();
             for (style, line) in &wrapped_styled_lines {
                 append_styled_agent_terminal_line(&mut bytes, *style, line, &ui_theme);
                 bytes.push_str("\x1b[0m\r\n");
             }
-            Self::feed_agent_terminal_screen(
+            let entry = self.presentation_entry(
+                pane_id,
+                mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+            );
+            let ranges = if self.has_presentation_boundary(pane_id) {
+                vec![(prefix_len..bytes.len(), entry)]
+            } else {
+                Vec::new()
+            };
+            Self::feed_presentation_ranges(
                 &mut screen,
                 bytes.as_bytes(),
+                &ranges,
                 "appending styled agent lines",
             )?;
             screen.set_recent_normal_copy_texts(&wrapped_copy_lines, AGENT_COPY_SKIP_LINE);
@@ -1857,6 +1918,39 @@ impl RuntimeSessionService {
         copy_lines: &[String],
         source: Option<(&str, &str)>,
     ) -> Result<()> {
+        if !self.has_presentation_boundary(pane_id) {
+            return self.append_agent_terminal_rendered_lines_with_entry(
+                pane_id,
+                style,
+                rendered_lines,
+                copy_lines,
+                source,
+            );
+        }
+        let entry = self.presentation_entry(
+            pane_id,
+            mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+        );
+        self.with_presentation_entry(pane_id, entry, |service| {
+            service.append_agent_terminal_rendered_lines_with_entry(
+                pane_id,
+                style,
+                rendered_lines,
+                copy_lines,
+                source,
+            )
+        })
+    }
+
+    /// Writes transformed rows belonging to one already captured semantic entry.
+    fn append_agent_terminal_rendered_lines_with_entry(
+        &mut self,
+        pane_id: &str,
+        style: AgentTerminalPresentationStyle,
+        rendered_lines: &[RichTextLine],
+        copy_lines: &[String],
+        source: Option<(&str, &str)>,
+    ) -> Result<()> {
         if rendered_lines.is_empty() {
             return Ok(());
         }
@@ -1877,13 +1971,24 @@ impl RuntimeSessionService {
             } else {
                 bytes.push_str("\r\n");
             }
+            let prefix_len = bytes.len();
             for line in rendered_lines {
                 append_styled_agent_terminal_rendered_line(&mut bytes, style, line, &ui_theme);
                 bytes.push_str("\x1b[0m\r\n");
             }
-            Self::feed_agent_terminal_screen(
+            let entry = self.presentation_entry(
+                pane_id,
+                mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+            );
+            let ranges = if self.has_presentation_boundary(pane_id) {
+                vec![(prefix_len..bytes.len(), entry)]
+            } else {
+                Vec::new()
+            };
+            Self::feed_presentation_ranges(
                 &mut screen,
                 bytes.as_bytes(),
+                &ranges,
                 "appending rendered agent lines",
             )?;
             screen.set_recent_normal_copy_texts(copy_lines, AGENT_COPY_SKIP_LINE);
@@ -1960,6 +2065,9 @@ impl RuntimeSessionService {
             .agent_streaming_say_presentations
             .get(pane_id)
             .ok_or_else(|| MezError::invalid_state("streaming presentation is unavailable"))?;
+        if presentation.layout_retired {
+            return Ok(());
+        }
         let conversation_id = presentation.conversation_id.clone();
         let mut candidate = presentation.provider_screen.as_ref().clone();
         let cursor = candidate.cursor_state();
@@ -1990,6 +2098,9 @@ impl RuntimeSessionService {
             .agent_streaming_say_presentations
             .get(pane_id)
             .ok_or_else(|| MezError::invalid_state("streaming say presentation is unavailable"))?;
+        if presentation.layout_retired {
+            return Ok(());
+        }
         let conversation_id = presentation.conversation_id.clone();
         let mut candidate = presentation.provider_screen.as_ref().clone();
         let cursor = candidate.cursor_state();
@@ -2213,7 +2324,34 @@ impl RuntimeSessionService {
                     .agent_published_header_thinking
                     .contains(key)
             }) {
-                self.append_agent_thinking_text_to_terminal_buffer(pane_id, &thinking)?;
+                let mut entry = self.presentation_entry(
+                    pane_id,
+                    mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+                );
+                entry.id.push_str(":summary");
+                if let Some(source) = activity.as_ref() {
+                    let owner = self.presentation.agent_provider_log_orders.iter().find_map(
+                        |((pane, turn, conversation, group), owner)| {
+                            (pane == pane_id
+                                && turn == &source.turn_id
+                                && conversation == &source.conversation_id
+                                && group.as_str() == source.response_id)
+                                .then_some(owner)
+                        },
+                    );
+                    if let Some(retained) = owner.and_then(|owner| {
+                        owner
+                            .streamed_entries
+                            .get(&(source.action_ordinal, "summary".to_string()))
+                    }) {
+                        entry = retained.clone();
+                    } else {
+                        entry.occurrence = owner.map(|owner| owner.occurrence).unwrap_or_default();
+                    }
+                }
+                self.with_presentation_entry(pane_id, entry, |service| {
+                    service.append_agent_thinking_text_to_terminal_buffer(pane_id, &thinking)
+                })?;
                 if let Some(key) = thinking_key {
                     self.presentation
                         .agent_published_header_thinking

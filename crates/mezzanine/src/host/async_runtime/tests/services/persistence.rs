@@ -35,6 +35,7 @@ async fn async_steering_persistence_worker_retries_without_repeating_promotion()
             version: 1,
             conversation_id: conversation.clone(),
             receipt: SteeringRecoveryReceipt {
+                occurrence: Default::default(),
                 id: "worker-occurrence".into(),
                 acceptance_order: 1,
                 turn_id: Some("old-turn".into()),
@@ -1175,6 +1176,7 @@ async fn async_persistence_side_effect_service_batches_adjacent_presentations() 
     let _ = std::fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     let presentation = |turn_id: &str, created_at_unix_seconds| AgentPresentationEntry {
+        presentation: None,
         conversation_id: "worker-presentation".to_string(),
         sequence: 0,
         created_at_unix_seconds,

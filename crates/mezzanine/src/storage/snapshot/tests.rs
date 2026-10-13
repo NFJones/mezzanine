@@ -644,6 +644,10 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
         .unwrap();
     let message_state = message_service.snapshot_state();
     let unsettled_peer_presentations = vec![SnapshotUnsettledPeerPresentation {
+        occurrence: mez_core::presentation::PresentationOccurrence::new(
+            Some(1234),
+            mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+        ),
         identity: "peer-message recipient=agent-%1 sequence=1 id=snapshot-message".to_string(),
         recipient_agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
@@ -705,10 +709,40 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     let loaded = repo.inspect_payload("snap-1").unwrap();
     let plan = payload.resume_plan();
 
-    assert!(encoded.starts_with("payload_version\t6\n"));
+    assert!(encoded.starts_with("payload_version\t7\n"));
     assert!(encoded.contains("\nwindow_layout\t@1\t"));
     assert!(encoded.contains("\npane_shell\t%1\t\texited\t\tunknown\n"));
     assert_eq!(loaded, payload);
+    assert_eq!(
+        loaded.unsettled_peer_presentations[0]
+            .occurrence
+            .unix_millis,
+        Some(1234)
+    );
+    let mut legacy_receipt = serde_json::to_value(&loaded.unsettled_peer_presentations[0]).unwrap();
+    legacy_receipt.as_object_mut().unwrap().remove("occurrence");
+    let legacy_receipt: SnapshotUnsettledPeerPresentation =
+        serde_json::from_value(legacy_receipt).unwrap();
+    assert_eq!(
+        legacy_receipt.occurrence,
+        mez_core::presentation::PresentationOccurrence::default()
+    );
+    legacy_receipt.validate().unwrap();
+    let occurrence_field = "\"occurrence\":{\"unix_millis\":1234,\"basis\":\"LocalAcceptance\"},";
+    assert!(
+        encoded.contains(occurrence_field),
+        "known stamp must be encoded before constructing the legacy fixture"
+    );
+    let legacy_payload = encoded
+        .replacen("payload_version\t7\n", "payload_version\t6\n", 1)
+        .replace(occurrence_field, "");
+    fs::write(root.join("legacy-occurrence.payload"), legacy_payload).unwrap();
+    let legacy_payload = repo.inspect_payload("legacy-occurrence").unwrap();
+    assert_eq!(legacy_payload.payload_version, 6);
+    assert_eq!(
+        legacy_payload.unsettled_peer_presentations[0].occurrence,
+        mez_core::presentation::PresentationOccurrence::default()
+    );
     assert_eq!(loaded.shell.path, "/usr/bin/zsh");
     assert_eq!(loaded.shell.source, "shell-env");
     assert!(!loaded.shell.used_fallback);
@@ -823,7 +857,7 @@ fn snapshot_v4_normalizes_legacy_focus_into_landing_navigation() {
     let path = root.join("legacy.payload");
     let legacy = fs::read_to_string(&path)
         .unwrap()
-        .replace("payload_version\t6\n", "payload_version\t4\n")
+        .replace("payload_version\t7\n", "payload_version\t4\n")
         .lines()
         .filter(|line| !line.starts_with("landing_navigation\t"))
         .collect::<Vec<_>>()
@@ -1270,7 +1304,7 @@ fn snapshot_v2_through_v5_keep_peer_presentation_outbox_empty() {
         fs::write(
             &path,
             v6.replacen(
-                "payload_version\t6\n",
+                "payload_version\t7\n",
                 format!("payload_version\t{version}\n").as_str(),
                 1,
             ),
@@ -1285,7 +1319,7 @@ fn snapshot_v2_through_v5_keep_peer_presentation_outbox_empty() {
     }
     fs::write(
         &path,
-        v6.replacen("payload_version\t6\n", "payload_version\t5\n", 1)
+        v6.replacen("payload_version\t7\n", "payload_version\t5\n", 1)
             + "unsettled_peer_presentations\t[]\n",
     )
     .unwrap();
@@ -1361,6 +1395,7 @@ fn snapshot_v6_peer_presentation_outbox_enforces_boundary_without_loss() {
     }];
     payload.unsettled_peer_presentations = (1..=1_024)
         .map(|sequence| SnapshotUnsettledPeerPresentation {
+            occurrence: Default::default(),
             identity: format!(
                 "peer-message recipient=agent-%1 sequence={sequence} id=message-{sequence}"
             ),
@@ -1380,6 +1415,7 @@ fn snapshot_v6_peer_presentation_outbox_enforces_boundary_without_loss() {
 
     payload.validate().unwrap();
     let overflow = SnapshotUnsettledPeerPresentation {
+        occurrence: Default::default(),
         identity: "peer-message recipient=agent-%1 sequence=1025 id=message-1025".to_string(),
         recipient_agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
@@ -1450,6 +1486,7 @@ fn snapshot_v6_peer_presentation_payload_round_trips_utf8_at_byte_bound() {
         transcript_entries: 0,
     }];
     payload.unsettled_peer_presentations = vec![SnapshotUnsettledPeerPresentation {
+        occurrence: Default::default(),
         identity: "peer-message recipient=agent-%1 sequence=1 id=utf8".to_string(),
         recipient_agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
@@ -1485,6 +1522,7 @@ fn snapshot_v6_peer_presentation_rejects_missing_cursor_or_owner() {
     .unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&session);
     payload.unsettled_peer_presentations = vec![SnapshotUnsettledPeerPresentation {
+        occurrence: Default::default(),
         identity: "peer-message recipient=agent-%1 sequence=1 id=malformed".to_string(),
         recipient_agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
@@ -1575,6 +1613,7 @@ fn snapshot_v6_peer_presentation_rejects_invalid_recipient_pane_ownership() {
         transcript_entries: 0,
     }];
     payload.unsettled_peer_presentations = vec![SnapshotUnsettledPeerPresentation {
+        occurrence: Default::default(),
         identity: "peer-message recipient=agent-%1 sequence=1 id=ownership".to_string(),
         recipient_agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),

@@ -8,10 +8,21 @@
 use super::*;
 use crate::runtime::{RenderInvalidationReason, RuntimeTransition};
 
+/// Compares rendered text/style/copy parity separately from immutable producer
+/// provenance. Independent static and streamed occurrences intentionally differ
+/// in identity and clock basis; occurrence tests assert those fields directly.
+fn agent_visual_rows(mut rows: Vec<TerminalStyledLine>) -> Vec<TerminalStyledLine> {
+    for row in &mut rows {
+        row.presentation = None;
+    }
+    rows
+}
+
 mod command_promotion;
 mod header_previews;
 mod history_reconstruction;
 mod intervening_writes;
+mod occurrence;
 mod peer_messages;
 mod pending_messages;
 mod pending_steering;
@@ -239,6 +250,7 @@ fn runtime_structured_pane_log_replay_fallback_honors_configured_column_cap() {
         turn_id: None,
         terminal_width: 80,
         style_names: vec!["status".to_string(), "status".to_string()],
+        presentation: None,
         display_lines: vec![source.to_string(), thinking.to_string()],
         copy_lines: vec![source.to_string(), thinking.to_string()],
         ansi_text: None,
@@ -313,6 +325,7 @@ fn runtime_legacy_raw_ansi_replay_is_not_rewrapped_to_agent_column_cap() {
         turn_id: None,
         terminal_width: 80,
         style_names: vec!["status".to_string()],
+        presentation: None,
         display_lines: vec![display.to_string()],
         copy_lines: vec![display.to_string()],
         ansi_text: Some(format!("\r\x1b[2m{display}\x1b[0m\r\n")),

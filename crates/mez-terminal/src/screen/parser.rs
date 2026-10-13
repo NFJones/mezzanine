@@ -462,6 +462,7 @@ impl TerminalScreen {
             renditions: self.renditions.clone(),
             line_wraps: self.line_wraps.clone(),
             line_copy_texts: self.line_copy_texts.clone(),
+            line_presentations: self.line_presentations.clone(),
             cursor: self.cursor,
             cursor_visible: self.cursor_visible,
             wrap_pending: self.wrap_pending,
@@ -483,6 +484,7 @@ impl TerminalScreen {
         self.renditions = state.renditions;
         self.line_wraps = state.line_wraps;
         self.line_copy_texts = state.line_copy_texts;
+        self.line_presentations = state.line_presentations;
         self.cursor = state.cursor;
         self.cursor_visible = state.cursor_visible;
         self.wrap_pending = state.wrap_pending;

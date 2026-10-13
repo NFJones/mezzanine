@@ -249,6 +249,9 @@ pub struct AgentPresentationEntry {
     pub sequence: u64,
     /// Creation time as Unix seconds.
     pub created_at_unix_seconds: u64,
+    /// Immutable semantic occurrence and entry boundary, separate from record
+    /// creation/catalog time. Opaque legacy rows have no proven entry metadata.
+    pub presentation: Option<mez_core::presentation::PresentationEntry>,
     /// Pane id that rendered the presentation entry.
     pub pane_id: String,
     /// Turn id associated with the rendered entry, if known.

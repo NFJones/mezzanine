@@ -81,7 +81,10 @@ impl RuntimeSessionService {
         text: &str,
     ) -> Result<()> {
         let source = self.activity_rationale_source(pane_id, execution, text)?;
-        self.append_agent_thinking_with_activity(pane_id, text, source)
+        let entry = self.provider_component_entry(pane_id, execution, None, "rationale")?;
+        self.with_presentation_entry(pane_id, entry, |service| {
+            service.append_agent_thinking_with_activity(pane_id, text, source)
+        })
     }
 
     /// Returns response-wide accepted identity for both static and promoted
@@ -187,7 +190,22 @@ impl RuntimeSessionService {
             preview_source: None,
             intent: self.activity_intent_for_result(pane_id, execution, action),
         };
-        self.append_agent_command_preview_with_activity(pane_id, command, false, Some(activity))
+        let entry =
+            self.current_presentation_entry(pane_id)
+                .unwrap_or(self.provider_component_entry(
+                    pane_id,
+                    execution,
+                    Some(ordinal),
+                    "command",
+                )?);
+        self.with_presentation_entry(pane_id, entry, |service| {
+            service.append_agent_command_preview_with_activity(
+                pane_id,
+                command,
+                false,
+                Some(activity),
+            )
+        })
     }
 
     /// Binds a visible result preview to its accepted response and explicit
@@ -357,6 +375,7 @@ impl RuntimeSessionService {
                 Ok(())
             }
             RuntimeProviderLogInput::Validated(execution) => {
+                self.retain_provider_presentation_order(pane_id, execution)?;
                 self.reconcile_agent_streaming_say_completion_with_render_intent(
                     pane_id, turn_id, execution,
                 )?;
@@ -492,14 +511,89 @@ impl RuntimeSessionService {
         {
             return Ok(());
         }
-        self.presentation
+        if !self
+            .presentation
             .agent_queued_provider_headers
-            .entry(key)
-            .or_insert_with(|| (action.clone(), header));
+            .contains_key(&key)
+        {
+            let entry = self
+                .retained_provider_component_entry(pane_id, execution, Some(index), "header")?
+                .unwrap_or_else(|| {
+                    self.presentation_entry(
+                        pane_id,
+                        mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+                    )
+                });
+            self.presentation
+                .agent_queued_provider_headers
+                .insert(key, (action.clone(), header, Some(entry)));
+        }
         Ok(())
     }
 
-    /// Queues a validated shell preview for publication at its action ordinal.
+    /// Presents one executor-selected command under its exact transaction owner.
+    /// Duplicate callbacks retain the installed/queued entry without a new clock.
+    pub(crate) fn queue_ordered_provider_transaction_command(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        action: &mez_agent::AgentAction,
+        command: &str,
+        marker: &str,
+    ) -> Result<()> {
+        let Some(conversation) = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+        else {
+            return Ok(());
+        };
+        let group = super::provider_execution::provider_log_execution_group_id(execution)?;
+        let Some(index) = execution.response.action_batch.as_ref().and_then(|batch| {
+            batch
+                .actions
+                .iter()
+                .position(|candidate| candidate.id == action.id)
+        }) else {
+            return Ok(());
+        };
+        let key = (
+            pane_id.to_string(),
+            execution.request.turn_id.clone(),
+            conversation.clone(),
+            group.clone(),
+            index,
+        );
+        let id = format!(
+            "transaction-command:{conversation}:{}:{index}:{marker}",
+            group.as_str()
+        );
+        if self
+            .presentation
+            .agent_published_provider_commands
+            .contains(&(key.clone(), id.clone()))
+        {
+            return Ok(());
+        }
+        let entry = self
+            .presentation
+            .agent_queued_provider_commands
+            .get(&key)
+            .and_then(|entries| entries.iter().find(|(_, entry)| entry.id == id))
+            .map(|(_, entry)| entry.clone())
+            .unwrap_or_else(|| mez_core::presentation::PresentationEntry {
+                id,
+                occurrence: self.capture_presentation_occurrence(
+                    mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+                ),
+                first_row: true,
+            });
+        self.with_presentation_entry(pane_id, entry, |service| {
+            service.queue_ordered_provider_command(pane_id, execution, action, command)
+        })
+    }
+
+    /// Queues a validated model command intent for publication at its action ordinal.
     pub(crate) fn queue_ordered_provider_command(
         &mut self,
         pane_id: &str,
@@ -530,7 +624,15 @@ impl RuntimeSessionService {
             group,
             index,
         );
-        let source_key = (key.clone(), command.to_string());
+        let entry =
+            self.current_presentation_entry(pane_id)
+                .unwrap_or(self.provider_component_entry(
+                    pane_id,
+                    execution,
+                    Some(index),
+                    "command",
+                )?);
+        let source_key = (key.clone(), entry.id.clone());
         if self
             .presentation
             .agent_published_provider_commands
@@ -543,7 +645,9 @@ impl RuntimeSessionService {
             .agent_published_provider_headers
             .contains(&key)
         {
-            self.append_activity_command_for_execution(pane_id, execution, action, command)?;
+            self.with_presentation_entry(pane_id, entry, |service| {
+                service.append_activity_command_for_execution(pane_id, execution, action, command)
+            })?;
             self.presentation
                 .agent_published_provider_commands
                 .insert(source_key);
@@ -552,11 +656,15 @@ impl RuntimeSessionService {
         self.presentation
             .agent_queued_provider_headers
             .entry(key.clone())
-            .or_insert_with(|| (action.clone(), String::new()));
-        self.presentation
+            .or_insert_with(|| (action.clone(), String::new(), None));
+        let commands = self
+            .presentation
             .agent_queued_provider_commands
             .entry(key)
-            .or_insert_with(|| command.to_string());
+            .or_default();
+        if !commands.iter().any(|(_, existing)| existing.id == entry.id) {
+            commands.push((command.to_string(), entry));
+        }
         self.flush_ordered_provider_headers(pane_id, execution)
     }
 
@@ -626,10 +734,19 @@ impl RuntimeSessionService {
                 .insert(source_key);
             return Ok(());
         }
-        self.presentation
+        if !self
+            .presentation
             .agent_queued_provider_results
-            .entry(key)
-            .or_insert_with(|| (action.clone(), result.clone(), text));
+            .contains_key(&key)
+        {
+            let entry = self.presentation_entry(
+                pane_id,
+                mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+            );
+            self.presentation
+                .agent_queued_provider_results
+                .insert(key, (action.clone(), result.clone(), text, entry));
+        }
         Ok(())
     }
 
@@ -678,7 +795,7 @@ impl RuntimeSessionService {
             .presentation
             .agent_provider_log_orders
             .get(&owner)
-            .cloned()
+            .map(|owner| owner.actions.clone())
         else {
             return Ok(());
         };
@@ -771,7 +888,7 @@ impl RuntimeSessionService {
                 {
                     break;
                 }
-                if let Some((approved_action, header)) = self
+                if let Some((approved_action, header, entry)) = self
                     .presentation
                     .agent_queued_provider_headers
                     .get(&key)
@@ -788,48 +905,63 @@ impl RuntimeSessionService {
                         crate::storage::transcript::activity::ActivityComponentKind::Header,
                         (&header, "application/vnd.mezzanine.agent-presentation.action-header+text; charset=utf-8"),
                     )?;
-                        self.append_agent_action_header_with_activity(
+                        let entry = entry.unwrap_or(self.provider_component_entry(
                             pane_id,
-                            &approved_action,
-                            &header,
-                            activity,
-                        )?;
+                            execution,
+                            Some(index),
+                            "header",
+                        )?);
+                        self.with_presentation_entry(pane_id, entry, |service| {
+                            service.append_agent_action_header_with_activity(
+                                pane_id,
+                                &approved_action,
+                                &header,
+                                activity,
+                            )
+                        })?;
                     }
                     self.presentation
                         .agent_published_provider_headers
                         .insert(key.clone());
                     self.presentation.agent_queued_provider_headers.remove(&key);
                 }
-                if let Some(command) = self
+                if let Some(commands) = self
                     .presentation
                     .agent_queued_provider_commands
                     .get(&key)
                     .cloned()
                 {
-                    self.append_activity_command_for_execution(
-                        pane_id, execution, action, &command,
-                    )?;
-                    self.presentation
-                        .agent_published_provider_commands
-                        .insert((key.clone(), command));
+                    for (command, entry) in commands {
+                        let entry_id = entry.id.clone();
+                        self.with_presentation_entry(pane_id, entry, |service| {
+                            service.append_activity_command_for_execution(
+                                pane_id, execution, action, &command,
+                            )
+                        })?;
+                        self.presentation
+                            .agent_published_provider_commands
+                            .insert((key.clone(), entry_id));
+                    }
                     self.presentation
                         .agent_queued_provider_commands
                         .remove(&key);
                 }
-                if let Some((action, result, text)) = self
+                if let Some((action, result, text, entry)) = self
                     .presentation
                     .agent_queued_provider_results
                     .get(&key)
                     .cloned()
                 {
-                    self.append_ordered_activity_result(
-                        pane_id,
-                        (key.3.as_str(), key.4, None),
-                        &action,
-                        &result,
-                        &text,
-                        self.activity_intent_for_result(pane_id, execution, &action),
-                    )?;
+                    self.with_presentation_entry(pane_id, entry, |service| {
+                        service.append_ordered_activity_result(
+                            pane_id,
+                            (key.3.as_str(), key.4, None),
+                            &action,
+                            &result,
+                            &text,
+                            service.activity_intent_for_result(pane_id, execution, &action),
+                        )
+                    })?;
                     self.presentation
                         .agent_published_provider_results
                         .insert((key.clone(), text));
@@ -841,20 +973,25 @@ impl RuntimeSessionService {
                     .get(&key)
                     .cloned()
                 {
-                    for (is_error, line) in outcomes {
-                        if let Some(result) = execution
-                            .action_results
-                            .iter()
-                            .find(|result| result.action_id == action.id)
-                        {
-                            self.append_ordered_activity_outcome(
-                                pane_id, execution, action, result, is_error, &line,
-                            )?;
-                        } else if is_error {
-                            self.append_agent_error_text_to_terminal_buffer(pane_id, &line)?;
-                        } else {
-                            self.append_agent_status_text_to_terminal_buffer(pane_id, &line)?;
-                        }
+                    for (is_error, line, entry) in outcomes {
+                        self.with_presentation_entry(pane_id, entry, |service| {
+                            if let Some(result) = execution
+                                .action_results
+                                .iter()
+                                .find(|result| result.action_id == action.id)
+                            {
+                                service.append_ordered_activity_outcome(
+                                    pane_id, execution, action, result, is_error, &line,
+                                )?;
+                            } else if is_error {
+                                service
+                                    .append_agent_error_text_to_terminal_buffer(pane_id, &line)?;
+                            } else {
+                                service
+                                    .append_agent_status_text_to_terminal_buffer(pane_id, &line)?;
+                            }
+                            Ok(())
+                        })?;
                         self.presentation.agent_published_provider_outcomes.insert((
                             key.clone(),
                             is_error,
@@ -865,7 +1002,7 @@ impl RuntimeSessionService {
                             .agent_queued_provider_outcomes
                             .get_mut(&key)
                         {
-                            pending.retain(|entry| entry != &(is_error, line.clone()));
+                            pending.retain(|entry| entry.0 != is_error || entry.1 != line);
                         }
                     }
                     self.presentation
@@ -1149,18 +1286,7 @@ impl RuntimeSessionService {
             return Ok(());
         };
 
-        if let Some(session) = self.agent_shell_store().get(pane_id) {
-            let group = super::provider_execution::provider_log_execution_group_id(execution)?;
-            self.presentation
-                .agent_provider_log_orders
-                .entry((
-                    pane_id.to_string(),
-                    execution.request.turn_id.clone(),
-                    session.session_id.clone(),
-                    group,
-                ))
-                .or_insert_with(|| batch.actions.clone());
-        }
+        self.retain_provider_presentation_order(pane_id, execution)?;
 
         let visible_action_texts = runtime_agent_batch_visible_action_texts(batch);
         let streamed_response_was_promoted =
@@ -1222,11 +1348,19 @@ impl RuntimeSessionService {
                         pending_runtime_visible_action = true;
                     } else {
                         emitted_user_visible_action = true;
-                        self.append_agent_assistant_content_to_terminal_buffer(
+                        let entry = self.provider_component_entry(
                             pane_id,
-                            text,
-                            content_type,
+                            execution,
+                            Some(action_index),
+                            "say",
                         )?;
+                        self.with_presentation_entry(pane_id, entry, |service| {
+                            service.append_agent_assistant_content_to_terminal_buffer(
+                                pane_id,
+                                text,
+                                content_type,
+                            )
+                        })?;
                         if let Some(session) = self.agent_shell_store().get(pane_id) {
                             let group = super::provider_execution::provider_log_execution_group_id(
                                 execution,
@@ -1439,11 +1573,15 @@ impl RuntimeSessionService {
                 }) {
                     continue;
                 }
-                self.append_agent_assistant_content_to_terminal_buffer(
-                    pane_id,
-                    text,
-                    content_type,
-                )?;
+                let entry =
+                    self.provider_component_entry(pane_id, execution, Some(action_index), "say")?;
+                self.with_presentation_entry(pane_id, entry, |service| {
+                    service.append_agent_assistant_content_to_terminal_buffer(
+                        pane_id,
+                        text,
+                        content_type,
+                    )
+                })?;
                 if let Some(key) = publication_key {
                     self.presentation
                         .agent_deferred_provider_progress
@@ -1584,17 +1722,29 @@ impl RuntimeSessionService {
                 self.presentation
                     .agent_queued_provider_headers
                     .entry(key.clone())
-                    .or_insert_with(|| (action.clone(), String::new()));
+                    .or_insert_with(|| (action.clone(), String::new(), None));
+                let already_queued = self
+                    .presentation
+                    .agent_queued_provider_outcomes
+                    .get(&key)
+                    .is_some_and(|pending| {
+                        pending
+                            .iter()
+                            .any(|entry| entry.0 == is_error && entry.1 == line)
+                    });
+                let occurrence = (!already_queued).then(|| {
+                    self.presentation_entry(
+                        pane_id,
+                        mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+                    )
+                });
                 let pending = self
                     .presentation
                     .agent_queued_provider_outcomes
                     .entry(key)
                     .or_default();
-                if !pending
-                    .iter()
-                    .any(|entry| entry == &(is_error, line.clone()))
-                {
-                    pending.push((is_error, line));
+                if let Some(entry) = occurrence {
+                    pending.push((is_error, line, entry));
                 }
                 self.flush_ordered_provider_headers(pane_id, execution)?;
             } else if is_error {

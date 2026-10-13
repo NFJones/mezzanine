@@ -1021,6 +1021,10 @@ impl RuntimeSessionService {
             routed_worker_profile: None,
             completion: None,
         });
+        let prompt_entry = self.presentation_entry(
+            pane_id,
+            mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+        );
         let started = match self.start_agent_loop_work_turn(pane_id) {
             Ok(started) => started,
             Err(error) => {
@@ -1036,7 +1040,9 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
-        self.append_agent_user_prompt_to_terminal_buffer(pane_id, input)?;
+        self.with_presentation_entry(pane_id, prompt_entry, |service| {
+            service.append_agent_user_prompt_to_terminal_buffer(pane_id, input)
+        })?;
         let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "loop".to_string(),

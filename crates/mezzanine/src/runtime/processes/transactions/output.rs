@@ -435,6 +435,13 @@ impl RuntimeSessionService {
                         output_preview_lines,
                     );
                     if !lines.is_empty() {
+                        let starts_at_entry = !transaction.observed_output_truncated
+                            && transaction
+                                .observed_output_preview
+                                .lines()
+                                .filter(|line| !line.trim().is_empty())
+                                .count()
+                                <= output_preview_lines;
                         status_line_updates.push((
                             transaction.turn_id.clone(),
                             action_id.clone(),
@@ -442,6 +449,7 @@ impl RuntimeSessionService {
                             transaction.pane_id.clone(),
                             u64::try_from(transaction.observed_output_bytes).unwrap_or(u64::MAX),
                             lines,
+                            starts_at_entry,
                         ));
                     }
                 }
@@ -471,9 +479,11 @@ impl RuntimeSessionService {
                 let _ = self.promote_confirmed_action_presentation_progress(&progress);
             }
         }
-        for (turn_id, action_id, marker, pane_id, revision, lines) in status_line_updates {
+        for (turn_id, action_id, marker, pane_id, revision, lines, starts_at_entry) in
+            status_line_updates
+        {
             if self.agent_shell_transaction_action_shows_live_output(&turn_id, &action_id) {
-                let _ = self.update_agent_shell_output_preview(
+                let _ = self.update_agent_shell_output_preview_with_boundary(
                     &pane_id,
                     RuntimeAgentShellPreviewOwner {
                         turn_id,
@@ -482,6 +492,7 @@ impl RuntimeSessionService {
                     },
                     revision,
                     &lines,
+                    starts_at_entry,
                 );
             }
         }

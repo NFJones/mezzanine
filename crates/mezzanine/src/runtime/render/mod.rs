@@ -360,6 +360,10 @@ pub(crate) struct RuntimeAgentShellPreviewOwner {
 struct RuntimeAgentShellPreview {
     /// Pane-local order assigned when this owner first appears.
     first_seen_order: u64,
+    /// Original observed structured output component, retained across revisions.
+    entry: mez_core::presentation::PresentationEntry,
+    /// Positive producer proof that this bounded source includes its beginning.
+    starts_at_entry: bool,
     /// Monotonic producer revision accepted for this owner.
     revision: u64,
     /// Sanitized logical source rows reflowed at the current pane width.
@@ -402,6 +406,8 @@ struct RuntimeActionPresentationProgressKey {
 #[derive(Debug, Clone)]
 struct RuntimeActionPresentationProgressComponent {
     first_seen_order: u64,
+    /// Immutable observed component provenance, not executor timing evidence.
+    entry: mez_core::presentation::PresentationEntry,
     revision: u64,
     source: String,
     source_truncated: bool,
@@ -436,7 +442,10 @@ struct RuntimeActionPresentationProgressPresentation {
         RuntimeActionPresentationProgressKey,
         RuntimeActionPresentationProgressComponent,
     >,
-    promoted_components: std::collections::BTreeMap<RuntimeActionPresentationProgressKey, String>,
+    promoted_components: std::collections::BTreeMap<
+        RuntimeActionPresentationProgressKey,
+        RuntimeActionPresentationProgressComponent,
+    >,
 }
 
 /// Released divider-layout outcome awaiting debounce consumption.
@@ -549,6 +558,13 @@ type RuntimeProviderLogOrdinal = (
 pub(crate) struct RuntimePresentationComponent {
     /// Current atomically replaceable presentation configuration.
     pub(super) settings: RuntimePresentationSettings,
+    /// Temporary pane-scoped immutable provenance, not a retained event store.
+    /// Heap ownership keeps new metadata out of large actor/future stack frames.
+    occurrence_override: Option<Box<(String, mez_core::presentation::PresentationEntry)>>,
+    /// Injectable local occurrence clock; absent uses the actor wall clock.
+    /// This seam never affects catalog, execution, or provider clocks.
+    #[cfg(test)]
+    pub(super) occurrence_clock_millis: Option<Option<i64>>,
     /// Test-only countdown to a single failure before durable screen installation.
     #[cfg(test)]
     pub(super) agent_install_failure_countdown: Option<usize>,
@@ -645,32 +661,45 @@ pub(crate) struct RuntimePresentationComponent {
     /// Validated executor headers waiting for preceding action logs to publish.
     pub(super) agent_queued_provider_headers: std::collections::BTreeMap<
         RuntimeProviderLogOrdinal,
-        (crate::runtime::AgentAction, String),
+        (
+            crate::runtime::AgentAction,
+            String,
+            Option<mez_core::presentation::PresentationEntry>,
+        ),
     >,
     /// Validated shell command previews awaiting their response ordinal.
-    pub(super) agent_queued_provider_commands:
-        std::collections::BTreeMap<RuntimeProviderLogOrdinal, String>,
+    pub(super) agent_queued_provider_commands: std::collections::BTreeMap<
+        RuntimeProviderLogOrdinal,
+        Vec<(String, mez_core::presentation::PresentationEntry)>,
+    >,
     /// Exact shell preview sources already published for an action ordinal.
     pub(super) agent_published_provider_commands:
         std::collections::BTreeSet<(RuntimeProviderLogOrdinal, String)>,
     /// Settled verbose results waiting for their action's published header.
     pub(super) agent_queued_provider_results: std::collections::BTreeMap<
         RuntimeProviderLogOrdinal,
-        (crate::runtime::AgentAction, mez_agent::ActionResult, String),
+        (
+            crate::runtime::AgentAction,
+            mez_agent::ActionResult,
+            String,
+            mez_core::presentation::PresentationEntry,
+        ),
     >,
     /// Exact verbose result sources already published for an action ordinal.
     pub(super) agent_published_provider_results:
         std::collections::BTreeSet<(RuntimeProviderLogOrdinal, String)>,
     /// Runtime outcome rows waiting for preceding accepted action logs.
-    pub(super) agent_queued_provider_outcomes:
-        std::collections::BTreeMap<RuntimeProviderLogOrdinal, Vec<(bool, String)>>,
+    pub(super) agent_queued_provider_outcomes: std::collections::BTreeMap<
+        RuntimeProviderLogOrdinal,
+        Vec<(bool, String, mez_core::presentation::PresentationEntry)>,
+    >,
     /// Exact outcome rows already published for a validated response and action.
     pub(super) agent_published_provider_outcomes:
         std::collections::BTreeSet<(RuntimeProviderLogOrdinal, bool, String)>,
     /// Validated response action order, used only to sequence visible logs.
     pub(super) agent_provider_log_orders: std::collections::BTreeMap<
         (String, String, String, mez_agent::ContextExecutionGroupId),
-        Vec<crate::runtime::AgentAction>,
+        RuntimeProviderPresentationOrder,
     >,
     /// Ordinals whose executor-owned headers have been published.
     pub(super) agent_published_provider_headers: std::collections::BTreeSet<(
@@ -825,6 +854,9 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     response_index: usize,
     /// Conversation binding captured before the first streamed action.
     conversation_id: String,
+    /// Ordinary pane writes revoke layout, not the original response evidence.
+    /// Retired source can only transfer metadata after accepted-source validation.
+    layout_retired: bool,
     /// Runtime-owned lineage of the exact composite screen currently installed.
     installed_lineage: u64,
     /// Exact pane state restored before each rich-source reprojection.
@@ -842,7 +874,7 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     /// Established shell-summary source keyed by MAAP action index.
     shell_summaries: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
     /// Closed typed execution headers keyed by MAAP action index.
-    action_headers: std::collections::BTreeMap<usize, mez_agent::StreamingActionHeader>,
+    action_headers: std::collections::BTreeMap<usize, RuntimeStreamingHeaderSource>,
     /// Direct action objects received in this response, distinct from field closure.
     received_actions: std::collections::BTreeSet<usize>,
     /// Monotonic render-input generation used to fence worker projections.
@@ -897,10 +929,36 @@ pub(crate) struct RuntimeStreamingSayProjectionContext {
 }
 
 /// Accumulated source and contract fields for one streamed `say` action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeStreamingHeaderSource {
+    /// Exact closed provider header, not execution admission evidence.
+    header: mez_agent::StreamingActionHeader,
+    /// First local observation retained through validated header promotion.
+    entry: Option<mez_core::presentation::PresentationEntry>,
+}
+
+/// Existing validated response-order owner with immutable acceptance evidence.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeProviderPresentationOrder {
+    /// Authored action order; time never reorders or deduplicates it.
+    pub(in crate::runtime) actions: Vec<crate::runtime::AgentAction>,
+    /// Local batch acceptance, used only for components lacking stream evidence.
+    pub(in crate::runtime) occurrence: mez_core::presentation::PresentationOccurrence,
+    /// Exact validated stream evidence, independent of whether rows promoted.
+    /// This immutable payload retires with the existing response-order owner.
+    pub(in crate::runtime) streamed_entries: std::collections::BTreeMap<
+        (Option<usize>, String),
+        mez_core::presentation::PresentationEntry,
+    >,
+}
+
+/// Accumulated source and contract fields for one streamed `say` action.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeStreamingSayAction {
     /// Lifecycle status established before source text became visible.
     status: mez_agent::SayStatus,
+    /// First locally observed entry; synthetic renderer inputs carry none.
+    entry: Option<mez_core::presentation::PresentationEntry>,
     /// Normalized presentation media type.
     content_type: String,
     /// Complete decoded source received so far.
@@ -914,6 +972,8 @@ pub(crate) struct RuntimeStreamingSayAction {
 pub(crate) struct RuntimeStreamingMessageSource {
     /// Requested recipient expression supplied by the provider.
     recipient: String,
+    /// Original observed or accepted sender entry, independent of payload bytes.
+    entry: Option<mez_core::presentation::PresentationEntry>,
     /// Stable presentation label resolved from the recipient at message start.
     recipient_label: String,
     /// Whether the requested recipient is this child agent's direct parent.
@@ -931,6 +991,8 @@ pub(crate) struct RuntimeStreamingMessageSource {
 pub(crate) struct RuntimeStreamingTextSource {
     /// Complete decoded source received so far.
     text: String,
+    /// Immutable first observation retained through completion and promotion.
+    entry: Option<mez_core::presentation::PresentationEntry>,
     /// Whether the JSON source string has closed.
     complete: bool,
 }
@@ -1008,7 +1070,7 @@ pub(crate) struct RuntimeStreamingSayProjectionWork {
     /// Cumulative shell-summary state captured for this generation.
     pub(crate) shell_summaries: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
     /// Closed typed execution headers captured for this generation.
-    pub(crate) action_headers: std::collections::BTreeMap<usize, mez_agent::StreamingActionHeader>,
+    pub(crate) action_headers: std::collections::BTreeMap<usize, RuntimeStreamingHeaderSource>,
     /// Whether thinking text is visible for this pane.
     pub(crate) thinking_enabled: bool,
     /// Shell dialect used by the existing command-preview highlighter.

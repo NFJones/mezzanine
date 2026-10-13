@@ -19,6 +19,7 @@ fn steering_recovery_presentation_order_survives_restore_and_new_acceptance() {
         .session_id
         .clone();
     let history = vec![SteeringRecoveryReceipt {
+        occurrence: Default::default(),
         id: "restored-occurrence".into(),
         acceptance_order: 70,
         turn_id: None,
@@ -94,6 +95,7 @@ fn steering_recovery_projection_preserves_pending_and_deduplicates_transfer() {
     );
     let terminal = (0..STEERING_RECOVERY_ENTRIES)
         .map(|index| SteeringRecoveryReceipt {
+            occurrence: Default::default(),
             id: format!("terminal-{index}"),
             acceptance_order: index as u64 + 2,
             turn_id: None,
@@ -129,6 +131,7 @@ fn steering_recovery_projection_preserves_pending_and_deduplicates_transfer() {
                 "display".into(),
                 None,
                 index as u64 + 200,
+                Default::default(),
             );
             entry.id = format!("pending-{index}");
             entry
@@ -276,6 +279,7 @@ fn steering_recovery_manual_resume_is_inert_and_transactional() {
         target.prompt_cache_lineage_id = "target-lineage".into();
         target.transcript_entries = 1;
         target.steering_recovery = vec![SteeringRecoveryReceipt {
+            occurrence: Default::default(),
             id: "target-occurrence".into(),
             acceptance_order: if fail { u64::MAX } else { 1 },
             turn_id: Some("old-turn".into()),
@@ -305,6 +309,7 @@ fn steering_recovery_manual_resume_is_inert_and_transactional() {
             };
             store
                 .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+                    presentation: None,
                     conversation_id: target.conversation_id.clone(),
                     sequence: 1,
                     created_at_unix_seconds: 1,
@@ -336,6 +341,7 @@ fn steering_recovery_manual_resume_is_inert_and_transactional() {
                 "%1",
                 &previous,
                 &[SteeringRecoveryReceipt {
+                    occurrence: Default::default(),
                     id: "prior-occurrence".into(),
                     acceptance_order: 1,
                     turn_id: None,
@@ -634,7 +640,7 @@ fn steering_recovery_checkpoint_restart_is_inert_and_failure_preserves_receipts(
     {
         if let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { entry, .. } = effect
         {
-            store.append_presentation_many(&[entry]).unwrap();
+            store.append_presentation_many(&[*entry]).unwrap();
         }
     }
     let mut again = crate::test_support::runtime::RuntimeServiceFixture::new()

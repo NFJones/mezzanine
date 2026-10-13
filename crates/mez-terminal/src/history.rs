@@ -308,6 +308,11 @@ impl HistoryBuffer {
     /// Replaces the copy-source text for one retained history record.
     #[doc(hidden)]
     pub fn set_copy_text(&mut self, index: usize, copy_text: Option<String>) {
+        self.update_styled_line(index, |line| line.copy_text = copy_text);
+    }
+
+    /// Mutates one row in the bounded tail or a copy-on-write sealed chunk.
+    fn update_styled_line(&mut self, index: usize, update: impl FnOnce(&mut TerminalStyledLine)) {
         if index >= self.len {
             return;
         }
@@ -323,14 +328,14 @@ impl HistoryBuffer {
             if index < logical_start.saturating_add(available) {
                 let record_index = skipped.saturating_add(index.saturating_sub(logical_start));
                 let mut records = chunk.iter().cloned().collect::<Vec<_>>();
-                records[record_index].line.copy_text = copy_text;
+                update(&mut records[record_index].line);
                 *chunk = Arc::from(records);
                 return;
             }
             logical_start = logical_start.saturating_add(available);
         }
         if let Some(record) = self.tail.get_mut(index.saturating_sub(logical_start)) {
-            record.line.copy_text = copy_text;
+            update(&mut record.line);
         }
     }
 

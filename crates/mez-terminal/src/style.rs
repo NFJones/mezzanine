@@ -3,6 +3,10 @@
 //! These value types describe colors and rendition spans produced by terminal
 //! parsing. They contain no multiplexer layout or host-rendering policy.
 
+pub use mez_core::presentation::{
+    PresentationEntry, PresentationOccurrence, PresentationOccurrenceBasis,
+};
+
 /// Terminal color recorded from SGR foreground or background parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalColor {
@@ -60,6 +64,8 @@ pub struct TerminalStyledLine {
     /// Presentation may transform a line while preserving source text for
     /// paste buffers or host clipboards.
     pub copy_text: Option<String>,
+    /// Optional host annotation; arbitrary PTY output has no entry boundary.
+    pub presentation: Option<PresentationEntry>,
 }
 
 impl TerminalStyledLine {
@@ -69,6 +75,7 @@ impl TerminalStyledLine {
             text: text.into(),
             style_spans: Vec::new(),
             copy_text: None,
+            presentation: None,
         }
     }
 }

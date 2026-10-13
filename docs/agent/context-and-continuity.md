@@ -34,6 +34,32 @@ Conversation continuity is not proof that a command completed or that the
 filesystem is unchanged: verify interrupted work before asking the agent to
 continue.
 
+Agent log entries retain presentation-only local occurrence evidence separately
+from saved-session creation and activity timestamps. Streamed components keep the
+time first observed locally; accepted prompts, steering and message receipts keep
+their local acceptance time. This is not remote generation, command-start or
+delivery evidence. Newlines, tables and wrapping do not create more entries, and
+equal or backward clocks do not change conversation order.
+
+Semantic replay, resize, fork and persistence retries preserve captured metadata
+without adding timestamp text to source, copy output or model context. Older
+source-backed logs retain only coarse record-time evidence; missing times and
+opaque ANSI rows are not guessed from file dates or resume time. Hidden and
+ephemeral/no-store panes retain this metadata in memory. Restart retention still
+depends on the existing durable presentation log, steering checkpoint and peer
+outbox; process-only snapshots do not introduce an ephemeral agent-history store.
+This metadata foundation adds no visible timestamp column or configuration toggle.
+Filtered executor progress keeps its captured metadata only for the existing
+component/promotion receipt's bounded lifetime; this does not make suppressed
+content appear later or persist it after that owner retires.
+
+Transcript-only forks retain a bounded original record tail in the existing
+presentation log so their new conversation/catalog creation time does not replace
+coarse source-time evidence. Replay keeps each record boundary separate and
+resume chrome untagged; malformed fallback source is rejected rather than shown
+as raw model history. Exact validated streamed components retain their original
+observation evidence even when ordering or geometry requires static re-rendering.
+
 Active bindings are checkpointed separately for each Mezzanine session. New
 versions import older shared binding metadata once without rewriting a running
 older daemon's index. The known trailing-bracket corruption is recovered only

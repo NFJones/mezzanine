@@ -7,6 +7,54 @@
 use super::*;
 
 impl RuntimeSessionService {
+    /// Revokes only provisional layout before an ordinary pane write. Original
+    /// typed source stays inert on its bounded response owner until acceptance,
+    /// rejection, a new response, failed claim, or turn/pane teardown. It cannot
+    /// project or restore a screen after this transition.
+    pub(super) fn retire_agent_streaming_layout(&mut self, pane_id: &str) -> Result<()> {
+        let Some(mut presentation) = self
+            .presentation
+            .agent_streaming_say_presentations
+            .remove(pane_id)
+        else {
+            return Ok(());
+        };
+        if !presentation.layout_retired {
+            presentation.layout_retired = true;
+            presentation.projected_revision = None;
+            presentation.projected_context = None;
+            presentation.projected_actions = None;
+            presentation.projected_rationale = None;
+            presentation.projected_lineage = None;
+            self.presentation
+                .agent_promoted_streaming_say_actions
+                .remove(&(pane_id.to_string(), presentation.turn_id.clone()));
+            if self
+                .agent_shell_store()
+                .get(pane_id)
+                .is_some_and(|session| session.session_id == presentation.conversation_id)
+                && self.agent_pane_screen_lineage(pane_id, &presentation.conversation_id)
+                    == Some(presentation.installed_lineage)
+            {
+                let result = self.update_agent_streaming_screen(
+                    pane_id,
+                    &presentation.conversation_id,
+                    presentation.baseline_screen.as_ref().clone(),
+                );
+                if let Err(error) = result {
+                    self.presentation
+                        .agent_streaming_say_presentations
+                        .insert(pane_id.to_string(), presentation);
+                    return Err(error);
+                }
+            }
+        }
+        self.presentation
+            .agent_streaming_say_presentations
+            .insert(pane_id.to_string(), presentation);
+        Ok(())
+    }
+
     /// Retires one unvalidated live response and conditionally restores its baseline.
     ///
     /// The baseline is restored only while the pane still exactly matches the
@@ -33,6 +81,10 @@ impl RuntimeSessionService {
         self.presentation
             .agent_promoted_streaming_say_actions
             .remove(&(pane_id.to_string(), presentation.turn_id.clone()));
+        if presentation.layout_retired {
+            // Removing inert evidence is not a live-layout rollback.
+            return Ok(false);
+        }
         if self
             .agent_shell_store()
             .get(pane_id)
@@ -188,12 +240,14 @@ impl RuntimeSessionService {
         }
         if completed {
             for (action_index, source, row) in &preview.finals {
-                self.persist_agent_presentation_entry(
+                self.persist_streamed_presentation(
                     pane_id,
-                    vec![row.style.clone(); row.rendered_lines.len()],
-                    row.rendered_lines.clone(),
-                    row.copy_lines.clone(),
-                    String::new(),
+                    source.entry.clone(),
+                    (
+                        vec![row.style.clone(); row.rendered_lines.len()],
+                        row.rendered_lines.clone(),
+                        row.copy_lines.clone(),
+                    ),
                     Some((source.text.as_str(), source.content_type.as_str())),
                 );
                 self.presentation

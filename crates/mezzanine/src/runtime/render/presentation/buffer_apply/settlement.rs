@@ -157,8 +157,14 @@ impl RuntimeSessionService {
                     } else {
                         std::collections::BTreeMap::from([(
                             header_index,
-                            mez_agent::StreamingActionHeader::Action {
-                                action: Box::new(accepted_action.clone()),
+                            crate::runtime::render::RuntimeStreamingHeaderSource {
+                                header: mez_agent::StreamingActionHeader::Action {
+                                    action: Box::new(accepted_action.clone()),
+                                },
+                                entry: presentation
+                                    .action_headers
+                                    .get(&header_index)
+                                    .and_then(|source| source.entry.clone()),
                             },
                         )])
                     },
@@ -216,6 +222,7 @@ impl RuntimeSessionService {
                             row.style.clone(),
                             row.rendered_lines.clone(),
                             row.copy_lines.clone(),
+                            source.entry.clone(),
                         ),
                         &source.text,
                     )?;
@@ -250,7 +257,7 @@ impl RuntimeSessionService {
                             self.persist_activity_action_projection(
                                 pane_id, execution,
                                 (index, crate::storage::transcript::activity::ActivityComponentKind::Header),
-                                (AgentTerminalPresentationStyle::Status.persistence_name().to_string(), rendered_lines.clone(), Vec::new()),
+                                (AgentTerminalPresentationStyle::Status.persistence_name().to_string(), rendered_lines.clone(), Vec::new(), presentation.action_headers.get(&index).and_then(|source| source.entry.clone())),
                                 (&accepted_header, AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE),
                             )?;
                             self.integration
@@ -267,12 +274,14 @@ impl RuntimeSessionService {
                         if pending_indices.contains(&index) {
                             continue;
                         }
-                        self.persist_agent_presentation_entry(
+                        self.persist_streamed_presentation(
                             pane_id,
-                            vec![row.style.clone(); row.rendered_lines.len()],
-                            row.rendered_lines.clone(),
-                            row.copy_lines.clone(),
-                            String::new(),
+                            source.entry.clone(),
+                            (
+                                vec![row.style.clone(); row.rendered_lines.len()],
+                                row.rendered_lines.clone(),
+                                row.copy_lines.clone(),
+                            ),
                             Some((source.text.as_str(), source.content_type.as_str())),
                         );
                         promoted.insert(index);
@@ -364,7 +373,7 @@ impl RuntimeSessionService {
                 && presentation.action_headers.iter().all(|(index, header)| {
                     batch.actions.get(*index).is_some_and(|action| {
                         agent_action_execution_display_header(action).is_some_and(|accepted| {
-                            streaming_action_execution_display_header(header) == accepted
+                            streaming_action_execution_display_header(&header.header) == accepted
                         }) && execution.action_results.iter().any(|result| {
                             result.action_id == action.id
                                 && matches!(result.status, mez_agent::ActionStatus::Running | mez_agent::ActionStatus::Succeeded)
@@ -468,6 +477,7 @@ impl RuntimeSessionService {
                     projection.style.clone(),
                     projection.rendered_lines.clone(),
                     projection.copy_lines.clone(),
+                    rationale.entry.clone(),
                 ),
                 &rationale.text,
             )?;
@@ -520,7 +530,7 @@ impl RuntimeSessionService {
             && presentation.action_headers.iter().all(|(index, header)| {
                 batch.actions.get(*index).is_some_and(|action| {
                     agent_action_execution_display_header(action).is_some_and(|static_header| {
-                        streaming_action_execution_display_header(header) == static_header
+                        streaming_action_execution_display_header(&header.header) == static_header
                     }) && execution.action_results.iter().any(|result| {
                         result.action_id == action.id
                             && matches!(
@@ -635,6 +645,7 @@ impl RuntimeSessionService {
                         projection.style.clone(),
                         projection.rendered_lines.clone(),
                         projection.copy_lines.clone(),
+                        rationale.entry.clone(),
                     ),
                     &rationale.text,
                 )?;
@@ -679,6 +690,10 @@ impl RuntimeSessionService {
                                 .to_string(),
                             rendered_lines.clone(),
                             Vec::new(),
+                            presentation
+                                .action_headers
+                                .get(&index)
+                                .and_then(|source| source.entry.clone()),
                         ),
                         (
                             &static_header,
@@ -704,12 +719,14 @@ impl RuntimeSessionService {
                     }) {
                         continue;
                     }
-                    self.persist_agent_presentation_entry(
+                    self.persist_streamed_presentation(
                         pane_id,
-                        vec![row.style.clone(); row.rendered_lines.len()],
-                        row.rendered_lines.clone(),
-                        row.copy_lines.clone(),
-                        String::new(),
+                        source.entry.clone(),
+                        (
+                            vec![row.style.clone(); row.rendered_lines.len()],
+                            row.rendered_lines.clone(),
+                            row.copy_lines.clone(),
+                        ),
                         Some((source.text.as_str(), source.content_type.as_str())),
                     );
                     promoted.insert(index);
@@ -817,6 +834,7 @@ impl RuntimeSessionService {
                     projection.style.clone(),
                     projection.rendered_lines.clone(),
                     projection.copy_lines.clone(),
+                    rationale.entry.clone(),
                 ),
                 &rationale.text,
             )?;
@@ -855,6 +873,10 @@ impl RuntimeSessionService {
                             .to_string(),
                         rendered_lines,
                         Vec::new(),
+                        presentation
+                            .action_headers
+                            .get(&index)
+                            .and_then(|source| source.entry.clone()),
                     ),
                     (&header, AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE),
                 )?;
@@ -904,6 +926,7 @@ impl RuntimeSessionService {
                             .to_string(),
                         rendered_lines,
                         Vec::new(),
+                        source.entry.clone(),
                     ),
                     (&source.text, AGENT_PRESENTATION_THINKING_CONTENT_TYPE),
                 )?;
@@ -948,16 +971,25 @@ impl RuntimeSessionService {
                         projection.style.clone(),
                         projection.rendered_lines.clone(),
                         projection.copy_lines.clone(),
+                        presentation
+                            .shell_commands
+                            .get(&projection.action_index)
+                            .and_then(|source| source.entry.clone()),
                     ),
                     source,
                 )?;
             } else {
-                self.persist_agent_presentation_entry(
+                self.persist_streamed_presentation(
                     pane_id,
-                    vec![projection.style.clone(); projection.rendered_lines.len()],
-                    projection.rendered_lines.clone(),
-                    projection.copy_lines.clone(),
-                    String::new(),
+                    presentation
+                        .actions
+                        .get(&projection.action_index)
+                        .and_then(|source| source.entry.clone()),
+                    (
+                        vec![projection.style.clone(); projection.rendered_lines.len()],
+                        projection.rendered_lines.clone(),
+                        projection.copy_lines.clone(),
+                    ),
                     source,
                 );
             }

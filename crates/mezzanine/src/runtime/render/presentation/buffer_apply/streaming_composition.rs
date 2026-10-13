@@ -74,7 +74,9 @@ impl RuntimeSessionService {
             .presentation
             .agent_streaming_say_presentations
             .get_mut(pane_id)
-            .filter(|presentation| presentation.conversation_id == conversation_id)
+            .filter(|presentation| {
+                !presentation.layout_retired && presentation.conversation_id == conversation_id
+            })
         {
             presentation.provider_screen = std::sync::Arc::new(provider_screen);
             presentation.installed_lineage = installed_lineage;

@@ -759,6 +759,9 @@ async fn actor_provider_completion_case(
             // Elapsed-time status can cross a second boundary between the two
             // runs; compare all rows and styles without treating that clock as
             // provider-log output.
+            // Producer identity/occurrence basis is intentionally distinct;
+            // compare visual/style/copy parity, with stamp contracts tested separately.
+            line.presentation = None;
             if line.text.starts_with("│ Worked for ") {
                 line.text = "│ Worked for <elapsed>".to_string();
                 line.copy_text = Some("Worked for <elapsed>".to_string());

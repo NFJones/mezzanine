@@ -469,6 +469,7 @@ fn runtime_record_browser_kind_selector_navigation_preserves_record_cursor() {
             text: selector_view.lines[all_kinds_row].clone(),
             style_spans: selector_view.line_style_spans[all_kinds_row].clone(),
             copy_text: None,
+            presentation: None,
         },
         all_kinds_column,
     );
@@ -477,6 +478,7 @@ fn runtime_record_browser_kind_selector_navigation_preserves_record_cursor() {
             text: selector_view.lines[defect_row].clone(),
             style_spans: selector_view.line_style_spans[defect_row].clone(),
             copy_text: None,
+            presentation: None,
         },
         defect_column,
     );
@@ -509,6 +511,7 @@ fn runtime_record_browser_kind_selector_navigation_preserves_record_cursor() {
             text: moved_view.lines[all_kinds_row].clone(),
             style_spans: moved_view.line_style_spans[all_kinds_row].clone(),
             copy_text: None,
+            presentation: None,
         },
         all_kinds_column,
     );
@@ -517,6 +520,7 @@ fn runtime_record_browser_kind_selector_navigation_preserves_record_cursor() {
             text: moved_view.lines[defect_row].clone(),
             style_spans: moved_view.line_style_spans[defect_row].clone(),
             copy_text: None,
+            presentation: None,
         },
         defect_column,
     );
@@ -3037,6 +3041,7 @@ fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
             text: view.lines[first_row].clone(),
             style_spans: view.line_style_spans[first_row].clone(),
             copy_text: None,
+            presentation: None,
         },
         first_column,
     );
@@ -3045,6 +3050,7 @@ fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
             text: view.lines[second_row].clone(),
             style_spans: view.line_style_spans[second_row].clone(),
             copy_text: None,
+            presentation: None,
         },
         second_column,
     );
@@ -3080,6 +3086,7 @@ fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
             text: moved_view.lines[first_row].clone(),
             style_spans: moved_view.line_style_spans[first_row].clone(),
             copy_text: None,
+            presentation: None,
         },
         first_column,
     );
@@ -3088,6 +3095,7 @@ fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
             text: moved_view.lines[second_row].clone(),
             style_spans: moved_view.line_style_spans[second_row].clone(),
             copy_text: None,
+            presentation: None,
         },
         second_column,
     );

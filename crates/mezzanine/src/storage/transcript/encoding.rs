@@ -34,7 +34,9 @@ const LEGACY_PROMPT_HISTORY_VERSION: &str = "mez-agent-prompt-history/1";
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/5";
+const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/6";
+/// Ordered steering receipts before immutable acceptance-time provenance.
+const UNSTAMPED_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/5";
 /// Recovery evidence before explicit producer acceptance order.
 const UNORDERED_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/4";
 /// Metadata with primary display identities, before steering recovery evidence.
@@ -47,7 +49,9 @@ const LEGACY_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const AGENT_PRESENTATION_VERSION: &str = "mez-agent-presentation/2";
+const AGENT_PRESENTATION_VERSION: &str = "mez-agent-presentation/3";
+/// Source-backed records before explicit occurrence provenance.
+const SOURCE_AGENT_PRESENTATION_VERSION: &str = "mez-agent-presentation/2";
 /// Defines the legacy presentation snapshot version accepted during migration.
 const LEGACY_AGENT_PRESENTATION_VERSION: &str = "mez-agent-presentation/1";
 
@@ -149,6 +153,15 @@ impl AgentPresentationEntry {
     /// Validates one durable presentation entry before persistence or replay.
     pub fn validate(&self) -> Result<()> {
         validate_conversation_id(&self.conversation_id)?;
+        if self
+            .presentation
+            .as_ref()
+            .is_some_and(|entry| !entry.is_valid())
+        {
+            return Err(MezError::invalid_args(
+                "invalid presentation occurrence provenance",
+            ));
+        }
         if self.sequence == 0 || self.created_at_unix_seconds == 0 {
             return Err(MezError::invalid_args(
                 "presentation sequence and creation time must be non-zero",
@@ -166,6 +179,14 @@ impl AgentPresentationEntry {
         if let Some(content_type) = self.source_content_type.as_deref() {
             validate_non_empty("presentation source content type", content_type)?;
         }
+        if self.source_content_type.as_deref() == Some(super::fallback::CONTENT_TYPE) {
+            super::fallback::Source::decode(self.source_text.as_deref().unwrap_or_default())?;
+            if self.presentation.is_some() {
+                return Err(MezError::invalid_args(
+                    "transcript fallback has per-record, not outer, provenance",
+                ));
+            }
+        }
         if self.source_content_type.as_deref() == Some(super::steering::CONTENT_TYPE) {
             let source =
                 super::steering::Source::decode(self.source_text.as_deref().unwrap_or_default())?;
@@ -174,6 +195,21 @@ impl AgentPresentationEntry {
             {
                 return Err(MezError::invalid_args(
                     "steering source differs from presentation owner",
+                ));
+            }
+            if self.presentation.as_ref().is_some_and(|entry| {
+                if source.receipt.occurrence.unix_millis.is_some() {
+                    entry.occurrence != source.receipt.occurrence
+                } else {
+                    !matches!(
+                        entry.occurrence.basis,
+                        mez_core::presentation::PresentationOccurrenceBasis::Unknown
+                            | mez_core::presentation::PresentationOccurrenceBasis::LegacyRecord
+                    )
+                }
+            }) {
+                return Err(MezError::invalid_args(
+                    "steering occurrence differs from receipt evidence",
                 ));
             }
         }
@@ -245,6 +281,9 @@ impl AgentPresentationEntry {
             self.ansi_text.clone().unwrap_or_default(),
             self.source_text.clone().unwrap_or_default(),
             self.source_content_type.clone().unwrap_or_default(),
+            serde_json::to_string(&self.presentation).map_err(|error| {
+                MezError::invalid_args(format!("presentation occurrence encoding failed: {error}"))
+            })?,
         ]
         .into_iter()
         .map(|field| escape_field(&field))
@@ -256,8 +295,10 @@ impl AgentPresentationEntry {
     pub(super) fn decode(line: &str) -> Result<Self> {
         let fields = split_fields(line)?;
         let legacy = fields[0] == LEGACY_AGENT_PRESENTATION_VERSION;
+        let source_legacy = fields[0] == SOURCE_AGENT_PRESENTATION_VERSION;
         if !((legacy && (fields.len() == 10 || fields.len() == 11))
-            || (!legacy && fields.len() == 13 && fields[0] == AGENT_PRESENTATION_VERSION))
+            || (source_legacy && fields.len() == 13)
+            || (fields.len() == 14 && fields[0] == AGENT_PRESENTATION_VERSION))
         {
             return Err(MezError::invalid_args("invalid presentation entry"));
         }
@@ -265,6 +306,22 @@ impl AgentPresentationEntry {
             conversation_id: fields[1].clone(),
             sequence: parse_u64(&fields[2], "presentation sequence")?,
             created_at_unix_seconds: parse_u64(&fields[3], "presentation created_at_unix_seconds")?,
+            presentation: if legacy || source_legacy {
+                fields.get(11).filter(|source| !source.is_empty()).map(|_| {
+                    mez_core::presentation::PresentationEntry {
+                        id: format!("legacy:{}:{}", fields[1], fields[2]),
+                        occurrence: mez_core::presentation::PresentationOccurrence::legacy_record(
+                            parse_u64(&fields[3], "legacy presentation record time")
+                                .unwrap_or_default(),
+                        ),
+                        first_row: true,
+                    }
+                })
+            } else {
+                serde_json::from_str(&fields[13]).map_err(|error| {
+                    MezError::invalid_args(format!("invalid presentation occurrence: {error}"))
+                })?
+            },
             pane_id: fields[4].clone(),
             turn_id: (!fields[5].is_empty()).then(|| fields[5].clone()),
             terminal_width: parse_u16(&fields[6], "presentation terminal_width")?,
@@ -464,9 +521,10 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
     let legacy = fields
         .first()
         .is_some_and(|version| version == LEGACY_AGENT_SESSION_METADATA_VERSION);
-    let current = fields
-        .first()
-        .is_some_and(|version| version == AGENT_SESSION_METADATA_VERSION);
+    let current = fields.first().is_some_and(|version| {
+        version == AGENT_SESSION_METADATA_VERSION
+            || version == UNSTAMPED_AGENT_SESSION_METADATA_VERSION
+    });
     let project_version = fields
         .first()
         .is_some_and(|version| version == PROJECT_AGENT_SESSION_METADATA_VERSION);

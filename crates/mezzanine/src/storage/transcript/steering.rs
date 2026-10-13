@@ -79,6 +79,7 @@ mod tests {
             version: 1,
             conversation_id: "conversation".into(),
             receipt: SteeringRecoveryReceipt {
+                occurrence: Default::default(),
                 id: "first".into(),
                 acceptance_order: 1,
                 turn_id: Some("turn".into()),
@@ -88,6 +89,7 @@ mod tests {
             },
         };
         let entry = super::super::AgentPresentationEntry {
+            presentation: None,
             conversation_id: source.conversation_id.clone(),
             sequence: 1,
             created_at_unix_seconds: 1,
@@ -138,6 +140,7 @@ mod tests {
             version: 1,
             conversation_id: "conversation".into(),
             receipt: SteeringRecoveryReceipt {
+                occurrence: Default::default(),
                 id: "occurrence".into(),
                 acceptance_order: 1,
                 turn_id: Some("turn".into()),

@@ -9,6 +9,328 @@ use mez_agent::{
     ActionPresentationProgress,
 };
 
+/// The actual managed transaction ingress, not only typed progress helpers,
+/// knows whether a cumulative preview includes its original beginning. First
+/// short output is a boundary; later tail clipping keeps the original ID/time
+/// and removes only first-row proof. This fixture performs no process I/O.
+#[test]
+fn runtime_occurrence_native_transaction_ingress_keeps_boundary_and_stamp() {
+    let (mut service, _) =
+        running_action_progress_fixture(shell_action(), "live-marker", "sleep 1");
+    service.presentation.occurrence_clock_millis = Some(Some(1234));
+    service.record_running_shell_transaction_output("%1", b"first output\n");
+    let before = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    let entry = before
+        .iter()
+        .find(|row| row.text.contains("first output"))
+        .unwrap()
+        .presentation
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert!(entry.first_row);
+    assert_eq!(entry.occurrence.unix_millis, Some(1234));
+    service.presentation.occurrence_clock_millis = Some(Some(9000));
+    let tail = "later output\n".repeat(service.terminal_shell_output_preview_lines() + 1);
+    service.record_running_shell_transaction_output("%1", tail.as_bytes());
+    let after = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    let entries = after
+        .iter()
+        .filter_map(|row| row.presentation.as_ref())
+        .filter(|row| row.id == entry.id)
+        .collect::<Vec<_>>();
+    assert!(!entries.is_empty());
+    assert!(
+        entries
+            .iter()
+            .all(|row| !row.first_row && row.occurrence == entry.occurrence)
+    );
+}
+
+/// Hidden promotion retains the original observation on the existing promoted
+/// receipt, even when no display section is eligible. Visibility transitions
+/// cannot turn that receipt into a fresh observation or execution authority.
+#[test]
+fn runtime_occurrence_hidden_progress_promotion_retains_original_stamp() {
+    for initially_hidden in [false, true] {
+        let action = patch_action();
+        let (mut service, turn) = running_action_progress_fixture(
+            action.clone(),
+            "hidden-marker",
+            "# __MEZ_APPLY_PATCH_WRITE_PHASE__",
+        );
+        service.presentation.occurrence_clock_millis = Some(Some(1234));
+        if initially_hidden {
+            service.agent_shell_store_mut().request_exit("%1").unwrap();
+        }
+        let progress = transaction_progress(
+            &turn.turn_id,
+            &action.id,
+            "hidden-marker",
+            1,
+            ActionPresentationComponentIdentity::confirmed_mutation(0, "note.txt"),
+            "--- a/note.txt\n+++ b/note.txt\n@@ -1 +1 @@\n-old\n+new\n",
+        );
+        assert!(
+            service
+                .apply_action_presentation_progress(progress.clone())
+                .unwrap()
+        );
+        let before = service.action_presentation_progress_entries_for_tests("%1");
+        assert_eq!(before.len(), 1);
+        if !initially_hidden {
+            service.agent_shell_store_mut().request_exit("%1").unwrap();
+        }
+        service.presentation.occurrence_clock_millis = Some(Some(9000));
+        assert!(
+            service
+                .promote_confirmed_action_presentation_progress(&progress)
+                .unwrap()
+        );
+        assert_eq!(
+            service.action_presentation_progress_counts_for_tests("%1"),
+            (0, 1)
+        );
+        assert_eq!(
+            service.action_presentation_progress_entries_for_tests("%1"),
+            before
+        );
+        assert_eq!(before[0].occurrence.unix_millis, Some(1234));
+    }
+}
+
+/// A cropped shell component retains its identity/time but never promotes its
+/// newest visible tail into an original entry boundary. The same false marker
+/// survives success persistence and semantic replay after later clock changes.
+#[test]
+fn runtime_occurrence_cropped_shell_progress_keeps_stamp_without_first_row() {
+    let action = shell_action();
+    let (mut service, turn) =
+        running_action_progress_fixture(action.clone(), "crop-marker", "sleep 1");
+    let store = AgentTranscriptStore::new(temp_root("occurrence-cropped-progress"));
+    service.set_agent_transcript_store(store.clone());
+    service.presentation.occurrence_clock_millis = Some(Some(1234));
+    let source = "x".repeat(20_000);
+    let progress = transaction_progress(
+        &turn.turn_id,
+        &action.id,
+        "crop-marker",
+        1,
+        ActionPresentationComponentIdentity::ShellOutput,
+        &source,
+    );
+    assert!(
+        service
+            .apply_action_presentation_progress(progress.clone())
+            .unwrap()
+    );
+    let entry = service.action_presentation_progress_entries_for_tests("%1")[0].clone();
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    let matched = rows
+        .iter()
+        .filter_map(|row| row.presentation.as_ref())
+        .filter(|row| row.id == entry.id)
+        .collect::<Vec<_>>();
+    assert!(!matched.is_empty());
+    assert!(
+        matched
+            .iter()
+            .all(|row| !row.first_row && row.occurrence == entry.occurrence)
+    );
+    service.presentation.occurrence_clock_millis = Some(Some(9000));
+    let result = mez_agent::ActionResult::succeeded(&turn, &action, vec![source], None);
+    assert!(
+        service
+            .reconcile_action_presentation_progress(&progress, &result)
+            .unwrap()
+    );
+    let entries = store.inspect_presentation(&turn.conversation_id).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].presentation.as_ref().unwrap().occurrence,
+        entry.occurrence
+    );
+    assert!(!entries[0].presentation.as_ref().unwrap().first_row);
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(30, 10).unwrap(), 120).unwrap(),
+    );
+    service
+        .replay_agent_presentation_entries_to_terminal_buffer("%1", &entries)
+        .unwrap();
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    let matched = rows
+        .iter()
+        .filter_map(|row| row.presentation.as_ref())
+        .filter(|row| row.id == entry.id)
+        .collect::<Vec<_>>();
+    assert!(!matched.is_empty());
+    assert!(
+        matched
+            .iter()
+            .all(|row| !row.first_row && row.occurrence == entry.occurrence)
+    );
+}
+
+/// Transaction-specific previews under one accepted action are independent
+/// occurrences even for equal command text. Repeated callbacks for the same
+/// marker cannot append another row or sample a replacement timestamp.
+#[test]
+fn runtime_occurrence_transaction_commands_have_distinct_marker_owners() {
+    let action = shell_action();
+    let (mut service, turn) =
+        running_action_progress_fixture(action.clone(), "command-marker", "sleep 1");
+    let execution = service.agent_turn_executions()[&turn.turn_id].clone();
+    service
+        .retain_provider_presentation_order("%1", &execution)
+        .unwrap();
+    service
+        .queue_ordered_provider_header("%1", &execution, &action)
+        .unwrap();
+    service
+        .flush_ordered_provider_headers("%1", &execution)
+        .unwrap();
+    for (marker, time) in [
+        ("transaction-a", 1234),
+        ("transaction-b", 2345),
+        ("transaction-a", 9000),
+    ] {
+        service.presentation.occurrence_clock_millis = Some(Some(time));
+        service
+            .queue_ordered_provider_transaction_command(
+                "%1",
+                &execution,
+                &action,
+                "printf equal",
+                marker,
+            )
+            .unwrap();
+    }
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    let entries = rows
+        .iter()
+        .filter_map(|row| row.presentation.as_ref())
+        .filter(|entry| entry.first_row && entry.id.starts_with("transaction-command:"))
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 2);
+    assert_ne!(entries[0].id, entries[1].id);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.occurrence.unix_millis)
+            .collect::<Vec<_>>(),
+        vec![Some(1234), Some(2345)]
+    );
+}
+
+/// Commands retained behind an unfinished predecessor keep their original
+/// transaction acceptance stamps through duplicate callbacks and delayed flush.
+/// The eventual semantic source and copy projection remain exact command bytes.
+#[test]
+fn runtime_occurrence_delayed_transaction_queue_keeps_original_stamps() {
+    let first = shell_action();
+    let mut second = first.clone();
+    second.id = "shell-2".into();
+    let (mut service, turn) =
+        running_action_progress_fixture(first.clone(), "delayed-marker", "sleep 1");
+    let store = AgentTranscriptStore::new(temp_root("occurrence-delayed-commands"));
+    service.set_agent_transcript_store(store.clone());
+    let mut execution = service.agent_turn_executions()[&turn.turn_id].clone();
+    execution
+        .response
+        .action_batch
+        .as_mut()
+        .unwrap()
+        .actions
+        .push(second.clone());
+    execution
+        .action_results
+        .push(mez_agent::ActionResult::running(
+            &turn,
+            &second,
+            Vec::new(),
+            None,
+        ));
+    service
+        .retain_provider_presentation_order("%1", &execution)
+        .unwrap();
+    service
+        .queue_ordered_provider_header("%1", &execution, &second)
+        .unwrap();
+    for (marker, time) in [
+        ("delayed-a", 1234),
+        ("delayed-b", 2345),
+        ("delayed-a", 9000),
+    ] {
+        service.presentation.occurrence_clock_millis = Some(Some(time));
+        service
+            .queue_ordered_provider_transaction_command(
+                "%1",
+                &execution,
+                &second,
+                "printf equal",
+                marker,
+            )
+            .unwrap();
+    }
+    assert!(
+        !service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .iter()
+            .any(|row| row.contains("printf equal"))
+    );
+    execution.action_results[0] =
+        mez_agent::ActionResult::succeeded(&turn, &first, Vec::new(), None);
+    service
+        .queue_ordered_provider_header("%1", &execution, &first)
+        .unwrap();
+    service
+        .flush_ordered_provider_headers("%1", &execution)
+        .unwrap();
+    let rows = store.inspect_presentation(&turn.conversation_id).unwrap();
+    let commands = rows
+        .iter()
+        .filter(|row| {
+            row.presentation
+                .as_ref()
+                .is_some_and(|entry| entry.id.starts_with("transaction-command:"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(
+        commands
+            .iter()
+            .map(|row| row.presentation.as_ref().unwrap().occurrence.unix_millis)
+            .collect::<Vec<_>>(),
+        vec![Some(1234), Some(2345)]
+    );
+    for row in commands {
+        let source = crate::storage::transcript::activity::ActivitySource::decode(
+            row.source_text.as_deref().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(source.source, "printf equal");
+    }
+}
+
 /// Installs one running action and an exact managed-shell transaction marker.
 ///
 /// The fixture deliberately bypasses process I/O: these tests exercise the
@@ -687,6 +1009,7 @@ fn runtime_action_progress_reconciles_provisional_results_without_replay() {
         ActionPresentationComponentIdentity::ShellOutput,
         "exact-success-output",
     );
+    service.presentation.occurrence_clock_millis = Some(Some(1234));
     assert!(
         service
             .apply_action_presentation_progress(successful_progress.clone())
@@ -699,6 +1022,7 @@ fn runtime_action_progress_reconciles_provisional_results_without_replay() {
         None,
     );
     let canonical_before = succeeded.clone();
+    service.presentation.occurrence_clock_millis = Some(Some(9000));
     assert!(
         service
             .reconcile_action_presentation_progress(&successful_progress, &succeeded)
@@ -740,6 +1064,15 @@ fn runtime_action_progress_reconciles_provisional_results_without_replay() {
     assert_eq!(source.status, "succeeded");
     assert_eq!(source.action_id.as_deref(), Some(action.id.as_str()));
     assert_eq!(source.transaction.as_deref(), Some("transaction:marker-1"));
+    assert_eq!(
+        entries[0]
+            .presentation
+            .as_ref()
+            .unwrap()
+            .occurrence
+            .unix_millis,
+        Some(1234)
+    );
     assert!(source.mutation.is_none());
     let retained: Vec<(String, String)> = serde_json::from_str(&source.source).unwrap();
     assert_eq!(

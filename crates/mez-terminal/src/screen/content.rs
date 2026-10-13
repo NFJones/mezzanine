@@ -47,6 +47,7 @@ impl TerminalScreen {
                     cells,
                     renditions,
                     self.line_copy_texts.get(row).cloned().flatten(),
+                    self.line_presentations.get(row).cloned().flatten(),
                     self.emoji_width,
                 )
             })
@@ -92,6 +93,20 @@ impl TerminalScreen {
         if self.set_recent_normal_copy_texts_inner(copy_texts, continuation_copy_text) > 0 {
             self.mark_render_changed();
         }
+    }
+
+    /// Feeds one producer-proven semantic entry into the existing normal rows.
+    /// The caller excludes preceding separators. Newlines, including blank rows,
+    /// and wraps share identity; the original first row is marked as produced,
+    /// never guessed after pruning. Invalid metadata/alternate screens get no
+    /// annotation. No clocks, history scans, or authored-byte changes occur.
+    pub fn feed_presentation(&mut self, bytes: &[u8], metadata: PresentationEntry) {
+        let previous = self.active_presentation.take();
+        if metadata.is_valid() && !self.alternate.active() {
+            self.active_presentation = Some(metadata);
+        }
+        self.feed(bytes);
+        self.active_presentation = previous;
     }
 
     /// Assigns recent copy text and returns inspected physical-row count for tests.
@@ -230,6 +245,7 @@ impl TerminalScreen {
                         &self.cells[row],
                         &self.renditions[row],
                         self.line_copy_texts.get(row).cloned().flatten(),
+                        self.line_presentations.get(row).cloned().flatten(),
                         self.emoji_width,
                     ),
                     self.line_wraps.get(row).copied().unwrap_or(false),
@@ -360,6 +376,7 @@ impl TerminalScreen {
                 blank_rendition_row(self.size.columns, GraphicRendition::default());
             self.line_wraps[row] = false;
             self.line_copy_texts[row] = None;
+            self.line_presentations[row] = None;
         }
         self.cursor = Cursor {
             row: suffix
@@ -409,6 +426,7 @@ impl TerminalScreen {
         self.renditions = blank_renditions(self.size, GraphicRendition::default());
         self.line_wraps = vec![false; usize::from(self.size.rows)];
         self.line_copy_texts = vec![None; usize::from(self.size.rows)];
+        self.line_presentations = vec![None; usize::from(self.size.rows)];
         self.cursor = Cursor { row: 0, column: 0 };
         self.cursor_visible = true;
         self.wrap_pending = false;
@@ -444,6 +462,7 @@ impl TerminalScreen {
                 self.emoji_width,
             );
             self.line_copy_texts[row_index] = line.copy_text.clone();
+            self.line_presentations[row_index] = line.presentation.clone();
         }
     }
 }

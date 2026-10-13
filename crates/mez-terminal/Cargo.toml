@@ -15,5 +15,6 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+mez-core = { path = "../mez-core", version = "0.5.1" }
 unicode-segmentation = "1.12"
 unicode-width = "0.2"

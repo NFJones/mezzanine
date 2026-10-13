@@ -39,6 +39,8 @@ pub(crate) struct Receipt {
     pub(crate) id: String,
     /// Actor-assigned acceptance order, preserved through every ownership transfer.
     pub(crate) acceptance_order: u64,
+    /// Immutable local acceptance clock, independent of mutable admission evidence.
+    pub(crate) occurrence: mez_core::presentation::PresentationOccurrence,
     /// Canonical user event bound at acceptance, never reconstructed from text.
     pub(crate) sequence: u64,
     /// Exact model input, without presentation labels.
@@ -67,10 +69,12 @@ impl Receipt {
         display: String,
         process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
         acceptance_order: u64,
+        occurrence: mez_core::presentation::PresentationOccurrence,
     ) -> Self {
         Self {
             id: crate::storage::token_usage::new_token_usage_event_id(),
             acceptance_order,
+            occurrence,
             sequence: 0,
             input,
             display,
@@ -431,6 +435,9 @@ impl RuntimeSessionService {
         input: &str,
         display: &str,
     ) {
+        let occurrence = self.capture_presentation_occurrence(
+            mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+        );
         if let Some(owner) = self.agent.steering_receipts.get_mut(&turn.turn_id) {
             // Capacity validation rejects exhaustion immediately before atomic
             // insertion; actor ownership prevents another allocation here.
@@ -438,6 +445,7 @@ impl RuntimeSessionService {
             owner.entries.push(Receipt {
                 id: crate::storage::token_usage::new_token_usage_event_id(),
                 acceptance_order: self.agent.next_steering_acceptance_order,
+                occurrence,
                 sequence,
                 input: input.into(),
                 display: display.into(),

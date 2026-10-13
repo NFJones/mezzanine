@@ -33,7 +33,11 @@ const ACTION_PRESENTATION_PROGRESS_MAX_COMPONENTS_PER_PANE: usize = 128;
 /// Maximum component identities retained for one action execution.
 const ACTION_PRESENTATION_PROGRESS_MAX_COMPONENTS_PER_ACTION: usize = 64;
 
-type RenderedProgressSection = (AgentTerminalPresentationStyle, Vec<RichTextLine>);
+type RenderedProgressSection = (
+    AgentTerminalPresentationStyle,
+    Vec<RichTextLine>,
+    mez_core::presentation::PresentationEntry,
+);
 
 impl RuntimeSessionService {
     /// Routes native shell output to the same owner used by final settlement.
@@ -85,7 +89,20 @@ impl RuntimeSessionService {
             &progress.source,
             self.terminal_shell_output_preview_lines(),
         );
-        self.update_agent_shell_output_preview(&pane_id, owner, progress.revision, &lines)?;
+        let starts_at_entry = !progress.source_truncated
+            && progress
+                .source
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count()
+                <= self.terminal_shell_output_preview_lines();
+        self.update_agent_shell_output_preview_with_boundary(
+            &pane_id,
+            owner,
+            progress.revision,
+            &lines,
+            starts_at_entry,
+        )?;
         Ok(true)
     }
 
@@ -189,10 +206,21 @@ impl RuntimeSessionService {
                 presentation.next_order = presentation.next_order.saturating_add(1);
                 order
             });
+        let entry = presentation
+            .components
+            .get(&key)
+            .map(|component| component.entry.clone())
+            .unwrap_or_else(|| {
+                self.presentation_entry(
+                    &pane_id,
+                    mez_core::presentation::PresentationOccurrenceBasis::LocalObservation,
+                )
+            });
         presentation.components.insert(
             key,
             RuntimeActionPresentationProgressComponent {
                 first_seen_order,
+                entry,
                 revision: progress.revision,
                 source: progress.source,
                 source_truncated: progress.source_truncated,
@@ -270,7 +298,7 @@ impl RuntimeSessionService {
             .action_presentation_progress
             .get(&pane_id)
             .and_then(|presentation| presentation.promoted_components.get(&key))
-            .is_some_and(|source| source == &progress.source);
+            .is_some_and(|component| component.source == progress.source);
         if !exact_retained && !exact_promoted {
             return Ok(false);
         }
@@ -374,6 +402,26 @@ impl RuntimeSessionService {
         self.retire_action_presentation_progress_matching(|key| key.turn_id == turn_id)
     }
 
+    /// Returns immutable active/promoted provenance without rendering or clocks.
+    #[cfg(test)]
+    pub(crate) fn action_presentation_progress_entries_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Vec<mez_core::presentation::PresentationEntry> {
+        self.presentation
+            .action_presentation_progress
+            .get(pane_id)
+            .map(|owner| {
+                owner
+                    .components
+                    .values()
+                    .chain(owner.promoted_components.values())
+                    .map(|component| component.entry.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Returns active and promoted source counts for focused regressions.
     #[cfg(test)]
     pub(crate) fn action_presentation_progress_counts_for_tests(
@@ -419,7 +467,7 @@ impl RuntimeSessionService {
                             section.ordinal,
                             section.path.clone(),
                         )
-                        && source.as_str() == section.diff
+                        && source.source.as_str() == section.diff
                 })
             })
     }
@@ -447,7 +495,7 @@ impl RuntimeSessionService {
         !promoted.is_empty()
             && promoted
                 .iter()
-                .all(|(_key, source)| output.contains(source.as_str()))
+                .all(|(_key, source)| output.contains(source.source.as_str()))
     }
 
     /// Composes retained executor progress over a newly rebuilt lower baseline.
@@ -648,6 +696,7 @@ impl RuntimeSessionService {
         ordered.sort_by_key(|(_key, component)| component.first_seen_order);
         let mut sections = Vec::new();
         for (key, component) in ordered {
+            let mut entry = component.entry.clone();
             let rendered = match &key.component {
                 ActionPresentationComponentIdentity::ShellOutput
                     if !presentation.projected_context.shell_view
@@ -657,6 +706,12 @@ impl RuntimeSessionService {
                         ) =>
                 {
                     let max_rows = self.terminal_shell_output_preview_lines();
+                    let source_rows = component
+                        .source
+                        .lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .count();
+                    entry.first_row &= !component.source_truncated && source_rows <= max_rows;
                     let mut rendered =
                         mez_agent::shell_observation::latest_agent_shell_transaction_output_lines(
                             &component.source,
@@ -668,6 +723,7 @@ impl RuntimeSessionService {
                         })
                         .collect::<Vec<_>>();
                     if rendered.len() > max_rows {
+                        entry.first_row = false;
                         rendered.drain(..rendered.len() - max_rows);
                     }
                     rendered
@@ -699,7 +755,7 @@ impl RuntimeSessionService {
                 } else {
                     AgentTerminalPresentationStyle::Status
                 };
-                sections.push((style, rendered));
+                sections.push((style, rendered, entry));
             }
         }
         Ok(sections)
@@ -755,7 +811,8 @@ impl RuntimeSessionService {
     ) -> Result<(String, usize)> {
         let mut bytes = String::new();
         let mut physical_rows = 0usize;
-        for (style, lines) in sections {
+        let mut occurrence_ranges = Vec::new();
+        for (style, lines, entry) in sections {
             if lines.is_empty() {
                 continue;
             }
@@ -769,16 +826,19 @@ impl RuntimeSessionService {
             } else {
                 bytes.push_str("\r\n");
             }
+            let start = bytes.len();
             for line in lines {
                 physical_rows = physical_rows.saturating_add(1);
                 append_styled_agent_terminal_rendered_line(&mut bytes, *style, line, ui_theme);
                 bytes.push_str("\x1b[0m\r\n");
             }
+            occurrence_ranges.push((start..bytes.len(), entry.clone()));
         }
         if !bytes.is_empty() {
-            Self::feed_agent_terminal_screen(
+            Self::feed_presentation_ranges(
                 screen,
                 bytes.as_bytes(),
+                &occurrence_ranges,
                 "projecting executor-owned action progress",
             )?;
         }
@@ -840,7 +900,7 @@ impl RuntimeSessionService {
         presentation.components.remove(key);
         presentation
             .promoted_components
-            .insert(key.clone(), component.source.clone());
+            .insert(key.clone(), component.clone());
 
         let old_lineage = presentation.installed_lineage;
         let preview_rows = self
@@ -935,7 +995,7 @@ impl RuntimeSessionService {
         if !target_sections.is_empty() {
             let flattened = target_sections
                 .iter()
-                .flat_map(|(style, lines)| lines.iter().map(move |line| (*style, line)))
+                .flat_map(|(style, lines, _)| lines.iter().map(move |line| (*style, line)))
                 .collect::<Vec<_>>();
             let source_content_type = if key.component.is_confirmed() {
                 "text/x-diff; charset=utf-8"
@@ -1030,31 +1090,38 @@ impl RuntimeSessionService {
                 });
                 source.encode().ok()
             });
-            self.persist_agent_presentation_entry(
-                pane_id,
-                flattened
-                    .iter()
-                    .map(|(style, _line)| style.persistence_name().to_string())
-                    .collect(),
-                flattened
-                    .iter()
-                    .map(|(_style, line)| line.display.clone())
-                    .collect(),
-                Vec::new(),
-                ansi_text,
-                Some(encoded.as_deref().map_or(
-                    (
-                        preview_source.as_deref().unwrap_or(replay_source),
-                        source_content_type,
-                    ),
-                    |source| {
+            let entry = target_sections
+                .first()
+                .map(|section| section.2.clone())
+                .unwrap_or_else(|| component.entry.clone());
+            self.with_presentation_entry(pane_id, entry, |service| {
+                service.persist_agent_presentation_entry(
+                    pane_id,
+                    flattened
+                        .iter()
+                        .map(|(style, _line)| style.persistence_name().to_string())
+                        .collect(),
+                    flattened
+                        .iter()
+                        .map(|(_style, line)| line.display.clone())
+                        .collect(),
+                    Vec::new(),
+                    ansi_text,
+                    Some(encoded.as_deref().map_or(
                         (
-                            source,
-                            crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE,
-                        )
-                    },
-                )),
-            );
+                            preview_source.as_deref().unwrap_or(replay_source),
+                            source_content_type,
+                        ),
+                        |source| {
+                            (
+                                source,
+                                crate::storage::transcript::activity::ACTIVITY_CONTENT_TYPE,
+                            )
+                        },
+                    )),
+                );
+                Ok(())
+            })?;
         }
         Ok(true)
     }

@@ -627,6 +627,7 @@ impl StyledCopyMode {
                 text: self.buffer.lines()[line].clone(),
                 style_spans: self.style_spans[line].clone(),
                 copy_text: self.copy_overrides[line].clone(),
+                presentation: None,
             })
             .collect()
     }

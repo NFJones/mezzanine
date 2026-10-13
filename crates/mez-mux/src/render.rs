@@ -199,6 +199,7 @@ pub fn compose_styled_pane_rows(
             text: collect_text_cells(row),
             style_spans,
             copy_text: None,
+            presentation: None,
         })
         .collect()
 }
@@ -425,6 +426,7 @@ pub fn styled_frame_line_with_rendition(
             rendition,
         }],
         copy_text: None,
+        presentation: None,
     }
 }
 
@@ -1486,6 +1488,7 @@ pub fn fit_styled_width(line: &TerminalStyledLine, width: usize) -> TerminalStyl
         text,
         style_spans,
         copy_text: line.copy_text.clone(),
+        presentation: line.presentation.clone(),
     }
 }
 
@@ -1869,6 +1872,7 @@ mod tests {
                 rendition,
             }],
             copy_text: None,
+            presentation: None,
         };
 
         let fitted = fit_styled_width(&line, 2);

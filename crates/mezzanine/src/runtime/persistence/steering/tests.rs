@@ -18,6 +18,7 @@ fn steering_persistence_retry_is_exact_bounded_and_lost_reply_safe() {
         version: 1,
         conversation_id: "conversation".into(),
         receipt: SteeringRecoveryReceipt {
+            occurrence: Default::default(),
             id: "occurrence".into(),
             acceptance_order: 1,
             turn_id: Some("turn".into()),
@@ -27,6 +28,7 @@ fn steering_persistence_retry_is_exact_bounded_and_lost_reply_safe() {
         },
     };
     let entry = AgentPresentationEntry {
+        presentation: None,
         conversation_id: "conversation".into(),
         sequence: 0,
         created_at_unix_seconds: 1,

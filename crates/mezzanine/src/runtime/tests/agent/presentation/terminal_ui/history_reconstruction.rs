@@ -92,6 +92,7 @@ fn runtime_agent_resize_reconstructs_more_than_two_hundred_presentation_entries(
     for sequence in 1..=205 {
         transcript_store
             .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+                presentation: None,
                 conversation_id: conversation_id.clone(),
                 sequence,
                 created_at_unix_seconds: sequence,

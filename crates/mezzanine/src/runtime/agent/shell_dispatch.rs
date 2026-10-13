@@ -469,11 +469,18 @@ impl RuntimeSessionService {
                 self.terminal_shell_output_preview_lines(),
             );
             if !lines.is_empty() {
-                self.update_agent_shell_output_preview(
+                let starts_at_entry = !output_truncated
+                    && combined_output
+                        .lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .count()
+                        <= self.terminal_shell_output_preview_lines();
+                self.update_agent_shell_output_preview_with_boundary(
                     &turn.pane_id,
                     preview_owner.clone(),
                     u64::MAX,
                     &lines,
+                    starts_at_entry,
                 )?;
             }
             self.settle_agent_shell_output_preview(&turn.pane_id, &preview_owner);

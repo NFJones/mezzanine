@@ -2688,6 +2688,9 @@ dependencies = [
 [[package]]
 name = "mez-core"
 version = "0.5.1"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "mez-mux"
@@ -2710,6 +2713,7 @@ dependencies = [
 name = "mez-terminal"
 version = "0.5.1"
 dependencies = [
+ "mez-core",
  "unicode-segmentation",
  "unicode-width",
 ]

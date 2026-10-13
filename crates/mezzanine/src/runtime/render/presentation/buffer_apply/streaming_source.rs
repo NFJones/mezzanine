@@ -17,6 +17,55 @@ impl RuntimeSessionService {
         turn_id: &str,
         event: &mez_agent::StreamingSayEvent,
     ) -> Result<()> {
+        // Existing response/component ownership, never text or time, decides
+        // whether this event establishes a new occurrence. Duplicate starts
+        // transfer the original value without asking the clock again.
+        let current = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get(pane_id)
+            .filter(|source| source.turn_id == turn_id);
+        let established = match event {
+            mez_agent::StreamingSayEvent::Started { action_index, .. } => Some(
+                current
+                    .and_then(|source| source.actions.get(action_index))
+                    .and_then(|source| source.entry.clone()),
+            ),
+            mez_agent::StreamingSayEvent::MessageStarted { action_index, .. } => Some(
+                current
+                    .and_then(|source| source.outbound_messages.get(action_index))
+                    .and_then(|source| source.entry.clone()),
+            ),
+            mez_agent::StreamingSayEvent::RationaleStarted => Some(
+                current
+                    .and_then(|source| source.rationale.as_ref())
+                    .and_then(|source| source.entry.clone()),
+            ),
+            mez_agent::StreamingSayEvent::ShellCommandStarted { action_index } => Some(
+                current
+                    .and_then(|source| source.shell_commands.get(action_index))
+                    .and_then(|source| source.entry.clone()),
+            ),
+            mez_agent::StreamingSayEvent::ShellCommandSummaryStarted { action_index } => Some(
+                current
+                    .and_then(|source| source.shell_summaries.get(action_index))
+                    .and_then(|source| source.entry.clone()),
+            ),
+            mez_agent::StreamingSayEvent::ActionHeader { action_index, .. } => Some(
+                current
+                    .and_then(|source| source.action_headers.get(action_index))
+                    .and_then(|source| source.entry.clone()),
+            ),
+            _ => None,
+        };
+        let observed_entry = established.map(|entry| {
+            entry.unwrap_or_else(|| {
+                self.presentation_entry(
+                    pane_id,
+                    mez_core::presentation::PresentationOccurrenceBasis::LocalObservation,
+                )
+            })
+        });
         match event {
             mez_agent::StreamingSayEvent::ResponseRejected { response_index } => {
                 if self
@@ -73,6 +122,7 @@ impl RuntimeSessionService {
                         turn_id: turn_id.to_string(),
                         response_index: *response_index,
                         conversation_id: conversation_id.clone(),
+                        layout_retired: false,
                         installed_lineage: self
                             .agent_pane_screen_lineage(pane_id, &conversation_id)
                             .ok_or_else(|| {
@@ -140,6 +190,7 @@ impl RuntimeSessionService {
                             turn_id: turn_id.to_string(),
                             response_index: 0,
                             conversation_id: conversation_id.clone(),
+                            layout_retired: false,
                             installed_lineage: self
                                 .agent_pane_screen_lineage(pane_id, &conversation_id)
                                 .ok_or_else(|| {
@@ -180,6 +231,7 @@ impl RuntimeSessionService {
                     .entry(*action_index)
                     .or_insert_with(|| RuntimeStreamingSayAction {
                         status: *status,
+                        entry: observed_entry.clone(),
                         content_type: content_type.clone(),
                         text: String::new(),
                         complete: false,
@@ -297,6 +349,7 @@ impl RuntimeSessionService {
                     .entry(*action_index)
                     .or_insert_with(|| RuntimeStreamingMessageSource {
                         recipient: recipient.clone(),
+                        entry: observed_entry.clone(),
                         recipient_label,
                         direct_parent,
                         content_type: content_type.clone(),
@@ -368,7 +421,12 @@ impl RuntimeSessionService {
                 if presentation.rationale.is_some() {
                     return Ok(());
                 }
-                presentation.rationale.get_or_insert_with(Default::default);
+                presentation
+                    .rationale
+                    .get_or_insert_with(|| RuntimeStreamingTextSource {
+                        entry: observed_entry.clone(),
+                        ..Default::default()
+                    });
                 presentation.revision = presentation.revision.wrapping_add(1);
                 presentation.projected_revision = None;
             }
@@ -436,7 +494,10 @@ impl RuntimeSessionService {
                 presentation
                     .shell_commands
                     .entry(*action_index)
-                    .or_insert_with(Default::default);
+                    .or_insert_with(|| RuntimeStreamingTextSource {
+                        entry: observed_entry.clone(),
+                        ..Default::default()
+                    });
                 presentation.revision = presentation.revision.wrapping_add(1);
                 presentation.projected_revision = None;
                 let has_predecessor = presentation
@@ -533,7 +594,10 @@ impl RuntimeSessionService {
                 presentation
                     .shell_summaries
                     .entry(*action_index)
-                    .or_insert_with(Default::default);
+                    .or_insert_with(|| RuntimeStreamingTextSource {
+                        entry: observed_entry.clone(),
+                        ..Default::default()
+                    });
                 presentation.revision = presentation.revision.wrapping_add(1);
                 presentation.projected_revision = None;
             }
@@ -603,9 +667,16 @@ impl RuntimeSessionService {
                     })?;
                 if presentation
                     .action_headers
-                    .insert(*action_index, *header.clone())
-                    != Some(*header.clone())
+                    .get(action_index)
+                    .is_none_or(|source| source.header != **header)
                 {
+                    presentation.action_headers.insert(
+                        *action_index,
+                        crate::runtime::render::RuntimeStreamingHeaderSource {
+                            header: *header.clone(),
+                            entry: observed_entry,
+                        },
+                    );
                     presentation.revision = presentation.revision.wrapping_add(1);
                     presentation.projected_revision = None;
                 }
@@ -667,6 +738,7 @@ impl RuntimeSessionService {
                     turn_id: turn_id.to_string(),
                     response_index: 0,
                     conversation_id: conversation_id.clone(),
+                    layout_retired: false,
                     installed_lineage: self
                         .agent_pane_screen_lineage(pane_id, &conversation_id)
                         .ok_or_else(|| {

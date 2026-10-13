@@ -498,6 +498,338 @@ async fn max_messages_checkpoint_cancel_stale_and_mismatched_owner() {
     );
 }
 
+/// The real production relay must apply original response barriers in order
+/// even with installed provisional output and a full non-render queue. Repaint
+/// pressure may evict pixels, not source ownership or authoritative outcomes.
+/// Equal later source/index belongs to response two, stale response-zero work
+/// cannot install, and accepted source keeps its actual first-observation stamp.
+#[tokio::test(flavor = "current_thread")]
+async fn provider_occurrence_relay_pressure_preserves_original_boundaries_and_outcomes() {
+    use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+    use mez_agent::StreamingSayEvent as Event;
+    for succeeds in [false, true] {
+        let (service, dispatch) = issued_fixture().await;
+        let store = service.agent_transcript_store().unwrap().clone();
+        let agent = AgentId::opaque(dispatch.turn.agent_id.clone()).unwrap();
+        let turn = dispatch.turn.turn_id.clone();
+        let (handle, actor) = AsyncRuntimeSessionActor::new(
+            service,
+            AsyncRuntimeActorConfig {
+                side_effect_buffer: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let client = async {
+            handle.drain_runtime_side_effects(1024).await.unwrap();
+            let first = vec![
+                Event::ResponseStarted { response_index: 0 },
+                Event::Started {
+                    action_index: 0,
+                    status: mez_agent::SayStatus::Final,
+                    content_type: "text/plain; charset=utf-8".into(),
+                },
+                Event::TextDelta {
+                    action_index: 0,
+                    text: "complete replacement".into(),
+                },
+            ];
+            assert_eq!(
+                relay_agent_streaming_progress(&handle, &agent, &turn, "%1", 7, first)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .applied,
+                3
+            );
+            let old_work = handle
+                .take_streaming_say_projection_work("%1".into(), turn.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            let old_projection =
+                RuntimeSessionService::build_agent_streaming_say_projection(old_work.clone())
+                    .unwrap();
+            let old_entry = old_projection
+                .screen
+                .normal_styled_content_lines()
+                .into_iter()
+                .find(|row| row.text.contains("complete replacement"))
+                .unwrap()
+                .presentation
+                .unwrap();
+            assert!(
+                handle
+                    .apply_streaming_say_projection(old_projection)
+                    .await
+                    .unwrap()
+            );
+            handle.drain_runtime_side_effects(1024).await.unwrap();
+            handle
+                .queue_runtime_side_effects(vec![
+                    RuntimeSideEffect::DispatchAgentProvider {
+                        agent_id: agent.clone(),
+                        turn_id: "pressure-one".into(),
+                    },
+                    RuntimeSideEffect::DispatchAgentProvider {
+                        agent_id: agent.clone(),
+                        turn_id: "pressure-two".into(),
+                    },
+                ])
+                .await
+                .unwrap();
+            let barriers = vec![
+                Event::ResponseRejected { response_index: 0 },
+                Event::ResponseStarted { response_index: 1 },
+                Event::ResponseStarted { response_index: 2 },
+            ];
+            // Observe real admission, not the optional wrapper's name. Queue
+            // policy evicts repaint effects without dropping source barriers.
+            assert_eq!(
+                relay_agent_streaming_progress(&handle, &agent, &turn, "%1", 7, barriers)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .applied,
+                3
+            );
+            assert!(
+                handle
+                    .metrics()
+                    .await
+                    .unwrap()
+                    .render_client_side_effects_evicted
+                    > 0
+            );
+            let stale = vec![
+                Event::ResponseStarted { response_index: 99 },
+                Event::Started {
+                    action_index: 0,
+                    status: mez_agent::SayStatus::Final,
+                    content_type: "text/plain; charset=utf-8".into(),
+                },
+                Event::TextDelta {
+                    action_index: 0,
+                    text: "complete replacement".into(),
+                },
+            ];
+            assert_eq!(
+                relay_agent_streaming_progress(&handle, &agent, &turn, "%1", 8, stale)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .applied,
+                0
+            );
+            let body = vec![
+                Event::Started {
+                    action_index: 0,
+                    status: mez_agent::SayStatus::Final,
+                    content_type: "text/plain; charset=utf-8".into(),
+                },
+                Event::TextDelta {
+                    action_index: 0,
+                    text: "complete replacement".into(),
+                },
+                Event::TextComplete { action_index: 0 },
+                Event::ActionComplete { action_index: 0 },
+            ];
+            assert_eq!(
+                relay_agent_streaming_progress(&handle, &agent, &turn, "%1", 7, body)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .applied,
+                4
+            );
+            let work = handle
+                .take_streaming_say_projection_work("%1".into(), turn.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(work.response_index, 2);
+            let projected =
+                RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+            let entry = projected
+                .screen
+                .normal_styled_content_lines()
+                .into_iter()
+                .find(|row| row.text.contains("complete replacement"))
+                .unwrap()
+                .presentation
+                .unwrap();
+            assert_ne!(entry.id, old_entry.id);
+            assert_eq!(
+                entry.occurrence.basis,
+                mez_core::presentation::PresentationOccurrenceBasis::LocalObservation
+            );
+            assert!(entry.occurrence.unix_millis.is_some());
+            assert!(
+                !handle
+                    .apply_streaming_say_projection(
+                        RuntimeSessionService::build_agent_streaming_say_projection(old_work)
+                            .unwrap()
+                    )
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                handle
+                    .drain_persistence_side_effects(1024)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            let queued = handle.drain_runtime_side_effects(1024).await.unwrap();
+            for expected in ["pressure-one", "pressure-two"] {
+                assert!(queued.iter().any(|effect| matches!(effect, RuntimeSideEffect::DispatchAgentProvider { turn_id, .. } if turn_id == expected)));
+            }
+            let result = if succeeds {
+                let provider = IncompleteProvider {
+                    requests: Mutex::new(Vec::new()),
+                    failures: 0,
+                    stream: false,
+                };
+                let (sender, mut observations) = tokio::sync::mpsc::channel(8);
+                let observer =
+                    ProviderWireRequestObserver::new(&dispatch.turn.conversation_id, "%1", sender)
+                        .with_claim_generation(7);
+                let execution = run_incomplete_fixture(&provider, &observer, &dispatch, 0, None)
+                    .await
+                    .unwrap();
+                while let Ok(observation) = observations.try_recv() {
+                    submit_provider_wire_request_observation(&handle, observation)
+                        .await
+                        .unwrap();
+                }
+                Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
+                    execution,
+                )))
+            } else {
+                Err(MezError::invalid_state(
+                    "offline authoritative failure after pressure",
+                ))
+            };
+            let (event, _) = provider_worker_event(agent.clone(), turn.clone(), 7, Ok(result));
+            let mut batch = RuntimeEventBatch::new();
+            batch.push(event);
+            assert_eq!(
+                handle.submit_runtime_events(batch).await.unwrap().applied,
+                1
+            );
+            if succeeds {
+                // Acceptance is not durable completion. Execute the actual
+                // canonical persistence work and acknowledge its exact outcome
+                // through the same actor ingress used by the worker fixture.
+                // Ordinary adapters consume queued title/timer work in between
+                // these phases. Keep the tiny pressure budget unchanged and
+                // drain those original effects, never retry an applied event.
+                let mut work = None;
+                let mut publication = Vec::new();
+                for effect in handle.drain_persistence_side_effects(64).await.unwrap() {
+                    match effect {
+                        RuntimeSideEffect::SettleAgentProviderPersistence { work: canonical } => {
+                            assert!(work.replace(canonical).is_none());
+                        }
+                        original_unexecuted => publication.push(original_unexecuted),
+                    }
+                }
+                let work =
+                    work.expect("accepted source must enter canonical persistence settlement");
+                // Claim the canonical route first: a generic drain also owns
+                // persistence routes and cannot be used before this handoff.
+                handle.drain_runtime_side_effects(1024).await.unwrap();
+                // Do not discard publication work claimed beside the canonical
+                // job. Hand these unchanged, never-executed effects to the real
+                // adapter before the canonical ack can publish later rows.
+                if !publication.is_empty() {
+                    handle
+                        .queue_runtime_side_effects(publication)
+                        .await
+                        .unwrap();
+                    let report =
+                        crate::host::async_runtime::run_async_persistence_side_effect_service(
+                            &handle,
+                            crate::host::async_runtime::AsyncRuntimeSideEffectServiceConfig {
+                                max_polls: 2,
+                                drain_limit: 64,
+                                idle_interval: Duration::from_millis(1),
+                            },
+                            |polls, _| polls >= 2,
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(report.failed, 0);
+                    handle.drain_runtime_side_effects(1024).await.unwrap();
+                }
+                let outcome = tokio::task::spawn_blocking(move || {
+                    crate::runtime::execute_agent_provider_persistence_work(*work)
+                })
+                .await
+                .unwrap()
+                .unwrap();
+                let mut batch = RuntimeEventBatch::new();
+                batch.push(RuntimeEvent::AgentProvider(
+                    AgentProviderEvent::PersistenceSettled {
+                        outcome: Box::new(outcome),
+                    },
+                ));
+                assert_eq!(
+                    handle.submit_runtime_events(batch).await.unwrap().applied,
+                    1
+                );
+                // Final presentation publication is a separate actor adapter
+                // route, not proof supplied by the canonical transcript ack.
+                let report = crate::host::async_runtime::run_async_persistence_side_effect_service(
+                    &handle,
+                    crate::host::async_runtime::AsyncRuntimeSideEffectServiceConfig {
+                        max_polls: 2,
+                        drain_limit: 64,
+                        idle_interval: Duration::from_millis(1),
+                    },
+                    |polls, _| polls >= 2,
+                )
+                .await
+                .unwrap();
+                assert_eq!(report.failed, 0);
+            }
+            assert!(
+                !handle.agent_turn_is_running(&turn).await.unwrap(),
+                "succeeds={succeeds}"
+            );
+            handle.shutdown().await.unwrap();
+            entry
+        };
+        let (entry, exit) = tokio::join!(client, actor.run());
+        let state = exit.service.agent_turn_ledger().turn(&turn).unwrap().state;
+        assert_eq!(
+            state,
+            if succeeds {
+                mez_agent::AgentTurnState::Completed
+            } else {
+                mez_agent::AgentTurnState::Failed
+            }
+        );
+        if succeeds {
+            let rows = store
+                .inspect_presentation(&dispatch.turn.conversation_id)
+                .unwrap();
+            assert!(
+                rows.iter()
+                    .any(|row| row.presentation.as_ref() == Some(&entry)),
+                "expected={entry:?}; actual={rows:?}"
+            );
+            let usage = exit
+                .service
+                .agent_token_usage_for_conversation(&dispatch.turn.conversation_id);
+            assert_eq!(
+                usage[&mez_agent::ModelTokenUsageKey::new("local-chat", "test-model")].input_tokens,
+                5
+            );
+        }
+    }
+}
+
 /// Reports the parser-backed response boundary without controlling cancellation.
 struct NotifyingProvider {
     inner: std::sync::Arc<IncompleteProvider>,

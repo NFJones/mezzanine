@@ -212,6 +212,22 @@ fn streaming_say_runtime_event_batch(
     batch
 }
 
+/// Submits one coalesced progress segment through the production actor ingress.
+/// Keeping this seam explicit permits offline pressure qualification without
+/// substituting a private presenter, provider outcome, or queue implementation.
+async fn relay_agent_streaming_progress(
+    handle: &AsyncRuntimeSessionHandle,
+    agent_id: &AgentId,
+    turn_id: &str,
+    pane_id: &str,
+    claim_generation: u64,
+    events: Vec<mez_agent::StreamingSayEvent>,
+) -> Result<Option<crate::runtime::RuntimeEventIngressReport>> {
+    let batch =
+        streaming_say_runtime_event_batch(agent_id, turn_id, pane_id, claim_generation, events);
+    handle.submit_optional_provider_progress(batch).await
+}
+
 /// Outcome of one latest-generation projection attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StreamingSayProjectionAttempt {
@@ -1199,14 +1215,14 @@ where
                     if events.is_empty() {
                         break;
                     }
-                    let batch = streaming_say_runtime_event_batch(
+                    let _ = relay_agent_streaming_progress(
+                        &handle,
                         &agent_id,
                         &turn_id,
                         &pane_id,
                         claim_generation,
                         events,
-                    );
-                    let _ = handle.submit_optional_provider_progress(batch).await?;
+                    ).await?;
                     tokio::task::yield_now().await;
                 }
                 while projection_workers.join_next().await.is_some() {}
@@ -1250,14 +1266,14 @@ where
                 let projection_changed = events
                     .iter()
                     .any(streaming_presentation_event_changes_projection);
-                let batch = streaming_say_runtime_event_batch(
+                let report = relay_agent_streaming_progress(
+                    &handle,
                     &agent_id,
                     &turn_id,
                     &pane_id,
                     claim_generation,
                     events,
-                );
-                let report = handle.submit_optional_provider_progress(batch).await?;
+                ).await?;
                 if projection_changed && report.is_some_and(|report| report.applied > 0) {
                     if projection_workers.is_empty() {
                         spawn_streaming_say_projection_worker(

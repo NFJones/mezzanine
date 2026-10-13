@@ -20,6 +20,7 @@ impl TerminalScreen {
                     &self.cells[row],
                     &self.renditions[row],
                     self.line_copy_texts.get(row).cloned().flatten(),
+                    self.line_presentations.get(row).cloned().flatten(),
                     self.emoji_width,
                 ),
                 wraps_to_next: self.line_wraps.get(row).copied().unwrap_or(false),
@@ -89,10 +90,26 @@ impl TerminalScreen {
         }
     }
 
-    /// Clears raw-copy metadata for a visible row after terminal mutation.
+    /// Clears copy and presentation metadata after a visible terminal write.
     pub(super) fn clear_line_copy_text(&mut self, row: usize) {
         if let Some(copy_text) = self.line_copy_texts.get_mut(row) {
             *copy_text = None;
+        }
+        if let Some(presentation) = self.line_presentations.get_mut(row) {
+            if let Some(active) = self
+                .active_presentation
+                .as_mut()
+                .filter(|_| !self.alternate.active())
+            {
+                if !presentation.as_ref().is_some_and(|previous| {
+                    previous.id == active.id && previous.occurrence == active.occurrence
+                }) {
+                    *presentation = Some(active.clone());
+                }
+                active.first_row = false;
+            } else {
+                *presentation = None;
+            }
         }
     }
 
@@ -252,15 +269,19 @@ impl TerminalScreen {
         self.cells
             .iter()
             .zip(self.renditions.iter())
-            .rposition(|(cells, renditions)| {
-                cells
-                    .iter()
-                    .zip(renditions.iter())
-                    .any(|(cell, rendition)| {
-                        cell.is_written()
-                            || !cell.is_blank()
-                            || *rendition != GraphicRendition::default()
-                    })
+            .enumerate()
+            .rposition(|(row, (cells, renditions))| {
+                self.line_presentations
+                    .get(row)
+                    .is_some_and(Option::is_some)
+                    || cells
+                        .iter()
+                        .zip(renditions.iter())
+                        .any(|(cell, rendition)| {
+                            cell.is_written()
+                                || !cell.is_blank()
+                                || *rendition != GraphicRendition::default()
+                        })
             })
     }
 }

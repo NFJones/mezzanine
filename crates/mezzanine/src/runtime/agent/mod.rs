@@ -126,6 +126,8 @@ struct RuntimeReceivedPeerMessagePresentation {
     /// deliver one envelope to several recipient identities, so it cannot be
     /// part of the receipt's authority boundary.
     recipient_agent_id: AgentId,
+    /// Original local receive commit, never persistence/restart time.
+    occurrence: mez_core::presentation::PresentationOccurrence,
     /// Destination pane that owns the receiver-only presentation row.
     pane_id: String,
     /// Durable conversation whose presentation log settles this receipt.
@@ -216,6 +218,7 @@ mod memory;
 mod messages;
 mod outcome;
 mod presentation;
+mod presentation_occurrence;
 pub(crate) use presentation::RuntimeProviderLogInput;
 mod project_accounting;
 mod provider_context;
@@ -2750,6 +2753,9 @@ impl RuntimeSessionService {
             ));
         }
         let acceptance_order = self.next_steering_acceptance_order()?;
+        let occurrence = self.capture_presentation_occurrence(
+            mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+        );
         self.agent
             .agent_compaction_steering
             .entry(pane_id.to_string())
@@ -2758,7 +2764,13 @@ impl RuntimeSessionService {
                 client: primary_client_id,
                 conversation: conversation_id,
                 epoch: compaction_epoch,
-                receipt: steering::Receipt::deferred(prompt, display, process, acceptance_order),
+                receipt: steering::Receipt::deferred(
+                    prompt,
+                    display,
+                    process,
+                    acceptance_order,
+                    occurrence,
+                ),
             });
         self.publish_steering_recovery_checkpoint();
         self.request_steering_presentation(pane_id);

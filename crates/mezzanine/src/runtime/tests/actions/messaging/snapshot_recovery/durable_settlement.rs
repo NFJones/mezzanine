@@ -16,6 +16,7 @@ fn runtime_v6_snapshot_restore_filters_durably_settled_peer_receipt() {
     service.set_agent_transcript_store(store.clone());
     let identity = "peer-message recipient=agent-%1 sequence=1 id=stale-v6";
     store.append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+        presentation: None,
         conversation_id: "conversation".to_string(), sequence: 1, created_at_unix_seconds: 1,
         pane_id: "%1".to_string(), turn_id: None, terminal_width: 80,
         style_names: vec!["user-prompt".to_string()],
@@ -25,6 +26,7 @@ fn runtime_v6_snapshot_restore_filters_durably_settled_peer_receipt() {
         source_content_type: Some("application/vnd.mezzanine.agent-presentation.peer-message+json; charset=utf-8".to_string()),
     }).unwrap();
     let receipt = crate::storage::snapshot::SnapshotUnsettledPeerPresentation {
+        occurrence: Default::default(),
         identity: identity.to_string(),
         recipient_agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),

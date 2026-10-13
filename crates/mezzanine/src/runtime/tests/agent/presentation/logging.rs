@@ -105,10 +105,14 @@ fn runtime_ordered_logs_retain_components_after_install_failure() {
             .next()
             .unwrap()
             .clone();
+        let entry = service.presentation_entry(
+            "%1",
+            mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+        );
         service
             .presentation
             .agent_queued_provider_commands
-            .insert(key, "COMMAND_SENTINEL".to_string());
+            .insert(key, vec![("COMMAND_SENTINEL".to_string(), entry)]);
         service.fail_agent_presentation_install_for_tests(after);
         assert!(
             service
@@ -2055,6 +2059,7 @@ fn runtime_agent_presentation_replay_rejects_mismatched_conversation() {
     let process_before = service.process_pane_screen("%1").unwrap().clone();
     let agent_before = service.agent_pane_screen("%1").unwrap().clone();
     let stale = crate::storage::transcript::AgentPresentationEntry {
+        presentation: None,
         conversation_id: "stale-conversation".to_string(),
         sequence: 1,
         created_at_unix_seconds: 1,
