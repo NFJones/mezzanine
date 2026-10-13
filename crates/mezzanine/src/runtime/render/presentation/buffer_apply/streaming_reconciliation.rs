@@ -6,6 +6,17 @@
 
 use super::*;
 
+/// Metadata evidence accepts an unfinished decoded prefix only under the exact
+/// response owner already fenced by provider ingress. Closure requires equality;
+/// this never grants row promotion, execution admission, or delivery settlement.
+fn observed_source_matches(complete: bool, observed: &str, accepted: &str) -> bool {
+    if complete {
+        observed == accepted
+    } else {
+        accepted.starts_with(observed)
+    }
+}
+
 /// Reports whether any provisional field lacks its source-closure receipt.
 /// This classifies rejection diagnostics only, never authorizes publication.
 pub(super) fn streaming_source_is_incomplete(
@@ -178,17 +189,15 @@ impl RuntimeSessionService {
                         entries.push(((ordinal, component.to_string()), entry.clone()));
                     }
                 };
-            if let Some(source) = presentation
-                .rationale
-                .as_ref()
-                .filter(|source| source.complete && source.text == batch.rationale)
-            {
+            if let Some(source) = presentation.rationale.as_ref().filter(|source| {
+                observed_source_matches(source.complete, &source.text, &batch.rationale)
+            }) {
                 retain(None, "rationale", &source.entry);
             }
             for (index, source) in &presentation.actions {
                 if batch.actions.get(*index).is_some_and(|action| matches!(&action.payload,
                     AgentActionPayload::Say { status, text, content_type }
-                    if source.complete && source.status == *status && source.text == *text
+                    if source.status == *status && observed_source_matches(source.complete, &source.text, text)
                         && source.content_type == mez_agent::normalize_agent_output_content_type(Some(content_type))))
                 {
                     retain(Some(*index), "say", &source.entry);
@@ -197,7 +206,7 @@ impl RuntimeSessionService {
             for (index, source) in &presentation.outbound_messages {
                 if batch.actions.get(*index).is_some_and(|action| matches!(&action.payload,
                     AgentActionPayload::SendMessage { recipient, content_type, payload, .. }
-                    if source.complete && source.recipient == *recipient && source.text == *payload
+                    if source.recipient == *recipient && observed_source_matches(source.complete, &source.text, payload)
                         && source.content_type == mez_agent::normalize_maap_message_content_type(content_type)))
                 {
                     retain(Some(*index), "message", &source.entry);
@@ -210,7 +219,7 @@ impl RuntimeSessionService {
                 for (index, source) in sources {
                     if batch.actions.get(*index).is_some_and(|action| matches!(&action.payload,
                         AgentActionPayload::ShellCommand { command, summary, .. }
-                        if source.complete && source.text == *if component == "command" { command } else { summary }))
+                        if observed_source_matches(source.complete, &source.text, if component == "command" { command } else { summary })))
                     {
                         retain(Some(*index), component, &source.entry);
                     }
@@ -238,6 +247,9 @@ impl RuntimeSessionService {
                 }
             }
             self.retain_validated_stream_entries(pane_id, execution, entries)?;
+        }
+        if presentation.layout_retired {
+            return Ok(Default::default());
         }
         self.settle_captured_streaming_presentation(pane_id, turn_id, execution, presentation)
     }

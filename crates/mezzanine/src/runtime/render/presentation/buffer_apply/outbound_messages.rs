@@ -165,11 +165,24 @@ impl RuntimeSessionService {
             // cumulative owner until every outbound action from this response
             // settles, so a later rejected sibling can still restore the
             // shared baseline instead of leaving a partial sender transcript.
-            self.persist_accepted_outbound_message_presentation(
-                pane_id,
-                action.id.as_str(),
-                &source,
-            )?;
+            if self
+                .presentation
+                .agent_streaming_say_presentations
+                .get(pane_id)
+                .is_some_and(|presentation| presentation.layout_retired)
+            {
+                self.append_accepted_outbound_message_presentation(
+                    pane_id,
+                    action.id.as_str(),
+                    &source,
+                )?;
+            } else {
+                self.persist_accepted_outbound_message_presentation(
+                    pane_id,
+                    action.id.as_str(),
+                    &source,
+                )?;
+            }
             self.presentation
                 .agent_settled_outbound_message_actions
                 .insert(identity);

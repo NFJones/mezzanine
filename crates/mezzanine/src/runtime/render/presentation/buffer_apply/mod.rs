@@ -1712,7 +1712,7 @@ impl RuntimeSessionService {
             .agent_streaming_say_presentations
             .contains_key(pane_id)
         {
-            self.discard_agent_streaming_say_presentation(pane_id, None)?;
+            self.retire_agent_streaming_layout(pane_id)?;
         }
         if let Some(preview) = self
             .presentation
@@ -2065,6 +2065,9 @@ impl RuntimeSessionService {
             .agent_streaming_say_presentations
             .get(pane_id)
             .ok_or_else(|| MezError::invalid_state("streaming presentation is unavailable"))?;
+        if presentation.layout_retired {
+            return Ok(());
+        }
         let conversation_id = presentation.conversation_id.clone();
         let mut candidate = presentation.provider_screen.as_ref().clone();
         let cursor = candidate.cursor_state();
@@ -2095,6 +2098,9 @@ impl RuntimeSessionService {
             .agent_streaming_say_presentations
             .get(pane_id)
             .ok_or_else(|| MezError::invalid_state("streaming say presentation is unavailable"))?;
+        if presentation.layout_retired {
+            return Ok(());
+        }
         let conversation_id = presentation.conversation_id.clone();
         let mut candidate = presentation.provider_screen.as_ref().clone();
         let cursor = candidate.cursor_state();

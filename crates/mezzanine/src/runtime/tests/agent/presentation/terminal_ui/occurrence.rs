@@ -214,15 +214,8 @@ fn runtime_occurrence_transcript_only_fork_keeps_original_record_evidence() {
 /// only layout ownership, not a validated component's first observation. Exact
 /// closed source keeps its ID/basis/time; different accepted source must not
 /// borrow that evidence merely because it reused the response-local ordinal.
-#[test]
-fn runtime_occurrence_static_fallback_keeps_only_matching_stream_evidence() {
-    for (projected, rationale, matches, complete, intervening) in [
-        (true, true, true, true, false),
-        (false, false, true, true, false),
-        (true, true, false, true, false),
-        (false, false, true, false, false),
-        (true, true, true, true, true),
-    ] {
+fn occurrence_static_fallback_cases(cases: &[(bool, bool, bool, bool, bool, bool)]) {
+    for &(projected, rationale, matches, complete, intervening, resize) in cases {
         let mut service = test_runtime_service();
         let store = AgentTranscriptStore::new(temp_root("occurrence-static-fallback"));
         service.set_agent_transcript_store(store.clone());
@@ -301,6 +294,19 @@ fn runtime_occurrence_static_fallback_keeps_only_matching_stream_evidence() {
                     .unwrap()
             );
         }
+        if resize {
+            assert!(
+                service
+                    .rebuild_agent_presentation_after_resize("%1", Size::new(30, 12).unwrap())
+                    .unwrap()
+            );
+            assert!(
+                service
+                    .take_agent_streaming_say_projection_work("%1", "turn-1")
+                    .unwrap()
+                    .is_none()
+            );
+        }
         service.presentation.occurrence_clock_millis = Some(Some(9000));
         let accepted = if matches {
             "original streamed answer"
@@ -363,15 +369,10 @@ fn runtime_occurrence_static_fallback_keeps_only_matching_stream_evidence() {
                     .any(|row| row.contains("intervening status"))
             );
         }
-        let live = service
+        let live_rows = service
             .agent_pane_screen("%1")
             .unwrap()
-            .normal_styled_content_lines()
-            .into_iter()
-            .find(|row| row.text.contains(accepted))
-            .unwrap()
-            .presentation
-            .unwrap();
+            .normal_styled_content_lines();
         let durable = store
             .inspect_presentation(&conversation)
             .unwrap()
@@ -380,6 +381,16 @@ fn runtime_occurrence_static_fallback_keeps_only_matching_stream_evidence() {
             .unwrap()
             .presentation
             .unwrap();
+        // Physical wrapping cannot locate a whole authored string on one row.
+        // The exact durable source above identifies the accepted entry, whose
+        // live boundary must exist exactly once with identical provenance.
+        let boundaries = live_rows
+            .iter()
+            .filter_map(|row| row.presentation.as_ref())
+            .filter(|entry| entry.id == durable.id && entry.first_row)
+            .collect::<Vec<_>>();
+        assert_eq!(boundaries.len(), 1, "{live_rows:?}");
+        let live = boundaries[0].clone();
         assert_eq!(live, durable);
         if matches {
             assert_eq!(live, observed);
@@ -392,6 +403,507 @@ fn runtime_occurrence_static_fallback_keeps_only_matching_stream_evidence() {
             );
         }
     }
+}
+
+/// A structural response owner may be retired before its first component. First
+/// source receipt must still capture metadata but cannot install the owner's old
+/// screen or erase the exact text/style/copy/status rows of an intervening write.
+fn first_component_retirement_case(command: bool) {
+    use mez_agent::StreamingSayEvent as Event;
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-1",
+            crate::runtime::RuntimeProviderLogInput::Progress(&Event::ResponseStarted {
+                response_index: 0,
+            }),
+        )
+        .unwrap();
+    service.presentation.occurrence_clock_millis = Some(Some(2000));
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "intervening exact status")
+        .unwrap();
+    let before = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    service.presentation.occurrence_clock_millis = Some(Some(1234));
+    let source = if command { "printf later" } else { "later say" };
+    let events = if command {
+        vec![
+            Event::ShellCommandStarted { action_index: 0 },
+            Event::ShellCommandTextDelta {
+                action_index: 0,
+                text: source.into(),
+            },
+            Event::ShellCommandTextComplete { action_index: 0 },
+            Event::ActionComplete { action_index: 0 },
+        ]
+    } else {
+        vec![
+            Event::Started {
+                action_index: 0,
+                status: mez_agent::SayStatus::Progress,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.into(),
+            },
+            Event::TextDelta {
+                action_index: 0,
+                text: source.into(),
+            },
+            Event::TextComplete { action_index: 0 },
+            Event::ActionComplete { action_index: 0 },
+        ]
+    };
+    for event in events {
+        service
+            .ingest_provider_log(
+                "%1",
+                "turn-1",
+                crate::runtime::RuntimeProviderLogInput::Progress(&event),
+            )
+            .unwrap();
+        assert_eq!(
+            service
+                .agent_pane_screen("%1")
+                .unwrap()
+                .normal_styled_content_lines(),
+            before,
+            "event={event:?}"
+        );
+        assert!(
+            service
+                .take_agent_streaming_say_projection_work("%1", "turn-1")
+                .unwrap()
+                .is_none()
+        );
+    }
+    service.presentation.occurrence_clock_millis = Some(Some(9000));
+    let payload = if command {
+        mez_agent::AgentActionPayload::ShellCommand {
+            command: source.into(),
+            summary: "intent".into(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        }
+    } else {
+        mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Progress,
+            text: source.into(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.into(),
+        }
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-1"),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".into(),
+            model: "test".into(),
+            raw_text: source.into(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: String::new(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "later".into(),
+                    payload,
+                }],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: Vec::new(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-1",
+            crate::runtime::RuntimeProviderLogInput::Validated(&execution),
+        )
+        .unwrap();
+    let entry = service
+        .retained_provider_component_entry(
+            "%1",
+            &execution,
+            Some(0),
+            if command { "command" } else { "say" },
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.occurrence.unix_millis, Some(1234));
+    assert_eq!(
+        entry.occurrence.basis,
+        mez_core::presentation::PresentationOccurrenceBasis::LocalObservation
+    );
+    service
+        .ingest_provider_log(
+            "%1",
+            "turn-1",
+            crate::runtime::RuntimeProviderLogInput::Settled(&execution),
+        )
+        .unwrap();
+    let after = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    let original_status = before
+        .iter()
+        .find(|row| row.text.contains("intervening exact status"))
+        .unwrap();
+    assert_eq!(
+        after
+            .iter()
+            .find(|row| row.text.contains("intervening exact status"))
+            .unwrap(),
+        original_status
+    );
+}
+
+/// First say receipt after structural-owner retirement cannot restore its old
+/// screen. Exact accepted source retains its original first-observation stamp.
+#[test]
+fn runtime_occurrence_retired_owner_first_say_preserves_intervening_rows() {
+    first_component_retirement_case(false);
+}
+
+/// First command-intent receipt after structural-owner retirement remains
+/// inert until accepted source; it is never proof that the command executed.
+#[test]
+fn runtime_occurrence_retired_owner_first_command_preserves_intervening_rows() {
+    first_component_retirement_case(true);
+}
+
+/// Every semantic source family transfers only its original observation under
+/// the exact typed component contract. Closed unequal text and incomplete
+/// non-prefixes cannot acquire that evidence; partial matching text does not
+/// authorize partial-row promotion or any executor/message effect.
+#[test]
+fn runtime_occurrence_component_fallback_retains_only_proven_original_sources() {
+    use mez_agent::StreamingSayEvent as Event;
+    for component in [
+        "rationale",
+        "say",
+        "command",
+        "summary",
+        "message",
+        "header",
+    ] {
+        for complete in [false, true] {
+            if component == "header" && !complete {
+                continue;
+            }
+            for matches in [false, true] {
+                let mut service = test_runtime_service();
+                service
+                    .agent_shell_store_mut()
+                    .enter_or_resume("%1")
+                    .unwrap();
+                set_agent_pane_screen_for_test(
+                    &mut service,
+                    "%1",
+                    TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+                );
+                service.presentation.occurrence_clock_millis = Some(Some(1234));
+                let observed = if complete {
+                    "authored source extended"
+                } else {
+                    "authored source"
+                };
+                let accepted = if matches {
+                    "authored source extended"
+                } else {
+                    "different validated source"
+                };
+                let mut events = match component {
+                    "rationale" => vec![
+                        Event::RationaleStarted,
+                        Event::RationaleTextDelta {
+                            text: observed.into(),
+                        },
+                    ],
+                    "say" => vec![
+                        Event::Started {
+                            action_index: 0,
+                            status: mez_agent::SayStatus::Final,
+                            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.into(),
+                        },
+                        Event::TextDelta {
+                            action_index: 0,
+                            text: observed.into(),
+                        },
+                    ],
+                    "command" => vec![
+                        Event::ShellCommandStarted { action_index: 0 },
+                        Event::ShellCommandTextDelta {
+                            action_index: 0,
+                            text: observed.into(),
+                        },
+                    ],
+                    "summary" => vec![
+                        Event::ShellCommandSummaryStarted { action_index: 0 },
+                        Event::ShellCommandSummaryTextDelta {
+                            action_index: 0,
+                            text: observed.into(),
+                        },
+                    ],
+                    "message" => vec![
+                        Event::MessageStarted {
+                            action_index: 0,
+                            recipient: "agent-%2".into(),
+                            content_type: "text/plain; charset=utf-8".into(),
+                        },
+                        Event::MessagePayloadDelta {
+                            action_index: 0,
+                            text: observed.into(),
+                        },
+                    ],
+                    "header" => vec![Event::ActionHeader {
+                        action_index: 0,
+                        header: Box::new(mez_agent::StreamingActionHeader::WebSearch {
+                            query: observed.into(),
+                        }),
+                    }],
+                    _ => unreachable!(),
+                };
+                if complete {
+                    match component {
+                        "rationale" => events.push(Event::RationaleTextComplete),
+                        "say" => events.push(Event::TextComplete { action_index: 0 }),
+                        "command" => {
+                            events.push(Event::ShellCommandTextComplete { action_index: 0 })
+                        }
+                        "summary" => {
+                            events.push(Event::ShellCommandSummaryTextComplete { action_index: 0 })
+                        }
+                        "message" => events.push(Event::MessagePayloadComplete { action_index: 0 }),
+                        _ => {}
+                    }
+                }
+                for event in events {
+                    service
+                        .ingest_provider_log(
+                            "%1",
+                            "turn-1",
+                            crate::runtime::RuntimeProviderLogInput::Progress(&event),
+                        )
+                        .unwrap();
+                }
+                let work = service
+                    .take_agent_streaming_say_projection_work("%1", "turn-1")
+                    .unwrap()
+                    .unwrap();
+                let projection =
+                    RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+                let original = projection
+                    .screen
+                    .normal_styled_content_lines()
+                    .into_iter()
+                    .filter_map(|row| row.presentation)
+                    .find(|entry| entry.first_row)
+                    .unwrap();
+                service.presentation.occurrence_clock_millis = Some(Some(9000));
+                let payload = match component {
+                    "rationale" | "say" => mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
+                        text: accepted.into(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.into(),
+                    },
+                    "command" | "summary" => mez_agent::AgentActionPayload::ShellCommand {
+                        command: accepted.into(),
+                        summary: accepted.into(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: None,
+                    },
+                    "message" => mez_agent::AgentActionPayload::SendMessage {
+                        recipient: "agent-%2".into(),
+                        scope: None,
+                        content_type: "text/plain; charset=utf-8".into(),
+                        payload: accepted.into(),
+                        correlation_id: None,
+                    },
+                    "header" => mez_agent::AgentActionPayload::WebSearch {
+                        query: accepted.into(),
+                        domains: Vec::new(),
+                        recency_days: None,
+                        max_results: None,
+                    },
+                    _ => unreachable!(),
+                };
+                let execution = mez_agent::AgentTurnExecution {
+                    request: runtime_model_request_fixture("turn-1"),
+                    response: mez_agent::ModelResponse {
+                        provider: "runtime-batch".into(),
+                        model: "test".into(),
+                        raw_text: accepted.into(),
+                        usage: Default::default(),
+                        latest_request_usage: None,
+                        quota_usage: Default::default(),
+                        action_batch: Some(mez_agent::MaapBatch {
+                            rationale: if component == "rationale" {
+                                accepted.into()
+                            } else {
+                                String::new()
+                            },
+                            actions: vec![mez_agent::AgentAction {
+                                id: "component".into(),
+                                payload,
+                            }],
+                        }),
+                        provider_transcript_events: Vec::new(),
+                    },
+                    latest_response_usage: Default::default(),
+                    routing_token_usage_by_model: Default::default(),
+                    action_results: Vec::new(),
+                    final_turn: true,
+                    terminal_state: AgentTurnState::Completed,
+                };
+                service
+                    .ingest_provider_log(
+                        "%1",
+                        "turn-1",
+                        crate::runtime::RuntimeProviderLogInput::Validated(&execution),
+                    )
+                    .unwrap();
+                let retained = service
+                    .retained_provider_component_entry(
+                        "%1",
+                        &execution,
+                        if component == "rationale" {
+                            None
+                        } else {
+                            Some(0)
+                        },
+                        component,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    retained,
+                    matches.then_some(original),
+                    "component={component} complete={complete} matches={matches}"
+                );
+            }
+        }
+    }
+}
+
+/// Exact closed source retains observation metadata through layout fallback,
+/// while closed unequal source cannot borrow that provisional evidence.
+#[test]
+fn runtime_occurrence_static_fallback_keeps_only_matching_stream_evidence() {
+    occurrence_static_fallback_cases(&[
+        (true, true, true, true, false, false),
+        (false, false, true, true, false, false),
+        (true, true, false, true, false, false),
+    ]);
+}
+
+/// Optional source fragments may end before field closure. An exact accepted
+/// continuation must retain first observation without promoting partial rows.
+#[test]
+fn runtime_occurrence_partial_fallback_keeps_original_observation() {
+    occurrence_static_fallback_cases(&[(false, false, true, false, false, false)]);
+}
+
+/// Ordinary status output retires only layout authority. Exact later acceptance
+/// retains original source evidence and cannot erase status or admit stale work.
+#[test]
+fn runtime_occurrence_intervening_write_fallback_keeps_original_observation() {
+    occurrence_static_fallback_cases(&[(true, true, true, true, true, false)]);
+}
+
+/// Retired source survives source-backed resize without re-projecting rows.
+/// Acceptance keeps the old observation while durable status/copy remains.
+#[test]
+fn runtime_occurrence_retired_layout_resize_keeps_only_inert_source() {
+    occurrence_static_fallback_cases(&[(true, true, true, true, true, true)]);
+}
+
+/// A fork of already projected fallback rows preserves its frozen display/copy
+/// source, including historical chrome, while keeping original record stamps.
+/// Only transcript-only record-form source synthesizes new resume chrome.
+#[test]
+fn runtime_occurrence_projected_fallback_fork_preserves_frozen_source() {
+    let mut source = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("occurrence-projected-fork"));
+    source.set_agent_transcript_store(store.clone());
+    let conversation = source
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let entry = mez_agent::transcript::TranscriptEntry {
+        conversation_id: conversation.clone(),
+        sequence: 1,
+        created_at_unix_seconds: 2,
+        role: mez_agent::transcript::TranscriptRole::User,
+        turn_id: "turn".into(),
+        agent_id: "agent-%1".into(),
+        pane_id: "%1".into(),
+        content: "frozen original record".into(),
+    };
+    store.append(&entry).unwrap();
+    set_agent_pane_screen_for_test(
+        &mut source,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    source
+        .replay_agent_transcript_fallback_to_terminal_buffer(
+            "%1",
+            RuntimeSessionService::runtime_resume_transcript_presentation(
+                &conversation,
+                1,
+                &[entry],
+            ),
+            true,
+        )
+        .unwrap();
+    let original = source
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    store.fork(&conversation, "forked", 99).unwrap();
+    let entries = store.inspect_presentation("forked").unwrap();
+    let mut target = test_runtime_service();
+    target
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    target
+        .agent_shell_store_mut()
+        .bind_conversation_with_lineage("%1", "forked", 1, None)
+        .unwrap();
+    target.presentation.occurrence_clock_millis = Some(Some(9000));
+    set_agent_pane_screen_for_test(
+        &mut target,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    target
+        .replay_agent_presentation_entries_to_terminal_buffer("%1", &entries)
+        .unwrap();
+    assert_eq!(
+        target
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_styled_content_lines(),
+        original
+    );
 }
 
 /// Typed transcript fallback must retain the legacy batch's visible rows,

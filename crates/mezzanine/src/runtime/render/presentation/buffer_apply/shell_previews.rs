@@ -366,7 +366,8 @@ impl RuntimeSessionService {
             .agent_streaming_say_presentations
             .get(pane_id)
             .filter(|streaming| {
-                streaming.conversation_id == conversation_id
+                !streaming.layout_retired
+                    && streaming.conversation_id == conversation_id
                     && streaming.installed_lineage == current_lineage
             })
             .map(|streaming| streaming.provider_screen.as_ref().clone())
@@ -462,7 +463,8 @@ impl RuntimeSessionService {
             .agent_streaming_say_presentations
             .get_mut(pane_id)
             .filter(|streaming| {
-                streaming.conversation_id == conversation_id
+                !streaming.layout_retired
+                    && streaming.conversation_id == conversation_id
                     && streaming.installed_lineage == current_lineage
             })
         {

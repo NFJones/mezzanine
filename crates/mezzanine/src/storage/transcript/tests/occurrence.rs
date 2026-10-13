@@ -5,6 +5,84 @@ use mez_core::presentation::{
     PresentationEntry, PresentationOccurrence, PresentationOccurrenceBasis,
 };
 
+/// Version-five steering receipts truly omitted occurrence. Their identity,
+/// acceptance order, status and exact display must survive while missing time
+/// remains unknown, not inherited from metadata/checkpoint or decode time.
+#[test]
+fn presentation_occurrence_legacy_v5_missing_steering_stamp_stays_unknown() {
+    use mez_agent::transcript::{SteeringRecoveryReceipt, SteeringRecoveryStatus};
+    let mut metadata = agent_session_metadata("$legacy", "legacy-steering");
+    metadata.steering_recovery.push(SteeringRecoveryReceipt {
+        id: "original".into(),
+        acceptance_order: 1,
+        occurrence: PresentationOccurrence::new(
+            Some(1234),
+            PresentationOccurrenceBasis::LocalAcceptance,
+        ),
+        turn_id: Some("turn".into()),
+        event_sequence: Some(9),
+        display: "exact\t雪\r\n\\source".into(),
+        status: SteeringRecoveryStatus::Admitted(7),
+    });
+    let encoded = encode_agent_session_metadata(&metadata).unwrap();
+    let (prefix, _) = encoded.rsplit_once('\t').unwrap();
+    let mut rows = serde_json::to_value(&metadata.steering_recovery).unwrap();
+    rows[0].as_object_mut().unwrap().remove("occurrence");
+    let json = serde_json::to_string(&rows)
+        .unwrap()
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r");
+    let legacy = format!(
+        "{}\t{json}",
+        prefix.replacen(
+            "mez-agent-session-metadata/6",
+            "mez-agent-session-metadata/5",
+            1
+        )
+    );
+    metadata.steering_recovery[0].occurrence = PresentationOccurrence::default();
+    assert_eq!(decode_agent_session_metadata(&legacy).unwrap(), metadata);
+}
+
+/// The fork source uses exactly the established 64-entry/2-MiB transcript tail.
+/// Oversized last rows must not turn partial bytes into a fabricated entry, and
+/// record-count clipping retains original order/bytes and full catalog count.
+#[test]
+fn presentation_occurrence_fork_tail_matches_existing_bounded_reader() {
+    use crate::storage::transcript::fallback::{Content, RECORD_BYTES, RECORD_LIMIT, Source};
+    for large_last in [false, true] {
+        let root = temp_root("occurrence-fork-tail");
+        let store = AgentTranscriptStore::new(root.clone());
+        for sequence in 1..=70 {
+            let mut row = entry("original", sequence, TranscriptRole::User);
+            if large_last && sequence == 70 {
+                row.content = "x".repeat(RECORD_BYTES + 1);
+            }
+            store.append(&row).unwrap();
+        }
+        let expected = store
+            .inspect_recent("original", RECORD_LIMIT, RECORD_BYTES as u64)
+            .unwrap();
+        assert_eq!(expected.len(), if large_last { 0 } else { RECORD_LIMIT });
+        let forked = store.fork("original", "forked", 99).unwrap();
+        assert_eq!(forked.entries, 70);
+        let presentation = store.inspect_presentation("forked").unwrap();
+        let source = Source::decode(presentation[0].source_text.as_deref().unwrap()).unwrap();
+        let Content::Records {
+            records,
+            transcript_entries,
+        } = source.content
+        else {
+            panic!("expected original records");
+        };
+        assert_eq!(transcript_entries, 70);
+        assert_eq!(Source::entries(&records).unwrap(), expected);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// Fallback presentation source uses the existing reversible transcript codec,
 /// including NUL/control escaping, and never admits changed record chronology,
 /// unknown fields or a future envelope version as raw canonical display text.

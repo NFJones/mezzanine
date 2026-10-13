@@ -854,6 +854,9 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     response_index: usize,
     /// Conversation binding captured before the first streamed action.
     conversation_id: String,
+    /// Ordinary pane writes revoke layout, not the original response evidence.
+    /// Retired source can only transfer metadata after accepted-source validation.
+    layout_retired: bool,
     /// Runtime-owned lineage of the exact composite screen currently installed.
     installed_lineage: u64,
     /// Exact pane state restored before each rich-source reprojection.

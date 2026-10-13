@@ -122,6 +122,7 @@ impl RuntimeSessionService {
                         turn_id: turn_id.to_string(),
                         response_index: *response_index,
                         conversation_id: conversation_id.clone(),
+                        layout_retired: false,
                         installed_lineage: self
                             .agent_pane_screen_lineage(pane_id, &conversation_id)
                             .ok_or_else(|| {
@@ -189,6 +190,7 @@ impl RuntimeSessionService {
                             turn_id: turn_id.to_string(),
                             response_index: 0,
                             conversation_id: conversation_id.clone(),
+                            layout_retired: false,
                             installed_lineage: self
                                 .agent_pane_screen_lineage(pane_id, &conversation_id)
                                 .ok_or_else(|| {
@@ -736,6 +738,7 @@ impl RuntimeSessionService {
                     turn_id: turn_id.to_string(),
                     response_index: 0,
                     conversation_id: conversation_id.clone(),
+                    layout_retired: false,
                     installed_lineage: self
                         .agent_pane_screen_lineage(pane_id, &conversation_id)
                         .ok_or_else(|| {

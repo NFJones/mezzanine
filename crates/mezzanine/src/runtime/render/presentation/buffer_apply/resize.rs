@@ -318,7 +318,22 @@ impl RuntimeSessionService {
             && self.presentation.settings == result.presentation_settings
             && self.terminal_history_limit() == result.history_limit
             && self.terminal_history_rotate_lines() == result.history_rotate_lines
-            && current_source_revision == result.source_revision;
+            && current_source_revision == result.source_revision
+            && match (
+                self.presentation
+                    .agent_streaming_say_presentations
+                    .get(&result.pane_id),
+                result.streaming_say_presentation.as_ref(),
+            ) {
+                (Some(current), Some(captured)) => {
+                    current.turn_id == captured.turn_id
+                        && current.response_index == captured.response_index
+                        && current.revision == captured.revision
+                        && current.layout_retired == captured.layout_retired
+                }
+                (None, None) => true,
+                _ => false,
+            };
         if !current {
             let retry_size = self
                 .agent_shell_store()

@@ -15140,9 +15140,21 @@ occurrence. Each decoded record MUST retain its original identity/time; resume
 chrome MUST remain explicitly untagged. Original records MUST pass the canonical
 transcript codec and malformed envelopes MUST fail closed, not render raw model
 history. Replay nesting MUST preserve existing persistence-suppression ownership.
+Original-record fallback sources synthesize chrome for their current outer
+conversation. Already projected row-form sources MUST retain frozen display/copy
+source, including historical chrome, when forked; chrome is not an authored entry
+and MUST NOT gain occurrence provenance in either representation.
 Exact validated streamed components MUST retain first-observation provenance even
 when missing rationale or projection/geometry ownership requires static fallback;
 source mismatches MUST NOT borrow a provisional component's occurrence evidence.
+Unfinished decoded prefixes MAY transfer only metadata after the exact active
+provider claim/response/component and all observed typed fields match accepted
+source; closed fields require equality. This MUST NOT relax source-closure row
+promotion, execution, receiver/sender acceptance or stale-worker checks. Ordinary
+pane writes MAY retire only layout while retaining inert source evidence on the
+existing response owner; explicit rejection and turn/pane teardown MUST discard
+it. Retired layout MUST NOT project, roll back unrelated writes or regain screen
+authority during resize or preview composition.
 Snapshot payload version 7 MUST retain the original receive-commit stamp in the
 existing unsettled peer-presentation outbox; version 6 missing stamps decode as
 unknown. Process-screen snapshots MUST remain process-only. Ephemeral/no-store

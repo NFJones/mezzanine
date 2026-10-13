@@ -379,7 +379,7 @@ impl RuntimeSessionService {
             .presentation
             .agent_streaming_say_presentations
             .get(pane_id)
-            .filter(|presentation| presentation.turn_id == turn_id)
+            .filter(|presentation| presentation.turn_id == turn_id && !presentation.layout_retired)
         else {
             return Ok(None);
         };
@@ -559,7 +559,8 @@ impl RuntimeSessionService {
             .agent_streaming_say_presentations
             .get(&result.pane_id)
             .is_some_and(|presentation| {
-                presentation.turn_id == result.turn_id
+                !presentation.layout_retired
+                    && presentation.turn_id == result.turn_id
                     && presentation.response_index == result.response_index
                     && presentation.conversation_id == result.conversation_id
                     && presentation.revision == result.revision

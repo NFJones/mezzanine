@@ -459,7 +459,8 @@ impl RuntimeSessionService {
         });
         let streaming_to_restore = previous_streaming.clone().filter(|streaming| {
             streaming.conversation_id == session_id
-                && previous_lineage == Some(streaming.installed_lineage)
+                && (streaming.layout_retired
+                    || previous_lineage == Some(streaming.installed_lineage))
         });
         let rebuild_result = (|| -> Result<()> {
             let rebuilt = TerminalScreen::new_with_history_config(
@@ -506,7 +507,8 @@ impl RuntimeSessionService {
                 || self
                     .presentation
                     .agent_streaming_say_presentations
-                    .contains_key(pane_id)
+                    .get(pane_id)
+                    .is_some_and(|streaming| !streaming.layout_retired)
             {
                 self.update_agent_streaming_screen(pane_id, &session_id, durable_screen.clone())?;
             }
