@@ -59,6 +59,46 @@ daemon; add
 
 ### Harness bootstrap
 
+#### Offline installed-native support matrix
+
+The dedicated installed-source acceptance fixture runs the actual CLI in cleared
+environments with temporary HOME/default roots: absent-root dry-run, install,
+repeat, recognized missing-file repair, and read-only installed preview/check.
+Authored settings/statusline/exporter bytes and sibling callbacks survive repair;
+shared Codex/Cursor authored members survive repeat and preview. Whole-file
+absence repair cannot preserve callbacks already deleted with that file, so that
+case is qualified before adding shared authored members.
+
+| Harness / ordinary command | Offline installed-source evidence | Accounting boundary |
+| --- | --- | --- |
+| Claude / `claude` | Child discovers installed skill/plugin/hooks metadata; SDK-shaped loader shim executes the installed module, real native helper ingress and local timer cancellation | Synthetic current-request final outcomes commit once on replay; missing usage stays unknown. Not an actual Claude vendor-loader or paid-request check. Native retirement after creator exit is separate from local SessionEnd. |
+| Codex / `codex` | Child reads installed hooks.json and executes exact commands; native enrollment, lifecycle and exact SessionEnd retirement | Hook counters/selected model/context totals do not bill. Separate OTel counters exist, but requesting-client/request/origin/privacy association is not qualified here. |
+| Copilot / `copilot` | Child discovers installed hooks/mezzanine.json exec/args; native lifecycle and exact SessionEnd retirement | `unavailable-safe-activation`: no safe ordinary persistent OTel activation/native correlation is supplied or enabled by this fixture. Existing exporters are preserved. |
+| Cursor / `agent` | Child reads installed hooks.json and executes exact ordinary CLI hook commands; native lifecycle and exact SessionEnd retirement | `unavailable-counter-schema`: exact CLI counter/cache/multiplicity/native-origin evidence remains unqualified. No forced print mode or IDE-counter substitution. |
+| OpenCode / `opencode` | Separate compiled installer/loader fixtures only; not an assembled installed-native case in this four-harness matrix | Ordinary shared-server/client association and durable accounting dependencies remain unresolved; installation is not accounting acceptance. |
+| Pi / `pi` | Separate Pi acceptance owner and fixtures | Not qualified by the four-harness matrix. |
+
+Two repeated isolated runs hold four independent creators on two actual pane
+roots, alongside an ordinary idle native Harness. They exercise pinned titles,
+`:agent-status` without creating a native conversation, native `/status`, and
+`:list-agents` focus with no external interrupt/pause/close authority. Real Unix
+current-writer/parent/root proof, bounded metadata-only helper requests and storage
+redaction are checked; no parent-supplied completion, capability, PID, helper
+activation or module entry path supplies admission. The fake vendors emit their
+own source-shaped callbacks. These are Linux offline fixture results, not actual
+vendor security-policy/loading, macOS, daemon replacement/restart, shared-server
+or full billing/release certification. Bootstrap still reports runtime verification
+`not-performed`; users do not need a universal certification gate to install a
+best-effort supported subset.
+
+For the explicit fixture, build `mez` first, set `MEZ_TEST_NODE_BINARY` to an
+existing absolute offline Node executable, then run
+`timeout 1800 cargo test --quiet -p mezzanine --lib external_installed_matrix_supported_subset_two_panes_four_creators -- --ignored`.
+The fixture does not install a vendor or contact a provider. Default tests leave
+this prerequisite-dependent native qualification ignored.
+
+#### Installation and maintenance
+
 `mez bootstrap <harness> [--vendor-version VERSION] [--root ABSOLUTE_ROOT]`
 accepts `claude`, `codex`, `copilot`, `opencode`, `cursor`, and `pi` as adapter
 candidates. All six now have compiled best-effort deployment recipes; this does

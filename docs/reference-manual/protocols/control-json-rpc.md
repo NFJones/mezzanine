@@ -1184,6 +1184,28 @@ or `external-reported` for legacy reports (not exhaustive invoice evidence).
 `usage: "unavailable-source-continuity"` is explicit: ordinary usage RPCs are
 rejected until durable source continuity exists, not billed under fresh owners.
 
+#### Installed-source assembled evidence boundary
+
+The offline four-harness matrix serves actual installed helpers over the
+production authenticated Unix framing and `UnixOriginStream`, with kernel
+current-writer/direct-parent/pane-root qualification. Child-owned phase barriers
+carry only inspection bytes. They do not submit enrollment, request readiness,
+usage completion, launch tokens or native identity from the parent. A bounded
+read-only audit wraps the qualified stream and rejects content/PID/capability
+fields in real helper ingress; it does not transform or synthesize requests.
+Every connection remains uninitialized with no control client. Browser lifecycle
+keys remain unavailable for external rows, while Enter focuses the bound pane.
+
+Actor-task extraction at each inspection barrier retains the same runtime
+service, roots, source state and ledger. It is not daemon replacement or renewed
+source enrollment and provides no restart/source-resume guarantee. Claude's
+SDK-shaped shim follows installed loader metadata, preserves callback results,
+emits synthetic final outcomes from the child and checks local timer shutdown;
+it is not actual vendor loading. Native creator-exit reconciliation separately
+retires that source. Classic Codex/Copilot/Cursor exact original SessionEnd
+retirement is checked while the creator remains alive. Supported synthetic
+current-request accounting and unavailable classic accounting stay distinct.
+
 #### Classic Copilot command callbacks
 
 `copilot-local-command/1` is a distinct `command-hook` creator declaration for

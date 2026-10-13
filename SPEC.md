@@ -746,6 +746,28 @@ state without mutation and conflict with dry-run/maintenance. Uninstall/recovery
 MUST be exclusive. Obsolete `--apply`/`--plan` MUST reject, not alias new intents.
 Missing compiled adapters MUST fail mutating intents before root discovery;
 read-only check/dry-run MUST remain unavailable diagnostics, not fake installation.
+
+#### Installed-native supported-subset qualification
+
+Offline acceptance MAY compose the production bare installer with ordinary
+fixture-owned vendor-like creators that discover the installed configuration.
+It MUST distinguish actual installed bytes/native writer-parent-root admission
+from real vendor-loader attestation. The four-harness assembled matrix qualifies
+Claude SDK-shaped module callbacks and classic Codex/Copilot/Cursor commands on
+two panes, repeated isolated runs, native/external coexistence, pinned titles,
+read-only status/browser controls and exact source retirement. Its child-only
+synthetic Claude current-request outcomes qualify durable replay/nonbilling of
+missing counters, not provider spending or exhaustive accounting. Classic
+callback counters MUST remain unbilled; unavailable usage is not measured zero.
+Claude local SessionEnd cancellation MUST NOT be represented as immediate native
+retirement while its creator is still alive: process-death reconciliation is a
+separate evidenced boundary. Classic exact SessionEnd retirement is distinct.
+OpenCode loader/association support and Pi acceptance remain separate scopes.
+This matrix MUST NOT certify real vendor loading, shared-server association,
+cross-process source handoff, restart continuity, macOS execution or full billing.
+
+#### Classic hook installation and source limits
+
 Copilot revision2 MAY install only the compiled `hooks/mezzanine.json` user file
 under the documented COPILOT_HOME/default root, version1 direct-exec/args hook
 syntax for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/

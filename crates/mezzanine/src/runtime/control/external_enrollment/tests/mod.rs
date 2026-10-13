@@ -1333,6 +1333,7 @@ mod harnesses;
 mod health;
 mod helper_discovery;
 mod helper_presentation;
+mod installed_matrix;
 mod observer_epochs;
 mod parent_ancestry;
 mod persistent_client;
