@@ -138,7 +138,34 @@ function verifyPeer(socket, helper, signal) {
   });
 }
 
-/** Immutable observer client; successors never transfer lifecycle credentials. */
+/** Copies only public original-observer selectors; possession grants no native
+ * source authority. Unknown/null/unsafe members fail before transport opens. */
+function resumeSelector(input) {
+  try {
+    if (!input || typeof input !== "object" || Array.isArray(input)
+        || Object.keys(input).length !== 2
+        || Object.keys(input).some(key => !["observer_witness", "generation"].includes(key))) return;
+    const observer_witness = Object.hasOwn(input, "observer_witness") ? input.observer_witness : undefined;
+    const generation = Object.hasOwn(input, "generation") ? input.generation : undefined;
+    if (typeof observer_witness !== "string" || !/^[a-f0-9]{64}$/.test(observer_witness) || !positive(generation)) return;
+    return Object.freeze({ observer_witness, generation });
+  } catch { /* arbitrary metadata getters cannot establish resume ownership */ }
+}
+
+/** Exact typed ordinal basis, not generic enrollment/transport success. */
+function recoveryReceipt(input) {
+  return input && typeof input === "object" && !Array.isArray(input)
+    && Object.keys(input).length === 2
+    && Object.keys(input).every(key => ["kind", "next_sequence"].includes(key))
+    && input.kind === "same-live-source" && input.next_sequence === 1;
+}
+
+/** Private handle identity includes the credential; numeric generation alone
+ * cannot identify a projection after an ephemeral registry is reconstructed. */
+const sameHandle = (a, b) => a && b && ["token", "generation", "witness", "run", "epoch"].every(key => a[key] === b[key]);
+
+/** Immutable observer client; successors transfer only public resume selectors,
+ * never lifecycle credentials or instance-local request-accounting tickets. */
 export function createPersistentTelemetryClient(options) {
   const route = discoverPersistentRoute(options?.env);
   const metadata = {
@@ -146,12 +173,19 @@ export function createPersistentTelemetryClient(options) {
     external_session_id: options?.session, display_name: options?.displayName,
     observer_kind: "persistent", observer_instance: options?.instance,
   };
-  if (options?.predecessor !== undefined) metadata.predecessor_generation = options.predecessor;
+  const predecessor = options?.predecessor;
+  if (predecessor !== undefined) metadata.predecessor_generation = predecessor;
+  Object.freeze(metadata);
+  const suppliedResume = options?.sourceResume;
+  const initialResume = suppliedResume === undefined ? undefined : resumeSelector(suppliedResume);
+  const initialRun = options?.sourceRun;
+  const initialEpoch = options?.sourceEpoch;
   const helper = options?.peerHelper;
   const valid = route && ["claude", "codex", "copilot", "opencode", "cursor", "pi"].includes(metadata.harness)
     && text(metadata.version, 128) && text(metadata.external_session_id, 128)
     && text(metadata.display_name, 128) && text(metadata.observer_instance, 128)
-    && (metadata.predecessor_generation === undefined || positive(metadata.predecessor_generation));
+    && (metadata.predecessor_generation === undefined || positive(metadata.predecessor_generation))
+    && (suppliedResume === undefined || (initialResume && positive(initialRun) && positive(initialEpoch)));
   let socket;
   let phase = "loaded";
   let handle;
@@ -166,6 +200,10 @@ export function createPersistentTelemetryClient(options) {
   let disposed = false;
   let verifier;
   let projectionMode;
+  // An unknown reply retains the exact request and original predecessor/selector.
+  // Only a validated receipt ends this attempt. No newest-owner/bare fallback.
+  let pendingEnrollment;
+  let acceptedRecovery;
   const lose = current => {
     if (current !== attempt) return;
     phase = "connection-lost";
@@ -226,6 +264,14 @@ export function createPersistentTelemetryClient(options) {
     if (disposed || !valid) return Promise.resolve(false);
     if (phase === "enrolled") return Promise.resolve(true);
     if (starting) return starting;
+    if (!pendingEnrollment) {
+      const selectors = handle ? resumeSelector({ observer_witness: handle.witness, generation: handle.generation }) : initialResume;
+      pendingEnrollment = Object.freeze({
+        request: Object.freeze({ ...metadata, ...(selectors ? { source_resume: selectors } : {}) }),
+        selectors, previous: handle, run: handle?.run ?? initialRun, epoch: handle?.epoch ?? initialEpoch,
+      });
+    }
+    const enrollment = pendingEnrollment;
     const current = ++attempt;
     starting = (async () => {
       if (!trustedPaths(route, helper)) { lose(current); return false; }
@@ -248,15 +294,44 @@ export function createPersistentTelemetryClient(options) {
       const verified = await verifyPeer(socket, helper, verification.controller.signal);
       if (verifier === verification) verifier = undefined;
       if (!verified || current !== attempt || disposed) { lose(current); return false; }
-      const result = await exchange("agent/external/enroll", metadata, current);
-      if (!result || result.protocol !== "external-agent/1" || result.registered !== true
+      const result = await exchange("agent/external/enroll", enrollment.request, current);
+      if (current !== attempt || disposed || phase !== "connecting"
+          || !result || result.protocol !== "external-agent/1" || result.registered !== true
           || !Array.isArray(result.controls) || result.controls.length !== 0
           || !positive(result.generation) || !positive(result.run_id) || !positive(result.observer_epoch)
           || result.observer_instance !== metadata.observer_instance || result.external_session_id !== metadata.external_session_id
           || typeof result.launch_token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(result.launch_token)
           || typeof result.observer_witness !== "string" || !/^[a-f0-9]{64}$/.test(result.observer_witness)
           || result.usage !== "unavailable-source-continuity") { lose(current); return false; }
-      handle = { token: result.launch_token, generation: result.generation, witness: result.observer_witness, run: result.run_id, epoch: result.observer_epoch };
+      const next = Object.freeze({ token: result.launch_token, generation: result.generation,
+        witness: result.observer_witness, run: result.run_id, epoch: result.observer_epoch });
+      const recovered = Object.hasOwn(result, "recovery");
+      const unchanged = sameHandle(handle, next);
+      if (recovered) {
+        if (!enrollment.selectors || !recoveryReceipt(result.recovery)) { lose(current); return false; }
+        if (unchanged) {
+          // A repeated already-accepted receipt cannot reset an advanced ordinal.
+          if (!sameHandle(acceptedRecovery, next)) { lose(current); return false; }
+        } else {
+          const epoch = enrollment.epoch + 1;
+          if (!positive(epoch) || next.epoch !== epoch || next.run !== enrollment.run
+              || next.witness === enrollment.selectors.observer_witness
+              || (enrollment.previous && next.token === enrollment.previous.token)) { lose(current); return false; }
+          sequence = 0;
+          acceptedRecovery = next;
+        }
+      } else if (handle && !unchanged) {
+        // Reconnect is not permission to infer a new projection from credentials.
+        lose(current); return false;
+      } else if (!handle && enrollment.selectors) {
+        // A normal successor rotation uses its existing zero ordinal, but its
+        // captured public parent expectations still constrain run/epoch/witness.
+        const epoch = enrollment.epoch + 1;
+        if (!positive(epoch) || next.epoch !== epoch || next.run !== enrollment.run
+            || next.witness === enrollment.selectors.observer_witness) { lose(current); return false; }
+      }
+      handle = next;
+      pendingEnrollment = undefined;
       phase = "enrolled";
       return true;
     })().catch(() => { lose(current); return false; });
@@ -313,10 +388,12 @@ export function createPersistentTelemetryClient(options) {
       });
     },
     successor(instance) {
-      if (!handle || !text(instance, 128)) return;
+      if (disposed || !handle || !text(instance, 128) || instance === metadata.observer_instance) return;
       return createPersistentTelemetryClient({ harness: metadata.harness, version: metadata.version,
         session: metadata.external_session_id, displayName: metadata.display_name, instance,
         predecessor: handle.generation, peerHelper: helper,
+        sourceResume: { observer_witness: handle.witness, generation: handle.generation },
+        sourceRun: handle.run, sourceEpoch: handle.epoch,
         env: { MEZ: route.encoded, MEZ_PANE: route.pane } });
     },
     end() {

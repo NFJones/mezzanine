@@ -10,7 +10,7 @@ pub(crate) fn manifest() -> Manifest {
     let mut manifest = Manifest {
         harness: "opencode".into(),
         vendor_version: "best-effort".into(),
-        revision: 10,
+        revision: 11,
         entries: vec![
             Entry {
                 path: "plugins/mezzanine.js".into(),
@@ -72,6 +72,13 @@ pub(super) fn nested_manifest(jsonc: bool) -> Manifest {
             *pointer = "/tui/plugin".into();
         }
     }
+    candidate
+}
+
+/// Exact pre-resume shared client for every compiled revision-10 loader layout.
+pub(super) fn historical_pre_resume_manifest(mut candidate: Manifest) -> Manifest {
+    candidate.revision = 10;
+    super::history::freeze_pre_resume_transport(&mut candidate);
     candidate
 }
 
@@ -145,7 +152,7 @@ mod tests {
             nested_manifest(true),
         ];
         for old_layout in &layouts {
-            for revision in [7, 8, 9] {
+            for revision in [7, 8, 9, 10] {
                 let old = super::super::compiled_history(old_layout)
                     .into_iter()
                     .find(|candidate| candidate.revision == revision)

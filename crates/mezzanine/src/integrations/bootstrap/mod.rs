@@ -211,6 +211,16 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         _ => return Vec::new(),
     };
     let current_opencode = compiled_variant_matches(manifest, &opencode_artifact::manifest());
+    let revision10_opencode = [
+        opencode_artifact::manifest(),
+        opencode_artifact::jsonc_manifest(),
+        opencode_artifact::nested_manifest(false),
+        opencode_artifact::nested_manifest(true),
+    ]
+    .into_iter()
+    .map(opencode_artifact::historical_pre_resume_manifest)
+    .any(|candidate| candidate == *manifest);
+    let opencode_history = current_opencode || revision10_opencode;
     if manifest.harness == "opencode"
         && !opencode_artifact::historical_payloads_match(
             include_bytes!("opencode_tui.mjs"),
@@ -222,11 +232,14 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     let current_pi = manifest.harness == "pi" && *manifest == pi_artifact::candidate_manifest();
     let revision10_pi =
         manifest.harness == "pi" && *manifest == pi_artifact::historical_usage_manifest();
-    if !current_pi && !revision10_pi && *manifest != current && !current_opencode {
+    let revision11_pi =
+        manifest.harness == "pi" && *manifest == pi_artifact::historical_loss_manifest();
+    if !current_pi && !revision10_pi && !revision11_pi && *manifest != current && !opencode_history
+    {
         return Vec::new();
     }
-    let revision8_client = if manifest.harness == "pi" || current_opencode {
-        let mut snapshot = if current_pi || revision10_pi {
+    let revision8_client = if manifest.harness == "pi" || opencode_history {
+        let mut snapshot = if current_pi || revision10_pi || revision11_pi {
             current.clone()
         } else {
             manifest.clone()
@@ -237,8 +250,8 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     } else {
         None
     };
-    let last_current = if manifest.harness == "pi" || current_opencode {
-        let mut snapshot = if current_pi || revision10_pi {
+    let last_current = if manifest.harness == "pi" || opencode_history {
+        let mut snapshot = if current_pi || revision10_pi || revision11_pi {
             current.clone()
         } else {
             manifest.clone()
@@ -320,23 +333,32 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         if let Some(last_current) = last_current {
             history.insert(0, last_current);
         }
-        if current_opencode {
+        if opencode_history {
             history.insert(1, opencode_artifact::historical_manifest());
         }
         if let Some(revision8_client) = revision8_client {
             history.insert(0, revision8_client);
         }
-        if current_pi || revision10_pi {
+        if current_pi || revision10_pi || revision11_pi {
             history.insert(0, pi_artifact::historical_manifest());
         }
-        if current_pi {
+        if current_pi || revision11_pi {
             history.insert(0, pi_artifact::historical_usage_manifest());
         }
-        if current_opencode {
+        if current_pi {
+            history.insert(0, pi_artifact::historical_loss_manifest());
+        }
+        if opencode_history {
             history.insert(
                 0,
                 opencode_artifact::historical_request_manifest(manifest.clone()),
             );
+            if current_opencode {
+                history.insert(
+                    0,
+                    opencode_artifact::historical_pre_resume_manifest(manifest.clone()),
+                );
+            }
             // The newly effective loader layout cannot redefine which shipped
             // predecessors are recognized. Only the four compiled JSONC-era
             // layouts are eligible; receipt-selected paths/pointers and former
@@ -348,10 +370,15 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
                 opencode_artifact::nested_manifest(false),
                 opencode_artifact::nested_manifest(true),
             ] {
-                for revision in [7, 8, 9] {
+                for revision in [7, 8, 9, 10] {
+                    if revision10_opencode && revision == 10 {
+                        continue;
+                    }
                     let mut snapshot = layout.clone();
                     snapshot.revision = revision;
-                    if revision == 9 {
+                    if revision == 10 {
+                        history::freeze_pre_resume_transport(&mut snapshot);
+                    } else if revision == 9 {
                         history::freeze_revision9_transport(&mut snapshot);
                     } else if revision == 8 {
                         history::freeze_revision8_request_client(&mut snapshot);

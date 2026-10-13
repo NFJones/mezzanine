@@ -209,9 +209,9 @@ mod tests {
         use super::super::installer::Operation;
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
-            assert_eq!(current.revision, if harness == "pi" { 11 } else { 10 });
+            assert_eq!(current.revision, if harness == "pi" { 12 } else { 11 });
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), if harness == "pi" { 9 } else { 18 });
+            assert_eq!(history.len(), if harness == "pi" { 10 } else { 22 });
             assert!(history.iter().any(|manifest| manifest.revision == 8));
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
@@ -223,11 +223,7 @@ mod tests {
             assert_eq!(
                 frozen.artifact,
                 Artifact::File {
-                    bytes: if harness == "pi" {
-                        include_bytes!("persistent_client.mjs").to_vec()
-                    } else {
-                        super::super::history::persistent_client_v6()
-                    }
+                    bytes: include_bytes!("history/persistent_client_pre_resume.mjs").to_vec()
                 }
             );
             let request = immediate
@@ -243,7 +239,7 @@ mod tests {
             );
             use sha2::Digest;
             assert_eq!(
-                sha2::Sha256::digest(include_bytes!("persistent_client.mjs"))
+                sha2::Sha256::digest(include_bytes!("history/persistent_client_pre_resume.mjs"))
                     .iter()
                     .map(|byte| format!("{byte:02x}"))
                     .collect::<String>(),

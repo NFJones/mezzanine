@@ -273,3 +273,17 @@ test("ordinary Pi completed and reordered callbacks preserve current ticket with
   main({ type: "agent_settled" }); await owner.tail;
   assert.equal(expense, 2); assert.equal(abandoned, 0);
 });
+
+/** A failed lifecycle/gap callback stays explicitly unavailable in this bounded
+ * phase; transport support cannot silently clear the original owner's latch,
+ * revive cancellation, or transfer its callback state to a successor. */
+test("ordinary Pi lifecycle delivery failure remains latched without implicit recovery", async () => {
+  const owner = {}; let events = 0; let begins = 0;
+  const main = load(owner, () => ({ async start() { return true; },
+    async piObservation() { return { delivered: ++events === 1 }; },
+    async beginRequest() { begins++; }, detach() {} }));
+  main({ type: "session_start", reason: "startup" }); await owner.tail;
+  main({ type: "agent_start" }); await owner.tail; assert.equal(owner.lease.failed, true);
+  main({ type: "turn_start", turnIndex: 0 }); await owner.tail;
+  assert.equal(begins, 0); assert.equal(owner.lease.failed, true);
+});

@@ -1228,6 +1228,45 @@ usage reports, and MUST NOT change amounts, source ownership, permissions,
 native task/conversation, focus, counters/reset, or lifecycle Present/Retire
 operations. Amount/content/unknown fields and arbitrary reasons MUST be rejected.
 Transport loss remains visible independently; coverage gaps never erase expense.
+An updated ordinary persistent client MAY request explicit same-live-source
+recovery using only `source_resume: {observer_witness, generation}` captured from
+its original accepted public handle. The selector MUST have exactly those two
+fields, lowercase 64-hex witness and positive exact JS-safe generation. It is
+not authority: the native owner must reprove the same live UID/writer/root/creator
+and retained current control anchor; durable namespace mapping alone is not
+permission to re-enroll, revive retirement, or replace missing service lifetime.
+The client MUST freeze its full enrollment attempt, original instance/session,
+original predecessor and resume selectors before any await. Reply loss/error
+MUST retry only that exact attempt, never newest selectors, dropped predecessor
+or a bare initial-enrollment fallback. A successor carries only parent public
+selectors/run/epoch expectations; original accounting tickets/private credentials
+MUST NOT transfer. A later explicit retry after accepted H1 may capture current H1.
+A resume-only reply MAY contain exact `recovery: {kind: "same-live-source",
+next_sequence: 1}`. The client MUST reject unsolicited/null/extra/ambiguous or
+malformed recovery metadata and changed same-instance handles without that typed
+receipt. A new accepted recovery handle requires new public witness/credential,
+same run, checked observer epoch old-plus-one, and exact instance/session. Only
+this typed changed-handle adoption may reset presentation ordinal to zero once;
+the same already-accepted handle/replayed receipt MUST retain an advanced ordinal.
+Numeric generation, socket loss or generic success MUST NOT imply a reset.
+The transport RPC-ID counter MUST NOT reset (each exchange still allocates a
+fresh transport ID). Projection mode, original usage marker/source witness/
+admission time, origin, normalized payload and UTC MUST remain unchanged. Accounting readiness
+source/origin mismatch MUST still reject after successful observer recovery.
+Ordinary normal replies keep their existing grammar; invalid recovery does not
+enable an older-daemon fallback. Unknown accepted-resume reply followed by a
+second ephemeral registry loss may remain unavailable rather than resurrecting
+shadow credentials/projection or inventing a source namespace. Cancelled,
+disposed, retired, closed or stale callback owners MUST NOT be silently revived.
+The initial bounded client phase leaves lifecycle/gap failure latches unavailable;
+it does not claim automatic ordinary-owner recovery after exhausted delivery.
+Fresh resumed Pi projection may accept the first actual fixed gap at ordinal one
+only under native resume-qualified diagnostic state, not a client-synthesized
+startup/outcome. The client MUST NOT autoemit a baseline callback or recursively
+enqueue it during start. Lost gap ACK remains explicitly failed, not silently
+advanced, committed, or re-reset from an idempotent enrollment response. This
+scope is retained same-live service/native-source recovery, not OS daemon,
+pane/producer replacement, cross-process unsent spool or full invoice coverage.
 The Pi capability-only Unix transport MUST consume explicitly supplied private
 authority without initializing a primary or minting a launch. One 500 ms total
 deadline MUST cover connect, write and strict bounded reply decoding. Only a

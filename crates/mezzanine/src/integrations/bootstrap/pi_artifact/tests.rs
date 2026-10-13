@@ -66,12 +66,27 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
     let previous = historical_manifest();
     let current = candidate_manifest();
     assert_eq!(previous.revision, 9);
-    assert_eq!(current.revision, 11);
+    assert_eq!(current.revision, 12);
     assert_eq!(previous.entries.len(), 10);
     let revision10 = historical_usage_manifest();
     assert_eq!(revision10.revision, 10);
     assert_eq!(revision10.entries.len(), 11);
     assert!(super::super::compiled_history(&current).contains(&revision10));
+    let revision11 = historical_loss_manifest();
+    assert_eq!(revision11.revision, 11);
+    assert!(super::super::compiled_history(&current).contains(&revision11));
+    assert!(super::super::compiled_history(&revision11).contains(&revision10));
+    let mut altered11 = revision11.clone();
+    if let Artifact::File { bytes } = &mut altered11
+        .entries
+        .iter_mut()
+        .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
+        .unwrap()
+        .artifact
+    {
+        bytes.push(0);
+    }
+    assert!(super::super::compiled_history(&altered11).is_empty());
     for (bytes, expected) in [
         (
             include_bytes!("../history/pi_persistent_v10.mjs").as_slice(),
@@ -103,6 +118,10 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
         .apply()
         .unwrap();
     plan(&root, &revision10, Operation::Install)
+        .unwrap()
+        .apply()
+        .unwrap();
+    plan(&root, &revision11, Operation::Install)
         .unwrap()
         .apply()
         .unwrap();

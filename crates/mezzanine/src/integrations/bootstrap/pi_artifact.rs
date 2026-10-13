@@ -42,10 +42,19 @@ pub(crate) fn candidate_manifest() -> Manifest {
     entries.extend(super::persistent_client::entries("extensions/mezzanine"));
     Manifest {
         harness: "pi".into(),
-        revision: 11,
+        revision: 12,
         vendor_version: super::pi::RELEASE.into(),
         entries,
     }
+}
+
+/// Exact revision-11 layout before shared-client resume support. Pi-owned bytes
+/// are unchanged in revision 12; only shared transport is independently frozen.
+pub(super) fn historical_loss_manifest() -> Manifest {
+    let mut manifest = candidate_manifest();
+    manifest.revision = 11;
+    super::history::freeze_pre_resume_transport(&mut manifest);
+    manifest
 }
 
 /// Exact revision-10 changed slots, independent of current loss-ordering code.
@@ -69,6 +78,7 @@ pub(super) fn historical_usage_manifest() -> Manifest {
             };
         }
     }
+    super::history::freeze_pre_resume_transport(&mut manifest);
     manifest
 }
 

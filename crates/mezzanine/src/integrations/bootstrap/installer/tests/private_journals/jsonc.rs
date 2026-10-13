@@ -294,7 +294,7 @@ fn bootstrap_jsonc_history_keeps_strict_predecessors_and_rejects_payload_drift()
     use crate::integrations::bootstrap::{opencode_artifact, reconciliation::Artifact};
     let current = opencode_artifact::manifest();
     let history = crate::integrations::bootstrap::compiled_history(&current);
-    assert_eq!(history.len(), 18);
+    assert_eq!(history.len(), 22);
     assert!(history.contains(&opencode_artifact::historical_manifest()));
     let jsonc = history
         .iter()
@@ -305,9 +305,9 @@ fn bootstrap_jsonc_history_keeps_strict_predecessors_and_rejects_payload_drift()
                 .any(|entry| matches!(entry.artifact, Artifact::JsoncArrayEntry { .. }))
         })
         .collect::<Vec<_>>();
-    assert_eq!(jsonc.len(), 12);
+    assert_eq!(jsonc.len(), 16);
     assert_eq!(history.len() - jsonc.len(), 6);
-    for revision in [7, 8, 9] {
+    for revision in [7, 8, 9, 10] {
         assert_eq!(
             jsonc
                 .iter()
@@ -319,7 +319,7 @@ fn bootstrap_jsonc_history_keeps_strict_predecessors_and_rejects_payload_drift()
     assert!(
         jsonc
             .iter()
-            .all(|manifest| [7, 8, 9].contains(&manifest.revision))
+            .all(|manifest| [7, 8, 9, 10].contains(&manifest.revision))
     );
     let tui = include_bytes!("../../../opencode_tui.mjs");
     let client = include_bytes!("../../../history/persistent_client_v5.mjs");

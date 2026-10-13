@@ -46,7 +46,7 @@ fn snapshot(root: &Path) -> Vec<Observation> {
 #[test]
 fn bootstrap_binary_upgrades_historical_opencode_layouts() {
     let member = serde_json::json!("./plugins/mezzanine/opencode_tui.mjs");
-    for revision in [7, 8, 9] {
+    for revision in [7, 8, 9, 10] {
         for (name, pointer) in [
             ("tui.json", "/plugin"),
             ("tui.json", "/tui/plugin"),
@@ -95,7 +95,7 @@ fn bootstrap_binary_upgrades_historical_opencode_layouts() {
             let mut receipt: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
             let manifest = &mut receipt["manifest"];
-            assert_eq!(manifest["revision"], 10);
+            assert_eq!(manifest["revision"], 11);
             manifest["revision"] = revision.into();
             let entries = manifest["entries"].as_array_mut().unwrap();
             if revision == 7 {
@@ -106,17 +106,21 @@ fn bootstrap_binary_upgrades_historical_opencode_layouts() {
             for entry in entries {
                 let path = entry["path"].as_str().unwrap().to_owned();
                 let frozen = match path.as_str() {
-                    "plugins/mezzanine/persistent_client.mjs" => Some(if revision == 7 {
-                        include_bytes!(
-                            "../src/integrations/bootstrap/history/persistent_client_v5.mjs"
-                        )
-                        .as_slice()
-                    } else {
-                        include_bytes!(
-                            "../src/integrations/bootstrap/history/persistent_client_v6.mjs"
-                        )
-                        .as_slice()
-                    }),
+                    "plugins/mezzanine/persistent_client.mjs" => {
+                        Some(if revision == 10 {
+                            include_bytes!("../src/integrations/bootstrap/history/persistent_client_pre_resume.mjs").as_slice()
+                        } else if revision == 7 {
+                            include_bytes!(
+                                "../src/integrations/bootstrap/history/persistent_client_v5.mjs"
+                            )
+                            .as_slice()
+                        } else {
+                            include_bytes!(
+                                "../src/integrations/bootstrap/history/persistent_client_v6.mjs"
+                            )
+                            .as_slice()
+                        })
+                    }
                     "plugins/mezzanine/request_accounting.mjs" if revision == 8 => Some(
                         include_bytes!(
                             "../src/integrations/bootstrap/history/request_accounting_v8.mjs"
@@ -151,11 +155,11 @@ fn bootstrap_binary_upgrades_historical_opencode_layouts() {
             assert_eq!(snapshot(&home), before);
             let upgraded = invoke(&[]);
             assert_eq!(upgraded["result"], "upgraded");
-            assert_eq!(upgraded["manifest_revision"], 10);
+            assert_eq!(upgraded["manifest_revision"], 11);
             assert_eq!(upgraded["runtime_verification"], "not-performed");
             let current: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
-            assert_eq!(current["manifest"]["revision"], 10);
+            assert_eq!(current["manifest"]["revision"], 11);
             let registration = current["manifest"]["entries"]
                 .as_array()
                 .unwrap()

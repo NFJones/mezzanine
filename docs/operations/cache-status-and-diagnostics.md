@@ -52,6 +52,15 @@ session teardown boundary before its observer retires. No amount is charged
 without finalized counters, and previous totals remain intact; the retained
 last running state is not manufactured into completion merely to disclose loss.
 
+Observer resume selectors and accounting source witnesses are different. A
+native-qualified same-live-service resume can restore a fresh transport handle
+without changing original request marker, report time, project origin or counters.
+Only its exact typed changed-handle reply resets presentation sequence once; an
+idempotent receipt or same-handle reconnect does not. Source mismatch still stops
+expense reporting. Lifecycle/gap failures remain latched unavailable in the
+bounded initial client scope; missing service anchors, source replacement and
+cross-process unsent recovery are not fixed by replaying labels or history.
+
 | Observation | Interpretation |
 | --- | --- |
 | `Cumulative cache hit` | Token-weighted ratio across retained provider samples, including cold starts and auxiliary routing or sizing requests. |

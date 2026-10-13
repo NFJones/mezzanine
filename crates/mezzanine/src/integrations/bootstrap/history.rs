@@ -392,6 +392,22 @@ pub(super) fn persistent_client_v6() -> Vec<u8> {
     include_bytes!("history/persistent_client_v6.mjs").to_vec()
 }
 
+/// Freezes the pre-resume deployed transport (Pi10/11 and OpenCode10) without
+/// deriving historical byte authority from the new active parser.
+pub(super) fn freeze_pre_resume_transport(manifest: &mut super::installer::Manifest) {
+    for entry in &mut manifest.entries {
+        if matches!(
+            entry.path.as_str(),
+            "extensions/mezzanine/persistent_client.mjs"
+                | "plugins/mezzanine/persistent_client.mjs"
+        ) {
+            entry.artifact = super::reconciliation::Artifact::File {
+                bytes: include_bytes!("history/persistent_client_pre_resume.mjs").to_vec(),
+            };
+        }
+    }
+}
+
 /// Freezes the revision-9 shared transport, byte-identical to immutable v6
 /// (SHA256 68db5b7859b9a98607abdf2410bec1e56324e158cf45746898ef30a8cd3c2d4c).
 /// Request-accounting bytes are unchanged by the new Pi gap projection.

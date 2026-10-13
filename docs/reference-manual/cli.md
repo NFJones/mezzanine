@@ -357,7 +357,32 @@ The callbacks remain synchronous and neutral while readiness is pending. Already
 completed reports do not gain a false loss, and an unmatched historical outcome
 cannot close the current request. This is an unknown coverage gap, not invented
 expense, zero-spend proof, or a fabricated task-completion event. Pi revision 11
-changes only this ordering; the shared transport and OpenCode revision stay at 10.
+introduced this ordering. Current Pi revision 12 and OpenCode revision 11 also
+ship the strict shared client resume parser, with exact pre-resume transport and
+all prior artifact layouts independently frozen for upgrade/repair.
+
+Same-live-source reconnect is explicit: the client captures its accepted public
+observer witness/generation and original predecessor before awaiting enrollment.
+Lost replies retry that immutable tuple, never the newest generation or a bare
+initial fallback. Only a typed resume reply (`same-live-source`, next ordinal 1)
+with changed handle, same run and checked epoch advance resets presentation
+sequence once. Same-handle normal reconnect and repeated already-accepted resume
+receipts retain their sequence. A successor carries only public expectations;
+old request tickets, markers, report UTC, source witness and project origin stay
+on their original client and remain subject to native readiness revalidation.
+
+Selectors alone grant nothing. Native retained control ownership and live Unix
+writer/root/creator evidence are required; absent original service anchors or
+retired/replaced source cannot be recovered from a database row or label change.
+If a resumed reply is lost and its new registry binding is then lost again, the
+old selector may remain unavailable; the client does not invent shadow authority.
+The client sends no synthetic startup, outcome or diagnostic baseline on recovery.
+The first actual Pi gap may use ordinal 1 only on a native resume-qualified
+projection; a lost gap ACK stays failed. Lifecycle/gap delivery failure remains
+latched unavailable in this initial scope, with no silent revival of cancelled
+or stale owners. This is not full OS-process/pane restart, durable unsent spool,
+automatic recovery of every callback, or native-server qualification by mocked
+wire tests. Actual installed combined recovery fixtures are separately scoped.
 
 Source evidence: public Pi revision
 `7bd01fb92485c06f92ecfff7ccf3197148bc16af` (`agent-session.ts`, extension
