@@ -28,6 +28,8 @@ const MAX_READY_ORIGINS: usize = 4096;
 pub(super) struct ExternalUsageBegins {
     pending: BTreeSet<u64>,
     next: u64,
+    /// Exact control owner survives registration loss, not service replacement.
+    incarnation: Arc<()>,
     /// Readiness cache only; durable markers remain authoritative after eviction.
     pub(super) origins: BTreeMap<(String, String), ExternalRequestOrigin>,
 }
@@ -54,6 +56,8 @@ impl ExternalUsageBegins {
 #[derive(Debug, Clone)]
 pub(crate) struct ExternalUsageBeginWork {
     admission: u64,
+    /// Original readiness reservation owner, never a reporting capability.
+    accounting_incarnation: Arc<()>,
     pub(crate) request_id: String,
     digest: [u8; 32],
     generation: u64,
@@ -128,7 +132,7 @@ impl RuntimeSessionService {
     /// Reports metadata reservations without exposing private producer handles.
     #[cfg(test)]
     pub(crate) fn external_usage_begin_pending_for_tests(&self) -> usize {
-        self.control.external_agents().usage_begins.pending.len()
+        self.control.external_usage_begins().pending.len()
     }
     /// Reserves a native producer's original request boundary.
     /// Payload PIDs/projects/owners are not admitted; legacy, initialized,
@@ -201,6 +205,7 @@ impl RuntimeSessionService {
         let mut work = ExternalUsageBeginWork {
             admission: 0,
             request_id: request.id.clone(),
+            accounting_incarnation: self.control.external_usage_begins().incarnation.clone(),
             digest,
             generation: binding.generation,
             pane_id: binding.pane_id.clone(),
@@ -231,7 +236,7 @@ impl RuntimeSessionService {
             deadline: Instant::now() + Duration::from_secs(2),
             published: Arc::new(OnceLock::new()),
         };
-        let begins = &mut self.control.external_agents_mut().usage_begins;
+        let begins = self.control.external_usage_begins_mut();
         if begins.pending.len() >= 32 {
             return Err(MezError::new(
                 crate::error::MezErrorKind::RateLimited,
@@ -257,10 +262,17 @@ impl RuntimeSessionService {
         connection: &ControlConnectionState,
     ) -> String {
         let outcome = (|| {
+            if !Arc::ptr_eq(
+                &work.accounting_incarnation,
+                &self.control.external_usage_begins().incarnation,
+            ) {
+                return Err(MezError::conflict(
+                    "external readiness reservation owner changed",
+                ));
+            }
             if !self
                 .control
-                .external_agents_mut()
-                .usage_begins
+                .external_usage_begins_mut()
                 .pending
                 .remove(&work.admission)
             {
@@ -312,10 +324,11 @@ impl RuntimeSessionService {
                     "external request marker result mismatch or unpublished",
                 ));
             }
-            self.control
-                .external_agents_mut()
-                .usage_begins
-                .cache_origin(work.owner.clone(), work.marker.clone(), origin.clone());
+            self.control.external_usage_begins_mut().cache_origin(
+                work.owner.clone(),
+                work.marker.clone(),
+                origin.clone(),
+            );
             Ok(origin)
         })();
         match outcome {

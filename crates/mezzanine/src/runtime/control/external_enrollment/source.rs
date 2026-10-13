@@ -42,7 +42,12 @@ impl ExternalEnrollmentWork {
                 },
             )
             .ok()?;
-            store.external_source_owner(&key).ok()
+            if matches!(producer, ProducerEvidence::VerifiedParent(_)) {
+                return store.external_source_owner(&key).ok();
+            }
+            let resolved = store.resolve_external_source_owner(&key).ok()?;
+            let _ = self.source_created.set(resolved.created);
+            Some(resolved.owner)
         })();
         // Native observation already has one-shot publication; a duplicate
         // worker cannot replace its original diagnostic namespace result.

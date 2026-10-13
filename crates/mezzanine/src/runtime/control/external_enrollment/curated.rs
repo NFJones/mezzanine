@@ -436,6 +436,8 @@ impl RuntimeSessionService {
                     epoch: 1,
                     instance: work.observer_instance.clone(),
                     predecessor_generation: None,
+                    accepted_resume: None,
+                    resume_usage_gap: None,
                     instances: BTreeSet::from([work.observer_instance.clone()]),
                     observers: Vec::new(),
                     curated_observer: Some(CuratedObserver::default()),

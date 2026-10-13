@@ -117,9 +117,14 @@ async fn external_source_curated_creator_recreation_preserves_owner() {
 /// Resolves through the real native worker and actor ingress, never supplying a
 /// PID/namespace key or pretending an injected success established ancestry.
 async fn enroll(fixture: &mut Fixture) -> serde_json::Value {
+    enroll_request(fixture, &request()).await
+}
+
+/// Executes only an explicitly selected source-owned enrollment request.
+async fn enroll_request(fixture: &mut Fixture, request: &JsonRpcRequest) -> serde_json::Value {
     let work = fixture
         .service
-        .prepare_external_enrollment(&request(), &fixture.connection)
+        .prepare_external_enrollment(request, &fixture.connection)
         .unwrap();
     let native = work.clone();
     let observed = tokio::task::spawn_blocking(move || native.observe())
@@ -158,7 +163,18 @@ async fn external_source_native_registry_recreation_preserves_owner() {
         .accounting_owner
         .clone();
     *fixture.service.control.external_agents_mut() = Default::default();
-    let second = enroll(&mut fixture).await;
+    let mut recovery = request();
+    let mut params: serde_json::Value =
+        serde_json::from_str(recovery.params.as_deref().unwrap()).unwrap();
+    params["source_resume"] = serde_json::json!({"observer_witness":first["result"]["observer_witness"],"generation":first["result"]["generation"]});
+    recovery.params = Some(params.to_string());
+    assert!(
+        fixture
+            .service
+            .prepare_external_enrollment(&request(), &fixture.connection)
+            .is_err()
+    );
+    let second = enroll_request(&mut fixture, &recovery).await;
     assert_eq!(second["result"]["registered"], true);
     assert_ne!(
         second["result"]["launch_token"],
@@ -177,6 +193,77 @@ async fn external_source_native_registry_recreation_preserves_owner() {
         original
     );
     assert_eq!(second["result"]["usage"], "unavailable-source-continuity");
+}
+
+/// Registry loss must not force a still-live original observer to discard its
+/// captured predecessor. The qualified socket/root are deliberately unchanged;
+/// this regression is only the missing daemon contract, not installed Node/Pi
+/// qualification or proof of a durable no-gap outage buffer. Recovery must issue
+/// fresh transport credentials while conserving the native accounting owner.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_same_live_original_predecessor_recovers_after_registry_loss() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    let path = fixture.directory.join("usage.sqlite");
+    fixture
+        .service
+        .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&path));
+    let first = enroll(&mut fixture).await;
+    assert_eq!(first["result"]["registered"], true);
+    let original = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap()
+        .accounting_owner
+        .clone();
+    *fixture.service.control.external_agents_mut() = Default::default();
+    fixture
+        .service
+        .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&path));
+    let mut recovery = request();
+    let mut params: serde_json::Value =
+        serde_json::from_str(recovery.params.as_deref().unwrap()).unwrap();
+    params["source_resume"] = serde_json::json!({
+        "observer_witness":first["result"]["observer_witness"],
+        "generation":first["result"]["generation"],
+    });
+    recovery.params = Some(params.to_string());
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&recovery, &fixture.connection)
+        .unwrap();
+    let native = work.clone();
+    let observed = tokio::task::spawn_blocking(move || native.observe())
+        .await
+        .unwrap();
+    let recovered: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_enrollment(work, observed, &fixture.connection),
+    )
+    .unwrap();
+    assert_eq!(recovered["result"]["registered"], true, "{recovered}");
+    assert_ne!(
+        recovered["result"]["launch_token"],
+        first["result"]["launch_token"]
+    );
+    assert_eq!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap()
+            .accounting_owner,
+        original
+    );
 }
 
 /// Ledger failure does not break a qualified observational producer or pretend

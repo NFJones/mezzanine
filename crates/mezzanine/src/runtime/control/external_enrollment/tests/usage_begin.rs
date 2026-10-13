@@ -6,8 +6,8 @@ use super::helper_presentation::enroll_producer;
 use super::*;
 
 /// Retiring the only current source removes reconstructible readiness but not
-/// its durable origin. A genuinely requalified same-native source can restore
-/// the original marker without adopting current project/time or creating cost.
+/// its durable origin. Reopening storage restores metadata without adopting
+/// current project/time or creating cost, but grants no retired source readiness.
 #[tokio::test(flavor = "current_thread")]
 async fn external_request_readiness_retirement_preserves_durable_origin_restore() {
     let Some(mut fixture) = fixture("hold").await else {
@@ -41,35 +41,42 @@ async fn external_request_readiness_retirement_preserves_durable_origin_restore(
         .keys()
         .next()
         .unwrap();
+    let owner = fixture.service.control.external_agents().bindings[&digest]
+        .accounting_owner
+        .clone();
     fixture.service.retire_external_agent_binding(digest);
     assert!(
         fixture
             .service
             .control
-            .external_agents()
-            .usage_begins
+            .external_usage_begins()
             .origins
             .is_empty()
     );
-    let enrolled = enroll_producer(&mut fixture).await;
-    let request = begin(&enrolled, &"a".repeat(64));
-    let work = fixture
-        .service
-        .prepare_external_usage_begin(&request, &fixture.connection)
-        .unwrap();
-    let native = work.clone();
-    let result = tokio::task::spawn_blocking(move || native.execute())
-        .await
-        .unwrap();
-    let restored: serde_json::Value = serde_json::from_str(
-        &fixture
+    assert!(
+        fixture
             .service
-            .complete_external_usage_begin(work, result, &fixture.connection),
-    )
-    .unwrap();
+            .prepare_external_usage_begin(&request, &fixture.connection)
+            .is_err()
+    );
+    assert!(
+        fixture
+            .service
+            .prepare_external_enrollment(&super::request(), &fixture.connection)
+            .is_err()
+    );
+    let restored = crate::storage::token_usage::TokenUsageStore::new(&path)
+        .begin_external_request(
+            &owner,
+            "pi",
+            &"a".repeat(64),
+            None,
+            first["result"]["admitted_at"].as_u64().unwrap() + 1,
+        )
+        .unwrap();
     assert_eq!(
-        restored["result"]["admitted_at"],
-        first["result"]["admitted_at"]
+        restored.admitted_at,
+        first["result"]["admitted_at"].as_u64().unwrap()
     );
     let database = rusqlite::Connection::open(path).unwrap();
     assert_eq!(
@@ -116,8 +123,7 @@ async fn external_request_readiness_cache_exhaustion_preserves_fresh_and_durable
         fixture
             .service
             .control
-            .external_agents_mut()
-            .usage_begins
+            .external_usage_begins_mut()
             .origins
             .insert(
                 (format!("abandoned-{index}"), "f".repeat(64)),
@@ -148,8 +154,7 @@ async fn external_request_readiness_cache_exhaustion_preserves_fresh_and_durable
         fixture
             .service
             .control
-            .external_agents()
-            .usage_begins
+            .external_usage_begins()
             .origins
             .len()
             <= 4096
@@ -157,8 +162,7 @@ async fn external_request_readiness_cache_exhaustion_preserves_fresh_and_durable
     fixture
         .service
         .control
-        .external_agents_mut()
-        .usage_begins
+        .external_usage_begins_mut()
         .origins
         .remove(&(owner, "a".repeat(64)));
     let work = fixture
