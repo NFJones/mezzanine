@@ -198,6 +198,7 @@ struct RuntimeInterruptedRoutedOwnership {
 mod approvals;
 mod audit;
 mod bookkeeping;
+mod child_failures;
 pub(crate) use bookkeeping::{
     RuntimeBookkeepingCandidate, RuntimeBookkeepingCandidateWork,
     RuntimeBookkeepingTranscriptReadWork,
@@ -401,6 +402,9 @@ pub(crate) struct RuntimeAgentComponent {
     /// Parked peer waits with committed model mail that still need fair queue
     /// reacquisition after a temporary scheduler-capacity refusal.
     agent_turn_peer_wait_wake_pending: BTreeSet<String>,
+    /// Local terminal-child occurrences retained independently of best-effort
+    /// bridge delivery until exact parent context and wake admission commit.
+    owned_child_failures: BTreeMap<String, child_failures::OwnedChildFailure>,
     /// Per-failure-signature correction attempts keyed by turn/signature.
     agent_turn_failure_feedback_attempts: BTreeMap<String, usize>,
     /// Output-limit recovery attempt currently shaping each active request.

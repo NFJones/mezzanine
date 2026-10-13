@@ -63,6 +63,7 @@ impl RuntimeSessionService {
     /// remain durable and model-visible without pane presentation.
     pub(crate) fn deliver_pending_runtime_agent_messages(&mut self, now_ms: u64) -> Result<usize> {
         self.recover_received_peer_message_turn_scheduling(now_ms)?;
+        self.recover_owned_child_failures(now_ms)?;
         // Presentation is a recoverable receiver-side projection. Once a
         // receipt and cursor exist, it must never block provider admission or
         // a parked peer wait from resuming; the retained receipt retries on the
@@ -209,11 +210,11 @@ impl RuntimeSessionService {
     }
 
     /// Fairly reacquires capacity and settles one parked peer wait after model
-    /// mail has committed to its existing turn context.
+    /// mail or authoritative owned-child failure committed to its turn context.
     ///
     /// A full scheduler queue is recoverable: the wake marker remains so a
     /// later delivery sweep retries without losing the committed peer mail.
-    fn resume_parked_peer_wait(&mut self, turn: &AgentTurnRecord) -> Result<bool> {
+    pub(super) fn resume_parked_peer_wait(&mut self, turn: &AgentTurnRecord) -> Result<bool> {
         if turn.state != AgentTurnState::Blocked {
             self.agent
                 .agent_turn_peer_wait_wake_pending
@@ -239,6 +240,10 @@ impl RuntimeSessionService {
             Err(error) if error.kind() == SchedulerErrorKind::QueueFull => return Ok(false),
             Err(error) => return Err(error.into()),
         }
+        let owned_child_failed = self.agent.owned_child_failures.values().any(|receipt| {
+            receipt.committed_turn_id.as_deref() == Some(turn.turn_id.as_str())
+                && !receipt.wake_admitted
+        });
         let settled_wait = self
             .agent_turn_executions_mut()
             .get_mut(&turn.turn_id)
@@ -248,10 +253,17 @@ impl RuntimeSessionService {
                     if result.action_type == "wait" && result.status == ActionStatus::Running {
                         result.status = ActionStatus::Succeeded;
                         result.content = vec![mez_agent::ActionContentBlock::text(
-                            "peer mail received; resuming this turn",
+                            if owned_child_failed {
+                                "owned child terminated unexpectedly; reassess the missing peer answer"
+                            } else {
+                                "peer mail received; resuming this turn"
+                            },
                         )];
-                        result.structured_content_json =
-                            Some(r#"{"state":"peer_message_received"}"#.to_string());
+                        result.structured_content_json = Some(if owned_child_failed {
+                            r#"{"state":"owned_child_failed"}"#
+                        } else {
+                            r#"{"state":"peer_message_received"}"#
+                        }.to_string());
                         settled = true;
                     }
                 }
@@ -281,7 +293,11 @@ impl RuntimeSessionService {
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
-            "scheduler waiting -> queued reason=peer_message_received capacity=reacquire",
+            if owned_child_failed {
+                "scheduler waiting -> queued reason=owned_child_failed capacity=reacquire"
+            } else {
+                "scheduler waiting -> queued reason=peer_message_received capacity=reacquire"
+            },
         )?;
         self.start_ready_agent_turns()?;
         Ok(true)
@@ -1155,6 +1171,28 @@ impl RuntimeSessionService {
     /// per-window peer turns. The durable cursor advances only after the new turn
     /// stores the canonical peer-message events.
     fn start_runtime_peer_message_turn(&mut self, pane_id: &str, now_ms: u64) -> Result<usize> {
+        self.start_runtime_received_context_turn(pane_id, now_ms, None)
+    }
+
+    /// Starts an exact-owned idle failure response through normal receive
+    /// admission, including the ordinary loop limit and human inhibition.
+    pub(super) fn start_runtime_owned_child_failure_turn(
+        &mut self,
+        pane_id: &str,
+        now_ms: u64,
+        receipt: &super::child_failures::OwnedChildFailure,
+    ) -> Result<usize> {
+        self.start_runtime_received_context_turn(pane_id, now_ms, Some(receipt))
+    }
+
+    /// Commits ordinary unread mail and an optional local terminal reference
+    /// before the existing scheduler owns a receive-triggered turn.
+    fn start_runtime_received_context_turn(
+        &mut self,
+        pane_id: &str,
+        now_ms: u64,
+        failure: Option<&super::child_failures::OwnedChildFailure>,
+    ) -> Result<usize> {
         let agent_id = format!("agent-{pane_id}");
         if self.agent_shell_store().get(pane_id).is_none() {
             return Ok(0);
@@ -1190,15 +1228,18 @@ impl RuntimeSessionService {
             return Ok(0);
         }
         let crate::runtime::control::RuntimePeerMessageTurnContext {
-            context,
+            mut context,
             delivered_message_sequence,
             delivered_messages,
             delivered_message_count,
             imported_history_sequence_high_water,
         } = self.peer_message_turn_context(pane_id, now_ms)?;
-        let Some(delivered_message_sequence) = delivered_message_sequence else {
+        if delivered_message_sequence.is_none() && failure.is_none() {
             return Ok(0);
-        };
+        }
+        if let Some(failure) = failure {
+            context.append_peer_message_event(failure.label.clone(), failure.content.clone())?;
+        }
         let recipient = AgentId::opaque(agent_id.clone())
             .ok_or_else(|| MezError::invalid_state("runtime agent id is invalid for MMP"))?;
         if !self.can_admit_received_peer_message_presentation_batch(&recipient, &delivered_messages)
@@ -1247,6 +1288,14 @@ impl RuntimeSessionService {
             imported_history_sequence_high_water,
         );
         self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
+        if let Some(failure) = failure
+            && let Some(stored) = self
+                .agent
+                .owned_child_failures
+                .get_mut(&failure.child_turn_id)
+        {
+            stored.committed_turn_id = Some(turn_id.clone());
+        }
         for (sequence, envelope) in delivered_messages.iter().cloned() {
             self.register_received_peer_message_presentation(
                 recipient.clone(),
@@ -1261,9 +1310,11 @@ impl RuntimeSessionService {
                 "injected peer-message idle-turn failure after context storage",
             ));
         }
-        self.control
-            .message_service_mut()
-            .advance_subscription(&recipient, delivered_message_sequence)?;
+        if let Some(delivered_message_sequence) = delivered_message_sequence {
+            self.control
+                .message_service_mut()
+                .advance_subscription(&recipient, delivered_message_sequence)?;
+        }
         #[cfg(test)]
         if self.take_peer_message_receive_after_cursor_advance_failure_for_tests() {
             return Err(MezError::invalid_state(
@@ -1272,16 +1323,7 @@ impl RuntimeSessionService {
         }
         self.set_agent_peer_message_turn_count(&agent_id, started_turns.saturating_add(1));
         self.clear_agent_peer_message_limit_reported(&agent_id);
-        if !self.agent_work_is_scheduled(&turn_id) {
-            self.enqueue_agent_work(ScheduledWork {
-                turn_id: turn_id.clone(),
-                conversation_id,
-                agent_id: agent_id.clone(),
-                pane_id: Some(pane_id.to_string()),
-                kind: mez_agent::ScheduledWorkKind::ShellCapable,
-            })?;
-        }
-        self.start_ready_agent_turns()?;
+        self.admit_owned_child_failure_context_turn(&turn)?;
         let _ = self.flush_received_peer_message_presentations();
         #[cfg(test)]
         if self.take_peer_message_turn_post_admission_failure_for_tests() {
@@ -1311,7 +1353,27 @@ impl RuntimeSessionService {
             pane_id,
             &format!("agent: started turn {turn_id} from pending peer mail"),
         )?;
-        Ok(delivered_message_count)
+        Ok(delivered_message_count.saturating_add(usize::from(failure.is_some())))
+    }
+
+    /// Reuses normal admission after an exact receive context has committed.
+    /// Queue pressure leaves the original queued turn recoverable, not a new
+    /// continuation or a direct provider call.
+    pub(super) fn admit_owned_child_failure_context_turn(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        if !self.agent_work_is_scheduled(&turn.turn_id) {
+            self.enqueue_agent_work(ScheduledWork {
+                turn_id: turn.turn_id.clone(),
+                conversation_id: turn.conversation_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                pane_id: Some(turn.pane_id.clone()),
+                kind: mez_agent::ScheduledWorkKind::ShellCapable,
+            })?;
+        }
+        self.start_ready_agent_turns()?;
+        Ok(())
     }
 
     /// Returns whether any recipient currently has deliverable peer mail.
@@ -1323,6 +1385,9 @@ impl RuntimeSessionService {
     /// bridge traffic never starts a turn, so it keeps the ordinary pending
     /// behavior that also drives TTL expiry.
     pub(crate) fn has_pending_peer_messages(&mut self, now_ms: u64) -> bool {
+        if self.has_pending_owned_child_failure_handoff() {
+            return true;
+        }
         if !self.agent.agent_turn_peer_wait_wake_pending.is_empty() {
             return true;
         }

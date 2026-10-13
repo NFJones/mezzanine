@@ -485,6 +485,7 @@ impl RuntimeSessionService {
                     success,
                     summary,
                     &output,
+                    None,
                 )?;
                 if !self
                     .agent
@@ -1341,6 +1342,7 @@ impl RuntimeSessionService {
             success,
             summary,
             &output,
+            Some(execution.terminal_state),
         )?;
         let disposition = TerminalResultDisposition::Delivered;
         self.record_terminal_result_disposition(&turn.turn_id, disposition);
@@ -1399,6 +1401,7 @@ impl RuntimeSessionService {
             false,
             "subagent task cancelled",
             "cancelled by runtime request",
+            None,
         )?;
         self.agent
             .routed_loop_completions_by_parent_turn
@@ -1444,7 +1447,7 @@ impl RuntimeSessionService {
             .cloned()
             .map(joined_dependency_from_loop_completion);
         self.emit_subagent_task_result_with_dependency(
-            turn, dependency, success, summary, &output,
+            turn, dependency, success, summary, &output, None,
         )?;
         self.agent
             .routed_loop_completions_by_parent_turn
@@ -1487,6 +1490,7 @@ impl RuntimeSessionService {
                 true,
                 "subagent task completed",
                 "completed without provider output",
+                None,
             ),
             AgentTurnState::Failed => self.emit_subagent_task_result_with_dependency(
                 turn,
@@ -1494,6 +1498,7 @@ impl RuntimeSessionService {
                 false,
                 "subagent task failed",
                 "failed without provider output",
+                Some(state),
             ),
             AgentTurnState::Interrupted => self.emit_subagent_task_result_with_dependency(
                 turn,
@@ -1501,6 +1506,7 @@ impl RuntimeSessionService {
                 false,
                 "subagent task interrupted",
                 "interrupted by snapshot resume",
+                Some(state),
             ),
             _ => Ok(()),
         }
@@ -1646,6 +1652,7 @@ impl RuntimeSessionService {
         success: bool,
         summary: &str,
         output: &str,
+        unexpected_outcome: Option<AgentTurnState>,
     ) -> Result<()> {
         let dependency = dependency.or_else(|| {
             self.agent
@@ -1678,6 +1685,15 @@ impl RuntimeSessionService {
             parent_agent_id.is_some() || self.has_subagent_authority_state(&turn.agent_id);
         if !has_subagent_runtime_state {
             return Ok(());
+        }
+
+        // Only the execution/state lifecycle owners supply an unexpected
+        // outcome. Neither a failed-looking envelope nor requested teardown
+        // can create this local receipt, and existing joins retain settlement.
+        if dependency.is_none()
+            && let Some(outcome) = unexpected_outcome
+        {
+            self.retain_owned_child_failure(turn, outcome, summary, output);
         }
 
         let now_ms = current_unix_seconds().saturating_mul(1000);

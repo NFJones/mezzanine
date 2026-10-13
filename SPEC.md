@@ -14406,7 +14406,7 @@ remain blocked or waiting internally.
 Waiting time MUST NOT consume the remaining configured turn timeout. Committing
 one or more model-originated MMP messages MUST settle the pending `wait` exactly
 once and fairly reacquire provider capacity for the same turn; runtime-authored
-task status and task result bridge traffic MUST NOT wake it. Multiple messages
+task status and task result bridge traffic alone MUST NOT wake it. Multiple messages
 committed in one delivery pass MUST queue at most one continuation. A peer
 message committed before the wait response is accepted MUST invalidate the
 older provider generation through the normal context high-water rule, and mail
@@ -14415,6 +14415,30 @@ lost. Resuming an existing wait MUST NOT increment
 `agents.peer_message_loop_limit`, which counts only newly created
 peer-message-triggered turns. Stop, pane shutdown, session shutdown, and parent
 cancellation MUST clear peer-wait state through normal turn cleanup.
+
+An authoritative **local owned-child unexpected terminal occurrence** MUST
+also permit the exact owning parent's peer wait to resume. Eligibility MUST
+come from current runtime lifecycle/delegation ownership, not `task_result`,
+`success:false`, `runtime_bridge`, payload text, or display names. The retained
+occurrence MUST bind the parent conversation/incarnation and originating task,
+and the exact child agent/task attempt and Failed or unexpected Interrupted
+outcome. Requested cancellation/closure/teardown, stale or restored lineage,
+and joined/routed/macro settlement MUST NOT create this independent wake.
+Bounded failure reference evidence MUST commit before fair same-turn wait
+settlement; it MUST explain that the expected answer may never arrive and the
+model must reassess. It MUST remain untrusted reference evidence, never an
+approval, instruction, review verdict or automatic child/effect retry.
+Receipt recovery MUST survive best-effort bridge delivery faults, route cleanup,
+cursor advancement, failure before park, duplicate observations and QueueFull.
+An accepted exact-parent request that already observed the evidence satisfies
+the occurrence; an older request or mere envelope acceptance does not. Multiple
+occurrences MUST settle one retained wait at most once. A truly idle parent MAY
+receive one normal receive-triggered turn only from its exact still-owning
+Completed origin, using ordinary admission and peer-message loop limits. Active
+parents receive evidence at their ordinary safe context boundary. Failure
+evidence MUST NOT resurrect stopped/failed/interrupted/replaced/closed parents,
+unpause human work, bypass approval/dependency blocks or replay settled actions.
+Routine task status and successful task result bridge traffic remain nonwake.
 
 Interagent MMP traffic is presentation-only. One presentation-eligible,
 model-authored `send_message` MAY create one `${recipient}< {payload}` row in

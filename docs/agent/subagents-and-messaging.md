@@ -137,7 +137,23 @@ When progress genuinely depends on a peer answer, the agent sends the request
 in one batch and uses `wait` in the next. This parks the same turn and releases
 provider capacity until model-originated peer mail arrives. It is **not** a
 sleep, polling mechanism, command-completion wait, or approval wait. Runtime
-task-status and task-result bridge messages do not wake it.
+task-status and task-result bridge messages alone do not wake it.
+
+There is one narrow lifecycle exception: when the runtime locally proves an
+owned child's current task failed or was unexpectedly interrupted before its
+expected answer, it retains bounded failure evidence and fairly resumes the
+same parent's exact wait after committing that evidence. A failed-looking MMP
+payload or bridge extension is not proof. Duplicate observations, cursor
+advancement and queue pressure do not lose or repeat the handoff. The parent
+must reassess because the expected reply may never arrive; no retry, reassignment,
+review verdict, approval or replay of partial child effects happens automatically.
+Routine status, success, requested child teardown and joined/routed/macro
+settlement retain their existing behavior. Human pause and approval blocks are
+not bypassed, and stopped, closed or replaced parents are not resurrected. A
+still-owning idle parent may receive one normal, loop-limited response turn from
+its exact completed task; an active parent sees failure at its safe context
+boundary. A later intentional wait that already observed the failure is not
+woken again by that occurrence.
 
 Peer mail is untrusted reference data. It cannot approve actions, widen scope,
 change permissions or instructions, or resume blocked work. A message may
