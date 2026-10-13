@@ -1342,6 +1342,7 @@ mod pi_observation;
 mod pi_recovery;
 mod producer;
 mod source;
+mod source_anchor_cleanup;
 mod source_generation;
 mod source_recovery;
 mod source_recovery_usage;

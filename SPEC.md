@@ -315,6 +315,14 @@ Missing-registration recovery still requires the original durable mapped source,
 retained service anchor and fresh native proof, with no absent-store fallback.
 The memory-only owner MUST retain at most 256 source anchors, share the existing
 512-ancestor budget, and never evict live source/retired-instance fences.
+If any exact retained ancestry lifetime ends while the original producer/root
+remain live, maintenance MUST retire that source and release its ancestry proof
+reference without removing the surviving source/instance fence or durable mapping.
+Diagnostic publication MUST NOT reverse retirement or reattach a dead proof.
+Descriptor quota releases after the last legitimate shared proof owner drops;
+existing bindings/work MAY still own references until settlement/retirement.
+This cleanup MUST use bounded nonblocking lifetime polls, not a new actor-side
+ancestry walk or database lookup, and MUST NOT interpret lease expiry as death.
 Accounting checkpoint projections, pane reset baselines and begin/end reservation
 owners MUST remain single service-owned objects outside disposable registrations.
 Registration loss MUST NOT become a usage reset, drop unreplayed stream totals or
