@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { normalizePiUsage, projectPiUsage, createPiUsageObserver } from "../crates/mezzanine/src/integrations/bootstrap/pi_usage.mjs";
 import { createRequestAccountingClient } from "../crates/mezzanine/src/integrations/bootstrap/request_accounting.mjs";
+import { registerOrdinaryPiObserver } from "../crates/mezzanine/src/integrations/bootstrap/pi_persistent.mjs";
 
 const usage = () => ({ input: 5, output: 7, cacheRead: 2, cacheWrite: 3 });
 const message = () => ({ role: "assistant", provider: "provider", model: "requested", responseModel: "actual", stopReason: "stop", usage: usage() });
@@ -157,4 +158,136 @@ test("Pi failed durable ACK emits sticky observer gap", async () => {
   f.start(); f.end(message()); await f.drain(); await f.drain();
   assert.deepEqual(facts, [{ type: "usage_gap", reason: "durable-acknowledgment" }]);
   assert.equal(f.owned.usageCoverage, "unavailable-durable-acknowledgment");
+});
+
+/** Composes the real request core and ordinary callback owner with separate
+ * ordered queues. Only transport replies are injected; this tests retained
+ * tickets/latches, not native admission or ledger deduplication authority. */
+function callbackRetryFixture(gapDelivered = true) {
+  const owner = {}; const requests = []; const facts = []; const tickets = [];
+  const handlers = new Map(); let wire = Promise.resolve(); let clock = 20;
+  let original; let ends = 0;
+  const core = createRequestAccountingClient({
+    enqueue(operation) { const next = wire.then(operation); wire = next.catch(() => {}); return next; },
+    async exchange(method, payload) {
+      requests.push({ method, payload: structuredClone(payload) });
+      if (method.endsWith("usage-begin")) {
+        original ??= payload.request_id;
+        return { protocol: "external-request/1", accepted: true, request_id: payload.request_id,
+          admitted_at: 10, source_witness: "c".repeat(64), origin: "unattributed", controls: [] };
+      }
+      if (++ends <= 2) return undefined;
+      return { accepted: true, durable: true, applied: payload.request_id !== original,
+        revision: payload.request_id === original ? 1 : 2,
+        coverage: { source: "external-reported", reasoning_known: false } };
+    },
+  });
+  const client = { ...core, async start() { return true; }, detach() {},
+    async piObservation(fact) { facts.push({ ...fact }); return { delivered: fact.type !== "usage_gap" || gapDelivered }; },
+    endRequest(ticket, report) { tickets.push(ticket); return core.endRequest(ticket, report); } };
+  registerOrdinaryPiObserver({ on(type, callback) { handlers.set(type, callback); } }, {
+    owner, createClient: () => client, peerHelper: "/fixture/mez", now: () => clock,
+    env: { MEZ: "/tmp/fixture.sock\x1fsession=a\x1fwindow=@1\x1fpane=%1\x1fprotocol=mez-control/1", MEZ_PANE: "%1" },
+  });
+  return { owner, requests, facts, tickets, clock(value) { clock = value; },
+    emit(value) {
+      const before = JSON.stringify(value);
+      assert.equal(handlers.get(value.type)?.(value, { sessionManager: { getSessionId: () => "session-a" } }), undefined);
+      assert.equal(JSON.stringify(value), before);
+    },
+    async drain() {
+      for (let remaining = 32; remaining > 0; remaining--) {
+        const tail = owner.tail; await tail;
+        if (tail === owner.tail) return;
+      }
+      assert.fail("ordinary retry callback queue did not settle");
+    },
+  };
+}
+
+/** Two immediate ACK losses exhaust one real endRequest operation. A later
+ * exact finalized callback retries its same instance-local ticket and frozen
+ * report, not a provider request, new marker, timestamp or copied ticket. The
+ * truthful epoch loss fact remains recorded even after a durable replay ACK. */
+test("ordinary exact finalized callback retries the real core after two lost ACKs", async () => {
+  const f = callbackRetryFixture();
+  f.emit({ type: "session_start", reason: "startup" });
+  f.emit({ type: "agent_start" });
+  f.emit({ type: "turn_start", turnIndex: 0 });
+  const original = message(); f.emit({ type: "message_end", message: original });
+  f.emit(event(original)); await f.drain();
+  let begins = f.requests.filter(row => row.method.endsWith("usage-begin"));
+  let ends = f.requests.filter(row => row.method.endsWith("usage-end"));
+  assert.equal(begins.length, 3); assert.equal(ends.length, 2);
+  assert.deepEqual(ends[0].payload, ends[1].payload);
+  assert.equal(ends[0].payload.observed_at, 20);
+  assert.equal(Object.isFrozen(f.tickets[0]), true);
+  assert.equal(f.owner.lease.failed, false);
+  assert.equal(f.owner.lease.usageCoverage, "unavailable-durable-acknowledgment");
+  assert.deepEqual(f.facts.filter(fact => fact.type === "usage_gap"), [{ type: "usage_gap", reason: "durable-acknowledgment" }]);
+  f.clock(99); f.emit(event(message())); await f.drain();
+  begins = f.requests.filter(row => row.method.endsWith("usage-begin"));
+  ends = f.requests.filter(row => row.method.endsWith("usage-end"));
+  assert.equal(begins.length, 4); assert.equal(ends.length, 3);
+  assert.deepEqual(ends[2].payload, ends[0].payload);
+  assert.equal(f.tickets[1], f.tickets[0]);
+  assert.equal(begins.every(row => row.payload.request_id === begins[0].payload.request_id), true);
+  assert.equal(f.owner.lease.failed, false);
+  assert.equal(f.owner.lease.usageCoverage, "finalized-assistant-external-reported");
+  assert.equal(f.facts.filter(fact => fact.type === "usage_gap").length, 1);
+  const known = f.requests.length;
+  f.emit(event(message())); await f.drain();
+  assert.equal(f.requests.length, known, "known durable callback replay started new transport work");
+  f.emit({ type: "agent_start" }); f.emit({ type: "turn_start", turnIndex: 0 });
+  const next = message(); f.emit({ type: "message_end", message: next }); f.emit(event(next, "entry-b"));
+  await f.drain();
+  ends = f.requests.filter(row => row.method.endsWith("usage-end"));
+  assert.equal(ends.length, 4);
+  assert.notEqual(ends[3].payload.request_id, ends[0].payload.request_id);
+  assert.notEqual(ends[3].payload.event_id, ends[0].payload.event_id);
+  assert.equal(ends[3].payload.observed_at, 99);
+});
+
+/** A failed truthful gap delivery latches the ordinary owner. Neither exact
+ * retry, changed or historical callbacks, nor a genuine subsequent turn can
+ * clear it or initiate reporting; the vendor callback return stays neutral. */
+test("failed gap after two ACK losses suppresses all later ordinary request work", async () => {
+  const f = callbackRetryFixture(false);
+  f.emit({ type: "session_start", reason: "startup" }); f.emit({ type: "agent_start" });
+  f.emit({ type: "turn_start", turnIndex: 0 });
+  const original = message(); f.emit({ type: "message_end", message: original }); f.emit(event(original));
+  await f.drain();
+  assert.equal(f.owner.lease.failed, true);
+  assert.equal(f.owner.lease.usageCoverage, "unavailable-durable-acknowledgment");
+  const count = f.requests.length; const facts = f.facts.length;
+  f.emit(event(message()));
+  const changed = message(); changed.usage.input = 8; f.emit(event(changed));
+  f.emit(event(message(), "historical", 99));
+  f.emit({ type: "agent_start" }); f.emit({ type: "turn_start", turnIndex: 1 });
+  const next = message(); f.emit({ type: "message_end", message: next }); f.emit(event(next, "entry-b", 1));
+  await f.drain();
+  assert.equal(f.requests.length, count); assert.equal(f.facts.length, facts);
+  assert.equal(f.owner.lease.failed, true);
+  assert.equal(f.requests.filter(row => row.method.endsWith("usage-end")).length, 2);
+});
+
+/** Healthy owner status is not permission to borrow an old expense slot for a
+ * historical ID or changed finalized counters. Such callbacks disclose their
+ * exact fixed diagnostic, leave the original undurable report unchanged, and
+ * cannot create another end operation or readiness marker. */
+test("historical and changed callbacks cannot replace the undurable real-core report", async () => {
+  for (const historical of [false, true]) {
+    const f = callbackRetryFixture();
+    f.emit({ type: "session_start", reason: "startup" }); f.emit({ type: "agent_start" });
+    f.emit({ type: "turn_start", turnIndex: 0 });
+    const original = message(); f.emit({ type: "message_end", message: original }); f.emit(event(original));
+    await f.drain(); const count = f.requests.length;
+    const rejected = message(); if (!historical) rejected.usage.input = 8;
+    f.emit(event(rejected, historical ? "historical" : "entry-a", historical ? 99 : 0));
+    await f.drain();
+    assert.equal(f.requests.length, count);
+    assert.equal(f.requests.filter(row => row.method.endsWith("usage-end")).length, 2);
+    assert.equal(f.facts.at(-1).reason, historical ? "unmatched-finalized-event" : "immutable-observation-conflict");
+    assert.equal(f.owner.lease.failed, false);
+  }
 });
