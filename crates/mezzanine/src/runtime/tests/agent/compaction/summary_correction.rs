@@ -133,6 +133,17 @@ fn qualify_manual_summary_correction(mutate: bool) {
         row.content = "genuinely rewritten selected source".into();
         changed.append(&row).unwrap();
         service.set_agent_transcript_store(changed.clone());
+        let task = service
+            .pending_agent_compaction_task_for_tests("%1")
+            .unwrap();
+        let error = service
+            .manual_compaction_candidate_context(task, "short accepted manual summary")
+            .unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Conflict);
+        assert_eq!(
+            error.message(),
+            "summary correction frozen manual source changed"
+        );
         Some(changed)
     } else {
         None
@@ -151,14 +162,6 @@ fn qualify_manual_summary_correction(mutate: bool) {
                 .compaction_epoch("manual-correction")
                 .unwrap()
                 .is_none()
-        );
-        assert!(
-            service
-                .pane_screen("%1")
-                .unwrap()
-                .normal_content_lines()
-                .join("\n")
-                .contains("frozen manual source changed")
         );
         assert!(service.pending_agent_provider_tasks().is_empty());
         return;
