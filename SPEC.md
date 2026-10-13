@@ -306,8 +306,10 @@ selector MAY narrow normal lifecycle retry/rotation without a token-usage store
 or successful mapping lookup. Same-instance retry MUST return the same handle;
 a new unretired instance requires its exact current predecessor and normal
 rotation. This path MUST preserve the original accounting owner/durability flag,
-MUST NOT upgrade reporting or restore a namespace/baseline, and MUST NOT add a
-recovery acknowledgment. The captured mode MUST be rechecked at commit; loss of
+MUST NOT upgrade reporting or restore a namespace/baseline, and MUST NOT create a
+new recovery acknowledgment. Same-handle retries of an already recovered owner
+MUST preserve its original receipt/sequence rather than strip or replay its reset.
+The captured mode MUST be rechecked at commit; loss of
 the live binding MUST NOT implicitly switch to a weaker recovery/fallback mode.
 Missing-registration recovery still requires the original durable mapped source,
 retained service anchor and fresh native proof, with no absent-store fallback.

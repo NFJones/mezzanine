@@ -1105,7 +1105,9 @@ For an exact CURRENT unretired binding, the selector narrows existing lifecycle
 retry/rotation without requiring a usage store or successful mapping lookup.
 Same-instance retry returns the same handle; a new unretired instance uses its
 exact current predecessor and normal fresh-handle rotation, with no `recovery`
-field. Original accounting ownership/reporting durability stays unchanged; this
+field created by that rotation. Same-handle retry of an already recovered owner
+preserves its original receipt, including the existing recovery field, without
+another projection reset or sequence rewind. Original accounting ownership/reporting durability stays unchanged; this
 does not enable usage, upgrade a fallback owner or restore any namespace/baseline.
 The prepare-time mode and native/current-owner proof are rechecked at settlement;
 a vanished live binding cannot fall through to a weaker mode. Exact accepted

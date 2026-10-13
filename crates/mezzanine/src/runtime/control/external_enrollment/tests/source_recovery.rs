@@ -7,6 +7,76 @@
 
 use super::*;
 
+/// A durably recovered owner can later retry its CURRENT receipt during a store
+/// outage. This creates no new recovery but preserves the original same-handle
+/// receipt, including its existing recovery field, and must not rewind an
+/// already advanced Pi sequence or alter original accounting identity.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_resume_recovered_owner_current_retry_keeps_receipt_and_sequence() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    storage(&mut fixture);
+    let first = enroll(&mut fixture, &request()).await;
+    *fixture.service.control.external_agents_mut() = Default::default();
+    let recovered = enroll(&mut fixture, &resume(&first, "fixture-instance-a", None)).await;
+    assert_eq!(
+        recovered["result"]["recovery"],
+        serde_json::json!({"kind":"same-live-source","next_sequence":1})
+    );
+    fixture
+        .service
+        .dispatch_external_agent_request(
+            &pi(
+                &recovered,
+                1,
+                serde_json::json!({"type":"session_start","reason":"startup"}),
+            ),
+            &fixture.connection,
+        )
+        .unwrap();
+    let running = pi(&recovered, 2, serde_json::json!({"type":"agent_start"}));
+    let original = fixture
+        .service
+        .dispatch_external_agent_request(&running, &fixture.connection)
+        .unwrap();
+    let blocked = fixture.directory.join("blocked-current-store");
+    std::fs::write(&blocked, b"preserve").unwrap();
+    fixture
+        .service
+        .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
+            blocked.join("usage.sqlite"),
+        ));
+    let current = resume(&recovered, "fixture-instance-a", None);
+    assert_eq!(enroll(&mut fixture, &current).await, recovered);
+    assert_eq!(
+        fixture
+            .service
+            .dispatch_external_agent_request(&running, &fixture.connection)
+            .unwrap(),
+        original
+    );
+    assert_eq!(
+        fixture.service.external_agent_rows()[0]["status"],
+        "running"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap()
+            .enrollment
+            .as_ref()
+            .unwrap()
+            .epoch,
+        2
+    );
+}
+
 /// Current lifecycle credentials remain usable when storage fails, whether the
 /// run began without durable accounting or mapped successfully before an outage.
 /// Rotation/retry preserves the original owner and durability flag rather than
