@@ -5,6 +5,76 @@
 
 use super::*;
 
+/// Ordered rejection restores the current response baseline but an old
+/// response ordinal cannot discard its complete replacement. Delayed rich
+/// projection work from the rejected response must also remain inert.
+#[test]
+fn max_messages_ordered_response_rejection_fences_replacement_projection() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(40, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(40, 12).unwrap(), 120).unwrap(),
+    );
+    for response_index in [0, 1] {
+        for event in [
+            mez_agent::StreamingSayEvent::ResponseStarted { response_index },
+            mez_agent::StreamingSayEvent::Started {
+                action_index: 0,
+                status: mez_agent::SayStatus::Progress,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.into(),
+            },
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: if response_index == 0 {
+                    "discarded partial"
+                } else {
+                    "complete replacement"
+                }
+                .into(),
+            },
+        ] {
+            service
+                .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
+                .unwrap();
+        }
+        let candidate = RuntimeSessionService::build_agent_streaming_say_projection(
+            service
+                .take_agent_streaming_say_projection_work("%1", "turn-1")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer(
+                "%1",
+                "turn-1",
+                &mez_agent::StreamingSayEvent::ResponseRejected { response_index: 0 },
+            )
+            .unwrap();
+        assert_eq!(
+            service
+                .apply_agent_streaming_say_projection_result(candidate)
+                .unwrap(),
+            response_index == 1
+        );
+    }
+    let text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(text.contains("complete replacement"), "{text}");
+    assert!(!text.contains("discarded partial"), "{text}");
+}
+
 /// Verifies a rich generation captured before newer source arrived
 /// cannot replace the pane or expose rows from two streaming generations.
 ///

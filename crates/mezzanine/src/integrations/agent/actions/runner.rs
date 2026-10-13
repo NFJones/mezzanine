@@ -258,7 +258,14 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         turn: AgentTurnRecord,
         context: &AgentContext,
     ) -> Result<AgentTurnExecution> {
-        self.run_turn_ref_with_allowed_actions(ledger, turn, context, None, None)
+        self.run_turn_ref_with_allowed_actions(
+            ledger,
+            turn,
+            context,
+            None,
+            None,
+            AgentTurnLimits::default(),
+        )
     }
 
     /// Executes a borrowed-context turn with an optional controller-selected
@@ -270,15 +277,17 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         context: &AgentContext,
         allowed_actions: Option<AllowedActionSet>,
         interaction_kind: Option<mez_agent::ModelInteractionKind>,
+        limits: AgentTurnLimits,
     ) -> Result<AgentTurnExecution> {
         let environment = SyncProductAgentTurnEnvironment { runner: self };
-        run_ready_turn(mez_agent::run_agent_turn_async(
+        run_ready_turn(mez_agent::run_agent_turn_async_with_limits(
             &environment,
             ledger,
             turn,
             context,
             allowed_actions,
             interaction_kind,
+            limits,
         ))
     }
 
@@ -467,10 +476,25 @@ impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment
                 .send(mez_agent::StreamingSayEvent::ResponseStarted { response_index })
                 .await;
         }
-        self.runner
+        let result = self
+            .runner
             .provider
             .send_request_async_with_progress(request, self.progress.clone())
-            .await
+            .await;
+        if result.as_ref().err().is_some_and(|error| {
+            provider_error_retry_class(error)
+                == mez_agent::ProviderErrorRetryClass::RetryableIncomplete
+        }) && let Some(progress) = &self.progress
+        {
+            let _ = progress
+                .send(mez_agent::StreamingSayEvent::ResponseRejected { response_index })
+                .await;
+        }
+        result
+    }
+
+    async fn wait_provider_retry(&self, delay_ms: u64) {
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
     }
 
     fn with_recovery_facts(
@@ -614,7 +638,14 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         context: &AgentContext,
     ) -> Result<AgentTurnExecution> {
         self.run_turn_async_ref_with_previous_request_and_progress(
-            ledger, turn, context, None, None, None, None,
+            ledger,
+            turn,
+            context,
+            None,
+            None,
+            None,
+            None,
+            AgentTurnLimits::default(),
         )
         .await
     }
@@ -634,6 +665,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         interaction_kind: Option<mez_agent::ModelInteractionKind>,
         previous_request: Option<&ModelRequest>,
         progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+        limits: AgentTurnLimits,
     ) -> Result<AgentTurnExecution> {
         let environment = ProductAgentTurnEnvironment {
             runner: self,
@@ -655,7 +687,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         })?;
         let limits = AgentTurnLimits {
             timeout_ms,
-            ..AgentTurnLimits::default()
+            ..limits
         };
         let turn_id = turn.turn_id.clone();
         match tokio::time::timeout(

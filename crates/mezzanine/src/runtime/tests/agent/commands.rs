@@ -94,6 +94,7 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
         .record_provider_wire_request_observation(
             &crate::integrations::agent::provider::ProviderWireRequestObservation {
                 request_id: "wire-output-budget".to_string(),
+                claim_generation: None,
                 attempt_index: 1,
                 retry_reason: None,
                 conversation_id: "conversation-output-budget".to_string(),

@@ -21,6 +21,10 @@ pub(super) struct ProviderAccountingOwner {
     pub(super) process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
     /// Stable namespace retained for every storage observation from this request.
     pub(super) observation_id: String,
+    /// Wire IDs checkpointed before cancellable inference backoff.
+    pub(super) checkpoint_ids: std::collections::BTreeSet<String>,
+    /// Already persisted disjoint wire expense, subtracted at final settlement.
+    pub(super) checkpoint_usage: std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
 }
 
 /// Frozen provenance shared by turn-less auxiliary requests.
@@ -66,6 +70,65 @@ fn add_partition(
 }
 
 impl RuntimeSessionService {
+    /// Checkpoints one reported wire expense without consuming the issued
+    /// owner. Cancellation cannot erase this expense, and final settlement
+    /// charges only its uncheckpointed remainder. Duplicate wire IDs are inert.
+    pub(crate) fn checkpoint_provider_wire_usage(
+        &mut self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) {
+        use crate::integrations::agent::provider::ProviderRequestPurpose;
+        let (Some(generation), Some(usage)) = (observation.claim_generation, observation.usage)
+        else {
+            return;
+        };
+        if observation.purpose != ProviderRequestPurpose::Execution {
+            return;
+        }
+        let Some(owner) = self
+            .agent
+            .provider_accounting_owners
+            .get_mut(&(observation.turn_id.clone(), generation))
+        else {
+            return;
+        };
+        if owner.turn.agent_id != observation.agent_id
+            || owner.turn.conversation_id != observation.conversation_id
+            || owner.profile.provider != observation.provider
+            || owner.profile.model != observation.model
+            || !owner.checkpoint_ids.insert(observation.request_id.clone())
+        {
+            return;
+        }
+        let key = ModelTokenUsageKey::new(&observation.provider, &observation.model);
+        owner
+            .checkpoint_usage
+            .entry(key.clone())
+            .or_default()
+            .add_assign(usage);
+        let owner = owner.clone();
+        let pane = self
+            .agent_shell_store()
+            .get(&owner.turn.pane_id)
+            .is_some_and(|session| session.session_id == owner.turn.conversation_id)
+            && owner.process.as_ref().is_some_and(|identity| {
+                self.pane_process_identity(&owner.turn.pane_id)
+                    .ok()
+                    .is_some_and(|current| identity.same_incarnation(&current))
+            });
+        self.record_native_usage_observation(
+            &owner.turn.conversation_id,
+            pane.then_some(owner.turn.pane_id.as_str()),
+            &owner.origin,
+            &key,
+            usage,
+            format!(
+                "provider:{}:wire:{}",
+                owner.observation_id, observation.request_id
+            ),
+        );
+    }
+
     /// Refuses new auxiliary requests rather than evicting unsettled expense evidence.
     pub(in crate::runtime) fn require_auxiliary_accounting_capacity(
         &self,
@@ -167,12 +230,30 @@ impl RuntimeSessionService {
                     .is_some_and(|current| identity.same_incarnation(&current))
             });
         for (index, (model, counters)) in usage.iter().enumerate() {
+            let charged = owner
+                .checkpoint_usage
+                .get(model)
+                .copied()
+                .unwrap_or_default();
+            let remainder = ModelTokenUsage {
+                input_tokens: counters.input_tokens.saturating_sub(charged.input_tokens),
+                output_tokens: counters.output_tokens.saturating_sub(charged.output_tokens),
+                reasoning_tokens: counters
+                    .reasoning_tokens
+                    .saturating_sub(charged.reasoning_tokens),
+                cached_input_tokens: counters
+                    .cached_input_tokens
+                    .map(|total| total.saturating_sub(charged.cached_input_tokens.unwrap_or(0))),
+                cache_write_input_tokens: counters.cache_write_input_tokens.map(|total| {
+                    total.saturating_sub(charged.cache_write_input_tokens.unwrap_or(0))
+                }),
+            };
             self.record_native_usage_observation(
                 &owner.turn.conversation_id,
                 pane.then_some(owner.turn.pane_id.as_str()),
                 &owner.origin,
                 model,
-                *counters,
+                remainder,
                 format!("provider:{}:{index}", owner.observation_id),
             );
         }

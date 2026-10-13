@@ -538,6 +538,9 @@ impl ProviderRequestPurpose {
 pub struct ProviderWireRequestObservation {
     /// Monotonic identity within the owning worker dispatch.
     pub request_id: String,
+    /// Issued execution claim, when this observation can checkpoint expense.
+    /// This identity never authorizes response content or replacement work.
+    pub claim_generation: Option<u64>,
     /// One-based wire-attempt ordinal within the logical provider call.
     pub attempt_index: usize,
     /// Content-free reason for an adapter-internal retry, when applicable.
@@ -668,10 +671,20 @@ pub struct OpenAiResponseDiagnostics {
 type OpenAiResponsesCompleted = (Result<ModelResponse>, OpenAiResponseDiagnostics);
 
 /// Actor-bound observation sink shared by every provider call in one worker.
+/// Undelivered content-free observations retained across cancellation of send.
+/// The monitor acknowledges entries only after actor application and drains
+/// the remainder after joining its aborted producer; existing wire IDs dedup.
+pub(crate) type PendingProviderWireObservations = std::sync::Arc<
+    std::sync::Mutex<std::collections::BTreeMap<String, ProviderWireRequestObservation>>,
+>;
+
+/// Actor-bound observation sink shared by every provider call in one worker.
 pub struct ProviderWireRequestObserver {
     conversation_id: String,
     pane_id: String,
     sender: tokio::sync::mpsc::Sender<ProviderWireRequestObservation>,
+    claim_generation: Option<u64>,
+    pending: Option<PendingProviderWireObservations>,
 }
 
 /// Process-local monotonic identity for concrete provider requests.
@@ -689,7 +702,24 @@ impl ProviderWireRequestObserver {
             conversation_id: conversation_id.into(),
             pane_id: pane_id.into(),
             sender,
+            claim_generation: None,
+            pending: None,
         }
+    }
+
+    /// Associates execution observations with the immutable issued expense owner.
+    pub fn with_claim_generation(mut self, generation: u64) -> Self {
+        self.claim_generation = Some(generation);
+        self
+    }
+
+    /// Retains observations before the channel send can yield or be cancelled.
+    pub(crate) fn with_pending_observations(
+        mut self,
+        pending: PendingProviderWireObservations,
+    ) -> Self {
+        self.pending = Some(pending);
+        self
     }
 
     /// Allocates the next process-local request identity.
@@ -769,21 +799,31 @@ impl<'a> ProviderWireObservationContext<'a> {
         final_wire: FinalWireObservation,
         result: &Result<ModelResponse>,
     ) {
-        let usage = result.as_ref().ok().and_then(|response| {
-            response.latest_request_usage.or_else(|| {
-                let usage = response.usage;
-                (!usage.is_zero()
-                    || usage.cached_input_tokens.is_some()
-                    || usage.cache_write_input_tokens.is_some())
-                .then_some(usage)
+        let usage = result
+            .as_ref()
+            .ok()
+            .and_then(|response| {
+                response.latest_request_usage.or_else(|| {
+                    let usage = response.usage;
+                    (!usage.is_zero()
+                        || usage.cached_input_tokens.is_some()
+                        || usage.cache_write_input_tokens.is_some())
+                    .then_some(usage)
+                })
             })
-        });
+            .or_else(|| {
+                result.as_ref().err().and_then(|error| {
+                    let usage = error.provider_incurred_usage();
+                    (!usage.is_zero()).then_some(usage)
+                })
+            });
         let failure_kind = result
             .as_ref()
             .err()
             .map(|error| provider_wire_failure_kind(error).to_string());
         let observation = ProviderWireRequestObservation {
             request_id: self.observer.next_request_id(),
+            claim_generation: self.observer.claim_generation,
             attempt_index,
             retry_reason: retry_reason.map(str::to_string),
             conversation_id: self.observer.conversation_id.clone(),
@@ -842,6 +882,14 @@ impl<'a> ProviderWireObservationContext<'a> {
             failure_kind,
             elapsed_ms: final_wire.elapsed_ms,
         };
+        if let Some(pending) = &self.observer.pending {
+            // Poison recovery preserves already incurred expense; a panic in
+            // presentation delivery must not erase this content-free evidence.
+            pending
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(observation.request_id.clone(), observation.clone());
+        }
         let _ = self.observer.sender.send(observation).await;
     }
 }
@@ -864,6 +912,10 @@ fn provider_action_result_bytes(request: &ModelRequest, action_type: &str) -> us
 
 /// Returns a stable content-free provider failure classification.
 fn provider_wire_failure_kind(error: &MezError) -> &'static str {
+    if provider_error_retry_class(error) == mez_agent::ProviderErrorRetryClass::RetryableIncomplete
+    {
+        return "retryable_incomplete";
+    }
     match error.kind() {
         crate::error::MezErrorKind::InvalidArgs => "invalid_args",
         crate::error::MezErrorKind::InvalidState => "invalid_state",

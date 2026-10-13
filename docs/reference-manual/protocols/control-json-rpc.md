@@ -1091,6 +1091,57 @@ their separate authorization; no generic parent-enrollment or launcher fallback.
 First enrollment omits `predecessor_generation`; replacement supplies the exact
 positive generation returned for its current predecessor. Neither field grants
 authority or replaces the native root/producer/writer evidence.
+
+Optional `source_resume` is exactly `{observer_witness, generation}`: a 64-byte
+lower-case hex witness and positive JS-safe generation from a previous accepted
+receipt. It is supported only for a persistent socket producer whose original
+native source anchor remains active in the **same control service**. It is not
+daemon/service replacement recovery. Fresh writer/UID/creator incarnation/root
+and ancestry proof are mandatory at both prepare and settlement. Same-instance
+recovery retains its original predecessor field; a new successor supplies the
+current receipt and exact current predecessor, never a guessed newest value.
+
+Explicit success adds only `recovery: {kind: "same-live-source", next_sequence: 1}`
+and returns fresh private credentials/public witness/generation, observer epoch
+advanced by one, and the original logical run/accounting source. Reset producer
+presentation sequence only once when adopting that changed typed receipt, not
+when replaying its identical response. Exact accepted input can retry while its
+result's binding is current; it does not rotate again or refresh the lease. Bare
+same-instance packets cannot retrieve recovered handles. If a second registry
+loss removes that binding before the new receipt is known, retry of the old input
+fails `source resume retry unavailable`. No shadow credential/projection or newest
+lookup reconstructs it. A known current receipt can qualify another recovery.
+
+Active registry loss without explicit resume, retired sources (even with a new
+instance label), missing service anchors, mismatched sources, root/producer
+replacement and stale/expired writer evidence fail closed. Source anchors are
+memory-only, bounded at 256, share the existing descriptor budget and are fenced
+synchronously by all ordinary rotations and central retirements.
+Snapshot/session replacement invalidates every retained source, including one
+whose registration was already lost; it cannot use registry-only resume. The
+single checked control-service generation allocator covers socket/curated
+initial admission, primary launch, ordinary rotation and explicit resume. It
+does not reset with registrations, preventing stale presentation owner aliases
+or one recovered source clearing another live source's status/title.
+Accounting projections, original readiness reservations and pane reset baselines
+also remain under their single existing control-service owners, not under the
+disposable registration facade. Registry loss preserves unreplayed stream/session
+totals and pre-loss pane resets. Old completion/cancellation cannot consume a new
+service's coincident numeric reservation; full owner replacement remains outside
+recovery even when its storage worker already committed real expense.
+Existing initial, ordinary rotation and unresumed identical retry reply shapes stay unchanged.
+An existing accounting mapping without a retained authority also rejects bare
+initial/changed-instance packets. Mapping novelty comes from the same SQLite
+transaction, not a guessed lookup. A mapping committed by an initial admission
+that never published remains inert: later initial retry fails
+`same-live source activation unavailable`. No row deletion, alternate owner or
+historical recharge bypasses that conservative availability gap.
+The original accounting `source_witness`, admitted time/project and immutable
+report clock remain distinct from the observer receipt and are never rewritten.
+An explicitly resumed Pi owner permits first actual `usage_gap` at sequence 1 as
+diagnostics only, inheriting a fixed prior gap reason; no fake SDK start or old
+lifecycle outcome is introduced. Never-received usage and cross-process/repeated
+reset replay guarantees remain outside this bounded contract.
 These six labels describe shared persistent-producer API eligibility, not proof
 that a vendor adapter is installed, loaded, enrolled or has accounting support.
 They are not executable/vendor attestation. Unknown/case-alias labels and retired
@@ -1183,6 +1234,28 @@ and `usage_coverage`, which is `unavailable-source-continuity` for ordinary runs
 or `external-reported` for legacy reports (not exhaustive invoice evidence).
 `usage: "unavailable-source-continuity"` is explicit: ordinary usage RPCs are
 rejected until durable source continuity exists, not billed under fresh owners.
+
+#### Installed-source assembled evidence boundary
+
+The offline four-harness matrix serves actual installed helpers over the
+production authenticated Unix framing and `UnixOriginStream`, with kernel
+current-writer/direct-parent/pane-root qualification. Child-owned phase barriers
+carry only inspection bytes. They do not submit enrollment, request readiness,
+usage completion, launch tokens or native identity from the parent. A bounded
+read-only audit wraps the qualified stream and rejects content/PID/capability
+fields in real helper ingress; it does not transform or synthesize requests.
+Every connection remains uninitialized with no control client. Browser lifecycle
+keys remain unavailable for external rows, while Enter focuses the bound pane.
+
+Actor-task extraction at each inspection barrier retains the same runtime
+service, roots, source state and ledger. It is not daemon replacement or renewed
+source enrollment and provides no restart/source-resume guarantee. Claude's
+SDK-shaped shim follows installed loader metadata, preserves callback results,
+emits synthetic final outcomes from the child and checks local timer shutdown;
+it is not actual vendor loading. Native creator-exit reconciliation separately
+retires that source. Classic Codex/Copilot/Cursor exact original SessionEnd
+retirement is checked while the creator remains alive. Supported synthetic
+current-request accounting and unavailable classic accounting stay distinct.
 
 #### Classic Copilot command callbacks
 
@@ -1322,6 +1395,14 @@ and a lost handoff preserves its exact attempted instance for later recovery.
 No vendor observer descriptor, launcher helper environment or forced session flag
 is required for this lifecycle path. Vendor trust/disabled-extension policy is
 not bypassed; supported Pi callback shapes remain best-effort observations.
+
+The offline [assembled Pi qualifier](../cli.md) uses actual bare bootstrap and
+child-discovered installed artifacts, then genuine `UnixOriginStream` writer
+proof through the production actor. Its marker gates carry only synthetic phase
+names, never identities, tickets, capabilities or parent-completed usage. Wire
+audit remains bounded/private and checks typed durable replies without replacing
+commit ownership. This does not qualify daemon/registry reset recovery, periodic
+idle renewal or a real vendor SDK; those boundaries require separate evidence.
 
 ### Claude source projection (not an installed integration)
 

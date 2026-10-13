@@ -28,6 +28,7 @@ impl ProviderRetryRecovery {
             ProviderErrorRetryClass::ContextLimit => Some(Self::ContextLimit),
             ProviderErrorRetryClass::OutputLimit => Some(Self::OutputLimit),
             ProviderErrorRetryClass::RetryableTransport => Some(Self::None),
+            ProviderErrorRetryClass::RetryableIncomplete => Some(Self::None),
             ProviderErrorRetryClass::NonRetryable => None,
         }
     }
@@ -175,6 +176,10 @@ enum ProviderRetryPhase {
 struct ProviderRetryState {
     /// Latest one-based retry attempt.
     attempt: u64,
+    /// Canonical provider calls already consumed before actor redispatch.
+    provider_calls: usize,
+    /// Whether a finite incomplete replacement sequence has begun.
+    incomplete_sequence: bool,
     /// Delay selected once when this attempt was planned.
     delay_ms: u64,
     /// Current effect boundary for the attempt.
@@ -262,6 +267,40 @@ impl ProviderRetryScheduler {
             .unwrap_or(0)
     }
 
+    /// Conserves canonical call consumption and finite inline reservations.
+    /// The product supplies this once after validating the exact issued claim;
+    /// this observation neither queues work nor changes an existing timer.
+    pub fn record_invocation(&mut self, turn_id: &str, calls: usize, retries: u64) {
+        let state = self
+            .turns
+            .entry(turn_id.to_string())
+            .or_insert(ProviderRetryState {
+                attempt: 0,
+                provider_calls: 0,
+                incomplete_sequence: false,
+                delay_ms: 0,
+                phase: ProviderRetryPhase::Dispatched,
+            });
+        state.attempt = state.attempt.saturating_add(retries);
+        state.provider_calls = state.provider_calls.saturating_add(calls);
+        state.incomplete_sequence |= retries != 0;
+    }
+
+    /// Returns calls consumed by earlier canonical invocations of this turn.
+    pub fn provider_calls(&self, turn_id: &str) -> usize {
+        self.turns
+            .get(turn_id)
+            .map_or(0, |state| state.provider_calls)
+    }
+
+    /// Reports whether the original call ceiling now fences replacement work.
+    /// Ordinary unlimited transport outages retain their existing semantics.
+    pub fn incomplete_sequence(&self, turn_id: &str) -> bool {
+        self.turns
+            .get(turn_id)
+            .is_some_and(|state| state.incomplete_sequence)
+    }
+
     /// Iterates turns whose progress currently depends on retry state.
     pub fn turn_ids(&self) -> impl Iterator<Item = &String> {
         self.turns.keys()
@@ -292,6 +331,8 @@ impl ProviderRetryScheduler {
             return ProviderRetryTransition::Terminal;
         }
         let attempt = recorded_attempts.saturating_add(1);
+        let provider_calls = self.provider_calls(&turn_id);
+        let incomplete_sequence = self.incomplete_sequence(&turn_id);
         let delay_ms = self
             .policy
             .delay_ms(attempt, advised_delay_ms, jitter_sample);
@@ -299,6 +340,8 @@ impl ProviderRetryScheduler {
             turn_id.clone(),
             ProviderRetryState {
                 attempt,
+                provider_calls,
+                incomplete_sequence,
                 delay_ms,
                 phase: ProviderRetryPhase::Recovering,
             },
@@ -412,6 +455,56 @@ mod tests {
             panic!("retryable failure should request recovery")
         };
         effect
+    }
+
+    /// Inline reservations share the finite budget with actor retries while
+    /// ordinary transport outages remain unlimited beyond sixteen calls.
+    /// The original call count is retained for later incomplete activation.
+    #[test]
+    fn max_messages_scheduler_conserves_inline_budget_without_limiting_transport_outages() {
+        let mut scheduler = ProviderRetryScheduler::new(ProviderRetryPolicy {
+            max_attempts: 2,
+            unlimited: true,
+            ..DEFAULT_PROVIDER_RETRY_POLICY
+        });
+        for _ in 0..20 {
+            scheduler.record_invocation("outage", 1, 0);
+            let ProviderRetryEffect::Recover { attempt, .. } = observe_retry(
+                &mut scheduler,
+                "outage",
+                ProviderErrorRetryClass::RetryableTransport,
+            ) else {
+                panic!("transport recovery")
+            };
+            scheduler.apply(ProviderRetryEvent::RecoveryCompleted {
+                turn_id: "outage".into(),
+                attempt,
+                result: ProviderRetryRecoveryResult::Ready,
+            });
+            scheduler.apply(ProviderRetryEvent::TimerElapsed {
+                turn_id: "outage".into(),
+                attempt,
+            });
+            scheduler.apply(ProviderRetryEvent::DispatchCompleted {
+                turn_id: "outage".into(),
+                attempt,
+                result: ProviderRetryDispatchResult::Ready,
+            });
+        }
+        assert_eq!(scheduler.provider_calls("outage"), 20);
+        assert!(!scheduler.incomplete_sequence("outage"));
+        scheduler.record_invocation("mixed", 3, 2);
+        assert_eq!(scheduler.attempt("mixed"), 2);
+        assert_eq!(scheduler.provider_calls("mixed"), 3);
+        assert!(scheduler.incomplete_sequence("mixed"));
+        assert!(!scheduler.policy().should_retry(
+            scheduler.attempt("mixed"),
+            ProviderErrorRetryClass::RetryableIncomplete
+        ));
+        scheduler.apply(ProviderRetryEvent::TurnSettled {
+            turn_id: "mixed".into(),
+        });
+        assert_eq!(scheduler.provider_calls("mixed"), 0);
     }
 
     /// Verifies normal recovery, timer, and dispatch completion advance one

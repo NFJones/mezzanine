@@ -61,6 +61,16 @@ expense reporting. Lifecycle/gap failures remain latched unavailable in the
 bounded initial client scope; missing service anchors, source replacement and
 cross-process unsent recovery are not fixed by replaying labels or history.
 
+The assembled offline Pi acceptance chain distinguishes admission from expense:
+three finalized reports produce three durable expense rows, while a fourth
+missing-counter request retains its original readiness marker without a linked
+observation or fabricated zero charge. It checks current `/status` and
+`:list-agents`, pinned titles and native conversation coexistence, not historical
+screenshots. Its source-shaped local process is not real SDK/manual/provider
+qualification; idle renewal and combined installed same-live-source
+reset/reconnect are separately qualified, not proved by this initial chain.
+See the [qualification matrix](../reference-manual/cli.md).
+
 | Observation | Interpretation |
 | --- | --- |
 | `Cumulative cache hit` | Token-weighted ratio across retained provider samples, including cold starts and auxiliary routing or sizing requests. |

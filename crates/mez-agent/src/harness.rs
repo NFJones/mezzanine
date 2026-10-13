@@ -175,6 +175,11 @@ impl<Request> AgentTurnNegotiation<Request> {
             | crate::ProviderErrorRetryClass::RetryableTransport => {
                 AgentTurnProviderFailureDecision::ReturnToRuntime
             }
+            crate::ProviderErrorRetryClass::RetryableIncomplete => {
+                // Canonical inference retry owns this class. An exhausted
+                // replacement must not reopen actor or summary budgets.
+                AgentTurnProviderFailureDecision::ReturnToRuntime
+            }
             crate::ProviderErrorRetryClass::NonRetryable => {
                 AgentTurnProviderFailureDecision::Summarize
             }

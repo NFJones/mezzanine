@@ -556,6 +556,7 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
             "observer_kind",
             "observer_instance",
             "predecessor_generation",
+            "source_resume",
         ]),
     },
     ControlMethodSpec {

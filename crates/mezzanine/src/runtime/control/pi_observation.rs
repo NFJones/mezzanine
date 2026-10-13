@@ -56,6 +56,11 @@ pub(super) struct PiLifecycleProjection {
 }
 
 impl PiLifecycleProjection {
+    /// Returns only fixed diagnostic metadata for the retained native anchor.
+    pub(super) fn usage_gap_reason(&self) -> Option<pi_ipc::UsageGapReason> {
+        self.usage_gap
+    }
+
     /// Projects only a fixed coverage reason for status, with no billing effect.
     pub(super) fn usage_gap_coverage(&self) -> Option<&'static str> {
         self.usage_gap.map(pi_ipc::UsageGapReason::coverage)
@@ -120,7 +125,10 @@ impl RuntimeSessionService {
             None => PiLifecycleProjection {
                 owner: LifecycleOwner::new(&input.external_session_id)?,
                 latest: None,
-                usage_gap: None,
+                usage_gap: binding
+                    .enrollment
+                    .as_ref()
+                    .and_then(|enrollment| enrollment.inherited_usage_gap()),
             },
         };
         let expected = projection
@@ -133,7 +141,12 @@ impl RuntimeSessionService {
             ));
         }
         if let pi_ipc::Event::UsageGap { reason } = &input.event {
-            if projection.latest.is_none() {
+            if projection.latest.is_none()
+                && !binding
+                    .enrollment
+                    .as_ref()
+                    .is_some_and(|enrollment| enrollment.allows_initial_usage_gap())
+            {
                 return Err(MezError::conflict(
                     "Pi usage gap requires current started observer",
                 ));

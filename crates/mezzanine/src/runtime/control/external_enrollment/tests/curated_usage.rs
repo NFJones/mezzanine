@@ -344,7 +344,10 @@ pub(super) fn end(first: &serde_json::Value, observed_at: u64) -> JsonRpcRequest
 
 /// A genuine child helper obtains request origin, rejects a same-user wrong
 /// parent without expense or lost readiness, then commits once and safely
-/// retries the same report. Both native and ledger reservations are consumed.
+/// retries the same report despite a different captured clock second. Original
+/// readiness and the entire first end request stay frozen, while independently
+/// changed timestamps or counters still conflict without another charge. Both
+/// native and ledger reservations are consumed, including rejected reports.
 #[tokio::test(flavor = "current_thread")]
 async fn external_curated_request_end_native_commit_replay_and_wrong_parent_conserve() {
     let Some(mut fixture) = fixture("hold").await else {
@@ -356,11 +359,15 @@ async fn external_curated_request_end_native_commit_replay_and_wrong_parent_cons
         .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&path));
     let (_socket, connection) = child(&mut fixture).await;
     let first = enroll(&mut fixture, &connection).await;
+    let original_capture = crate::runtime::current_unix_seconds().saturating_sub(500);
+    let mut original_request = None;
     for iteration in 0..2 {
-        let work = fixture
+        let capture_at = original_capture + iteration * 100;
+        let mut work = fixture
             .service
             .prepare_external_helper_presentation(&begin(&first), &connection)
             .unwrap();
+        assert!(work.fixture_usage_capture_at(capture_at));
         let native = work.clone();
         let observed = tokio::task::spawn_blocking(move || native.observe())
             .await
@@ -372,7 +379,12 @@ async fn external_curated_request_end_native_commit_replay_and_wrong_parent_cons
         )
         .unwrap();
         assert_eq!(ready["result"]["accepted"], true);
-        let request = end(&first, crate::runtime::current_unix_seconds());
+        assert_eq!(ready["result"]["admitted_at"], original_capture);
+        // Capture the complete report once, after actual native readiness and
+        // before even the wrong-parent attempt. A retry is not a new report.
+        let request = original_request
+            .get_or_insert_with(|| end(&first, ready["result"]["admitted_at"].as_u64().unwrap()))
+            .clone();
         if iteration == 0 {
             let work = fixture
                 .service
@@ -400,12 +412,72 @@ async fn external_curated_request_end_native_commit_replay_and_wrong_parent_cons
                 fixture
                     .service
                     .control
-                    .external_agents()
-                    .usage_begins
+                    .external_usage_begins()
                     .origins
                     .len(),
                 1
             );
+            let database = rusqlite::Connection::open(&path).unwrap();
+            assert_eq!(
+                database
+                    .query_row("SELECT count(*) FROM token_usage_events", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                0
+            );
+        } else {
+            // Both clocks are safely in the past and at/after the original
+            // readiness. A rebuilt report would conflict, not be a replay.
+            assert!(capture_at > original_capture);
+            assert_ne!(request.params, end(&first, capture_at).params);
+            for field in ["observed_at", "counters"] {
+                let mut changed = request.clone();
+                let mut params: serde_json::Value =
+                    serde_json::from_str(changed.params.as_deref().unwrap()).unwrap();
+                if field == "observed_at" {
+                    params[field] = capture_at.into();
+                } else {
+                    params[field]["input_tokens"] = 11.into();
+                }
+                changed.params = Some(params.to_string());
+                let work = fixture
+                    .service
+                    .prepare_external_helper_presentation(&changed, &connection)
+                    .unwrap();
+                let native = work.clone();
+                let observed = tokio::task::spawn_blocking(move || native.observe())
+                    .await
+                    .unwrap();
+                let error = observed.as_ref().unwrap_err();
+                assert_eq!(error.kind(), crate::error::MezErrorKind::Conflict);
+                assert_eq!(
+                    error.to_string(),
+                    "Conflict: external observation id has conflicting immutable payload"
+                );
+                let reply: serde_json::Value = serde_json::from_str(
+                    &fixture
+                        .service
+                        .complete_external_enrollment(work, observed, &connection),
+                )
+                .unwrap();
+                assert!(reply.get("error").is_some(), "{reply}");
+                assert_eq!(
+                    fixture
+                        .service
+                        .external_usage_reservation_counts_for_tests(),
+                    (0, 0)
+                );
+                assert!(
+                    fixture
+                        .service
+                        .control
+                        .external_agents()
+                        .enrollments
+                        .pending
+                        .is_empty()
+                );
+            }
         }
         let work = fixture
             .service
@@ -524,7 +596,7 @@ async fn external_curated_registry_reset_reuses_durable_owner_not_observer_witne
         .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&path));
     let fresh = enroll(&mut fixture, &connection).await;
     assert_eq!(fresh["result"]["registered"], true, "{fresh}");
-    assert_eq!(fresh["result"]["generation"], first["result"]["generation"]);
+    assert_ne!(fresh["result"]["generation"], first["result"]["generation"]);
     assert_ne!(
         fresh["result"]["observer_witness"],
         first["result"]["observer_witness"]
@@ -545,7 +617,13 @@ async fn external_curated_registry_reset_reuses_durable_owner_not_observer_witne
             "harness":"claude","generation":receipt["result"]["generation"],"observer_witness":receipt["result"]["observer_witness"],
             "external_session_id":"session-a","sequence":1}}).to_string()).unwrap()
     };
-    for stale in [begin(&first), original.clone(), heartbeat(&first)] {
+    for mut stale in [begin(&first), original.clone(), heartbeat(&first)] {
+        // The allocator no longer reuses a generation inside this service, but
+        // supplying the current number must not make the original witness valid.
+        let mut params: serde_json::Value =
+            serde_json::from_str(stale.params.as_deref().unwrap()).unwrap();
+        params["generation"] = fresh["result"]["generation"].clone();
+        stale.params = Some(params.to_string());
         let refused = match fixture
             .service
             .prepare_external_helper_presentation(&stale, &connection)
@@ -558,7 +636,7 @@ async fn external_curated_registry_reset_reuses_durable_owner_not_observer_witne
         };
         assert!(
             refused,
-            "old witness was accepted after numeric generation reuse"
+            "old witness was accepted with the current numeric generation"
         );
     }
     let source = fixture

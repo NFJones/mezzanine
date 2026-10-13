@@ -30,11 +30,7 @@ const TOMBSTONE_SECONDS: u64 = 300;
 #[derive(Debug, Default)]
 pub(super) struct ExternalAgentRegistry {
     pub(super) bindings: BTreeMap<[u8; 32], LaunchBinding>,
-    pub(super) next_generation: u64,
     pub(super) enrollments: super::external_enrollment::EnrollmentAdmissions,
-    pub(super) usage: super::external_usage::ExternalUsageProjection,
-    /// Separate bounded request-origin metadata admissions, not billing streams.
-    pub(super) usage_begins: super::external_usage_requests::ExternalUsageBegins,
 }
 
 /// Exact local launch authority and optional registration settlement.
@@ -114,7 +110,7 @@ impl LaunchBinding {
 }
 
 /// Immutable registration metadata, bound to a single server-issued launch.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Registration {
     pub(super) agent_id: AgentId,
     pub(super) external_session_id: String,
@@ -222,18 +218,17 @@ impl RuntimeSessionService {
             .map(mez_agent::messaging::ProjectMembership::from_canonical_root)
             .map(|membership| membership.scope_id());
         let accounting_origin = self.capture_accounting_origin_for_pane(&pane_id);
-        let registry = self.control.external_agents_mut();
+        let (registry, next_generation) = self.control.external_agents_and_generation_mut();
         if registry.bindings.len() >= MAX_BINDINGS {
             return Err(MezError::new(
                 crate::error::MezErrorKind::RateLimited,
                 "external launch registry is full",
             ));
         }
-        let generation = registry
-            .next_generation
+        let generation = next_generation
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("external launch generation exhausted"))?;
-        registry.next_generation = generation;
+        *next_generation = generation;
         let mut bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut bytes);
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
@@ -385,6 +380,9 @@ impl RuntimeSessionService {
         {
             enrollment.observe_connection(origin);
         }
+        if result.is_ok() {
+            self.record_external_source_anchor(digest);
+        }
         result
     }
 
@@ -463,6 +461,7 @@ impl RuntimeSessionService {
 
     /// Retires only one exact registration and retains a bounded retry tombstone.
     pub(super) fn retire_external_agent_binding(&mut self, digest: [u8; 32]) {
+        self.retire_external_source_anchor(digest);
         let registry = self.control.external_agents_mut();
         let Some(binding) = registry.bindings.get_mut(&digest) else {
             return;
@@ -497,8 +496,8 @@ impl RuntimeSessionService {
             .values()
             .any(|binding| !binding.retired && binding.accounting_owner == accounting_owner)
         {
-            registry
-                .usage_begins
+            self.control
+                .external_usage_begins_mut()
                 .origins
                 .retain(|(owner, _), _| owner != &accounting_owner);
         }
@@ -525,6 +524,7 @@ impl RuntimeSessionService {
                 binding.expires = now.saturating_add(LEASE_SECONDS);
             }
         }
+        self.refresh_external_source_diagnostics();
     }
 
     /// Expires missing renewal or replaced pane roots without claiming death.
@@ -553,6 +553,7 @@ impl RuntimeSessionService {
 
     /// Expires missing renewal or replaced pane roots without claiming death.
     pub(crate) fn reconcile_external_agent_registrations(&mut self) -> usize {
+        self.prune_external_source_anchors();
         let now = current_unix_seconds();
         let retired = self
             .control
@@ -583,6 +584,7 @@ impl RuntimeSessionService {
     /// tombstone GC cannot strand a retired creator FD after its actual exit.
     pub(crate) fn external_agent_cleanup_needed(&self) -> bool {
         !self.control.external_agents().bindings.is_empty()
+            || !self.control.external_sources().is_empty()
             || !self
                 .control
                 .external_agents()
@@ -594,6 +596,8 @@ impl RuntimeSessionService {
     /// Retires runtime-only external identities after snapshot replacement.
     /// No capability survives restart, so restored metadata cannot revive a run.
     pub(crate) fn retire_unbound_external_message_identities(&mut self) {
+        self.retire_all_external_source_anchors();
+        self.invalidate_external_enrollment_admissions();
         let identities = self
             .control
             .message_service()

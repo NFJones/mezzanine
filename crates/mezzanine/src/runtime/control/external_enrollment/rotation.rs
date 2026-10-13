@@ -23,7 +23,7 @@ impl RuntimeSessionService {
         work: &ExternalEnrollmentWork,
         connection: &ControlConnectionState,
     ) -> Result<String> {
-        let registry = self.control.external_agents_mut();
+        let (registry, next_generation) = self.control.external_agents_and_generation_mut();
         let binding = registry
             .bindings
             .get_mut(&digest)
@@ -50,6 +50,9 @@ impl RuntimeSessionService {
             return Err(MezError::conflict("external observer evidence expired"));
         }
         if enrollment.instance == work.observer_instance {
+            if enrollment.accepted_resume.is_some() && work.source_resume.is_none() {
+                return Err(MezError::conflict("explicit source resume required"));
+            }
             if enrollment.predecessor_generation != work.predecessor_generation {
                 return Err(MezError::conflict(
                     "external observer retry predecessor differs",
@@ -82,8 +85,7 @@ impl RuntimeSessionService {
             .epoch
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("external observer epoch exhausted"))?;
-        let generation = registry
-            .next_generation
+        let generation = next_generation
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("external observer generation exhausted"))?;
         if curated.is_some()
@@ -131,6 +133,8 @@ impl RuntimeSessionService {
         enrollment.epoch = epoch;
         enrollment.instance = work.observer_instance.clone();
         enrollment.predecessor_generation = Some(old_generation);
+        enrollment.accepted_resume = None;
+        enrollment.resume_usage_gap = None;
         enrollment.instances.insert(work.observer_instance.clone());
         enrollment.token = SecretString::from(token);
         enrollment.observers.clear();
@@ -151,7 +155,7 @@ impl RuntimeSessionService {
         };
         binding.enrollment = Some(enrollment);
         let pane = binding.pane_id.clone();
-        registry.next_generation = generation;
+        *next_generation = generation;
         if let Some((namespace_digest, namespace_boundary, boundary)) = namespace_state {
             *namespace_digest = replacement_digest;
             *namespace_boundary = boundary;
@@ -169,6 +173,7 @@ impl RuntimeSessionService {
             replacement_digest,
         );
         registry.bindings.insert(replacement_digest, binding);
+        self.record_external_source_anchor(replacement_digest);
         self.presentation.set_pane_harness_status(
             &pane,
             &format!("external-registration:{old_generation}"),

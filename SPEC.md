@@ -294,6 +294,57 @@ uninitialized same-user Unix ingress for canonical `claude`, `codex`, `copilot`,
 `observer_instance` and exact `observer_kind: persistent`. The optional positive
 `predecessor_generation` narrows observer replacement. These are selectors, not
 authority; first enrollment MUST NOT claim an unavailable predecessor.
+Ordinary socket enrollment MAY explicitly recover the SAME live native source
+with optional strict `source_resume: {observer_witness, generation}`. The witness
+MUST be 64 lower-case hexadecimal bytes and the generation a positive JS-safe
+integer. Recovery MUST require the original active source anchor retained by the
+SAME control service outside disposable registrations, plus fresh original-kind
+UID/creator/root incarnation, ancestry and current writer proof at admission and
+settlement. It MUST NOT reconstruct authority from the durable accounting mapping.
+The memory-only owner MUST retain at most 256 source anchors, share the existing
+512-ancestor budget, and never evict live source/retired-instance fences.
+Accounting checkpoint projections, pane reset baselines and begin/end reservation
+owners MUST remain single service-owned objects outside disposable registrations.
+Registration loss MUST NOT become a usage reset, drop unreplayed stream totals or
+reuse pending IDs. Full owner replacement MUST fence old completion/release by
+exact incarnation without undoing already-committed durable expense.
+Actual producer/root replacement ends its anchor; central retirement MUST synchronously
+invalidate every observer instance for that exact source lifetime. A new label
+MUST NOT reactivate it. Ordinary rotation MUST update the same currentness owner.
+Snapshot/session replacement MUST invalidate ALL retained source anchors even
+when their disposable registrations are already missing. It is not registry-only
+recovery. One checked external generation allocator MUST belong to the control
+service across initial socket/curated admission, primary launch, rotation and
+resume, so retained presentation owner keys cannot alias or clear another source
+after registry loss. Numeric generations remain selectors, not native authority.
+Prepare/commit revision checks MUST fence distinct competing or delayed admissions.
+Same-instance resume MUST retain its immutable original predecessor; a genuinely
+new successor MUST name the current receipt and exact predecessor generation and
+MUST NOT reuse a retired instance. Successful resume MUST rotate private token,
+public witness and generation and advance observer epoch exactly once, preserving
+logical run, source namespace and original request provenance. ONLY explicit
+resume replies carry `recovery: {kind: "same-live-source", next_sequence: 1}`.
+Exact accepted-input retries MAY return the same current recovered handle without
+another epoch, projection reset or lease refresh. Bare old same-instance packets
+MUST NOT obtain recovered handles. If registry loss removes that recovered binding
+before its reply is known, old-selector retry MUST fail `source resume retry unavailable`;
+there is no newest lookup or shadow credential/projection copy. A known current
+receipt MAY explicitly qualify another fresh recovery. Missing service anchors,
+service/OS-daemon replacement, source mismatches and expired/retired evidence MUST
+fail closed even when accounting mappings survive. Omitted explicit resume after
+active registry loss MUST reject, not silently start another accounting namespace.
+Mapping lookup MUST publish New/Existing disposition atomically with its existing
+immediate SQLite transaction. Existing mappings without retained service authority
+MUST NOT activate even through a bare initial packet or changed instance label.
+If an initial mapping committed but its native admission never published, later
+initial admission MUST fail `same-live source activation unavailable`; the inert
+row is not deleted/reassigned to bypass that conservative availability gap.
+An explicitly resumed Pi projection MAY accept its first ACTUAL gap fact at
+sequence 1 as diagnostics only, retaining a prior fixed gap reason/report-seen
+flag. It MUST NOT restore old lifecycle candidates/outcomes or synthesize a SDK
+start, presentation, completion, retirement or loss event. Normal initial/ordinary
+rotation first-gap guards remain unchanged. This contract does not guarantee
+never-received reports, repeated-reset reply recovery or cross-process continuity.
 Shared protocol eligibility MUST NOT be presented as installed/loaded vendor
 adapter support or executable/vendor attestation. Unknown labels and retired
 Gemini MUST reject before reservation. The label MUST NOT enable initial helper,
@@ -746,6 +797,28 @@ state without mutation and conflict with dry-run/maintenance. Uninstall/recovery
 MUST be exclusive. Obsolete `--apply`/`--plan` MUST reject, not alias new intents.
 Missing compiled adapters MUST fail mutating intents before root discovery;
 read-only check/dry-run MUST remain unavailable diagnostics, not fake installation.
+
+#### Installed-native supported-subset qualification
+
+Offline acceptance MAY compose the production bare installer with ordinary
+fixture-owned vendor-like creators that discover the installed configuration.
+It MUST distinguish actual installed bytes/native writer-parent-root admission
+from real vendor-loader attestation. The four-harness assembled matrix qualifies
+Claude SDK-shaped module callbacks and classic Codex/Copilot/Cursor commands on
+two panes, repeated isolated runs, native/external coexistence, pinned titles,
+read-only status/browser controls and exact source retirement. Its child-only
+synthetic Claude current-request outcomes qualify durable replay/nonbilling of
+missing counters, not provider spending or exhaustive accounting. Classic
+callback counters MUST remain unbilled; unavailable usage is not measured zero.
+Claude local SessionEnd cancellation MUST NOT be represented as immediate native
+retirement while its creator is still alive: process-death reconciliation is a
+separate evidenced boundary. Classic exact SessionEnd retirement is distinct.
+OpenCode loader/association support and Pi acceptance remain separate scopes.
+This matrix MUST NOT certify real vendor loading, shared-server association,
+cross-process source handoff, restart continuity, macOS execution or full billing.
+
+#### Classic hook installation and source limits
+
 Copilot revision2 MAY install only the compiled `hooks/mezzanine.json` user file
 under the documented COPILOT_HOME/default root, version1 direct-exec/args hook
 syntax for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/
@@ -1182,6 +1255,13 @@ Exact latest replay MUST return the original bounded acknowledgment; conflicting
 older/gapped or content-bearing facts MUST NOT change state. Typed Pi and generic
 presentation sources MUST NOT mix in an observer epoch; rotation resets both.
 This lifecycle delivery is not durable usage commitment or exhaustive token support.
+Acceptance evidence MUST distinguish bare public bootstrap-to-ordinary-process
+composition from internal installer-plan or explicitly selected helper/entry
+fixtures. An offline assembled qualifier MAY use isolated HOME and source-shaped
+callbacks, but MUST retain actual installed-path discovery, native Unix writer
+admission and typed durable ACK ownership. Parent fixture gates MUST carry no
+enrollment or usage authority. Passing such a fixture MUST NOT imply real SDK,
+periodic idle renewal, registry/daemon recovery, platform or invoice completeness.
 Ordinary `mez bootstrap pi` MUST also install the supported finalized assistant
 usage producer without launcher/FD3/manual accounting enablement. Genuine
 `turn_start` opens an original request marker through native usage-begin; it MUST
@@ -6699,7 +6779,8 @@ than `4294967295` and MUST default to `5`; zero disables finite retries.
 transport failures, rate limits, provider retry hints, 5xx responses, and
 transient overload or unavailability. It MUST NOT make malformed requests,
 authentication failures, context-limit recovery, output-limit recovery, or
-non-retryable provider failures infinite. Reloading either setting MUST affect
+authoritative incomplete-inference replacement retries or non-retryable
+provider failures infinite. Reloading either setting MUST affect
 the next observed provider failure without invalidating an already scheduled
 retry generation or changing its selected delay.
 `agents.turn_timeout_ms` MUST be a positive integer and MUST default to
@@ -10785,6 +10866,22 @@ hits a configured limit.
 The harness MUST expose long-running action status to the user.
 
 ### 9.11 Errors, Retries, and Persistence
+
+An OpenAI Responses incomplete response whose authoritative structured
+`incomplete_details.reason` is exactly `max_messages` MUST retry only the
+failed prepared inference under the finite provider-error budget and the
+original turn-wide provider-call ceiling. Replacement calls MUST retain the
+same model, native input framing, action catalog and negotiation phase, use
+bounded provider backoff, and remain cancellable under the issued generation
+and absolute turn deadline. This reason MUST NOT imply input-context overflow,
+output-token continuation, or unlimited transport eligibility. Display-only
+failure summaries, unknown reasons and malformed output MUST NOT authorize it.
+Incomplete native calls and plausible partial action batches MUST NOT execute
+or enter durable provider continuity. Only a complete replacement may be
+accepted; settled actions, siblings and earlier negotiation steps MUST NOT be
+replayed. Known per-wire expense MUST survive cancellation during backoff under
+the original issued provenance, with duplicate checkpoint and final settlement
+delivery charging each reported token counter only once.
 
 Provider errors, malformed responses, permission denials, command timeouts, and
 transport failures MUST be recorded in the agent transcript.

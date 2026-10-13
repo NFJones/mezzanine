@@ -44,18 +44,23 @@ mod cursor;
 mod helper;
 mod helper_usage;
 mod producer;
+mod recovery;
 mod rotation;
 mod source;
 mod targets;
 use producer::ProducerEvidence;
+pub(super) use recovery::LiveSourceAnchors;
+use recovery::{ResumeAdmission, SourceResume};
 
 /// Actor-owned reservations consumed on every completion, including reply loss.
 #[derive(Debug, Default)]
 pub(super) struct EnrollmentAdmissions {
     pending: BTreeSet<u64>,
     next: u64,
+    /// Registry incarnation fences reused numeric reservation IDs after reset.
+    incarnation: Arc<()>,
     /// Aggregate native ancestry descriptors across workers and live runs.
-    ancestry_budget: Arc<UnixAncestryBudget>,
+    pub(in crate::runtime::control) ancestry_budget: Arc<UnixAncestryBudget>,
     /// Candidate selectors maintained only by ordinary binding lifecycle owners.
     pub(in crate::runtime::control) helper_targets: targets::HelperTargets,
     /// Original declared creator/session fences outlive expiring capabilities,
@@ -88,6 +93,10 @@ pub(super) struct EnrollmentBinding {
     instance: String,
     /// Immutable predecessor witness for identical transition retries.
     predecessor_generation: Option<u64>,
+    /// Exact accepted explicit resume input, not a newest-observer alias.
+    accepted_resume: Option<SourceResume>,
+    /// Inherited fixed diagnostic only; no lifecycle/candidate state survives.
+    resume_usage_gap: Option<crate::integrations::bootstrap::pi_ipc::UsageGapReason>,
     /// Bounded retired-instance fence; old instances cannot reclaim this run.
     instances: BTreeSet<String>,
     /// Bounded authorized observer sockets; stale closure cannot clear a healthy
@@ -110,6 +119,8 @@ pub(super) struct EnrollmentBinding {
 #[derive(Debug, Clone)]
 pub(crate) struct ExternalEnrollmentWork {
     admission: u64,
+    /// Original reservation owner, not a process or enrollment capability.
+    registry_incarnation: Arc<()>,
     pub(crate) request_id: String,
     origin: Arc<UnixOriginProcess>,
     process: RuntimePaneProcessIdentity,
@@ -120,6 +131,10 @@ pub(crate) struct ExternalEnrollmentWork {
     display_name: String,
     observer_instance: String,
     predecessor_generation: Option<u64>,
+    /// Public receipt selector; native lifetime evidence remains mandatory.
+    source_resume: Option<SourceResume>,
+    /// Retained control-owner revision captured before native work is reserved.
+    resume_admission: Option<ResumeAdmission>,
     deadline: Instant,
     /// Existing run only; no helper observation may allocate a producer owner.
     helper: Option<helper::HelperPresentation>,
@@ -133,6 +148,8 @@ pub(crate) struct ExternalEnrollmentWork {
     source_store: Option<crate::storage::token_usage::TokenUsageStore>,
     /// One-shot native namespace observation, not an admission capability.
     source_owner: Arc<OnceLock<Option<String>>>,
+    /// Atomic lookup novelty; existing rows cannot recreate missing live owners.
+    source_created: Arc<OnceLock<bool>>,
     /// Deterministic test-owned barrier proving native work does not hold actor.
     #[cfg(test)]
     pub(crate) worker_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
@@ -238,6 +255,18 @@ impl ExternalEnrollmentWork {
 }
 
 impl EnrollmentBinding {
+    /// Exposes only the fixed inherited gap diagnostic, never lifecycle state.
+    pub(super) fn inherited_usage_gap(
+        &self,
+    ) -> Option<crate::integrations::bootstrap::pi_ipc::UsageGapReason> {
+        self.resume_usage_gap
+    }
+
+    /// Permits the first actual gap fact only after explicit native source resume.
+    pub(super) fn allows_initial_usage_gap(&self) -> bool {
+        self.accepted_resume.is_some()
+    }
+
     /// Whole-chain lifetime fencing uses only bounded nonblocking kernel polls;
     /// a live producer cannot keep an orphaned pane association authoritative.
     pub(super) fn provenance_is_live(&self) -> bool {
@@ -337,6 +366,15 @@ impl EnrollmentBinding {
 }
 
 impl RuntimeSessionService {
+    /// Bulk lifecycle replacement fences even a never-published initial worker.
+    /// Accounting begin/end owners are independent and retain already-admitted
+    /// incurred expense; only native enrollment reservations are invalidated.
+    pub(in crate::runtime::control) fn invalidate_external_enrollment_admissions(&mut self) {
+        let admissions = &mut self.control.external_agents_mut().enrollments;
+        admissions.incarnation = Arc::new(());
+        admissions.pending.clear();
+    }
+
     /// Validates inert metadata and reserves finite native work before any
     /// registration or capability allocation. No client initialization is done.
     pub(crate) fn prepare_external_enrollment(
@@ -395,6 +433,12 @@ impl RuntimeSessionService {
         let session_id = text(&params, "external_session_id", 128)?;
         let display_name = text(&params, "display_name", 128)?;
         let observer_instance = text(&params, "observer_instance", 128)?;
+        let source_resume = SourceResume::from_params(&params)?;
+        if source_resume.is_some() && curated.is_some() {
+            return Err(MezError::invalid_args(
+                "source resume requires a persistent socket producer",
+            ));
+        }
         let predecessor_generation = match params.get("predecessor_generation") {
             None => None,
             Some(value) => Some(
@@ -431,6 +475,8 @@ impl RuntimeSessionService {
             ));
         }
         let source_store = self.persistence.cloned_token_usage_store();
+        self.prune_external_source_anchors();
+        self.sync_external_ancestry_budget();
         let registry = self.control.external_agents_mut();
         // An existing run needs a worker reservation, not another binding slot.
         // This is only a candidate lookup: native observation and commit fences
@@ -466,8 +512,9 @@ impl RuntimeSessionService {
             })?;
         registry.enrollments.next = admission;
         registry.enrollments.pending.insert(admission);
-        Ok(ExternalEnrollmentWork {
+        let mut work = ExternalEnrollmentWork {
             admission,
+            registry_incarnation: registry.enrollments.incarnation.clone(),
             request_id: request.id.clone(),
             origin,
             process,
@@ -478,6 +525,8 @@ impl RuntimeSessionService {
             display_name,
             observer_instance,
             predecessor_generation,
+            source_resume,
+            resume_admission: None,
             deadline: Instant::now() + ADMISSION_BUDGET,
             helper: None,
             curated,
@@ -485,11 +534,24 @@ impl RuntimeSessionService {
             ancestry_budget: registry.enrollments.ancestry_budget.clone(),
             source_store,
             source_owner: Arc::new(OnceLock::new()),
+            source_created: Arc::new(OnceLock::new()),
             #[cfg(test)]
             worker_gate: registry.enrollments.worker_gate.clone(),
             #[cfg(test)]
             settled: registry.enrollments.settled.clone(),
-        })
+        };
+        match self.capture_external_source_resume(&work) {
+            Ok(admission) => work.resume_admission = admission,
+            Err(error) => {
+                self.control
+                    .external_agents_mut()
+                    .enrollments
+                    .pending
+                    .remove(&work.admission);
+                return Err(error);
+            }
+        }
+        Ok(work)
     }
 
     /// Consumes one reservation and fences current actor authority before
@@ -547,6 +609,14 @@ impl RuntimeSessionService {
         observed: Result<()>,
         connection: &ControlConnectionState,
     ) -> Result<String> {
+        if !Arc::ptr_eq(
+            &work.registry_incarnation,
+            &self.control.external_agents().enrollments.incarnation,
+        ) {
+            return Err(MezError::conflict(
+                "external enrollment reservation owner changed",
+            ));
+        }
         if !self
             .control
             .external_agents_mut()
@@ -599,6 +669,10 @@ impl RuntimeSessionService {
             return self.commit_external_helper_presentation(work, helper);
         }
         self.reconcile_external_agent_registrations();
+        if work.source_resume.is_some() {
+            return self.commit_external_source_resume(work, connection);
+        }
+        self.validate_external_source_initial(work)?;
         let existing =
             self.control
                 .external_agents()
@@ -625,13 +699,14 @@ impl RuntimeSessionService {
                 "external observer predecessor unavailable",
             ));
         }
+        self.validate_external_source_mapping_allocation(work)?;
         self.refresh_project_trust_store_from_disk_if_changed()?;
         let project_scope = self
             .trusted_project_root_for_pane(&work.pane_id)
             .map(mez_agent::messaging::ProjectMembership::from_canonical_root)
             .map(|membership| membership.scope_id());
         let accounting_origin = self.capture_accounting_origin_for_pane(&work.pane_id);
-        let registry = self.control.external_agents_mut();
+        let (registry, next_generation) = self.control.external_agents_and_generation_mut();
         if registry.bindings.len() >= super::external_agents::MAX_BINDINGS {
             return Err(MezError::new(
                 crate::error::MezErrorKind::RateLimited,
@@ -647,11 +722,10 @@ impl RuntimeSessionService {
                 "external enrollment evidence expired before allocation",
             ));
         }
-        let generation = registry
-            .next_generation
+        let generation = next_generation
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("external enrollment generation exhausted"))?;
-        registry.next_generation = generation;
+        *next_generation = generation;
         let mut bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut bytes);
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
@@ -684,6 +758,8 @@ impl RuntimeSessionService {
                     epoch: 1,
                     instance: work.observer_instance.clone(),
                     predecessor_generation: None,
+                    accepted_resume: None,
+                    resume_usage_gap: None,
                     instances: BTreeSet::from([work.observer_instance.clone()]),
                     observers: vec![Arc::downgrade(&work.origin)],
                     curated_observer: None,
@@ -709,6 +785,7 @@ impl RuntimeSessionService {
             .enrollments
             .helper_targets
             .insert(work.origin.uid(), &work.harness, &work.session_id, digest);
+        self.record_external_source_anchor(digest);
         let binding = self
             .control
             .external_agents()
@@ -729,12 +806,16 @@ fn enrollment_response(
     enrollment: &EnrollmentBinding,
     session: &str,
 ) -> String {
-    serde_json::json!({"protocol":"external-agent/1","launch_token":enrollment.token.expose_secret(),
+    let mut response = serde_json::json!({"protocol":"external-agent/1","launch_token":enrollment.token.expose_secret(),
         "observer_witness":observer_witness(Sha256::digest(enrollment.token.expose_secret().as_bytes()).into()),
         "agent_id":binding.registration.as_ref().map(|registration| registration.agent_id.as_str()),
         "run_id":enrollment.run_generation,"observer_epoch":enrollment.epoch,"observer_instance":enrollment.instance,
         "generation":binding.generation,"external_session_id":session,"registered":true,"controls":[],
-        "expires_at_unix_seconds":binding.expires,"lease_seconds":60,"usage":"unavailable-source-continuity"}).to_string()
+        "expires_at_unix_seconds":binding.expires,"lease_seconds":60,"usage":"unavailable-source-continuity"});
+    if enrollment.accepted_resume.is_some() {
+        response["recovery"] = serde_json::json!({"kind":"same-live-source","next_sequence":1});
+    }
+    response.to_string()
 }
 
 #[cfg(all(test, target_os = "linux"))]

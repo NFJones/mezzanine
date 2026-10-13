@@ -1333,12 +1333,17 @@ mod harnesses;
 mod health;
 mod helper_discovery;
 mod helper_presentation;
+mod installed_matrix;
 mod observer_epochs;
 mod parent_ancestry;
 mod persistent_client;
+mod pi_assembled;
 mod pi_observation;
 mod producer;
 mod source;
+mod source_generation;
+mod source_recovery;
+mod source_recovery_usage;
 mod usage_begin;
 
 /// Programmatic requests still undergo strict selector decoding before native

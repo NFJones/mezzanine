@@ -59,6 +59,46 @@ daemon; add
 
 ### Harness bootstrap
 
+#### Offline installed-native support matrix
+
+The dedicated installed-source acceptance fixture runs the actual CLI in cleared
+environments with temporary HOME/default roots: absent-root dry-run, install,
+repeat, recognized missing-file repair, and read-only installed preview/check.
+Authored settings/statusline/exporter bytes and sibling callbacks survive repair;
+shared Codex/Cursor authored members survive repeat and preview. Whole-file
+absence repair cannot preserve callbacks already deleted with that file, so that
+case is qualified before adding shared authored members.
+
+| Harness / ordinary command | Offline installed-source evidence | Accounting boundary |
+| --- | --- | --- |
+| Claude / `claude` | Child discovers installed skill/plugin/hooks metadata; SDK-shaped loader shim executes the installed module, real native helper ingress and local timer cancellation | Synthetic current-request final outcomes commit once on replay; missing usage stays unknown. Not an actual Claude vendor-loader or paid-request check. Native retirement after creator exit is separate from local SessionEnd. |
+| Codex / `codex` | Child reads installed hooks.json and executes exact commands; native enrollment, lifecycle and exact SessionEnd retirement | Hook counters/selected model/context totals do not bill. Separate OTel counters exist, but requesting-client/request/origin/privacy association is not qualified here. |
+| Copilot / `copilot` | Child discovers installed hooks/mezzanine.json exec/args; native lifecycle and exact SessionEnd retirement | `unavailable-safe-activation`: no safe ordinary persistent OTel activation/native correlation is supplied or enabled by this fixture. Existing exporters are preserved. |
+| Cursor / `agent` | Child reads installed hooks.json and executes exact ordinary CLI hook commands; native lifecycle and exact SessionEnd retirement | `unavailable-counter-schema`: exact CLI counter/cache/multiplicity/native-origin evidence remains unqualified. No forced print mode or IDE-counter substitution. |
+| OpenCode / `opencode` | Separate compiled installer/loader fixtures only; not an assembled installed-native case in this four-harness matrix | Ordinary shared-server/client association and durable accounting dependencies remain unresolved; installation is not accounting acceptance. |
+| Pi / `pi` | Separate Pi acceptance owner and fixtures | Not qualified by the four-harness matrix. |
+
+Two repeated isolated runs hold four independent creators on two actual pane
+roots, alongside an ordinary idle native Harness. They exercise pinned titles,
+`:agent-status` without creating a native conversation, native `/status`, and
+`:list-agents` focus with no external interrupt/pause/close authority. Real Unix
+current-writer/parent/root proof, bounded metadata-only helper requests and storage
+redaction are checked; no parent-supplied completion, capability, PID, helper
+activation or module entry path supplies admission. The fake vendors emit their
+own source-shaped callbacks. These are Linux offline fixture results, not actual
+vendor security-policy/loading, macOS, daemon replacement/restart, shared-server
+or full billing/release certification. Bootstrap still reports runtime verification
+`not-performed`; users do not need a universal certification gate to install a
+best-effort supported subset.
+
+For the explicit fixture, build `mez` first, set `MEZ_TEST_NODE_BINARY` to an
+existing absolute offline Node executable, then run
+`timeout 1800 cargo test --quiet -p mezzanine --lib external_installed_matrix_supported_subset_two_panes_four_creators -- --ignored`.
+The fixture does not install a vendor or contact a provider. Default tests leave
+this prerequisite-dependent native qualification ignored.
+
+#### Installation and maintenance
+
 `mez bootstrap <harness> [--vendor-version VERSION] [--root ABSOLUTE_ROOT]`
 accepts `claude`, `codex`, `copilot`, `opencode`, `cursor`, and `pi` as adapter
 candidates. All six now have compiled best-effort deployment recipes; this does
@@ -395,6 +435,41 @@ qualification uses `MEZ_TEST_NODE_BINARY=/absolute/node timeout 600s cargo test
 external_enrollment_installed_ordinary_pi_usage_has_bounded_durable_stream -- --ignored`.
 This runs synthetic source-shaped callbacks through the real installed default
 producer/Unix peer/ledger, not a live vendor or provider.
+
+The assembled bare-bootstrap qualifier is separate from that internal-plan
+fixture. First build the product binary, then run:
+
+```sh
+timeout 900s cargo build -p mezzanine --bin mez --all-features --quiet
+MEZ_TEST_NODE_BINARY=/absolute/already-installed/node timeout 180s cargo test -p mezzanine --lib --all-features --quiet external_pi_bare_bootstrap_ordinary_launch_accounting_and_retirement -- --ignored
+```
+
+It invokes actual `mez bootstrap pi --dry-run` and bare `mez bootstrap pi` under
+an isolated HOME: default-root discovery, missing-root read-only preview,
+install/repeat and private owned-edit archive/repair preserve unrelated settings
+and extensions. A normally invoked local `pi`-shaped process independently finds
+the installed package entry and emits source-shaped callbacks. No explicit root,
+version/apply flag, entry/helper argument, enrollment token, vendor observer fd3,
+manual artifact renderer or accounting enablement is supplied. Private marker
+gates sequence the synthetic vendor only; the child alone creates callbacks and
+reports through genuine native Unix origin/writer proof and the production actor.
+
+| Assembled local boundary | Qualified assertion |
+| --- | --- |
+| Factory and ordinary startup | Resource-free/duplicate-neutral factory; exactly one native producer enrollment with no controls or client initialization. |
+| Lifecycle and presentation | Current input-wait, `/status` and `:list-agents`; pinned user title and retained native conversation coexist without provider work. |
+| Finalized usage | Success/error/abort callbacks, actual response model, inclusive cache partitions, fresh frozen reporting UTC, replay deduplication and three typed durable ACKs. |
+| Missing counters | A fourth original readiness marker has no linked observation/expense; explicit coverage gap preserves earlier totals, never invents zero expense. |
+| Completion and outside Mez | Exact session retirement and cleared reservations; outside-Mez callbacks preserve normal output/exit and request no telemetry authority. |
+| Privacy | Only allowlisted observational methods and metadata; prompt/answer/tool/error content and raw upstream response identity stay out of transport. |
+
+This is offline assembled qualification, not a real Pi SDK loader/provider run,
+multi-pane/disabled-policy certification or spend completeness. Same-live-source
+committed-ACK loss with registry reset/reconnect and periodic ordinary idle renewal
+remain separate **source-feasible** acceptance/implementation work, not external
+environment excuses. Real SDK loading, macOS execution and manual/live-provider
+coverage must be recorded independently. Legacy inherited-descriptor fixtures below
+are isolated utilities, not required setup for ordinary Pi commands.
 
 Offline callback qualification is available with explicit trusted local paths:
 `MEZ_PI_NODE=/absolute/node MEZ_PI_PACKAGE=/absolute/pi-coding-agent timeout 180s cargo test -p mezzanine --lib --quiet pi_lifecycle_released_loader -- --ignored`.

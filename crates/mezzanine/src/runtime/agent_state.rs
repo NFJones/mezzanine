@@ -298,6 +298,9 @@ impl RuntimeAgentProviderDispatchProvider {
 pub struct RuntimeAgentProviderDispatch {
     /// Exact actor-assigned generation of the provider claim owning this dispatch.
     pub claim_generation: u64,
+    /// Remaining finite error capacity captured by the actor retry owner.
+    /// Canonical incomplete retries retain this policy and their exact request.
+    pub turn_limits: mez_agent::AgentTurnLimits,
     /// Immutable accounting attribution; never resampled on response settlement.
     pub(crate) accounting_origin: crate::storage::token_usage::AccountingOrigin,
     /// Stores the turn value for this data structure.

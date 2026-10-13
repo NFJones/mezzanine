@@ -101,6 +101,7 @@ impl RuntimeSessionService {
                 "external helper requires authenticated Unix transport",
             ));
         };
+        self.sync_external_ancestry_budget();
         crate::control::validate_control_method_params_schema(request)?;
         let raw = request.params.as_deref().unwrap_or("{}");
         if raw.len() > 4096 {
@@ -230,6 +231,12 @@ impl RuntimeSessionService {
         };
         let mut work = ExternalEnrollmentWork {
             admission: 0,
+            registry_incarnation: self
+                .control
+                .external_agents()
+                .enrollments
+                .incarnation
+                .clone(),
             request_id: request.id.clone(),
             origin,
             process: binding.process.clone(),
@@ -240,6 +247,8 @@ impl RuntimeSessionService {
             display_name: registration.display_name.clone(),
             observer_instance: enrollment.instance.clone(),
             predecessor_generation: None,
+            source_resume: None,
+            resume_admission: None,
             deadline: Instant::now() + ADMISSION_BUDGET,
             curated: None,
             helper: Some(HelperPresentation {
@@ -258,6 +267,7 @@ impl RuntimeSessionService {
             ancestry: Arc::new(OnceLock::new()),
             source_store: None,
             source_owner: Arc::new(OnceLock::new()),
+            source_created: Arc::new(OnceLock::new()),
             ancestry_budget: self
                 .control
                 .external_agents()
@@ -422,14 +432,11 @@ impl RuntimeSessionService {
             let origin = begin.origin(binding)?;
             let witness =
                 super::super::external_usage_requests::request_source_witness(&begin.owner);
-            self.control
-                .external_agents_mut()
-                .usage_begins
-                .cache_origin(
-                    begin.owner.clone(),
-                    origin.request_id.clone(),
-                    origin.clone(),
-                );
+            self.control.external_usage_begins_mut().cache_origin(
+                begin.owner.clone(),
+                origin.request_id.clone(),
+                origin.clone(),
+            );
             return Ok(serde_json::json!({"protocol":"external-request/1","accepted":true,"request_id":origin.request_id,"admitted_at":origin.admitted_at,"source_witness":witness,"origin":if origin.project.is_some(){"project"}else{"unattributed"},"controls":[]}).to_string());
         }
         if helper.usage_end.is_some() {

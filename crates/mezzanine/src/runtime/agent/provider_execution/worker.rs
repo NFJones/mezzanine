@@ -583,6 +583,11 @@ impl RuntimeSessionService {
                 &provider_context,
                 allowed_actions.clone(),
                 interaction_kind,
+                mez_agent::AgentTurnLimits {
+                    provider_retry_policy: self.provider_retry_policy(),
+                    provider_retry_attempt_offset: u64::from(context_limit_recovery_attempts),
+                    ..Default::default()
+                },
             ) {
                 Ok(execution) => break execution,
                 Err(error) => {
@@ -928,6 +933,11 @@ impl RuntimeSessionService {
                 &provider_context,
                 allowed_actions.clone(),
                 interaction_kind,
+                mez_agent::AgentTurnLimits {
+                    provider_retry_policy: self.provider_retry_policy(),
+                    provider_retry_attempt_offset: u64::from(context_limit_recovery_attempts),
+                    ..Default::default()
+                },
             ) {
                 Ok(execution) => break execution,
                 Err(error) => {

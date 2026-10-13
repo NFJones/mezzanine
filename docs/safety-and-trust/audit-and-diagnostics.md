@@ -96,6 +96,28 @@ local chain proves. Use protected external collection and independently retained
 checkpoints if the deployment needs stronger tamper evidence. Age-based retention
 prunes local evidence; establish any required archival policy before pruning.
 
+## External accounting recovery privacy and limits
+
+Same-live external source recovery keeps bounded native lifetime anchors and
+inert current/retired observer selectors in the existing control service's memory.
+It does not persist credentials, active capabilities, private callbacks,
+transcripts or lifecycle projections. The private accounting database continues
+to store opaque source mappings, request provenance and replay tombstones; those
+rows cannot activate a source or prove vendor identity/invoice completeness.
+
+Recovery is limited to disposable registry/actor-task loss while the same service,
+actual creator and pane root remain alive. Complete service/OS-daemon replacement,
+retirement, replaced sources or missing native evidence fail closed.
+Snapshot/session replacement retires all retained source authority; it is not
+the disposable registration loss which the bounded protocol can recover.
+Losing the recovered registry again before its new receipt is known is a named unavailable
+retry, not permission to guess the newest owner or recharge old usage.
+An initial mapping whose native admission never published also remains inert;
+bare initial packets cannot recreate a missing service authority from it. Preserve
+the original immutable report and request boundary; retry reporting, never paid
+provider work. Reports the daemon never received remain a visible coverage gap.
+Native Linux fixtures do not by themselves qualify installed vendors or macOS.
+
 ## Collect a safe incident report
 
 1. Preserve the time, session/pane identifiers, exact symptom, and relevant
