@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url";
 assert.equal(process.argv.length, 2);
 const home = process.env.HOME;
 const mode = readFileSync(join(home, "replay-mode"), "utf8");
-assert(["connected", "registry"].includes(mode));
+assert(["connected", "registry", "unknown"].includes(mode));
 for (const key of ["PI_CODING_AGENT_DIR", "MEZ_HARNESS_SESSION", "MEZ_HARNESS_OBSERVER_FD", "MEZ_HARNESS_HELPER", "MEZ_EXTERNAL_LAUNCH_TOKEN"])
   assert.equal(process.env[key], undefined, "fixture received an activation input");
 const root = join(home, ".pi", "agent", "extensions");
@@ -61,8 +61,15 @@ const emit = event => {
 const settle = async () => {
   const owner = globalThis[ownerKey];
   assert(owner?.tail);
-  await owner.tail;
-  return owner;
+  // A real failed report can append the adapter's truthful gap operation while
+  // its original tail resolves. Drain that existing bounded queue, never emit
+  // or complete a callback from the parent to manufacture the failed latch.
+  for (let remaining = 32; remaining > 0; remaining--) {
+    const tail = owner.tail;
+    await tail;
+    if (tail === owner.tail) return owner;
+  }
+  throw new Error("ordinary observation queue did not settle");
 };
 const finalizedRequest = async index => {
   emit({ type: "turn_start", turnIndex: index, timestamp: 1 }); await settle();
@@ -86,7 +93,19 @@ try {
   // Exactly one SDK request/finalization. The installed client alone retries its
   // original ticket/report after the parent drops an actual committed reply.
   owner = await finalizedRequest(0);
-  if (owner.lease.failed || owner.lease.usageCoverage !== "finalized-assistant-external-reported") {
+  if (mode === "unknown") {
+    // A real R1 reply was lost and its registration disappeared again. The
+    // installed client knows only its original public S0; it must fail closed
+    // and latch the genuine send/gap failure, never select a newest handle.
+    assert.equal(owner.lease.failed, true);
+    assert.equal(owner.lease.usageCoverage, "unavailable-durable-acknowledgment");
+    assert.equal(owner.client.status().phase, "connection-lost");
+    assert.equal(owner.client.status().usage, "unavailable-source-continuity");
+    assert.equal(starts, 1); assert.equal(finalized, 1);
+    await checkpoint("refused");
+    publish("complete");
+    process.stdout.write("PI_NATIVE_REPLAY_REFUSED\n");
+  } else if (owner.lease.failed || owner.lease.usageCoverage !== "finalized-assistant-external-reported") {
     publish("unavailable"); process.exitCode = 1;
   } else {
     assert.equal(starts, 1); assert.equal(finalized, 1);

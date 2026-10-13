@@ -24,13 +24,25 @@ struct Audit {
     requests: Vec<u8>,
     replies: Vec<u8>,
     dropped: Option<serde_json::Value>,
+    dropped_resume: Option<serde_json::Value>,
 }
 
-/// Wraps a genuinely native-qualified stream and faults only a committed reply.
+/// Exact real reply boundary to fault; none permits ordinary transport.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReplyFault {
+    /// Actual durable applied usage reply after ledger commitment.
+    Commit,
+    /// Actual registered same-live recovery reply after native admission.
+    Resume,
+    /// No synthetic fault or replacement response.
+    None,
+}
+
+/// Wraps a genuinely native-qualified stream and faults only a selected real reply.
 struct FaultIo<S> {
     inner: S,
     audit: Arc<std::sync::Mutex<Audit>>,
-    drop_commit: bool,
+    fault: ReplyFault,
 }
 
 impl<S: AsyncRead + Unpin> AsyncRead for FaultIo<S> {
@@ -61,23 +73,33 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for FaultIo<S> {
         bytes: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         let this = self.get_mut();
-        if this.drop_commit
+        if this.fault != ReplyFault::None
             && let Ok((body, consumed)) = crate::control_client::decode_control_frame(bytes, 8192)
             && consumed == bytes.len()
             && let Ok(reply) = serde_json::from_str::<serde_json::Value>(&body)
-            && reply["result"]["durable"] == true
-            && reply["result"]["applied"] == true
+            && ((this.fault == ReplyFault::Commit
+                && reply["result"]["durable"] == true
+                && reply["result"]["applied"] == true)
+                || (this.fault == ReplyFault::Resume
+                    && reply["result"]["registered"] == true
+                    && reply["result"]["recovery"]
+                        == serde_json::json!({"kind":"same-live-source","next_sequence":1})))
         {
             let mut audit = this.audit.lock().unwrap();
+            let lost = if this.fault == ReplyFault::Commit {
+                &mut audit.dropped
+            } else {
+                &mut audit.dropped_resume
+            };
             assert!(
-                audit.dropped.is_none(),
-                "fault may drop only one committed reply"
+                lost.is_none(),
+                "selected real reply may be dropped only once"
             );
-            audit.dropped = Some(reply);
-            this.drop_commit = false;
+            *lost = Some(reply);
+            this.fault = ReplyFault::None;
             return Poll::Ready(Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
-                "private fixture drops committed ACK",
+                "private fixture drops an actual committed/admitted reply",
             )));
         }
         let result = Pin::new(&mut this.inner).poll_write(cx, bytes);
@@ -150,12 +172,17 @@ fn frames(mut bytes: &[u8]) -> Vec<serde_json::Value> {
     result
 }
 
+/// Original owner, request ID, project origin, admitted UTC and linked observation.
+type RequestRow = (String, String, Option<String>, i64, Option<String>);
+/// Expense ID, reporting UTC, input/output/reasoning and optional cache partitions.
+type ExpenseRow = (String, i64, i64, i64, i64, Option<i64>, Option<i64>);
+
 /// Conserves the actual original durable IDs/origin/clock and stream revision.
 /// Only fixture-owned SQLite is inspected; the parent never reports these values.
 #[derive(Debug, PartialEq, Eq)]
 struct Ledger {
-    requests: Vec<(String, String, Option<String>, i64, Option<String>)>,
-    events: Vec<(String, i64, i64, i64, i64, Option<i64>, Option<i64>)>,
+    requests: Vec<RequestRow>,
+    events: Vec<ExpenseRow>,
     streams: Vec<(String, i64)>,
     sources: Vec<(String, String)>,
     observations: i64,
@@ -228,7 +255,7 @@ async fn connection(
     mut socket: tokio::net::UnixStream,
     handle: AsyncRuntimeSessionHandle,
     audit: Arc<std::sync::Mutex<Audit>>,
-    drop_commit: bool,
+    fault: ReplyFault,
     node: &std::path::Path,
     processes: &Processes,
 ) -> (ControlConnectionState, Result<u64>) {
@@ -252,7 +279,7 @@ async fn connection(
     let mut io = FaultIo {
         inner: qualified,
         audit,
-        drop_commit,
+        fault,
     };
     let result = serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
         &mut io,
@@ -323,16 +350,27 @@ fn assert_replay(audit: &Audit, registry: bool, revision: u64) {
         assert!(
             current["recovery"] == serde_json::json!({"kind":"same-live-source","next_sequence":1})
         );
-        let first = requests
+        let facts = requests
             .iter()
             .skip_while(|row| row["id"] != enrolls[1]["id"])
             .skip(1)
-            .find(|row| row["method"] == "agent/external/pi-observation")
-            .unwrap();
-        assert_eq!(first["params"]["sequence"], 1);
+            .filter(|row| row["method"] == "agent/external/pi-observation")
+            .collect::<Vec<_>>();
+        // Ordinary LifecycleOwner accepts a genuine candidate directly. Resume
+        // permits diagnostic gaps, but a successful retry invents neither a
+        // missing-accounting gap nor an SDK SessionStart for this new epoch.
+        assert_eq!(facts.len(), 3);
+        assert_eq!(facts[0]["params"]["sequence"], 1);
         assert!(
-            first["params"]["event"]
-                == serde_json::json!({"type":"usage_gap","reason":"durable-acknowledgment"})
+            facts[0]["params"]["event"]
+                == serde_json::json!({"type":"agent_before_settle","outcome":"completed"})
+        );
+        assert_eq!(facts[1]["params"]["sequence"], 2);
+        assert!(facts[1]["params"]["event"] == serde_json::json!({"type":"agent_settled"}));
+        assert_eq!(facts[2]["params"]["sequence"], 3);
+        assert!(
+            facts[2]["params"]["event"]
+                == serde_json::json!({"type":"session_shutdown","reason":"quit"})
         );
     } else {
         assert!(current["launch_token"] == old["launch_token"]);
@@ -423,7 +461,7 @@ fn bootstrap(helper: &std::path::Path, home: &std::path::Path) {
 /// Shared local fixture composes the genuine CLI/producer/actor/ledger chain.
 /// Connected mode isolates ACK loss; registry mode additionally clears ONLY
 /// ephemeral registrations after disconnect, retaining the same control owner.
-async fn qualify(registry: bool) {
+async fn qualify(registry: bool, unknown: bool) {
     use std::os::unix::fs::PermissionsExt;
     let node = std::path::PathBuf::from(
         std::env::var_os("MEZ_TEST_NODE_BINARY").expect("explicit already-installed Node path"),
@@ -448,7 +486,13 @@ async fn qualify(registry: bool) {
     std::fs::create_dir(&home).unwrap();
     std::fs::write(
         home.join("replay-mode"),
-        if registry { "registry" } else { "connected" },
+        if unknown {
+            "unknown"
+        } else if registry {
+            "registry"
+        } else {
+            "connected"
+        },
     )
     .unwrap();
     bootstrap(&helper, &home);
@@ -532,7 +576,7 @@ async fn qualify(registry: bool) {
             socket,
             handle.clone(),
             audit.clone(),
-            true,
+            ReplyFault::Commit,
             &node,
             &processes
         ),
@@ -615,6 +659,204 @@ async fn qualify(registry: bool) {
         handle = next_handle;
         actor_task = tokio::spawn(next_actor.run());
     }
+    if unknown {
+        // R1 is genuinely admitted but its actual reply never reaches Node.
+        let (socket, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let (resumed_connection, lost_resume) = connection(
+            socket,
+            handle.clone(),
+            audit.clone(),
+            ReplyFault::Resume,
+            &node,
+            &processes,
+        )
+        .await;
+        assert_eq!(
+            lost_resume.unwrap_err().io_kind(),
+            Some(std::io::ErrorKind::BrokenPipe)
+        );
+        assert_eq!(resumed_connection.unix_origin().unwrap().identity, producer);
+        assert_eq!(ledger(&usage), committed);
+        {
+            let recorded = audit.lock().unwrap();
+            let admitted = recorded
+                .dropped_resume
+                .as_ref()
+                .expect("actual R1 admission reply must have been lost before bytes");
+            assert_eq!(admitted["result"]["registered"], true);
+            assert!(
+                admitted["result"]["recovery"]
+                    == serde_json::json!({"kind":"same-live-source","next_sequence":1})
+            );
+        }
+        handle.shutdown().await.unwrap();
+        let mut retained = actor_task.await.unwrap().service;
+        assert_eq!(retained.session().id.to_string(), session);
+        assert_eq!(
+            mez_mux::process::process_parent_identity_for_pid(root.process_id).unwrap(),
+            root
+        );
+        assert_eq!(
+            mez_mux::process::process_parent_identity_for_pid(producer.process_id).unwrap(),
+            producer
+        );
+        assert_eq!(retained.control.external_agents().bindings.len(), 1);
+        *retained.control.external_agents_mut() = Default::default();
+        retained.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&usage));
+        assert_eq!(
+            retained
+                .external_token_usage(None)
+                .values()
+                .map(|value| value.input_tokens)
+                .sum::<u64>(),
+            10
+        );
+        assert_eq!(ledger(&usage), committed);
+        let (next, actor) =
+            AsyncRuntimeSessionActor::new(retained, AsyncRuntimeActorConfig::default()).unwrap();
+        handle = next;
+        actor_task = tokio::spawn(actor.run());
+        let (socket, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let (refused, ()) = tokio::join!(
+            connection(
+                socket,
+                handle.clone(),
+                audit.clone(),
+                ReplyFault::None,
+                &node,
+                &processes
+            ),
+            async {
+                wait_phase(&home, "refused").await;
+                assert_eq!(
+                    ledger(&usage),
+                    committed,
+                    "failed old-S0 retry must not create any replacement expense or namespace"
+                );
+                release(&home, "refused");
+            }
+        );
+        let (refused_connection, finished) = refused;
+        assert!(finished.unwrap() > 0);
+        assert_eq!(refused_connection.unix_origin().unwrap().identity, producer);
+        handle.shutdown().await.unwrap();
+        let mut retained = actor_task.await.unwrap().service;
+        assert_eq!(retained.session().clients().len(), clients);
+        assert_eq!(
+            retained.session().pane_title_state("%1").unwrap().0,
+            "Pinned replay title"
+        );
+        assert_eq!(
+            retained.agent_shell_store().get("%1").unwrap().session_id,
+            native_conversation
+        );
+        assert!(retained.agent_turn_ledger().turns().is_empty());
+        assert!(
+            retained.control.external_agents().bindings.is_empty(),
+            "denied S0 must not allocate R2"
+        );
+        assert!(
+            retained
+                .control
+                .external_agents()
+                .enrollments
+                .pending
+                .is_empty()
+        );
+        assert_eq!(
+            retained
+                .external_token_usage(None)
+                .values()
+                .map(|value| value.input_tokens)
+                .sum::<u64>(),
+            10
+        );
+        assert_eq!(ledger(&usage), committed);
+        {
+            let recorded = audit.lock().unwrap();
+            let sent = frames(&recorded.requests);
+            let received = frames(&recorded.replies);
+            let enrolls = sent
+                .iter()
+                .filter(|row| row["method"] == "agent/external/enroll")
+                .collect::<Vec<_>>();
+            assert_eq!(enrolls.len(), 3);
+            assert!(
+                enrolls[1]["params"] == enrolls[2]["params"],
+                "unknown R1 must retain original S0/P metadata, not newest/bare fallback"
+            );
+            let original = received
+                .iter()
+                .find(|row| row["result"]["registered"] == true)
+                .unwrap();
+            assert!(
+                enrolls[2]["params"]["source_resume"]["observer_witness"]
+                    == original["result"]["observer_witness"]
+            );
+            assert!(
+                enrolls[2]["params"]["source_resume"]["generation"]
+                    == original["result"]["generation"]
+            );
+            let rejected = received
+                .iter()
+                .find(|row| row["id"] == enrolls[2]["id"])
+                .unwrap();
+            assert_eq!(rejected["error"]["code"], -32006);
+            assert_eq!(
+                rejected["error"]["message"],
+                "source resume retry unavailable"
+            );
+            assert_eq!(
+                sent.iter()
+                    .filter(|row| row["method"] == "agent/external/usage-end")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                sent.iter()
+                    .filter(|row| row["method"] == "agent/external/usage-begin")
+                    .count(),
+                2
+            );
+            assert_eq!(
+                received
+                    .iter()
+                    .filter(|row| row["result"]["registered"] == true)
+                    .count(),
+                1
+            );
+            assert!(
+                !received.iter().any(|row| row["result"]["durable"] == true),
+                "no lost durable reply was delivered"
+            );
+            assert!(
+                !received
+                    .iter()
+                    .any(|row| row["id"] == recorded.dropped.as_ref().unwrap()["id"]
+                        || row["id"] == recorded.dropped_resume.as_ref().unwrap()["id"])
+            );
+            let after = sent
+                .iter()
+                .rposition(|row| row["method"] == "agent/external/enroll")
+                .unwrap();
+            assert_eq!(
+                after + 1,
+                sent.len(),
+                "failed resume must not send a manufactured gap or follow-on report"
+            );
+            assert!(
+                !String::from_utf8_lossy(&recorded.requests).contains("PRIVATE_REPLAY_CONTENT")
+            );
+        }
+        retained.terminate_all_pane_processes().unwrap();
+        return;
+    }
     let (socket, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
         .await
         .unwrap()
@@ -624,7 +866,7 @@ async fn qualify(registry: bool) {
             socket,
             handle.clone(),
             audit.clone(),
-            false,
+            ReplyFault::None,
             &node,
             &processes
         ),
@@ -648,7 +890,20 @@ async fn qualify(registry: bool) {
                     && status.contains("request-bound-external-reported")
             );
             if registry {
-                assert!(status.contains("durable-acknowledgment"));
+                // start() restores credentials/ordinal but emits no SDK fact.
+                // The producer is paused before its next lifecycle callback:
+                // do not manufacture a gap from successful durable replay.
+                let recorded = frames(&audit.lock().unwrap().requests);
+                let resumed = recorded
+                    .iter()
+                    .rposition(|row| row["method"] == "agent/external/enroll")
+                    .unwrap();
+                assert!(
+                    !recorded[resumed + 1..]
+                        .iter()
+                        .any(|row| row["method"] == "agent/external/pi-observation")
+                );
+                assert!(!status.contains("unavailable-pi-usage-"));
             }
             assert!(!status.contains("PRIVATE_REPLAY_CONTENT"));
             let list = handle
@@ -725,19 +980,34 @@ async fn qualify(registry: bool) {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit already-installed Node and freshly built sibling mez required; real native ACK-loss acceptance"]
 async fn external_pi_native_committed_ack_loss_without_registry_reset() {
-    tokio::time::timeout(Duration::from_secs(45), qualify(false))
+    tokio::time::timeout(Duration::from_secs(45), qualify(false, false))
         .await
         .unwrap();
 }
 
 /// Actual commit-before-lost-ACK plus same-service registry recreation requires
-/// child-originated same-live proof, fresh transport handles and diagnostic-only
-/// ordinal one. Original owner/request/origin/clock/revision remain unchanged,
+/// child-originated same-live proof and fresh transport handles. The first real
+/// lifecycle candidate has ordinal one without a synthetic start or gap.
+/// Original owner/request/origin/clock/revision remain unchanged,
 /// replay applies zero delta, and the next genuine request charges exactly once.
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit already-installed Node and freshly built sibling mez required; real native registry-reset replay acceptance"]
 async fn external_pi_native_committed_ack_loss_and_registry_reset_replays_once() {
-    tokio::time::timeout(Duration::from_secs(45), qualify(true))
+    tokio::time::timeout(Duration::from_secs(45), qualify(true, false))
+        .await
+        .unwrap();
+}
+
+/// A genuine R1 native admission reply lost before bytes cannot authorize a
+/// later retry after R1 registrations disappear again. The same live child
+/// knows only original S0/P and must receive the named refusal, latch its real
+/// failed/gap path, and preserve exactly one original committed expense/source.
+/// Neither parent nor child guesses R1/R2, changes frozen report data, or falls
+/// back to bare enrollment; the lost replies are never treated as delivered.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit already-installed Node and freshly built sibling mez required; actual unknown-R1 reply loss negative"]
+async fn external_pi_native_unknown_recovery_reply_second_reset_refuses_old_proof() {
+    tokio::time::timeout(Duration::from_secs(45), qualify(true, true))
         .await
         .unwrap();
 }
