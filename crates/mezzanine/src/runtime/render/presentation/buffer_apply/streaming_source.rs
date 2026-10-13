@@ -18,6 +18,19 @@ impl RuntimeSessionService {
         event: &mez_agent::StreamingSayEvent,
     ) -> Result<()> {
         match event {
+            mez_agent::StreamingSayEvent::ResponseRejected { response_index } => {
+                if self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get(pane_id)
+                    .is_some_and(|presentation| {
+                        presentation.turn_id == turn_id
+                            && presentation.response_index == *response_index
+                    })
+                {
+                    self.discard_agent_streaming_say_presentation(pane_id, None)?;
+                }
+            }
             mez_agent::StreamingSayEvent::ResponseStarted { response_index } => {
                 self.ensure_current_agent_presentation_screen(pane_id)?;
                 let conversation_id = self

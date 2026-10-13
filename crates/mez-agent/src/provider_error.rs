@@ -74,6 +74,10 @@ pub enum ProviderErrorRetryClass {
     OutputLimit,
     /// The same request may be retried without a terminal failure summary.
     RetryableTransport,
+    /// Authoritative max_messages incomplete output requires a complete
+    /// replacement of this inference, never partial-output continuation.
+    /// This class always consumes the finite provider error budget.
+    RetryableIncomplete,
     /// The provider failure should terminate the current recovery attempt.
     NonRetryable,
 }
@@ -104,6 +108,7 @@ impl ProviderRetryPolicy {
             ProviderErrorRetryClass::ContextLimit
                 | ProviderErrorRetryClass::OutputLimit
                 | ProviderErrorRetryClass::RetryableTransport
+                | ProviderErrorRetryClass::RetryableIncomplete
         );
         let budget_available = recorded_attempts < self.max_attempts as u64
             || (self.unlimited
@@ -247,6 +252,25 @@ pub fn classify_provider_error_retry(
     }
     if provider_error_has_explicit_output_limit(provider_failure_json) {
         return ProviderErrorRetryClass::OutputLimit;
+    }
+    if kind == ProviderErrorKind::InvalidState
+        && provider_failure_json
+            .and_then(|payload| serde_json::from_str::<serde_json::Value>(payload).ok())
+            .is_some_and(|value| {
+                [
+                    "/incomplete_details/reason",
+                    "/response/incomplete_details/reason",
+                    "/body/incomplete_details/reason",
+                    "/body/response/incomplete_details/reason",
+                ]
+                .iter()
+                .any(|pointer| {
+                    value.pointer(pointer).and_then(serde_json::Value::as_str)
+                        == Some("max_messages")
+                })
+            })
+    {
+        return ProviderErrorRetryClass::RetryableIncomplete;
     }
     if provider_error_is_output_limit_exceeded(message, provider_failure_json) {
         return ProviderErrorRetryClass::OutputLimit;
@@ -586,6 +610,58 @@ mod tests {
         provider_retry_after_delay_ms,
     };
     use crate::ProviderHttpTimeoutPhase;
+
+    /// Authoritative incomplete reason metadata, not a display summary, admits
+    /// max_messages replacement retries. The finite error budget still applies
+    /// when transport outages are configured to retry indefinitely.
+    #[test]
+    fn max_messages_requires_structured_reason_and_finite_budget() {
+        let policy = ProviderRetryPolicy {
+            max_attempts: 2,
+            unlimited: true,
+            ..DEFAULT_PROVIDER_RETRY_POLICY
+        };
+        for payload in [
+            r#"{"incomplete_details":{"reason":"max_messages"}}"#,
+            r#"{"body":{"status":"incomplete","incomplete_details":{"reason":"max_messages"}}}"#,
+            r#"{"response":{"incomplete_details":{"reason":"max_messages"}}}"#,
+        ] {
+            let class = classify_provider_error_retry(
+                ProviderErrorKind::InvalidState,
+                "[REDACTED]",
+                Some(payload),
+            );
+            assert_eq!(format!("{class:?}"), "RetryableIncomplete");
+            assert!(policy.should_retry(0, class));
+            assert!(policy.should_retry(1, class));
+            assert!(!policy.should_retry(2, class));
+        }
+        for payload in [
+            None,
+            Some("not json"),
+            Some(r#"{"error":{"message":"max_messages"}}"#),
+        ] {
+            assert_eq!(
+                classify_provider_error_retry(
+                    ProviderErrorKind::InvalidState,
+                    "OpenAI stream returned an incomplete response: max_messages",
+                    payload,
+                ),
+                ProviderErrorRetryClass::NonRetryable
+            );
+        }
+        for reason in ["unknown", "content_filter", "max_messages_extra"] {
+            let payload = serde_json::json!({"incomplete_details":{"reason":reason}}).to_string();
+            assert_eq!(
+                classify_provider_error_retry(
+                    ProviderErrorKind::InvalidState,
+                    "incomplete response",
+                    Some(&payload),
+                ),
+                ProviderErrorRetryClass::NonRetryable
+            );
+        }
+    }
 
     /// Verifies only the structured typed-timeout marker classifies a timeout.
     #[test]

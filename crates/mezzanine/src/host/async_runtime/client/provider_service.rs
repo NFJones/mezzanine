@@ -16,8 +16,9 @@ use super::{
 };
 use crate::integrations::agent::network::execute_network_action_with_transport_async_with_progress;
 use crate::integrations::agent::provider::{
-    ObservedAsyncModelProvider, ProviderRequestPurpose, ProviderWireRequestObservation,
-    ProviderWireRequestObserver, STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES,
+    ObservedAsyncModelProvider, PendingProviderWireObservations, ProviderRequestPurpose,
+    ProviderWireRequestObservation, ProviderWireRequestObserver,
+    STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES,
 };
 use crate::runtime::{
     AgentSessionTitleEvent, AgentSessionTitleOutcome, RuntimeAgentCommandAsyncOutcome,
@@ -41,6 +42,30 @@ const DEFERRED_AGENT_COMMAND_DEADLINE: Duration = Duration::from_secs(120);
 /// Keeps a nested async task owned on cancellation, channel errors and panic.
 /// Dropping a JoinHandle detaches its task; this guard instead requests abort.
 struct AbortProviderWorkerOnDrop(tokio::task::AbortHandle);
+
+/// Service-owned expense evidence surviving monitor abort or early failure.
+/// Producer destruction is acknowledged before the ordinary wire journal is
+/// drained; this owner never sends provider requests or authorizes output.
+struct ProviderObservationDrain {
+    abort: tokio::task::AbortHandle,
+    completed: tokio::sync::oneshot::Receiver<()>,
+    pending: PendingProviderWireObservations,
+}
+
+/// Retained cleanup owners for the currently active inference monitors.
+type ProviderObservationDrains = std::sync::Arc<
+    std::sync::Mutex<std::collections::BTreeMap<(String, u64), ProviderObservationDrain>>,
+>;
+
+/// Acknowledges producer destruction, including cancellation before completion.
+struct ProviderCompletionOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
+impl Drop for ProviderCompletionOnDrop {
+    fn drop(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.send(());
+        }
+    }
+}
 
 impl Drop for AbortProviderWorkerOnDrop {
     fn drop(&mut self) {
@@ -66,6 +91,7 @@ fn streaming_presentation_event_changes_projection(event: &mez_agent::StreamingS
         | mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { .. }
         | mez_agent::StreamingSayEvent::RationaleTextComplete => true,
         mez_agent::StreamingSayEvent::ResponseStarted { .. }
+        | mez_agent::StreamingSayEvent::ResponseRejected { .. }
         | mez_agent::StreamingSayEvent::Started { .. }
         | mez_agent::StreamingSayEvent::RationaleStarted
         | mez_agent::StreamingSayEvent::ShellCommandStarted { .. }
@@ -84,6 +110,9 @@ fn push_coalesced_streaming_say_event(
     match event {
         mez_agent::StreamingSayEvent::ResponseStarted { response_index } => {
             events.push(mez_agent::StreamingSayEvent::ResponseStarted { response_index });
+        }
+        mez_agent::StreamingSayEvent::ResponseRejected { response_index } => {
+            events.push(mez_agent::StreamingSayEvent::ResponseRejected { response_index });
         }
         mez_agent::StreamingSayEvent::RationaleTextDelta { text } => {
             if let Some(mez_agent::StreamingSayEvent::RationaleTextDelta {
@@ -261,50 +290,55 @@ where
         terminal_state: *lifecycle.borrow(),
     };
 
-    loop {
-        let state = *lifecycle.borrow();
-        report.terminal_state = state;
-        drain_completed_agent_provider_workers(&mut workers, handle, &mut report).await?;
-        if should_stop(report.polls, state) {
-            abort_agent_provider_workers(&mut workers).await;
-            return Ok(report);
-        }
-
-        let dispatches = handle
-            .drain_agent_provider_dispatch_side_effects(config.max_tasks_per_poll)
-            .await?;
-        if dispatches.is_empty() {
-            handle
-                .queue_provider_poll_timer_if_needed(
-                    report.polls.saturating_add(1),
-                    config.provider_poll_fallback_delay_ms(),
-                )
-                .await?;
-        }
-        if dispatches.is_empty() {
-            report.idle_polls = report.idle_polls.saturating_add(1);
-            report.polls = report.polls.saturating_add(1);
+    let drains: ProviderObservationDrains = Default::default();
+    let result = async {
+        loop {
+            let state = *lifecycle.borrow();
+            report.terminal_state = state;
+            drain_completed_agent_provider_workers(&mut workers, handle, &mut report).await?;
             if should_stop(report.polls, state) {
-                abort_agent_provider_workers(&mut workers).await;
                 return Ok(report);
             }
-            if let Some(joined) = wait_for_agent_provider_worker_wakeup(
-                handle,
-                &mut workers,
-                &mut lifecycle,
-                &mut side_effect_watcher,
-                config.idle_interval,
-            )
-            .await
-            {
-                record_joined_agent_provider_worker(joined, handle, &mut report).await?;
+
+            let dispatches = handle
+                .drain_agent_provider_dispatch_side_effects(config.max_tasks_per_poll)
+                .await?;
+            if dispatches.is_empty() {
+                handle
+                    .queue_provider_poll_timer_if_needed(
+                        report.polls.saturating_add(1),
+                        config.provider_poll_fallback_delay_ms(),
+                    )
+                    .await?;
             }
-        } else {
-            dispatch_agent_provider_side_effects(handle, dispatches, &mut workers).await?;
-            drain_completed_agent_provider_workers(&mut workers, handle, &mut report).await?;
-            report.polls = report.polls.saturating_add(1);
+            if dispatches.is_empty() {
+                report.idle_polls = report.idle_polls.saturating_add(1);
+                report.polls = report.polls.saturating_add(1);
+                if should_stop(report.polls, state) {
+                    return Ok(report);
+                }
+                if let Some(joined) = wait_for_agent_provider_worker_wakeup(
+                    handle,
+                    &mut workers,
+                    &mut lifecycle,
+                    &mut side_effect_watcher,
+                    config.idle_interval,
+                )
+                .await
+                {
+                    record_joined_agent_provider_worker(joined, handle, &mut report).await?;
+                }
+            } else {
+                dispatch_agent_provider_side_effects(handle, dispatches, &mut workers, &drains)
+                    .await?;
+                drain_completed_agent_provider_workers(&mut workers, handle, &mut report).await?;
+                report.polls = report.polls.saturating_add(1);
+            }
         }
     }
+    .await;
+    abort_agent_provider_workers(&mut workers, handle, &drains).await?;
+    result
 }
 
 /// Runs deferred interactive commands on a dedicated, bounded worker lane.
@@ -565,9 +599,18 @@ async fn wait_for_agent_provider_worker_wakeup(
 /// Aborts provider workers before the provider service exits.
 async fn abort_agent_provider_workers(
     workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
-) {
+    handle: &AsyncRuntimeSessionHandle,
+    drains: &ProviderObservationDrains,
+) -> Result<()> {
     workers.abort_all();
     while workers.join_next().await.is_some() {}
+    let retained = std::mem::take(&mut *drains.lock().unwrap_or_else(|error| error.into_inner()));
+    for (_, drain) in retained {
+        drain.abort.abort();
+        let _ = drain.completed.await;
+        flush_pending_provider_observations(handle, &drain.pending).await?;
+    }
+    Ok(())
 }
 
 /// Runs the dispatch agent provider side effects operation for this subsystem.
@@ -579,6 +622,7 @@ async fn dispatch_agent_provider_side_effects(
     handle: &AsyncRuntimeSessionHandle,
     dispatches: Vec<RuntimeSideEffect>,
     workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
+    drains: &ProviderObservationDrains,
 ) -> Result<()> {
     for dispatch in dispatches {
         match dispatch {
@@ -594,6 +638,7 @@ async fn dispatch_agent_provider_side_effects(
                     agent_id,
                     turn_id,
                     dispatch,
+                    drains.clone(),
                 ));
             }
             RuntimeSideEffect::DispatchApprovedExternalAction { turn_id, action_id } => {
@@ -1054,7 +1099,47 @@ async fn monitor_runtime_agent_provider_dispatch(
     agent_id: AgentId,
     turn_id: String,
     dispatch: RuntimeAgentProviderDispatch,
+    drains: ProviderObservationDrains,
 ) -> Result<AsyncAgentProviderWorkerResult> {
+    let pane_id = dispatch.turn.pane_id.clone();
+    let claim_generation = dispatch.claim_generation;
+    monitor_agent_provider_future(
+        handle,
+        agent_id,
+        turn_id,
+        pane_id,
+        claim_generation,
+        drains,
+        move |progress, observations, pending| {
+            execute_runtime_agent_provider_dispatch(dispatch, Some(progress), observations, pending)
+        },
+    )
+    .await
+}
+
+/// Owns claim monitoring, ordered presentation and cancellation-safe expense
+/// for one inference future. Concrete dispatch construction stays above this
+/// boundary; offline fixtures inject only the future, not another lifecycle.
+#[allow(clippy::too_many_arguments)]
+async fn monitor_agent_provider_future<Factory, ProviderFuture>(
+    handle: AsyncRuntimeSessionHandle,
+    agent_id: AgentId,
+    turn_id: String,
+    pane_id: String,
+    claim_generation: u64,
+    drains: ProviderObservationDrains,
+    factory: Factory,
+) -> Result<AsyncAgentProviderWorkerResult>
+where
+    Factory: FnOnce(
+            tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>,
+            tokio::sync::mpsc::Sender<ProviderWireRequestObservation>,
+            PendingProviderWireObservations,
+        ) -> ProviderFuture
+        + Send
+        + 'static,
+    ProviderFuture: Future<Output = Result<RuntimeAgentProviderWorkerOutcome>> + Send + 'static,
+{
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     if !classify_provider_monitor_liveness(
@@ -1063,18 +1148,30 @@ async fn monitor_runtime_agent_provider_dispatch(
     )? {
         return Ok(None);
     }
-    let pane_id = dispatch.turn.pane_id.clone();
-    let claim_generation = dispatch.claim_generation;
     let (progress_sender, mut progress_receiver) =
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let (observation_sender, mut observation_receiver) =
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let mut latency = ProviderLatencyTracker::new(Instant::now());
-    let mut worker = tokio::spawn(execute_runtime_agent_provider_dispatch(
-        dispatch,
-        Some(progress_sender),
-        observation_sender,
-    ));
+    let pending_observations: PendingProviderWireObservations = Default::default();
+    let (completed_sender, completed) = tokio::sync::oneshot::channel();
+    let worker_pending = pending_observations.clone();
+    let mut worker = tokio::spawn(async move {
+        let _completed = ProviderCompletionOnDrop(Some(completed_sender));
+        factory(progress_sender, observation_sender, worker_pending).await
+    });
+    let drain_key = (turn_id.clone(), claim_generation);
+    drains
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(
+            drain_key.clone(),
+            ProviderObservationDrain {
+                abort: worker.abort_handle(),
+                completed,
+                pending: pending_observations.clone(),
+            },
+        );
     let _worker_owner = AbortProviderWorkerOnDrop(worker.abort_handle());
     let mut projection_workers = JoinSet::new();
     let mut projection_dirty = false;
@@ -1086,14 +1183,9 @@ async fn monitor_runtime_agent_provider_dispatch(
                     latency.total_elapsed_ms(Instant::now()),
                 );
                 while let Ok(observation) = observation_receiver.try_recv() {
-                    let mut batch = RuntimeEventBatch::new();
-                    batch.push(RuntimeEvent::AgentProvider(
-                        AgentProviderEvent::WireRequestObserved {
-                            observation: Box::new(observation),
-                        },
-                    ));
-                    handle.submit_runtime_events(batch).await?;
+                    submit_pending_provider_observation(&handle, &pending_observations, observation).await?;
                 }
+                flush_pending_provider_observations(&handle, &pending_observations).await?;
                 loop {
                     let mut events = Vec::new();
                     let mut drained = 0usize;
@@ -1131,6 +1223,7 @@ async fn monitor_runtime_agent_provider_dispatch(
                         break;
                     }
                 }
+                drains.lock().unwrap_or_else(|error| error.into_inner()).remove(&drain_key);
                 return Ok(Some(provider_worker_event(
                     agent_id,
                     turn_id,
@@ -1139,13 +1232,7 @@ async fn monitor_runtime_agent_provider_dispatch(
                 )));
             }
             Some(observation) = observation_receiver.recv() => {
-                let mut batch = RuntimeEventBatch::new();
-                batch.push(RuntimeEvent::AgentProvider(
-                    AgentProviderEvent::WireRequestObserved {
-                        observation: Box::new(observation),
-                    },
-                ));
-                handle.submit_runtime_events(batch).await?;
+                submit_pending_provider_observation(&handle, &pending_observations, observation).await?;
             }
             Some(event) = progress_receiver.recv() => {
                 let (phase, elapsed_ms) = latency.observe_progress(Instant::now());
@@ -1206,6 +1293,10 @@ async fn monitor_runtime_agent_provider_dispatch(
                         crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal,
                         latency.total_elapsed_ms(Instant::now()),
                     );
+                    worker.abort();
+                    let _ = (&mut worker).await;
+                    flush_pending_provider_observations(&handle, &pending_observations).await?;
+                    drains.lock().unwrap_or_else(|error| error.into_inner()).remove(&drain_key);
                     return Ok(None);
                 }
             }
@@ -1213,6 +1304,12 @@ async fn monitor_runtime_agent_provider_dispatch(
         let lifecycle_state = *lifecycle.borrow();
         if is_terminal_runtime_lifecycle_state(lifecycle_state) {
             worker.abort();
+            let _ = (&mut worker).await;
+            flush_pending_provider_observations(&handle, &pending_observations).await?;
+            drains
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(&drain_key);
             handle.record_latency_phase(
                 crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal,
                 latency.total_elapsed_ms(Instant::now()),
@@ -1224,6 +1321,12 @@ async fn monitor_runtime_agent_provider_dispatch(
             &lifecycle,
         )? {
             worker.abort();
+            let _ = (&mut worker).await;
+            flush_pending_provider_observations(&handle, &pending_observations).await?;
+            drains
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(&drain_key);
             handle.record_latency_phase(
                 crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal,
                 latency.total_elapsed_ms(Instant::now()),
@@ -1231,6 +1334,39 @@ async fn monitor_runtime_agent_provider_dispatch(
             return Ok(None);
         }
     }
+}
+
+/// Applies retained evidence and acknowledges only successful actor ingress.
+async fn submit_pending_provider_observation(
+    handle: &AsyncRuntimeSessionHandle,
+    pending: &PendingProviderWireObservations,
+    observation: ProviderWireRequestObservation,
+) -> Result<()> {
+    let id = observation.request_id.clone();
+    submit_provider_wire_request_observation(handle, observation).await?;
+    pending
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(&id);
+    Ok(())
+}
+
+/// Flushes immutable evidence after producer completion or abort acknowledgement.
+/// No later enqueue can race this drain; wire IDs keep repeated delivery inert.
+async fn flush_pending_provider_observations(
+    handle: &AsyncRuntimeSessionHandle,
+    pending: &PendingProviderWireObservations,
+) -> Result<()> {
+    let observations: Vec<_> = pending
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .values()
+        .cloned()
+        .collect();
+    for observation in observations {
+        submit_pending_provider_observation(handle, pending, observation).await?;
+    }
+    Ok(())
 }
 
 /// Classifies provider-monitor liveness failures against actor lifecycle.
@@ -1589,6 +1725,8 @@ fn session_title_worker_event(
 /// Inputs shared by the four concrete observed provider turn adapters. Provider
 /// selection and the OpenAI-only previous-request choice remain at the caller.
 struct ObservedTurnInputs<'a> {
+    /// Dispatch-captured finite error policy; retained within this invocation.
+    turn_limits: mez_agent::AgentTurnLimits,
     turn: &'a AgentTurnRecord,
     context: &'a mez_agent::AgentContext,
     allowed_actions: &'a Option<mez_agent::AllowedActionSet>,
@@ -1634,6 +1772,7 @@ async fn execute_observed_provider_turn<P: AsyncModelProvider>(
             inputs.interaction_kind,
             previous_request,
             inputs.progress.clone(),
+            inputs.turn_limits,
         )
         .await
 }
@@ -1647,9 +1786,11 @@ async fn execute_runtime_agent_provider_dispatch(
     dispatch: RuntimeAgentProviderDispatch,
     output_progress_sender: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     observation_sender: tokio::sync::mpsc::Sender<ProviderWireRequestObservation>,
+    pending_observations: PendingProviderWireObservations,
 ) -> Result<RuntimeAgentProviderWorkerOutcome> {
     let RuntimeAgentProviderDispatch {
-        claim_generation: _,
+        claim_generation,
+        turn_limits,
         accounting_origin: _,
         turn,
         context,
@@ -1681,7 +1822,9 @@ async fn execute_runtime_agent_provider_dispatch(
         turn.conversation_id.clone(),
         turn.pane_id.clone(),
         observation_sender,
-    );
+    )
+    .with_claim_generation(claim_generation)
+    .with_pending_observations(pending_observations);
     if let Some(mut request) = sandbox_failure_assessment_request.or(macro_judge_request) {
         request.allowed_actions = allowed_actions.clone().ok_or_else(|| {
             MezError::invalid_state("auxiliary request is missing its session action catalog")
@@ -1740,6 +1883,7 @@ async fn execute_runtime_agent_provider_dispatch(
     .with_sandbox_first_local_prompts(sandbox_first_local_prompts)
     .with_macro_bridge_recipients(macro_bridge_recipients);
     let inputs = ObservedTurnInputs {
+        turn_limits,
         turn: &turn,
         context: &context,
         allowed_actions: &allowed_actions,
@@ -2188,6 +2332,8 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
 mod tests {
     use super::*;
 
+    mod incomplete;
+
     /// A paid cutoff followed by success, another cutoff or ordinary failure
     /// retains every reported counter through worker events and exact auxiliary
     /// settlement. Duplicate delivery cannot charge the retained owner twice.
@@ -2521,6 +2667,7 @@ mod tests {
             memory_actions_enabled: false,
             issue_actions_enabled: false,
             progress: &progress,
+            turn_limits: mez_agent::AgentTurnLimits::default(),
         };
         let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
         let observer = ProviderWireRequestObserver::new("conversation-test", "%1", sender);
@@ -2609,6 +2756,7 @@ mod tests {
             memory_actions_enabled: false,
             issue_actions_enabled: false,
             progress: &progress,
+            turn_limits: mez_agent::AgentTurnLimits::default(),
         };
         let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
         let observer = ProviderWireRequestObserver::new("conversation-failure", "%1", sender);

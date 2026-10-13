@@ -38,6 +38,7 @@ fn runtime_provider_retry_class_name(retry_class: ProviderErrorRetryClass) -> &'
         ProviderErrorRetryClass::ContextLimit => "context_limit",
         ProviderErrorRetryClass::OutputLimit => "output_limit",
         ProviderErrorRetryClass::RetryableTransport => "retryable_transport",
+        ProviderErrorRetryClass::RetryableIncomplete => "retryable_incomplete",
         ProviderErrorRetryClass::NonRetryable => "non_retryable",
     }
 }
@@ -1231,6 +1232,16 @@ impl RuntimeSessionService {
             accounting_origin: self.capture_accounting_origin_for_pane(&turn.pane_id),
             macro_bridge_recipients: self.macro_bridge_message_recipient_ids(&turn.turn_id),
             claim_generation: 0,
+            turn_limits: mez_agent::AgentTurnLimits {
+                provider_call_offset: self.agent.provider_retry_scheduler.provider_calls(turn_id),
+                incomplete_sequence_active: self
+                    .agent
+                    .provider_retry_scheduler
+                    .incomplete_sequence(turn_id),
+                provider_retry_policy: self.provider_retry_policy(),
+                provider_retry_attempt_offset: self.agent_provider_retry_attempt_for_turn(turn_id),
+                ..Default::default()
+            },
             turn,
             context,
             allowed_actions,
@@ -1913,6 +1924,8 @@ impl RuntimeSessionService {
                 origin: dispatch.accounting_origin.clone(),
                 process: self.pane_process_identity(&turn.pane_id).ok(),
                 observation_id: crate::storage::token_usage::new_token_usage_event_id(),
+                checkpoint_ids: Default::default(),
+                checkpoint_usage: Default::default(),
             },
         );
         Ok(RuntimeTransition {

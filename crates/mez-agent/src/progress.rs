@@ -28,6 +28,13 @@ pub enum StreamingPresentationEvent {
         /// Zero-based provider interaction ordinal within the logical turn.
         response_index: usize,
     },
+    /// The current response was rejected before acceptance. This ordered
+    /// barrier discards its provisional presentation during retry backoff;
+    /// it never dispatches actions or alters the accepted chronology.
+    ResponseRejected {
+        /// Exact response ordinal being discarded, not its replacement.
+        response_index: usize,
+    },
     /// The direct batch-level `rationale` string is ready for display.
     RationaleStarted,
     /// Newly decoded batch-level rationale source.

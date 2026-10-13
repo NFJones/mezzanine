@@ -858,6 +858,7 @@ mod provider_wire_tests {
     ) -> ProviderWireRequestObservation {
         ProviderWireRequestObservation {
             request_id: request_id.to_string(),
+            claim_generation: None,
             attempt_index: 1,
             retry_reason: None,
             conversation_id: conversation_id.to_string(),

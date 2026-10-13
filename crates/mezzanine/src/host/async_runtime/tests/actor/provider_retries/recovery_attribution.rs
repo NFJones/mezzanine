@@ -89,6 +89,7 @@ async fn qualify_terminal_facts(
         attempts_reserved: 2,
         attempt_limit: 2,
         provider_calls_started: 3,
+        incomplete_retries_reserved: 0,
         provider_call_limit: 16,
         repair_calls_started: 2,
         last_request_kind: mez_agent::ModelInteractionKind::MaapRepair,
