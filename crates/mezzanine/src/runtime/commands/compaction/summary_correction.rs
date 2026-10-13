@@ -70,6 +70,48 @@ impl RuntimeSessionService {
         let rejected = validation
             .err()
             .ok_or_else(|| MezError::invalid_state("summary validation outcome disappeared"))?;
+        self.correct_rejected_compaction_summary(task, rejected)?;
+        Ok(None)
+    }
+
+    /// Admits private correction of a typed malformed completed wire response.
+    /// Only the existing crate-authored structured diagnostic tag selects this
+    /// path; generic InvalidState, raw output and message substrings never do.
+    pub(super) fn correct_malformed_compaction_response(
+        &mut self,
+        task: &mut RuntimeAgentCompactionTask,
+    ) -> Result<()> {
+        let (budget, tokens) = match &task.target {
+            RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } => {
+                (plan.summary_budget_words(), plan.planning_budget().1)
+            }
+            RuntimeAgentCompactionTarget::Conversation => {
+                (task.request.max_output_tokens.unwrap_or(usize::MAX), false)
+            }
+        };
+        self.correct_rejected_compaction_summary(
+            task,
+            ModelCompactionSummaryRejection {
+                defect: ModelCompactionSummaryDefect::Malformed,
+                bytes: 0,
+                cost: 0,
+                budget: task
+                    .summary_correction
+                    .output_ceiling
+                    .unwrap_or(budget)
+                    .min(budget),
+                estimated_tokens: tokens,
+            },
+        )
+    }
+
+    /// Shares source proof, finite/progress policy and exact fresh-generation
+    /// admission across completed values and typed malformed wire failures.
+    fn correct_rejected_compaction_summary(
+        &mut self,
+        task: &mut RuntimeAgentCompactionTask,
+        rejected: ModelCompactionSummaryRejection,
+    ) -> Result<()> {
         self.validate_compaction_correction_source(task)?;
         prepare_summary_correction(task, rejected)?;
         self.append_agent_trace_turn_event(
@@ -77,11 +119,11 @@ impl RuntimeSessionService {
             task.resume_turn_id.as_deref().unwrap_or("manual"),
             &format!("context_compaction summary_correction reason={:?} summary_bytes={} summary_cost={} budget={} unit={} output_ceiling={}",
                 rejected.defect, rejected.bytes, rejected.cost, rejected.budget,
-                if tokens { "estimated_input_tokens" } else { "words" },
+                if rejected.estimated_tokens { "estimated_input_tokens" } else { "words" },
                 task.request.max_output_tokens.unwrap_or(0)),
         )?;
         self.queue_agent_compaction_task(task.clone());
-        Ok(None)
+        Ok(())
     }
 
     /// Proves the frozen source remains authoritative before treating output as

@@ -2313,7 +2313,19 @@ fn runtime_staged_compaction_preserves_late_peer_occurrences() {
         }
     }
     let context = service.agent_turn_contexts().get(&turn_id).unwrap();
-    let suffix = context.chronology()[context.chronology().len() - 4..].to_vec();
+    let suffix_start = context.chronology().len() - 4;
+    let suffix = context.chronology()[suffix_start..].to_vec();
+    complete_runtime_test_compaction(&mut service, "%1", "");
+    assert!(service.agent_is_compacting("%1"));
+    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
+    assert_eq!(
+        &service
+            .agent_turn_contexts()
+            .get(&turn_id)
+            .unwrap()
+            .chronology()[suffix_start..],
+        suffix.as_slice()
+    );
     complete_runtime_test_compaction(&mut service, "%1", "second summary");
     assert!(service.agent_provider_task_is_pending(&turn_id));
     let context = service.agent_turn_contexts().get(&turn_id).unwrap();

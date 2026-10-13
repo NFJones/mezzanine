@@ -69,6 +69,14 @@ pub struct ModelCompactionSummaryRejection {
 /// Validates output only; callers must independently prove exact frozen source.
 /// Equality is accepted. A provider output-token cap does not establish this
 /// local input-token, word or byte bound. No text is truncated or synthesized.
+///
+/// ```
+/// use mez_agent::context_compaction::{validate_model_compaction_summary, ModelCompactionSummaryDefect};
+/// assert!(validate_model_compaction_summary("one two", 2, false).is_ok());
+/// let rejected = validate_model_compaction_summary("one two three", 2, false).unwrap_err();
+/// assert_eq!(rejected.defect, ModelCompactionSummaryDefect::Budget);
+/// assert_eq!((rejected.cost, rejected.budget), (3, 2));
+/// ```
 pub fn validate_model_compaction_summary(
     summary: &str,
     budget: usize,

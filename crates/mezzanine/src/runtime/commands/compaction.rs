@@ -2886,6 +2886,31 @@ impl RuntimeSessionService {
             return Ok(failed.had_task());
         };
         if let Some(mut task) = self.finish_agent_compaction_task(pane_id, task_generation) {
+            if provider_failure_json
+                .and_then(|payload| serde_json::from_str::<serde_json::Value>(payload).ok())
+                .is_some_and(|payload| {
+                    payload.get("type").and_then(serde_json::Value::as_str)
+                        == Some("malformed_model_output")
+                })
+            {
+                if let Err(error) = self.correct_malformed_compaction_response(&mut task) {
+                    self.append_agent_status_text_to_terminal_buffer(
+                        pane_id,
+                        &format!(
+                            "agent: compact failed while correcting completed output: {}",
+                            error.message()
+                        ),
+                    )?;
+                    if let Some(turn) = task.resume_turn_id.as_deref() {
+                        self.fail_running_turn_after_compaction_failure(
+                            turn,
+                            &task.source,
+                            error.message(),
+                        )?;
+                    }
+                }
+                return Ok(true);
+            }
             let retry_class =
                 provider_error_retry_class_from_parts(parsed_kind, message, provider_failure_json);
             let policy = self.provider_retry_policy();
@@ -3394,6 +3419,17 @@ fn runtime_rebuild_active_turn_compaction_request(
     };
     let blocks = runtime_redact_compaction_blocks(&blocks);
     task.summarized_entries = blocks.len();
+    let correction_guidance = task
+        .request
+        .messages
+        .iter()
+        .filter(|message| {
+            message.role == ModelMessageRole::Developer
+                && message.source == ContextSourceKind::Configuration
+                && message.content.starts_with("[private summary correction]")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     task.request = runtime_model_compaction_request_for_blocks(
         &task.model_profile,
         &task.pane_id,
@@ -3406,7 +3442,8 @@ fn runtime_rebuild_active_turn_compaction_request(
         final_request_retry
             .summary_ceiling
             .unwrap_or(plan.summary_budget_words())
-            .min(plan.summary_budget_words()),
+            .min(plan.summary_budget_words())
+            .min(task.summary_correction.output_ceiling.unwrap_or(usize::MAX)),
     );
     let ceiling = task
         .request
@@ -3417,6 +3454,11 @@ fn runtime_rebuild_active_turn_compaction_request(
         ceiling,
         plan.planning_budget().1,
     );
+    let mut messages = task.request.messages.iter().cloned().collect::<Vec<_>>();
+    for message in correction_guidance {
+        messages.insert(2.min(messages.len()), message);
+    }
+    task.request.messages = messages.into();
     *current_blocks = blocks;
     Ok(())
 }

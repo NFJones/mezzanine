@@ -8,13 +8,15 @@ use super::*;
 /// ordinary continuation. All requests are offline loopback traffic.
 #[tokio::test(flavor = "current_thread")]
 async fn async_compaction_invalid_completed_output_repairs_before_ordinary_dispatch() {
-    for kind in ["budget", "empty", "bytes"] {
+    for kind in ["budget", "empty", "bytes", "malformed"] {
         Box::pin(qualify_completed_output(kind)).await;
     }
 }
 
 /// Owns fake server, real worker and actor futures with explicit response gates.
 async fn qualify_completed_output(kind: &str) {
+    let exhausted = kind.ends_with("-exhaust");
+    let malformed = kind.starts_with("malformed");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let root = std::env::temp_dir().join(format!(
@@ -24,6 +26,12 @@ async fn qualify_completed_output(kind: &str) {
     std::fs::create_dir(&root).unwrap();
     let store = AgentTranscriptStore::new(root.join("transcripts"));
     let mut service = test_service();
+    service.configure_provider_retry_policy(mez_agent::ProviderRetryPolicy {
+        max_attempts: 0,
+        unlimited: true,
+        initial_delay_ms: 20,
+        max_delay_ms: 40,
+    });
     service.set_agent_transcript_store(store.clone());
     service.set_auth_store(crate::security::auth::AuthStore::new(
         crate::security::auth::AuthPaths::under_config_root(&root),
@@ -111,7 +119,8 @@ async fn qualify_completed_output(kind: &str) {
     );
     let invalid = match kind {
         "budget" => "INVALID_SUMMARY ".repeat(budget + 1),
-        "empty" => " \n\t".into(),
+        "empty" | "empty-exhaust" => " \n\t".into(),
+        "malformed" | "malformed-exhaust" => "{broken".into(),
         _ => "界".repeat(128 * 1024 / 3 + 1),
     };
     let started = StdArc::new(tokio::sync::Notify::new());
@@ -141,11 +150,25 @@ async fn qualify_completed_output(kind: &str) {
                     async_provider_concurrency_write_chat_content_response(
                         &mut stream,
                         "local-chat-model",
-                        "VALID_REPAIRED_SUMMARY",
+                        if exhausted {
+                            &invalid
+                        } else {
+                            "VALID_REPAIRED_SUMMARY"
+                        },
                     )
                     .await;
                 }
                 _ => {
+                    if exhausted {
+                        assert!(requests[2].contains("FROZEN_SOURCE_1"));
+                        async_provider_concurrency_write_chat_content_response(
+                            &mut stream,
+                            "local-chat-model",
+                            &invalid,
+                        )
+                        .await;
+                        continue;
+                    }
                     assert!(requests[2].contains("VALID_REPAIRED_SUMMARY"));
                     assert!(!requests[2].contains("INVALID_SUMMARY"));
                     async_provider_concurrency_write_chat_response(
@@ -208,17 +231,30 @@ async fn qualify_completed_output(kind: &str) {
                 .await
                 .unwrap()
                 .unwrap();
-            if view
-                .lines
-                .iter()
-                .any(|line| line.contains("ordinary repaired continuation completed"))
-            {
+            if view.lines.iter().any(|line| {
+                line.contains(if exhausted {
+                    "compact failed"
+                } else {
+                    "ordinary repaired continuation completed"
+                })
+            }) {
                 break;
             }
             tokio::task::yield_now().await;
         }
         stop.store(true, Ordering::SeqCst);
         stopped.notified().await;
+        run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 4,
+                drain_limit: 64,
+                idle_interval: Duration::from_millis(1),
+            },
+            |_, _| false,
+        )
+        .await
+        .unwrap();
         handle.shutdown().await.unwrap();
     };
     let ((), report, requests, mut exit) = tokio::time::timeout(Duration::from_secs(20), async {
@@ -232,10 +268,28 @@ async fn qualify_completed_output(kind: &str) {
     .await
     .unwrap();
     assert_eq!(requests.len(), 3);
-    assert_eq!(report.executions, 3);
-    let epoch = store.compaction_epoch(&conversation).unwrap().unwrap();
-    assert_eq!(epoch.ranges.len(), 1);
-    assert_eq!(epoch.ranges[0].summary, "VALID_REPAIRED_SUMMARY");
+    // Typed malformed wire content is a failed worker result, not a completed
+    // value; the HTTP inventory still proves all three inference attempts.
+    assert_eq!(
+        report.executions,
+        if malformed {
+            if exhausted { 0 } else { 2 }
+        } else {
+            3
+        }
+    );
+    if exhausted {
+        assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+        assert!(
+            !requests
+                .iter()
+                .any(|request| request.contains("VALID_REPAIRED_SUMMARY"))
+        );
+    } else {
+        let epoch = store.compaction_epoch(&conversation).unwrap().unwrap();
+        assert_eq!(epoch.ranges.len(), 1);
+        assert_eq!(epoch.ranges[0].summary, "VALID_REPAIRED_SUMMARY");
+    }
     assert!(!exit.service.agent_is_compacting("%1"));
     assert_eq!(
         exit.service
@@ -243,8 +297,23 @@ async fn qualify_completed_output(kind: &str) {
             .turn("turn-1")
             .unwrap()
             .state,
-        mez_agent::AgentTurnState::Completed
+        if exhausted {
+            mez_agent::AgentTurnState::Failed
+        } else {
+            mez_agent::AgentTurnState::Completed
+        }
     );
     exit.service.terminate_all_pane_processes().unwrap();
     std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Completed HTTP200 blank and malformed replies each admit exactly two
+/// corrections under unlimited transport policy, then truthfully fail without
+/// an ordinary retry or published epoch. Three HTTP attempts are independently
+/// inventoried by the fake server and production actor lease owner.
+#[tokio::test(flavor = "current_thread")]
+async fn async_compaction_empty_and_malformed_corrections_are_finite() {
+    for kind in ["empty-exhaust", "malformed-exhaust"] {
+        Box::pin(qualify_completed_output(kind)).await;
+    }
 }
