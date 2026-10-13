@@ -66,7 +66,7 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
     let previous = historical_manifest();
     let current = candidate_manifest();
     assert_eq!(previous.revision, 9);
-    assert_eq!(current.revision, 12);
+    assert_eq!(current.revision, 13);
     assert_eq!(previous.entries.len(), 10);
     let revision10 = historical_usage_manifest();
     assert_eq!(revision10.revision, 10);
@@ -74,6 +74,10 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
     assert!(super::super::compiled_history(&current).contains(&revision10));
     let revision11 = historical_loss_manifest();
     assert_eq!(revision11.revision, 11);
+    let revision12 = historical_resume_manifest();
+    assert_eq!(revision12.revision, 12);
+    assert!(super::super::compiled_history(&current).contains(&revision12));
+    assert!(super::super::compiled_history(&revision12).contains(&revision11));
     assert!(super::super::compiled_history(&current).contains(&revision11));
     assert!(super::super::compiled_history(&revision11).contains(&revision10));
     let mut altered11 = revision11.clone();
@@ -88,6 +92,14 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
     }
     assert!(super::super::compiled_history(&altered11).is_empty());
     for (bytes, expected) in [
+        (
+            include_bytes!("../history/pi_usage_v12.mjs").as_slice(),
+            "9ea319f42d99b8e1211b9707ac7e433082a160c85d2762f2941bf99f8a8b10fb",
+        ),
+        (
+            include_bytes!("../history/pi_persistent_v12.mjs").as_slice(),
+            "6b6ad7e56150865660d20705a35f373ee51ecc8e0f29bf53f0f9d941353bba00",
+        ),
         (
             include_bytes!("../history/pi_persistent_v10.mjs").as_slice(),
             "eb5e0bd7fc7ac984527b6d68c166375ce61e05a86feff7bea2c1b537d55a04a7",
@@ -122,6 +134,10 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
         .apply()
         .unwrap();
     plan(&root, &revision11, Operation::Install)
+        .unwrap()
+        .apply()
+        .unwrap();
+    plan(&root, &revision12, Operation::Install)
         .unwrap()
         .apply()
         .unwrap();

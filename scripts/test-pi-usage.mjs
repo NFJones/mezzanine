@@ -181,6 +181,7 @@ function callbackRetryFixture(gapDelivered = true, options = {}) {
   const core = createRequestAccountingClient({
     enqueue(operation) { const next = wire.then(operation); wire = next.catch(() => {}); return next; },
     async exchange(method, payload) {
+      await options.beforeExchange?.(method, payload);
       requests.push({ method, payload: structuredClone(payload) });
       if (method.endsWith("usage-begin")) {
         original ??= payload.request_id;
@@ -195,7 +196,11 @@ function callbackRetryFixture(gapDelivered = true, options = {}) {
     },
   });
   const client = { ...core, async start() { return true; }, detach() {},
-    async piObservation(fact) { facts.push({ ...fact }); return { delivered: fact.type !== "usage_gap" || gapDelivered }; },
+    async piObservation(fact) {
+      facts.push({ ...fact });
+      if (fact.type === "usage_gap" && options.gapReceipt) return options.gapReceipt();
+      return { delivered: fact.type !== "usage_gap" || gapDelivered };
+    },
     endRequest(ticket, report) { tickets.push(ticket); return core.endRequest(ticket, report); } };
   registerOrdinaryPiObserver({ on(type, callback) { handlers.set(type, callback); } }, {
     owner, createClient: () => client, peerHelper: "/fixture/mez", now: () => clock,
@@ -329,6 +334,192 @@ test("ordinary failed or terminal owners cancel pending scheduled recovery", asy
     assert.equal(f.requests.length, known);
     assert.equal(f.requests.filter(row => row.method.endsWith("usage-end")).length, 2);
   }
+});
+
+/** Delayed queue execution must recheck the absolute horizon and preserve
+ * backoff after actual recovery completion, not its much earlier reservation.
+ * This controlled observer queue supplies no native or request-core authority;
+ * it exposes overdue dispatch and long in-flight completion deterministically. */
+test("Pi delayed recovery cannot burst overdue retries or escape dispatch horizon", async () => {
+  for (const delayed of ["queued", "in-flight", "expired"]) {
+    const timer = retrySchedulerFixture(); const operations = []; let calls = 0;
+    let release; let entered;
+    const started = new Promise(resolve => { entered = resolve; });
+    const owned = { session: "session-a", client: {
+      async beginRequest(id) { return { request_id: id, admitted_at: 10 }; },
+      async piObservation() { return { delivered: true }; },
+      async endRequest() {
+        calls++;
+        if (calls === 2 && delayed === "in-flight") {
+          entered(); await new Promise(resolve => { release = resolve; });
+        }
+        return { delivered: false, durable: false };
+      }, abandonRequest() {},
+    } };
+    const observer = createPiUsageObserver(owned, operation => { operations.push(operation); return true; }, new Map(), () => 20, () => {}, { retryScheduler: timer.scheduler });
+    const drain = async () => { while (operations.length) await operations.shift()(); };
+    observer.turnStart({ type: "turn_start", turnIndex: 0 });
+    const msg = message(); observer.messageEnd({ type: "message_end", message: msg }); observer.turnEnd(event(msg));
+    await drain(); assert.equal(calls, 1);
+    timer.advance(250); assert.equal(operations.length, 1);
+    if (delayed === "in-flight") {
+      const pending = drain(); await started; timer.advance(4900); release(); await pending;
+    } else { timer.advance(delayed === "expired" ? 5001 : 4900); await drain(); }
+    assert.equal(calls, delayed === "expired" ? 1 : 2);
+    assert.equal(timer.pending.size, 0, "overdue retry immediately rearmed inside exhausted spacing horizon");
+    observer.close();
+  }
+});
+
+/** An early genuine duplicate consumes the same retry index as a timer. It
+ * cannot replenish the original absolute deadline, including when reporting
+ * UTC moves backwards independently of the monotonic owner clock. */
+test("ordinary early callback and timers share retry indices and frozen UTC", async () => {
+  const timer = retrySchedulerFixture();
+  const f = callbackRetryFixture(true, { retryScheduler: timer.scheduler, missingAcks: Infinity });
+  f.emit({ type: "session_start", reason: "startup" }); f.emit({ type: "agent_start" });
+  f.emit({ type: "turn_start", turnIndex: 0 });
+  const original = message(); f.emit({ type: "message_end", message: original }); f.emit(event(original)); await f.drain();
+  f.clock(1); f.emit(event(message())); await f.drain();
+  assert.equal(f.requests.filter(row => row.method.endsWith("usage-end")).length, 4);
+  assert.equal([...timer.pending.values()][0].at, 1000);
+  for (const offset of [1000, 4000]) { timer.advance(offset); await f.drain(); }
+  const ends = f.requests.filter(row => row.method.endsWith("usage-end"));
+  assert.equal(ends.length, 8);
+  assert.equal(ends.every(row => row.payload.observed_at === 20), true);
+  assert.equal(timer.pending.size, 0);
+  f.emit(event(message())); await f.drain();
+  assert.equal(f.requests.filter(row => row.method.endsWith("usage-end")).length, 8);
+});
+
+/** A gap failure can arrive after a timer has been armed. Captured timer work
+ * must be fenced immediately, and an in-flight ACK after settlement or owner
+ * failure can settle its exact original slot without reviving coverage. */
+test("ordinary held gap failure and late ACK cannot revive terminal owner", async () => {
+  const timer = retrySchedulerFixture(); let releaseGap; let gapEntered;
+  const gapStarted = new Promise(resolve => { gapEntered = resolve; });
+  const f = callbackRetryFixture(true, { retryScheduler: timer.scheduler,
+    gapReceipt() { gapEntered(); return new Promise(resolve => { releaseGap = resolve; }); } });
+  f.emit({ type: "session_start", reason: "startup" }); f.emit({ type: "agent_start" });
+  f.emit({ type: "turn_start", turnIndex: 0 });
+  const msg = message(); f.emit({ type: "message_end", message: msg }); f.emit(event(msg));
+  await gapStarted;
+  const captured = [...timer.pending.values()].map(handle => handle.callback);
+  assert.equal(captured.length, 1);
+  releaseGap({ delivered: false }); await f.drain();
+  assert.equal(f.owner.lease.failed, true); assert.equal(timer.pending.size, 0);
+  const known = f.requests.length;
+  timer.advance(250); captured[0](); await f.drain(); assert.equal(f.requests.length, known);
+  for (const terminal of ["agent_settled", "failed"]) {
+    const t = retrySchedulerFixture(); let release; let entered;
+    const started = new Promise(resolve => { entered = resolve; }); let ends = 0;
+    const pending = callbackRetryFixture(true, { retryScheduler: t.scheduler,
+      async beforeExchange(method) {
+        if (method.endsWith("usage-end") && ++ends === 3) {
+          entered(); await new Promise(resolve => { release = resolve; });
+        }
+      } });
+    pending.emit({ type: "session_start", reason: "startup" }); pending.emit({ type: "agent_start" });
+    pending.emit({ type: "turn_start", turnIndex: 0 });
+    const original = message(); pending.emit({ type: "message_end", message: original }); pending.emit(event(original)); await pending.drain();
+    t.advance(250); await started;
+    const lease = pending.owner.lease;
+    if (terminal === "failed") { lease.failed = true; lease.cancelUsageRetries(); }
+    else pending.emit({ type: "agent_settled" });
+    release(); await pending.drain();
+    assert.equal([...pending.owner.usageRecent.values()][0].slot.durable, true);
+    assert.equal(lease.usageCoverage, "unavailable-durable-acknowledgment");
+    assert.equal(t.pending.size, 0);
+    if (terminal === "agent_settled") {
+      const count = pending.requests.length;
+      pending.emit({ type: "agent_start" }); pending.emit(event(message())); await pending.drain();
+      t.advance(4000); await pending.drain(); assert.equal(pending.requests.length, count);
+    }
+  }
+});
+
+/** Reservations are process-wide even when original readiness is still held.
+ * 127 pending obligations plus one new active slot must refuse slot129 before
+ * any asynchronous admission. Closed finalized slots survive owner reload and
+ * cannot be pruned as if missing report construction proved no incurred usage. */
+test("Pi held readiness reserves final slot and old-owner pending survives close", async () => {
+  const timer = retrySchedulerFixture(); const recent = new Map(); const operations = [];
+  let begins = 0; let release; let entered; let hold = false;
+  const started = new Promise(resolve => { entered = resolve; });
+  const client = { async piObservation() { return { delivered: true }; },
+    async beginRequest(id) {
+      begins++;
+      if (hold) { entered(); await new Promise(resolve => { release = resolve; }); }
+      return { request_id: id, admitted_at: 10 };
+    }, async endRequest() { return { delivered: false, durable: false }; }, abandonRequest() { assert.fail("valid finalized pending ticket abandoned"); } };
+  const owner = { session: "session-a", client };
+  const enqueue = operation => { operations.push(operation); return true; };
+  const observer = createPiUsageObserver(owner, enqueue, recent, () => 20, () => {}, { retryScheduler: timer.scheduler });
+  const drain = async () => { while (operations.length) await operations.shift()(); };
+  const request = index => {
+    observer.turnStart({ type: "turn_start", turnIndex: index }); const msg = message();
+    observer.messageEnd({ type: "message_end", message: msg }); observer.turnEnd(event(msg, `reserved-${index}`, index));
+  };
+  for (let index = 0; index < 127; index++) { request(index); await drain(); }
+  hold = true; request(127); assert.equal(recent.size, 128);
+  const pending = drain(); await started;
+  request(128); assert.equal(recent.size, 128); assert.equal(begins, 128);
+  observer.close(); observer.runStart(); request(129);
+  assert.equal(recent.size, 128); release(); await pending;
+  assert.equal(begins, 128); assert.equal(recent.size, 128);
+  assert.equal([...recent.values()].every(row => row.slot.projection && row.slot.initialDone), true);
+  assert.equal(timer.pending.size, 0);
+  const successor = createPiUsageObserver({ session: "session-a", client }, enqueue, recent, () => 20, () => {}, { retryScheduler: timer.scheduler });
+  successor.turnStart({ type: "turn_start", turnIndex: 0 }); await drain();
+  assert.equal(begins, 128); assert.equal(recent.size, 128);
+});
+
+/** One due scheduler tick is bounded independently of the number of retained
+ * reports. Repeated captured callbacks cannot enqueue a retry storm into the
+ * ordinary owner, and each original slot is serviced before another round. */
+test("Pi scheduler serializes 128 due slots through one recovery operation", async () => {
+  const timer = retrySchedulerFixture(); const recent = new Map(); const operations = []; const retried = new Set();
+  let calls = 0;
+  const owned = { session: "session-a", client: {
+    async piObservation() { return { delivered: true }; },
+    async beginRequest(id) { return { request_id: id, admitted_at: 10 }; },
+    async endRequest(ticket) {
+      calls++; if (calls > 128) retried.add(ticket);
+      return { delivered: false, durable: false };
+    }, abandonRequest() {},
+  } };
+  const observer = createPiUsageObserver(owned, operation => { operations.push(operation); return true; }, recent, () => 20, () => {}, { retryScheduler: timer.scheduler });
+  const drain = async () => { while (operations.length) await operations.shift()(); };
+  for (let index = 0; index < 128; index++) {
+    observer.turnStart({ type: "turn_start", turnIndex: index }); const msg = message();
+    observer.messageEnd({ type: "message_end", message: msg }); observer.turnEnd(event(msg, `serial-${index}`, index)); await drain();
+  }
+  assert.equal(timer.pending.size, 1);
+  for (let index = 0; index < 128; index++) {
+    const captured = [...timer.pending.values()][0].callback;
+    timer.advance(250); captured(); captured();
+    assert.equal(operations.length, 1); assert.equal(timer.pending.size, 0);
+    await drain(); assert(timer.pending.size <= 1);
+  }
+  assert.equal(retried.size, 128); assert.equal(calls, 256); assert.equal(owned.failed, undefined);
+  observer.close(); assert.equal(timer.pending.size, 0);
+});
+
+/** Changed finalized data is only conflict evidence, not permission to abandon
+ * the original immutable obligation. Its remaining timer may still recover the
+ * exact ticket/report, with both genuine gap reasons remaining truthful. */
+test("ordinary conflicting replay preserves original pending timer recovery", async () => {
+  const timer = retrySchedulerFixture(); const f = callbackRetryFixture(true, { retryScheduler: timer.scheduler });
+  f.emit({ type: "session_start", reason: "startup" }); f.emit({ type: "agent_start" });
+  f.emit({ type: "turn_start", turnIndex: 0 });
+  const original = message(); f.emit({ type: "message_end", message: original }); f.emit(event(original)); await f.drain();
+  const changed = message(); changed.usage.input = 99; f.emit(event(changed)); await f.drain();
+  timer.advance(250); await f.drain();
+  const ends = f.requests.filter(row => row.method.endsWith("usage-end"));
+  assert.equal(ends.length, 3);
+  assert.equal(JSON.stringify(ends[2].payload) === JSON.stringify(ends[0].payload), true);
+  assert.equal(f.owner.lease.failed, false);
+  assert.equal(f.facts.filter(fact => fact.type === "usage_gap").length, 2);
 });
 
 /** Two immediate ACK losses exhaust one real endRequest operation. A later

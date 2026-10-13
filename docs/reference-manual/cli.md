@@ -355,7 +355,8 @@ producer. Pi work is independent of the retired Gemini harness, not its replacem
 Ordinary `mez bootstrap pi` now also installs finalized assistant request
 accounting. Run normal `pi` in the Mez pane; no `mez pi`, fd3, preselected session,
 `--apply`, version/root gate or separate accounting enable step is required.
-Pi revision 11 recognizes exact revision-10 and revision-9 owned bytes for upgrade/repair/repeat;
+Pi revision 13 recognizes independently frozen revision-12/11 and all earlier
+compiled owned bytes for upgrade/repair/repeat;
 disabled vendor policy, authored entries and trust remain unchanged. The same
 shared-client byte update is versioned for OpenCode ownership without adding
 OpenCode usage behavior.
@@ -375,8 +376,23 @@ Only a typed durable ACK commits reporting. Retry retains the same marker,
 persisted-entry digest, normalized payload and once-frozen reporting UTC, and
 never retries a provider. Native begin captures actual admission cwd/time; the
 asynchronous callback queue does not guarantee earlier callback-time attribution.
-The callback queue is bounded at 32 and recent metadata at 128; capacity eviction
-abandons the original unknown-delivery ticket without claiming it did not commit.
+The callback queue is bounded at32 and process-owned active-plus-pending metadata
+at128, reserved before asynchronous begin. Only durable historical replay evidence
+may be pruned. Full pending capacity refuses new telemetry admission with a
+truthful readiness gap; it never abandons incurred unknown-delivery obligations.
+Exhausted or closed pending slots can saturate this process-local capacity until
+process exit, including across reload. This is not a durable expense spool.
+The same healthy observer retries frozen finalized reports without another vendor
+callback through one unreferenced timer and one queued/running recovery operation.
+Initial delivery plus at most three retries share a finite callback/timer budget
+(at most eight wire report attempts). Timer offsets are250/1000/4000ms from first
+undurable completion with an absolute5000ms monotonic dispatch horizon, rechecked
+inside the queue; delayed work retains spacing rather than bursting to catch up.
+This is not a five-second completion guarantee. Duplicate callbacks cannot reset
+the horizon/budget. Exhaustion retains the sticky gap and original obligation.
+Failure, settlement, teardown and stale ownership cancel/fence future recovery;
+new runs cannot revive closed slots. A late real ACK can settle its original
+obligation without restoring a failed or stale owner. No provider work is retried.
 Genuine reload reuses process-owned replay evidence, but successor credentials
 cannot inherit old tickets. Unmatched restored/history events are dropped.
 
@@ -397,7 +413,7 @@ The callbacks remain synchronous and neutral while readiness is pending. Already
 completed reports do not gain a false loss, and an unmatched historical outcome
 cannot close the current request. This is an unknown coverage gap, not invented
 expense, zero-spend proof, or a fabricated task-completion event. Pi revision 11
-introduced this ordering. Current Pi revision 12 and OpenCode revision 11 also
+introduced this ordering. Pi revision 12 and current OpenCode revision 11 also
 ship the strict shared client resume parser, with exact pre-resume transport and
 all prior artifact layouts independently frozen for upgrade/repair.
 
