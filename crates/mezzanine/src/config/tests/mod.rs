@@ -91,6 +91,7 @@ fn unset(path: &str) -> ConfigMutation {
 mod command_rules;
 mod defaults;
 mod layers;
+mod log_timestamps;
 mod migration;
 mod mutation;
 mod parse;

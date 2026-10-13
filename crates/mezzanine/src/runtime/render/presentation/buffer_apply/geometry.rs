@@ -13,6 +13,16 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<usize> {
         let columns = self.agent_terminal_presentation_columns(pane_id)?;
+        if self.presentation.settings.terminal_agent_log_timestamps {
+            return Ok(self
+                .presentation
+                .settings
+                .log_frame_settings()
+                .0
+                .frame(columns)
+                .body_budget
+                .max(1));
+        }
         Ok(bounded_agent_terminal_presentation_columns(
             columns,
             self.presentation.settings.terminal_agent_wrap_column_cap,

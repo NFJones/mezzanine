@@ -65,11 +65,15 @@ copy/replace examples such as command-rule arrays, or provider catalog fields
 that are materialized only after authentication; they are not activation
 markers.
 
-The current config schema version is `101`. On launch, Mezzanine migrates an
+The current config schema version is `102`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
 running binary supports are rejected instead of interpreted best-effort.
+
+The v101-to-v102 migration advances schema authority without changing authored
+`terminal.agent_log_timestamps` choices or adjacent terminal settings. Absence
+inherits the default `false` in TOML, YAML and JSON, including inline TOML tables.
 
 The v94-to-v95 primary-config migration removes retired
 `agent_transcript_peer_receiver_fg` and `agent_transcript_peer_receiver_bg`
@@ -180,7 +184,7 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `101` | Config schema version. Do not change this. |
+| `version` | integer | `102` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
@@ -411,6 +415,7 @@ not resize the existing Tokio runtime.
 | `terminal.render_rate_limit_fps` | integer | `30` | Maximum burst render frames per second for attached terminals and remote pushed-render streams; `0` disables render rate limiting. |
 | `terminal.shell_output_preview_lines` | integer | `5` | Maximum visual rows shown for each transient shell-command output preview after grapheme-safe wrapping at the current pane width; must be positive. Long unbroken output is hard-wrapped before the newest-row tail is selected. |
 | `terminal.agent_wrap_column_cap` | integer | `120` | Maximum display-cell width for structured agent log and transcript rows, including status, error, diagnostic, action, result, and structured replay-fallback rows; must be positive. Continuations repeat the agent gutter, and unbroken ordinary log tokens split at grapheme boundaries. Retained legacy ANSI-only bytes are not rewrapped to this configured cap; they replay byte-for-byte and may instead wrap at the physical pane width. |
+| `terminal.agent_log_timestamps` | boolean | `false` | Display captured UTC `HH:MM:SS` once per proven structured log entry: eight cells plus one separator left of the two-cell gutter. Continuations/unknown times are blank. The cap includes the whole margin; it is suppressed below 21 capped cells. Legacy record timestamps are coarse persistence evidence, not occurrence/execution proof. Content copy/search/capture/export/model bytes remain undecorated; visual frames retain decoration. Fixed format, no timezone/format knob. |
 | `terminal.cursor_style` | string | `"block"` | Cursor style: `block`, `underline`, or `bar`. |
 | `terminal.cursor_blink` | boolean | `false` | Whether Mezzanine-rendered cursors blink. |
 | `terminal.cursor_blink_interval_ms` | integer | `500` | Full blink cycle length in milliseconds. |

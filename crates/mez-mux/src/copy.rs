@@ -7,6 +7,7 @@
 use crate::input::{KeyCode, parse_key_chord_bytes};
 use crate::readline::readline_word_column_range;
 use crate::{MuxError, Result};
+use mez_core::presentation::LogFrame;
 use mez_terminal::{
     TerminalScreen, TerminalStyledLine, terminal_emoji_width, terminal_grapheme_width,
     terminal_graphemes, terminal_text_width,
@@ -157,6 +158,8 @@ pub fn classify_copy_mode_key_action(input: &[u8]) -> Option<CopyModeKeyAction> 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyBuffer {
     lines: Vec<String>,
+    /// Geometry owned by these exact visual rows, never current actor settings.
+    log_frames: Vec<Option<LogFrame>>,
     viewport_rows: usize,
     scroll_top: usize,
     cursor: CopyPosition,
@@ -178,6 +181,7 @@ impl CopyBuffer {
             ));
         }
         let mut buffer = Self {
+            log_frames: vec![None; lines.len()],
             lines,
             viewport_rows,
             scroll_top,
@@ -196,6 +200,11 @@ impl CopyBuffer {
     /// Returns all display lines in the copy buffer.
     pub fn lines(&self) -> &[String] {
         &self.lines
+    }
+
+    /// Returns proven decoration geometry for one row in this frozen snapshot.
+    pub fn log_frame(&self, line: usize) -> Option<&LogFrame> {
+        self.log_frames.get(line).and_then(Option::as_ref)
     }
 
     /// Returns the zero-based first visible line.
@@ -344,16 +353,28 @@ impl CopyBuffer {
 
     /// Moves the cursor to the previous readline-style word boundary.
     pub fn move_cursor_word_left(&mut self) {
+        let origin = self
+            .log_frame(self.cursor.line)
+            .map_or(0, |frame| frame.body_origin);
         self.cursor.column = self
             .lines
             .get(self.cursor.line)
             .map(|line| previous_word_column(line, self.cursor.column))
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .max(origin);
         self.update_keyboard_selection();
     }
 
     /// Moves the cursor to the next readline-style word boundary.
     pub fn move_cursor_word_right(&mut self) {
+        let origin = self
+            .log_frame(self.cursor.line)
+            .map_or(0, |frame| frame.body_origin);
+        if self.cursor.column < origin {
+            self.cursor.column = origin;
+            self.update_keyboard_selection();
+            return;
+        }
         self.cursor.column = self
             .lines
             .get(self.cursor.line)
@@ -411,9 +432,13 @@ impl CopyBuffer {
                 "copy mode search query must not be empty",
             ));
         }
-        if let Some((position, width)) =
-            search_lines(&self.lines, self.scroll_top, query, direction)
-        {
+        if let Some((position, width)) = search_lines_with_frames(
+            &self.lines,
+            &self.log_frames,
+            self.scroll_top,
+            query,
+            direction,
+        ) {
             self.scroll_top = position.line.min(self.lines.len().saturating_sub(1));
             self.selection = Some((
                 position,
@@ -439,21 +464,32 @@ impl CopyBuffer {
     /// Selects the readline-style word surrounding one position.
     pub fn select_word_at(&mut self, position: CopyPosition) -> Result<()> {
         let position = self.clamp_position(position);
+        let origin = self
+            .log_frame(position.line)
+            .map_or(0, |frame| frame.body_origin);
+        if position.column < origin {
+            return self.select_range(position, position);
+        }
         let Some(line) = self.lines.get(position.line) else {
             return Err(MuxError::invalid_args(
                 "copy mode word selection line is invalid",
             ));
         };
-        let scalar = display_column_to_scalar_index(line, position.column);
-        let (start, end) = readline_word_column_range(line, scalar);
+        let byte_origin = line
+            .char_indices()
+            .nth(origin)
+            .map_or(line.len(), |(byte, _)| byte);
+        let content = line.get(byte_origin..).unwrap_or_default();
+        let scalar = display_column_to_scalar_index(content, position.column - origin);
+        let (start, end) = readline_word_column_range(content, scalar);
         self.select_range(
             CopyPosition {
                 line: position.line,
-                column: scalar_index_to_display_column(line, start),
+                column: origin + scalar_index_to_display_column(content, start),
             },
             CopyPosition {
                 line: position.line,
-                column: scalar_index_to_display_column(line, end),
+                column: origin + scalar_index_to_display_column(content, end),
             },
         )
     }
@@ -549,6 +585,41 @@ pub struct StyledCopyMode {
 }
 
 impl StyledCopyMode {
+    /// Builds an explicit visual snapshot with its matching typed geometry.
+    /// Rows and maps must align. The live cursor is mapped into the visual
+    /// margin exactly once; source overrides remain the original byte payload.
+    pub fn from_projected_rows(
+        screen: &TerminalScreen,
+        rows: Vec<TerminalStyledLine>,
+        frames: Vec<Option<LogFrame>>,
+        viewport_rows: usize,
+        visible_only: bool,
+    ) -> Result<Self> {
+        if frames.len() != rows.len() {
+            return Err(MuxError::invalid_args(
+                "copy row/frame geometry length mismatch",
+            ));
+        }
+        let (scroll_top, mut cursor) = if visible_only {
+            (0, CopyPosition { line: 0, column: 0 })
+        } else {
+            initial_copy_mode_view(screen, &rows, viewport_rows)
+        };
+        cursor.column += frames
+            .get(cursor.line)
+            .and_then(Option::as_ref)
+            .map_or(0, LogFrame::margin_width);
+        let mut copy = Self::new(
+            rows,
+            viewport_rows,
+            scroll_top,
+            cursor,
+            screen.alternate_screen_active(),
+        )?;
+        copy.buffer.log_frames = frames;
+        Ok(copy)
+    }
+
     /// Builds copy state from normal-screen history and live terminal rows.
     pub fn from_screen(screen: &TerminalScreen, viewport_rows: usize) -> Result<Self> {
         let styled_lines = screen.normal_styled_content_lines();
@@ -779,6 +850,18 @@ pub fn search_lines(
     query: &str,
     direction: SearchDirection,
 ) -> Option<(CopyPosition, usize)> {
+    search_lines_with_frames(lines, &[], start_line, query, direction)
+}
+
+/// Searches only content cells and maps matches back into the visual grid.
+/// Skipping before matching preserves authored text equal to a displayed stamp.
+fn search_lines_with_frames(
+    lines: &[String],
+    frames: &[Option<LogFrame>],
+    start_line: usize,
+    query: &str,
+    direction: SearchDirection,
+) -> Option<(CopyPosition, usize)> {
     if lines.is_empty() {
         return None;
     }
@@ -793,16 +876,29 @@ pub fn search_lines(
 
     for line_index in indices {
         let line = &lines[line_index];
+        let origin = frames
+            .get(line_index)
+            .and_then(Option::as_ref)
+            .map_or(0, |frame| frame.body_origin);
+        // The typed margin and gutter occupy one cell per scalar, but the box
+        // drawing gutter is UTF-8. Convert the owned scalar prefix to bytes;
+        // ordinary rows use zero and never parse authored timestamp text.
+        let byte_origin = line
+            .char_indices()
+            .nth(origin)
+            .map_or(line.len(), |(byte, _)| byte);
+        let content = line.get(byte_origin..).unwrap_or_default();
         let Some(byte_index) = (match direction {
-            SearchDirection::Forward => line.find(query),
-            SearchDirection::Backward => line.rfind(query),
+            SearchDirection::Forward => content.find(query),
+            SearchDirection::Backward => content.rfind(query),
         }) else {
             continue;
         };
         return Some((
             CopyPosition {
                 line: line_index,
-                column: terminal_text_width(&line[..byte_index], terminal_emoji_width()),
+                column: origin
+                    + terminal_text_width(&content[..byte_index], terminal_emoji_width()),
             },
             terminal_text_width(query, terminal_emoji_width()),
         ));

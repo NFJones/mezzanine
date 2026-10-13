@@ -585,6 +585,7 @@ impl RuntimeSessionService {
             || self.agent_terminal_markdown_frame_width(&result.pane_id)? != result.frame_width
             || self.agent_terminal_markdown_terminal_width(&result.pane_id)? != result.table_width
             || self.presentation.settings.ui_theme != result.ui_theme
+            || result.screen.log_frame_settings() != self.presentation.settings.log_frame_settings()
         {
             self.integration
                 .runtime_metrics_mut()

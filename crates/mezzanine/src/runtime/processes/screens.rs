@@ -69,6 +69,8 @@ impl RuntimeSessionService {
     }
 
     /// Returns the retained agent terminal screen for one pane.
+    ///
+    /// Visual consumers project optional decoration separately from this source.
     #[allow(dead_code)]
     pub(crate) fn agent_pane_screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
         self.agent_pane_screen_state(pane_id)
@@ -86,7 +88,51 @@ impl RuntimeSessionService {
             .map(AgentPaneScreen::lineage)
     }
 
+    /// Applies a settings replacement to retained agent surfaces at unchanged
+    /// PTY/composer geometry. Rotating lineage rejects earlier async work even
+    /// across an on/off/on cycle; transient baselines retain their source owners.
+    pub(crate) fn refresh_agent_log_frame_settings(&mut self) -> Result<()> {
+        let (policy, rendition) = self.presentation.settings.log_frame_settings();
+        let panes = self
+            .process
+            .agent_pane_screens
+            .iter()
+            .filter_map(|(pane, state)| {
+                (state.screen().log_frame_settings() != (policy, rendition)).then(|| {
+                    (
+                        pane.clone(),
+                        state.conversation_id().to_string(),
+                        state.lineage(),
+                        state.screen().size(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        if !panes.is_empty() {
+            self.presentation.clear_stale_frame_coordinate_state();
+        }
+        for (pane, conversation, previous_lineage, size) in panes {
+            if let Some(screen) = self.agent_pane_screen_mut(&pane) {
+                screen.set_log_frame_settings(policy, rendition);
+            }
+            if let Some(lineage) = self.agent_pane_screen_lineage(&pane, &conversation) {
+                self.presentation
+                    .rebase_agent_presentations_after_provisional_resize(
+                        &pane,
+                        previous_lineage,
+                        lineage,
+                        size,
+                    )?;
+                self.presentation
+                    .defer_agent_presentation_resize(&pane, size);
+            }
+        }
+        Ok(())
+    }
+
     /// Returns mutable retained agent terminal state for one pane.
+    ///
+    /// Mutation rotates lineage so delayed projections cannot replace new geometry.
     #[allow(dead_code)]
     pub(crate) fn agent_pane_screen_mut(&mut self, pane_id: &str) -> Option<&mut TerminalScreen> {
         self.process.next_agent_pane_screen_lineage = self
@@ -105,12 +151,16 @@ impl RuntimeSessionService {
     }
 
     /// Replaces one pane's retained agent screen with a conversation-bound value.
+    ///
+    /// Captured framing policy is installed before the screen gains authority.
     pub(crate) fn set_agent_pane_screen(
         &mut self,
         pane_id: impl Into<String>,
         conversation_id: impl Into<String>,
-        screen: TerminalScreen,
+        mut screen: TerminalScreen,
     ) {
+        let (policy, rendition) = self.presentation.settings.log_frame_settings();
+        screen.set_log_frame_settings(policy, rendition);
         let pane_id = pane_id.into();
         self.reset_steering_presentation_surface(&pane_id);
         self.process.next_agent_pane_screen_lineage = self
@@ -142,6 +192,8 @@ impl RuntimeSessionService {
         conversation_id: &str,
         mut screen: TerminalScreen,
     ) -> Option<u64> {
+        let (policy, rendition) = self.presentation.settings.log_frame_settings();
+        screen.set_log_frame_settings(policy, rendition);
         self.agent_pane_screen_lineage(pane_id, conversation_id)?;
         let (composite, pending_rows) = self
             .compose_pending_steering_suffix(pane_id, conversation_id, screen)

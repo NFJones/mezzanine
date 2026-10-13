@@ -589,6 +589,7 @@ use config::{
     runtime_random_marker_token, runtime_saved_session_retention_policy_from_config,
     runtime_shell_mode_from_config, runtime_string_array_json,
     runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
+    runtime_terminal_agent_log_timestamps_from_config,
     runtime_terminal_agent_wrap_column_cap_from_config, runtime_terminal_clipboard_from_config,
     runtime_terminal_completion_attention_flashing_from_config,
     runtime_terminal_cursor_blink_from_config,

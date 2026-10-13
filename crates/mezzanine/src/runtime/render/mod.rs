@@ -185,6 +185,23 @@ impl Default for RuntimePresentationSettings {
 }
 
 impl RuntimePresentationSettings {
+    /// Captures optional log geometry and semantic style for one agent screen.
+    /// Process screens and editable composer geometry do not consume this policy.
+    pub(crate) fn log_frame_settings(
+        &self,
+    ) -> (
+        mez_core::presentation::LogFramePolicy,
+        mez_terminal::GraphicRendition,
+    ) {
+        (
+            mez_core::presentation::LogFramePolicy {
+                timestamps: self.terminal_agent_log_timestamps,
+                wrap_cap: self.terminal_agent_wrap_column_cap,
+            },
+            self.ui_theme.agent_framing_rendition(),
+        )
+    }
+
     /// Returns the geometry-affecting frame policy after zen-mode suppression.
     fn effective_frame_geometry(
         &self,
@@ -233,6 +250,7 @@ impl RuntimePresentationSettings {
             || self.pane_frame_style != replacement.pane_frame_style
             || self.pane_frame_visible_fields != replacement.pane_frame_visible_fields
             || self.terminal_agent_wrap_column_cap != replacement.terminal_agent_wrap_column_cap
+            || self.terminal_agent_log_timestamps != replacement.terminal_agent_log_timestamps
             || self.terminal_reduced_motion != replacement.terminal_reduced_motion
             || self.terminal_zen_mode != replacement.terminal_zen_mode
             || self.terminal_streaming_output != replacement.terminal_streaming_output
@@ -286,7 +304,12 @@ impl RuntimePresentationSettings {
                 crate::runtime::runtime_terminal_render_rate_limit_fps_from_config(root)?,
             terminal_agent_wrap_column_cap:
                 crate::runtime::runtime_terminal_agent_wrap_column_cap_from_config(root)?,
-            terminal_agent_log_timestamps: false,
+            // Activation stays inert until the complete frame/copy contract is qualified.
+            terminal_agent_log_timestamps: {
+                let _validated =
+                    crate::runtime::runtime_terminal_agent_log_timestamps_from_config(root)?;
+                false
+            },
             terminal_reduced_motion: crate::runtime::runtime_terminal_reduced_motion_from_config(
                 root,
             )?,
@@ -2348,10 +2371,12 @@ impl RuntimePresentationComponent {
         size: Size,
     ) -> Result<()> {
         size.validate()?;
+        let (policy, rendition) = self.settings.log_frame_settings();
         if let Some(preview) = self.agent_shell_output_previews.get_mut(pane_id)
             && preview.installed_lineage == previous_lineage
         {
             let mut baseline = preview.baseline_screen.as_ref().clone();
+            baseline.set_log_frame_settings(policy, rendition);
             baseline.resize(size)?;
             preview.baseline_screen = std::sync::Arc::new(baseline);
             preview.installed_lineage = resized_lineage;
@@ -2360,6 +2385,7 @@ impl RuntimePresentationComponent {
             && progress.installed_lineage == previous_lineage
         {
             let mut baseline = progress.baseline_screen.as_ref().clone();
+            baseline.set_log_frame_settings(policy, rendition);
             baseline.resize(size)?;
             progress.baseline_screen = std::sync::Arc::new(baseline);
             progress.installed_lineage = resized_lineage;
@@ -2369,8 +2395,10 @@ impl RuntimePresentationComponent {
             && streaming.installed_lineage == previous_lineage
         {
             let mut baseline = streaming.baseline_screen.as_ref().clone();
+            baseline.set_log_frame_settings(policy, rendition);
             baseline.resize(size)?;
             let mut provider = streaming.provider_screen.as_ref().clone();
+            provider.set_log_frame_settings(policy, rendition);
             provider.resize(size)?;
             streaming.baseline_screen = std::sync::Arc::new(baseline);
             streaming.provider_screen = std::sync::Arc::new(provider);

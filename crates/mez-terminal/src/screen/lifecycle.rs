@@ -248,6 +248,8 @@ impl TerminalScreen {
             line_copy_texts: vec![None; usize::from(size.rows)],
             line_presentations: vec![None; usize::from(size.rows)],
             active_presentation: None,
+            log_frame_policy: LogFramePolicy::default(),
+            log_timestamp_rendition: GraphicRendition::default(),
             wrap_continuation_prefix: None,
             emoji_width: terminal_emoji_width(),
             cursor: Cursor { row: 0, column: 0 },
@@ -582,12 +584,14 @@ impl TerminalScreen {
             &source_rows,
             self.wrap_continuation_prefix.as_deref(),
             self.emoji_width,
+            self.log_frame_policy.timestamps,
         );
         let physical_rows = reflow_logical_lines(
             &logical_lines,
             usize::from(size.columns),
             self.wrap_continuation_prefix.as_deref(),
             self.emoji_width,
+            self.log_frame_policy,
         );
         let visible_start = if preserve_bottom || physical_rows.len() > new_rows {
             physical_rows.len().saturating_sub(new_rows)
@@ -628,6 +632,7 @@ impl TerminalScreen {
                 usize::from(size.columns),
                 self.wrap_continuation_prefix.as_deref(),
                 self.emoji_width,
+                self.log_frame_policy,
             );
             self.cursor.row = absolute_row.saturating_sub(visible_start).min(max_row);
             self.cursor.column = column.min(max_column);
@@ -857,12 +862,14 @@ impl TerminalScreen {
             &source_rows,
             self.wrap_continuation_prefix.as_deref(),
             self.emoji_width,
+            self.log_frame_policy.timestamps,
         );
         let physical_rows = reflow_logical_lines(
             &logical_lines,
             usize::from(size.columns),
             self.wrap_continuation_prefix.as_deref(),
             self.emoji_width,
+            self.log_frame_policy,
         );
         let visible_start = if preserve_bottom || physical_rows.len() > new_rows {
             physical_rows.len().saturating_sub(new_rows)
@@ -907,6 +914,7 @@ impl TerminalScreen {
                 usize::from(size.columns),
                 self.wrap_continuation_prefix.as_deref(),
                 self.emoji_width,
+                self.log_frame_policy,
             );
             self.cursor.row = absolute_row.saturating_sub(visible_start).min(max_row);
             self.cursor.column = column.min(max_column);

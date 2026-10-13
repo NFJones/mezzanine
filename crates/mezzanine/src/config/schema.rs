@@ -596,6 +596,7 @@ pub(super) const TERMINAL_KEYS: &[&str] = &[
     "render_rate_limit_fps",
     "shell_output_preview_lines",
     "agent_wrap_column_cap",
+    "agent_log_timestamps",
     "cursor_style",
     "cursor_blink",
     "cursor_blink_interval_ms",

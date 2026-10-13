@@ -107,6 +107,16 @@ impl TerminalScreen {
         }
         self.feed(bytes);
         self.active_presentation = previous;
+        // A tagged logical right edge is not the physical PTY right edge.
+        // Restore raw-feed cursor semantics without overwriting the last cell;
+        // another tagged feed still wraps through its capacity check.
+        if self.wrap_pending
+            && self.cursor.column < self.max_column()
+            && self.active_presentation.is_none()
+        {
+            self.cursor.column += 1;
+            self.wrap_pending = false;
+        }
     }
 
     /// Assigns recent copy text and returns inspected physical-row count for tests.

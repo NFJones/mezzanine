@@ -451,10 +451,7 @@ pub(super) fn display_overlay_text_rendition(ui_theme: &UiTheme) -> GraphicRendi
 /// Uses the restored thinking-log foreground and shadow attributes only for
 /// composer decoration. Other overlays retain their own semantic theme role.
 fn agent_composer_decoration_rendition(ui_theme: &UiTheme) -> GraphicRendition {
-    GraphicRendition {
-        dim: true,
-        ..text_foreground_rendition(ui_theme.colors.agent_transcript_status)
-    }
+    ui_theme.agent_framing_rendition()
 }
 
 /// Clips header text with the shared display-width owner, then fills remaining

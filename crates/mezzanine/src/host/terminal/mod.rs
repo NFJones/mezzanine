@@ -46,6 +46,7 @@ mod host_clipboard;
 pub(crate) mod iroh_clipboard;
 pub(crate) mod iroh_health;
 pub(crate) mod iroh_pill;
+pub(crate) mod log_frame;
 /// Exposes the mouse module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

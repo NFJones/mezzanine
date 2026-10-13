@@ -173,7 +173,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 101
+version = 102
 
 # Model-selected skills remain default-off when policy is absent. Explicit false
 # is a global veto; omission permits individual document/operator opt-ins.
@@ -299,6 +299,8 @@ shell_output_preview_lines = 5
 # Maximum display width for structured Mezzanine-owned agent log and transcript
 # rows. Legacy ANSI-only replay remains byte-preserving.
 agent_wrap_column_cap = 120
+# Display captured UTC HH:MM:SS once per structured log entry; content copy is unchanged.
+agent_log_timestamps = false
 # Cursor shape: "block", "underline", or "bar".
 cursor_style = "block"
 # Keep the terminal cursor steady by default.

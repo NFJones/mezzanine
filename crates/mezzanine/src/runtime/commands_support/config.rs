@@ -1311,6 +1311,7 @@ pub(crate) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "terminal.emoji_width"
                 | "terminal.reduced_motion"
                 | "terminal.streaming_output"
+                | "terminal.agent_log_timestamps"
                 | "terminal.resize_debounce_ms"
                 | "terminal.render_rate_limit_fps"
                 | "terminal.shell_output_preview_lines"

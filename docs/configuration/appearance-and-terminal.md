@@ -52,6 +52,25 @@ at grapheme boundaries. Legacy ANSI-only presentation
 records remain byte-preserving and can therefore wrap at the physical pane
 width instead.
 
+Set `terminal.agent_log_timestamps = true` to show captured occurrence times in
+fixed **UTC HH:MM:SS**, once per proven structured log entry. It defaults off.
+Eight clock cells and one separator precede the existing two-cell gutter;
+continuations (including a cropped first visible row) reserve blank nine-cell
+padding. Unknown/unrepresentable times are blank, opaque PTY/ANSI rows remain
+untagged, and safely retained legacy record times are coarse persistence evidence.
+The whole margin counts toward the wrapping cap and is suppressed below 21
+capped cells. Composer/editor input, pane frames and physical PTY dimensions are
+unchanged. Timestamp cells share the dim foreground-only passive agent framing
+recipe, with independent category and body styling.
+
+The display uses original server wall-clock instants, not render time, durations
+or executor/remote-generation proof. Midnight or backward/equal clocks can repeat;
+UTC does not jump for local DST, and sequence order remains authoritative. There
+is no format/timezone knob or periodic refresh. Visual client frames retain the
+margin; content copy/search/capture/export/model observations omit it without
+rewriting authored source, including literal `HH:MM:SS` text. Margin-only source
+selection remains empty.
+
 Agent transcript gutters use `│ ` (two display cells) and their row category's foreground without background
 fill. Assistant/user labels retain bold accents; status and thinking text use
 dim shadow styling. Authored body emphasis remains independent. No palette,

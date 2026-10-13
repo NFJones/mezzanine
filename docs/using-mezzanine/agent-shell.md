@@ -255,6 +255,35 @@ Structured agent output wraps at the smaller of the pane width and
 recovers logical text rather than inserting presentation-only wrap boundaries.
 Older ANSI-only saved records are replayed unchanged and may wrap differently.
 
+### Optional log occurrence timestamps
+
+`terminal.agent_log_timestamps` defaults to `false`. Enabling it shows fixed
+**UTC HH:MM:SS** (eight cells and one separator) left of the two-cell log gutter,
+once at the original first row of each structured user/parent/peer message,
+thinking/rationale/say component, action header/preview/result, status/error/macro
+or structured shell-output entry. Authored newlines, tables and wrapped rows
+reserve the same blank nine-cell margin; scrolling to a continuation never
+repeats the timestamp. Untagged interactive PTY chunks and opaque legacy ANSI
+records do not acquire guessed entry times. Unknown or unrepresentable times
+are blank. Original legacy record times, when safely available, are coarse
+seconds-precision persistence evidence rather than observed occurrence time.
+
+These captured server wall-clock instants are not elapsed time, executor start
+or remote generation/delivery proof. Clock-only text omits dates, so midnight,
+equal instants and backward clock adjustments can repeat. UTC does not jump for
+local daylight-saving changes; sequence order, not clock text, orders entries.
+No format or timezone setting is introduced. Rendering never reads the current
+clock or timezone files, and there is no periodic timestamp repaint.
+
+The configured cap includes timestamp margin and gutter; the optional margin
+is suppressed below 21 capped pane cells. The editable composer and PTY size
+do not change. Timestamps use dim foreground-only passive framing style;
+category gutters and authored body emphasis remain independent. Visual client
+frames/screenshots retain the margin. Content copy, source copy, search, capture,
+history export and model observations omit it while preserving their existing
+content format, including literal timestamp-looking authored text. Selecting
+only the margin does not copy an unrelated whole source entry.
+
 Later action logs and assistant text wait behind earlier presentation barriers.
 When a barrier releases, eligible components drain in response order. Accepted
 sources remain owned until installation succeeds; a bounded presentation-only

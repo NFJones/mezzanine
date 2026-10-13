@@ -37,12 +37,23 @@ impl RuntimeSessionService {
     ) -> Result<usize> {
         let mut ordered = previews.values().collect::<Vec<_>>();
         ordered.sort_by_key(|preview| preview.first_seen_order);
-        let content_columns = bounded_agent_terminal_presentation_columns(
-            usize::from(screen.size().columns),
-            column_cap,
-        )
-        .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
-        .max(1);
+        let (policy, _) = screen.log_frame_settings();
+        let content_columns = if policy.timestamps {
+            mez_core::presentation::LogFramePolicy {
+                wrap_cap: column_cap,
+                ..policy
+            }
+            .frame(usize::from(screen.size().columns))
+            .body_budget
+            .max(1)
+        } else {
+            bounded_agent_terminal_presentation_columns(
+                usize::from(screen.size().columns),
+                column_cap,
+            )
+            .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
+            .max(1)
+        };
         // A live window cannot own more rows than the pane can display. Keep
         // each owner's source, but clip the composite before feeding terminal
         // bytes so its head never becomes an obsolete insertion point in history.

@@ -8,6 +8,9 @@
 
 use serde::{Deserialize, Serialize};
 
+mod log_frame;
+pub use log_frame::{LogFrame, LogFramePolicy};
+
 /// Evidence behind a local presentation timestamp, never execution evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PresentationOccurrenceBasis {

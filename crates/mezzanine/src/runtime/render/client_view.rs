@@ -28,6 +28,20 @@ use super::{
 };
 use crate::host::terminal::project_provisional_pane_resize;
 
+/// Formats only proven agent rows from the screen's captured policy. The
+/// synchronized-output getter remains canonical; process/editor screens have
+/// disabled policy, and snapshots never mix actor settings with captured rows.
+fn agent_log_visual_rows(screen: &TerminalScreen) -> Vec<TerminalStyledLine> {
+    let (policy, rendition) = screen.log_frame_settings();
+    crate::host::terminal::log_frame::project_log_rows(
+        screen.presentation_visible_styled_lines(),
+        policy,
+        usize::from(screen.size().columns),
+        rendition,
+    )
+    .rows
+}
+
 /// Formats composer-only key hints in lowercase. An uppercase ASCII character
 /// retains an explicit shift marker; canonical bindings and shared notation
 /// remain unchanged.
@@ -100,7 +114,7 @@ pub(crate) fn compose_client_render_snapshot(
             role,
             &window,
             |pane_id| screens.get(pane_id).map(|screen| screen.as_ref()),
-            |_pane_id, screen| std::sync::Arc::from(screen.presentation_visible_styled_lines()),
+            |_pane_id, screen| std::sync::Arc::from(agent_log_visual_rows(screen)),
             presentation_plan.as_ref(),
             &config,
             client_size,
@@ -614,7 +628,7 @@ impl RuntimeSessionService {
                     return rows;
                 }
                 let rows: std::sync::Arc<[TerminalStyledLine]> =
-                    std::sync::Arc::from(screen.presentation_visible_styled_lines());
+                    std::sync::Arc::from(agent_log_visual_rows(screen));
                 cache.misses = cache.misses.saturating_add(1);
                 cache.rows.insert(
                     pane_id.to_string(),

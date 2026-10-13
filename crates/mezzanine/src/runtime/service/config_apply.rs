@@ -621,6 +621,7 @@ impl RuntimeSessionService {
         }
         if let Some((presentation_settings, host_clipboard)) = prepared_presentation {
             presentation_invalidation = self.presentation.apply_settings(presentation_settings);
+            self.refresh_agent_log_frame_settings()?;
             self.set_host_clipboard(host_clipboard);
             if previous_frame_geometry != self.effective_frame_geometry() {
                 self.presentation.clear_mouse_resize_drag_state();

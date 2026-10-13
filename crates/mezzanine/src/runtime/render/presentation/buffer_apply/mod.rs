@@ -1618,7 +1618,18 @@ impl RuntimeSessionService {
         );
         let prefix_width =
             UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX) + UnicodeWidthStr::width("$ ");
-        let content_columns = display_columns.saturating_sub(prefix_width).max(1);
+        let content_columns = if self.presentation.settings.terminal_agent_log_timestamps {
+            self.presentation
+                .settings
+                .log_frame_settings()
+                .0
+                .frame(columns)
+                .body_budget
+                .saturating_sub(UnicodeWidthStr::width("$ "))
+                .max(1)
+        } else {
+            display_columns.saturating_sub(prefix_width).max(1)
+        };
         let mut source = bounded_command_preview_source(command);
         source.truncated |= source_was_truncated;
         let rendered_lines = command_preview_terminal_rendered_lines(

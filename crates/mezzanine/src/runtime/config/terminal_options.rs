@@ -447,6 +447,20 @@ pub(crate) fn runtime_terminal_zen_focus_label_duration_ms_from_config(
         })
 }
 
+/// Parses the default-off structured-log display setting. Missing values remain
+/// false; non-boolean authored values fail before the settings replacement.
+pub(crate) fn runtime_terminal_agent_log_timestamps_from_config(root: &Value) -> Result<bool> {
+    let Some(terminal) = runtime_json_object(root, "terminal") else {
+        return Ok(false);
+    };
+    let Some(value) = terminal.get("agent_log_timestamps") else {
+        return Ok(false);
+    };
+    value
+        .as_bool()
+        .ok_or_else(|| MezError::config("terminal.agent_log_timestamps must be true or false"))
+}
+
 /// Returns whether provisional provider output should render while it arrives.
 pub(crate) fn runtime_terminal_streaming_output_from_config(root: &Value) -> Result<bool> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {

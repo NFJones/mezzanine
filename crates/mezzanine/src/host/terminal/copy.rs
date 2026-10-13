@@ -64,6 +64,34 @@ impl DerefMut for CopyMode {
 impl CopyMode {
     /// Builds copy state from normal-screen history and live terminal rows.
     pub fn from_screen(screen: &TerminalScreen, viewport_rows: usize) -> Result<Self> {
+        let (policy, rendition) = screen.log_frame_settings();
+        if policy.timestamps {
+            let projection = super::log_frame::project_log_rows(
+                screen.normal_log_frame_copy_rows(|source| {
+                    decode_agent_copy_source_line(source)
+                        .map(|(identity, _)| format!("{COPY_SOURCE_REFERENCE_PREFIX}{identity}"))
+                        .or_else(|| {
+                            source
+                                .strip_prefix(COPY_SOURCE_REFERENCE_PREFIX)
+                                .map(|identity| format!("{COPY_SOURCE_REFERENCE_PREFIX}{identity}"))
+                        })
+                        .unwrap_or_else(|| AGENT_COPY_SKIP_LINE.to_string())
+                }),
+                policy,
+                usize::from(screen.size().columns),
+                rendition,
+            );
+            return Ok(Self(
+                StyledCopyMode::from_projected_rows(
+                    screen,
+                    projection.rows,
+                    projection.frames,
+                    viewport_rows,
+                    false,
+                )?,
+                false,
+            ));
+        }
         Ok(Self(
             StyledCopyMode::from_screen(screen, viewport_rows)?,
             false,
@@ -72,6 +100,25 @@ impl CopyMode {
 
     /// Builds copy state from only the currently visible terminal rows.
     pub fn from_visible_screen(screen: &TerminalScreen, viewport_rows: usize) -> Result<Self> {
+        let (policy, rendition) = screen.log_frame_settings();
+        if policy.timestamps {
+            let projection = super::log_frame::project_log_rows(
+                screen.visible_styled_lines(),
+                policy,
+                usize::from(screen.size().columns),
+                rendition,
+            );
+            return Ok(Self(
+                StyledCopyMode::from_projected_rows(
+                    screen,
+                    projection.rows,
+                    projection.frames,
+                    viewport_rows,
+                    true,
+                )?,
+                false,
+            ));
+        }
         Ok(Self(
             StyledCopyMode::from_visible_screen(screen, viewport_rows)?,
             false,
@@ -128,14 +175,24 @@ impl CopyMode {
                     .unwrap_or_default()
             };
             let selected = self.copy_rendered_line_slice(line, line_start, line_end);
+            let margin = self
+                .0
+                .log_frame(line)
+                .map_or(0, |frame| frame.margin_width());
+            if self
+                .0
+                .log_frame(line)
+                .is_some_and(|frame| line_end <= frame.body_origin)
+                && (start.line == end.line || line == start.line || line == end.line)
+            {
+                continue;
+            }
             let includes_gutter = self.1
-                && line_start == 0
-                && line_end >= 2
-                && self
-                    .0
-                    .lines()
-                    .get(line)
-                    .is_some_and(|row| strip_agent_copy_indicator(row).is_some());
+                && line_start <= margin
+                && line_end >= margin + 2
+                && self.0.lines().get(line).is_some_and(|row| {
+                    strip_agent_copy_indicator(&line_slice(row, margin, char_count(row))).is_some()
+                });
             if includes_gutter {
                 decorated.push(selected);
             } else {
@@ -155,6 +212,18 @@ impl CopyMode {
         let mut emitted_group_starts = BTreeSet::new();
         let mut line = start.line;
         while line <= end.line {
+            let selected_start = if line == start.line { start.column } else { 0 };
+            let selected_end = if line == end.line {
+                end.column
+            } else {
+                self.0.lines().get(line).map_or(0, |row| char_count(row))
+            };
+            if self.0.log_frame(line).is_some_and(|frame| {
+                selected_end <= frame.body_origin || selected_start >= selected_end
+            }) {
+                line += 1;
+                continue;
+            }
             let Some(copy_line) = self.0.copy_line(line) else {
                 line = line.saturating_add(1);
                 continue;
@@ -230,10 +299,17 @@ impl CopyMode {
 
     /// Slices one displayed row without applying source-recovery metadata.
     fn copy_rendered_line_slice(&self, line: usize, start: usize, end: usize) -> String {
+        let margin = self
+            .0
+            .log_frame(line)
+            .map_or(0, |frame| frame.margin_width());
+        if end <= margin {
+            return String::new();
+        }
         self.0
             .lines()
             .get(line)
-            .map(|display_line| line_slice(display_line, start, end))
+            .map(|display_line| line_slice(display_line, start.max(margin), end))
             .unwrap_or_default()
     }
 

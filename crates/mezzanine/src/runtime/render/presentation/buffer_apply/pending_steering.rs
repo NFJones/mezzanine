@@ -361,12 +361,22 @@ impl RuntimeSessionService {
         if budget == 0 {
             return Ok((screen, 0));
         }
-        let width = bounded_agent_terminal_presentation_columns(
-            usize::from(size.columns),
-            self.presentation.settings.terminal_agent_wrap_column_cap,
-        )
-        .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
-        .max(1);
+        let width = if self.presentation.settings.terminal_agent_log_timestamps {
+            self.presentation
+                .settings
+                .log_frame_settings()
+                .0
+                .frame(usize::from(size.columns))
+                .body_budget
+                .max(1)
+        } else {
+            bounded_agent_terminal_presentation_columns(
+                usize::from(size.columns),
+                self.presentation.settings.terminal_agent_wrap_column_cap,
+            )
+            .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
+            .max(1)
+        };
         let (mut lines, mut row_entries): (Vec<_>, Vec<_>) = pending
             .iter()
             .flat_map(|entry| {

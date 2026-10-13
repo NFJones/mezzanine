@@ -326,6 +326,19 @@ pub struct UiTheme {
     pub colors: UiThemeColors,
 }
 
+impl UiTheme {
+    /// Foreground-only shadow styling shared by passive agent framing.
+    /// Category gutters and authored body styles remain independent; the
+    /// configured status background is deliberately not inherited.
+    pub fn agent_framing_rendition(&self) -> GraphicRendition {
+        GraphicRendition {
+            dim: true,
+            foreground: Some(self.colors.agent_transcript_status.foreground),
+            ..GraphicRendition::default()
+        }
+    }
+}
+
 impl Default for UiTheme {
     /// Runs the default operation for this subsystem.
     ///

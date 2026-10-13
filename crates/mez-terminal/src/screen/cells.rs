@@ -200,7 +200,7 @@ impl TerminalScreen {
         } else {
             return false;
         };
-        let Some(leading_column) = self.leading_column_for_cell(self.cursor.row, start_column)
+        let Some(mut leading_column) = self.leading_column_for_cell(self.cursor.row, start_column)
         else {
             return false;
         };
@@ -229,8 +229,20 @@ impl TerminalScreen {
             return false;
         }
 
-        self.clear_line_copy_text(self.cursor.row);
         let rendition = self.renditions[self.cursor.row][leading_column];
+        let print_max_column = self.print_max_column();
+        if self.autowrap_enabled
+            && self.active_presentation.is_some()
+            && leading_column.saturating_add(new_width) > print_max_column + 1
+        {
+            // VS16/keycap/ZWJ can expand a previously accepted one-cell scalar.
+            // Move the complete grapheme, not its trailing scalar, into the
+            // owned continuation. Canonical cells still contain no decoration.
+            self.clear_cell_footprint(self.cursor.row, leading_column, rendition);
+            self.wrap_to_next_line();
+            leading_column = self.cursor.column;
+        }
+        self.clear_line_copy_text(self.cursor.row);
         for column in
             leading_column.saturating_add(old_width)..leading_column.saturating_add(new_width)
         {
@@ -250,8 +262,8 @@ impl TerminalScreen {
             }
         }
         let next_column = leading_column.saturating_add(new_width);
-        if next_column > self.max_column() {
-            self.cursor.column = self.max_column();
+        if next_column > print_max_column {
+            self.cursor.column = print_max_column;
             self.wrap_pending = true;
         } else {
             self.cursor.column = next_column;

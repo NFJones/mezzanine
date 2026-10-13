@@ -90,12 +90,13 @@ use super::v97_v98::migrate_v97_to_v98;
 use super::v98_v99::migrate_v98_to_v99;
 use super::v99_v100::migrate_v99_to_v100;
 use super::v100_v101::migrate_v100_to_v101;
+use super::v101_v102::migrate_v101_to_v102;
 use super::{
     ConfigFormat, MezError, Path, Result, extract_config_values, fs, write_private_config_file,
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 101;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 102;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -540,6 +541,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             100 => {
                 current_text = migrate_v100_to_v101(format, &current_text)?;
                 current_version = 101;
+            }
+            101 => {
+                current_text = migrate_v101_to_v102(format, &current_text)?;
+                current_version = 102;
             }
             unsupported => {
                 return Err(MezError::config(format!(

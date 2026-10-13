@@ -6,6 +6,7 @@
 //! and continuation wrapping without changing the public `TerminalScreen`
 //! contract. The engine remains independent of product runtime and host I/O.
 
+use mez_core::presentation::LogFramePolicy;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -676,6 +677,10 @@ pub struct TerminalScreen {
     pub(super) line_presentations: Vec<Option<PresentationEntry>>,
     /// Scoped producer annotation during semantic feed; absent for arbitrary PTY.
     pub(super) active_presentation: Option<PresentationEntry>,
+    /// Immutable optional decoration geometry; canonical cells never contain it.
+    pub(super) log_frame_policy: LogFramePolicy,
+    /// Supplied semantic rendition for the product's visual projection only.
+    pub(super) log_timestamp_rendition: GraphicRendition,
     /// Optional styled line prefix repeated on soft-wrapped continuation rows.
     ///
     /// The prefix is presentation policy supplied by the product layer. The
@@ -905,6 +910,8 @@ mod cells;
 mod content;
 mod editing;
 mod lifecycle;
+mod log_frame;
+use log_frame::log_frame_columns;
 mod parser;
 mod state;
 mod synchronized_output;
@@ -1075,6 +1082,7 @@ fn merge_wrapped_physical_lines(
     rows: &[PhysicalStyledLine],
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
+    preserve_source_associations: bool,
 ) -> Vec<TerminalStyledLine> {
     let mut logical_lines = Vec::new();
     let mut current: Option<TerminalStyledLine> = None;
@@ -1099,7 +1107,7 @@ fn merge_wrapped_physical_lines(
             // Reflow must not resurrect provenance from its unedited prefix.
             current_line.presentation = None;
         }
-        let source_line = if !starts_logical_line && current_has_continuation_prefix {
+        let mut source_line = if !starts_logical_line && current_has_continuation_prefix {
             continuation_prefix
                 .and_then(|prefix| {
                     strip_continuation_prefix_from_styled_line(&row.line, prefix, emoji_width)
@@ -1108,6 +1116,12 @@ fn merge_wrapped_physical_lines(
         } else {
             row.line.clone()
         };
+        if preserve_source_associations
+            && !starts_logical_line
+            && current_line.presentation.is_some()
+        {
+            source_line.copy_text = None;
+        }
         append_styled_line(current_line, &source_line, emoji_width);
         if !row.wraps_to_next {
             logical_lines.push(
@@ -1163,11 +1177,19 @@ fn reflow_logical_lines(
     columns: usize,
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
+    frame_policy: LogFramePolicy,
 ) -> Vec<PhysicalStyledLine> {
     let columns = columns.max(1);
     let mut rows = Vec::new();
     for line in lines {
-        reflow_one_logical_line(line, columns, continuation_prefix, emoji_width, &mut rows);
+        reflow_one_logical_line(
+            line,
+            columns,
+            continuation_prefix,
+            emoji_width,
+            frame_policy,
+            &mut rows,
+        );
     }
     rows
 }
@@ -1179,8 +1201,10 @@ fn reflow_one_logical_line(
     columns: usize,
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
+    frame_policy: LogFramePolicy,
     rows: &mut Vec<PhysicalStyledLine>,
 ) {
+    let columns = log_frame_columns(line.presentation.as_ref(), columns, frame_policy);
     let continuation_prefix = continuation_prefix
         .and_then(|prefix| continuation_prefix_from_styled_line(line, prefix, emoji_width))
         .filter(|prefix| prefix_width(prefix) < columns);
@@ -1201,6 +1225,12 @@ fn reflow_one_logical_line(
                 wraps_to_next: true,
             });
             current = TerminalStyledLine::plain(String::new());
+            if frame_policy.timestamps && line.presentation.is_some() {
+                // Copy payload is opaque to the terminal. Proven structured
+                // source associations survive on every newly reflowed row;
+                // the product deduplicates their existing source identities.
+                current.copy_text = line.copy_text.clone();
+            }
             current.presentation = line.presentation.clone().map(|mut entry| {
                 entry.first_row = false;
                 entry
@@ -1427,12 +1457,21 @@ fn physical_position_for_logical_cursor(
     columns: usize,
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
+    frame_policy: LogFramePolicy,
 ) -> (usize, usize) {
     let columns = columns.max(1);
     let row_offset = logical_lines
         .iter()
         .take(logical_line)
-        .map(|line| physical_row_count_for_line(line, columns, continuation_prefix, emoji_width))
+        .map(|line| {
+            physical_row_count_for_line(
+                line,
+                columns,
+                continuation_prefix,
+                emoji_width,
+                frame_policy,
+            )
+        })
         .sum::<usize>();
     let (line_row, column) = physical_position_in_line(
         logical_lines.get(logical_line),
@@ -1440,6 +1479,7 @@ fn physical_position_for_logical_cursor(
         columns,
         continuation_prefix,
         emoji_width,
+        frame_policy,
     );
     (row_offset.saturating_add(line_row), column)
 }
@@ -1450,6 +1490,7 @@ fn physical_row_count_for_line(
     columns: usize,
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
+    frame_policy: LogFramePolicy,
 ) -> usize {
     let mut rows = Vec::new();
     reflow_one_logical_line(
@@ -1457,6 +1498,7 @@ fn physical_row_count_for_line(
         columns.max(1),
         continuation_prefix,
         emoji_width,
+        frame_policy,
         &mut rows,
     );
     rows.len().max(1)
@@ -1470,10 +1512,12 @@ fn physical_position_in_line(
     columns: usize,
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
+    frame_policy: LogFramePolicy,
 ) -> (usize, usize) {
     let Some(line) = line else {
         return (0, 0);
     };
+    let columns = log_frame_columns(line.presentation.as_ref(), columns, frame_policy);
     let continuation_prefix = continuation_prefix
         .and_then(|prefix| continuation_prefix_from_styled_line(line, prefix, emoji_width))
         .filter(|prefix| prefix_width(prefix) < columns);

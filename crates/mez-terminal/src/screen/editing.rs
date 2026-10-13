@@ -24,11 +24,12 @@ impl TerminalScreen {
         if width == 0 {
             return;
         }
+        let print_max_column = self.print_max_column();
         if self.wrap_pending {
             self.wrap_to_next_line();
         }
         if self.autowrap_enabled
-            && self.cursor.column.saturating_add(width).saturating_sub(1) > self.max_column()
+            && self.cursor.column.saturating_add(width).saturating_sub(1) > print_max_column
         {
             self.wrap_to_next_line();
         }
@@ -53,19 +54,19 @@ impl TerminalScreen {
         self.renditions[row][column] = self.graphic_rendition;
         for offset in 1..width {
             let column = column.saturating_add(offset);
-            if column <= self.max_column() {
+            if column <= print_max_column {
                 self.cells[row][column] = TerminalScreenCell::continuation();
                 self.renditions[row][column] = self.graphic_rendition;
             }
         }
         let next_column = self.cursor.column.saturating_add(width);
-        if next_column > self.max_column() {
+        if next_column > print_max_column {
             if !self.autowrap_enabled {
                 self.cursor.column = self.max_column();
                 self.wrap_pending = false;
                 return;
             }
-            self.cursor.column = self.max_column();
+            self.cursor.column = print_max_column;
             self.wrap_pending = true;
         } else {
             self.cursor.column = next_column;
