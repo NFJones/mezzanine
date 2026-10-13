@@ -105,7 +105,7 @@ async fn issued_fixture() -> (RuntimeSessionService, RuntimeAgentProviderDispatc
         format:ConfigFormat::Toml,scope:ConfigScope::Primary,trusted:true,
         text:"[agents]\nrouting=false\nshell_mode=\"native\"\ndefault_provider=\"local-chat\"\ndefault_model_profile=\"default\"\n[permissions]\nsandbox=\"policy-only\"\n[providers.local-chat]\nkind=\"openai-compatible\"\nbase_url=\"http://127.0.0.1:1/v1\"\nmodels=[\"test-model\"]\ndefault_model=\"test-model\"\n[model_profiles.default]\nprovider=\"local-chat\"\nmodel=\"test-model\"\n".into(),
     }]).unwrap();
-    service
+    let primary = service
         .attach_primary(
             "primary",
             true,
@@ -120,9 +120,15 @@ async fn issued_fixture() -> (RuntimeSessionService, RuntimeAgentProviderDispatc
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let turn = service
-        .start_agent_prompt_turn("%1", "replace incomplete inference")
+    service
+        .execute_agent_shell_command(&primary, "replace incomplete inference")
         .unwrap();
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&task.turn_id)
+        .unwrap()
+        .clone();
     let preparation = service.prepare_agent_provider_work(&turn.turn_id).unwrap();
     let outcome = RuntimeSessionService::execute_agent_provider_preparation(preparation).await;
     service.apply_agent_provider_preparation(outcome).unwrap();
@@ -232,11 +238,12 @@ async fn max_messages_product_replacement_and_known_usage_once() {
             execution.response.action_batch.as_ref().unwrap().actions[0].payload,
             mez_agent::AgentActionPayload::Say { .. }
         ));
-        let requests = provider.requests.lock().unwrap();
-        assert_eq!(requests.len(), 3);
-        assert_eq!(requests[0], requests[1]);
-        assert_eq!(requests[1], requests[2]);
-        drop(requests);
+        {
+            let requests = provider.requests.lock().unwrap();
+            assert_eq!(requests.len(), 3);
+            assert_eq!(requests[0], requests[1]);
+            assert_eq!(requests[1], requests[2]);
+        }
         while let Ok(observation) = receiver.try_recv() {
             service.checkpoint_provider_wire_usage(&observation);
             service.checkpoint_provider_wire_usage(&observation);
@@ -282,6 +289,32 @@ async fn max_messages_product_replacement_and_known_usage_once() {
                 handle.submit_runtime_events(batch).await.unwrap().applied,
                 0
             );
+            let work = handle
+                .drain_persistence_side_effects(64)
+                .await
+                .unwrap()
+                .into_iter()
+                .find_map(|effect| match effect {
+                    RuntimeSideEffect::SettleAgentProviderPersistence { work } => Some(work),
+                    _ => None,
+                })
+                .expect("accepted replacement must complete its persistence phase");
+            let outcome = tokio::task::spawn_blocking(move || {
+                crate::runtime::execute_agent_provider_persistence_work(*work)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            let mut batch = RuntimeEventBatch::new();
+            batch.push(RuntimeEvent::AgentProvider(
+                AgentProviderEvent::PersistenceSettled {
+                    outcome: Box::new(outcome),
+                },
+            ));
+            assert_eq!(
+                handle.submit_runtime_events(batch).await.unwrap().applied,
+                1
+            );
             assert!(
                 !handle
                     .agent_turn_is_running(&dispatch.turn.turn_id)
@@ -291,7 +324,7 @@ async fn max_messages_product_replacement_and_known_usage_once() {
             handle.shutdown().await.unwrap();
         };
         let ((), exit) = tokio::join!(client, actor.run());
-        let service = exit.unwrap().service;
+        let service = exit.service;
         let key = mez_agent::ModelTokenUsageKey::new("local-chat", "test-model");
         assert_eq!(
             service.agent_token_usage_for_conversation(&dispatch.turn.conversation_id)[&key],
@@ -385,7 +418,7 @@ async fn max_messages_actor_repeated_exhaustion_is_terminal_once() {
         handle.shutdown().await.unwrap();
     };
     let ((), exit) = tokio::join!(client, actor.run());
-    let service = exit.unwrap().service;
+    let service = exit.service;
     let key = mez_agent::ModelTokenUsageKey::new("local-chat", "test-model");
     assert_eq!(
         service.agent_token_usage_for_conversation(&dispatch.turn.conversation_id)[&key]
@@ -571,7 +604,6 @@ async fn max_messages_stop_during_backoff_preserves_expense_and_executes_nothing
         handle.shutdown().await.unwrap();
     };
     let ((), exit) = tokio::join!(client, actor.run());
-    let exit = exit.unwrap();
     let key = mez_agent::ModelTokenUsageKey::new("local-chat", "test-model");
     let usage = exit
         .service
@@ -660,7 +692,6 @@ async fn max_messages_service_stop_flushes_backpressured_wire_journal() {
         handle.shutdown().await.unwrap();
     };
     let ((), exit) = tokio::join!(client, actor.run());
-    let exit = exit.unwrap();
     let key = mez_agent::ModelTokenUsageKey::new("local-chat", "test-model");
     assert_eq!(
         exit.service
@@ -753,7 +784,10 @@ async fn max_messages_partial_checkpoint_cache_categories_and_persisted_totals()
         assert_eq!(service.project_usage_for_pane("%1")[0].usage, expected);
         let history = store
             .history_snapshot(
-                crate::runtime::current_unix_seconds(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
                 &[1],
                 &crate::storage::token_usage::TokenHistoryScope::default(),
             )
