@@ -168,27 +168,6 @@ impl RuntimeSessionService {
             }
             RuntimeAgentCompactionTarget::Conversation => {
                 self.manual_compaction_candidate_context(task, "x")?;
-                let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
-                    MezError::invalid_state("summary correction source store disappeared")
-                })?;
-                let pending = self
-                    .persistence
-                    .pending_transcript_entries(&task.conversation_id);
-                let view = store.conversation_transcript_view(
-                    &task.conversation_id,
-                    crate::storage::transcript::ConversationTranscriptRead::All,
-                    task.transcript_entries > pending.len() as u64,
-                    &pending,
-                )?;
-                if task
-                    .frozen_compaction_rows
-                    .iter()
-                    .any(|row| !view.logical.contains(row))
-                {
-                    return Err(MezError::conflict(
-                        "summary correction frozen manual source changed",
-                    ));
-                }
             }
         }
         Ok(())

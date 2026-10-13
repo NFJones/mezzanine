@@ -2514,6 +2514,15 @@ impl RuntimeSessionService {
                 &pending,
             )?
             .logical;
+        if task
+            .frozen_compaction_rows
+            .iter()
+            .any(|row| !entries.contains(row))
+        {
+            return Err(MezError::conflict(
+                "summary correction frozen manual source changed",
+            ));
+        }
         let post_plan_entries = session
             .transcript_entries
             .saturating_sub(task.transcript_entries);

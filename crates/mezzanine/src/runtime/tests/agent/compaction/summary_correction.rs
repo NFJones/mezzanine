@@ -70,6 +70,19 @@ fn runtime_compaction_summary_correction_token_budget_requires_size_progress() {
 /// accepting a short model summary publishes once without an ordinary turn.
 #[test]
 fn runtime_manual_compaction_invalid_completed_summary_repairs_privately() {
+    qualify_manual_summary_correction(false);
+}
+
+/// A valid repaired manual summary cannot publish over selected durable rows
+/// rewritten while auxiliary correction is in flight. Immutable original rows
+/// are revalidated by the same candidate owner used for correction admission.
+#[test]
+fn runtime_manual_compaction_summary_correction_rejects_source_changed_during_retry() {
+    qualify_manual_summary_correction(true);
+}
+
+/// Seeds one manual frozen source and optionally replaces its row during repair.
+fn qualify_manual_summary_correction(mutate: bool) {
     let mut service = test_runtime_service();
     service.replace_config_layers(vec![ConfigLayer {
         name: "manual-correction".into(), path: None, format: ConfigFormat::Toml,
@@ -114,8 +127,42 @@ fn runtime_manual_compaction_invalid_completed_summary_repairs_privately() {
             .is_none()
     );
     assert_eq!(store.inspect("manual-correction").unwrap(), before);
+    let changed = if mutate {
+        let changed = AgentTranscriptStore::new(temp_root("manual-output-correction-mutated"));
+        let mut row = before[0].clone();
+        row.content = "genuinely rewritten selected source".into();
+        changed.append(&row).unwrap();
+        service.set_agent_transcript_store(changed.clone());
+        Some(changed)
+    } else {
+        None
+    };
     complete_runtime_test_compaction(&mut service, "%1", "short accepted manual summary");
     assert!(!service.agent_is_compacting("%1"));
+    if let Some(changed) = changed {
+        assert!(
+            changed
+                .compaction_epoch("manual-correction")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .compaction_epoch("manual-correction")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            service
+                .pane_screen("%1")
+                .unwrap()
+                .normal_content_lines()
+                .join("\n")
+                .contains("frozen manual source changed")
+        );
+        assert!(service.pending_agent_provider_tasks().is_empty());
+        return;
+    }
     assert!(
         store
             .compaction_epoch("manual-correction")
