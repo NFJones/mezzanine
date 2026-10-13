@@ -3,6 +3,12 @@
 //! The mux crate owns prompt-buffer transitions, reverse search, multiline
 //! navigation, and baseline terminal input. Mezzanine retains command/agent
 //! prefixes plus selector discovery and completion policy.
+//!
+//! Retained selection is valid only for its current surface and last applied
+//! line/cursor. Authoritative cwd or runtime-candidate changes retire it without
+//! rewriting the draft. Render clones share operational caches, so cache keys
+//! include exact completion inputs rather than relying on clone-local revisions.
+//! Filesystem discovery remains prompt-owned and exact-key/generation fenced.
 
 use crate::error::Result;
 use crate::ui::selector::{
@@ -41,6 +47,8 @@ struct ReadlinePromptRenderSnapshotKey {
     draft: mez_mux::readline::ReadlineDraft,
     cursor: usize,
     selector_revision: u64,
+    selector_working_directory: Option<PathBuf>,
+    selector_extra_candidates: Vec<SelectorExtraCandidate>,
     filesystem_completion_generation: Option<u64>,
 }
 
@@ -112,14 +120,19 @@ impl ReadlinePrompt {
     ) {
         let candidates = candidates.into_iter().collect::<Vec<_>>();
         if self.selector_extra_candidates != candidates {
+            self.selector = None;
             self.selector_extra_candidates = candidates;
             self.selector_revision = self.selector_revision.wrapping_add(1);
         }
     }
 
-    /// Replaces the prompt-local working directory used for completion.
+    /// Replaces the prompt-local cwd and retires selection when it changes.
+    ///
+    /// The selected draft is preserved; reinstalling the same cwd retains normal
+    /// cycling. `None` is a changed context, not permission to reuse old paths.
     pub fn set_selector_working_directory(&mut self, working_directory: Option<PathBuf>) {
         if self.selector_working_directory != working_directory {
+            self.selector = None;
             self.selector_revision = self.selector_revision.wrapping_add(1);
         }
         self.selector_working_directory = working_directory;
@@ -136,6 +149,8 @@ impl ReadlinePrompt {
             draft: self.state.buffer.draft_snapshot(),
             cursor: self.state.buffer.cursor(),
             selector_revision: self.selector_revision,
+            selector_working_directory: self.selector_working_directory.clone(),
+            selector_extra_candidates: self.selector_extra_candidates.clone(),
             filesystem_completion_generation: filesystem_snapshot.completion_generation(),
         };
         if let Some(snapshot) = self.render_snapshot_cache.get(&key) {
@@ -312,10 +327,14 @@ impl ReadlinePrompt {
             return ReadlineOutcome::Noop;
         };
         if self.selector.as_ref().is_some_and(|selector| {
-            selector.should_refresh_from_selected_directory(
-                self.state.buffer.line(),
-                self.state.buffer.cursor(),
-            )
+            selector.surface != surface
+                || !selector.selected_line().is_some_and(|(line, cursor)| {
+                    line == self.state.buffer.line() && cursor == self.state.buffer.cursor()
+                })
+                || selector.should_refresh_from_selected_directory(
+                    self.state.buffer.line(),
+                    self.state.buffer.cursor(),
+                )
         }) {
             self.selector = None;
         }

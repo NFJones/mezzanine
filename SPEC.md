@@ -3273,6 +3273,15 @@ accept parameters SHOULD render a parameter placeholder after the complete
 command name; each parameter placeholder MUST disappear as soon as the user
 types any text for that parameter position.
 
+Runtime-owned prompt completion MUST use the current pane working-directory
+context for both candidate application and shadow-hint rendering. A changed cwd
+(including loss of a known cwd) or runtime candidate list MUST retire an open
+selection without rewriting the editable draft. Reinstalling identical context
+MUST preserve ordinary cycling. A retained selection MUST NOT restore an old
+draft after whole-buffer replacement or cursor movement. Render projections and
+late filesystem results MUST remain bound to their exact completion context;
+completion remains read-only and grants no execution or permission authority.
+
 Configuration changes made through the command prompt or configuration shell
 MUST apply to the live session when the affected setting supports live mutation.
 
