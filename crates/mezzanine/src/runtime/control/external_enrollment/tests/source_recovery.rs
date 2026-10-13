@@ -7,6 +7,310 @@
 
 use super::*;
 
+/// A durably recovered owner can later retry its CURRENT receipt during a store
+/// outage. This creates no new recovery but preserves the original same-handle
+/// receipt, including its existing recovery field, and must not rewind an
+/// already advanced Pi sequence or alter original accounting identity.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_resume_recovered_owner_current_retry_keeps_receipt_and_sequence() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    storage(&mut fixture);
+    let first = enroll(&mut fixture, &request()).await;
+    *fixture.service.control.external_agents_mut() = Default::default();
+    let recovered = enroll(&mut fixture, &resume(&first, "fixture-instance-a", None)).await;
+    assert_eq!(
+        recovered["result"]["recovery"],
+        serde_json::json!({"kind":"same-live-source","next_sequence":1})
+    );
+    fixture
+        .service
+        .dispatch_external_agent_request(
+            &pi(
+                &recovered,
+                1,
+                serde_json::json!({"type":"session_start","reason":"startup"}),
+            ),
+            &fixture.connection,
+        )
+        .unwrap();
+    let running = pi(&recovered, 2, serde_json::json!({"type":"agent_start"}));
+    let original = fixture
+        .service
+        .dispatch_external_agent_request(&running, &fixture.connection)
+        .unwrap();
+    let blocked = fixture.directory.join("blocked-current-store");
+    std::fs::write(&blocked, b"preserve").unwrap();
+    fixture
+        .service
+        .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
+            blocked.join("usage.sqlite"),
+        ));
+    let current = resume(&recovered, "fixture-instance-a", None);
+    assert_eq!(enroll(&mut fixture, &current).await, recovered);
+    assert_eq!(
+        fixture
+            .service
+            .dispatch_external_agent_request(&running, &fixture.connection)
+            .unwrap(),
+        original
+    );
+    assert_eq!(
+        fixture.service.external_agent_rows()[0]["status"],
+        "running"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap()
+            .enrollment
+            .as_ref()
+            .unwrap()
+            .epoch,
+        2
+    );
+}
+
+/// Current lifecycle credentials remain usable when storage fails, whether the
+/// run began without durable accounting or mapped successfully before an outage.
+/// Rotation/retry preserves the original owner and durability flag rather than
+/// upgrading, relabeling or restoring a namespace. Missing-registry admission
+/// still requires durable mapping proof and must not fall back to the live mode.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_resume_live_store_failure_preserves_owner_without_recovery() {
+    for originally_durable in [false, true] {
+        let Some(mut fixture) = fixture("hold").await else {
+            return;
+        };
+        let blocked = fixture.directory.join("blocked-store");
+        std::fs::write(&blocked, b"preserve").unwrap();
+        let failed =
+            crate::storage::token_usage::TokenUsageStore::new(blocked.join("usage.sqlite"));
+        if originally_durable {
+            storage(&mut fixture);
+        } else {
+            fixture.service.set_token_usage_store(failed.clone());
+        }
+        let first = enroll(&mut fixture, &request()).await;
+        let owner = fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap()
+            .accounting_owner
+            .clone();
+        fixture.service.set_token_usage_store(failed);
+        let own = resume(&first, "fixture-instance-a", None);
+        assert_eq!(enroll(&mut fixture, &own).await, first);
+        let successor = resume(
+            &first,
+            "fixture-instance-b",
+            Some(first["result"]["generation"].as_u64().unwrap()),
+        );
+        let second = enroll(&mut fixture, &successor).await;
+        assert_eq!(second["result"]["registered"], true, "{second}");
+        assert!(second["result"].get("recovery").is_none());
+        assert_eq!(enroll(&mut fixture, &successor).await, second);
+        let binding = fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap();
+        assert_eq!(binding.accounting_owner, owner);
+        assert_eq!(
+            binding.enrollment.as_ref().unwrap().usage_owner_is_durable,
+            originally_durable
+        );
+        assert!(!binding.enrollment.as_ref().unwrap().recovered_projection);
+        assert!(fixture.service.external_token_usage(None).is_empty());
+        *fixture.service.control.external_agents_mut() = Default::default();
+        let missing = resume(
+            &second,
+            "fixture-instance-b",
+            Some(first["result"]["generation"].as_u64().unwrap()),
+        );
+        assert!(enroll(&mut fixture, &missing).await.get("error").is_some());
+        assert!(
+            fixture
+                .service
+                .control
+                .external_agents()
+                .bindings
+                .is_empty()
+        );
+        assert_eq!(std::fs::read(blocked).unwrap(), b"preserve");
+    }
+}
+
+/// A captured current-binding mode cannot become namespace recovery if its
+/// binding disappears without the corresponding admission owner changing. The
+/// selector and native source still exist, but no implicit mode switch may
+/// bypass missing-registry proof or publish another private handle.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_resume_captured_live_mode_does_not_fall_back_after_binding_loss() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    storage(&mut fixture);
+    let first = enroll(&mut fixture, &request()).await;
+    let successor = resume(
+        &first,
+        "fixture-instance-b",
+        Some(first["result"]["generation"].as_u64().unwrap()),
+    );
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&successor, &fixture.connection)
+        .unwrap();
+    let native = work.clone();
+    let observed = tokio::task::spawn_blocking(move || native.observe())
+        .await
+        .unwrap();
+    assert!(observed.is_ok());
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .bindings
+        .clear();
+    let rejected: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_enrollment(work, observed, &fixture.connection),
+    )
+    .unwrap();
+    assert!(
+        rejected
+            .to_string()
+            .contains("source resume current binding unavailable"),
+        "{rejected}"
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
+    );
+}
+
+/// Existing native lifecycle authority does not depend on a token-usage store.
+/// Genuine shutdown/reload and a new observer's captured current receipt and
+/// exact predecessor use normal rotation, not accounting-source recovery. The
+/// actual reload fact initializes the fresh reducer; no fabricated SDK start or
+/// restored outcome is needed. Missing-registry recovery still fails without a
+/// durable namespace, and malformed/stale receipt metadata cannot be ignored.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_resume_live_lifecycle_reload_does_not_require_usage_store() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    let first = enroll(&mut fixture, &request()).await;
+    assert_eq!(first["result"]["registered"], true, "{first}");
+    fixture
+        .service
+        .dispatch_external_agent_request(
+            &pi(
+                &first,
+                1,
+                serde_json::json!({"type":"session_start","reason":"startup"}),
+            ),
+            &fixture.connection,
+        )
+        .unwrap();
+    fixture
+        .service
+        .dispatch_external_agent_request(
+            &pi(
+                &first,
+                2,
+                serde_json::json!({"type":"session_shutdown","reason":"reload"}),
+            ),
+            &fixture.connection,
+        )
+        .unwrap();
+    let successor = resume(
+        &first,
+        "fixture-instance-b",
+        Some(first["result"]["generation"].as_u64().unwrap()),
+    );
+    let second = enroll(&mut fixture, &successor).await;
+    assert_eq!(second["result"]["registered"], true, "{second}");
+    assert!(second["result"].get("recovery").is_none());
+    assert_ne!(
+        second["result"]["observer_witness"],
+        first["result"]["observer_witness"]
+    );
+    assert_eq!(second["result"]["observer_epoch"], 2);
+    assert_eq!(second["result"]["run_id"], first["result"]["run_id"]);
+    assert_eq!(enroll(&mut fixture, &successor).await, second);
+    fixture
+        .service
+        .dispatch_external_agent_request(
+            &pi(
+                &second,
+                1,
+                serde_json::json!({"type":"session_start","reason":"reload"}),
+            ),
+            &fixture.connection,
+        )
+        .unwrap();
+    assert_eq!(fixture.service.external_agent_rows()[0]["status"], "ready");
+    assert!(fixture.service.external_token_usage(None).is_empty());
+    assert!(
+        !fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap()
+            .enrollment
+            .as_ref()
+            .unwrap()
+            .usage_owner_is_durable
+    );
+    let current = resume(
+        &second,
+        "fixture-instance-b",
+        Some(first["result"]["generation"].as_u64().unwrap()),
+    );
+    assert_eq!(enroll(&mut fixture, &current).await, second);
+    *fixture.service.control.external_agents_mut() = Default::default();
+    assert!(enroll(&mut fixture, &current).await.get("error").is_some());
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .is_empty()
+    );
+}
+
 /// Bulk snapshot retirement must also fence initial worker evidence which has
 /// not yet published any source anchor. Its mapping remains inert; it cannot
 /// become a post-snapshot registration merely because the native creator survives.

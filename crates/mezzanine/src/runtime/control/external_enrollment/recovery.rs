@@ -10,6 +10,11 @@
 //! here or on disk. An accepted transition can replay only through its still-active
 //! registration. Losing that registration before receiving its new selector is
 //! an explicit availability gap, never permission to look up the newest owner.
+//! A strictly matched CURRENT binding uses ordinary lifecycle retry/rotation,
+//! even with absent/failed accounting storage; original reporting availability
+//! cannot be upgraded. Only a genuinely missing binding uses durable namespace
+//! recovery and its fresh-projection acknowledgment. Captured mode, currentness
+//! revision and native evidence are rechecked before either path can publish.
 
 use super::*;
 use crate::runtime::control::external_agents::{MAX_BINDINGS, Registration};
@@ -52,6 +57,15 @@ impl SourceResume {
     }
 }
 
+/// Continuation of current lifecycle authority is distinct from namespace recovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResumeMode {
+    /// Current qualified registration only; no namespace/projection restoration.
+    CurrentBinding,
+    /// Missing registration requires the original durable namespace and anchor.
+    DurableRecovery,
+}
+
 /// Original service-owned source revision captured before off-actor observation.
 #[derive(Debug, Clone)]
 pub(super) struct ResumeAdmission {
@@ -59,6 +73,8 @@ pub(super) struct ResumeAdmission {
     owner: String,
     /// Exact currentness revision; distinct contenders cannot both publish.
     revision: u64,
+    /// Immutable routing decision; a lost live binding cannot downgrade proof.
+    mode: ResumeMode,
 }
 
 /// Bounded native authority and inert metadata only, not a shadow registration.
@@ -201,6 +217,38 @@ impl LiveSourceAnchors {
 }
 
 impl RuntimeSessionService {
+    /// Confirms the retained original binding, not merely a present numeric
+    /// generation. This is lifecycle authority already published by the actor;
+    /// it never restores an accounting namespace or upgrades disabled reporting.
+    fn has_current_source_binding(&self, owner: &str, anchor: &BoundSourceAnchor) -> bool {
+        self.control
+            .external_agents()
+            .bindings
+            .get(&anchor.digest)
+            .is_some_and(|binding| {
+                !binding.retired
+                    && binding.generation == anchor.generation
+                    && binding.accounting_owner == owner
+                    && binding.uid == anchor.producer.uid()
+                    && binding.pane_id == anchor.pane_id
+                    && binding.process.same_incarnation(&anchor.process)
+                    && binding.harness == anchor.harness
+                    && binding.version == anchor.version
+                    && binding.registration.as_ref().is_some_and(|registration| {
+                        registration.external_session_id == anchor.registration.external_session_id
+                            && registration.display_name == anchor.registration.display_name
+                    })
+                    && binding.enrollment.as_ref().is_some_and(|enrollment| {
+                        enrollment.producer.same_owner(&anchor.producer)
+                            && enrollment.instance == anchor.instance
+                            && enrollment.predecessor_generation == anchor.predecessor
+                            && enrollment.epoch == anchor.epoch
+                            && enrollment.run_generation == anchor.run_generation
+                            && enrollment.usage_owner_is_durable == anchor.durable
+                    })
+            })
+    }
+
     /// Snapshot/session replacement invalidates every retained source, including
     /// one whose disposable registration already disappeared. Keep retired
     /// lifetime fences, but release ancestry and any accepted transition input.
@@ -455,19 +503,15 @@ impl RuntimeSessionService {
             })
             .ok_or_else(|| MezError::conflict("same-live source anchor unavailable"))?;
         anchor.qualify(work)?;
+        let current = self.has_current_source_binding(owner, anchor);
         if anchor.is_replay(work) {
-            if !self
-                .control
-                .external_agents()
-                .bindings
-                .contains_key(&anchor.digest)
-            {
+            if !current {
                 return Err(MezError::conflict("source resume retry unavailable"));
             }
         } else {
             anchor.validate_transition(work)?;
         }
-        if !anchor.durable || anchor.revision == u64::MAX {
+        if (!current && !anchor.durable) || anchor.revision == u64::MAX {
             return Err(MezError::conflict(
                 "same-live source continuity unavailable",
             ));
@@ -475,12 +519,18 @@ impl RuntimeSessionService {
         Ok(Some(ResumeAdmission {
             owner: owner.clone(),
             revision: anchor.revision,
+            mode: if current {
+                ResumeMode::CurrentBinding
+            } else {
+                ResumeMode::DurableRecovery
+            },
         }))
     }
 
-    /// Revalidates the original source and revision after fresh native observation,
-    /// then publishes one new transport/projection owner. Store failure, replaced
-    /// source, retired predecessor and distinct stale contenders grant nothing.
+    /// Revalidates the original source, captured mode and revision after native
+    /// observation. Current bindings use ordinary retry/rotation without storage
+    /// availability; missing bindings require original durable namespace proof.
+    /// Replaced sources, retired predecessors and distinct stale contenders fail.
     pub(super) fn commit_external_source_resume(
         &mut self,
         work: &ExternalEnrollmentWork,
@@ -499,35 +549,48 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::conflict("same-live source anchor unavailable"))?;
         anchor.qualify(work)?;
         anchor.producer.authorize_socket(&work.origin)?;
-        if work.source_owner.get().and_then(Option::as_ref) != Some(&admission.owner) {
+        if anchor.durable
+            && work
+                .source_owner
+                .get()
+                .and_then(Option::as_ref)
+                .is_some_and(|owner| owner != &admission.owner)
+        {
             return Err(MezError::conflict(
                 "same-live source accounting namespace differs",
             ));
         }
+        let current = self.has_current_source_binding(&admission.owner, &anchor);
         if anchor.is_replay(work) {
-            let binding = self
-                .control
-                .external_agents_mut()
-                .bindings
-                .get_mut(&anchor.digest)
-                .filter(|binding| !binding.retired && binding.generation == anchor.generation)
-                .ok_or_else(|| MezError::conflict("source resume retry unavailable"))?;
-            let enrollment = binding
-                .enrollment
-                .as_mut()
-                .ok_or_else(|| MezError::conflict("source resume retry unavailable"))?;
-            enrollment.authorize(connection)?;
-            enrollment.observe_connection(&work.origin);
-            let enrollment = binding
-                .enrollment
-                .as_ref()
-                .ok_or_else(|| MezError::conflict("source resume retry unavailable"))?;
-            return Ok(enrollment_response(binding, enrollment, &work.session_id));
+            if !current {
+                return Err(MezError::conflict("source resume retry unavailable"));
+            }
+            return self.replace_or_retry_external_observer(anchor.digest, work, connection);
         }
         if anchor.revision != admission.revision {
             return Err(MezError::conflict("source resume revision changed"));
         }
         anchor.validate_transition(work)?;
+        if admission.mode == ResumeMode::CurrentBinding {
+            if !current {
+                return Err(MezError::conflict(
+                    "source resume current binding unavailable",
+                ));
+            }
+            // A validated current receipt narrows ordinary retry/rotation; no
+            // storage result can upgrade or relabel that existing native owner.
+            return self.replace_or_retry_external_observer(anchor.digest, work, connection);
+        }
+        if current {
+            return Err(MezError::conflict("source resume binding state changed"));
+        }
+        if !anchor.durable
+            || work.source_owner.get().and_then(Option::as_ref) != Some(&admission.owner)
+        {
+            return Err(MezError::conflict(
+                "same-live source accounting namespace differs",
+            ));
+        }
         let epoch = anchor
             .epoch
             .checked_add(1)
@@ -582,6 +645,7 @@ impl RuntimeSessionService {
                 instance: work.observer_instance.clone(),
                 predecessor_generation: work.predecessor_generation,
                 accepted_resume: work.source_resume.clone(),
+                recovered_projection: true,
                 resume_usage_gap: anchor.gap,
                 instances,
                 observers: vec![Arc::downgrade(&work.origin)],

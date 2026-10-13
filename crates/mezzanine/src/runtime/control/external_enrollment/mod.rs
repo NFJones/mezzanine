@@ -95,6 +95,8 @@ pub(super) struct EnrollmentBinding {
     predecessor_generation: Option<u64>,
     /// Exact accepted explicit resume input, not a newest-observer alias.
     accepted_resume: Option<SourceResume>,
+    /// True only for durable recovery that created a fresh missing projection.
+    recovered_projection: bool,
     /// Inherited fixed diagnostic only; no lifecycle/candidate state survives.
     resume_usage_gap: Option<crate::integrations::bootstrap::pi_ipc::UsageGapReason>,
     /// Bounded retired-instance fence; old instances cannot reclaim this run.
@@ -264,7 +266,7 @@ impl EnrollmentBinding {
 
     /// Permits the first actual gap fact only after explicit native source resume.
     pub(super) fn allows_initial_usage_gap(&self) -> bool {
-        self.accepted_resume.is_some()
+        self.recovered_projection
     }
 
     /// Whole-chain lifetime fencing uses only bounded nonblocking kernel polls;
@@ -759,6 +761,7 @@ impl RuntimeSessionService {
                     instance: work.observer_instance.clone(),
                     predecessor_generation: None,
                     accepted_resume: None,
+                    recovered_projection: false,
                     resume_usage_gap: None,
                     instances: BTreeSet::from([work.observer_instance.clone()]),
                     observers: vec![Arc::downgrade(&work.origin)],
@@ -812,7 +815,7 @@ fn enrollment_response(
         "run_id":enrollment.run_generation,"observer_epoch":enrollment.epoch,"observer_instance":enrollment.instance,
         "generation":binding.generation,"external_session_id":session,"registered":true,"controls":[],
         "expires_at_unix_seconds":binding.expires,"lease_seconds":60,"usage":"unavailable-source-continuity"});
-    if enrollment.accepted_resume.is_some() {
+    if enrollment.recovered_projection {
         response["recovery"] = serde_json::json!({"kind":"same-live-source","next_sequence":1});
     }
     response.to_string()
