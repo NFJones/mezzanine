@@ -12,6 +12,7 @@ use mez_agent::messaging::{Envelope, MessageScope, MessageService};
 use mez_core::ids::PaneId;
 
 mod action_dispatch;
+mod child_failure;
 mod delivery_lifecycle;
 mod discovery_and_approval;
 mod fixtures;
