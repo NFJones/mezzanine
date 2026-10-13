@@ -5,7 +5,8 @@
 //! actor stop/returned-service inspection so no clone fabricates observer health.
 //! Only this fixture's registration deadline is aged; origin/clock/identity and
 //! accounting are never rewritten. Normal read-only commands emit the real idle
-//! key, and an actual matching timer event runs production reconciliation.
+//! key, and manually delivering that emitted matching timer after its actual
+//! delay runs production reconciliation (not the full daemon timer adapter).
 //! Private gates sequence the synthetic vendor only. Separate shell exit status
 //! and post-assert result qualify child completion, not socket EOF. This is not
 //! real SDK, paid-provider, OS-root replacement, spool or zero-invoice evidence.
@@ -66,7 +67,8 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for AuditIo<S> {
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> { Pin::new(&mut self.get_mut().inner).poll_shutdown(cx) }
 }
 
-/// Panic cleanup signals only freshly reobserved owned process incarnations.
+/// Best-effort panic cleanup rechecks owned process incarnations before numeric
+/// signalling; it is not a race-free kernel PID-handle kill guarantee.
 #[derive(Default)]
 struct Processes(Vec<mez_mux::process::ProcessParentIdentity>);
 impl Drop for Processes {
@@ -294,11 +296,13 @@ async fn qualify(eof: bool) {
         release(&home,"disconnected");
     } else {
         release(&home,"renewed");
-        // Consume real EOF through the genuine adapter, but retain it so source
-        // death, not a fabricated observer-drop marker, makes discovery hide.
+        // Consuming real EOF releases adapter observer ownership. The distinct
+        // producer-death proof is native death under a still-live root with an
+        // explicitly unexpired lease, never a fabricated disconnected marker.
         let mut byte = [0]; assert_eq!(tokio::time::timeout(Duration::from_secs(10),io.read(&mut byte)).await.unwrap().unwrap(),0);
         wait_file(&home,"idle-exit-status",Some("0")).await;
         assert!(!origin.is_live()); assert_eq!(mez_mux::process::process_parent_identity_for_pid(root.process_id).unwrap(),root);
+        assert!(renewed > crate::runtime::current_unix_seconds(),"producer death must be observed before its remaining lease expires");
         assert!(service.external_agent_rows().is_empty()); assert_eq!(expiry(&service),renewed);
         assert!(service.control.external_agents().bindings.values().all(|binding| !binding.retired),"read-only discovery performed retirement");
         service = inspect_timer(service,&primary,true,false).await;
@@ -340,4 +344,34 @@ async fn external_pi_installed_idle_timer_renews_and_real_eof_expires() {
 #[ignore="explicit already-installed Node and fresh sibling mez required; actual native installed producer-exit acceptance"]
 async fn external_pi_installed_producer_exit_without_sdk_end_retires_under_live_shell() {
     tokio::time::timeout(Duration::from_secs(60),qualify(false)).await.unwrap();
+}
+
+/// Abnormal setup must reject prohibited activation strings and unexpected
+/// owner objects without Node assertion diffs exposing their values. No SDK,
+/// daemon, artifact stub or actual private user input is needed: unique owned
+/// sentinels fail before filesystem discovery, and all child output is captured
+/// privately. Static messages and genuine nonzero exit qualify rejection.
+#[test]
+#[ignore="explicit already-installed Node required; offline fixture privacy qualification"]
+fn external_pi_idle_setup_rejects_private_values_without_diagnostic_exposure() {
+    let node = std::path::PathBuf::from(std::env::var_os("MEZ_TEST_NODE_BINARY").expect("explicit already-installed Node path"));
+    assert!(node.is_absolute() && node.is_file());
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/pi-native-idle-fixture.mjs").canonicalize().unwrap();
+    let home = std::fs::canonicalize("/tmp").unwrap().join(format!("mez-pi-idle-privacy-{}-{:x}",std::process::id(),rand::random::<u64>()));
+    std::fs::create_dir(&home).unwrap(); let _directory = Directory(home.clone());
+    let sentinel = "SYNTHETIC_IDLE_PRIVATE_VALUE_NOT_A_CREDENTIAL";
+    for key in ["PI_CODING_AGENT_DIR", "MEZ_HARNESS_SESSION", "MEZ_HARNESS_OBSERVER_FD", "MEZ_HARNESS_HELPER", "MEZ_EXTERNAL_LAUNCH_TOKEN"] {
+        let output = std::process::Command::new("timeout").arg("5s").arg(&node).arg(&script).env_clear().env("HOME",&home).env(key,sentinel).stdin(std::process::Stdio::null()).output().unwrap();
+        assert!(output.status.code().is_some_and(|code| code != 0 && code != 124),"setup must actually reject, not timeout");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("activation input supplied"));
+        assert!(!stderr.contains(sentinel),"setup diagnostic exposed a synthetic activation value");
+    }
+    let preload = format!("data:text/javascript,globalThis[Symbol.for(%22mezzanine.pi.ordinary-owner.v1%22)]={{privateToken:%22{sentinel}%22}}");
+    let output = std::process::Command::new("timeout").arg("5s").arg(&node).args(["--import",&preload]).arg(&script).env_clear().env("HOME",&home).stdin(std::process::Stdio::null()).output().unwrap();
+    assert!(output.status.code().is_some_and(|code| code != 0 && code != 124));
+    assert!(output.stdout.is_empty()); let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("factory opened resources"));
+    assert!(!stderr.contains(sentinel),"setup diagnostic exposed an unexpected owner object");
 }

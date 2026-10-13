@@ -9,12 +9,14 @@ import { readdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-assert.equal(process.argv.length, 2);
+assert(process.argv.length === 2, "fixture accepts no activation arguments");
+const ownerKey = Symbol.for("mezzanine.pi.ordinary-owner.v1");
+assert(globalThis[ownerKey] === undefined, "factory opened resources");
+for (const key of ["PI_CODING_AGENT_DIR", "MEZ_HARNESS_SESSION", "MEZ_HARNESS_OBSERVER_FD", "MEZ_HARNESS_HELPER", "MEZ_EXTERNAL_LAUNCH_TOKEN"])
+  assert(process.env[key] === undefined, "activation input supplied");
 const home = process.env.HOME;
 const mode = readFileSync(join(home, "idle-mode"), "utf8");
 assert(["eof", "exit"].includes(mode));
-for (const key of ["PI_CODING_AGENT_DIR", "MEZ_HARNESS_SESSION", "MEZ_HARNESS_OBSERVER_FD", "MEZ_HARNESS_HELPER", "MEZ_EXTERNAL_LAUNCH_TOKEN"])
-  assert.equal(process.env[key], undefined, "activation input supplied");
 const root = join(home, ".pi", "agent", "extensions");
 const factories = [];
 for (const child of readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
@@ -23,17 +25,16 @@ for (const child of readdirSync(root, { withFileTypes: true }).sort((a, b) => a.
   let manifest;
   try { manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8")); } catch { continue; }
   for (const entry of manifest.pi?.extensions ?? []) {
-    assert.equal(entry, "index.mjs");
+    assert(entry === "index.mjs", "installed package entry unavailable");
     factories.push((await import(pathToFileURL(join(directory, entry)).href)).default);
   }
 }
-assert.equal(factories.length, 1);
+assert(factories.length === 1, "installed package entry unavailable");
 const handlers = new Map();
 for (const factory of factories) factory(new Proxy({ on(type, callback) { handlers.set(type, callback); } }, {
-  get(target, key) { assert.equal(key, "on", "vendor mutation API accessed"); return target[key]; },
+  get(target, key) { assert(key === "on", "vendor mutation API accessed"); return target[key]; },
 }));
-const ownerKey = Symbol.for("mezzanine.pi.ordinary-owner.v1");
-assert.equal(globalThis[ownerKey], undefined, "factory opened resources");
+assert(globalThis[ownerKey] === undefined, "factory opened resources");
 let callbacks = 0;
 const emit = event => {
   callbacks++;
