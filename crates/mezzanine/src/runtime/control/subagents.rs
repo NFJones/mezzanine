@@ -1475,6 +1475,12 @@ impl RuntimeSessionService {
             let Some(name) = self.subagent_bucket_window_display_name(&window_id) else {
                 continue;
             };
+            if self.session.windows().iter().any(|window| {
+                window.id.as_str() == window_id
+                    && (window.has_explicit_name() || window.name == name)
+            }) {
+                continue;
+            }
             if let Some(controller) = controller {
                 self.session
                     .rename_window_generated(controller, window_id.as_str(), name)?;
@@ -1484,6 +1490,19 @@ impl RuntimeSessionService {
             }
         }
         Ok(())
+    }
+
+    /// Repairs generated bucket titles after a pane has left session membership.
+    ///
+    /// Removal reconciliation may no longer have the pane's former window id,
+    /// so reuse the bounded reserved-bucket scan. Only changed generated names
+    /// are committed; deleted windows are pruned and explicit names preserved.
+    /// Session-owned rename needs no attached controller. This is presentation
+    /// repair only: callers must not repeat committed close effects on failure.
+    /// Rename has no external I/O: errors indicate an internal window lookup
+    /// invariant violation, not failure of the already committed pane removal.
+    pub(crate) fn refresh_subagent_window_names_after_pane_removal(&mut self) -> Result<()> {
+        self.refresh_subagent_window_names_internal(None)
     }
 
     /// Builds a compact window name from the display names of its subagent panes.

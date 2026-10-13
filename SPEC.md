@@ -11259,6 +11259,11 @@ normal window lists and status bars. Generated names MUST NOT include a fixed
 exactly one live subagent MUST include that subagent's display name even if the
 pane title later changes. Explicit user or agent window renames MUST prevent
 later generated subagent-window refreshes from overwriting the chosen name.
+After actual pane membership removal, generated names MUST immediately reflect
+the remaining panes, including visible-name promotion and overflow counts.
+Stopped, failed, or completed work in a retained pane is not removal. Teardown
+without an attached controller MUST preserve the same generated-name behavior;
+removing the final pane deletes its window rather than renaming a missing one.
 
 Subagent windows MUST use an even, self-rebalancing pane layout. When a
 subagent pane is added to or removed from such a window, the remaining panes
