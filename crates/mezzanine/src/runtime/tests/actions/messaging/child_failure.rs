@@ -11,6 +11,9 @@ use super::*;
 fn owned_child_wait_fixture() -> (RuntimeSessionService, AgentTurnRecord, AgentTurnRecord) {
     let mut service = test_runtime_service();
     service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    service.set_agent_transcript_store(AgentTranscriptStore::new(temp_root(
+        "runtime-owned-child-failure-wake",
+    )));
     service
         .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
         .unwrap();
@@ -47,7 +50,13 @@ fn owned_child_wait_fixture() -> (RuntimeSessionService, AgentTurnRecord, AgentT
     let spawned: serde_json::Value =
         serde_json::from_str(spawned.structured_content_json.as_deref().unwrap()).unwrap();
     let child_id = spawned["spawn"]["agent"]["id"].as_str().unwrap();
-    let child = service.runtime_agent_active_turn(child_id).unwrap();
+    let child = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == child_id)
+        .unwrap()
+        .clone();
     assert_eq!(service.joined_subagent_dependency_count(), 0);
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
