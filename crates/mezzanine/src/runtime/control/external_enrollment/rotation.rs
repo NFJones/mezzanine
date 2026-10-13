@@ -133,7 +133,8 @@ impl RuntimeSessionService {
         enrollment.epoch = epoch;
         enrollment.instance = work.observer_instance.clone();
         enrollment.predecessor_generation = Some(old_generation);
-        enrollment.accepted_resume = None;
+        enrollment.accepted_resume = work.source_resume.clone();
+        enrollment.recovered_projection = false;
         enrollment.resume_usage_gap = None;
         enrollment.instances.insert(work.observer_instance.clone());
         enrollment.token = SecretString::from(token);

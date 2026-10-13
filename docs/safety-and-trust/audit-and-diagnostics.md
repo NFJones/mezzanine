@@ -104,6 +104,11 @@ It does not persist credentials, active capabilities, private callbacks,
 transcripts or lifecycle projections. The private accounting database continues
 to store opaque source mappings, request provenance and replay tombstones; those
 rows cannot activate a source or prove vendor identity/invoice completeness.
+An exact current live lifecycle binding can validate its public receipt and
+retry/rotate even without an accounting store. This is not namespace recovery:
+the original owner and unavailable-reporting flag cannot be upgraded, and no
+durable recovery acknowledgment is returned. Missing-registration recovery still
+requires the original durable mapping and retained native service authority.
 
 Recovery is limited to disposable registry/actor-task loss while the same service,
 actual creator and pane root remain alive. Complete service/OS-daemon replacement,

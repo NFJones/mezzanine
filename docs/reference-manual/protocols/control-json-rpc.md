@@ -1101,7 +1101,18 @@ and ancestry proof are mandatory at both prepare and settlement. Same-instance
 recovery retains its original predecessor field; a new successor supplies the
 current receipt and exact current predecessor, never a guessed newest value.
 
-Explicit success adds only `recovery: {kind: "same-live-source", next_sequence: 1}`
+For an exact CURRENT unretired binding, the selector narrows existing lifecycle
+retry/rotation without requiring a usage store or successful mapping lookup.
+Same-instance retry returns the same handle; a new unretired instance uses its
+exact current predecessor and normal fresh-handle rotation, with no `recovery`
+field. Original accounting ownership/reporting durability stays unchanged; this
+does not enable usage, upgrade a fallback owner or restore any namespace/baseline.
+The prepare-time mode and native/current-owner proof are rechecked at settlement;
+a vanished live binding cannot fall through to a weaker mode. Exact accepted
+normal-transition input is retained for lost-reply retry while its result is
+current, independently of whether a durable projection was recovered.
+
+Missing-registration durable recovery adds only `recovery: {kind: "same-live-source", next_sequence: 1}`
 and returns fresh private credentials/public witness/generation, observer epoch
 advanced by one, and the original logical run/accounting source. Reset producer
 presentation sequence only once when adopting that changed typed receipt, not
@@ -1138,7 +1149,7 @@ that never published remains inert: later initial retry fails
 historical recharge bypasses that conservative availability gap.
 The original accounting `source_witness`, admitted time/project and immutable
 report clock remain distinct from the observer receipt and are never rewritten.
-An explicitly resumed Pi owner permits first actual `usage_gap` at sequence 1 as
+A durably recovered fresh Pi owner permits first actual `usage_gap` at sequence 1 as
 diagnostics only, inheriting a fixed prior gap reason; no fake SDK start or old
 lifecycle outcome is introduced. Never-received usage and cross-process/repeated
 reset replay guarantees remain outside this bounded contract.

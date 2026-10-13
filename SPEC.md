@@ -301,6 +301,16 @@ integer. Recovery MUST require the original active source anchor retained by the
 SAME control service outside disposable registrations, plus fresh original-kind
 UID/creator/root incarnation, ancestry and current writer proof at admission and
 settlement. It MUST NOT reconstruct authority from the durable accounting mapping.
+When that exact original binding is CURRENT and unretired, the same strict
+selector MAY narrow normal lifecycle retry/rotation without a token-usage store
+or successful mapping lookup. Same-instance retry MUST return the same handle;
+a new unretired instance requires its exact current predecessor and normal
+rotation. This path MUST preserve the original accounting owner/durability flag,
+MUST NOT upgrade reporting or restore a namespace/baseline, and MUST NOT add a
+recovery acknowledgment. The captured mode MUST be rechecked at commit; loss of
+the live binding MUST NOT implicitly switch to a weaker recovery/fallback mode.
+Missing-registration recovery still requires the original durable mapped source,
+retained service anchor and fresh native proof, with no absent-store fallback.
 The memory-only owner MUST retain at most 256 source anchors, share the existing
 512-ancestor budget, and never evict live source/retired-instance fences.
 Accounting checkpoint projections, pane reset baselines and begin/end reservation
@@ -320,11 +330,11 @@ after registry loss. Numeric generations remain selectors, not native authority.
 Prepare/commit revision checks MUST fence distinct competing or delayed admissions.
 Same-instance resume MUST retain its immutable original predecessor; a genuinely
 new successor MUST name the current receipt and exact predecessor generation and
-MUST NOT reuse a retired instance. Successful resume MUST rotate private token,
+MUST NOT reuse a retired instance. Successful missing-registration recovery MUST rotate private token,
 public witness and generation and advance observer epoch exactly once, preserving
-logical run, source namespace and original request provenance. ONLY explicit
-resume replies carry `recovery: {kind: "same-live-source", next_sequence: 1}`.
-Exact accepted-input retries MAY return the same current recovered handle without
+logical run, source namespace and original request provenance. ONLY durable
+recovery replies carry `recovery: {kind: "same-live-source", next_sequence: 1}`.
+Exact accepted-input retries MAY return the same current handle without
 another epoch, projection reset or lease refresh. Bare old same-instance packets
 MUST NOT obtain recovered handles. If registry loss removes that recovered binding
 before its reply is known, old-selector retry MUST fail `source resume retry unavailable`;
