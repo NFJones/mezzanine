@@ -1070,6 +1070,14 @@ async fn control_socket_primary_attach_loop_prefers_ready_input_over_runtime_eve
     assert_eq!(io.written_frames[1].lines, vec!["after input"]);
 }
 
+/// Verifies a structural window event requests a fresh view without discarding
+/// the physical output frame, even after several canceled idle input waits.
+///
+/// The blocking server and paused Tokio client have independent schedulers.
+/// Frame notifications gate event delivery and socket closure, while a request
+/// receipt gates the second reply. This separates input cancellation, event
+/// readiness, control response completion, and rendering instead of treating a
+/// time advance or server write as proof that a frame reached the terminal.
 #[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn control_socket_primary_attach_loop_structural_runtime_event_preserves_output_frame() {
     let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
@@ -1078,6 +1086,12 @@ async fn control_socket_primary_attach_loop_structural_runtime_event_preserves_o
     let (event_client_stream, mut event_server_stream) = UnixStream::pair().unwrap();
     event_client_stream.set_nonblocking(true).unwrap();
     let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let (release_server, server_gate) = std::sync::mpsc::channel();
+    let (view_requested, second_view_request) = tokio::sync::oneshot::channel();
+    let mut view_requested = Some(view_requested);
+    server_stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     let server = thread::spawn(move || {
         for (expected_id, response_lines) in [
             ("cli-terminal-view-0", "initial"),
@@ -1094,6 +1108,10 @@ async fn control_socket_primary_attach_loop_structural_runtime_event_preserves_o
                 parsed.get("id").and_then(serde_json::Value::as_str),
                 Some(expected_id)
             );
+            if expected_id == "cli-terminal-view-1" {
+                view_requested.take().unwrap().send(()).unwrap();
+                server_gate.recv().unwrap();
+            }
             server_stream
                 .write_all(&encode_control_body(&format!(
                     r#"{{"jsonrpc":"2.0","id":"{expected_id}","result":{{"view":{{"lines":["{response_lines}"],"line_style_spans":[[]],"cursor":{{"row":0,"column":14,"visible":true,"style":"bar","blink":false}},"output_modes":{{"application_keypad":false}}}}}}}}"#
@@ -1101,16 +1119,20 @@ async fn control_socket_primary_attach_loop_structural_runtime_event_preserves_o
                 .unwrap();
             server_stream.flush().unwrap();
             if expected_id == "cli-terminal-view-0" {
+                server_gate.recv().unwrap();
                 event_server_stream
                     .write_all(&event_notification_frame("window_changed"))
                     .unwrap();
                 event_server_stream.flush().unwrap();
             }
         }
+        // Event EOF is teardown, not an acknowledgment of the second render.
+        server_gate.recv().unwrap();
     });
     let mut io = AsyncFakeAttachedTerminalIo::default();
-    io.push_pending_input_read();
-    io.push_pending_input_read();
+    io.keep_input_open();
+    let rendered = std::sync::Arc::new(tokio::sync::Notify::new());
+    io.notify_on_write(rendered.clone());
     let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     {
         let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
@@ -1121,7 +1143,25 @@ async fn control_socket_primary_attach_loop_structural_runtime_event_preserves_o
             Some(event_client_stream),
         );
         tokio::pin!(run);
-        tokio::time::advance(Duration::from_millis(100)).await;
+        let ordering = async {
+            rendered.notified().await;
+            // Withhold the event through more deadline cancellations than the
+            // old finite pending-read budget. Idle input must remain live.
+            for _ in 0..3 {
+                tokio::time::advance(Duration::from_millis(100)).await;
+                tokio::task::yield_now().await;
+            }
+            release_server.send(()).unwrap();
+            second_view_request.await.unwrap();
+            release_server.send(()).unwrap();
+            rendered.notified().await;
+            release_server.send(()).unwrap();
+        };
+        tokio::select! {
+            biased;
+            result = &mut run => panic!("attach loop exited before both renders: {result:?}"),
+            () = ordering => {}
+        }
         run.await.unwrap();
     }
     server.join().unwrap();
