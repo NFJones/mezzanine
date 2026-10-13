@@ -148,6 +148,32 @@ frozen token attribution or MMP project membership. External rows describe their
 bound pane, not an independently verified vendor workspace. Project paths remain
 searchable and included in saved output; lifecycle keys and authority are unchanged.
 
+The shared browser also has a typed **CurrentProject** snapshot foundation;
+`:list-agents` remains explicitly **All**, and this does not add a slash command
+or permit colon arguments. CurrentProject uses exact canonical current trusted
+root equality, not the display label, cwd prefixes, MMP parent membership,
+accounting origin or vendor workspace. The attached primary and invoking pane's
+process incarnation/current conversation owner are captured before the query,
+even when that pane has no registered agent. Refresh keeps that same origin,
+not later active focus. Destroying, reusing or replacing its owner leaves the
+retained query unavailable rather than pivoting to a replacement.
+
+Unknown, rejected, revoked, pending and failed provenance never match each
+other. An unavailable origin yields an explicitly empty scoped view with a
+nonsensitive reason and an All/`--all` hint (`:list-agents` remains available for
+All). Both records and action targets are filtered before construction. Search,
+copy and saved output cannot recover excluded rows. Each snapshot refreshes
+trust once and resolves each pane once, including an unregistered origin;
+paint/search/reflow do not re-read project evidence. Administrative refreshes
+retain scope, search, viewport and valid selected IDs and retire stale close
+confirmations. Separate registrations sharing one pane keep distinct IDs.
+
+Symlink aliases match after canonicalization. Nested trusted roots differ;
+broad trusted ancestors can group multiple repositories, and separate worktrees
+or moved children can be excluded despite MMP parent membership. Project
+equality grants no permissions, changes no MMP audience or accounting, and gives
+external rows no native lifecycle controls.
+
 Enter or an identifier-cell click focuses the selected pane globally for the
 invoking primary and dismisses only on success. Navigation and search never focus.
 `i` interrupts native work; `p` pauses or explicitly resumes its retained task;

@@ -138,6 +138,19 @@ Use `:list-agents` from the terminal command prompt for these targeted controls:
 confirmation. They are not new slash commands. Enter focuses only after explicit
 activation. Runtime pause is not transparent process suspension across restart.
 
+The shared human browser supports typed All and CurrentProject snapshots;
+`:list-agents` remains all-session and argument-free. CurrentProject compares
+exact canonical **current trusted roots**, not display labels, saved/MMP project
+membership or accounting origin. It retains the authenticated invoking pane's
+incarnation/current owner through refreshes instead of following later focus.
+Unavailable or withheld origin evidence produces an empty scoped view with a
+nonsensitive reason and an All/`--all` hint, never a silent global fallback.
+Search, copy and save see only retained scoped records. Symlink aliases match,
+nested trusted roots differ, broad trusted ancestors may group repositories,
+and separate worktrees or moved children may exclude MMP peers. This is view
+filtering, not a permission or audience grant; this foundation adds no slash
+command and does not change model-facing discovery or native control rights.
+
 In the `/resume` picker, Enter resumes the selected conversation, `i` opens its
 transcript for inspection, and `a` toggles between the current project and all
 saved conversations. Press `d` to delete the selected saved conversation;

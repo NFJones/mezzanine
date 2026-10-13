@@ -3499,6 +3499,40 @@ logout, project trust decisions, permission profile display or
 mutation, command-rule management, approval-bypass control, and approval-mode
 selection, MUST NOT be duplicated as terminal commands.
 
+The shared human agent-management browser MUST support typed `All` and
+`CurrentProject` snapshots. `All` means current session registrations, not saved
+conversations or other sessions. The argument-free colon `:list-agents` MUST
+remain explicitly `All`; this scope foundation does not register a slash command
+or change colon grammar.
+
+`CurrentProject` MUST capture its authenticated attached-primary client and exact
+invoking pane's process incarnation and current conversation owner before the
+query. Its cohort MUST use exact typed canonical current trusted project-root
+equality, never display labels, cwd prefixes, MMP membership, accounting origin,
+delegation lineage or vendor workspace. An unregistered invoking pane MUST still
+be resolved. Missing, unknown, rejected, revoked, pending or failed provenance
+MUST NOT match another unavailable project. An unavailable origin MUST produce
+an explicitly empty scoped view with a nonsensitive reason and an All/`--all`
+hint, never fall back to session scope or later active focus. A destroyed,
+reused or ownership-replaced origin MUST remain unavailable for that retained
+query; a new invocation is required to capture a replacement owner.
+
+Each snapshot MUST refresh trust once before capturing action targets and cache
+project resolution by pane, including the origin, only within that snapshot.
+Separate native, internal, subagent and qualified external registrations sharing
+one pane MUST retain separate IDs. Both records and retained action targets MUST
+be filtered before browser construction, without a row cap. Search, save, copy,
+paint and reflow MUST operate only on the filtered snapshot without new project
+lookups. Every refresh, administrative operation and retained reconstruction MUST
+preserve the typed query and original origin, search, viewport and valid selected
+ID, retiring stale action generations and close confirmations.
+
+Canonical symlink aliases therefore match; a nested trusted root differs from
+its trusted ancestor. A broad trusted ancestor may group multiple repositories,
+while separate worktrees and moved children may differ despite retained MMP
+parent membership. This relation is a human view convenience, NOT a permission
+grant, MMP audience change, accounting reattribution or native control right.
+
 The baseline commands MUST have the following semantics:
 
 | Command | Required behavior |

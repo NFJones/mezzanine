@@ -114,6 +114,8 @@ pub(crate) enum RuntimeRecordBrowserOverlaySource {
     /// Administrative session snapshot with exact targets and modal confirmation.
     Agents {
         client_id: String,
+        /// Typed scope and exact captured origin retained across every rebuild.
+        query: crate::runtime::control::agent_browser::AgentBrowserQuery,
         targets: BTreeMap<String, crate::runtime::control::agent_browser::AgentBrowserTarget>,
         confirmation: Option<Box<crate::runtime::control::agent_browser::AgentCloseConfirmation>>,
     },

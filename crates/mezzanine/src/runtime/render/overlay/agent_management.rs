@@ -4,6 +4,8 @@
 //! Native controls reuse lifecycle authority; focus is global but client-local.
 //! An armed close binds the snapshot and overlay generation and never follows
 //! a neighboring row after navigation or refresh. Search and save stay shared.
+//! Refresh and every lifecycle/confirmation path retain the original typed query
+//! and authenticated origin; they never widen project scope or follow focus.
 
 use crate::error::{MezError, Result};
 use crate::runtime::RuntimeSessionService;
@@ -14,14 +16,15 @@ use mez_core::ids::ClientId;
 impl RuntimeSessionService {
     /// Rebuilds the live in-memory snapshot, preserving search/viewport and ID.
     pub(crate) fn refresh_agent_management_overlay(&mut self, client: &ClientId) -> Result<bool> {
-        let (owner, selected) = self
+        let (owner, query, selected, browser_scroll, overlay_scroll) = self
             .presentation
             .primary_display_overlay
             .as_ref()
             .and_then(|overlay| {
                 let state = overlay.record_browser.as_ref()?;
-                let RuntimeRecordBrowserOverlaySource::Agents { client_id, .. } =
-                    state.source.as_ref()?
+                let RuntimeRecordBrowserOverlaySource::Agents {
+                    client_id, query, ..
+                } = state.source.as_ref()?
                 else {
                     return None;
                 };
@@ -31,7 +34,13 @@ impl RuntimeSessionService {
                     .and_then(|selection| state.browser.records().get(selection.logical_id))
                     .map(|record| record.id.clone())
                     .or_else(|| state.browser.active_record_id().map(str::to_string));
-                Some((client_id.clone(), selected))
+                Some((
+                    client_id.clone(),
+                    query.clone(),
+                    selected,
+                    state.browser.scroll_offset(),
+                    overlay.scroll_offset,
+                ))
             })
             .ok_or_else(|| MezError::conflict("agent browser unavailable"))?;
         if owner != client.as_str() {
@@ -39,10 +48,11 @@ impl RuntimeSessionService {
                 "agent browser belongs to another primary",
             ));
         }
-        let (mut browser, targets) = self.agent_management_browser(client)?;
+        let (mut browser, targets) = self.agent_management_browser_for_query(client, &query)?;
         if let Some(selected) = selected {
             browser.set_active_record_id(&selected);
         }
+        browser.set_scroll_offset(browser_scroll);
         if let Some(state) = self
             .presentation
             .primary_display_overlay
@@ -51,12 +61,21 @@ impl RuntimeSessionService {
         {
             state.source = Some(RuntimeRecordBrowserOverlaySource::Agents {
                 client_id: owner,
+                query,
                 targets,
                 confirmation: None,
             });
             state.browser = browser;
         }
-        Ok(self.reflow_primary_record_browser_overlay())
+        let changed = self.reflow_primary_record_browser_overlay();
+        // Shared search reflow may scroll to a rendered match. This refresh is
+        // not a new search/navigation intent: retain its actual visible viewport
+        // and clamp only when the rebuilt cohort/content has become shorter.
+        if let Some(overlay) = self.presentation.primary_display_overlay.as_mut() {
+            overlay.scroll_offset = overlay_scroll;
+            mez_mux::overlay::clamp_overlay_scroll(overlay, self.session.authoritative_size);
+        }
+        Ok(changed)
     }
 
     /// Handles administrative keys only after shared search/prompt precedence.
@@ -75,6 +94,7 @@ impl RuntimeSessionService {
             client_id,
             targets,
             confirmation,
+            ..
         }) = state.source.as_ref()
         else {
             return Ok(None);
