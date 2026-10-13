@@ -29,6 +29,7 @@ mod pending_steering;
 mod resize_admission;
 mod resize_surfaces;
 mod streaming_identity;
+mod timestamps;
 mod transient_restore;
 
 /// Verifies partial terminal configuration retains the product's 30 FPS

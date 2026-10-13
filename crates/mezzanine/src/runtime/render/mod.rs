@@ -113,6 +113,8 @@ pub(crate) struct RuntimePresentationSettings {
     terminal_render_rate_limit_fps: u64,
     /// Maximum display width for product-owned agent rows.
     terminal_agent_wrap_column_cap: usize,
+    /// Whether structured log projections show captured occurrence timestamps.
+    pub(super) terminal_agent_log_timestamps: bool,
     /// Whether optional terminal animation is disabled.
     terminal_reduced_motion: bool,
     /// Whether passive Mezzanine chrome is configured to be hidden.
@@ -166,6 +168,7 @@ impl Default for RuntimePresentationSettings {
             terminal_resize_debounce_ms: 200,
             terminal_render_rate_limit_fps: 30,
             terminal_agent_wrap_column_cap: crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
+            terminal_agent_log_timestamps: false,
             terminal_reduced_motion: false,
             terminal_zen_mode: false,
             terminal_zen_focus_label_duration_ms: 1000,
@@ -283,6 +286,7 @@ impl RuntimePresentationSettings {
                 crate::runtime::runtime_terminal_render_rate_limit_fps_from_config(root)?,
             terminal_agent_wrap_column_cap:
                 crate::runtime::runtime_terminal_agent_wrap_column_cap_from_config(root)?,
+            terminal_agent_log_timestamps: false,
             terminal_reduced_motion: crate::runtime::runtime_terminal_reduced_motion_from_config(
                 root,
             )?,
