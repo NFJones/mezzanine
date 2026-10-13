@@ -1339,6 +1339,7 @@ mod parent_ancestry;
 mod persistent_client;
 mod pi_assembled;
 mod pi_observation;
+mod pi_recovery;
 mod producer;
 mod source;
 mod source_generation;
