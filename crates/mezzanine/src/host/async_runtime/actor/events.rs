@@ -1662,6 +1662,9 @@ impl AsyncRuntimeSessionActor {
                         )?;
                     }
                     error = error.with_recovery_facts(*facts);
+                    if let Some(facts) = error.recovery_facts() {
+                        self.service.record_agent_provider_invocation(facts);
+                    }
                 }
                 if !accounted
                     && let Some(turn) = self.service.agent_turn_ledger().turn(&turn_id).cloned()

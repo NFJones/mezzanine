@@ -22,6 +22,7 @@ impl RuntimeSessionService {
         &mut self,
         observation: crate::integrations::agent::provider::ProviderWireRequestObservation,
     ) -> Result<crate::runtime::RuntimeTransition> {
+        self.checkpoint_provider_wire_usage(&observation);
         let conversation_current = self
             .agent_shell_store()
             .get(&observation.pane_id)

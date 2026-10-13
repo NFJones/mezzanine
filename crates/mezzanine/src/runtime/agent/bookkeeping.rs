@@ -1502,14 +1502,14 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         error: &MezError,
     ) {
-        let Some(state) = error.provider_output_limit_state() else {
+        let Some(_state) = error.provider_output_limit_state() else {
             return;
         };
         let Some(profile) = self.agent_turn_model_profile(&turn.turn_id) else {
             return;
         };
         let key = ModelTokenUsageKey::new(&profile.provider, &profile.model);
-        let usage = state.usage;
+        let usage = error.provider_incurred_usage();
         if usage.is_zero() {
             return;
         }

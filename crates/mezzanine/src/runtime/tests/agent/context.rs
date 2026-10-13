@@ -2248,6 +2248,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
                        usage: Option<mez_agent::ModelTokenUsage>| {
         crate::integrations::agent::provider::ProviderWireRequestObservation {
             request_id: request_id.to_string(),
+            claim_generation: None,
             attempt_index: 1,
             retry_reason: None,
             conversation_id: conversation_id.clone(),

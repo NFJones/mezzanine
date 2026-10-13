@@ -34,6 +34,16 @@ pub struct AgentTurnLimits {
     pub max_provider_interactions: usize,
     /// Maximum elapsed time for the complete turn, enforced by async adapters.
     pub timeout_ms: u64,
+    /// Finite replacement retry budget and backoff, captured at dispatch.
+    /// Unlimited transport mode never extends incomplete inference retries.
+    pub provider_retry_policy: crate::ProviderRetryPolicy,
+    /// Reservations already spent by the same turn before this invocation.
+    pub provider_retry_attempt_offset: u64,
+    /// Provider calls consumed before this invocation; consulted when an
+    /// incomplete sequence first activates the original turn-wide ceiling.
+    pub provider_call_offset: usize,
+    /// Whether an earlier invocation activated incomplete replacement bounds.
+    pub incomplete_sequence_active: bool,
 }
 
 impl Default for AgentTurnLimits {
@@ -41,6 +51,10 @@ impl Default for AgentTurnLimits {
         Self {
             max_provider_interactions: DEFAULT_AGENT_TURN_INTERACTION_LIMIT,
             timeout_ms: crate::DEFAULT_AGENT_TURN_TIMEOUT_MS,
+            provider_retry_policy: crate::DEFAULT_PROVIDER_RETRY_POLICY,
+            provider_retry_attempt_offset: 0,
+            provider_call_offset: 0,
+            incomplete_sequence_active: false,
         }
     }
 }
@@ -99,6 +113,12 @@ pub trait AgentTurnEnvironment {
 
     /// Sends one provider request through the concrete transport.
     async fn send_request(&self, request: &ModelRequest) -> Result<ModelResponse, Self::Error>;
+
+    /// Waits before an exact incomplete-inference replacement. Async product
+    /// adapters sleep inside the existing deadline/cancellation-owned future;
+    /// deterministic test adapters may complete immediately. No output from
+    /// the rejected attempt may be promoted while this wait is in progress.
+    async fn wait_provider_retry(&self, _delay_ms: u64) {}
 
     /// Classifies one provider failure for canonical recovery progression.
     fn provider_failure(&self, error: &Self::Error) -> AgentTurnProviderFailure;
@@ -284,19 +304,26 @@ async fn run_agent_turn_inner<E: AgentTurnEnvironment>(
     let mut negotiation =
         AgentTurnNegotiation::new(request.clone(), DEFAULT_MAAP_REPAIR_ATTEMPT_LIMIT);
     let mut provider_interactions = 0usize;
+    let mut incomplete_retry_attempts = 0u64;
+    let mut incomplete_sequence = limits.incomplete_sequence_active;
     let mut continuation_signatures = BTreeSet::new();
     let mut previous_request = environment.previous_request().cloned();
 
     let execution = loop {
-        if provider_interactions >= limits.max_provider_interactions {
+        if provider_interactions >= limits.max_provider_interactions
+            || (incomplete_sequence
+                && provider_interactions.saturating_add(limits.provider_call_offset)
+                    >= limits.max_provider_interactions)
+        {
             trace.finish(None, Disposition::InteractionLimit, false);
             project_ledger_result(ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed))?;
-            return Err(environment.invalid_state(format!(
+            let error = environment.invalid_state(format!(
                 "agent turn exceeded provider interaction limit of {}",
                 limits.max_provider_interactions
-            )));
+            ));
+            return Err(environment
+                .with_accumulated_response_usage(error, negotiation.cumulative_response_usage()));
         }
-        provider_interactions = provider_interactions.saturating_add(1);
         append_request_state_transition(&mut request);
         if let Err(error) = environment.prepare_request(&mut request, previous_request.as_ref()) {
             trace.finish(
@@ -312,15 +339,64 @@ async fn run_agent_turn_inner<E: AgentTurnEnvironment>(
         }
         let response_request = request.clone();
         previous_request = Some(response_request.clone());
-        trace.start_request(
-            &response_request,
-            provider_interactions,
-            limits.max_provider_interactions,
-            negotiation.recovery_phase(),
-            negotiation.recovery_attempts(),
-            negotiation.recovery_limit(),
-        );
-        let mut response = match environment.send_request(&request).await {
+        let provider_result = loop {
+            provider_interactions = provider_interactions.saturating_add(1);
+            trace.start_request(
+                &response_request,
+                provider_interactions,
+                limits.max_provider_interactions,
+                negotiation.recovery_phase(),
+                negotiation.recovery_attempts(),
+                negotiation.recovery_limit(),
+            );
+            let result = environment.send_request(&response_request).await;
+            let Err(error) = result else { break result };
+            if environment.provider_failure(&error).retry_class
+                != ProviderErrorRetryClass::RetryableIncomplete
+            {
+                break Err(error);
+            }
+            incomplete_sequence = true;
+            // Incomplete native items and plausible action JSON are expense,
+            // not accepted model output. Observe only counters, preserving the
+            // durable negotiation and the exact prepared request unchanged.
+            negotiation.observe_response(environment.failed_response_usage(&error), None, &[]);
+            let error = environment
+                .with_accumulated_response_usage(error, negotiation.cumulative_response_usage());
+            if provider_interactions.saturating_add(limits.provider_call_offset)
+                >= limits.max_provider_interactions
+            {
+                trace.finish(
+                    Some(Stage::ProviderOutput),
+                    Disposition::InteractionLimit,
+                    false,
+                );
+                return Err(error);
+            }
+            if !limits.provider_retry_policy.should_retry(
+                incomplete_retry_attempts.saturating_add(limits.provider_retry_attempt_offset),
+                ProviderErrorRetryClass::RetryableIncomplete,
+            ) {
+                trace.finish(
+                    Some(Stage::ProviderOutput),
+                    Disposition::BudgetExhausted,
+                    false,
+                );
+                return Err(error);
+            }
+            incomplete_retry_attempts = incomplete_retry_attempts.saturating_add(1);
+            if let Some(facts) = &mut trace.facts {
+                facts.incomplete_retries_reserved = incomplete_retry_attempts;
+            }
+            environment
+                .wait_provider_retry(limits.provider_retry_policy.delay_ms(
+                    incomplete_retry_attempts.saturating_add(limits.provider_retry_attempt_offset),
+                    None,
+                    None,
+                ))
+                .await;
+        };
+        let mut response = match provider_result {
             Ok(response) => response,
             Err(error) => {
                 negotiation.observe_response(environment.failed_response_usage(&error), None, &[]);
@@ -1222,6 +1298,299 @@ mod tests {
         }
     }
 
+    /// Fault-injecting environment used only by incomplete-inference tests.
+    /// Successful negotiation remains owned by the ordinary fake environment;
+    /// injected failures consume neither its responses nor executable output.
+    struct IncompleteEnvironment {
+        inner: FakeEnvironment,
+        failures: std::collections::BTreeSet<usize>,
+        waits: RefCell<Vec<u64>>,
+    }
+
+    impl AgentTurnEnvironment for IncompleteEnvironment {
+        type Error = TestError;
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+        fn assemble_request(
+            &self,
+            turn: &AgentTurnRecord,
+            context: &AgentContext,
+        ) -> Result<ModelRequest, TestError> {
+            self.inner.assemble_request(turn, context)
+        }
+        fn available_mcp_tools(&self) -> &[McpPromptTool] {
+            &[]
+        }
+        fn memory_actions_enabled(&self) -> bool {
+            false
+        }
+        fn issue_actions_enabled(&self) -> bool {
+            false
+        }
+        async fn send_request(&self, request: &ModelRequest) -> Result<ModelResponse, TestError> {
+            if self
+                .failures
+                .contains(&(self.inner.requests.borrow().len() + 1))
+            {
+                self.inner.requests.borrow_mut().push(request.clone());
+                return Err(TestError("authoritative incomplete max_messages".into()));
+            }
+            self.inner.send_request(request).await
+        }
+        async fn wait_provider_retry(&self, delay_ms: u64) {
+            self.waits.borrow_mut().push(delay_ms);
+        }
+        fn provider_failure(&self, error: &TestError) -> AgentTurnProviderFailure {
+            AgentTurnProviderFailure {
+                repairable_malformed_output: false,
+                retry_class: ProviderErrorRetryClass::RetryableIncomplete,
+                message: error.to_string(),
+                raw_text: String::new(),
+            }
+        }
+        fn failed_response_usage(&self, _error: &TestError) -> ModelTokenUsage {
+            ModelTokenUsage {
+                input_tokens: 17,
+                output_tokens: 3,
+                ..Default::default()
+            }
+        }
+        fn validate_batch(
+            &self,
+            turn: &AgentTurnRecord,
+            batch: &MaapBatch,
+        ) -> Result<(), TestError> {
+            self.inner.validate_batch(turn, batch)
+        }
+        fn plan_action_result(
+            &self,
+            turn: &AgentTurnRecord,
+            action: &AgentAction,
+        ) -> Result<ActionResult, TestError> {
+            self.inner.plan_action_result(turn, action)
+        }
+        fn invalid_args(&self, message: String) -> TestError {
+            TestError(message)
+        }
+        fn invalid_state(&self, message: String) -> TestError {
+            TestError(message)
+        }
+        fn error_message<'a>(&self, error: &'a TestError) -> &'a str {
+            &error.0
+        }
+        async fn summarize_provider_failure(
+            &self,
+            _turn: &AgentTurnRecord,
+            _request: &ModelRequest,
+            _error: &TestError,
+            _usage: ModelTokenUsage,
+        ) -> Option<AgentTurnExecution> {
+            panic!("incomplete exhaustion must not request a summary")
+        }
+        async fn summarize_controller_failure(
+            &self,
+            _turn: &AgentTurnRecord,
+            _request: &ModelRequest,
+            _response: ModelResponse,
+            _error: &TestError,
+            _stage: &'static str,
+        ) -> Option<AgentTurnExecution> {
+            None
+        }
+    }
+
+    /// A max_messages failure on a later repair or capability continuation
+    /// retries byte-identical prepared input, not the initial invocation. Known
+    /// expense is conserved while only the final complete batch is planned.
+    #[test]
+    fn max_messages_retries_exact_repair_and_capability_request() {
+        for capability in [false, true] {
+            let turn = test_turn();
+            let mut first = if capability {
+                capability_response(
+                    &turn,
+                    "request-shell",
+                    AgentCapability::Shell,
+                    "inspect once",
+                )
+            } else {
+                final_response(&turn)
+            };
+            if !capability {
+                first.action_batch = None;
+            }
+            let environment = IncompleteEnvironment {
+                inner: FakeEnvironment {
+                    responses: RefCell::new(VecDeque::from([first, final_response(&turn)])),
+                    requests: RefCell::new(Vec::new()),
+                },
+                failures: [2].into_iter().collect(),
+                waits: RefCell::new(Vec::new()),
+            };
+            let mut ledger = AgentTurnLedger::new(false);
+            let execution = run_ready(run_agent_turn_async_with_limits(
+                &environment,
+                &mut ledger,
+                turn,
+                &test_context(),
+                capability.then(AllowedActionSet::capability_decision),
+                capability.then_some(ModelInteractionKind::CapabilityDecision),
+                AgentTurnLimits::default(),
+            ))
+            .unwrap();
+            let requests = environment.inner.requests.borrow();
+            assert_eq!(requests.len(), 3);
+            assert_eq!(requests[1], requests[2]);
+            assert_ne!(requests[0], requests[1]);
+            assert_eq!(*environment.waits.borrow(), vec![1000]);
+            assert_eq!(execution.response.usage.input_tokens, 17);
+            assert_eq!(execution.response.usage.output_tokens, 3);
+            assert_eq!(execution.action_results.len(), 1);
+            let facts = execution.recovery_facts().unwrap();
+            assert_eq!(facts.provider_calls_started, 3);
+            assert_eq!(facts.incomplete_retries_reserved, 1);
+        }
+    }
+
+    /// Repeated incompletes stop at the shared finite error count even with
+    /// unlimited transport enabled; all replacements also spend the original
+    /// provider-call ceiling, which can stop recovery before that error count.
+    #[test]
+    fn max_messages_repeated_exhaustion_and_original_interaction_bound() {
+        for (calls, retries, offset, expected_calls, expected_waits) in [
+            (16, 2, 0, 3, 2),
+            (16, 2, 1, 2, 1),
+            (16, 2, 2, 1, 0),
+            (16, 100, 0, 16, 15),
+        ] {
+            let environment = IncompleteEnvironment {
+                inner: FakeEnvironment {
+                    responses: RefCell::new(VecDeque::new()),
+                    requests: RefCell::new(Vec::new()),
+                },
+                failures: (1..=32).collect(),
+                waits: RefCell::new(Vec::new()),
+            };
+            let mut ledger = AgentTurnLedger::new(false);
+            let mut trace = crate::recovery_attribution::RecoveryTrace::default();
+            let result = run_ready(run_agent_turn_inner(
+                &environment,
+                &mut ledger,
+                test_turn(),
+                &test_context(),
+                None,
+                None,
+                AgentTurnLimits {
+                    max_provider_interactions: calls,
+                    provider_retry_attempt_offset: offset,
+                    provider_retry_policy: crate::ProviderRetryPolicy {
+                        max_attempts: retries,
+                        unlimited: true,
+                        ..crate::DEFAULT_PROVIDER_RETRY_POLICY
+                    },
+                    ..Default::default()
+                },
+                &mut trace,
+            ));
+            assert!(result.is_err());
+            assert_eq!(environment.inner.requests.borrow().len(), expected_calls);
+            assert_eq!(environment.waits.borrow().len(), expected_waits);
+            let facts = trace.facts.unwrap();
+            assert_eq!(facts.provider_calls_started, expected_calls);
+            assert!(!facts.batch_planned);
+            assert_eq!(
+                facts.disposition,
+                if expected_calls == calls {
+                    crate::recovery_attribution::RecoveryDisposition::InteractionLimit
+                } else {
+                    crate::recovery_attribution::RecoveryDisposition::BudgetExhausted
+                }
+            );
+        }
+    }
+
+    /// First incomplete activation includes provider calls spent by earlier
+    /// actor attempts, even if those attempts were ordinary transport outages.
+    /// A fresh canonical invocation cannot reopen the original sixteen calls.
+    #[test]
+    fn max_messages_first_activation_conserves_prior_provider_calls() {
+        let environment = IncompleteEnvironment {
+            inner: FakeEnvironment {
+                responses: RefCell::new(VecDeque::new()),
+                requests: RefCell::new(Vec::new()),
+            },
+            failures: (1..=32).collect(),
+            waits: RefCell::new(Vec::new()),
+        };
+        let mut ledger = AgentTurnLedger::new(false);
+        let mut trace = crate::recovery_attribution::RecoveryTrace::default();
+        let result = run_ready(run_agent_turn_inner(
+            &environment,
+            &mut ledger,
+            test_turn(),
+            &test_context(),
+            None,
+            None,
+            AgentTurnLimits {
+                provider_call_offset: 15,
+                provider_retry_policy: crate::ProviderRetryPolicy {
+                    max_attempts: 100,
+                    ..crate::DEFAULT_PROVIDER_RETRY_POLICY
+                },
+                ..Default::default()
+            },
+            &mut trace,
+        ));
+        assert!(result.is_err());
+        assert_eq!(environment.inner.requests.borrow().len(), 1);
+        assert!(environment.waits.borrow().is_empty());
+        assert_eq!(
+            trace.facts.unwrap().disposition,
+            crate::recovery_attribution::RecoveryDisposition::InteractionLimit
+        );
+    }
+
+    /// A previously activated incomplete sequence retains its original call
+    /// ceiling even when the replacement invocation produces only successful
+    /// capability/repair steps. Pure transport-only history remains unchanged.
+    #[test]
+    fn max_messages_inherited_activation_bounds_successful_negotiation() {
+        for active in [false, true] {
+            let turn = test_turn();
+            let environment = IncompleteEnvironment {
+                inner: FakeEnvironment {
+                    responses: RefCell::new(VecDeque::from([
+                        capability_response(&turn, "shell", AgentCapability::Shell, "inspect once"),
+                        final_response(&turn),
+                    ])),
+                    requests: RefCell::new(Vec::new()),
+                },
+                failures: Default::default(),
+                waits: Default::default(),
+            };
+            let mut ledger = AgentTurnLedger::new(false);
+            let result = run_ready(run_agent_turn_async_with_limits(
+                &environment,
+                &mut ledger,
+                turn,
+                &test_context(),
+                Some(AllowedActionSet::capability_decision()),
+                Some(ModelInteractionKind::CapabilityDecision),
+                AgentTurnLimits {
+                    provider_call_offset: 15,
+                    incomplete_sequence_active: active,
+                    ..Default::default()
+                },
+            ));
+            assert_eq!(result.is_err(), active);
+            assert_eq!(
+                environment.inner.requests.borrow().len(),
+                if active { 1 } else { 2 }
+            );
+        }
+    }
+
     /// A repair followed by a valid capability continuation starts a clean
     /// phase. Earlier rejection stages cannot be relabelled as current-phase
     /// canonical evidence, even though the invocation's repair-call count stays.
@@ -1438,6 +1807,7 @@ mod tests {
             AgentTurnLimits {
                 max_provider_interactions: 1,
                 timeout_ms: 1000,
+                ..AgentTurnLimits::default()
             },
             &mut trace,
         ))
@@ -1494,6 +1864,7 @@ mod tests {
             AgentTurnLimits {
                 max_provider_interactions: 2,
                 timeout_ms: 1_000,
+                ..AgentTurnLimits::default()
             },
         ))
         .expect("interaction exhaustion should return a failed execution");

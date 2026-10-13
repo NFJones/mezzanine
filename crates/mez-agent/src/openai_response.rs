@@ -951,6 +951,47 @@ mod tests {
         );
     }
 
+    /// All three Responses parsers retain authoritative max_messages metadata
+    /// and known expense while rejecting even plausible complete native calls.
+    /// This protects the replacement boundary: no incomplete batch is accepted.
+    #[test]
+    fn openai_max_messages_incomplete_parser_parity() {
+        let response = serde_json::json!({
+            "id":"resp_incomplete", "status":"incomplete", "model":"test",
+            "incomplete_details":{"reason":"max_messages"},
+            "usage":{"input_tokens":17,"output_tokens":3},
+            "output_text":"discard this partial text",
+            "output":[{"type":"function_call","call_id":"call_partial",
+                "name":"submit_maap_action_batch", "arguments":"{\"actions\":[]}"}]
+        });
+        let event = serde_json::json!({"type":"response.incomplete","response":response});
+        let stream = format!("data: {event}\n\n");
+        let mut decoder = OpenAiResponsesStreamDecoder::default();
+        let errors = [
+            parse_openai_responses_http_body(&response.to_string(), "test").unwrap_err(),
+            parse_openai_responses_stream_body(&stream, "test").unwrap_err(),
+            decoder
+                .push_event(&crate::SseEvent {
+                    name: None,
+                    data: event.to_string(),
+                })
+                .unwrap_err(),
+        ];
+        for error in errors {
+            assert_eq!(error.kind(), ProviderResponseErrorKind::InvalidState);
+            let state = error.output_limit_state().unwrap();
+            assert_eq!(state.stop_reason, "max_messages");
+            assert_eq!(state.usage.input_tokens, 17);
+            assert_eq!(state.usage.output_tokens, 3);
+            let class = crate::classify_provider_error_retry(
+                crate::ProviderErrorKind::InvalidState,
+                error.message(),
+                error.provider_failure_json(),
+            );
+            assert_eq!(format!("{class:?}"), "RetryableIncomplete");
+        }
+    }
+
     /// Verifies unary incomplete Responses never promote syntactically complete
     /// native arguments into executable output or durable provider continuity.
     #[test]

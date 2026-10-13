@@ -6750,7 +6750,8 @@ than `4294967295` and MUST default to `5`; zero disables finite retries.
 transport failures, rate limits, provider retry hints, 5xx responses, and
 transient overload or unavailability. It MUST NOT make malformed requests,
 authentication failures, context-limit recovery, output-limit recovery, or
-non-retryable provider failures infinite. Reloading either setting MUST affect
+authoritative incomplete-inference replacement retries or non-retryable
+provider failures infinite. Reloading either setting MUST affect
 the next observed provider failure without invalidating an already scheduled
 retry generation or changing its selected delay.
 `agents.turn_timeout_ms` MUST be a positive integer and MUST default to
@@ -10836,6 +10837,22 @@ hits a configured limit.
 The harness MUST expose long-running action status to the user.
 
 ### 9.11 Errors, Retries, and Persistence
+
+An OpenAI Responses incomplete response whose authoritative structured
+`incomplete_details.reason` is exactly `max_messages` MUST retry only the
+failed prepared inference under the finite provider-error budget and the
+original turn-wide provider-call ceiling. Replacement calls MUST retain the
+same model, native input framing, action catalog and negotiation phase, use
+bounded provider backoff, and remain cancellable under the issued generation
+and absolute turn deadline. This reason MUST NOT imply input-context overflow,
+output-token continuation, or unlimited transport eligibility. Display-only
+failure summaries, unknown reasons and malformed output MUST NOT authorize it.
+Incomplete native calls and plausible partial action batches MUST NOT execute
+or enter durable provider continuity. Only a complete replacement may be
+accepted; settled actions, siblings and earlier negotiation steps MUST NOT be
+replayed. Known per-wire expense MUST survive cancellation during backoff under
+the original issued provenance, with duplicate checkpoint and final settlement
+delivery charging each reported token counter only once.
 
 Provider errors, malformed responses, permission denials, command timeouts, and
 transport failures MUST be recorded in the agent transcript.

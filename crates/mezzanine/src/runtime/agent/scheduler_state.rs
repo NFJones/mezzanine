@@ -89,6 +89,20 @@ impl RuntimeSessionService {
         self.agent.provider_retry_scheduler.policy()
     }
 
+    /// Conserves canonical calls and inline reservations after exact claim
+    /// validation. Duplicate or stale worker results must never reach this
+    /// method; the existing actor ingress owns that generation fence.
+    pub(crate) fn record_agent_provider_invocation(
+        &mut self,
+        facts: &mez_agent::recovery_attribution::RecoveryFacts,
+    ) {
+        self.agent.provider_retry_scheduler.record_invocation(
+            &facts.turn_id,
+            facts.provider_calls_started,
+            facts.incomplete_retries_reserved,
+        );
+    }
+
     /// Enqueues one validated unit of agent work.
     ///
     /// One accepted inbound prompt turn is exactly one enqueue, so this is also

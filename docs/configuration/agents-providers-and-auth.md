@@ -37,6 +37,16 @@ the finite count for eligible transient provider failures and continues at the
 limit, output-limit, or other non-retryable failures indefinitely. `/stop`,
 session cancellation, and runtime shutdown still terminate retry work.
 
+OpenAI Responses with an authoritative incomplete reason of `max_messages`
+retry the exact failed inference, not earlier actions or negotiation steps.
+These replacement retries use the finite provider-error count and backoff and
+also consume the original turn-wide provider-call bound. Unlimited outage mode
+does not extend them. Incomplete text and native calls are discarded: only a
+complete replacement can produce executable actions. Reported token expense
+is retained once, including when cancellation occurs during retry backoff.
+Unknown incomplete reasons do not acquire retry eligibility from a failure
+summary, and context/output limits retain their distinct recovery paths.
+
 Profile fields override configured model fields; configured model fields
 override provider discovery; discovery fills gaps ahead of built-in and
 conservative fallbacks. Lists replace lower-precedence lists, while option maps

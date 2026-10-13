@@ -112,14 +112,23 @@ impl RuntimeSessionService {
         let scheduler = &self.agent.provider_retry_scheduler;
         let attempt = scheduler.attempt(turn_id);
         let policy = scheduler.policy();
+        let calls_available = !scheduler.incomplete_sequence(turn_id)
+            || scheduler.provider_calls(turn_id) < mez_agent::DEFAULT_AGENT_TURN_INTERACTION_LIMIT;
         ProviderFailureRecoveryEligibility {
             current_owner,
-            repair_available: self.next_agent_maap_repair_attempt(turn_id)
-                <= u32::try_from(mez_agent::DEFAULT_MAAP_REPAIR_ATTEMPT_LIMIT).unwrap_or(u32::MAX),
-            context_available: policy.should_retry(attempt, ProviderErrorRetryClass::ContextLimit),
-            output_attempt: self.next_agent_output_limit_recovery_attempt(turn_id),
-            transport_available: policy
-                .should_retry(attempt, ProviderErrorRetryClass::RetryableTransport),
+            repair_available: calls_available
+                && self.next_agent_maap_repair_attempt(turn_id)
+                    <= u32::try_from(mez_agent::DEFAULT_MAAP_REPAIR_ATTEMPT_LIMIT)
+                        .unwrap_or(u32::MAX),
+            context_available: calls_available
+                && policy.should_retry(attempt, ProviderErrorRetryClass::ContextLimit),
+            output_attempt: if calls_available {
+                self.next_agent_output_limit_recovery_attempt(turn_id)
+            } else {
+                PROVIDER_OUTPUT_RECOVERY_LIMIT.saturating_add(1)
+            },
+            transport_available: calls_available
+                && policy.should_retry(attempt, ProviderErrorRetryClass::RetryableTransport),
         }
     }
 }
@@ -306,6 +315,7 @@ mod tests {
                     attempts_reserved: 2,
                     attempt_limit: 2,
                     provider_calls_started: 3,
+                    incomplete_retries_reserved: 0,
                     provider_call_limit: 16,
                     repair_calls_started: 2,
                     last_request_kind: mez_agent::ModelInteractionKind::MaapRepair,

@@ -66,6 +66,9 @@ pub struct RecoveryFacts {
     pub attempt_limit: usize,
     /// Provider calls started by this canonical invocation.
     pub provider_calls_started: usize,
+    /// Finite incomplete-inference replacement reservations in this invocation.
+    /// The runtime retry owner conserves them across actor-separated attempts.
+    pub incomplete_retries_reserved: u64,
     /// Existing turn-wide bound for those calls.
     pub provider_call_limit: usize,
     /// Corrective calls actually started; a reservation may remain unsent.
@@ -139,6 +142,9 @@ impl RecoveryTrace {
             attempts_reserved: attempts,
             attempt_limit,
             provider_calls_started: calls,
+            incomplete_retries_reserved: previous
+                .as_ref()
+                .map_or(0, |facts| facts.incomplete_retries_reserved),
             provider_call_limit: limit,
             repair_calls_started: repairs
                 + usize::from(request.interaction_kind == ModelInteractionKind::MaapRepair),

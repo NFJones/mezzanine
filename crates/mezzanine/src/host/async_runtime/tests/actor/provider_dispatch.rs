@@ -459,6 +459,7 @@ async fn async_actor_optional_provider_progress_pressure_preserves_failure() {
                 observation: Box::new(
                     crate::integrations::agent::provider::ProviderWireRequestObservation {
                         request_id: "wire-under-pressure".to_string(),
+                        claim_generation: None,
                         attempt_index: 1,
                         retry_reason: None,
                         conversation_id,
