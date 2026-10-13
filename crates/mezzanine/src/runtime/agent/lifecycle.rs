@@ -227,6 +227,12 @@ impl RuntimeSessionService {
     pub(super) fn clear_terminal_agent_turn_runtime_state(&mut self, turn_id: &str) {
         self.settle_steering_receipts(turn_id);
         self.retire_cancelled_mcp_leases_for_turn(turn_id);
+        // Only terminal parent ownership retires a local failure handoff.
+        // Child cleanup must preserve its still-outstanding parent obligation.
+        self.agent.owned_child_failures.retain(|_, receipt| {
+            receipt.parent_origin_turn_id != turn_id
+                && receipt.committed_turn_id.as_deref() != Some(turn_id)
+        });
         self.agent
             .human_pauses
             .retain(|_, pause| pause.turn_id() != Some(turn_id));

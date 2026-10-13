@@ -186,6 +186,12 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Injects one recoverable offline local-reference fault before admission.
+    #[cfg(test)]
+    pub(crate) fn fail_next_owned_child_failure_context_commit_for_tests(&mut self) {
+        self.agent.fail_next_owned_child_failure_context_commit = true;
+    }
+
     /// Keeps the existing delivery timer alive only for actionable admission.
     /// Running providers observe context through their ordinary generation
     /// boundary; paused/approval-blocked parents do not need failure polling.
@@ -201,20 +207,22 @@ impl RuntimeSessionService {
             let Some(turn) = self.agent_turn_ledger().turn(turn_id) else {
                 return true;
             };
-            if self.agent_turn_is_human_paused(turn_id) {
+            if receipt.committed_turn_id.is_some() && self.agent_turn_is_human_paused(turn_id) {
                 return false;
             }
             match turn.state {
                 AgentTurnState::Queued => true,
                 AgentTurnState::Blocked => {
-                    self.agent_turn_executions()
-                        .get(turn_id)
-                        .is_some_and(|execution| {
-                            execution.action_results.iter().any(|result| {
-                                result.action_type == "wait"
-                                    && result.status == super::ActionStatus::Running
+                    receipt.committed_turn_id.is_none()
+                        || self
+                            .agent_turn_executions()
+                            .get(turn_id)
+                            .is_some_and(|execution| {
+                                execution.action_results.iter().any(|result| {
+                                    result.action_type == "wait"
+                                        && result.status == super::ActionStatus::Running
+                                })
                             })
-                        })
                 }
                 AgentTurnState::Completed if receipt.parent_was_idle => {
                     self.agent_peer_message_turn_count(&receipt.parent_agent_id)
@@ -248,6 +256,7 @@ impl RuntimeSessionService {
             .as_deref()
             .unwrap_or(&receipt.parent_origin_turn_id);
         let gone = self.find_pane_descriptor(pane).is_none()
+            || self.pane_is_closing(pane)
             || self
                 .agent_shell_store()
                 .get(pane)
@@ -292,6 +301,12 @@ impl RuntimeSessionService {
             self.start_runtime_owned_child_failure_turn(pane, now_ms, receipt)?;
             // Normal admission records the exact new turn before scheduling.
             return Ok(());
+        }
+        #[cfg(test)]
+        if std::mem::take(&mut self.agent.fail_next_owned_child_failure_context_commit) {
+            return Err(super::MezError::invalid_state(
+                "injected local child failure context commit fault",
+            ));
         }
         let Some(context) = self.agent_turn_contexts_mut().get_mut(&parent.turn_id) else {
             return Ok(());

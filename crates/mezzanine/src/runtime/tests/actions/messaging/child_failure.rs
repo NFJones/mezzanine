@@ -766,6 +766,7 @@ async fn runtime_owned_child_bridge_fault_timer_fences_pre_failure_request() {
         .record_claimed_agent_provider_context_for_tests(&parent.turn_id, high_water)
         .unwrap();
     service.fail_next_subagent_result_accept_for_tests();
+    service.fail_next_owned_child_failure_context_commit_for_tests();
     fail_owned_child(&mut service, &child);
     assert_eq!(owned_failure_count(&service, &parent), 0);
     assert!(service.subagent_task_parent(&child.turn_id).is_none());
@@ -821,6 +822,164 @@ async fn runtime_owned_child_bridge_fault_timer_fences_pre_failure_request() {
             .any(|block| block
                 .content
                 .contains("obsolete failure-unaware completion"))
+    );
+    assert_eq!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .filter(|task| task.turn_id == parent.turn_id)
+            .count(),
+        1
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// The production transport-neutral provider-failed ingress carries terminal
+/// child failure into the same retained parent wait without a model send. A
+/// duplicate actor completion must conserve one receipt, wait and continuation.
+#[test]
+fn runtime_owned_child_actor_provider_failure_ingress_resumes_wait_once() {
+    let (mut service, parent, child) = owned_child_wait_fixture();
+    let child_id = AgentId::opaque(child.agent_id.clone()).unwrap();
+    let error = MezError::invalid_state("offline actor child provider failure");
+    service
+        .apply_agent_provider_failed_transition(&child_id, &child.turn_id, &error)
+        .unwrap();
+    service
+        .apply_agent_provider_failed_transition(&child_id, &child.turn_id, &error)
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    assert_eq!(owned_failure_count(&service, &parent), 1);
+    assert_eq!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .filter(|task| task.turn_id == parent.turn_id)
+            .count(),
+        1
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Approval inhibition is not a peer wait. A child failure appends untrusted
+/// evidence without settling, approving, cancelling or dispatching the blocked
+/// action; no provider continuation is admitted around its approval owner.
+#[test]
+fn runtime_owned_child_failure_does_not_bypass_parent_approval() {
+    let (mut service, parent, child) = owned_child_fixture(false);
+    let action = mez_agent::AgentAction {
+        id: "approval-owner".into(),
+        payload: mez_agent::AgentActionPayload::SendMessage {
+            recipient: "agent-other".into(),
+            scope: None,
+            content_type: "text/plain; charset=utf-8".into(),
+            payload: "must require human approval".into(),
+            correlation_id: None,
+        },
+    };
+    let blocked = mez_agent::plan_action_result(
+        &parent,
+        &action,
+        mez_agent::ActionPlanningInput {
+            approval_policy: mez_agent::ApprovalPolicy::Ask,
+            message_rule_decision: Some(mez_agent::permissions::RuleDecision::Prompt),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let execution =
+        fixtures::messaging_test_execution(&parent, &action, blocked, AgentTurnState::Blocked);
+    service
+        .agent_turn_executions_mut()
+        .insert(parent.turn_id.clone(), execution.clone());
+    service
+        .append_agent_execution_chronology(&parent, &execution)
+        .unwrap();
+    let approvals = service
+        .queue_blocked_approvals_for_execution(&parent, &execution)
+        .unwrap();
+    assert_eq!(approvals.len(), 1);
+    service
+        .agent_scheduler_mut()
+        .block_running(&parent.turn_id)
+        .unwrap();
+    service
+        .agent_turn_ledger_mut()
+        .finish_turn(&parent.turn_id, AgentTurnState::Blocked)
+        .unwrap();
+    service.remove_pending_agent_provider_task(&parent.turn_id);
+    fail_owned_child(&mut service, &child);
+    assert_eq!(owned_failure_count(&service, &parent), 1);
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Blocked
+    );
+    assert_eq!(
+        service
+            .agent_turn_executions()
+            .get(&parent.turn_id)
+            .unwrap()
+            .action_results[0]
+            .status,
+        ActionStatus::Blocked
+    );
+    assert!(service.blocked_approvals().get(&approvals[0]).is_some());
+    assert!(
+        !service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent.turn_id)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// A reused persistent child has a new exact task occurrence. Late observation
+/// of its prior settled task is inert; failure of its current task can append a
+/// new reference without duplicating the already settled parent's wait.
+#[test]
+fn runtime_owned_child_reused_task_has_distinct_failure_occurrence() {
+    let (mut service, parent, child) = owned_child_wait_fixture();
+    fail_owned_child(&mut service, &child);
+    let started = service
+        .start_agent_prompt_turn(&child.pane_id, "later accepted same-owner review")
+        .unwrap();
+    let later = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .clone();
+    service
+        .emit_subagent_task_result_for_state(&child, AgentTurnState::Failed)
+        .unwrap();
+    assert_eq!(owned_failure_count(&service, &parent), 1);
+    fail_owned_child(&mut service, &later);
+    service
+        .deliver_pending_runtime_agent_messages(current_unix_millis())
+        .unwrap();
+    assert_eq!(owned_failure_count(&service, &parent), 2);
+    assert_eq!(
+        service
+            .agent_turn_executions()
+            .get(&parent.turn_id)
+            .unwrap()
+            .action_results
+            .iter()
+            .filter(
+                |result| result.action_type == "wait" && result.status == ActionStatus::Succeeded
+            )
+            .count(),
+        1
     );
     assert_eq!(
         service

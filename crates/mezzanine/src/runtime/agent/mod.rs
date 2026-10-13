@@ -745,6 +745,9 @@ pub(crate) struct RuntimeAgentComponent {
     /// Test-only bridge acceptance fault after local failure receipt retention.
     #[cfg(test)]
     fail_next_subagent_result_accept: bool,
+    /// Test-only local failure-reference commit fault before wake admission.
+    #[cfg(test)]
+    fail_next_owned_child_failure_context_commit: bool,
     /// Test-only one-shot failure injected after receive context storage.
     #[cfg(test)]
     fail_next_peer_message_receive_after_context_storage: bool,

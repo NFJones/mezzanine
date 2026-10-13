@@ -1697,6 +1697,11 @@ impl RuntimeSessionService {
         }
 
         let now_ms = current_unix_seconds().saturating_mul(1000);
+        // The actor commits local evidence before touching the best-effort
+        // bridge. An older in-flight parent request is therefore fenced even
+        // if bridge acceptance fails or its route is retired below. A genuine
+        // context/admission fault keeps the local receipt for delivery recovery.
+        let _ = self.recover_owned_child_failures(now_ms);
         let child_display_name = self
             .subagent_lineage(&turn.agent_id)
             .map(|lineage| lineage.display_name.clone());
@@ -1957,7 +1962,7 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Resolves one explicit joined dependency against a terminal child turn.
+    /// Injects one offline bridge-accept failure after local receipt retention.
     #[cfg(test)]
     pub(crate) fn fail_next_subagent_result_accept_for_tests(&mut self) {
         self.agent.fail_next_subagent_result_accept = true;
