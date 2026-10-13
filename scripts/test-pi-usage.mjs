@@ -188,7 +188,7 @@ function callbackRetryFixture(gapDelivered = true, options = {}) {
           admitted_at: 10, source_witness: "c".repeat(64), origin: "unattributed", controls: [] };
       }
       if (++ends === 1) charges++;
-      if (ends <= 2) return undefined;
+      if (ends <= (options.missingAcks ?? 2)) return undefined;
       return { accepted: true, durable: true, applied: payload.request_id !== original,
         revision: payload.request_id === original ? 1 : 2,
         coverage: { source: "external-reported", reasoning_known: false } };
@@ -261,9 +261,12 @@ test("ordinary finite scheduler recovers retained report without another vendor 
   assert.equal(f.owner.lease.failed, false);
   assert.equal(f.owner.lease.usageCoverage, "unavailable-durable-acknowledgment");
   assert.equal(f.owner.lease.lastUsageGap, "durable-acknowledgment");
+  const scheduled = [...timer.pending.values()];
   f.clock(99); timer.advance(250); await f.drain();
   const recovered = f.requests.filter(row => row.method.endsWith("usage-end"));
   assert.equal(recovered.length, 3, "finite telemetry scheduler did not retry retained report");
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled.every(handle => handle.unreferenced), true);
   assert.equal(JSON.stringify(recovered[2].payload) === JSON.stringify(initial[0].payload), true);
   assert.equal(recovered[2].payload.observed_at, 20);
   assert.equal(f.tickets[1] === f.tickets[0], true);
@@ -278,6 +281,54 @@ test("ordinary finite scheduler recovers retained report without another vendor 
   assert.equal(timer.pending.size, 0);
   const count = f.requests.length; timer.advance(10000); await f.drain();
   assert.equal(f.requests.length, count);
+});
+
+/** Genuine duplicate callbacks and the timer share one finite attempt budget.
+ * Exhaustion retains the original unknown-delivery report and its gap, rather
+ * than minting readiness or allowing callbacks to replenish scheduled retries.
+ * All wire loss here is synthetic; only the actual request core is exercised. */
+test("ordinary timer and callbacks cannot replenish the finite retry budget", async () => {
+  const timer = retrySchedulerFixture();
+  const f = callbackRetryFixture(true, { retryScheduler: timer.scheduler, missingAcks: Infinity });
+  f.emit({ type: "session_start", reason: "startup" }); f.emit({ type: "agent_start" });
+  f.emit({ type: "turn_start", turnIndex: 0 });
+  const original = message(); f.emit({ type: "message_end", message: original }); f.emit(event(original));
+  await f.drain();
+  for (const offset of [250, 1000, 4000]) { timer.advance(offset); await f.drain(); }
+  const ends = f.requests.filter(row => row.method.endsWith("usage-end"));
+  assert.equal(ends.length, 8);
+  assert.equal(ends.every(row => JSON.stringify(row.payload) === JSON.stringify(ends[0].payload)), true);
+  assert.equal(timer.pending.size, 0);
+  assert.equal(f.owner.usageRecent.size, 1);
+  assert.equal(f.owner.lease.lastUsageGap, "durable-acknowledgment");
+  const known = f.requests.length;
+  for (let index = 0; index < 40; index++) f.emit(event(message()));
+  await f.drain(); timer.advance(10000); await f.drain();
+  assert.equal(f.requests.length, known, "duplicate callbacks replenished exhausted retry budget");
+  assert.equal(f.owner.lease.failed, false);
+});
+
+/** Failed gap delivery, settlement and shutdown are terminal retry fences.
+ * Captured timer callbacks must be inert after cancellation, even when a later
+ * clock advance would otherwise make the original report eligible. This does
+ * not simulate actual native retirement or grant successor ownership. */
+test("ordinary failed or terminal owners cancel pending scheduled recovery", async () => {
+  for (const boundary of ["failed-gap", "agent_settled", "session_shutdown"]) {
+    const timer = retrySchedulerFixture();
+    const f = callbackRetryFixture(boundary !== "failed-gap", { retryScheduler: timer.scheduler });
+    f.emit({ type: "session_start", reason: "startup" }); f.emit({ type: "agent_start" });
+    f.emit({ type: "turn_start", turnIndex: 0 });
+    const original = message(); f.emit({ type: "message_end", message: original }); f.emit(event(original));
+    await f.drain();
+    const captured = [...timer.pending.values()].map(handle => handle.callback);
+    if (boundary !== "failed-gap") f.emit({ type: boundary, ...(boundary === "session_shutdown" ? { reason: "quit" } : {}) });
+    await f.drain();
+    assert.equal(timer.pending.size, 0);
+    const known = f.requests.length;
+    timer.advance(250); for (const callback of captured) callback(); await f.drain();
+    assert.equal(f.requests.length, known);
+    assert.equal(f.requests.filter(row => row.method.endsWith("usage-end")).length, 2);
+  }
 });
 
 /** Two immediate ACK losses exhaust one real endRequest operation. A later
