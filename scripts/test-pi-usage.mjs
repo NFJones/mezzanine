@@ -522,6 +522,62 @@ test("ordinary conflicting replay preserves original pending timer recovery", as
   assert.equal(f.facts.filter(fact => fact.type === "usage_gap").length, 2);
 });
 
+/** Exact deadline dispatch is permitted, but stale ownership and queued work
+ * beyond the horizon are not. Report publication UTC is neither the scheduler
+ * clock nor a source of renewed authority. Throwing private scheduler services
+ * remain neutral and retain the already-disclosed obligation rather than crash
+ * or create an unlimited retry loop. */
+test("Pi scheduler deadline edge and private dependency failures stay bounded", async () => {
+  for (const mode of ["edge", "stale", "cancelled", "clock-failure", "timer-failure"]) {
+    const timer = retrySchedulerFixture(); const operations = []; const recent = new Map();
+    let current = true; let calls = 0;
+    if (mode === "clock-failure") timer.scheduler.now = () => { throw new Error("fixed clock failure"); };
+    if (mode === "timer-failure") timer.scheduler.setTimeout = () => { throw new Error("fixed timer failure"); };
+    const owned = { session: "session-a", client: {
+      async piObservation() { return { delivered: true }; },
+      async beginRequest(id) { return { request_id: id, admitted_at: 10 }; },
+      async endRequest() { calls++; return { delivered: false, durable: false }; }, abandonRequest() {},
+    } };
+    const observer = createPiUsageObserver(owned, operation => { operations.push(operation); return true; }, recent, () => 20, () => {}, { retryScheduler: timer.scheduler, isCurrent: () => current });
+    const drain = async () => { while (operations.length) await operations.shift()(); };
+    observer.turnStart({ type: "turn_start", turnIndex: 0 }); const msg = message();
+    observer.messageEnd({ type: "message_end", message: msg }); observer.turnEnd(event(msg)); await drain();
+    if (mode === "stale") current = false;
+    if (mode === "cancelled") { owned.cancelled = true; observer.cancelRetries(); }
+    timer.advance(5000); await drain();
+    assert.equal(calls, mode === "edge" ? 2 : 1);
+    assert.equal(timer.pending.size, 0);
+    assert.equal(recent.size, 1);
+    assert.equal(owned.lastUsageGap, "durable-acknowledgment");
+    assert.equal([...recent.values()][0].slot.report.observed_at, 20);
+    observer.close();
+  }
+});
+
+/** A finalized valid projection can exist before async readiness or report UTC
+ * construction. EOS and a subsequent genuine new run must preserve that queued
+ * initial delivery, while permanently fencing its future recovery callbacks.
+ * This specifically guards against reclaiming a no-report-yet reservation. */
+test("Pi pre-drain finalization survives close and new run without old retry revival", async () => {
+  const timer = retrySchedulerFixture(); const operations = []; const recent = new Map(); let calls = 0;
+  const owned = { session: "session-a", client: {
+    async piObservation() { return { delivered: true }; },
+    async beginRequest(id) { return { request_id: id, admitted_at: 10 }; },
+    async endRequest() { calls++; return { delivered: false, durable: false }; },
+    abandonRequest() { assert.fail("valid finalized initial obligation abandoned"); },
+  } };
+  const observer = createPiUsageObserver(owned, operation => { operations.push(operation); return true; }, recent, () => 20, () => {}, { retryScheduler: timer.scheduler });
+  observer.turnStart({ type: "turn_start", turnIndex: 0 }); const msg = message();
+  observer.messageEnd({ type: "message_end", message: msg }); observer.turnEnd(event(msg));
+  assert.equal(recent.size, 1); assert.equal([...recent.values()][0].slot.report, undefined);
+  observer.close(); observer.runStart();
+  while (operations.length) await operations.shift()();
+  assert.equal(calls, 1); assert.equal(recent.size, 1); assert.equal(timer.pending.size, 0);
+  observer.turnEnd(event(message()));
+  while (operations.length) await operations.shift()();
+  timer.advance(5000); assert.equal(calls, 1); assert.equal(timer.pending.size, 0);
+});
+
 /** Two immediate ACK losses exhaust one real endRequest operation. A later
  * exact finalized callback retries its same instance-local ticket and frozen
  * report, not a provider request, new marker, timestamp or copied ticket. The

@@ -357,9 +357,9 @@ accounting. Run normal `pi` in the Mez pane; no `mez pi`, fd3, preselected sessi
 `--apply`, version/root gate or separate accounting enable step is required.
 Pi revision 13 recognizes independently frozen revision-12/11 and all earlier
 compiled owned bytes for upgrade/repair/repeat;
-disabled vendor policy, authored entries and trust remain unchanged. The same
-shared-client byte update is versioned for OpenCode ownership without adding
-OpenCode usage behavior.
+disabled vendor policy, authored entries and trust remain unchanged. Pi13 changes
+only the Pi-owned producer modules; the shared resume transport and OpenCode11
+owned bytes remain unchanged, without adding OpenCode usage behavior.
 
 The producer observes genuine `turn_start` readiness, then persisted `turn_end`
 assistant entries. `message_end` is not charged: other extensions may still
