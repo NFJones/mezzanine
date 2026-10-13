@@ -163,10 +163,10 @@ test("Pi failed durable ACK emits sticky observer gap", async () => {
 /** Composes the real request core and ordinary callback owner with separate
  * ordered queues. Only transport replies are injected; this tests retained
  * tickets/latches, not native admission or ledger deduplication authority. */
-function callbackRetryFixture(gapDelivered = true) {
+function callbackRetryFixture(gapDelivered = true, options = {}) {
   const owner = {}; const requests = []; const facts = []; const tickets = [];
   const handlers = new Map(); let wire = Promise.resolve(); let clock = 20;
-  let original; let ends = 0;
+  let original; let ends = 0; let charges = 0;
   const core = createRequestAccountingClient({
     enqueue(operation) { const next = wire.then(operation); wire = next.catch(() => {}); return next; },
     async exchange(method, payload) {
@@ -176,7 +176,8 @@ function callbackRetryFixture(gapDelivered = true) {
         return { protocol: "external-request/1", accepted: true, request_id: payload.request_id,
           admitted_at: 10, source_witness: "c".repeat(64), origin: "unattributed", controls: [] };
       }
-      if (++ends <= 2) return undefined;
+      if (++ends === 1) charges++;
+      if (ends <= 2) return undefined;
       return { accepted: true, durable: true, applied: payload.request_id !== original,
         revision: payload.request_id === original ? 1 : 2,
         coverage: { source: "external-reported", reasoning_known: false } };
@@ -188,8 +189,9 @@ function callbackRetryFixture(gapDelivered = true) {
   registerOrdinaryPiObserver({ on(type, callback) { handlers.set(type, callback); } }, {
     owner, createClient: () => client, peerHelper: "/fixture/mez", now: () => clock,
     env: { MEZ: "/tmp/fixture.sock\x1fsession=a\x1fwindow=@1\x1fpane=%1\x1fprotocol=mez-control/1", MEZ_PANE: "%1" },
+    ...options,
   });
-  return { owner, requests, facts, tickets, clock(value) { clock = value; },
+  return { owner, requests, facts, tickets, charges: () => charges, clock(value) { clock = value; },
     emit(value) {
       const before = JSON.stringify(value);
       assert.equal(handlers.get(value.type)?.(value, { sessionManager: { getSessionId: () => "session-a" } }), undefined);
@@ -204,6 +206,68 @@ function callbackRetryFixture(gapDelivered = true) {
     },
   };
 }
+
+/** Deterministic telemetry-owner time is independent of incurred report UTC.
+ * Timer handles model cancellation and unref without keeping Node alive. The
+ * fixture advances one due callback at a time so observer queue drains remain
+ * explicit; it supplies no admission, accounting or native ownership rights. */
+function retrySchedulerFixture() {
+  let clock = 0; let next = 0; const pending = new Map();
+  const scheduler = {
+    now: () => clock,
+    setTimeout(callback, delay) {
+      const handle = { id: ++next, at: clock + delay, callback, unreferenced: false,
+        unref() { this.unreferenced = true; } };
+      pending.set(handle.id, handle); return handle;
+    },
+    clearTimeout(handle) { pending.delete(handle.id); },
+  };
+  return { scheduler, pending,
+    advance(value) {
+      clock = value;
+      const due = [...pending.values()].filter(handle => handle.at <= clock)
+        .sort((a, b) => a.at - b.at || a.id - b.id)[0];
+      if (due) { pending.delete(due.id); due.callback(); }
+    },
+  };
+}
+
+/** Desired recovery uses the SAME ordinary owner and real RequestCore after
+ * two actual missing transport ACKs, without another SDK/vendor callback. The
+ * transport fixture models a single committed observation and an inert replay
+ * acknowledgment; it is explicitly not proof of native admission or SQLite
+ * deduplication. Scheduler time cannot rewrite the original reporting UTC. */
+test("ordinary finite scheduler recovers retained report without another vendor callback", async () => {
+  const timer = retrySchedulerFixture();
+  const f = callbackRetryFixture(true, { retryScheduler: timer.scheduler });
+  f.emit({ type: "session_start", reason: "startup" }); f.emit({ type: "agent_start" });
+  f.emit({ type: "turn_start", turnIndex: 0 });
+  const original = message(); f.emit({ type: "message_end", message: original }); f.emit(event(original));
+  await f.drain();
+  const initial = f.requests.filter(row => row.method.endsWith("usage-end"));
+  assert.equal(initial.length, 2);
+  assert.equal(JSON.stringify(initial[0].payload) === JSON.stringify(initial[1].payload), true);
+  assert.equal(f.owner.lease.failed, false);
+  assert.equal(f.owner.lease.usageCoverage, "unavailable-durable-acknowledgment");
+  assert.equal(f.owner.lease.lastUsageGap, "durable-acknowledgment");
+  f.clock(99); timer.advance(250); await f.drain();
+  const recovered = f.requests.filter(row => row.method.endsWith("usage-end"));
+  assert.equal(recovered.length, 3, "finite telemetry scheduler did not retry retained report");
+  assert.equal(JSON.stringify(recovered[2].payload) === JSON.stringify(initial[0].payload), true);
+  assert.equal(recovered[2].payload.observed_at, 20);
+  assert.equal(f.tickets[1] === f.tickets[0], true);
+  const begins = f.requests.filter(row => row.method.endsWith("usage-begin"));
+  assert.equal(begins.length, 4);
+  assert.equal(begins.every(row => row.payload.request_id === begins[0].payload.request_id), true);
+  assert.equal(f.charges(), 1);
+  assert.equal(f.owner.lease.failed, false);
+  assert.equal(f.owner.lease.usageCoverage, "finalized-assistant-external-reported");
+  assert.equal(f.owner.lease.lastUsageGap, "durable-acknowledgment");
+  assert.deepEqual(f.facts.filter(fact => fact.type === "usage_gap"), [{ type: "usage_gap", reason: "durable-acknowledgment" }]);
+  assert.equal(timer.pending.size, 0);
+  const count = f.requests.length; timer.advance(10000); await f.drain();
+  assert.equal(f.requests.length, count);
+});
 
 /** Two immediate ACK losses exhaust one real endRequest operation. A later
  * exact finalized callback retries its same instance-local ticket and frozen
