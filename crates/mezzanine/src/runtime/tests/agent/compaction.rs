@@ -5,6 +5,7 @@ use crate::runtime::{current_unix_seconds, execute_runtime_agent_prompt_history_
 use mez_agent::messaging::{Envelope, MessageScope};
 
 mod preparation;
+mod summary_correction;
 mod terminal_handoff;
 mod transport_retries;
 mod usage_invalidation;

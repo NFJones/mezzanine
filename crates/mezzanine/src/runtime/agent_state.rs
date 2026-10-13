@@ -628,6 +628,8 @@ pub struct RuntimeAgentCompactionTask {
     pub transport_retry_attempts: u64,
     /// Pending supervised backoff; a held task cannot be dispatched or claimed.
     pub transport_retry_delay_ms: Option<u64>,
+    /// Private completed-output correction progress for the current frozen source.
+    pub summary_correction: RuntimeSummaryCorrection,
     /// Frozen project provenance of this model request, retained across retries.
     pub(crate) accounting_origin: crate::storage::token_usage::AccountingOrigin,
     /// Logical compaction epoch retained across recursive and retry generations.
@@ -674,6 +676,19 @@ pub struct RuntimeAgentCompactionTask {
         std::collections::BTreeMap<String, String>,
         bool,
     )>,
+}
+
+/// Completed-output correction state, reset only after accepting a bounded
+/// summary and advancing to another frozen chunk/range/synthesis source.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeSummaryCorrection {
+    /// Empty/malformed corrections consumed for this source; always finite.
+    pub empty_attempts: u8,
+    /// Last rejected cost/bytes; oversize correction must strictly improve both
+    /// dimensions that remain invalid, rather than repeat ignored guidance.
+    pub last_size: Option<(usize, usize)>,
+    /// Enforceable ceiling for the current source, retained through transport retries.
+    pub output_ceiling: Option<usize>,
 }
 
 /// Bounded work remaining before one manual conversation summary can commit.

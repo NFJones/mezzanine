@@ -7,6 +7,7 @@
 
 use super::*;
 
+mod summary_correction;
 mod transport_retries;
 
 /// Under-budget eligible history still runs actual model compaction. Both direct

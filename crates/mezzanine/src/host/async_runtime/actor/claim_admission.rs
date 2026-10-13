@@ -160,6 +160,7 @@ mod tests {
                 compaction_epoch: 0,
                 transport_retry_attempts: 0,
                 transport_retry_delay_ms: None,
+                summary_correction: Default::default(),
                 pane_id: "%1".into(),
                 conversation_id: actor
                     .service

@@ -38,6 +38,65 @@ impl<'a> ProviderBudgetProjection<'a> {
     }
 }
 
+/// Correctable defect in a completed model-authored summary, not source integrity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelCompactionSummaryDefect {
+    /// No non-whitespace semantic output was supplied.
+    Empty,
+    /// Completed response does not contain exactly one final summary action.
+    Malformed,
+    /// UTF-8 bytes exceed the canonical block limit.
+    Bytes,
+    /// Words or estimated input tokens exceed the frozen allowance.
+    Budget,
+}
+
+/// Content-free measurements for a rejected completed summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelCompactionSummaryRejection {
+    /// Specific correctable output defect.
+    pub defect: ModelCompactionSummaryDefect,
+    /// UTF-8 byte length of the summary.
+    pub bytes: usize,
+    /// Measured cost in the stated budget unit.
+    pub cost: usize,
+    /// Frozen cost allowance, independent of provider output tokens.
+    pub budget: usize,
+    /// Whether cost is estimated input tokens rather than whitespace words.
+    pub estimated_tokens: bool,
+}
+
+/// Validates output only; callers must independently prove exact frozen source.
+/// Equality is accepted. A provider output-token cap does not establish this
+/// local input-token, word or byte bound. No text is truncated or synthesized.
+pub fn validate_model_compaction_summary(
+    summary: &str,
+    budget: usize,
+    estimated_tokens: bool,
+) -> Result<(), ModelCompactionSummaryRejection> {
+    let cost = if estimated_tokens {
+        crate::provider_text_input_token_estimate(summary)
+    } else {
+        model_context_text_word_count(summary)
+    };
+    let defect = if summary.trim().is_empty() {
+        ModelCompactionSummaryDefect::Empty
+    } else if summary.len() > MODEL_CONTEXT_BLOCK_LIMIT_BYTES {
+        ModelCompactionSummaryDefect::Bytes
+    } else if cost > budget {
+        ModelCompactionSummaryDefect::Budget
+    } else {
+        return Ok(());
+    };
+    Err(ModelCompactionSummaryRejection {
+        defect,
+        bytes: summary.len(),
+        cost,
+        budget,
+        estimated_tokens,
+    })
+}
+
 /// Deterministic replacement plan awaiting a model-authored summary.
 ///
 /// The plan freezes selected chronology by stable event sequence, leaves every
@@ -88,9 +147,18 @@ impl ModelContextCompactionPlan {
         &self.retained_tail
     }
 
-    /// Returns the maximum provider-visible word budget for the model summary.
+    /// Returns the frozen summary cost allowance (words or estimated input tokens).
     pub fn summary_budget_words(&self) -> usize {
         self.summary_budget_words
+    }
+
+    /// Checks completed output without changing the frozen plan or source.
+    pub fn validate_summary(&self, summary: &str) -> Result<(), ModelCompactionSummaryRejection> {
+        validate_model_compaction_summary(
+            summary,
+            self.summary_budget_words,
+            self.summary_budget_is_tokens,
+        )
     }
 
     /// Whether this summary alone cannot fit the planner's block allowance.
@@ -540,14 +608,7 @@ pub fn apply_model_context_compaction_plan(
             "model compaction summary was supplied for a no-op plan",
         ));
     }
-    if model_summary.trim().is_empty()
-        || model_summary.len() > MODEL_CONTEXT_BLOCK_LIMIT_BYTES
-        || if plan.summary_budget_is_tokens {
-            crate::provider_text_input_token_estimate(&model_summary) > plan.summary_budget_words
-        } else {
-            model_context_text_word_count(&model_summary) > plan.summary_budget_words
-        }
-    {
+    if plan.validate_summary(&model_summary).is_err() {
         return Err(AgentContextError::new(
             "model compaction summary must be nonempty, bounded, and fit the planned summary budget",
         ));
@@ -846,6 +907,49 @@ fn model_context_retained_group_indexes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Output rejection carries only reason/unit/size facts. Equality is valid,
+    /// while whitespace, word overflow, dense token overflow and Unicode byte
+    /// overflow stay distinct from durable chronology errors.
+    #[test]
+    fn model_compaction_summary_validation_reports_typed_boundaries() {
+        assert_eq!(
+            validate_model_compaction_summary("one two", 2, false),
+            Ok(())
+        );
+        let empty = validate_model_compaction_summary(" \n\t", 2, false).unwrap_err();
+        assert_eq!(empty.defect, ModelCompactionSummaryDefect::Empty);
+        let words = validate_model_compaction_summary("one two three", 2, false).unwrap_err();
+        assert_eq!(words.defect, ModelCompactionSummaryDefect::Budget);
+        assert_eq!(
+            (words.cost, words.budget, words.estimated_tokens),
+            (3, 2, false)
+        );
+        let dense = "abcd".repeat(10);
+        let cost = crate::provider_text_input_token_estimate(&dense);
+        assert_eq!(
+            validate_model_compaction_summary(&dense, cost, true),
+            Ok(())
+        );
+        assert_eq!(
+            validate_model_compaction_summary(&dense, cost - 1, true)
+                .unwrap_err()
+                .defect,
+            ModelCompactionSummaryDefect::Budget
+        );
+        let unicode = "界".repeat(MODEL_CONTEXT_BLOCK_LIMIT_BYTES / 3 + 1);
+        assert_eq!(
+            validate_model_compaction_summary(&unicode, usize::MAX, false)
+                .unwrap_err()
+                .defect,
+            ModelCompactionSummaryDefect::Bytes
+        );
+        let boundary = "x".repeat(MODEL_CONTEXT_BLOCK_LIMIT_BYTES);
+        assert_eq!(
+            validate_model_compaction_summary(&boundary, 1, false),
+            Ok(())
+        );
+    }
 
     /// Dense context has few whitespace words but many estimated tokens. The
     /// provider-token planner must summarize the newest closed group when its

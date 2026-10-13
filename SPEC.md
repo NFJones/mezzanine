@@ -9338,6 +9338,24 @@ overlap and stale epochs remain integrity failures, not fallback admission.
 Turn-local request validation MUST include exact externally owned transcript
 arrivals after the captured history boundary without restoring summarized
 prefixes or admitting those arrivals to the frozen compaction selection.
+Completed compactor output that is empty, malformed, over the canonical UTF-8
+block-byte bound, or over its frozen summary cost allowance MUST be rejected
+privately before chunk/synthesis staging or publication. With independently
+validated frozen source, Mezzanine MUST admit bounded auxiliary correction under
+a fresh exact task generation while preserving the waiting turn, logical epoch,
+current source and earlier accepted staging. The model MUST receive the actual
+local target unit (words or estimated input tokens), byte bound and separate
+provider output-token ceiling, including framing headroom. Oversize corrections
+MUST tighten the enforceable ceiling and strictly improve each still-invalid
+size dimension; repeated output MUST fail without publication. Empty/malformed
+output MUST have a finite per-source correction budget, independent of unlimited
+transport retry policy. Legitimately advancing chunks/ranges MUST NOT be capped
+by an arbitrary total response count. Known incurred auxiliary usage MUST count
+once even when text is discarded, without replacing execution usage. Source,
+chronology, epoch and durable-evidence corruption remain terminal integrity
+failures, not output correction. No ordinary request or settled action may replay
+before accepted compaction and complete-request fit; cancellation, pause, stale
+delivery and failed admission retain existing exact-ownership semantics.
 If the complete candidate after a model-authored summary exceeds the safe input
 allowance, compaction MAY request a shorter model-authored summary of the same
 frozen source while the complete candidate estimate and enforceable output

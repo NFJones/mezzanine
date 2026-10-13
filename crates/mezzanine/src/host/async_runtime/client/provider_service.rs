@@ -2441,6 +2441,7 @@ mod tests {
                     task_generation: 1,
                     transport_retry_attempts: 0,
                     transport_retry_delay_ms: None,
+                    summary_correction: Default::default(),
                     accounting_origin: crate::storage::token_usage::AccountingOrigin::Unattributed,
                     compaction_epoch: 1,
                     pane_id: "%1".into(),

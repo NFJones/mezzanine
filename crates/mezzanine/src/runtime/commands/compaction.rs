@@ -41,6 +41,7 @@ mod handoff;
 mod preparation;
 mod selection;
 mod source;
+mod summary_correction;
 #[cfg(test)]
 mod tests;
 pub(crate) use preparation::{
@@ -816,13 +817,14 @@ impl RuntimeSessionService {
             compaction_epoch: prepared_epoch,
             transport_retry_attempts: 0,
             transport_retry_delay_ms: None,
+            summary_correction: Default::default(),
             pane_id: pane_id.to_string(),
             accounting_origin: self.capture_accounting_origin_for_pane(pane_id),
             conversation_id: conversation_id.clone(),
             source: source.to_string(),
             transcript_entries,
             compacted_through_sequence,
-            frozen_compaction_rows: Vec::new(),
+            frozen_compaction_rows: compactable_transcript_records.to_vec(),
             retained_transcript_entries,
             summarized_entries,
             model_profile_name: model_profile_name.clone(),
@@ -950,6 +952,11 @@ impl RuntimeSessionService {
             allowed_actions.clone(),
         )?;
         runtime_limit_compaction_summary_output(&mut request, plan.summary_budget_words());
+        summary_correction::communicate_summary_target(
+            &mut request,
+            plan.summary_budget_words(),
+            plan.planning_budget().1,
+        );
         if let (Some(rejected_bytes), Some(stream)) =
             (rejected_request_bytes, rejected_request_stream)
         {
@@ -971,6 +978,11 @@ impl RuntimeSessionService {
                     allowed_actions.clone(),
                 )?;
                 runtime_limit_compaction_summary_output(&mut request, plan.summary_budget_words());
+                summary_correction::communicate_summary_target(
+                    &mut request,
+                    plan.summary_budget_words(),
+                    plan.planning_budget().1,
+                );
             }
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;
@@ -979,6 +991,7 @@ impl RuntimeSessionService {
             compaction_epoch: 0,
             transport_retry_attempts: 0,
             transport_retry_delay_ms: None,
+            summary_correction: Default::default(),
             pane_id: turn.pane_id.clone(),
             accounting_origin: self.capture_accounting_origin_for_pane(&turn.pane_id),
             conversation_id,
@@ -1417,7 +1430,10 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         let application = (|| -> Result<()> {
-            let summary = runtime_model_compaction_summary_from_response(&response)?;
+            let summary = self.validate_or_correct_compaction_summary(&mut task, &response)?;
+            let Some(summary) = summary else {
+                return Ok(());
+            };
             if let Some(chunks) = task.conversation_chunks.as_mut() {
                 chunks.completed = chunks.completed.checked_add(1).ok_or_else(|| {
                     MezError::invalid_state("conversation compactor response count overflow")
@@ -3392,6 +3408,15 @@ fn runtime_rebuild_active_turn_compaction_request(
             .unwrap_or(plan.summary_budget_words())
             .min(plan.summary_budget_words()),
     );
+    let ceiling = task
+        .request
+        .max_output_tokens
+        .unwrap_or(plan.summary_budget_words());
+    summary_correction::communicate_summary_target(
+        &mut task.request,
+        ceiling,
+        plan.planning_budget().1,
+    );
     *current_blocks = blocks;
     Ok(())
 }
@@ -3413,6 +3438,7 @@ fn runtime_limit_compaction_summary_output(
             .unwrap_or(bounded_budget)
             .min(bounded_budget),
     );
+    summary_correction::communicate_summary_target(request, summary_budget_words, false);
 }
 
 /// Builds one compactor request from temporary active-turn source blocks.

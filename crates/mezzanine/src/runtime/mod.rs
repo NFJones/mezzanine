@@ -417,7 +417,7 @@ pub(crate) use agent::{RuntimeProviderLogInput, execute_agent_provider_persisten
 #[cfg(test)]
 pub(crate) use agent::{SessionTitleDenial, session_title_task_id};
 #[cfg(test)]
-pub(crate) use agent_state::RuntimeAgentCompactionTarget;
+pub(crate) use agent_state::{RuntimeActiveTurnCompactionTrigger, RuntimeAgentCompactionTarget};
 pub use agent_state::{
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentLoopState,
     RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind, RuntimeAgentProviderDispatch,

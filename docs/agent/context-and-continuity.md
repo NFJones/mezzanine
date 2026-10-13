@@ -113,6 +113,19 @@ and jittered backoff. The ordinary turn waits; settled actions are not replayed.
 Manual and observed-input compaction use the same policy. Stop and human pause
 remain effective during backoff. Exhausted or nonretryable failures are terminal,
 and incomplete summaries never replace authoritative history.
+Completed summaries are also checked before private chunk/synthesis staging.
+Empty or malformed output, oversized UTF-8 text, and text above the frozen word
+or estimated-input-token allowance retry only auxiliary summarization of the
+same validated source. The rejected text is not published or quoted back. The
+model receives the local unit/byte target separately from the provider's output
+token ceiling and response-framing overhead. Oversize corrections tighten that
+ceiling and must shrink every still-invalid size dimension; ignored guidance
+fails visibly. Empty/malformed output gets at most two corrections per current
+source, even with unlimited transport retries. Advancing legitimate chunks or
+ranges has no arbitrary total-response cap. Earlier accepted summaries stay
+private until the complete replay fits. Known auxiliary expense counts once,
+but does not become an ordinary execution sample. Changed source, stale epochs
+and corrupt required history are integrity failures, not retryable output.
 Missing or corrupt required history is reported rather than silently omitted.
 Provider-rejection recovery and observed-input recovery with uncommitted source
 can initially be **turn-local**. An accepted summary is not automatically a
