@@ -74,6 +74,17 @@ Replacing or removing that owner closes or fences its persistent children;
 they are not daemons that survive an unrelated `/new` task. Omit `lifetime`
 for ordinary one-task delegation.
 
+### Generated window names after closure
+
+Generated subagent window names reflect the panes currently hosted in the
+window: up to three display names separated by `/`, with `+N` for additional
+names. Actual pane closure immediately recomputes the surviving window's name,
+including promoting a previously hidden name and updating the overflow count.
+Process exit and detached spawn rollback use the same membership-based repair.
+The final pane's removal deletes its window. Explicit window names remain
+untouched, even if they resemble generated names. Stopped, failed, or completed
+work in a persistent pane that remains open does not remove its name.
+
 An authoritative same-owner persistent-child record with an already absent pane
 is cleaned up successfully with `closed: false`. A retained completed close for
 that owner also succeeds as a no-op without rediscovery. Retained no-op evidence

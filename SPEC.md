@@ -315,6 +315,14 @@ Missing-registration recovery still requires the original durable mapped source,
 retained service anchor and fresh native proof, with no absent-store fallback.
 The memory-only owner MUST retain at most 256 source anchors, share the existing
 512-ancestor budget, and never evict live source/retired-instance fences.
+If any exact retained ancestry lifetime ends while the original producer/root
+remain live, maintenance MUST retire that source and release its ancestry proof
+reference without removing the surviving source/instance fence or durable mapping.
+Diagnostic publication MUST NOT reverse retirement or reattach a dead proof.
+Descriptor quota releases after the last legitimate shared proof owner drops;
+existing bindings/work MAY still own references until settlement/retirement.
+This cleanup MUST use bounded nonblocking lifetime polls, not a new actor-side
+ancestry walk or database lookup, and MUST NOT interpret lease expiry as death.
 Accounting checkpoint projections, pane reset baselines and begin/end reservation
 owners MUST remain single service-owned objects outside disposable registrations.
 Registration loss MUST NOT become a usage reset, drop unreplayed stream totals or
@@ -3272,6 +3280,15 @@ multi-line input cannot shift or duplicate the visible token. Commands that
 accept parameters SHOULD render a parameter placeholder after the complete
 command name; each parameter placeholder MUST disappear as soon as the user
 types any text for that parameter position.
+
+Runtime-owned prompt completion MUST use the current pane working-directory
+context for both candidate application and shadow-hint rendering. A changed cwd
+(including loss of a known cwd) or runtime candidate list MUST retire an open
+selection without rewriting the editable draft. Reinstalling identical context
+MUST preserve ordinary cycling. A retained selection MUST NOT restore an old
+draft after whole-buffer replacement or cursor movement. Render projections and
+late filesystem results MUST remain bound to their exact completion context;
+completion remains read-only and grants no execution or permission authority.
 
 Configuration changes made through the command prompt or configuration shell
 MUST apply to the live session when the affected setting supports live mutation.
@@ -11259,6 +11276,11 @@ normal window lists and status bars. Generated names MUST NOT include a fixed
 exactly one live subagent MUST include that subagent's display name even if the
 pane title later changes. Explicit user or agent window renames MUST prevent
 later generated subagent-window refreshes from overwriting the chosen name.
+After actual pane membership removal, generated names MUST immediately reflect
+the remaining panes, including visible-name promotion and overflow counts.
+Stopped, failed, or completed work in a retained pane is not removal. Teardown
+without an attached controller MUST preserve the same generated-name behavior;
+removing the final pane deletes its window rather than renaming a missing one.
 
 Subagent windows MUST use an even, self-rebalancing pane layout. When a
 subagent pane is added to or removed from such a window, the remaining panes

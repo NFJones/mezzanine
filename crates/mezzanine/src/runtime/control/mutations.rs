@@ -605,6 +605,9 @@ impl RuntimeSessionService {
                 .kill_pane_with_effects(primary_client_id, target.as_deref(), force)?;
         let terminated = if let Some(pane) = transition.pane {
             let pane_id = pane.id.to_string();
+            // Membership is already committed, even if later process teardown
+            // fails. Repair presentation without replaying the close effects.
+            self.refresh_subagent_window_names_after_pane_removal()?;
             let _ = self.stop_active_pane_pipe(pane.id.as_str());
             let terminated = usize::from(self.terminate_runtime_pane_process(&pane_id, force)?);
             self.cleanup_removed_pane_runtime_state(&pane_id)?;
