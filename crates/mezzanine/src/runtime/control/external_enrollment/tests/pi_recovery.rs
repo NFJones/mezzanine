@@ -251,6 +251,58 @@ fn release(home: &std::path::Path, phase: &str) {
 
 /// Serves an actual Node socket over genuine UnixOriginStream writer capture.
 /// Authentication and all actor admission/usage checks remain production code.
+/// Fixed completion failure data contains no phase contents or private wire IDs.
+#[derive(Debug, PartialEq, Eq)]
+enum ChildFailure {
+    /// The actual parent-shell result is unavailable or unsuccessful.
+    Status(Option<u8>),
+}
+
+/// Collects only the atomically published actual shell result, not socket EOF.
+/// Missing, malformed and oversized values fail closed within five seconds.
+async fn child_status(home: &std::path::Path) -> Option<u8> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let path = home.join("replay-exit");
+            if let Ok(metadata) = tokio::fs::metadata(&path).await {
+                if metadata.len() > 4 {
+                    return None;
+                }
+                return tokio::fs::read_to_string(path)
+                    .await
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u8>().ok());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Releases the late assertion only after the native socket loop has finished.
+/// Separately proves the child's fault site and actual exit1; this observation
+/// is not yet a completion acceptance fence in the regression-first harness.
+async fn observe_late_failure(home: &std::path::Path, fail_child: bool) {
+    if fail_child {
+        // Refusal may close its socket before consuming the previous release.
+        // Do not overwrite that gate; require the child's next fixed phase.
+        wait_phase(home, "post-eof").await;
+        release(home, "post-eof");
+        assert_eq!(child_status(home).await, Some(1));
+        assert!(
+            std::fs::read_to_string(home.join("replay-failure-stage"))
+                .ok()
+                .as_deref()
+                == Some("assertion"),
+            "fixed post-EOF assertion stage not reached"
+        );
+    }
+}
+
+/// Serves an actual Node socket over genuine UnixOriginStream writer capture.
+/// Authentication and all actor admission/usage checks remain production code.
 async fn connection(
     mut socket: tokio::net::UnixStream,
     handle: AsyncRuntimeSessionHandle,
@@ -461,7 +513,11 @@ fn bootstrap(helper: &std::path::Path, home: &std::path::Path) {
 /// Shared local fixture composes the genuine CLI/producer/actor/ledger chain.
 /// Connected mode isolates ACK loss; registry mode additionally clears ONLY
 /// ephemeral registrations after disconnect, retaining the same control owner.
-async fn qualify(registry: bool, unknown: bool) {
+async fn qualify(
+    registry: bool,
+    unknown: bool,
+    fail_child: bool,
+) -> std::result::Result<(), ChildFailure> {
     use std::os::unix::fs::PermissionsExt;
     let node = std::path::PathBuf::from(
         std::env::var_os("MEZ_TEST_NODE_BINARY").expect("explicit already-installed Node path"),
@@ -496,6 +552,9 @@ async fn qualify(registry: bool, unknown: bool) {
     )
     .unwrap();
     bootstrap(&helper, &home);
+    if fail_child {
+        std::fs::write(home.join("replay-failure"), "post-eof-assertion").unwrap();
+    }
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../scripts/pi-native-replay-fixture.mjs")
         .canonicalize()
@@ -506,7 +565,7 @@ async fn qualify(registry: bool, unknown: bool) {
     std::fs::write(
         &pi,
         format!(
-            "#!/bin/sh\nexec {} {}\n",
+            "#!/bin/sh\n{} {}\nresult=$?\nprintf '%s\\n' \"$result\" > \"$HOME/replay-exit.tmp\"\nmv \"$HOME/replay-exit.tmp\" \"$HOME/replay-exit\"\nexit \"$result\"\n",
             shlex::try_quote(node.to_str().unwrap()).unwrap(),
             shlex::try_quote(script.to_str().unwrap()).unwrap()
         ),
@@ -745,6 +804,7 @@ async fn qualify(registry: bool, unknown: bool) {
         let (refused_connection, finished) = refused;
         assert!(finished.unwrap() > 0);
         assert_eq!(refused_connection.unix_origin().unwrap().identity, producer);
+        observe_late_failure(&home, fail_child).await;
         handle.shutdown().await.unwrap();
         let mut retained = actor_task.await.unwrap().service;
         assert_eq!(retained.session().clients().len(), clients);
@@ -855,7 +915,7 @@ async fn qualify(registry: bool, unknown: bool) {
             );
         }
         retained.terminate_all_pane_processes().unwrap();
-        return;
+        return Ok(());
     }
     let (socket, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
         .await
@@ -945,6 +1005,7 @@ async fn qualify(registry: bool, unknown: bool) {
     let (second_connection, served) = second;
     assert!(served.unwrap() > 0);
     assert_eq!(second_connection.unix_origin().unwrap().identity, producer);
+    observe_late_failure(&home, fail_child).await;
     handle.shutdown().await.unwrap();
     let mut returned = actor_task.await.unwrap().service;
     assert_eq!(returned.session().clients().len(), clients);
@@ -972,6 +1033,7 @@ async fn qualify(registry: bool, unknown: bool) {
     );
     assert_replay(&audit.lock().unwrap(), registry, revision);
     returned.terminate_all_pane_processes().unwrap();
+    Ok(())
 }
 
 /// Dropping a real durable reply without registry loss must retransmit only the
@@ -980,8 +1042,9 @@ async fn qualify(registry: bool, unknown: bool) {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit already-installed Node and freshly built sibling mez required; real native ACK-loss acceptance"]
 async fn external_pi_native_committed_ack_loss_without_registry_reset() {
-    tokio::time::timeout(Duration::from_secs(45), qualify(false, false))
+    tokio::time::timeout(Duration::from_secs(45), qualify(false, false, false))
         .await
+        .unwrap()
         .unwrap();
 }
 
@@ -993,8 +1056,9 @@ async fn external_pi_native_committed_ack_loss_without_registry_reset() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit already-installed Node and freshly built sibling mez required; real native registry-reset replay acceptance"]
 async fn external_pi_native_committed_ack_loss_and_registry_reset_replays_once() {
-    tokio::time::timeout(Duration::from_secs(45), qualify(true, false))
+    tokio::time::timeout(Duration::from_secs(45), qualify(true, false, false))
         .await
+        .unwrap()
         .unwrap();
 }
 
@@ -1007,7 +1071,33 @@ async fn external_pi_native_committed_ack_loss_and_registry_reset_replays_once()
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit already-installed Node and freshly built sibling mez required; actual unknown-R1 reply loss negative"]
 async fn external_pi_native_unknown_recovery_reply_second_reset_refuses_old_proof() {
-    tokio::time::timeout(Duration::from_secs(45), qualify(true, true))
+    tokio::time::timeout(Duration::from_secs(45), qualify(true, true, false))
         .await
+        .unwrap()
         .unwrap();
+}
+
+/// Every real native recovery path must reject an assertion which runs after
+/// parent-observed socket EOF. The child records its fixed fault stage and the
+/// shell publishes its genuine exit1 before cleanup; neither an unrelated
+/// error, a compile failure, a timeout nor an EOF can satisfy this regression.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit already-installed Node and freshly built sibling mez required; real post-EOF child failure"]
+async fn external_pi_native_post_eof_assertion_failure_is_rejected() {
+    let mut outcomes = Vec::new();
+    for (registry, unknown) in [(false, false), (true, false), (true, true)] {
+        let outcome =
+            tokio::time::timeout(Duration::from_secs(45), qualify(registry, unknown, true))
+                .await
+                .unwrap();
+        outcomes.push(outcome);
+    }
+    assert_eq!(
+        outcomes,
+        vec![
+            Err(ChildFailure::Status(Some(1))),
+            Err(ChildFailure::Status(Some(1))),
+            Err(ChildFailure::Status(Some(1)))
+        ]
+    );
 }
