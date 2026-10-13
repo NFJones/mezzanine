@@ -47,6 +47,43 @@ struct AsyncFilesystemSelectorState {
     pending: Option<AsyncFilesystemSelectorRequest>,
     active: Option<AsyncFilesystemSelectorKey>,
     completed: Option<AsyncFilesystemSelectorCompletion>,
+    #[cfg(test)]
+    gate: Option<AsyncFilesystemSelectorTestWorkerGate>,
+}
+
+/// One test-only pause after request ownership and before filesystem lookup.
+#[cfg(test)]
+#[derive(Debug)]
+struct AsyncFilesystemSelectorTestWorkerGate {
+    started: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+    finished: mpsc::Sender<()>,
+}
+
+/// Bounded deterministic control of one prompt-owned filesystem scan in tests.
+#[cfg(test)]
+pub(crate) struct AsyncFilesystemSelectorTestGate {
+    started: mpsc::Receiver<()>,
+    release: mpsc::Sender<()>,
+    finished: mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+impl AsyncFilesystemSelectorTestGate {
+    /// Waits until the worker owns the old request, with a bounded failure.
+    pub(crate) fn wait_started(&self) {
+        self.started
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+    }
+
+    /// Releases lookup and waits until the old completion fence was evaluated.
+    pub(crate) fn release_and_wait(self) {
+        self.release.send(()).unwrap();
+        self.finished
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +136,24 @@ impl Default for AsyncFilesystemSelectorCandidates {
 }
 
 impl AsyncFilesystemSelectorCandidates {
+    /// Pauses the next actual worker lookup, without changing production keys.
+    #[cfg(test)]
+    pub(crate) fn hold_next_lookup_for_tests(&self) -> AsyncFilesystemSelectorTestGate {
+        let (started_tx, started) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let (finished_tx, finished) = mpsc::channel();
+        self.state.lock().unwrap().gate = Some(AsyncFilesystemSelectorTestWorkerGate {
+            started: started_tx,
+            release: release_rx,
+            finished: finished_tx,
+        });
+        AsyncFilesystemSelectorTestGate {
+            started,
+            release,
+            finished,
+        }
+    }
+
     /// Returns a completed exact-key snapshot or starts bounded background discovery.
     pub fn snapshot(
         &self,
@@ -203,6 +258,20 @@ fn run_async_filesystem_selector_worker(
             let Some(request) = request else {
                 break;
             };
+            #[cfg(test)]
+            let gate = state.lock().unwrap().gate.take();
+            #[cfg(test)]
+            if let Some(gate) = &gate {
+                let _ = gate.started.send(());
+                if gate
+                    .release
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .is_err()
+                {
+                    // Dropping `finished` makes a lost ordering proof fail the fixture.
+                    return;
+                }
+            }
             let context = selector_token_context(&request.key.line, request.key.cursor);
             let candidates = path_candidates(
                 request.key.surface,
@@ -221,6 +290,10 @@ fn run_async_filesystem_selector_worker(
                 });
             }
             state.active = None;
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                let _ = gate.finished.send(());
+            }
             if state.pending.is_none() {
                 break;
             }

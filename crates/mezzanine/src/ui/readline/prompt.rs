@@ -294,6 +294,19 @@ impl ReadlinePrompt {
         self.render_snapshot_cache.misses()
     }
 
+    /// Completes this prompt's exact filesystem query for runtime fixtures.
+    #[cfg(test)]
+    pub(crate) fn complete_filesystem_selector_for_tests(&self) {
+        if let Some(surface) = self.selector_surface() {
+            self.filesystem_selector_candidates.complete_for_tests(
+                surface,
+                self.state.buffer.line(),
+                self.state.buffer.cursor(),
+                self.selector_working_directory.as_deref(),
+            );
+        }
+    }
+
     fn apply_selector_input(&mut self, reverse: bool) -> ReadlineOutcome {
         let Some(surface) = self.selector_surface() else {
             return ReadlineOutcome::Noop;
