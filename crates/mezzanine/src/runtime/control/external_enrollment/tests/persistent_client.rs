@@ -139,6 +139,25 @@ async fn external_enrollment_installed_pi_retired_same_id_remains_unavailable() 
     .await;
 }
 
+/// A deliberate final child assertion failure after real retired-source denial
+/// must fail parent qualification, not be mistaken for success on socket EOF.
+/// The expected panic names only the process result, never private frames.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built mez helper required; offline only"]
+#[should_panic(expected = "ordinary fixture child exited unsuccessfully: Some(1)")]
+async fn external_enrollment_installed_pi_retired_child_assertion_failure_is_rejected() {
+    qualify_installed_node_entry_result(
+        "pi-retired-source-ordinary-fixture.mjs",
+        "index.mjs",
+        3,
+        2,
+        false,
+        None,
+        true,
+    )
+    .await;
+}
+
 /// The installed ordinary Pi producer sends finalized error/abort/success
 /// expense through real native readiness and typed durable ACK, not parent
 /// completion. More than 4096 messages retain one source/model/category stream;
@@ -240,6 +259,51 @@ async fn qualify_installed_node_entry(
     typed_pi: bool,
     harness: Option<&str>,
 ) {
+    qualify_installed_node_entry_result(
+        script_name,
+        entry_name,
+        connections,
+        bindings,
+        typed_pi,
+        harness,
+        false,
+    )
+    .await;
+}
+
+/// Reads only a bounded numeric shell-published result for up to five seconds.
+/// Missing, malformed or oversized completion is unavailable, never success.
+async fn installed_fixture_child_status(path: &std::path::Path) -> Option<u8> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(metadata) = tokio::fs::metadata(path).await {
+                if metadata.len() > 4 {
+                    return None;
+                }
+                return tokio::fs::read_to_string(path)
+                    .await
+                    .ok()
+                    .and_then(|result| result.trim().parse::<u8>().ok());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Runs native qualification with an optional deliberately failing child tail.
+/// Child exit evidence is a separate test result, never admission authority.
+async fn qualify_installed_node_entry_result(
+    script_name: &str,
+    entry_name: &str,
+    connections: usize,
+    bindings: usize,
+    typed_pi: bool,
+    harness: Option<&str>,
+    fail_child: bool,
+) {
     /// Removes only the unique offline install/socket fixture on every exit.
     struct Directory(std::path::PathBuf);
     impl Drop for Directory {
@@ -251,7 +315,7 @@ async fn qualify_installed_node_entry(
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
         serve_authenticated_async_runtime_control_connection_loop_with_snapshots,
     };
-    use crate::integrations::bootstrap::installer::{Operation, plan};
+    use crate::integrations::bootstrap::installer::{Operation, plan, plan_private};
     let node = std::path::PathBuf::from(
         std::env::var_os("MEZ_TEST_NODE_BINARY").expect("explicit installed Node path"),
     );
@@ -305,16 +369,17 @@ async fn qualify_installed_node_entry(
         )
         .into_bytes(),
     };
-    plan(&root, &manifest, Operation::Install)
-        .unwrap()
-        .apply()
-        .unwrap();
-    assert!(
-        plan(&root, &manifest, Operation::Install)
-            .unwrap()
-            .changed_paths()
-            .is_empty()
-    );
+    // Current OpenCode owns multiple config arrays and requires production
+    // private publication. The unique fixture directory is its isolated HOME.
+    let install = || {
+        if opencode {
+            plan_private(&root, &directory, &manifest, Operation::Install)
+        } else {
+            plan(&root, &manifest, Operation::Install)
+        }
+    };
+    install().unwrap().apply().unwrap();
+    assert!(install().unwrap().changed_paths().is_empty());
     let mut service = RuntimeServiceFixture::new().control_socket(&path).build();
     let pi_usage = script_name == "pi-usage-ordinary-fixture.mjs";
     let request_accounting = script_name == "request-accounting-ordinary-fixture.mjs" || pi_usage;
@@ -332,8 +397,13 @@ async fn qualify_installed_node_entry(
         .join(script_name)
         .canonicalize()
         .unwrap();
+    // The pane shell publishes only Node's actual numeric exit status, atomically
+    // after process completion. This test-only result is not native RPC evidence.
+    let child_result = directory.join("child-result");
+    let child_result_pending = directory.join("child-result-pending");
+    let eof_stage = directory.join("native-eof-stage");
     let command = format!(
-        "{}{} {} {} {} {}\n",
+        "({}{} {} {} {} {} {} {}); result=$?; printf '%s\\n' \"$result\" > {}; mv {} {}\n",
         if opencode { "BUN_BE_BUN=1 " } else { "" },
         shlex::try_quote(node.to_str().unwrap()).unwrap(),
         shlex::try_quote(script.to_str().unwrap()).unwrap(),
@@ -357,7 +427,16 @@ async fn qualify_installed_node_entry(
             .unwrap()
         )
         .unwrap(),
-        shlex::try_quote(harness.unwrap_or("pi")).unwrap()
+        shlex::try_quote(harness.unwrap_or("pi")).unwrap(),
+        if fail_child {
+            "assertion-failure"
+        } else {
+            "success"
+        },
+        shlex::try_quote(eof_stage.to_str().unwrap()).unwrap(),
+        shlex::try_quote(child_result_pending.to_str().unwrap()).unwrap(),
+        shlex::try_quote(child_result_pending.to_str().unwrap()).unwrap(),
+        shlex::try_quote(child_result.to_str().unwrap()).unwrap(),
     );
     service
         .write_runtime_pane_input("%1", command.as_bytes())
@@ -447,14 +526,37 @@ async fn qualify_installed_node_entry(
         while let Some(result) = tasks.join_next().await {
             result.unwrap();
         }
+        // A test-only barrier proves the injected assertion occurs after the
+        // parent observed every native EOF, not merely after client detach.
+        if fail_child {
+            tokio::fs::write(&eof_stage, b"1").await.unwrap();
+        }
+        // The public-helper fixture keeps its producer alive until the stopped
+        // actor's live-owner assertions below. Its exit is required afterward.
+        let child_status = if helper_callback {
+            None
+        } else {
+            installed_fixture_child_status(&child_result).await
+        };
+        let reached_final_assertion =
+            !fail_child || tokio::fs::read_to_string(&eof_stage).await.ok().as_deref() == Some("2");
         handle.shutdown().await.unwrap();
+        (child_status, reached_final_assertion)
     };
-    let ((), mut exit) = tokio::time::timeout(
+    let ((child_status, reached_final_assertion), mut exit) = tokio::time::timeout(
         Duration::from_secs(if pi_usage { 300 } else { 25 }),
         async { tokio::join!(server, actor.run()) },
     )
     .await
     .unwrap();
+    if !reached_final_assertion {
+        exit.service.terminate_all_pane_processes().unwrap();
+        panic!("ordinary fixture did not reach the intentional post-EOF assertion");
+    }
+    if !helper_callback && child_status != Some(0) {
+        exit.service.terminate_all_pane_processes().unwrap();
+        panic!("ordinary fixture child exited unsuccessfully: {child_status:?}");
+    }
     assert_eq!(
         retired_rejected.load(std::sync::atomic::Ordering::SeqCst),
         pi_retired,
@@ -699,6 +801,16 @@ async fn qualify_installed_node_entry(
             .pending
             .is_empty()
     );
+    if helper_callback {
+        // Release the deliberately live producer only after every actor/native
+        // assertion, then require its actual final process success as well.
+        tokio::fs::write(&eof_stage, b"1").await.unwrap();
+        let child_status = installed_fixture_child_status(&child_result).await;
+        if child_status != Some(0) {
+            exit.service.terminate_all_pane_processes().unwrap();
+            panic!("ordinary fixture child exited unsuccessfully: {child_status:?}");
+        }
+    }
     exit.service.terminate_all_pane_processes().unwrap();
     std::fs::remove_dir_all(directory).unwrap();
 }

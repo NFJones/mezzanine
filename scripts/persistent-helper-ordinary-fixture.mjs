@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { readFile } from "node:fs/promises";
 
 const lifetime = setTimeout(() => { process.exitCode = 1; }, 20000);
 const { createPersistentTelemetryClient } = await import(pathToFileURL(process.argv[2]).href);
@@ -48,5 +49,15 @@ try {
   completed = true;
 } finally {
   client.detach();
-  if (!completed) clearTimeout(lifetime);
+  try {
+    if (completed) {
+      // Test-only release after Rust checks the genuinely live producer and
+      // applied native helper presentation. This is not an RPC receipt.
+      const deadline = Date.now() + 5000;
+      while (await readFile(process.argv[6], "utf8").catch(() => "") !== "1") {
+        assert(Date.now() < deadline, "parent live-producer assertion stage unavailable");
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    }
+  } finally { clearTimeout(lifetime); }
 }
