@@ -102,23 +102,34 @@ test("Pi earlier/later extension replacement requires exact native correlation",
   }
 });
 
-/** The real request client retains undurable tickets. Recent-map eviction must
- * abandon the original unknown-delivery ticket before the next begin so recovery
- * cannot remain stuck forever at its 128-ticket boundary. */
-test("Pi capacity releases original undurable tickets before admitting recovery", async () => {
-  let healthy = false; let admitted = 0; let charged = 0; let tail = Promise.resolve();
+/** The real request client retains undurable tickets. Capacity must reserve
+ * active plus pending obligations before admission and refuse another marker,
+ * never abandon incurred unknown-delivery reports merely to admit a new turn.
+ * A later durable original report can release capacity for a genuine new turn. */
+test("Pi capacity retains original pending tickets and refuses new admission", async () => {
+  let healthy = false; let admitted = 0; let charged = 0; let abandoned = 0; let tail = Promise.resolve();
   const enqueue = operation => { const result = tail.then(operation); tail = result.then(() => {}); return result; };
   const client = { ...createRequestAccountingClient({ enqueue, async exchange(method, payload) {
     if (method.endsWith("usage-begin")) { admitted++; return { protocol: "external-request/1", accepted: true, request_id: payload.request_id, admitted_at: 10, source_witness: "a".repeat(64), origin: "unattributed", controls: [] }; }
     if (!healthy) return { accepted: true, durable: false };
     charged++; return { accepted: true, durable: true, applied: true, revision: charged, coverage: { source: "external-reported", reasoning_known: false } };
   } }), async piObservation() { return { delivered: true }; } };
+  const abandon = client.abandonRequest;
+  client.abandonRequest = ticket => { abandoned++; return abandon(ticket); };
   const owned = { session: "session-a", client }; const recent = new Map(); let callbackTail = Promise.resolve();
   const observer = createPiUsageObserver(owned, operation => { callbackTail = callbackTail.then(operation); return true; }, recent, () => 20);
   const request = async index => { observer.turnStart({ type: "turn_start", turnIndex: index }); const msg = message(); observer.messageEnd({ type: "message_end", message: msg }); observer.turnEnd(event(msg, `capacity-${index}`, index)); await callbackTail; };
   for (let index = 0; index < 128; index++) await request(index);
+  const known = admitted;
   healthy = true; await request(128); await request(129);
-  assert.equal(charged, 2); assert(recent.size <= 128); assert(admitted > 128);
+  assert.equal(charged, 0, "full pending capacity admitted another marker");
+  assert.equal(abandoned, 0, "capacity discarded incurred unknown-delivery evidence");
+  assert.equal(admitted, known);
+  assert.equal(recent.size, 128);
+  observer.turnEnd(event(message(), "capacity-0", 0)); await callbackTail;
+  assert.equal(charged, 1);
+  await request(130);
+  assert.equal(charged, 2); assert(recent.size <= 128);
 });
 
 /** Missing counters after a successful expense must publish a bounded inert
