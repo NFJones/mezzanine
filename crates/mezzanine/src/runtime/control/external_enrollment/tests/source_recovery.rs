@@ -7,6 +7,61 @@
 
 use super::*;
 
+/// Bulk snapshot retirement must also fence initial worker evidence which has
+/// not yet published any source anchor. Its mapping remains inert; it cannot
+/// become a post-snapshot registration merely because the native creator survives.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_resume_bulk_retirement_fences_unpublished_initial_worker() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    storage(&mut fixture);
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&request(), &fixture.connection)
+        .unwrap();
+    let native = work.clone();
+    let observed = tokio::task::spawn_blocking(move || native.observe())
+        .await
+        .unwrap();
+    assert!(observed.is_ok());
+    fixture.service.retire_unbound_external_message_identities();
+    let rejected: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_enrollment(work, observed, &fixture.connection),
+    )
+    .unwrap();
+    assert!(
+        rejected
+            .to_string()
+            .contains("external enrollment reservation owner changed")
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
+    );
+    assert!(
+        enroll(&mut fixture, &request())
+            .await
+            .to_string()
+            .contains("same-live source activation unavailable")
+    );
+}
+
 /// Once disposable registrations disappear, the retained source is still the
 /// exact descriptor owner. Existing maintenance must remain scheduled until
 /// genuine creator exit, then release ancestry and stop without new enrollment

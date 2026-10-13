@@ -366,6 +366,15 @@ impl EnrollmentBinding {
 }
 
 impl RuntimeSessionService {
+    /// Bulk lifecycle replacement fences even a never-published initial worker.
+    /// Accounting begin/end owners are independent and retain already-admitted
+    /// incurred expense; only native enrollment reservations are invalidated.
+    pub(in crate::runtime::control) fn invalidate_external_enrollment_admissions(&mut self) {
+        let admissions = &mut self.control.external_agents_mut().enrollments;
+        admissions.incarnation = Arc::new(());
+        admissions.pending.clear();
+    }
+
     /// Validates inert metadata and reserves finite native work before any
     /// registration or capability allocation. No client initialization is done.
     pub(crate) fn prepare_external_enrollment(
@@ -697,7 +706,7 @@ impl RuntimeSessionService {
             .map(mez_agent::messaging::ProjectMembership::from_canonical_root)
             .map(|membership| membership.scope_id());
         let accounting_origin = self.capture_accounting_origin_for_pane(&work.pane_id);
-        let registry = self.control.external_agents_mut();
+        let (registry, next_generation) = self.control.external_agents_and_generation_mut();
         if registry.bindings.len() >= super::external_agents::MAX_BINDINGS {
             return Err(MezError::new(
                 crate::error::MezErrorKind::RateLimited,
@@ -713,11 +722,10 @@ impl RuntimeSessionService {
                 "external enrollment evidence expired before allocation",
             ));
         }
-        let generation = registry
-            .next_generation
+        let generation = next_generation
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("external enrollment generation exhausted"))?;
-        registry.next_generation = generation;
+        *next_generation = generation;
         let mut bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut bytes);
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);

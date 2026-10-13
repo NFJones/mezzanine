@@ -369,8 +369,9 @@ async fn external_helper_discovery_cleanup_is_targeted_and_ownership_is_preserve
 }
 
 /// Snapshot replacement clears targets with registrations. In-flight helper
-/// work releases its reservation but cannot publish after clearing; a fresh
-/// enrollment remains uniquely indexed and rejects old generation callbacks.
+/// work releases its reservation but cannot publish after clearing; the original
+/// source remains retired even with an explicit selector. A genuinely different
+/// native producer/helper pair may enroll and rejects old generation callbacks.
 #[tokio::test(flavor = "current_thread")]
 async fn external_helper_discovery_bulk_retirement_clears_index_and_old_work() {
     let Some(mut fixture) = fixture("hold").await else {
@@ -409,7 +410,32 @@ async fn external_helper_discovery_bulk_retirement_clears_index_and_old_work() {
             .get("error")
             .is_some()
     );
+    assert!(
+        fixture
+            .service
+            .prepare_external_enrollment(&request(), &fixture.connection)
+            .is_err()
+    );
+    let mut original = request();
+    let mut params: serde_json::Value =
+        serde_json::from_str(original.params.as_deref().unwrap()).unwrap();
+    params["source_resume"] = serde_json::json!({"observer_witness":enrolled["result"]["observer_witness"],"generation":enrolled["result"]["generation"]});
+    original.params = Some(params.to_string());
+    assert!(
+        fixture
+            .service
+            .prepare_external_enrollment(&original, &fixture.connection)
+            .is_err()
+    );
+    let (new_socket, new_producer) = child(&mut fixture).await;
+    assert_ne!(
+        new_producer.unix_origin().unwrap().identity,
+        fixture.connection.unix_origin().unwrap().identity
+    );
+    let _original_socket = std::mem::replace(&mut fixture.socket, new_socket);
+    let _original_connection = std::mem::replace(&mut fixture.connection, new_producer);
     let fresh = enroll_producer(&mut fixture).await;
+    let (_fresh_socket, fresh_helper) = child(&mut fixture).await;
     assert!(generation(&fresh) > generation(&enrolled));
     assert!(
         fixture
@@ -419,10 +445,10 @@ async fn external_helper_discovery_bulk_retirement_clears_index_and_old_work() {
     );
     let work = fixture
         .service
-        .prepare_external_helper_presentation(&observation(&fresh, 1), &connection)
+        .prepare_external_helper_presentation(&observation(&fresh, 1), &fresh_helper)
         .unwrap();
     assert_eq!(
-        settle(&mut fixture, work, &connection).await["result"]["changed"],
+        settle(&mut fixture, work, &fresh_helper).await["result"]["changed"],
         true
     );
     assert!(

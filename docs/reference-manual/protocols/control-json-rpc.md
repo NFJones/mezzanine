@@ -1117,6 +1117,12 @@ instance label), missing service anchors, mismatched sources, root/producer
 replacement and stale/expired writer evidence fail closed. Source anchors are
 memory-only, bounded at 256, share the existing descriptor budget and are fenced
 synchronously by all ordinary rotations and central retirements.
+Snapshot/session replacement invalidates every retained source, including one
+whose registration was already lost; it cannot use registry-only resume. The
+single checked control-service generation allocator covers socket/curated
+initial admission, primary launch, ordinary rotation and explicit resume. It
+does not reset with registrations, preventing stale presentation owner aliases
+or one recovered source clearing another live source's status/title.
 Accounting projections, original readiness reservations and pane reset baselines
 also remain under their single existing control-service owners, not under the
 disposable registration facade. Registry loss preserves unreplayed stream/session

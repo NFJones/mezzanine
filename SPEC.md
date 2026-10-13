@@ -311,6 +311,12 @@ exact incarnation without undoing already-committed durable expense.
 Actual producer/root replacement ends its anchor; central retirement MUST synchronously
 invalidate every observer instance for that exact source lifetime. A new label
 MUST NOT reactivate it. Ordinary rotation MUST update the same currentness owner.
+Snapshot/session replacement MUST invalidate ALL retained source anchors even
+when their disposable registrations are already missing. It is not registry-only
+recovery. One checked external generation allocator MUST belong to the control
+service across initial socket/curated admission, primary launch, rotation and
+resume, so retained presentation owner keys cannot alias or clear another source
+after registry loss. Numeric generations remain selectors, not native authority.
 Prepare/commit revision checks MUST fence distinct competing or delayed admissions.
 Same-instance resume MUST retain its immutable original predecessor; a genuinely
 new successor MUST name the current receipt and exact predecessor generation and

@@ -5,10 +5,13 @@ use super::*;
 /// Executes one native observation and its actor-owned settlement with a real
 /// fixture origin, never replacing ancestry with a test-only authority bypass.
 async fn enroll(fixture: &mut Fixture, request: &JsonRpcRequest) -> serde_json::Value {
-    let work = fixture
+    let work = match fixture
         .service
         .prepare_external_enrollment(request, &fixture.connection)
-        .unwrap();
+    {
+        Ok(work) => work,
+        Err(error) => return serde_json::json!({"error":error.message()}),
+    };
     let native = work.clone();
     let observed = tokio::task::spawn_blocking(move || native.observe())
         .await

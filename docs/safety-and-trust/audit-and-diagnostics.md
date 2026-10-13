@@ -107,8 +107,10 @@ rows cannot activate a source or prove vendor identity/invoice completeness.
 
 Recovery is limited to disposable registry/actor-task loss while the same service,
 actual creator and pane root remain alive. Complete service/OS-daemon replacement,
-retirement, replaced sources or missing native evidence fail closed. Losing the
-recovered registry again before its new receipt is known is a named unavailable
+retirement, replaced sources or missing native evidence fail closed.
+Snapshot/session replacement retires all retained source authority; it is not
+the disposable registration loss which the bounded protocol can recover.
+Losing the recovered registry again before its new receipt is known is a named unavailable
 retry, not permission to guess the newest owner or recharge old usage.
 An initial mapping whose native admission never published also remains inert;
 bare initial packets cannot recreate a missing service authority from it. Preserve

@@ -464,7 +464,7 @@ async fn external_curated_admission_expired_namespace_rejects_retry_after_gc() {
                 params["observer_instance"] = "replacement".into();
                 request.params = Some(params.to_string());
             }
-            let generation = fixture.service.control.external_agents().next_generation;
+            let generation = fixture.service.control.external_agent_generation();
             let work = fixture
                 .service
                 .prepare_external_enrollment(&request, &connection)
@@ -485,7 +485,7 @@ async fn external_curated_admission_expired_namespace_rejects_retry_after_gc() {
                 "expired creator namespace was implicitly replaced (gc={garbage_collect}, changed={changed_instance})"
             );
             assert_eq!(
-                fixture.service.control.external_agents().next_generation,
+                fixture.service.control.external_agent_generation(),
                 generation
             );
             assert!(
@@ -584,11 +584,11 @@ async fn external_curated_admission_namespace_capacity_survives_binding_gc() {
                 .is_empty()
         );
     }
-    let generation = fixture.service.control.external_agents().next_generation;
+    let generation = fixture.service.control.external_agent_generation();
     let reply = enroll(&mut fixture, &connection).await;
     assert!(reply.get("error").is_some());
     assert_eq!(
-        fixture.service.control.external_agents().next_generation,
+        fixture.service.control.external_agent_generation(),
         generation
     );
     assert!(
@@ -645,7 +645,7 @@ async fn external_curated_admission_snapshot_binding_cleanup_keeps_namespace_fen
             .bindings
             .is_empty()
     );
-    let generation = fixture.service.control.external_agents().next_generation;
+    let generation = fixture.service.control.external_agent_generation();
     assert!(
         enroll(&mut fixture, &connection)
             .await
@@ -653,7 +653,7 @@ async fn external_curated_admission_snapshot_binding_cleanup_keeps_namespace_fen
             .is_some()
     );
     assert_eq!(
-        fixture.service.control.external_agents().next_generation,
+        fixture.service.control.external_agent_generation(),
         generation
     );
     assert!(

@@ -596,7 +596,7 @@ async fn external_curated_registry_reset_reuses_durable_owner_not_observer_witne
         .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&path));
     let fresh = enroll(&mut fixture, &connection).await;
     assert_eq!(fresh["result"]["registered"], true, "{fresh}");
-    assert_eq!(fresh["result"]["generation"], first["result"]["generation"]);
+    assert_ne!(fresh["result"]["generation"], first["result"]["generation"]);
     assert_ne!(
         fresh["result"]["observer_witness"],
         first["result"]["observer_witness"]
@@ -617,7 +617,13 @@ async fn external_curated_registry_reset_reuses_durable_owner_not_observer_witne
             "harness":"claude","generation":receipt["result"]["generation"],"observer_witness":receipt["result"]["observer_witness"],
             "external_session_id":"session-a","sequence":1}}).to_string()).unwrap()
     };
-    for stale in [begin(&first), original.clone(), heartbeat(&first)] {
+    for mut stale in [begin(&first), original.clone(), heartbeat(&first)] {
+        // The allocator no longer reuses a generation inside this service, but
+        // supplying the current number must not make the original witness valid.
+        let mut params: serde_json::Value =
+            serde_json::from_str(stale.params.as_deref().unwrap()).unwrap();
+        params["generation"] = fresh["result"]["generation"].clone();
+        stale.params = Some(params.to_string());
         let refused = match fixture
             .service
             .prepare_external_helper_presentation(&stale, &connection)
@@ -630,7 +636,7 @@ async fn external_curated_registry_reset_reuses_durable_owner_not_observer_witne
         };
         assert!(
             refused,
-            "old witness was accepted after numeric generation reuse"
+            "old witness was accepted with the current numeric generation"
         );
     }
     let source = fixture
