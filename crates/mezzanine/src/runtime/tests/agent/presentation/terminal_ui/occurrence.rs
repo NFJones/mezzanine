@@ -190,7 +190,7 @@ fn runtime_occurrence_transcript_only_fork_keeps_original_record_evidence() {
                     RuntimeSessionService::runtime_resume_transcript_presentation(
                         conversation,
                         1,
-                        &[entry.clone()],
+                        std::slice::from_ref(&entry),
                     )
                     .into_iter()
                     .map(|(line, _)| line)

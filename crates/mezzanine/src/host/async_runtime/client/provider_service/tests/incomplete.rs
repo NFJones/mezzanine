@@ -734,7 +734,8 @@ async fn provider_occurrence_relay_pressure_preserves_original_boundaries_and_ou
                         original_unexecuted => publication.push(original_unexecuted),
                     }
                 }
-                let work = work.expect("accepted source must enter canonical persistence settlement");
+                let work =
+                    work.expect("accepted source must enter canonical persistence settlement");
                 // Claim the canonical route first: a generic drain also owns
                 // persistence routes and cannot be used before this handoff.
                 handle.drain_runtime_side_effects(1024).await.unwrap();
@@ -742,14 +743,22 @@ async fn provider_occurrence_relay_pressure_preserves_original_boundaries_and_ou
                 // job. Hand these unchanged, never-executed effects to the real
                 // adapter before the canonical ack can publish later rows.
                 if !publication.is_empty() {
-                    handle.queue_runtime_side_effects(publication).await.unwrap();
-                    let report = crate::host::async_runtime::run_async_persistence_side_effect_service(
-                        &handle,
-                        crate::host::async_runtime::AsyncRuntimeSideEffectServiceConfig {
-                            max_polls: 2, drain_limit: 64, idle_interval: Duration::from_millis(1),
-                        },
-                        |polls, _| polls >= 2,
-                    ).await.unwrap();
+                    handle
+                        .queue_runtime_side_effects(publication)
+                        .await
+                        .unwrap();
+                    let report =
+                        crate::host::async_runtime::run_async_persistence_side_effect_service(
+                            &handle,
+                            crate::host::async_runtime::AsyncRuntimeSideEffectServiceConfig {
+                                max_polls: 2,
+                                drain_limit: 64,
+                                idle_interval: Duration::from_millis(1),
+                            },
+                            |polls, _| polls >= 2,
+                        )
+                        .await
+                        .unwrap();
                     assert_eq!(report.failed, 0);
                     handle.drain_runtime_side_effects(1024).await.unwrap();
                 }
@@ -774,10 +783,14 @@ async fn provider_occurrence_relay_pressure_preserves_original_boundaries_and_ou
                 let report = crate::host::async_runtime::run_async_persistence_side_effect_service(
                     &handle,
                     crate::host::async_runtime::AsyncRuntimeSideEffectServiceConfig {
-                        max_polls: 2, drain_limit: 64, idle_interval: Duration::from_millis(1),
+                        max_polls: 2,
+                        drain_limit: 64,
+                        idle_interval: Duration::from_millis(1),
                     },
                     |polls, _| polls >= 2,
-                ).await.unwrap();
+                )
+                .await
+                .unwrap();
                 assert_eq!(report.failed, 0);
             }
             assert!(

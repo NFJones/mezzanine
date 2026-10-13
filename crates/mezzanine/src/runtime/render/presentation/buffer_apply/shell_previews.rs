@@ -300,11 +300,12 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Updates one action-owned transient preview for a hidden shell command.
+    /// Exercises a tail-only preview without producer start-boundary proof.
     ///
     /// The full preview set is rebuilt from a preview-free baseline. Exact
     /// installed-screen lineage prevents a delayed update from replacing any
     /// durable output that appeared after the previous projection.
+    #[cfg(test)]
     pub(crate) fn update_agent_shell_output_preview(
         &mut self,
         pane_id: &str,
