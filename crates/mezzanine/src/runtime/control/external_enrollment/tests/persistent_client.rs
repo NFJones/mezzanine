@@ -2,6 +2,73 @@
 
 use super::*;
 
+/// Forwards an already kernel-qualified stream unchanged and classifies only
+/// the fixed retired-source error. Private framed bytes remain transient and
+/// are never stored in the shared diagnostic or printed.
+struct RetiredReplySpy<S> {
+    stream: S,
+    pending: Vec<u8>,
+    rejected: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for RetiredReplySpy<S> {
+    /// Delegates actual native sender collection without replacing any bytes.
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for RetiredReplySpy<S> {
+    /// Observes only bytes actually written and preserves partial-write/error
+    /// results, so classification never manufactures a native acknowledgment.
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let result = std::pin::Pin::new(&mut self.stream).poll_write(cx, buf);
+        if let std::task::Poll::Ready(Ok(written)) = &result {
+            if self.pending.len().saturating_add(*written) <= 8320 {
+                self.pending.extend_from_slice(&buf[..*written]);
+                if let Ok((body, consumed)) =
+                    crate::control::decode_control_frame(&self.pending, 8192)
+                {
+                    if let Ok(reply) = serde_json::from_str::<serde_json::Value>(&body)
+                        && reply["error"]["message"] == "external native source has retired"
+                        && reply["error"]["code"] == -32006
+                    {
+                        self.rejected
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    self.pending.drain(..consumed);
+                }
+            } else {
+                self.pending.clear();
+            }
+        }
+        result
+    }
+
+    /// Preserves native flush behavior.
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stream).poll_flush(cx)
+    }
+    /// Preserves native shutdown behavior.
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
 /// Installed revision-8 client and accounting sibling run as an ordinary Node
 /// descendant, obtain genuine native request readiness, publish normalized
 /// expense with typed durable ACK and retire without primary/observer rights.
@@ -39,7 +106,8 @@ async fn external_enrollment_installed_persistent_node_client_owns_native_sender
 
 /// The actual installed Pi default factory activates ordinary callbacks with no
 /// vendor observer descriptor, wrapper markers or injected session binding.
-/// Reload keeps one run while new/resume/fork create exact fresh registrations.
+/// Reload keeps one run while new/resume/fork metadata select never-retired
+/// targets; historical same-ID source continuity is not qualified here.
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and locally built mez helper required"]
 async fn external_enrollment_installed_ordinary_pi_entry_uses_daemon_reducer() {
@@ -49,6 +117,23 @@ async fn external_enrollment_installed_ordinary_pi_entry_uses_daemon_reducer() {
         5,
         4,
         true,
+        None,
+    )
+    .await;
+}
+
+/// An actual retired source cannot reactivate the same ID with a fresh observer
+/// name. Its child remains failed/unavailable and sends no later request/fork or
+/// expense fallback; native origin/writer proof and reply classification are real.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built mez helper required; offline only"]
+async fn external_enrollment_installed_pi_retired_same_id_remains_unavailable() {
+    qualify_installed_node_entry(
+        "pi-retired-source-ordinary-fixture.mjs",
+        "index.mjs",
+        3,
+        2,
+        false,
         None,
     )
     .await;
@@ -164,7 +249,7 @@ async fn qualify_installed_node_entry(
     }
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
-        serve_async_runtime_control_connection_loop,
+        serve_authenticated_async_runtime_control_connection_loop_with_snapshots,
     };
     use crate::integrations::bootstrap::installer::{Operation, plan};
     let node = std::path::PathBuf::from(
@@ -234,6 +319,8 @@ async fn qualify_installed_node_entry(
     let pi_usage = script_name == "pi-usage-ordinary-fixture.mjs";
     let request_accounting = script_name == "request-accounting-ordinary-fixture.mjs" || pi_usage;
     let pi_loss = script_name == "pi-loss-ordinary-fixture.mjs";
+    let pi_retired = script_name == "pi-retired-source-ordinary-fixture.mjs";
+    let retired_rejected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     if request_accounting || pi_loss {
         service.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
             directory.join("usage.sqlite"),
@@ -284,7 +371,11 @@ async fn qualify_installed_node_entry(
         for ordinal in 0..connections {
             let (mut stream, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
                 .await
-                .unwrap_or_else(|_| panic!("ordinary native fixture stopped before connection {ordinal}/{connections}"))
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "ordinary native fixture stopped before connection {ordinal}/{connections}"
+                    )
+                })
                 .unwrap();
             let origin = crate::runtime::capture_unix_origin(
                 stream.as_raw_fd(),
@@ -315,10 +406,27 @@ async fn qualify_installed_node_entry(
                 producer = Some(origin.identity.process_id);
             }
             let handle = handle.clone();
+            let retired_rejected = retired_rejected.clone();
             tasks.spawn(async move {
                 let mut connection = ControlConnectionState::new(true, false);
-                serve_async_runtime_control_connection_loop(
+                connection
+                    .bind_authenticated_peer(AuthenticatedPeer::unix_user(origin.uid()))
+                    .unwrap();
+                connection
+                    .bind_unix_origin(std::sync::Arc::new(origin))
+                    .unwrap();
+                let qualified = crate::runtime::UnixOriginStream::new(
                     &mut stream,
+                    connection.unix_origin().cloned(),
+                );
+                let mut observed = RetiredReplySpy {
+                    stream: qualified,
+                    pending: Vec::new(),
+                    rejected: retired_rejected,
+                };
+                serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
+                    &mut observed,
+                    AuthenticatedPeer::unix_user(crate::runtime::current_effective_uid()),
                     &handle,
                     &mut connection,
                     AsyncRuntimeControlConnectionConfig::new(
@@ -326,6 +434,7 @@ async fn qualify_installed_node_entry(
                         crate::runtime::current_effective_uid(),
                     )
                     .unwrap(),
+                    None,
                     |_, _| false,
                 )
                 .await
@@ -346,6 +455,40 @@ async fn qualify_installed_node_entry(
     )
     .await
     .unwrap();
+    assert_eq!(
+        retired_rejected.load(std::sync::atomic::Ordering::SeqCst),
+        pi_retired,
+        "actual native retired-source conflict classification"
+    );
+    if pi_retired {
+        assert!(
+            !directory.join("usage.sqlite").exists(),
+            "no-store lifecycle fixture"
+        );
+        assert!(
+            exit.service
+                .control
+                .external_agents()
+                .bindings
+                .values()
+                .all(|binding| {
+                    binding.pi_lifecycle.is_some()
+                        && !binding.enrollment.as_ref().unwrap().request_reports_seen
+                })
+        );
+        assert_eq!(
+            exit.service.external_usage_reservation_counts_for_tests(),
+            (0, 0)
+        );
+        assert_eq!(
+            exit.service
+                .external_token_usage(None)
+                .values()
+                .map(|usage| usage.input_tokens)
+                .sum::<u64>(),
+            0
+        );
+    }
     assert_eq!(exit.service.session().clients().len(), clients);
     assert_eq!(
         exit.service.control.external_agents().bindings.len(),
@@ -377,7 +520,7 @@ async fn qualify_installed_node_entry(
     }
     assert_eq!(
         binding.enrollment.as_ref().unwrap().epoch,
-        if typed_pi || opencode || helper_callback || request_accounting || pi_loss {
+        if typed_pi || opencode || helper_callback || request_accounting || pi_loss || pi_retired {
             1
         } else {
             2
@@ -542,7 +685,7 @@ async fn qualify_installed_node_entry(
             .unwrap()
             .state,
         // Missing final counters do not manufacture an agent_settled fact.
-        if opencode || helper_callback || pi_loss {
+        if opencode || helper_callback || pi_loss || pi_retired {
             "running"
         } else {
             "complete"

@@ -48,7 +48,9 @@ try {
   assert.equal(globalThis[ownerKey].client.status().run, run);
   assert.equal(globalThis[ownerKey].client.status().epoch, 2);
   let session = "session-a";
-  for (const [reason, next] of [["new", "session-b"], ["resume", "session-a"], ["fork", "branch"]]) {
+  // Genuine callback reasons select fresh never-retired targets here. This
+  // proves lifecycle metadata/admission, NOT historical same-ID continuity.
+  for (const [reason, next] of [["new", "session-b"], ["resume", "session-c-fresh"], ["fork", "branch-d-fresh"]]) {
     replacement({ type: "session_shutdown", reason }, session);
     replacement({ type: "session_start", reason }, next);
     await settle();
