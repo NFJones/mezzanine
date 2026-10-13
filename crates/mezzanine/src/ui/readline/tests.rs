@@ -1,5 +1,7 @@
 //! Product prompt, selector, and decoder integration tests.
 
+mod selector_context;
+
 use std::time::Duration;
 
 use super::{
