@@ -47,14 +47,12 @@ pub(crate) use native_workload_environment::NativeLaunchEnvironmentRole;
 pub(crate) use native_workload_environment::native_ambient_environment;
 #[cfg(test)]
 pub(crate) use pane_creation_environment::daemon_only_probe_key_for_tests;
-pub(crate) use pane_process_identity::{
-    RuntimePaneProcessIdentity, RuntimePaneProcessRole, RuntimePaneShellIdentityEvidence,
-    RuntimePaneShellIdentityRefresh, RuntimePaneShellIdentityUnknown,
-    RuntimeShellIdentityUnknownReason,
-};
 #[cfg(test)]
+pub(crate) use pane_process_identity::RuntimePaneProcessIdentityInjection;
 pub(crate) use pane_process_identity::{
-    RuntimePaneProcessIdentityInjection, RuntimePaneProcessIdentityUnavailable,
+    RuntimePaneProcessIdentity, RuntimePaneProcessIdentityUnavailable, RuntimePaneProcessRole,
+    RuntimePaneShellIdentityEvidence, RuntimePaneShellIdentityRefresh,
+    RuntimePaneShellIdentityUnknown, RuntimeShellIdentityUnknownReason,
 };
 #[cfg(test)]
 pub(crate) use spawned_shell::execute_native_shell_dispatch;

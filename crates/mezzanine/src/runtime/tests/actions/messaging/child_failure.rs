@@ -15,6 +15,15 @@ fn owned_child_wait_fixture() -> (RuntimeSessionService, AgentTurnRecord, AgentT
 /// Creates the genuine owned actors, optionally accepting the parent's wait.
 /// The unparked variant permits a failure to commit before the wait response.
 fn owned_child_fixture(park: bool) -> (RuntimeSessionService, AgentTurnRecord, AgentTurnRecord) {
+    owned_child_fixture_with_parent_process(park, true)
+}
+
+/// Supports the explicitly non-live native parent topology without faking an
+/// unavailable OS observation for an otherwise live pane process.
+fn owned_child_fixture_with_parent_process(
+    park: bool,
+    process: bool,
+) -> (RuntimeSessionService, AgentTurnRecord, AgentTurnRecord) {
     let mut service = test_runtime_service();
     service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     service.set_agent_transcript_store(AgentTranscriptStore::new(temp_root(
@@ -23,7 +32,11 @@ fn owned_child_fixture(park: bool) -> (RuntimeSessionService, AgentTurnRecord, A
     service
         .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
         .unwrap();
-    service.start_initial_pane_process(Some("cat")).unwrap();
+    if process {
+        service.start_initial_pane_process(Some("cat")).unwrap();
+    } else {
+        service.session.set_pane_live_state("%1", false).unwrap();
+    }
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -1347,5 +1360,71 @@ fn runtime_owned_child_initial_process_uncertainty_requires_same_root_proof() {
             );
             service.terminate_all_pane_processes().unwrap();
         }
+    }
+}
+
+/// A legitimately non-live native parent has no host root to observe and may
+/// use explicit ProcessFree ownership. This is not an OS-error fallback. If a
+/// live root appears while QueueFull retains the receipt, the old process-free
+/// occurrence cannot wake that new incarnation after capacity is freed.
+#[test]
+fn runtime_owned_child_explicit_process_free_parent_is_distinct_from_uncertainty() {
+    for new_root in [false, true] {
+        let (mut service, parent, child) = owned_child_fixture_with_parent_process(true, false);
+        assert!(
+            service
+                .primary_pid_for_live_pane_process(&parent.pane_id)
+                .is_none()
+        );
+        if new_root {
+            service
+                .configure_agent_scheduler_queue_limits(1, usize::MAX)
+                .unwrap();
+            service
+                .agent_scheduler_mut()
+                .enqueue(ScheduledWork {
+                    turn_id: "process-free-queue-holder".into(),
+                    conversation_id: "process-free-queue-holder".into(),
+                    agent_id: "agent-process-free-holder".into(),
+                    pane_id: None,
+                    kind: mez_agent::ScheduledWorkKind::BackgroundTask,
+                })
+                .unwrap();
+        }
+        service
+            .emit_subagent_task_result_for_state(&child, AgentTurnState::Failed)
+            .unwrap();
+        assert_eq!(owned_failure_count(&service, &parent), 1);
+        if new_root {
+            assert_eq!(
+                service
+                    .agent_turn_ledger()
+                    .turn(&parent.turn_id)
+                    .unwrap()
+                    .state,
+                AgentTurnState::Blocked
+            );
+            service.start_initial_pane_process(Some("cat")).unwrap();
+            service
+                .agent_scheduler_mut()
+                .cancel("process-free-queue-holder")
+                .unwrap();
+        }
+        service
+            .apply_peer_message_delivery_timer(current_unix_millis(), 89)
+            .unwrap();
+        assert_eq!(
+            service
+                .agent_turn_ledger()
+                .turn(&parent.turn_id)
+                .unwrap()
+                .state,
+            if new_root {
+                AgentTurnState::Blocked
+            } else {
+                AgentTurnState::Running
+            }
+        );
+        service.terminate_all_pane_processes().unwrap();
     }
 }

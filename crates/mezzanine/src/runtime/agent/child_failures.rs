@@ -191,9 +191,8 @@ impl RuntimeSessionService {
                 start_token: mez_mux::process::process_start_token_for_pid(process_id),
             });
         let parent_process = if parent_root.is_none()
-            && self
-                .find_pane_descriptor(parent_pane)
-                .is_some_and(|pane| !pane.live)
+            && super::runtime_pane_by_id(&self.session, parent_pane)
+                .is_ok_and(|(_, pane)| !pane.live)
         {
             ParentProcessObservation::ProcessFree
         } else {
@@ -497,9 +496,8 @@ impl RuntimeSessionService {
         match &receipt.parent_process {
             ParentProcessObservation::ProcessFree => {
                 if self.primary_pid_for_live_pane_process(pane).is_some()
-                    || self
-                        .find_pane_descriptor(pane)
-                        .is_some_and(|pane| pane.live)
+                    || super::runtime_pane_by_id(&self.session, pane)
+                        .is_ok_and(|(_, pane)| pane.live)
                 {
                     retire(self)
                 } else {
