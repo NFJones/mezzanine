@@ -13,7 +13,7 @@ const home = process.env.HOME;
 const mode = readFileSync(join(home, "replay-mode"), "utf8");
 assert(["connected", "registry", "unknown"].includes(mode));
 for (const key of ["PI_CODING_AGENT_DIR", "MEZ_HARNESS_SESSION", "MEZ_HARNESS_OBSERVER_FD", "MEZ_HARNESS_HELPER", "MEZ_EXTERNAL_LAUNCH_TOKEN"])
-  assert.equal(process.env[key], undefined, "fixture received an activation input");
+  assert(process.env[key] === undefined, "fixture received an activation input");
 const root = join(home, ".pi", "agent", "extensions");
 const factories = [];
 for (const child of readdirSync(root, { withFileTypes: true })) {
