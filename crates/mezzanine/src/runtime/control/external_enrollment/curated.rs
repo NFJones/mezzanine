@@ -436,6 +436,7 @@ impl RuntimeSessionService {
                     instance: work.observer_instance.clone(),
                     predecessor_generation: None,
                     accepted_resume: None,
+                    recovered_projection: false,
                     resume_usage_gap: None,
                     instances: BTreeSet::from([work.observer_instance.clone()]),
                     observers: Vec::new(),

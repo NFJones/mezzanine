@@ -3,6 +3,9 @@
 //! A Unix socket pathname can exist before listening or after its owner exits.
 //! The gate must therefore prove connectability while its child remains alive,
 //! without sending control frames, requesting a role, or exposing child output.
+//! Stale nodes are made only by an isolated, single-test writer process: the
+//! parallel parent never owns its listener, and successful writer exit is the
+//! publication boundary for the negative fixture, not merely dropping one FD.
 
 use super::*;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -240,15 +243,221 @@ fn live_fixture_child() -> DetachedServeProcess {
     )
 }
 
+/// Private environment key used only by the exact isolated writer test.
+const STALE_WRITER_PATH: &str = "MEZ_TEST_STALE_SOCKET_WRITER_PATH";
+
+/// Fixed pipe acknowledgment; it contains neither socket paths nor child data.
+const STALE_WRITER_READY: &[u8] = b"MEZ_STALE_SOCKET_WRITER_READY\n";
+
+/// Removes a private fixture directory even when setup or an assertion fails.
+struct SocketFixtureDirectory(PathBuf);
+
+impl Drop for SocketFixtureDirectory {
+    /// Best-effort cleanup after the writer has been killed/reaped, if needed.
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Owns the sole listener writer and its private directory. Field drop order
+/// reaps the writer before removing the directory on every unwinding path.
+struct StaleSocketWriter {
+    /// Existing panic-safe process guard, also used for detached live children.
+    child: DetachedServeProcess,
+    /// Private pathname ownership; the parent never owns a listening FD.
+    directory: SocketFixtureDirectory,
+}
+
+impl StaleSocketWriter {
+    /// Re-executes only our ignored writer test, with one test thread and no
+    /// inherited configuration or credentials. Setup errors fail the parent;
+    /// the process guard reaps a writer that never acknowledges readiness.
+    fn start(name: &str) -> Self {
+        let directory = SocketFixtureDirectory(test_root(name));
+        fs::create_dir_all(&directory.0).unwrap();
+        Self::spawn(directory)
+    }
+
+    /// Starts the guarded writer after the caller has arranged its directory,
+    /// allowing bind failure to be controlled before the child can run.
+    fn spawn(directory: SocketFixtureDirectory) -> Self {
+        let path = directory.0.join("s.sock");
+        let child = DetachedServeProcess(
+            Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "socket_readiness::isolated_stale_socket_writer",
+                    "--ignored",
+                    "--test-threads=1",
+                    "--quiet",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env(STALE_WRITER_PATH, &path)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        Self { child, directory }
+    }
+
+    /// Returns the unique actual Unix-socket pathname, never a fake predicate.
+    fn path(&self) -> PathBuf {
+        self.directory.0.join("s.sock")
+    }
+
+    /// Reads a bounded fixed acknowledgment through libtest's framing. Polling
+    /// the pipe, not sleeping or retrying a socket probe, controls setup timing.
+    /// Unexpected EOF, excess output, or a hung writer fails without echoing it.
+    fn require_ready(&mut self) {
+        let stdout = self.child.stdout.as_mut().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut prefix = Vec::new();
+        while !prefix.ends_with(STALE_WRITER_READY) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "isolated socket writer setup timed out"
+            );
+            let mut poll = libc::pollfd {
+                fd: stdout.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: poll points to one initialized pipe descriptor; the
+            // writer remains guarded and the timeout is bounded by setup.
+            let ready = unsafe { libc::poll(&mut poll, 1, remaining.as_millis() as i32) };
+            if ready < 0
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+            {
+                continue;
+            }
+            assert!(ready > 0, "isolated socket writer setup pipe failed");
+            let mut byte = [0];
+            assert_eq!(
+                stdout.read(&mut byte).unwrap(),
+                1,
+                "isolated socket writer exited before setup"
+            );
+            prefix.push(byte[0]);
+            assert!(
+                prefix.len() <= 4096,
+                "isolated socket writer setup framing exceeded bound"
+            );
+        }
+        assert!(
+            self.child.try_wait().unwrap().is_none(),
+            "isolated socket writer exited while holding listener"
+        );
+    }
+
+    /// Releases the last duplicate and requires successful process exit/reap.
+    /// Only after this returns may the parent treat the node as stale.
+    fn publish_stale(&mut self) {
+        self.child.stdin.take().unwrap().write_all(b"X").unwrap();
+        assert!(
+            self.child.wait().unwrap().success(),
+            "isolated socket writer failed before stale publication"
+        );
+        assert!(
+            self.path().exists(),
+            "isolated socket writer did not leave a socket node"
+        );
+    }
+}
+
+/// Sole listener writer, re-executed as one exact ignored test in a fresh
+/// process. It never forks or launches another test: after cloning and dropping
+/// the original listener, a pipe acknowledgment proves the duplicate is held.
+/// The parent's explicit release drops the final listener; successful child
+/// exit is required separately before any stale-node negative assertion.
+/// Missing path, bind failure, or pipe EOF must fail rather than publish stale.
+#[test]
+#[ignore = "private subprocess fixture, invoked only by its owning tests"]
+fn isolated_stale_socket_writer() {
+    let path = std::env::var_os(STALE_WRITER_PATH).expect("private writer path is required");
+    let listener = UnixListener::bind(PathBuf::from(path)).unwrap();
+    let duplicate = listener.try_clone().unwrap();
+    drop(listener);
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(STALE_WRITER_READY).unwrap();
+    stdout.flush().unwrap();
+    let mut release = [0];
+    std::io::stdin().read_exact(&mut release).unwrap();
+    assert_eq!(release, *b"X");
+    drop(duplicate);
+}
+
+/// Dropping one listener is not a stale publication boundary when a duplicate
+/// retains its open-file description. This source-backed control uses a real
+/// connect while only the isolated writer's duplicate remains, then proves
+/// ConnectionRefused after successful last-writer exit. It does not claim to
+/// reproduce the historical parallel fork-to-exec failure deterministically.
+#[test]
+fn detached_socket_readiness_stale_publication_requires_last_writer_exit() {
+    let mut writer = StaleSocketWriter::start("socket-ready-last-writer");
+    writer.require_ready();
+    assert!(probe_socket(&writer.path(), Duration::from_millis(20)).is_ok());
+    writer.publish_stale();
+    assert_eq!(
+        probe_socket(&writer.path(), Duration::from_millis(20))
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::ConnectionRefused
+    );
+}
+
+/// A child whose private socket path cannot be bound must exit unsuccessfully,
+/// never masquerading as a published stale fixture. Closing the release pipe
+/// also makes a successfully bound writer fail, proving setup/release failures
+/// cannot pass the successful-exit boundary. Both paths remain guarded/reaped.
+#[test]
+fn detached_socket_readiness_stale_writer_rejects_setup_and_release_failures() {
+    let directory = SocketFixtureDirectory(test_root("socket-ready-writer-setup-failure"));
+    fs::create_dir_all(directory.0.join("s.sock")).unwrap();
+    let mut failed_setup = StaleSocketWriter::spawn(directory);
+    assert!(!failed_setup.child.wait().unwrap().success());
+    let mut failed_release = StaleSocketWriter::start("socket-ready-writer-release-failure");
+    failed_release.require_ready();
+    drop(failed_release.child.stdin.take());
+    assert!(!failed_release.child.wait().unwrap().success());
+}
+
+/// Dropping a fixture before release must kill/reap the still-held writer and
+/// remove its private socket directory. This exercises the same field-drop
+/// cleanup path used by assertion unwinding, without a leaked process or node
+/// and without relaxing any readiness predicate or waiting for daemon startup.
+#[test]
+fn detached_socket_readiness_stale_writer_drop_reaps_and_cleans() {
+    let mut writer = StaleSocketWriter::start("socket-ready-writer-drop");
+    writer.require_ready();
+    let pid = writer.child.id();
+    let root = writer.directory.0.clone();
+    assert!(writer.path().exists());
+    drop(writer);
+    // SAFETY: signal zero probes existence only; the pid was our reaped writer.
+    assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    assert!(!root.exists());
+}
+
 /// A leftover socket after listener destruction cannot pass readiness. Failure
 /// must remain bounded and content-free, and dropping the fixture must reap its
 /// still-live child rather than leaving it behind after a timeout assertion.
+/// The isolated writer must exit successfully before the actual stale pathname
+/// is probed: a multithreaded parent's concurrent fork can retain a listening
+/// open-file description even after its original descriptor was dropped.
 #[test]
 fn detached_socket_readiness_rejects_stale_socket_and_reaps_child() {
-    let root = test_root("socket-ready-stale");
-    fs::create_dir_all(&root).unwrap();
-    let path = root.join("s.sock");
-    drop(UnixListener::bind(&path).unwrap());
+    let mut writer = StaleSocketWriter::start("socket-ready-stale");
+    writer.require_ready();
+    writer.publish_stale();
+    let path = writer.path();
     assert!(path.exists());
     let mut child = live_fixture_child();
     let pid = child.id();
@@ -264,7 +473,6 @@ fn detached_socket_readiness_rejects_stale_socket_and_reaps_child() {
         std::io::Error::last_os_error().raw_os_error(),
         Some(libc::ESRCH)
     );
-    fs::remove_dir_all(&root).unwrap();
 }
 
 /// Listener success cannot mask a dead child. Exit diagnostics must identify
