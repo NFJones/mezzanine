@@ -284,7 +284,7 @@ async fn qualify_installed_node_entry(
         for ordinal in 0..connections {
             let (mut stream, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
                 .await
-                .unwrap()
+                .unwrap_or_else(|_| panic!("ordinary native fixture stopped before connection {ordinal}/{connections}"))
                 .unwrap();
             let origin = crate::runtime::capture_unix_origin(
                 stream.as_raw_fd(),
