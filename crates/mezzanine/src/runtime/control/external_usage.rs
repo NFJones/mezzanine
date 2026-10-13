@@ -6,6 +6,10 @@
 //! reordered replies cannot charge twice. Registration retirement does not erase
 //! incurred usage. Pane views require the original root; session totals survive
 //! close. Reset moves only a view baseline, never the durable stream checkpoint.
+//! This single projection/reservation owner belongs to the control service, not
+//! disposable registrations. Registration loss preserves pending work and resets;
+//! exact incarnation checks fence completion/release after full owner replacement
+//! without undoing real expense already committed by its original storage worker.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
@@ -27,6 +31,8 @@ const MAX_IN_FLIGHT: usize = 32;
 #[derive(Debug, Default)]
 pub(super) struct ExternalUsageProjection {
     pending: BTreeSet<u64>,
+    /// Exact control-owner incarnation; full service replacement cannot reuse IDs.
+    incarnation: Arc<()>,
     /// Exact actor-held capacity reservations, including canonical group keys.
     pub(super) reservations: BTreeMap<String, usize>,
     next_admission: u64,
@@ -81,6 +87,8 @@ struct ExternalUsagePublication {
 pub(crate) struct ExternalUsageWork {
     /// Exact actor admission, consumed once independently of report replay.
     admission: u64,
+    /// Original accounting owner, not a source/transport capability.
+    accounting_incarnation: Arc<()>,
     /// JSON-RPC reply identity, not command authority.
     pub request_id: String,
     /// Private durable store captured at admission.
@@ -215,20 +223,20 @@ impl RuntimeSessionService {
     /// Reports worker and stream reservations without exposing credentials.
     #[cfg(test)]
     pub(crate) fn external_usage_reservation_counts_for_tests(&self) -> (usize, usize) {
-        let usage = &self.control.external_agents().usage;
+        let usage = self.control.external_usage();
         (usage.pending.len(), usage.reservations.len())
     }
 
     /// Sets a bounded projection limit for deterministic capacity regressions.
     #[cfg(test)]
     pub(crate) fn set_external_usage_stream_limit_for_tests(&mut self, limit: usize) {
-        self.control.external_agents_mut().usage.stream_limit = Some(limit);
+        self.control.external_usage_mut().stream_limit = Some(limit);
     }
 
     /// Reports bounded projection/index size without revealing stream identities.
     #[cfg(test)]
     pub(crate) fn external_usage_projection_counts_for_tests(&self) -> (usize, usize) {
-        let projection = &self.control.external_agents().usage;
+        let projection = self.control.external_usage();
         (projection.streams.len(), projection.member_groups.len())
     }
 
@@ -239,7 +247,7 @@ impl RuntimeSessionService {
         started: std::sync::Arc<tokio::sync::Notify>,
         release: std::sync::Arc<tokio::sync::Notify>,
     ) {
-        self.control.external_agents_mut().usage.worker_gate = Some((started, release));
+        self.control.external_usage_mut().worker_gate = Some((started, release));
     }
 
     /// Authorizes a report under a current capability-only registration and
@@ -379,6 +387,7 @@ impl RuntimeSessionService {
         let work = ExternalUsageWork {
             admission: 0,
             request_id: request.id.clone(),
+            accounting_incarnation: self.control.external_usage().incarnation.clone(),
             store: self.persistence.cloned_token_usage_store().ok_or_else(|| {
                 MezError::invalid_state("durable external accounting unavailable")
             })?,
@@ -392,7 +401,7 @@ impl RuntimeSessionService {
             opencode_handoff: pair,
             published: Arc::new(OnceLock::new()),
             #[cfg(test)]
-            worker_gate: self.control.external_agents().usage.worker_gate.clone(),
+            worker_gate: self.control.external_usage().worker_gate.clone(),
         };
         self.reserve_external_usage_work(work)
     }
@@ -469,8 +478,7 @@ impl RuntimeSessionService {
         let marker = super::external_agents::text(params, "request_id", 64)?;
         let origin = self
             .control
-            .external_agents()
-            .usage_begins
+            .external_usage_begins()
             .origins
             .get(&(binding.accounting_owner.clone(), marker.clone()))
             .ok_or_else(|| {
@@ -519,6 +527,7 @@ impl RuntimeSessionService {
         let work = ExternalUsageWork {
             admission: 0,
             request_id,
+            accounting_incarnation: self.control.external_usage().incarnation.clone(),
             store: self.persistence.cloned_token_usage_store().ok_or_else(|| {
                 MezError::invalid_state("durable external accounting unavailable")
             })?,
@@ -532,7 +541,7 @@ impl RuntimeSessionService {
             opencode_handoff: None,
             published: Arc::new(OnceLock::new()),
             #[cfg(test)]
-            worker_gate: self.control.external_agents().usage.worker_gate.clone(),
+            worker_gate: self.control.external_usage().worker_gate.clone(),
         };
         Ok(work)
     }
@@ -558,7 +567,7 @@ impl RuntimeSessionService {
                 &work.report.epoch,
             )?
         };
-        let projection = &mut self.control.external_agents_mut().usage;
+        let projection = self.control.external_usage_mut();
         let stream_id = projection
             .member_groups
             .get(&stream_id)
@@ -605,6 +614,7 @@ impl RuntimeSessionService {
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("external accounting admission exhausted"))?;
         work.admission = projection.next_admission;
+        work.accounting_incarnation = projection.incarnation.clone();
         work.projection_id = Some(stream_id.clone());
         projection.pending.insert(work.admission);
         *projection.reservations.entry(stream_id).or_default() += 1;
@@ -614,7 +624,10 @@ impl RuntimeSessionService {
     /// Releases an admitted work that failed helper proof before a ledger
     /// publication. Preserves original readiness for the legitimate producer.
     pub(super) fn release_unexecuted_external_usage(&mut self, work: &ExternalUsageWork) {
-        let projection = &mut self.control.external_agents_mut().usage;
+        let projection = self.control.external_usage_mut();
+        if !Arc::ptr_eq(&projection.incarnation, &work.accounting_incarnation) {
+            return;
+        }
         if !projection.pending.remove(&work.admission) {
             return;
         }
@@ -635,7 +648,14 @@ impl RuntimeSessionService {
         work: ExternalUsageWork,
         result: Result<ExternalUsageCommit>,
     ) -> String {
-        let projection = &mut self.control.external_agents_mut().usage;
+        let projection = self.control.external_usage_mut();
+        if !Arc::ptr_eq(&projection.incarnation, &work.accounting_incarnation) {
+            return crate::runtime::runtime_json_rpc_error(
+                &work.request_id,
+                crate::error::MezErrorKind::Conflict,
+                "external accounting reservation owner changed",
+            );
+        }
         if !projection.pending.remove(&work.admission) {
             return crate::runtime::runtime_json_rpc_error(
                 &work.request_id,
@@ -673,8 +693,7 @@ impl RuntimeSessionService {
         };
         if let Some(marker) = &work.request_marker {
             self.control
-                .external_agents_mut()
-                .usage_begins
+                .external_usage_begins_mut()
                 .origins
                 .remove(&(work.admitted_report.owner.clone(), marker.clone()));
         }
@@ -689,8 +708,9 @@ impl RuntimeSessionService {
                     enrollment.request_reports_seen = true;
                 }
             }
+            self.refresh_external_source_diagnostics_for_owner(&work.report.owner);
         }
-        let projection = &mut self.control.external_agents_mut().usage;
+        let projection = self.control.external_usage_mut();
         match result {
             Ok(commit) => {
                 #[cfg(test)]
@@ -756,7 +776,7 @@ impl RuntimeSessionService {
         pane_id: Option<&str>,
     ) -> BTreeMap<(String, ModelTokenUsageKey), ModelTokenUsage> {
         let mut totals = BTreeMap::<(String, ModelTokenUsageKey), ModelTokenUsage>::new();
-        for stream in self.control.external_agents().usage.streams.values() {
+        for stream in self.control.external_usage().streams.values() {
             let usage = if let Some(pane) = pane_id {
                 if stream.pane_id != pane
                     || !self.pane_process_identity_is_current(pane, &stream.process)
@@ -788,8 +808,7 @@ impl RuntimeSessionService {
         crate::storage::token_usage::TokenHistoryUsage,
     )> {
         self.control
-            .external_agents()
-            .usage
+            .external_usage()
             .streams
             .values()
             .filter_map(|stream| {
@@ -821,13 +840,7 @@ impl RuntimeSessionService {
     /// Moves only the pane-view baseline; durable deduplication remains intact.
     pub(crate) fn reset_external_token_usage(&mut self, pane_id: &str) -> bool {
         let mut changed = false;
-        for stream in self
-            .control
-            .external_agents_mut()
-            .usage
-            .streams
-            .values_mut()
-        {
+        for stream in self.control.external_usage_mut().streams.values_mut() {
             if stream.pane_id == pane_id {
                 changed |= stream.reset_baseline != stream.totals;
                 stream.reset_baseline = stream.totals;

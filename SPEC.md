@@ -294,6 +294,51 @@ uninitialized same-user Unix ingress for canonical `claude`, `codex`, `copilot`,
 `observer_instance` and exact `observer_kind: persistent`. The optional positive
 `predecessor_generation` narrows observer replacement. These are selectors, not
 authority; first enrollment MUST NOT claim an unavailable predecessor.
+Ordinary socket enrollment MAY explicitly recover the SAME live native source
+with optional strict `source_resume: {observer_witness, generation}`. The witness
+MUST be 64 lower-case hexadecimal bytes and the generation a positive JS-safe
+integer. Recovery MUST require the original active source anchor retained by the
+SAME control service outside disposable registrations, plus fresh original-kind
+UID/creator/root incarnation, ancestry and current writer proof at admission and
+settlement. It MUST NOT reconstruct authority from the durable accounting mapping.
+The memory-only owner MUST retain at most 256 source anchors, share the existing
+512-ancestor budget, and never evict live source/retired-instance fences.
+Accounting checkpoint projections, pane reset baselines and begin/end reservation
+owners MUST remain single service-owned objects outside disposable registrations.
+Registration loss MUST NOT become a usage reset, drop unreplayed stream totals or
+reuse pending IDs. Full owner replacement MUST fence old completion/release by
+exact incarnation without undoing already-committed durable expense.
+Actual producer/root replacement ends its anchor; central retirement MUST synchronously
+invalidate every observer instance for that exact source lifetime. A new label
+MUST NOT reactivate it. Ordinary rotation MUST update the same currentness owner.
+Prepare/commit revision checks MUST fence distinct competing or delayed admissions.
+Same-instance resume MUST retain its immutable original predecessor; a genuinely
+new successor MUST name the current receipt and exact predecessor generation and
+MUST NOT reuse a retired instance. Successful resume MUST rotate private token,
+public witness and generation and advance observer epoch exactly once, preserving
+logical run, source namespace and original request provenance. ONLY explicit
+resume replies carry `recovery: {kind: "same-live-source", next_sequence: 1}`.
+Exact accepted-input retries MAY return the same current recovered handle without
+another epoch, projection reset or lease refresh. Bare old same-instance packets
+MUST NOT obtain recovered handles. If registry loss removes that recovered binding
+before its reply is known, old-selector retry MUST fail `source resume retry unavailable`;
+there is no newest lookup or shadow credential/projection copy. A known current
+receipt MAY explicitly qualify another fresh recovery. Missing service anchors,
+service/OS-daemon replacement, source mismatches and expired/retired evidence MUST
+fail closed even when accounting mappings survive. Omitted explicit resume after
+active registry loss MUST reject, not silently start another accounting namespace.
+Mapping lookup MUST publish New/Existing disposition atomically with its existing
+immediate SQLite transaction. Existing mappings without retained service authority
+MUST NOT activate even through a bare initial packet or changed instance label.
+If an initial mapping committed but its native admission never published, later
+initial admission MUST fail `same-live source activation unavailable`; the inert
+row is not deleted/reassigned to bypass that conservative availability gap.
+An explicitly resumed Pi projection MAY accept its first ACTUAL gap fact at
+sequence 1 as diagnostics only, retaining a prior fixed gap reason/report-seen
+flag. It MUST NOT restore old lifecycle candidates/outcomes or synthesize a SDK
+start, presentation, completion, retirement or loss event. Normal initial/ordinary
+rotation first-gap guards remain unchanged. This contract does not guarantee
+never-received reports, repeated-reset reply recovery or cross-process continuity.
 Shared protocol eligibility MUST NOT be presented as installed/loaded vendor
 adapter support or executable/vendor attestation. Unknown labels and retired
 Gemini MUST reject before reservation. The label MUST NOT enable initial helper,

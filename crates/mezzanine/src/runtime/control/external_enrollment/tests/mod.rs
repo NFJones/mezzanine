@@ -1341,6 +1341,8 @@ mod pi_assembled;
 mod pi_observation;
 mod producer;
 mod source;
+mod source_recovery;
+mod source_recovery_usage;
 mod usage_begin;
 
 /// Programmatic requests still undergo strict selector decoding before native

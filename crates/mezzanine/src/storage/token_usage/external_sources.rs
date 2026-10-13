@@ -14,6 +14,14 @@ use sha2::{Digest, Sha256};
 /// Durable mappings cannot be silently evicted and later become fresh expense.
 const MAX_SOURCES: usize = 65_536;
 
+/// Inert mapping lookup disposition, never evidence of source activation.
+pub(crate) struct ExternalSourceOwner {
+    /// Server-owned durable namespace under the exact native witness digest.
+    pub(crate) owner: String,
+    /// True only when this exact immediate transaction inserted the mapping.
+    pub(crate) created: bool,
+}
+
 /// Evidence kinds stay disjoint even for equal native metadata.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum NativeSourceKind {
@@ -107,16 +115,38 @@ impl TokenUsageStore {
     /// Reopen/concurrent callers recover the same owner; capacity exhaustion is
     /// explicit and never prunes replay authority. Call only off the actor.
     pub(crate) fn external_source_owner(&self, key: &ExternalSourceKey) -> Result<String> {
-        self.external_source_owner_with_limit(key, MAX_SOURCES)
+        self.resolve_external_source_owner(key)
+            .map(|resolved| resolved.owner)
+    }
+
+    /// Resolves namespace and novelty atomically. Existing rows cannot stand in
+    /// for missing live service authority; aborted first admissions leave inert
+    /// mappings rather than permission to allocate another accounting namespace.
+    pub(crate) fn resolve_external_source_owner(
+        &self,
+        key: &ExternalSourceKey,
+    ) -> Result<ExternalSourceOwner> {
+        self.resolve_external_source_with_limit(key, MAX_SOURCES)
     }
 
     /// Shared transaction owner; the test-only small bound exercises exhaustion
     /// without allocating the production mapping capacity.
+    #[cfg(test)]
     fn external_source_owner_with_limit(
         &self,
         key: &ExternalSourceKey,
         limit: usize,
     ) -> Result<String> {
+        self.resolve_external_source_with_limit(key, limit)
+            .map(|resolved| resolved.owner)
+    }
+
+    /// Owns one bounded immediate transaction, including lookup disposition.
+    fn resolve_external_source_with_limit(
+        &self,
+        key: &ExternalSourceKey,
+        limit: usize,
+    ) -> Result<ExternalSourceOwner> {
         let mut connection = self.open()?;
         let transaction =
             connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -133,7 +163,10 @@ impl TokenUsageStore {
                     "stored external source identity is invalid",
                 ));
             }
-            return Ok(owner);
+            return Ok(ExternalSourceOwner {
+                owner,
+                created: false,
+            });
         }
         let count: i64 =
             transaction.query_row("SELECT count(*) FROM external_usage_sources", [], |row| {
@@ -151,13 +184,51 @@ impl TokenUsageStore {
             params![key.digest, key.harness, owner],
         )?;
         transaction.commit()?;
-        Ok(owner)
+        Ok(ExternalSourceOwner {
+            owner,
+            created: true,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mapping novelty belongs to the same immediate transaction as the owner
+    /// allocation. Concurrent callers observe exactly one newly created row;
+    /// reopen is Existing and carries no source activation or expense authority.
+    #[test]
+    fn external_source_resolution_novelty_is_atomic_and_reopen_is_inert() {
+        let store = store();
+        let key = key("atomic-novelty");
+        let barrier = std::sync::Barrier::new(4);
+        let resolved = std::thread::scope(|scope| {
+            let tasks = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        store.resolve_external_source_owner(&key).unwrap()
+                    })
+                })
+                .collect::<Vec<_>>();
+            tasks
+                .into_iter()
+                .map(|task| task.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            resolved.iter().filter(|resolved| resolved.created).count(),
+            1
+        );
+        assert!(resolved.iter().all(|row| row.owner == resolved[0].owner));
+        let reopened = TokenUsageStore::new(store.path())
+            .resolve_external_source_owner(&key)
+            .unwrap();
+        assert!(!reopened.created);
+        assert_eq!(reopened.owner, resolved[0].owner);
+        std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+    }
 
     /// Pure synthetic witness for storage tests, not proof of native admission.
     fn key(session: &str) -> ExternalSourceKey {

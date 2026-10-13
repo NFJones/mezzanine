@@ -412,8 +412,7 @@ async fn external_curated_request_end_native_commit_replay_and_wrong_parent_cons
                 fixture
                     .service
                     .control
-                    .external_agents()
-                    .usage_begins
+                    .external_usage_begins()
                     .origins
                     .len(),
                 1
