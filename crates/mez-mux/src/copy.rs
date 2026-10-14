@@ -721,15 +721,14 @@ impl StyledCopyMode {
         }
         let mut seen = std::collections::BTreeMap::new();
         for source in self.copy_sources.iter().flatten() {
-            if let Some(previous) = seen.insert(&source.id, source.as_ref()) {
-                if previous.generation != source.generation
+            if let Some(previous) = seen.insert(&source.id, source.as_ref())
+                && (previous.generation != source.generation
                     || (!std::sync::Arc::ptr_eq(&previous.text, &source.text)
-                        && previous.text != source.text)
-                {
-                    return Err(MuxError::invalid_args(
-                        "copy snapshot contains conflicting source generations",
-                    ));
-                }
+                        && previous.text != source.text))
+            {
+                return Err(MuxError::invalid_args(
+                    "copy snapshot contains conflicting source generations",
+                ));
             }
         }
         Ok(())

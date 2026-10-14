@@ -7,147 +7,6 @@
 
 use super::*;
 
-#[cfg(test)]
-mod owned_scope_tests {
-    use super::*;
-
-    /// Fixed source capture invokes exactly one parser operation for the same
-    /// bytes regardless of retained history depth. The production scope touches
-    /// only active metadata and new row writes; there is no owner rediscovery
-    /// API. Retained unrelated history remains source-free.
-    #[test]
-    fn owned_source_fixed_feed_operation_is_independent_of_history_depth() {
-        for depth in [0usize, 4096] {
-            let mut screen = TerminalScreen::new(Size::new(80, 6).unwrap(), 5000).unwrap();
-            for _ in 0..depth {
-                screen.feed(b"old opaque row\r\n");
-            }
-            assert!(screen.history.len() >= depth.saturating_sub(6));
-            let entry = PresentationEntry {
-                id: "fixed-feed".into(),
-                occurrence: Default::default(),
-                first_row: true,
-            };
-            let source = TerminalCopySource::new(
-                crate::TerminalCopySourceId::new(
-                    &entry,
-                    crate::TerminalCopySourceGroup::WholeEntry,
-                )
-                .unwrap(),
-                "fixed source",
-            );
-            let mut operations = 0;
-            screen.with_presentation_scope(entry, Some(source.clone()), |screen| {
-                operations += 1;
-                screen.feed(b"new owned row");
-            });
-            assert_eq!(operations, 1);
-            let owners = screen
-                .normal_styled_content_lines()
-                .into_iter()
-                .filter_map(|row| row.copy_source)
-                .collect::<Vec<_>>();
-            assert_eq!(owners.len(), 1);
-            assert!(Arc::ptr_eq(&owners[0], &source));
-        }
-    }
-
-    /// A source-free inner public feed cannot inherit an enclosing source, and
-    /// valid later source feeds retain their own owner. Alternate rendering is
-    /// raw and never acquires normal-row source authority.
-    #[test]
-    fn owned_source_scope_nested_none_and_alternate_stay_unassociated() {
-        let mut screen = TerminalScreen::new(Size::new(24, 6).unwrap(), 16).unwrap();
-        let entry = PresentationEntry {
-            id: "outer".into(),
-            occurrence: Default::default(),
-            first_row: true,
-        };
-        let source = TerminalCopySource::new(
-            crate::TerminalCopySourceId::new(&entry, crate::TerminalCopySourceGroup::WholeEntry)
-                .unwrap(),
-            "outer source",
-        );
-        screen.with_presentation_scope(entry.clone(), Some(source.clone()), |screen| {
-            screen.feed_presentation(b"source-free\r\n", entry.clone());
-            assert!(screen.visible_styled_lines()[0].copy_source.is_none());
-            assert_eq!(screen.active_copy_source, Some(source.clone()));
-        });
-        assert!(screen.active_presentation.is_none());
-        assert!(screen.active_copy_source.is_none());
-        assert!(screen.feed_presentation_with_copy_source(
-            b"owned",
-            entry.clone(),
-            Some(source.clone())
-        ));
-        assert_eq!(
-            screen.visible_styled_lines()[1].copy_source,
-            Some(source.clone())
-        );
-        screen.feed(b"\x1b[?1049h");
-        assert!(screen.feed_presentation_with_copy_source(b"alternate", entry, Some(source)));
-        assert!(
-            screen
-                .visible_styled_lines()
-                .iter()
-                .all(|row| row.presentation.is_none() && row.copy_source.is_none())
-        );
-        assert!(screen.active_presentation.is_none());
-        assert!(screen.active_copy_source.is_none());
-    }
-
-    /// A deterministic partial parser operation unwinds with its original
-    /// payload. Both prior active fields must restore for outer None and Some;
-    /// already written prefix cells remain, and later raw bytes cannot inherit
-    /// the failed inner entry/source. This is not an atomic row rollback test.
-    #[test]
-    fn owned_source_scope_restores_both_active_fields_on_original_panic() {
-        for outer in [false, true] {
-            let mut screen = TerminalScreen::new(Size::new(24, 6).unwrap(), 16).unwrap();
-            let prior = PresentationEntry {
-                id: "prior".into(),
-                occurrence: Default::default(),
-                first_row: true,
-            };
-            let inner = PresentationEntry {
-                id: "inner".into(),
-                ..prior.clone()
-            };
-            let source = |entry: &PresentationEntry| {
-                crate::TerminalCopySource::new(
-                    crate::TerminalCopySourceId::new(
-                        entry,
-                        crate::TerminalCopySourceGroup::WholeEntry,
-                    )
-                    .unwrap(),
-                    "exact source",
-                )
-            };
-            let prior_source = source(&prior);
-            if outer {
-                screen.active_presentation = Some(prior.clone());
-                screen.active_copy_source = Some(prior_source.clone());
-            }
-            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                screen.with_presentation_scope(inner.clone(), Some(source(&inner)), |screen| {
-                    screen.feed(b"prefix");
-                    std::panic::panic_any(0x51_u64);
-                });
-            }))
-            .unwrap_err();
-            assert_eq!(caught.downcast_ref::<u64>(), Some(&0x51));
-            assert_eq!(screen.active_presentation, outer.then_some(prior));
-            assert_eq!(screen.active_copy_source, outer.then_some(prior_source));
-            assert!(screen.visible_lines()[0].starts_with("prefix"));
-            screen.active_presentation = None;
-            screen.active_copy_source = None;
-            screen.feed(b"\r\nraw");
-            assert!(screen.visible_styled_lines()[1].presentation.is_none());
-            assert!(screen.visible_styled_lines()[1].copy_source.is_none());
-        }
-    }
-}
-
 impl TerminalScreen {
     /// Returns the current terminal grid dimensions.
     pub fn size(&self) -> Size {
@@ -672,6 +531,147 @@ impl TerminalScreen {
             self.line_copy_texts[row_index] = line.copy_text.clone();
             self.line_copy_sources[row_index] = line.copy_source.clone();
             self.line_presentations[row_index] = line.presentation.clone();
+        }
+    }
+}
+
+#[cfg(test)]
+mod owned_scope_tests {
+    use super::*;
+
+    /// Fixed source capture invokes exactly one parser operation for the same
+    /// bytes regardless of retained history depth. The production scope touches
+    /// only active metadata and new row writes; there is no owner rediscovery
+    /// API. Retained unrelated history remains source-free.
+    #[test]
+    fn owned_source_fixed_feed_operation_is_independent_of_history_depth() {
+        for depth in [0usize, 4096] {
+            let mut screen = TerminalScreen::new(Size::new(80, 6).unwrap(), 5000).unwrap();
+            for _ in 0..depth {
+                screen.feed(b"old opaque row\r\n");
+            }
+            assert!(screen.history.len() >= depth.saturating_sub(6));
+            let entry = PresentationEntry {
+                id: "fixed-feed".into(),
+                occurrence: Default::default(),
+                first_row: true,
+            };
+            let source = TerminalCopySource::new(
+                crate::TerminalCopySourceId::new(
+                    &entry,
+                    crate::TerminalCopySourceGroup::WholeEntry,
+                )
+                .unwrap(),
+                "fixed source",
+            );
+            let mut operations = 0;
+            screen.with_presentation_scope(entry, Some(source.clone()), |screen| {
+                operations += 1;
+                screen.feed(b"new owned row");
+            });
+            assert_eq!(operations, 1);
+            let owners = screen
+                .normal_styled_content_lines()
+                .into_iter()
+                .filter_map(|row| row.copy_source)
+                .collect::<Vec<_>>();
+            assert_eq!(owners.len(), 1);
+            assert!(Arc::ptr_eq(&owners[0], &source));
+        }
+    }
+
+    /// A source-free inner public feed cannot inherit an enclosing source, and
+    /// valid later source feeds retain their own owner. Alternate rendering is
+    /// raw and never acquires normal-row source authority.
+    #[test]
+    fn owned_source_scope_nested_none_and_alternate_stay_unassociated() {
+        let mut screen = TerminalScreen::new(Size::new(24, 6).unwrap(), 16).unwrap();
+        let entry = PresentationEntry {
+            id: "outer".into(),
+            occurrence: Default::default(),
+            first_row: true,
+        };
+        let source = TerminalCopySource::new(
+            crate::TerminalCopySourceId::new(&entry, crate::TerminalCopySourceGroup::WholeEntry)
+                .unwrap(),
+            "outer source",
+        );
+        screen.with_presentation_scope(entry.clone(), Some(source.clone()), |screen| {
+            screen.feed_presentation(b"source-free\r\n", entry.clone());
+            assert!(screen.visible_styled_lines()[0].copy_source.is_none());
+            assert_eq!(screen.active_copy_source, Some(source.clone()));
+        });
+        assert!(screen.active_presentation.is_none());
+        assert!(screen.active_copy_source.is_none());
+        assert!(screen.feed_presentation_with_copy_source(
+            b"owned",
+            entry.clone(),
+            Some(source.clone())
+        ));
+        assert_eq!(
+            screen.visible_styled_lines()[1].copy_source,
+            Some(source.clone())
+        );
+        screen.feed(b"\x1b[?1049h");
+        assert!(screen.feed_presentation_with_copy_source(b"alternate", entry, Some(source)));
+        assert!(
+            screen
+                .visible_styled_lines()
+                .iter()
+                .all(|row| row.presentation.is_none() && row.copy_source.is_none())
+        );
+        assert!(screen.active_presentation.is_none());
+        assert!(screen.active_copy_source.is_none());
+    }
+
+    /// A deterministic partial parser operation unwinds with its original
+    /// payload. Both prior active fields must restore for outer None and Some;
+    /// already written prefix cells remain, and later raw bytes cannot inherit
+    /// the failed inner entry/source. This is not an atomic row rollback test.
+    #[test]
+    fn owned_source_scope_restores_both_active_fields_on_original_panic() {
+        for outer in [false, true] {
+            let mut screen = TerminalScreen::new(Size::new(24, 6).unwrap(), 16).unwrap();
+            let prior = PresentationEntry {
+                id: "prior".into(),
+                occurrence: Default::default(),
+                first_row: true,
+            };
+            let inner = PresentationEntry {
+                id: "inner".into(),
+                ..prior.clone()
+            };
+            let source = |entry: &PresentationEntry| {
+                crate::TerminalCopySource::new(
+                    crate::TerminalCopySourceId::new(
+                        entry,
+                        crate::TerminalCopySourceGroup::WholeEntry,
+                    )
+                    .unwrap(),
+                    "exact source",
+                )
+            };
+            let prior_source = source(&prior);
+            if outer {
+                screen.active_presentation = Some(prior.clone());
+                screen.active_copy_source = Some(prior_source.clone());
+            }
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                screen.with_presentation_scope(inner.clone(), Some(source(&inner)), |screen| {
+                    screen.feed(b"prefix");
+                    std::panic::panic_any(0x51_u64);
+                });
+            }))
+            .unwrap_err();
+            assert_eq!(caught.downcast_ref::<u64>(), Some(&0x51));
+            assert_eq!(screen.active_presentation, outer.then_some(prior));
+            assert_eq!(screen.active_copy_source, outer.then_some(prior_source));
+            assert!(screen.visible_lines()[0].starts_with("prefix"));
+            screen.active_presentation = None;
+            screen.active_copy_source = None;
+            screen.feed(b"\r\nraw");
+            assert!(screen.visible_styled_lines()[1].presentation.is_none());
+            assert!(screen.visible_styled_lines()[1].copy_source.is_none());
         }
     }
 }

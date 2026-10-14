@@ -11,6 +11,13 @@ use mez_core::presentation::{
     PresentationEntry, PresentationOccurrence, PresentationOccurrenceBasis,
 };
 
+/// One producer-delimited byte range and its paired immutable row provenance.
+type OwnedSourceRange = (
+    std::ops::Range<usize>,
+    PresentationEntry,
+    Option<std::sync::Arc<mez_terminal::TerminalCopySource>>,
+);
+
 impl RuntimeSessionService {
     /// Validates all owned logical-row ranges before any screen mutation, then
     /// feeds identical bytes with paired entry/source scope. Gaps remain raw
@@ -18,11 +25,7 @@ impl RuntimeSessionService {
     pub(in crate::runtime::render::presentation) fn feed_presentation_source_ranges(
         screen: &mut TerminalScreen,
         bytes: &[u8],
-        ranges: &[(
-            std::ops::Range<usize>,
-            PresentationEntry,
-            Option<std::sync::Arc<mez_terminal::TerminalCopySource>>,
-        )],
+        ranges: &[OwnedSourceRange],
         context: &str,
     ) -> Result<()> {
         let text = std::str::from_utf8(bytes).map_err(|_| {

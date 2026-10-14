@@ -43,7 +43,7 @@ fn copy_source_scoped_feed_unicode_pruning_and_frozen_projection() {
     let mut continuation = entry.clone();
     continuation.first_row = false;
     assert!(screen.feed_presentation_with_copy_source(
-        format!("{}", "long wrapped owner ".repeat(40)).as_bytes(),
+        "long wrapped owner ".repeat(40).as_bytes(),
         continuation,
         Some(source.clone())
     ));

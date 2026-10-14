@@ -8,6 +8,15 @@
 
 use super::*;
 
+impl TerminalScreen {
+    /// Reports whether this screen's proven copy associations are consumed by
+    /// modern framed copy views. Capture itself is independent of this mode;
+    /// never-enabled legacy OFF views retain their existing copy-byte contract.
+    pub fn uses_presentation_copy_associations(&self) -> bool {
+        self.preserve_presentation_copy_associations
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,14 +63,5 @@ mod tests {
             logical[0].copy_text.is_none(),
             "a conflict must not revive legacy source recovery"
         );
-    }
-}
-
-impl TerminalScreen {
-    /// Reports whether this screen's proven copy associations are consumed by
-    /// modern framed copy views. Capture itself is independent of this mode;
-    /// never-enabled legacy OFF views retain their existing copy-byte contract.
-    pub fn uses_presentation_copy_associations(&self) -> bool {
-        self.preserve_presentation_copy_associations
     }
 }

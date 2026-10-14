@@ -97,15 +97,14 @@ impl RuntimeSessionService {
             .process
             .agent_pane_screens
             .iter()
-            .filter_map(|(pane, state)| {
-                (state.screen().log_frame_settings() != (policy, rendition)).then(|| {
-                    (
-                        pane.clone(),
-                        state.conversation_id().to_string(),
-                        state.lineage(),
-                        state.screen().size(),
-                    )
-                })
+            .filter(|(_, state)| state.screen().log_frame_settings() != (policy, rendition))
+            .map(|(pane, state)| {
+                (
+                    pane.clone(),
+                    state.conversation_id().to_string(),
+                    state.lineage(),
+                    state.screen().size(),
+                )
             })
             .collect::<Vec<_>>();
         if !panes.is_empty() {
