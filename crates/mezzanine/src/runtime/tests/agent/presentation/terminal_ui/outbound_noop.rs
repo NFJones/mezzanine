@@ -56,7 +56,8 @@ fn streamed_outbound_noop_case(
     service.set_agent_transcript_store(store.clone());
     let conversation = service.agent_shell_store_mut().enter_or_resume("%1").unwrap().session_id.clone();
     service.agent_shell_store_mut().enter_or_resume(peer_pane).unwrap();
-    service.ensure_runtime_message_identity(&peer_agent, None, "agent", &[], crate::runtime::current_unix_millis()).unwrap();
+    let peer_identity = service.ensure_runtime_message_identity(&peer_agent, None, "agent", &[], crate::runtime::current_unix_millis()).unwrap();
+    service.control.message_service_mut().subscribe(&peer_identity.agent_id).unwrap();
     set_agent_pane_screen_for_test(&mut service, "%1", TerminalScreen::new(Size::new(80, 24).unwrap(), 200).unwrap());
     let started = service.start_agent_prompt_turn("%1", "send once and continue").unwrap();
     service.remove_pending_agent_provider_task(&started.turn_id);
@@ -84,7 +85,7 @@ fn streamed_outbound_noop_case(
     let action = mez_agent::AgentAction {
         id: "accepted-noop-message".into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
-            recipient, scope: None, content_type: content_type.into(),
+            recipient, scope: Some("session".into()), content_type: content_type.into(),
             payload: payload.into(), correlation_id: Some("noop-correlation".into()),
         },
     };
