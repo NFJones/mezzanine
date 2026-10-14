@@ -49,6 +49,24 @@ pub(super) struct ExternalUsageProjection {
         std::sync::Arc<tokio::sync::Notify>,
         std::sync::Arc<tokio::sync::Notify>,
     )>,
+    /// Test-owned first-failure checkpoint; it never supplies a worker outcome.
+    #[cfg(test)]
+    worker_probe: Option<Arc<ExternalUsageWorkerProbe>>,
+}
+
+/// Observes actual off-actor attempts without changing their storage results.
+/// The first real failure can be held while a fixture releases its own writer.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct ExternalUsageWorkerProbe {
+    /// Counts actual worker dispatches, not producer callback invocations.
+    pub(crate) attempts: std::sync::atomic::AtomicUsize,
+    /// Signals only after a real failed invocation, before actor completion.
+    pub(crate) failed: tokio::sync::Notify,
+    /// Fixture-owned release; no production cancellation or retry authority.
+    pub(crate) release: tokio::sync::Notify,
+    /// Records the broad original error kind without retaining error content.
+    pub(crate) failure: OnceLock<crate::error::MezErrorKind>,
 }
 
 /// One absolute durable checkpoint and its pane-view reset baseline.
@@ -119,6 +137,9 @@ pub(crate) struct ExternalUsageWork {
         std::sync::Arc<tokio::sync::Notify>,
         std::sync::Arc<tokio::sync::Notify>,
     )>,
+    /// Heap-held test observation only; never a production retry selector.
+    #[cfg(test)]
+    pub(crate) worker_probe: Option<Arc<ExternalUsageWorkerProbe>>,
 }
 
 impl ExternalUsageWork {
@@ -209,6 +230,16 @@ impl ExternalUsageWork {
     pub(crate) fn published_group_for_tests(&self) -> Option<&ExternalUsageGroupSnapshot> {
         self.published.get()?.group.as_ref()
     }
+
+    /// Verifies that the failure checkpoint belongs to genuine admitted native
+    /// work and has not already published expense. This does not fabricate a
+    /// retryable classification; the fixture still holds an actual SQLite lock.
+    #[cfg(test)]
+    pub(crate) fn assert_unpublished_native_attempt_for_tests(&self) {
+        assert!(self.admission > 0 && self.request_marker.is_some());
+        assert_eq!(self.report, self.admitted_report);
+        assert!(self.published.get().is_none());
+    }
 }
 
 impl RuntimeSessionService {
@@ -248,6 +279,17 @@ impl RuntimeSessionService {
         release: std::sync::Arc<tokio::sync::Notify>,
     ) {
         self.control.external_usage_mut().worker_gate = Some((started, release));
+    }
+
+    /// Installs an attempt observer before actor ownership. It changes neither
+    /// native admission nor the error returned by the actual storage worker.
+    #[cfg(test)]
+    pub(crate) fn probe_external_usage_worker_for_tests(
+        &mut self,
+    ) -> Arc<ExternalUsageWorkerProbe> {
+        let probe = Arc::new(ExternalUsageWorkerProbe::default());
+        self.control.external_usage_mut().worker_probe = Some(probe.clone());
+        probe
     }
 
     /// Authorizes a report under a current capability-only registration and
@@ -402,6 +444,8 @@ impl RuntimeSessionService {
             published: Arc::new(OnceLock::new()),
             #[cfg(test)]
             worker_gate: self.control.external_usage().worker_gate.clone(),
+            #[cfg(test)]
+            worker_probe: self.control.external_usage().worker_probe.clone(),
         };
         self.reserve_external_usage_work(work)
     }
@@ -542,6 +586,8 @@ impl RuntimeSessionService {
             published: Arc::new(OnceLock::new()),
             #[cfg(test)]
             worker_gate: self.control.external_usage().worker_gate.clone(),
+            #[cfg(test)]
+            worker_probe: self.control.external_usage().worker_probe.clone(),
         };
         Ok(work)
     }

@@ -337,10 +337,25 @@ impl AsyncRuntimeSessionActor {
                 release.notified().await;
             }
             let worker = work.clone();
+            #[cfg(test)]
+            if let Some(probe) = &work.worker_probe {
+                probe
+                    .attempts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             let result = tokio::task::spawn_blocking(move || worker.execute())
                 .await
                 .map_err(|_| MezError::invalid_state("external accounting worker failed"))
                 .and_then(|result| result);
+            #[cfg(test)]
+            if let Err(error) = &result
+                && let Some(probe) = &work.worker_probe
+                && probe.failure.set(error.kind()).is_ok()
+            {
+                work.assert_unpublished_native_attempt_for_tests();
+                probe.failed.notify_one();
+                probe.release.notified().await;
+            }
             let _ = sender
                 .send(AsyncRuntimeRequestEnvelope::new(
                     AsyncRuntimeRequest::CompleteExternalUsageInput {

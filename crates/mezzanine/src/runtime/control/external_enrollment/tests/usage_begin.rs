@@ -5,6 +5,8 @@
 use super::helper_presentation::enroll_producer;
 use super::*;
 
+mod pending_retry;
+
 /// Retiring the only current source removes reconstructible readiness but not
 /// its durable origin. Reopening storage restores metadata without adopting
 /// current project/time or creating cost, but grants no retired source readiness.
