@@ -578,6 +578,25 @@ test("Pi pre-drain finalization survives close and new run without old retry rev
   timer.advance(5000); assert.equal(calls, 1); assert.equal(timer.pending.size, 0);
 });
 
+/** More than4096 successful current-request observations must remain bounded
+ * without making a timer, abandoning incurred usage or changing callbacks.
+ * This source-only observer/client fixture checks retention policy, not native
+ * stream cardinality, durable ledger replay protection or vendor completeness. */
+test("Pi successful 5001-request workload prunes only durable replay metadata", async () => {
+  let abandoned = 0;
+  const f = fixture({ abandonRequest() { abandoned++; } }); let maximum = 0;
+  for (let index = 0; index < 5001; index++) {
+    f.start(index); f.end(message(), `workload-${index}`, index); await f.drain();
+    maximum = Math.max(maximum, f.recent.size);
+    assert(f.recent.size <= 128);
+  }
+  assert.equal(f.markers.length, 5001); assert.equal(f.reports.length, 5001);
+  assert.equal(maximum, 128); assert.equal(f.recent.size, 128); assert.equal(abandoned, 0);
+  assert.equal([...f.recent.values()].every(row => row.slot.durable), true);
+  assert.equal(f.owned.failed, undefined);
+  f.observer.close();
+});
+
 /** Two immediate ACK losses exhaust one real endRequest operation. A later
  * exact finalized callback retries its same instance-local ticket and frozen
  * report, not a provider request, new marker, timestamp or copied ticket. The
