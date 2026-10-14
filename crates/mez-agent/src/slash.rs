@@ -6,6 +6,8 @@
 
 use std::fmt;
 
+mod list_agents;
+pub use list_agents::{LIST_AGENTS_USAGE, ListAgentsOptions, parse_list_agents_options};
 mod status;
 pub use status::{
     STATUS_USAGE, StatusOptions, StatusScope, parse_status_option_tokens, parse_status_options,
@@ -80,6 +82,7 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("approval", &[], SlashCommandEffect::PolicyMutation, true),
         slash("approve", &[], SlashCommandEffect::PolicyMutation, true),
         slash("show-approvals", &[], SlashCommandEffect::ReadOnly, true),
+        slash("list-agents", &[], SlashCommandEffect::ReadOnly, true),
         slash("sandbox", &[], SlashCommandEffect::PolicyMutation, true),
         slash("shell-mode", &[], SlashCommandEffect::PolicyMutation, true),
         slash("list-macros", &[], SlashCommandEffect::ReadOnly, true),
@@ -237,6 +240,28 @@ mod tests {
     use super::{
         SlashCommandEffect, SlashCommandParseError, baseline_slash_commands, parse_slash_command,
     };
+
+    /// Opening the human browser is a canonical queueable diagnostic, not a
+    /// provider prompt or a lifecycle mutation. Arguments stay literal for the
+    /// dedicated option grammar; no alias introduces a second spelling.
+    #[test]
+    fn slash_parser_registers_list_agents_as_read_only() {
+        for args in ["", " --all"] {
+            let invocation = parse_slash_command(&format!("/list-agents{args}"))
+                .unwrap()
+                .unwrap();
+            assert_eq!(invocation.name, "list-agents");
+            assert_eq!(invocation.args, args.trim());
+            assert_eq!(invocation.effect, SlashCommandEffect::ReadOnly);
+            assert!(invocation.queueable_while_running);
+        }
+        let registry = baseline_slash_commands();
+        let spec = registry
+            .iter()
+            .find(|spec| spec.name == "list-agents")
+            .unwrap();
+        assert!(spec.aliases.is_empty());
+    }
 
     #[test]
     /// Verifies the pending-approval browser is a canonical read-only command

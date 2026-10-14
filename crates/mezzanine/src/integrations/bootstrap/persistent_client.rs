@@ -202,19 +202,21 @@ mod tests {
     /// A shared-client byte revision must preserve every compiled historical
     /// upgrade, not just the oldest or immediate predecessor. Historical client
     /// data stays independent of active source and upgrade touches no authored
-    /// sibling configuration. Immediate revision-8 clients retain independent
-    /// request and transport bytes, as do all older compiled predecessors.
+    /// sibling configuration. Pi13 retains Pi12's unchanged resume transport,
+    /// with Pi11 and OpenCode10 independently frozen before resume support.
+    /// Revision8 request/transport bytes and every older predecessor remain exact.
     #[test]
     fn persistent_client_artifact_upgrade_retains_all_frozen_predecessors() {
         use super::super::installer::Operation;
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
-            assert_eq!(current.revision, if harness == "pi" { 12 } else { 11 });
+            assert_eq!(current.revision, if harness == "pi" { 13 } else { 11 });
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), if harness == "pi" { 10 } else { 22 });
+            assert_eq!(history.len(), if harness == "pi" { 11 } else { 22 });
             assert!(history.iter().any(|manifest| manifest.revision == 8));
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
+            assert_eq!(immediate.revision, if harness == "pi" { 12 } else { 10 });
             let frozen = immediate
                 .entries
                 .iter()
@@ -223,9 +225,33 @@ mod tests {
             assert_eq!(
                 frozen.artifact,
                 Artifact::File {
-                    bytes: include_bytes!("history/persistent_client_pre_resume.mjs").to_vec()
+                    bytes: if harness == "pi" {
+                        include_bytes!("persistent_client.mjs").to_vec()
+                    } else {
+                        include_bytes!("history/persistent_client_pre_resume.mjs").to_vec()
+                    }
                 }
             );
+            if harness == "pi" {
+                assert_eq!(history[1].revision, 11);
+                let pre_resume = history[1]
+                    .entries
+                    .iter()
+                    .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
+                    .unwrap();
+                assert_eq!(
+                    pre_resume.artifact,
+                    Artifact::File {
+                        bytes: include_bytes!("history/persistent_client_pre_resume.mjs").to_vec()
+                    }
+                );
+                assert!(
+                    history
+                        .iter()
+                        .map(|manifest| manifest.revision)
+                        .eq((2..=12).rev())
+                );
+            }
             let request = immediate
                 .entries
                 .iter()

@@ -2856,6 +2856,21 @@ impl RuntimeSessionService {
         self.presentation.settings.pane_frame_position = position;
     }
 
+    /// Removes every staged component after one synchronous pager adoption,
+    /// including failed rendering. No later response can borrow this capability.
+    pub(crate) fn discard_pending_record_browser_overlay(&mut self, pane_id: &str, command: &str) {
+        let key = (pane_id.to_string(), command.to_string());
+        self.presentation
+            .pending_record_browser_overlays
+            .remove(&key);
+        self.presentation
+            .pending_record_browser_overlay_sources
+            .remove(&key);
+        self.presentation
+            .pending_record_browser_overlay_stacks
+            .remove(&key);
+    }
+
     /// Registers typed browser state for a later agent-shell display response.
     pub(crate) fn register_pending_record_browser_overlay(
         &mut self,
@@ -3620,6 +3635,14 @@ impl RuntimeSessionService {
     /// Reports whether any typed record browser still awaits presentation.
     pub(crate) fn pending_record_browser_overlays_is_empty(&self) -> bool {
         self.presentation.pending_record_browser_overlays.is_empty()
+            && self
+                .presentation
+                .pending_record_browser_overlay_sources
+                .is_empty()
+            && self
+                .presentation
+                .pending_record_browser_overlay_stacks
+                .is_empty()
     }
 
     /// Returns the transient primary error status for product integration tests.

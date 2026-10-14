@@ -47,6 +47,20 @@ request admission, not the callback's earlier cwd/time, freezes project origin.
 Pending/deferred and unattributable auxiliary usage are not included; process-local
 unsent reports are not a durable cross-process spool. These are supported
 observations, never a full invoice or spend-completeness guarantee.
+Pi revision13 gives the same healthy observer a finite telemetry-only recovery
+window without another finalized vendor callback: initial delivery plus three
+shared callback/timer retries, timer offsets250/1000/4000ms and a5000ms monotonic
+dispatch horizon. Transport may finish later; frozen report UTC/origin/counters
+never change. Failure/teardown cancels future retries, and success does not erase
+the sticky epoch gap. Active-plus-pending slots are synchronously bounded at128;
+full pending capacity refuses new telemetry instead of evicting incurred reports.
+Closed/exhausted unknown-delivery slots remain process-local and can permanently
+saturate capacity until process exit, even across reload. This is not a durable
+outbox, invoice completeness or cross-process loss-recovery guarantee.
+Late readiness/report failures after teardown cannot create new diagnostics in
+a successor observer. Existing unfinished-close loss facts captured before
+retirement keep their original ordering; an in-flight ACK can settle only its
+original obligation, without reviving owner coverage.
 An unfinished Pi request is disclosed at a genuine new-run, settled-agent or
 session teardown boundary before its observer retires. No amount is charged
 without finalized counters, and previous totals remain intact; the retained

@@ -42,16 +42,41 @@ pub(crate) fn candidate_manifest() -> Manifest {
     entries.extend(super::persistent_client::entries("extensions/mezzanine"));
     Manifest {
         harness: "pi".into(),
-        revision: 12,
+        revision: 13,
         vendor_version: super::pi::RELEASE.into(),
         entries,
     }
 }
 
-/// Exact revision-11 layout before shared-client resume support. Pi-owned bytes
-/// are unchanged in revision 12; only shared transport is independently frozen.
-pub(super) fn historical_loss_manifest() -> Manifest {
+/// Exact revision-12 layout before finite pending-report recovery. Both changed
+/// Pi producer slots come from independent pre-edit snapshots; unchanged shared
+/// transport retains its original compiled bytes, not receipt-derived authority.
+pub(super) fn historical_resume_manifest() -> Manifest {
     let mut manifest = candidate_manifest();
+    manifest.revision = 12;
+    for entry in &mut manifest.entries {
+        let bytes = match entry.path.as_str() {
+            "extensions/mezzanine/pi_usage.mjs" => {
+                Some(include_bytes!("history/pi_usage_v12.mjs").as_slice())
+            }
+            "extensions/mezzanine/pi_persistent.mjs" => {
+                Some(include_bytes!("history/pi_persistent_v12.mjs").as_slice())
+            }
+            _ => None,
+        };
+        if let Some(bytes) = bytes {
+            entry.artifact = Artifact::File {
+                bytes: bytes.to_vec(),
+            };
+        }
+    }
+    manifest
+}
+
+/// Exact revision-11 layout before shared-client resume support. Pi-owned bytes
+/// are identical to independently frozen revision12, never active revision13.
+pub(super) fn historical_loss_manifest() -> Manifest {
+    let mut manifest = historical_resume_manifest();
     manifest.revision = 11;
     super::history::freeze_pre_resume_transport(&mut manifest);
     manifest

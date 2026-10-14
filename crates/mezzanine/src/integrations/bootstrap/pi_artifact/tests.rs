@@ -66,7 +66,7 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
     let previous = historical_manifest();
     let current = candidate_manifest();
     assert_eq!(previous.revision, 9);
-    assert_eq!(current.revision, 12);
+    assert_eq!(current.revision, 13);
     assert_eq!(previous.entries.len(), 10);
     let revision10 = historical_usage_manifest();
     assert_eq!(revision10.revision, 10);
@@ -74,6 +74,10 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
     assert!(super::super::compiled_history(&current).contains(&revision10));
     let revision11 = historical_loss_manifest();
     assert_eq!(revision11.revision, 11);
+    let revision12 = historical_resume_manifest();
+    assert_eq!(revision12.revision, 12);
+    assert!(super::super::compiled_history(&current).contains(&revision12));
+    assert!(super::super::compiled_history(&revision12).contains(&revision11));
     assert!(super::super::compiled_history(&current).contains(&revision11));
     assert!(super::super::compiled_history(&revision11).contains(&revision10));
     let mut altered11 = revision11.clone();
@@ -88,6 +92,14 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
     }
     assert!(super::super::compiled_history(&altered11).is_empty());
     for (bytes, expected) in [
+        (
+            include_bytes!("../history/pi_usage_v12.mjs").as_slice(),
+            "9ea319f42d99b8e1211b9707ac7e433082a160c85d2762f2941bf99f8a8b10fb",
+        ),
+        (
+            include_bytes!("../history/pi_persistent_v12.mjs").as_slice(),
+            "6b6ad7e56150865660d20705a35f373ee51ecc8e0f29bf53f0f9d941353bba00",
+        ),
         (
             include_bytes!("../history/pi_persistent_v10.mjs").as_slice(),
             "eb5e0bd7fc7ac984527b6d68c166375ce61e05a86feff7bea2c1b537d55a04a7",
@@ -125,6 +137,10 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
         .unwrap()
         .apply()
         .unwrap();
+    plan(&root, &revision12, Operation::Install)
+        .unwrap()
+        .apply()
+        .unwrap();
     plan(&root, &current, Operation::Install)
         .unwrap()
         .apply()
@@ -152,4 +168,54 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
         b"{\"authored\":true}\n"
     );
     std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Revision13 changes only the two independently frozen Pi producer slots.
+/// Revision11 must resolve those exact revision12 bytes rather than rebuilding
+/// them from active source; the shared transport differs only at its previously
+/// qualified resume boundary. Every compiled predecessor/file slot rejects byte
+/// tampering as historical authority, including receipt-selected revision labels.
+#[test]
+fn pi_revision13_history_preserves_frozen_slots_and_rejects_tampered_authority() {
+    let current = candidate_manifest();
+    let revision12 = historical_resume_manifest();
+    let revision11 = historical_loss_manifest();
+    assert_eq!(current.entries.len(), revision12.entries.len());
+    let changed = current
+        .entries
+        .iter()
+        .zip(&revision12.entries)
+        .filter_map(|(active, frozen)| (active != frozen).then_some(active.path.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        changed,
+        [
+            "extensions/mezzanine/pi_persistent.mjs",
+            "extensions/mezzanine/pi_usage.mjs"
+        ]
+    );
+    for (old, frozen) in revision11.entries.iter().zip(&revision12.entries) {
+        assert_eq!(old.path, frozen.path);
+        if !old.path.ends_with("/persistent_client.mjs") {
+            assert_eq!(old.artifact, frozen.artifact);
+        }
+    }
+    let history = super::super::compiled_history(&current);
+    assert_eq!(history.len(), 11);
+    assert_eq!(
+        history.iter().map(|item| item.revision).collect::<Vec<_>>(),
+        (2..=12).rev().collect::<Vec<_>>()
+    );
+    for manifest in std::iter::once(current).chain(history) {
+        for index in 0..manifest.entries.len() {
+            let mut altered = manifest.clone();
+            if let Artifact::File { bytes } = &mut altered.entries[index].artifact {
+                bytes.push(0);
+                assert!(
+                    super::super::compiled_history(&altered).is_empty(),
+                    "changed artifact bytes granted compiled historical authority"
+                );
+            }
+        }
+    }
 }

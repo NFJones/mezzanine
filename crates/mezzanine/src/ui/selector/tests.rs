@@ -1139,6 +1139,21 @@ fn selector_shadow_hint_completes_loop_flags() {
     assert_eq!(goal_hint.kind, SelectorCandidateKind::Flag);
 }
 
+/// The human agent browser has a separate literal session-scope option. Its
+/// command-name completion and parameter hint must not imply a project parser.
+#[test]
+fn selector_shadow_hint_completes_list_agents_and_literal_all() {
+    for (line, text, kind) in [
+        ("/list-ag", "ents", SelectorCandidateKind::Command),
+        ("/list-agents --a", "ll", SelectorCandidateKind::Flag),
+        ("/list-agents ", " [--all]", SelectorCandidateKind::Value),
+    ] {
+        let hint = shadow_hint(SelectorSurface::AgentCommand, line, line.len()).unwrap();
+        assert_eq!(hint.text, text, "{line}");
+        assert_eq!(hint.kind, kind, "{line}");
+    }
+}
+
 /// Verifies `/status` exposes its extended-report option as a transient shadow
 /// completion, allowing users to discover the additional status tables before
 /// accepting the flag with Tab.

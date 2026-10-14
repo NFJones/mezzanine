@@ -7,6 +7,7 @@
 //! modules own concrete slash-command behavior.
 
 use super::disposition::{AgentShellAwaitedCommand, command_execution_metadata};
+use super::list_agents::AgentPromptCommandCapture;
 use super::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellVisibility, EventKind, MezError,
     Result, RuntimeSessionService, RuntimeSideEffect, agent_shell_visibility_json_name,
@@ -48,11 +49,12 @@ impl AgentShellCommandOrigin {
 }
 
 /// Stable ingress metadata for one agent-shell command invocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AgentShellCommandIngress<'a> {
     target_pane_id: Option<&'a str>,
     origin: AgentShellCommandOrigin,
     defer_prompt_history_to_worker: bool,
+    /// Only the synchronous prompt renderer owns this local presentation slot.
+    prompt_capture: Option<&'a mut AgentPromptCommandCapture>,
 }
 
 /// Result of applying the live side effects for an agent-shell exit request.
@@ -302,6 +304,7 @@ impl RuntimeSessionService {
                 target_pane_id: None,
                 origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
                 defer_prompt_history_to_worker: false,
+                prompt_capture: None,
             },
             input,
             input,
@@ -310,23 +313,27 @@ impl RuntimeSessionService {
         )
     }
 
-    /// Executes one attached-terminal prompt command with adapter-owned worker dispatch.
+    /// Executes one exact-pane prompt with a renderer-local capture. Generic
+    /// primary-input APIs and control calls never acquire this presentation slot.
     pub(crate) fn execute_attached_agent_shell_command(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         input: &str,
+        capture: &mut AgentPromptCommandCapture,
     ) -> Result<String> {
+        let queue_external_effects = capture.queue_external_effects;
         self.execute_agent_shell_command_with_origin(
             primary_client_id,
             AgentShellCommandIngress {
                 target_pane_id: Some(pane_id),
                 origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
-                defer_prompt_history_to_worker: true,
+                defer_prompt_history_to_worker: queue_external_effects,
+                prompt_capture: Some(capture),
             },
             input,
             input,
-            true,
+            queue_external_effects,
             ReadlineHistoryEntry::literal(input),
         )
     }
@@ -339,17 +346,20 @@ impl RuntimeSessionService {
         input: &str,
         display_input: &str,
         collapsed_paste_ranges: &[mez_mux::readline::ReadlinePasteRange],
+        capture: &mut AgentPromptCommandCapture,
     ) -> Result<String> {
+        let queue_external_effects = capture.queue_external_effects;
         self.execute_agent_shell_command_with_origin(
             primary_client_id,
             AgentShellCommandIngress {
                 target_pane_id: Some(pane_id),
                 origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
-                defer_prompt_history_to_worker: true,
+                defer_prompt_history_to_worker: queue_external_effects,
+                prompt_capture: Some(capture),
             },
             input,
             display_input,
-            true,
+            queue_external_effects,
             ReadlineHistoryEntry {
                 text: input.to_string(),
                 collapsed_paste_ranges: collapsed_paste_ranges.to_vec(),
@@ -391,6 +401,7 @@ impl RuntimeSessionService {
                 target_pane_id: None,
                 origin: AgentShellCommandOrigin::AuthenticatedControlRequest,
                 defer_prompt_history_to_worker: false,
+                prompt_capture: None,
             },
             input,
             input,
@@ -414,6 +425,7 @@ impl RuntimeSessionService {
                 target_pane_id: None,
                 origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
                 defer_prompt_history_to_worker: false,
+                prompt_capture: None,
             },
             input,
             display_input,
@@ -440,6 +452,7 @@ impl RuntimeSessionService {
             target_pane_id,
             origin,
             defer_prompt_history_to_worker,
+            prompt_capture,
         } = ingress;
         self.require_live()?;
         if !self.session.is_attached_primary(primary_client_id) {
@@ -504,6 +517,7 @@ impl RuntimeSessionService {
                         | "show-context"
                         | "show-memories"
                         | "show-approvals"
+                        | "list-agents"
                         | "show-issues"
                         | "list-macros"
                         | "list-skills"
@@ -662,6 +676,21 @@ impl RuntimeSessionService {
                 &pane_id,
                 command,
                 input,
+            );
+        }
+        // Keep the new human browser's local capability and builder temporaries
+        // outside the generic command/steering result closure. Admission and
+        // execution-disposition selection above still own every ingress check.
+        if matches!(outcome.as_ref(), Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) if command == "list-agents")
+        {
+            return self.execute_agent_shell_list_agents_response(
+                primary_client_id,
+                &pane_id,
+                input,
+                slash_invocation
+                    .as_ref()
+                    .map(|invocation| invocation.args.as_str()),
+                prompt_capture,
             );
         }
         let exit_requires_runtime = outcome.as_ref().is_some_and(|outcome| {
@@ -1345,6 +1374,7 @@ impl RuntimeSessionService {
                 target_pane_id: Some(pane_id),
                 origin: AgentShellCommandOrigin::TrustedPaneStatusAction,
                 defer_prompt_history_to_worker: false,
+                prompt_capture: None,
             },
             input,
             input,
@@ -1367,6 +1397,7 @@ impl RuntimeSessionService {
                     target_pane_id: None,
                     origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
                     defer_prompt_history_to_worker: false,
+                    prompt_capture: None,
                 },
                 input,
                 input,

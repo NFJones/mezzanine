@@ -984,7 +984,7 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "list-personalities"
         | "refresh-provider-info"
         | "sandbox" => "configuration",
-        "help" | "list-macros" | "list-mcp" | "list-skills" => "discovery",
+        "help" | "list-agents" | "list-macros" | "list-mcp" | "list-skills" => "discovery",
         _ => "work control",
     }
 }
@@ -1016,6 +1016,9 @@ fn agent_shell_command_description(name: &str) -> &'static str {
             "set pane or native shell execution mode; use --global to persist the selected mode."
         }
         "list-macros" => "list available macros and their #macro prompt names.",
+        "list-agents" => {
+            "open the human agent browser for the current trusted project; --all shows all current session registrations."
+        }
         "name-session" => "assign or replace the current conversation's durable display name.",
         "list-skills" => "list available skills and their $skill prompt names.",
         "sync-builtin-skills" => {
@@ -1229,6 +1232,17 @@ pub fn agent_shell_visibility_name(visibility: AgentShellVisibility) -> &'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The human current-project browser belongs to discovery, and its help
+    /// must distinguish a literal all-session option from model discovery.
+    #[test]
+    fn agent_shell_help_describes_list_agents_project_and_all() {
+        assert_eq!(agent_shell_command_category("list-agents"), "discovery");
+        let help = agent_shell_help_display();
+        assert!(help.contains("`/list-agents`"), "{help}");
+        assert!(help.contains("current trusted project"), "{help}");
+        assert!(help.contains("--all"), "{help}");
+    }
 
     /// Verifies command help warns that host access bypasses the configured
     /// sandbox instead of presenting it as an ordinary prompt policy.

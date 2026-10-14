@@ -188,6 +188,7 @@ impl RuntimeSessionService {
                     browser,
                     RuntimeRecordBrowserOverlaySource::Agents {
                         client_id: client.as_str().into(),
+                        query: crate::runtime::control::agent_browser::AgentBrowserQuery::All,
                         targets,
                         confirmation: None,
                     },

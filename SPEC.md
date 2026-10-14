@@ -1307,9 +1307,15 @@ remain uncharged coverage gaps, never invoice-completeness claims.
 The immutable normalized report and reporting-publication UTC MUST be frozen
 once after readiness and reused on every telemetry-only retry. Observer reload
 MUST NOT transfer original client-local tickets or credentials to a successor.
-Process-owned recent metadata MUST be bounded at 128; eviction abandons only the
-original ticket with unknown-delivery semantics, never mints new authority or
-erases daemon deduplication. Unmatched historical/resume/fork callbacks MUST NOT
+Pi revision13 MUST synchronously reserve a process-owned active-plus-pending slot
+before asynchronous begin. The shared recent map MUST remain bounded at128 across
+settlement/reload; only definitively durable historical dedup evidence may be
+pruned. Full pending capacity MUST refuse new telemetry admission and disclose
+the existing readiness gap without delaying provider work. Pending incurred
+obligations MUST NOT be abandoned for space or conflicting callback replay.
+Unknown-delivery closed/exhausted slots may permanently saturate128 until process
+exit; this bounded retention is not a durable outbox or no-gap guarantee.
+Unmatched historical/resume/fork callbacks MUST NOT
 allocate expense. Before a genuine `agent_start`, `agent_settled` or supported
 session shutdown releases an unfinished accounting slot, the producer MUST queue
 the existing content-free finalized-counters gap before original-ticket
@@ -1321,6 +1327,31 @@ amounts, definite noncommit or a lifecycle outcome. Native
 stream grouping remains shared provider/model/project/category coverage, never
 one epoch or source per message. Cross-process unsent spool recovery is not
 supported; lost process-local metadata cannot be recovered by importing history.
+The SAME healthy ordinary Pi observer MAY recover a retained finalized report
+without another vendor callback using one unreferenced telemetry-only timer and
+at most one observer-wide queued/running recovery operation. Initial delivery
+plus at most three further `endRequest` calls MUST share one immutable slot budget
+across timer and genuine exact callbacks (the unchanged core permits at most two
+wire attempts per call: at most8 ends and9 original-marker begins total).
+Timer eligibility offsets are250/1000/4000ms after the first undurable result;
+every retry MUST recheck the absolute5000ms monotonic dispatch horizon inside the
+queue. Delayed work MUST NOT catch up in a burst; remaining backoff spacing is
+preserved. The horizon bounds dispatch, not in-flight completion. No trigger may
+reset the budget/horizon, rewrite reporting UTC, or mint a marker/source/session.
+Only original client/ticket/readiness/origin/projection/report bytes may retry;
+provider requests and synthetic lifecycle/gap-baseline facts MUST NOT be replayed.
+Exhaustion retains truthful delivery-unknown coverage and the original obligation.
+Failure, cancellation, settlement/shutdown/reload and stale-owner replacement
+MUST cancel future timers and fence captured/queued recovery closures. A genuine
+new run may open new slots but MUST NOT revive closed original slots. Already
+queued initial finalization MUST retain loss-before-retirement ordering even if
+readiness/report construction is pending. An in-flight typed ACK may settle its
+original obligation but MUST NOT restore failed/stale/closed owner status.
+New asynchronous readiness, report-clock or delivery failure diagnostics MUST
+recheck the captured current healthy/nonclosed slot before changing coverage or
+queueing a gap. A late old-owner result MUST NOT contaminate successor/shared
+coverage. This fence MUST preserve synchronously captured unfinished-close loss
+facts already ordered before original abandonment and lifecycle retirement.
 The existing capability-scoped Pi observation lane MAY accept a typed
 `usage_gap` with an allowlisted content-free reason. It MUST update only sticky
 observer-epoch coverage diagnostics shown in `/status`, including after prior
@@ -3498,6 +3529,62 @@ operations that have an agent slash-command equivalent, including provider
 logout, project trust decisions, permission profile display or
 mutation, command-rule management, approval-bypass control, and approval-mode
 selection, MUST NOT be duplicated as terminal commands.
+
+The shared human agent-management browser MUST support typed `All` and
+`CurrentProject` snapshots. `All` means current session registrations, not saved
+conversations or other sessions. The argument-free colon `:list-agents` MUST
+remain explicitly `All`. The agent-shell `/list-agents` MUST open the same typed
+interactive browser with `CurrentProject` by default; `/list-agents --all` MUST
+select `All`. Slash arguments MUST be empty or one literal `--all`, rejecting
+duplicates, unknown flags, operands, quoted or escaped spellings and malformed
+flags with pane-local `usage: /list-agents [--all]`. Colon grammar stays unchanged.
+
+Slash opening MUST be read-only, queueable and compaction-safe, working within
+an existing visible agent prompt during idle, running, blocked, waiting, paused
+or compacting work without provider calls, new turns/conversations, unpause,
+interruption, continuation, focus or input forwarding. The authenticated primary
+and actual invocation pane MUST be captured before command work, not inferred
+from later global focus. A renderer-local typed capture MUST carry the exact
+snapshot/query/targets through the existing pending pager handoff once, fenced
+by client, pane, process/conversation owner and interaction action generation.
+Only successful matching pager adoption MAY stage typed browser state; failure,
+stale ownership, malformed output or nonmatching output MUST discard it. Direct
+and control/textual calls MUST return the existing display contract without
+residual typed state available to a later attached request. Later explicit
+native admin controls retain their ordinary independent authorization; external
+rows remain focus-only. Filtering grants neither control authority nor MMP scope.
+Textual slash display MUST include the rendered nonsensitive unavailable-origin
+reason and literal `--all` hint. Raw browser copy/save exports MUST retain their
+existing distinction from transient diagnostic chrome; this does not change
+the retained records, column/metadata parity or administrative action targets.
+
+`CurrentProject` MUST capture its authenticated attached-primary client and exact
+invoking pane's process incarnation and current conversation owner before the
+query. Its cohort MUST use exact typed canonical current trusted project-root
+equality, never display labels, cwd prefixes, MMP membership, accounting origin,
+delegation lineage or vendor workspace. An unregistered invoking pane MUST still
+be resolved. Missing, unknown, rejected, revoked, pending or failed provenance
+MUST NOT match another unavailable project. An unavailable origin MUST produce
+an explicitly empty scoped view with a nonsensitive reason and an All/`--all`
+hint, never fall back to session scope or later active focus. A destroyed,
+reused or ownership-replaced origin MUST remain unavailable for that retained
+query; a new invocation is required to capture a replacement owner.
+
+Each snapshot MUST refresh trust once before capturing action targets and cache
+project resolution by pane, including the origin, only within that snapshot.
+Separate native, internal, subagent and qualified external registrations sharing
+one pane MUST retain separate IDs. Both records and retained action targets MUST
+be filtered before browser construction, without a row cap. Search, save, copy,
+paint and reflow MUST operate only on the filtered snapshot without new project
+lookups. Every refresh, administrative operation and retained reconstruction MUST
+preserve the typed query and original origin, search, viewport and valid selected
+ID, retiring stale action generations and close confirmations.
+
+Canonical symlink aliases therefore match; a nested trusted root differs from
+its trusted ancestor. A broad trusted ancestor may group multiple repositories,
+while separate worktrees and moved children may differ despite retained MMP
+parent membership. This relation is a human view convenience, NOT a permission
+grant, MMP audience change, accounting reattribution or native control right.
 
 The baseline commands MUST have the following semantics:
 
@@ -11899,6 +11986,11 @@ The baseline command capabilities are:
   approval bypass state.
 - `/show-approvals`: Browse pending approvals for the live session. It MAY
   accept one approval id to open that request directly.
+- `/list-agents`: Open the human interactive agent browser for the actual
+  invoking pane's current trusted project. One literal `--all` includes all
+  current session registrations, without the model discovery cap or saved
+  `/resume` conversations. Opening is a read-only diagnostic; later explicit
+  browser controls use existing independent native authorization.
 - `/approval`: Inspect or set the pane-subtree approval mode. It MUST accept
   `ask`, `auto-allow`, `full-access`, or `host-access`, and MUST accept
   `inherit` or `clear` to remove the issuing pane's explicit override.
@@ -12215,6 +12307,14 @@ The baseline command capabilities are:
   links using the standard pager link-selection treatment. It MUST provide
   detail and empty states, preserve generic `/` search, use `a` to approve the
   request represented by the focused link once, and use `d` to deny it.
+- `/list-agents`: Reuse the same typed human browser as argument-free
+  `:list-agents`, with current-project default and literal `--all` for session
+  scope. Columns, metadata, lifecycle controls, stable-ID keyboard/mouse
+  activation, search/copy/save/resize and refresh MUST reuse the existing browser
+  contracts. Every refresh and admin reconstruction MUST retain the original
+  query/owner and retire removed targets and armed confirmation without
+  transferring action to a neighboring record. Search/save typing takes
+  precedence over `i`, `p`, `d` and `r` administration.
 - `/show-context`: Browse durable transcript entries for the current pane conversation
   in transcript order. Its list MUST be a table with one selectable stable
   sequence-id link per entry. Existing record-browser Created/Updated values

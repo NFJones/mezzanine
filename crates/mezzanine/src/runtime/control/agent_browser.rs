@@ -4,6 +4,11 @@
 //! Display text is inert; retained identities, root incarnations and task targets
 //! authorize explicit activation only. Confirmation never follows a neighboring
 //! row after refresh. External agents have focus but no native lifecycle controls.
+//! Typed project membership uses current trusted canonical roots, independently
+//! of display labels, MMP audience and accounting. A scoped query retains its
+//! authenticated origin incarnation/owner, never follows focus, and fails empty
+//! if that owner becomes unavailable. Snapshot-local pane caching is the only
+//! project lookup boundary; filtering precedes records AND operation targets.
 
 use super::agent_lifecycle::RuntimeAgentLifecycleTarget;
 use crate::error::{MezError, Result};
@@ -12,6 +17,7 @@ use crate::runtime::{AgentTurnState, RuntimeSessionService};
 use mez_core::ids::ClientId;
 use mez_mux::record_browser::{RecordBrowser, RecordBrowserRecord};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 #[cfg(test)]
 thread_local! {
@@ -25,10 +31,44 @@ pub(crate) fn take_agent_browser_project_lookup_counts() -> (usize, usize) {
     PROJECT_LOOKUPS.with(|counts| counts.replace((0, 0)))
 }
 
-/// Inert project labels qualified only during browser snapshot construction.
-/// No accounting mapping, MMP audience, pane title or vendor path grants a label.
+/// Human snapshot scope, distinct from model/MMP discovery and authorization.
+/// CurrentProject can only be captured by authenticated runtime ingress; its
+/// opaque owner is retained through refresh rather than synthesized from focus.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AgentBrowserQuery {
+    /// Every current session registration, uncapped and not saved conversations.
+    All,
+    /// Exact current trusted root membership for one captured invoking owner.
+    /// Out-of-line immutable evidence bounds the enclosing overlay/actor layout;
+    /// All stays allocation-free. Clone/equality retain the same exact owner.
+    CurrentProject(Box<AgentBrowserOrigin>),
+}
+
+/// Captured client/pane ownership, not a model-supplied project expression.
+/// Missing process evidence stays missing for the lifetime of this query; a
+/// future replacement cannot retroactively supply its origin incarnation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AgentBrowserOrigin {
+    /// Authenticated attached primary that captured this origin.
+    client: ClientId,
+    /// Exact invocation pane, even when it has no agent registration.
+    pane: String,
+    /// Kernel-backed preferred process owner observed at capture.
+    process: Option<RuntimePaneProcessIdentity>,
+    /// Native conversation owner, including explicit absence on normal terminals.
+    conversation: Option<String>,
+}
+
+/// Canonical trusted filesystem root; lossy display conversion is never equality.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentBrowserProjectRoot(PathBuf);
+
+/// Snapshot-qualified project identity and inert display/provenance metadata.
+/// No accounting mapping, MMP audience, pane title or vendor path grants identity.
 #[derive(Clone)]
 struct AgentBrowserProject {
+    /// Present only for a currently trusted canonical root, never for unknowns.
+    root: Option<AgentBrowserProjectRoot>,
     /// Full canonical trusted root, known absence, or unavailable evidence.
     label: String,
     /// Bounded provenance fact, separate from the visible table column.
@@ -39,6 +79,7 @@ impl AgentBrowserProject {
     /// Reports unavailable evidence without disclosing failed path diagnostics.
     fn unavailable() -> Self {
         Self {
+            root: None,
             label: "unavailable".into(),
             status: "unavailable".into(),
         }
@@ -65,6 +106,53 @@ pub(crate) struct AgentCloseConfirmation {
 }
 
 impl RuntimeSessionService {
+    /// Captures CurrentProject at authenticated human ingress, before querying.
+    /// Missing pane/process evidence is retained as an unavailable origin rather
+    /// than returning All or adopting a future owner. Non-primary callers fail.
+    #[allow(dead_code)] // Typed foundation consumed by the dependent slash ingress.
+    pub(crate) fn current_project_agent_browser_query(
+        &self,
+        client: &ClientId,
+        pane: &str,
+    ) -> Result<AgentBrowserQuery> {
+        self.require_live()?;
+        if !self.session.is_attached_primary(client) {
+            return Err(MezError::forbidden(
+                "agent management requires attached primary",
+            ));
+        }
+        Ok(AgentBrowserQuery::CurrentProject(Box::new(
+            AgentBrowserOrigin {
+                client: client.clone(),
+                pane: pane.to_string(),
+                process: self
+                    .find_pane_descriptor(pane)
+                    .and_then(|_| self.pane_process_identity(pane).ok()),
+                conversation: self
+                    .agent_shell_store()
+                    .get(pane)
+                    .map(|session| session.session_id.clone()),
+            },
+        )))
+    }
+
+    /// Checks the same preferred process incarnation and conversation owner.
+    /// Comparing a fresh preferred observation rejects an old foreground owner
+    /// still visible under a new root; executable changes within one incarnation
+    /// are not replacements. Missing capture evidence never binds later work.
+    fn agent_browser_origin_is_current(&self, origin: &AgentBrowserOrigin) -> bool {
+        self.find_pane_descriptor(&origin.pane).is_some()
+            && origin.process.as_ref().is_some_and(|captured| {
+                self.pane_process_identity(&origin.pane)
+                    .is_ok_and(|current| captured.same_incarnation(&current))
+            })
+            && self
+                .agent_shell_store()
+                .get(&origin.pane)
+                .map(|session| session.session_id.as_str())
+                == origin.conversation.as_deref()
+    }
+
     /// Resolves inert execution evidence for one exact registered identity.
     /// External launch metadata takes precedence on shared panes. Native evidence
     /// requires the pane-derived identity and a qualified current conversation;
@@ -162,10 +250,29 @@ impl RuntimeSessionService {
         &mut self,
         client: &ClientId,
     ) -> Result<(RecordBrowser, BTreeMap<String, AgentBrowserTarget>)> {
+        self.agent_management_browser_for_query(client, &AgentBrowserQuery::All)
+    }
+
+    /// Builds one typed human snapshot, filtering records and targets together.
+    /// Reconciliation/trust refresh precede capture, and one snapshot-local cache
+    /// resolves each pane at most once, including an unregistered origin. Scope
+    /// failure returns an explicitly empty browser, never an All/focus fallback.
+    pub(crate) fn agent_management_browser_for_query(
+        &mut self,
+        client: &ClientId,
+        query: &AgentBrowserQuery,
+    ) -> Result<(RecordBrowser, BTreeMap<String, AgentBrowserTarget>)> {
         self.require_live()?;
         if !self.session.is_attached_primary(client) {
             return Err(MezError::forbidden(
                 "agent management requires attached primary",
+            ));
+        }
+        if let AgentBrowserQuery::CurrentProject(origin) = query
+            && &origin.client != client
+        {
+            return Err(MezError::forbidden(
+                "agent browser origin belongs to another primary",
             ));
         }
         // Refresh may reconcile runtime authority; do it before capturing any
@@ -183,7 +290,33 @@ impl RuntimeSessionService {
         let mut targets = BTreeMap::new();
         let mut records = Vec::new();
         let mut projects = BTreeMap::<String, AgentBrowserProject>::new();
+        let mut unavailable_reason = None;
+        let origin_root = match query {
+            AgentBrowserQuery::All => None,
+            AgentBrowserQuery::CurrentProject(origin) => {
+                let project = if self.agent_browser_origin_is_current(origin) {
+                    self.agent_browser_project(&origin.pane, trust_available)
+                } else {
+                    unavailable_reason =
+                        Some("invoking pane incarnation or owner unavailable".to_string());
+                    AgentBrowserProject::unavailable()
+                };
+                if project.root.is_none() && unavailable_reason.is_none() {
+                    unavailable_reason = Some(if trust_available {
+                        project.status.clone()
+                    } else {
+                        "trust refresh failed".into()
+                    });
+                }
+                let root = project.root.clone();
+                projects.insert(origin.pane.clone(), project);
+                root
+            }
+        };
         for identity in self.message_service().discover_agents() {
+            if matches!(query, AgentBrowserQuery::CurrentProject(_)) && origin_root.is_none() {
+                break;
+            }
             let id = identity.agent_id.as_str().to_string();
             let external = self.external_agent_metadata(&id);
             if identity
@@ -204,6 +337,13 @@ impl RuntimeSessionService {
             } else {
                 AgentBrowserProject::unavailable()
             };
+            if matches!(query, AgentBrowserQuery::CurrentProject(_))
+                && !origin_root
+                    .as_ref()
+                    .is_some_and(|root| project.root.as_ref() == Some(root))
+            {
+                continue;
+            }
             let session = pane.and_then(|pane| self.agent_shell_store().get(pane));
             let process = pane
                 .filter(|_| descriptor.is_some())
@@ -354,7 +494,11 @@ impl RuntimeSessionService {
                 },
             );
         }
-        let mut browser = RecordBrowser::new("Live session agents", records, Vec::new())?;
+        let title = match query {
+            AgentBrowserQuery::All => "Live session agents",
+            AgentBrowserQuery::CurrentProject(_) => "Current project agents",
+        };
+        let mut browser = RecordBrowser::new(title, records, Vec::new())?;
         browser.set_table_columns(vec![
             "Name".into(),
             "Kind".into(),
@@ -370,7 +514,11 @@ impl RuntimeSessionService {
             "Project".into(),
         ]);
         browser.set_help(Some("**Keys:** Enter focus · i interrupt · p pause/resume · d confirm close · r refresh · / search · s save · Esc dismiss. Children may continue while their parent is paused.".into()), None);
-        if !trust_available {
+        if let Some(reason) = unavailable_reason {
+            browser.set_error(Some(format!(
+                "Current project unavailable ({reason}). Use All (`--all`) or :list-agents."
+            )));
+        } else if !trust_available {
             browser.set_error(Some(
                 "Project trust refresh failed; project labels unavailable.".into(),
             ));
@@ -413,9 +561,11 @@ impl RuntimeSessionService {
         match provenance {
             ProjectTrustProvenance::TrustedRoot(root) => AgentBrowserProject {
                 label: root.to_string_lossy().into_owned(),
+                root: Some(AgentBrowserProjectRoot(root)),
                 status: "trusted".into(),
             },
             other => AgentBrowserProject {
+                root: None,
                 label: "—".into(),
                 status: other.withheld_provenance().unwrap_or("no-decision").into(),
             },

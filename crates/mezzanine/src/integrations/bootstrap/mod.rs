@@ -234,12 +234,19 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         manifest.harness == "pi" && *manifest == pi_artifact::historical_usage_manifest();
     let revision11_pi =
         manifest.harness == "pi" && *manifest == pi_artifact::historical_loss_manifest();
-    if !current_pi && !revision10_pi && !revision11_pi && *manifest != current && !opencode_history
+    let revision12_pi =
+        manifest.harness == "pi" && *manifest == pi_artifact::historical_resume_manifest();
+    if !current_pi
+        && !revision10_pi
+        && !revision11_pi
+        && !revision12_pi
+        && *manifest != current
+        && !opencode_history
     {
         return Vec::new();
     }
     let revision8_client = if manifest.harness == "pi" || opencode_history {
-        let mut snapshot = if current_pi || revision10_pi || revision11_pi {
+        let mut snapshot = if current_pi || revision10_pi || revision11_pi || revision12_pi {
             current.clone()
         } else {
             manifest.clone()
@@ -251,7 +258,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         None
     };
     let last_current = if manifest.harness == "pi" || opencode_history {
-        let mut snapshot = if current_pi || revision10_pi || revision11_pi {
+        let mut snapshot = if current_pi || revision10_pi || revision11_pi || revision12_pi {
             current.clone()
         } else {
             manifest.clone()
@@ -339,14 +346,17 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         if let Some(revision8_client) = revision8_client {
             history.insert(0, revision8_client);
         }
-        if current_pi || revision10_pi || revision11_pi {
+        if current_pi || revision10_pi || revision11_pi || revision12_pi {
             history.insert(0, pi_artifact::historical_manifest());
         }
-        if current_pi || revision11_pi {
+        if current_pi || revision11_pi || revision12_pi {
             history.insert(0, pi_artifact::historical_usage_manifest());
         }
-        if current_pi {
+        if current_pi || revision12_pi {
             history.insert(0, pi_artifact::historical_loss_manifest());
+        }
+        if current_pi {
+            history.insert(0, pi_artifact::historical_resume_manifest());
         }
         if opencode_history {
             history.insert(
