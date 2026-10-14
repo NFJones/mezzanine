@@ -69,6 +69,7 @@ impl RuntimeSessionService {
                     })
                     .collect(),
                     copy_lines: Vec::new(),
+                    raw_copy_sources: Vec::new(),
                 }
             })
         });
@@ -98,6 +99,7 @@ impl RuntimeSessionService {
                             .map(|line| line.display.clone())
                             .collect(),
                         rendered_lines,
+                        raw_copy_sources: Vec::new(),
                     },
                 )
             })
@@ -135,6 +137,7 @@ impl RuntimeSessionService {
                             style: AgentTerminalPresentationStyle::Status,
                             rendered_lines,
                             copy_lines: Vec::new(),
+                            raw_copy_sources: Vec::new(),
                         },
                     )
                 })
@@ -160,6 +163,7 @@ impl RuntimeSessionService {
                         style: AgentTerminalPresentationStyle::Status,
                         rendered_lines,
                         copy_lines: Vec::new(),
+                        raw_copy_sources: Vec::new(),
                     },
                 )
             })
@@ -178,6 +182,7 @@ impl RuntimeSessionService {
         }
         let mut first_line = true;
         let mut occurrence_ranges = Vec::new();
+        let mut source_plans = Vec::new();
         if let Some(projection) = rationale_projection.as_ref() {
             let start = bytes.len();
             for line in &projection.rendered_lines {
@@ -278,6 +283,41 @@ impl RuntimeSessionService {
                     first_line = false;
                 }
                 if let Some(entry) = entry.filter(|_| start < bytes.len()) {
+                    let whole = work.outbound_messages.get(&action_index).filter(|message| {
+                        message.entry.as_ref().is_some_and(|owner| {
+                            owner.id == entry.id && owner.occurrence == entry.occurrence
+                        }) && runtime_peer_message_presentation_is_markdown(Some(
+                            &message.content_type,
+                        ))
+                    });
+                    let plan = whole
+                        .map(|message| {
+                            crate::host::terminal::source_copy::CopySourcePlan::WholeEntry(
+                                message.text.trim_end_matches(['\r', '\n']),
+                            )
+                        })
+                        .unwrap_or(crate::host::terminal::source_copy::CopySourcePlan::Blocks(
+                            &projection.raw_copy_sources,
+                        ));
+                    let sources = crate::host::terminal::source_copy::source_associations(
+                        &entry,
+                        &projection.rendered_lines,
+                        &projection.copy_lines,
+                        plan,
+                        &[],
+                    )?
+                    .into_iter()
+                    .map(|source| {
+                        source.map(|source| {
+                            mez_terminal::TerminalCopySource::projected(
+                                source.id.clone(),
+                                source.text.clone(),
+                                work.revision,
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                    source_plans.push((entry.clone(), sources));
                     occurrence_ranges.push((start..bytes.len(), entry));
                 }
                 if projection.copy_lines.is_empty() {
@@ -299,6 +339,13 @@ impl RuntimeSessionService {
         )?;
         if has_projection_copy_lines {
             candidate.set_recent_normal_copy_texts(&projection_copy_lines, AGENT_COPY_SKIP_LINE);
+        }
+        for (owner, sources) in source_plans {
+            if !candidate.set_recent_normal_copy_source_associations(&owner, &sources) {
+                return Err(MezError::invalid_state(
+                    "streamed source association targets changed owner",
+                ));
+            }
         }
         let mut projected_actions = say_projections
             .iter()

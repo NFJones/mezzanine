@@ -581,6 +581,10 @@ pub struct StyledCopyMode {
     buffer: CopyBuffer,
     style_spans: Vec<Vec<mez_terminal::TerminalStyleSpan>>,
     copy_overrides: Vec<Option<String>>,
+    /// Shared immutable source ownership matching these exact frozen rows.
+    copy_sources: Vec<Option<std::sync::Arc<mez_terminal::TerminalCopySource>>>,
+    /// Legacy never-framed views retain their established copy-byte contract.
+    source_associations_enabled: bool,
     alternate_screen_was_active: bool,
 }
 
@@ -617,6 +621,7 @@ impl StyledCopyMode {
             screen.alternate_screen_active(),
         )?;
         copy.buffer.log_frames = frames;
+        copy.source_associations_enabled = screen.uses_presentation_copy_associations();
         Ok(copy)
     }
 
@@ -624,24 +629,28 @@ impl StyledCopyMode {
     pub fn from_screen(screen: &TerminalScreen, viewport_rows: usize) -> Result<Self> {
         let styled_lines = screen.normal_styled_content_lines();
         let (scroll_top, cursor) = initial_copy_mode_view(screen, &styled_lines, viewport_rows);
-        Self::new(
+        let mut copy = Self::new(
             styled_lines,
             viewport_rows,
             scroll_top,
             cursor,
             screen.alternate_screen_active(),
-        )
+        )?;
+        copy.source_associations_enabled = screen.uses_presentation_copy_associations();
+        Ok(copy)
     }
 
     /// Builds copy state from only the currently visible terminal rows.
     pub fn from_visible_screen(screen: &TerminalScreen, viewport_rows: usize) -> Result<Self> {
-        Self::new(
+        let mut copy = Self::new(
             screen.visible_styled_lines(),
             viewport_rows,
             0,
             CopyPosition { line: 0, column: 0 },
             screen.alternate_screen_active(),
-        )
+        )?;
+        copy.source_associations_enabled = screen.uses_presentation_copy_associations();
+        Ok(copy)
     }
 
     /// Builds styled copy state from explicit terminal rows.
@@ -655,21 +664,27 @@ impl StyledCopyMode {
         let mut lines = Vec::with_capacity(styled_lines.len());
         let mut style_spans = Vec::with_capacity(styled_lines.len());
         let mut copy_overrides = Vec::with_capacity(styled_lines.len());
+        let mut copy_sources = Vec::with_capacity(styled_lines.len());
         for line in styled_lines {
             let copy_override = line.copy_text.filter(|copy_text| copy_text != &line.text);
             lines.push(line.text);
             style_spans.push(line.style_spans);
             copy_overrides.push(copy_override);
+            copy_sources.push(line.copy_source);
         }
         Ok(Self {
             buffer: CopyBuffer::new(lines, viewport_rows, scroll_top, cursor)?,
             style_spans,
             copy_overrides,
+            copy_sources,
+            source_associations_enabled: true,
             alternate_screen_was_active,
         })
     }
 
     /// Returns the underlying navigation and selection state.
+    ///
+    /// Typed source payloads remain owned by this snapshot, not the live screen.
     pub fn buffer(&self) -> &CopyBuffer {
         &self.buffer
     }
@@ -680,6 +695,8 @@ impl StyledCopyMode {
     }
 
     /// Returns source-aware copy text for one row, falling back to display text.
+    ///
+    /// Legacy string carriers remain independent of typed source associations.
     pub fn copy_line(&self, line: usize) -> Option<&str> {
         self.copy_overrides
             .get(line)
@@ -687,7 +704,42 @@ impl StyledCopyMode {
             .or_else(|| self.buffer.lines().get(line).map(String::as_str))
     }
 
+    /// Returns typed source ownership matching one frozen row. Never-framed
+    /// legacy snapshots deliberately retain their established string contract.
+    pub fn copy_source(&self, line: usize) -> Option<&mez_terminal::TerminalCopySource> {
+        self.source_associations_enabled
+            .then(|| self.copy_sources.get(line)?.as_deref())
+            .flatten()
+    }
+
+    /// Rejects mixed immutable generations or payloads under one semantic ID.
+    /// Revision is not another occurrence; conflicts cannot fall back to legacy
+    /// source strings. Rendered copy and navigation do not consume this check.
+    pub fn validate_copy_sources(&self) -> Result<()> {
+        if !self.source_associations_enabled {
+            return Ok(());
+        }
+        let mut seen = std::collections::BTreeMap::new();
+        for source in self.copy_sources.iter().flatten() {
+            if let Some(previous) = seen.insert(&source.id, source.as_ref()) {
+                if previous.generation != source.generation
+                    || (!std::sync::Arc::ptr_eq(&previous.text, &source.text)
+                        && previous.text != source.text)
+                {
+                    return Err(MuxError::invalid_args(
+                        "copy snapshot contains conflicting source generations",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Builds styled rows currently visible in the copy viewport.
+    ///
+    /// Source groups are validated before explicit source-copy consumption.
+    ///
+    /// Source metadata stays local to this frozen snapshot and is not wire text.
     ///
     /// Copy mode retains one complete display-text set. Only the bounded
     /// viewport is cloned for rendering, avoiding a second full-history text
@@ -698,6 +750,7 @@ impl StyledCopyMode {
                 text: self.buffer.lines()[line].clone(),
                 style_spans: self.style_spans[line].clone(),
                 copy_text: self.copy_overrides[line].clone(),
+                copy_source: self.copy_sources[line].clone(),
                 presentation: None,
             })
             .collect()

@@ -390,6 +390,7 @@ fn streaming_outbound_message_projection_with_theme(
         style: AgentTerminalPresentationStyle::UserPrompt,
         rendered_lines,
         copy_lines,
+        raw_copy_sources: Vec::new(),
     }
 }
 
@@ -508,6 +509,8 @@ struct StreamingSayProjection {
     style: AgentTerminalPresentationStyle,
     rendered_lines: Vec<RichTextLine>,
     copy_lines: Vec<String>,
+    /// Semantic block declarations captured before width-dependent wrapping.
+    raw_copy_sources: Vec<std::sync::Arc<mez_terminal::TerminalCopySource>>,
 }
 
 /// Decodes one typed styled-line presentation record for geometry-aware replay.
@@ -911,7 +914,7 @@ impl RuntimeSessionService {
                 })
                 .collect::<Vec<_>>()
         };
-        self.append_agent_terminal_rendered_lines_to_buffer(
+        self.append_agent_terminal_rendered_lines_with_sources_to_buffer(
             pane_id,
             AgentTerminalPresentationStyle::UserPrompt,
             rendered_lines.as_slice(),
@@ -920,6 +923,13 @@ impl RuntimeSessionService {
                 source.as_str(),
                 AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE,
             )),
+            if markdown {
+                crate::host::terminal::source_copy::CopySourcePlan::WholeEntry(
+                    presentation.payload.trim_end_matches(['\r', '\n']),
+                )
+            } else {
+                crate::host::terminal::source_copy::CopySourcePlan::Declared
+            },
         )
     }
 
@@ -1045,12 +1055,30 @@ impl RuntimeSessionService {
         text: &str,
         content_type: &str,
     ) -> Result<()> {
+        // Establish producer provenance once before semantic copy declarations.
+        // A scoped override makes this one bounded recursive entry, not another
+        // clock sample or source history. Opaque replay never gains ownership.
+        if self.has_presentation_boundary(pane_id)
+            && self.current_presentation_entry(pane_id).is_none()
+        {
+            let entry = self.presentation_entry(
+                pane_id,
+                mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+            );
+            return self.with_presentation_entry(pane_id, entry, |service| {
+                service.append_agent_assistant_content_to_terminal_buffer(
+                    pane_id,
+                    text,
+                    content_type,
+                )
+            });
+        }
         let frame_width = self.agent_terminal_markdown_frame_width(pane_id)?;
         let table_width = self.agent_terminal_markdown_terminal_width(pane_id)?;
         let projection = self.streaming_say_projection(
             &RuntimeStreamingSayAction {
                 status: mez_agent::SayStatus::Final,
-                entry: None,
+                entry: self.current_presentation_entry(pane_id),
                 content_type: content_type.to_string(),
                 text: text.to_string(),
                 complete: true,
@@ -1058,12 +1086,15 @@ impl RuntimeSessionService {
             frame_width,
             table_width,
         );
-        self.append_agent_terminal_rendered_lines_to_buffer(
+        self.append_agent_terminal_rendered_lines_with_sources_to_buffer(
             pane_id,
             projection.style,
             &projection.rendered_lines,
             &projection.copy_lines,
             Some((text, content_type)),
+            crate::host::terminal::source_copy::CopySourcePlan::Blocks(
+                &projection.raw_copy_sources,
+            ),
         )
     }
 
@@ -1929,6 +1960,27 @@ impl RuntimeSessionService {
         copy_lines: &[String],
         source: Option<(&str, &str)>,
     ) -> Result<()> {
+        self.append_agent_terminal_rendered_lines_with_sources_to_buffer(
+            pane_id,
+            style,
+            rendered_lines,
+            copy_lines,
+            source,
+            crate::host::terminal::source_copy::CopySourcePlan::Declared,
+        )
+    }
+
+    /// Installs explicit source declarations under the existing occurrence
+    /// override. Ownership capture is independent of display policy.
+    fn append_agent_terminal_rendered_lines_with_sources_to_buffer(
+        &mut self,
+        pane_id: &str,
+        style: AgentTerminalPresentationStyle,
+        rendered_lines: &[RichTextLine],
+        copy_lines: &[String],
+        source: Option<(&str, &str)>,
+        copy_plan: crate::host::terminal::source_copy::CopySourcePlan<'_>,
+    ) -> Result<()> {
         if !self.has_presentation_boundary(pane_id) {
             return self.append_agent_terminal_rendered_lines_with_entry(
                 pane_id,
@@ -1936,6 +1988,7 @@ impl RuntimeSessionService {
                 rendered_lines,
                 copy_lines,
                 source,
+                copy_plan,
             );
         }
         let entry = self.presentation_entry(
@@ -1949,6 +2002,7 @@ impl RuntimeSessionService {
                 rendered_lines,
                 copy_lines,
                 source,
+                copy_plan,
             )
         })
     }
@@ -1961,6 +2015,7 @@ impl RuntimeSessionService {
         rendered_lines: &[RichTextLine],
         copy_lines: &[String],
         source: Option<(&str, &str)>,
+        copy_plan: crate::host::terminal::source_copy::CopySourcePlan<'_>,
     ) -> Result<()> {
         if rendered_lines.is_empty() {
             return Ok(());
@@ -1992,7 +2047,7 @@ impl RuntimeSessionService {
                 mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
             );
             let ranges = if self.has_presentation_boundary(pane_id) {
-                vec![(prefix_len..bytes.len(), entry)]
+                vec![(prefix_len..bytes.len(), entry.clone())]
             } else {
                 Vec::new()
             };
@@ -2003,6 +2058,20 @@ impl RuntimeSessionService {
                 "appending rendered agent lines",
             )?;
             screen.set_recent_normal_copy_texts(copy_lines, AGENT_COPY_SKIP_LINE);
+            if self.has_presentation_boundary(pane_id) {
+                let associations = crate::host::terminal::source_copy::source_associations(
+                    &entry,
+                    rendered_lines,
+                    copy_lines,
+                    copy_plan,
+                    &[],
+                )?;
+                if !screen.set_recent_normal_copy_source_associations(&entry, &associations) {
+                    return Err(MezError::invalid_state(
+                        "rendered source association targets changed owner",
+                    ));
+                }
+            }
             bytes
         };
         self.install_agent_shell_preview_write(

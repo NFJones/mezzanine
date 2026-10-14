@@ -33,6 +33,7 @@ fn terminal_screen_restores_styled_visible_snapshot_content() {
                 rendition,
             }],
             copy_text: None,
+            copy_source: None,
             presentation: None,
         }],
     );

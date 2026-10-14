@@ -372,6 +372,7 @@ impl RuntimeSessionService {
                             .cloned()
                             .unwrap_or_default(),
                         copy_text: None,
+                        copy_source: None,
                         presentation: None,
                     })
                     .collect::<Vec<_>>();
@@ -387,6 +388,7 @@ impl RuntimeSessionService {
                             .cloned()
                             .unwrap_or_default(),
                         copy_text: None,
+                        copy_source: None,
                         presentation: None,
                     })
                     .collect::<Vec<_>>();

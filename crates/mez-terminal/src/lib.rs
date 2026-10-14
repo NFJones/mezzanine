@@ -50,7 +50,8 @@ pub use history::{
 
 pub use style::{
     GraphicRendition, PresentationEntry, PresentationOccurrence, PresentationOccurrenceBasis,
-    TerminalColor, TerminalStyleSpan, TerminalStyledLine,
+    TerminalColor, TerminalCopySource, TerminalCopySourceGeneration, TerminalCopySourceGroup,
+    TerminalCopySourceId, TerminalStyleSpan, TerminalStyledLine,
 };
 
 pub use width::{

@@ -201,6 +201,7 @@ impl TerminalScreen {
                         &self.renditions[row],
                         self.line_copy_texts[row].clone(),
                         self.line_presentations[row].clone(),
+                        self.line_copy_sources[row].clone(),
                         self.emoji_width,
                     ),
                     self.line_wraps[row],
@@ -211,12 +212,14 @@ impl TerminalScreen {
         self.renditions[top..=bottom].rotate_left(count);
         self.line_wraps[top..=bottom].rotate_left(count);
         self.line_copy_texts[top..=bottom].rotate_left(count);
+        self.line_copy_sources[top..=bottom].rotate_left(count);
         self.line_presentations[top..=bottom].rotate_left(count);
         for row in bottom.saturating_add(1).saturating_sub(count)..=bottom {
             self.cells[row] = blank_row(self.size.columns);
             self.renditions[row] = blank_rendition_row(self.size.columns, self.graphic_rendition);
             self.line_wraps[row] = false;
             self.line_copy_texts[row] = None;
+            self.line_copy_sources[row] = None;
             self.line_presentations[row] = None;
         }
     }
@@ -238,12 +241,14 @@ impl TerminalScreen {
         self.renditions[top..=bottom].rotate_right(count);
         self.line_wraps[top..=bottom].rotate_right(count);
         self.line_copy_texts[top..=bottom].rotate_right(count);
+        self.line_copy_sources[top..=bottom].rotate_right(count);
         self.line_presentations[top..=bottom].rotate_right(count);
         for row in top..top.saturating_add(count) {
             self.cells[row] = blank_row(self.size.columns);
             self.renditions[row] = blank_rendition_row(self.size.columns, self.graphic_rendition);
             self.line_wraps[row] = false;
             self.line_copy_texts[row] = None;
+            self.line_copy_sources[row] = None;
             self.line_presentations[row] = None;
         }
     }
@@ -347,12 +352,14 @@ impl TerminalScreen {
         self.renditions[self.cursor.row..=bottom].rotate_right(count);
         self.line_wraps[self.cursor.row..=bottom].rotate_right(count);
         self.line_copy_texts[self.cursor.row..=bottom].rotate_right(count);
+        self.line_copy_sources[self.cursor.row..=bottom].rotate_right(count);
         self.line_presentations[self.cursor.row..=bottom].rotate_right(count);
         for row in self.cursor.row..self.cursor.row.saturating_add(count) {
             self.cells[row] = blank_row(self.size.columns);
             self.renditions[row] = blank_rendition_row(self.size.columns, self.graphic_rendition);
             self.line_wraps[row] = false;
             self.line_copy_texts[row] = None;
+            self.line_copy_sources[row] = None;
             self.line_presentations[row] = None;
         }
     }
@@ -376,12 +383,14 @@ impl TerminalScreen {
         self.renditions[self.cursor.row..=bottom].rotate_left(count);
         self.line_wraps[self.cursor.row..=bottom].rotate_left(count);
         self.line_copy_texts[self.cursor.row..=bottom].rotate_left(count);
+        self.line_copy_sources[self.cursor.row..=bottom].rotate_left(count);
         self.line_presentations[self.cursor.row..=bottom].rotate_left(count);
         for row in bottom.saturating_add(1).saturating_sub(count)..=bottom {
             self.cells[row] = blank_row(self.size.columns);
             self.renditions[row] = blank_rendition_row(self.size.columns, self.graphic_rendition);
             self.line_wraps[row] = false;
             self.line_copy_texts[row] = None;
+            self.line_copy_sources[row] = None;
             self.line_presentations[row] = None;
         }
     }
@@ -541,6 +550,7 @@ impl TerminalScreen {
         self.renditions = blank_renditions(self.size, self.graphic_rendition);
         self.line_wraps = vec![false; usize::from(self.size.rows)];
         self.line_copy_texts = vec![None; usize::from(self.size.rows)];
+        self.line_copy_sources = vec![None; usize::from(self.size.rows)];
         self.line_presentations = vec![None; usize::from(self.size.rows)];
         self.cursor = Cursor { row: 0, column: 0 };
         self.wrap_pending = false;

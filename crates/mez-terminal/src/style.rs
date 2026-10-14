@@ -7,6 +7,11 @@ pub use mez_core::presentation::{
     PresentationEntry, PresentationOccurrence, PresentationOccurrenceBasis,
 };
 
+mod copy_source;
+pub use copy_source::{
+    TerminalCopySource, TerminalCopySourceGeneration, TerminalCopySourceGroup, TerminalCopySourceId,
+};
+
 /// Terminal color recorded from SGR foreground or background parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalColor {
@@ -64,6 +69,9 @@ pub struct TerminalStyledLine {
     /// Presentation may transform a line while preserving source text for
     /// paste buffers or host clipboards.
     pub copy_text: Option<String>,
+    /// Immutable proven source-group ownership, independent of decoration or
+    /// physical wrapping. Shared payloads survive clipping without a registry.
+    pub copy_source: Option<std::sync::Arc<TerminalCopySource>>,
     /// Optional host annotation; arbitrary PTY output has no entry boundary.
     pub presentation: Option<PresentationEntry>,
 }
@@ -75,6 +83,7 @@ impl TerminalStyledLine {
             text: text.into(),
             style_spans: Vec::new(),
             copy_text: None,
+            copy_source: None,
             presentation: None,
         }
     }

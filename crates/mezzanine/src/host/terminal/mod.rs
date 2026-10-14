@@ -58,6 +58,7 @@ mod pane_status;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod render;
+pub(crate) mod source_copy;
 pub(crate) mod wire_events;
 pub(crate) mod wire_identity;
 pub(crate) mod wire_modes;

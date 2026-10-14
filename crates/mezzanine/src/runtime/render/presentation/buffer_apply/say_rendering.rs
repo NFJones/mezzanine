@@ -32,11 +32,15 @@ impl RuntimeSessionService {
         if agent_output_content_type_is_markdown(&action.content_type)
             && !agent_say_text_is_displayed_patch_block(&action.text)
         {
-            let body = wrap_rich_text_lines_to_width(
-                render_agent_markdown_body_lines(&action.text, ui_theme, table_width),
-                frame_width,
-                table_width,
-            );
+            let body = render_agent_markdown_body_lines(&action.text, ui_theme, table_width);
+            let raw_copy_sources = action
+                .entry
+                .as_ref()
+                .map(|entry| {
+                    crate::host::terminal::source_copy::raw_block_declarations(entry, &body)
+                })
+                .unwrap_or_default();
+            let body = wrap_rich_text_lines_to_width(body, frame_width, table_width);
             let body_count = body.len();
             let rendered_lines = frame_markdown_lines(body, frame_width);
             let raw_lines = if action.text.is_empty() {
@@ -54,6 +58,7 @@ impl RuntimeSessionService {
                 style: AgentTerminalPresentationStyle::Assistant,
                 rendered_lines,
                 copy_lines,
+                raw_copy_sources,
             };
         }
         if agent_output_content_type_is_diff(&action.content_type) {
@@ -73,12 +78,14 @@ impl RuntimeSessionService {
                         frame_width,
                     ),
                     copy_lines: Vec::new(),
+                    raw_copy_sources: Vec::new(),
                 };
             }
             return StreamingSayProjection {
                 style: AgentTerminalPresentationStyle::Assistant,
                 rendered_lines: prefix_rich_text_lines(rendered_lines, "mez> ", "     "),
                 copy_lines: Vec::new(),
+                raw_copy_sources: Vec::new(),
             };
         }
         StreamingSayProjection {
@@ -89,6 +96,7 @@ impl RuntimeSessionService {
                 frame_width,
             ),
             copy_lines: Vec::new(),
+            raw_copy_sources: Vec::new(),
         }
     }
 }

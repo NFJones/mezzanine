@@ -35,7 +35,7 @@ impl RuntimeSessionService {
             )
         });
         self.with_presentation_entry(pane_id, entry, |service| {
-            service.append_agent_terminal_rendered_lines_to_buffer(
+            service.append_agent_terminal_rendered_lines_with_sources_to_buffer(
                 pane_id,
                 projection.style,
                 &projection.rendered_lines,
@@ -44,6 +44,13 @@ impl RuntimeSessionService {
                     persisted_source.as_str(),
                     AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE,
                 )),
+                if runtime_peer_message_presentation_is_markdown(Some(&source.content_type)) {
+                    crate::host::terminal::source_copy::CopySourcePlan::WholeEntry(
+                        source.text.trim_end_matches(['\r', '\n']),
+                    )
+                } else {
+                    crate::host::terminal::source_copy::CopySourcePlan::Declared
+                },
             )
         })
     }

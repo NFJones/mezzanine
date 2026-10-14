@@ -21,6 +21,7 @@ impl TerminalScreen {
                     &self.renditions[row],
                     self.line_copy_texts.get(row).cloned().flatten(),
                     self.line_presentations.get(row).cloned().flatten(),
+                    self.line_copy_sources.get(row).cloned().flatten(),
                     self.emoji_width,
                 ),
                 wraps_to_next: self.line_wraps.get(row).copied().unwrap_or(false),
@@ -94,6 +95,9 @@ impl TerminalScreen {
     pub(super) fn clear_line_copy_text(&mut self, row: usize) {
         if let Some(copy_text) = self.line_copy_texts.get_mut(row) {
             *copy_text = None;
+        }
+        if let Some(copy_source) = self.line_copy_sources.get_mut(row) {
+            *copy_source = None;
         }
         if let Some(presentation) = self.line_presentations.get_mut(row) {
             if let Some(active) = self

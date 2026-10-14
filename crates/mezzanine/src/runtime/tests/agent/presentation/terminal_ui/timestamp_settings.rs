@@ -7,6 +7,250 @@
 
 use super::*;
 
+/// A rendered authored paragraph separator owns an explicit empty SourceLine,
+/// unlike synthetic padding or a timestamp-only selection. Full source copy
+/// must emit that selected interior group once so two authored newlines survive;
+/// selecting the same row's margin alone remains empty.
+#[test]
+fn runtime_log_timestamps_owned_empty_source_line_preserves_authored_separator() {
+    let mut service = test_runtime_service_with_size(Size::new(80, 32).unwrap());
+    replace_timestamp_settings(&mut service, true, 80, "");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.presentation.occurrence_clock_millis = Some(Some(3_723_000));
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 200).unwrap(),
+    );
+    let source = "**first**\n\nsecond";
+    service
+        .append_agent_assistant_content_to_terminal_buffer(
+            "%1",
+            source,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+        )
+        .unwrap();
+    let mut copy = CopyMode::from_screen(service.agent_pane_screen("%1").unwrap(), 24).unwrap();
+    copy.set_agent_surface(true);
+    let blank = (0..copy.line_count())
+        .find(|row| {
+            copy.copy_source(*row).is_some_and(|source| {
+                source.text.is_empty()
+                    && source.id.group() == mez_terminal::TerminalCopySourceGroup::SourceLine(1)
+            })
+        })
+        .unwrap();
+    let first = copy
+        .lines()
+        .iter()
+        .position(|row| row.contains("first"))
+        .unwrap();
+    let last = copy
+        .lines()
+        .iter()
+        .position(|row| row.contains("second"))
+        .unwrap();
+    assert!(first < blank && blank < last);
+    let end = mez_mux::render::char_count(&copy.lines()[last]);
+    copy.select_range(
+        CopyPosition {
+            line: first,
+            column: 0,
+        },
+        CopyPosition {
+            line: last,
+            column: end,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+            .unwrap(),
+        source
+    );
+    copy.select_range(
+        CopyPosition {
+            line: blank,
+            column: 0,
+        },
+        CopyPosition {
+            line: blank,
+            column: 9,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+            .unwrap(),
+        ""
+    );
+}
+
+/// Raw Markdown peer source groups use one owner followed by skipped rows.
+/// Narrow live reflow must not duplicate that owner into unrecognized payloads:
+/// every visible first/continuation-only selection returns the exact original
+/// source once. Equal-text messages remain distinct owned groups through the
+/// same-size ON/OFF/ON transition and a history/live boundary.
+#[test]
+fn runtime_log_timestamps_raw_peer_reflow_preserves_every_source_group_row() {
+    for history_split in [false, true] {
+        let mut service = test_runtime_service_with_size(Size::new(100, 80).unwrap());
+        replace_timestamp_settings(&mut service, true, 80, "");
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service.presentation.occurrence_clock_millis = Some(Some(3_723_000));
+        set_agent_pane_screen_for_test(
+            &mut service,
+            "%1",
+            TerminalScreen::new(
+                Size::new(80, if history_split { 6 } else { 40 }).unwrap(),
+                300,
+            )
+            .unwrap(),
+        );
+        let payload = format!("{}\nauthored second line", "longtoken".repeat(24));
+        for _ in 0..2 {
+            service
+                .append_agent_received_peer_message_to_terminal_buffer(
+                    "%1",
+                    "agent-%3",
+                    "text/markdown",
+                    &payload,
+                )
+                .unwrap();
+        }
+        let before = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_styled_content_lines();
+        let owners = before
+            .iter()
+            .enumerate()
+            .filter_map(|(row, line)| {
+                (line.copy_text.as_deref() == Some(payload.as_str())).then_some(row)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            owners.len(),
+            2,
+            "fixture must exercise two raw source owners"
+        );
+        let ids = owners
+            .iter()
+            .map(|row| before[*row].presentation.as_ref().unwrap().id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(ids.len(), 2, "equal payloads must be distinct occurrences");
+        assert!(owners.iter().all(|row| {
+            before
+                .get(row + 1)
+                .and_then(|line| line.copy_text.as_deref())
+                == Some(mez_mux::copy::COPY_SKIP_LINE)
+        }));
+        service
+            .agent_pane_screen_mut("%1")
+            .unwrap()
+            .resize(Size::new(32, if history_split { 6 } else { 40 }).unwrap())
+            .unwrap();
+        for enabled in [true, false, true] {
+            replace_timestamp_settings(&mut service, enabled, 80, "");
+            let mut copy =
+                CopyMode::from_screen(service.agent_pane_screen("%1").unwrap(), 40).unwrap();
+            copy.set_agent_surface(true);
+            let rows = (0..copy.line_count())
+                .filter(|row| {
+                    copy.copy_source(*row)
+                        .is_some_and(|source| ids.contains(source.id.owner()))
+                })
+                .collect::<Vec<_>>();
+            assert!(rows.len() >= 4);
+            let first = rows[0];
+            let last = *rows.last().unwrap();
+            for row in rows.iter().copied() {
+                let end = mez_mux::render::char_count(&copy.lines()[row]);
+                copy.select_range(
+                    CopyPosition {
+                        line: row,
+                        column: if enabled { 11 } else { 2 },
+                    },
+                    CopyPosition {
+                        line: row,
+                        column: end,
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    copy.copy_selection_with_format(
+                        crate::host::terminal::CopySelectionFormat::Source
+                    )
+                    .unwrap(),
+                    payload,
+                    "history_split={history_split} enabled={enabled} row={row}"
+                );
+            }
+            let end = mez_mux::render::char_count(&copy.lines()[last]);
+            copy.select_range(
+                CopyPosition {
+                    line: first,
+                    column: 0,
+                },
+                CopyPosition {
+                    line: last,
+                    column: end,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                    .unwrap(),
+                format!("{payload}\n{payload}")
+            );
+            let screen = service.agent_pane_screen("%1").unwrap();
+            let canonical = screen.normal_styled_content_lines();
+            let mut shared = std::collections::BTreeMap::new();
+            for source in canonical.iter().filter_map(|row| row.copy_source.as_ref()) {
+                if let Some(previous) = shared.insert(source.id.clone(), source.text.clone()) {
+                    assert!(
+                        std::sync::Arc::ptr_eq(&previous, &source.text),
+                        "allocation sharing is not semantic identity"
+                    );
+                }
+            }
+            assert_eq!(shared.len(), 2);
+            let full_payload_bytes = canonical
+                .iter()
+                .filter_map(|row| row.copy_text.as_deref())
+                .filter(|text| *text == payload)
+                .map(str::len)
+                .sum::<usize>();
+            assert!(
+                full_payload_bytes <= 2 * payload.len(),
+                "reflow must not multiply full payload copies"
+            );
+            if history_split {
+                let history_ids = screen
+                    .history()
+                    .styled_lines()
+                    .filter_map(|row| row.copy_source.map(|source| source.id.clone()))
+                    .collect::<std::collections::BTreeSet<_>>();
+                let live_ids = screen
+                    .visible_styled_lines()
+                    .into_iter()
+                    .filter_map(|row| row.copy_source.map(|source| source.id.clone()))
+                    .collect::<std::collections::BTreeSet<_>>();
+                assert!(
+                    history_ids.intersection(&live_ids).next().is_some(),
+                    "fixture must actually straddle history/live"
+                );
+            }
+        }
+    }
+}
+
 /// Replaces synthetic primary configuration using the actual settings path.
 pub(super) fn replace_timestamp_settings(
     service: &mut RuntimeSessionService,

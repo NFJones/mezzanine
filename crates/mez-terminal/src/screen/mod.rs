@@ -6,8 +6,10 @@
 //! and continuation wrapping without changing the public `TerminalScreen`
 //! contract. The engine remains independent of product runtime and host I/O.
 
+use crate::TerminalCopySource;
 use mez_core::presentation::LogFramePolicy;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
@@ -307,6 +309,7 @@ fn bounded_restored_line(
     }
     let mut bounded = TerminalStyledLine::plain(String::new());
     bounded.copy_text = line.copy_text.clone();
+    bounded.copy_source = line.copy_source.clone();
     bounded.presentation = line.presentation.clone();
     let mut source_column = 0usize;
     let mut destination_column = 0usize;
@@ -370,6 +373,8 @@ pub(super) struct SavedNormalScreenState {
     pub(super) line_wraps: Vec<bool>,
     /// Stored copy-mode text overrides for the normal screen.
     pub(super) line_copy_texts: Vec<Option<String>>,
+    /// Shared source associations aligned with saved normal rows.
+    pub(super) line_copy_sources: Vec<Option<Arc<TerminalCopySource>>>,
     /// Stored presentation annotations aligned with the normal-screen rows.
     pub(super) line_presentations: Vec<Option<PresentationEntry>>,
     /// Stored visible cursor position for the normal screen.
@@ -674,6 +679,9 @@ pub struct TerminalScreen {
     pub(super) line_copy_texts: Vec<Option<String>>,
     /// Presentation annotations are retained alongside each visible row, not
     /// in an event store. Terminal writes clear them with copy overrides.
+    pub(super) line_copy_sources: Vec<Option<Arc<TerminalCopySource>>>,
+    /// Presentation annotations are retained alongside each visible row, not
+    /// in an event store. Terminal writes clear them with copy overrides.
     pub(super) line_presentations: Vec<Option<PresentationEntry>>,
     /// Scoped producer annotation during semantic feed; absent for arbitrary PTY.
     pub(super) active_presentation: Option<PresentationEntry>,
@@ -918,6 +926,7 @@ mod lifecycle;
 mod log_frame;
 use log_frame::log_frame_columns;
 mod parser;
+mod source_copy;
 mod state;
 mod synchronized_output;
 pub use synchronized_output::SynchronizedOutputFeedOutcome;
@@ -942,6 +951,7 @@ fn styled_line_from_row_with_copy_text(
     renditions: &[GraphicRendition],
     copy_text: Option<String>,
     presentation: Option<PresentationEntry>,
+    copy_source: Option<Arc<TerminalCopySource>>,
     emoji_width: TerminalEmojiWidth,
 ) -> TerminalStyledLine {
     let visible_columns = cells
@@ -1004,6 +1014,7 @@ fn styled_line_from_row_with_copy_text(
         text,
         style_spans,
         copy_text,
+        copy_source,
         presentation,
     }
 }
@@ -1092,6 +1103,7 @@ fn merge_wrapped_physical_lines(
     let mut logical_lines = Vec::new();
     let mut current: Option<TerminalStyledLine> = None;
     let mut current_has_continuation_prefix = false;
+    let mut current_source_consistent = true;
     for row in rows {
         let starts_logical_line = current.is_none();
         if starts_logical_line {
@@ -1102,6 +1114,8 @@ fn merge_wrapped_physical_lines(
         let current_line = current.get_or_insert_with(|| TerminalStyledLine::plain(String::new()));
         if starts_logical_line {
             current_line.presentation = row.line.presentation.clone();
+            current_line.copy_source = row.line.copy_source.clone();
+            current_source_consistent = true;
         } else if !current_line
             .presentation
             .as_ref()
@@ -1111,6 +1125,23 @@ fn merge_wrapped_physical_lines(
             // A raw edit or conflicting owner invalidates the entire logical row.
             // Reflow must not resurrect provenance from its unedited prefix.
             current_line.presentation = None;
+            current_source_consistent =
+                current_line.copy_source.is_none() && row.line.copy_source.is_none();
+        }
+        if !starts_logical_line && current_source_consistent {
+            current_source_consistent = match (&current_line.copy_source, &row.line.copy_source) {
+                (None, None) => true,
+                (Some(first), Some(next)) => {
+                    first.id == next.id
+                        && first.generation == next.generation
+                        && (Arc::ptr_eq(&first.text, &next.text) || first.text == next.text)
+                }
+                _ => false,
+            };
+        }
+        if !current_source_consistent {
+            current_line.copy_source = None;
+            current_line.copy_text = None;
         }
         let mut source_line = if !starts_logical_line && current_has_continuation_prefix {
             continuation_prefix
@@ -1121,9 +1152,10 @@ fn merge_wrapped_physical_lines(
         } else {
             row.line.clone()
         };
-        if preserve_source_associations
-            && !starts_logical_line
-            && current_line.presentation.is_some()
+        if !current_source_consistent
+            || (preserve_source_associations
+                && !starts_logical_line
+                && current_line.presentation.is_some())
         {
             source_line.copy_text = None;
         }
@@ -1219,6 +1251,7 @@ fn reflow_one_logical_line(
     let mut source_column = 0usize;
     let mut current = TerminalStyledLine::plain(String::new());
     current.copy_text = line.copy_text.clone();
+    current.copy_source = line.copy_source.clone();
     current.presentation = line.presentation.clone();
     let mut current_width = 0usize;
     for grapheme in terminal_graphemes(&line.text) {
@@ -1233,7 +1266,11 @@ fn reflow_one_logical_line(
                 wraps_to_next: true,
             });
             current = TerminalStyledLine::plain(String::new());
-            if preserve_source_associations && line.presentation.is_some() {
+            current.copy_source = line.copy_source.clone();
+            if preserve_source_associations
+                && line.presentation.is_some()
+                && line.copy_source.is_none()
+            {
                 // Copy payload is opaque to the terminal. Proven structured
                 // source associations survive on every newly reflowed row;
                 // the product deduplicates their existing source identities.
@@ -1328,6 +1365,7 @@ fn strip_continuation_prefix_from_styled_line(
         text,
         style_spans,
         copy_text: line.copy_text.clone(),
+        copy_source: line.copy_source.clone(),
         presentation: line.presentation.clone(),
     })
 }

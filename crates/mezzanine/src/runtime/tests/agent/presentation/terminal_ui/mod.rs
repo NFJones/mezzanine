@@ -14,6 +14,9 @@ use crate::runtime::{RenderInvalidationReason, RuntimeTransition};
 fn agent_visual_rows(mut rows: Vec<TerminalStyledLine>) -> Vec<TerminalStyledLine> {
     for row in &mut rows {
         row.presentation = None;
+        // Source ownership is also producer provenance; old legacy copy_text
+        // bytes remain compared here, while association tests assert IDs/data.
+        row.copy_source = None;
     }
     rows
 }
@@ -30,6 +33,7 @@ mod resize_admission;
 mod resize_surfaces;
 mod streaming_identity;
 mod timestamp_contracts;
+mod timestamp_replay;
 mod timestamp_settings;
 mod timestamps;
 mod transient_restore;

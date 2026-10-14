@@ -311,6 +311,22 @@ impl HistoryBuffer {
         self.update_styled_line(index, |line| line.copy_text = copy_text);
     }
 
+    /// Assigns a validated immutable source association without interpreting
+    /// product marker strings. The existing bounded chunk owner retains it.
+    pub(crate) fn set_copy_source(
+        &mut self,
+        index: usize,
+        source: Option<Arc<crate::TerminalCopySource>>,
+    ) {
+        self.update_styled_line(index, |line| line.copy_source = source);
+    }
+
+    /// Returns proven row ownership for bounded source-assignment validation.
+    pub(crate) fn presentation_at(&self, index: usize) -> Option<&crate::PresentationEntry> {
+        self.record_at(index)
+            .and_then(|record| record.line.presentation.as_ref())
+    }
+
     /// Mutates one row in the bounded tail or a copy-on-write sealed chunk.
     fn update_styled_line(&mut self, index: usize, update: impl FnOnce(&mut TerminalStyledLine)) {
         if index >= self.len {

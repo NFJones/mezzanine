@@ -15,6 +15,7 @@ struct RetainedScreenContent {
     renditions: Vec<Vec<GraphicRendition>>,
     line_wraps: Vec<bool>,
     line_copy_texts: Vec<Option<String>>,
+    line_copy_sources: Vec<Option<Arc<TerminalCopySource>>>,
     line_presentations: Vec<Option<PresentationEntry>>,
     normal_viewport_detached_from_history: bool,
 }
@@ -86,6 +87,10 @@ impl RetainedScreenContent {
                 &mut screen.line_copy_texts,
                 vec![None; usize::from(size.rows)],
             ),
+            line_copy_sources: std::mem::replace(
+                &mut screen.line_copy_sources,
+                vec![None; usize::from(size.rows)],
+            ),
             line_presentations: std::mem::replace(
                 &mut screen.line_presentations,
                 vec![None; usize::from(size.rows)],
@@ -115,6 +120,10 @@ impl RetainedScreenContent {
                 &mut screen.line_copy_texts,
                 vec![None; usize::from(size.rows)],
             ),
+            line_copy_sources: std::mem::replace(
+                &mut screen.line_copy_sources,
+                vec![None; usize::from(size.rows)],
+            ),
             line_presentations: std::mem::replace(
                 &mut screen.line_presentations,
                 vec![None; usize::from(size.rows)],
@@ -132,6 +141,7 @@ impl RetainedScreenContent {
         screen.renditions = self.renditions;
         screen.line_wraps = self.line_wraps;
         screen.line_copy_texts = self.line_copy_texts;
+        screen.line_copy_sources = self.line_copy_sources;
         screen.line_presentations = self.line_presentations;
         screen.normal_viewport_detached_from_history = self.normal_viewport_detached_from_history;
     }
@@ -142,6 +152,7 @@ impl RetainedScreenContent {
         screen.renditions = self.renditions;
         screen.line_wraps = self.line_wraps;
         screen.line_copy_texts = self.line_copy_texts;
+        screen.line_copy_sources = self.line_copy_sources;
         screen.line_presentations = self.line_presentations;
         screen.normal_viewport_detached_from_history = self.normal_viewport_detached_from_history;
     }
@@ -203,6 +214,7 @@ impl SavedNormalScreenMetadata {
             renditions: content.renditions,
             line_wraps: content.line_wraps,
             line_copy_texts: content.line_copy_texts,
+            line_copy_sources: content.line_copy_sources,
             line_presentations: content.line_presentations,
             cursor: self.cursor,
             cursor_visible: self.cursor_visible,
@@ -246,6 +258,7 @@ impl TerminalScreen {
             renditions: blank_renditions(size, GraphicRendition::default()),
             line_wraps: vec![false; usize::from(size.rows)],
             line_copy_texts: vec![None; usize::from(size.rows)],
+            line_copy_sources: vec![None; usize::from(size.rows)],
             line_presentations: vec![None; usize::from(size.rows)],
             active_presentation: None,
             log_frame_policy: LogFramePolicy::default(),
@@ -421,6 +434,7 @@ impl TerminalScreen {
             self.renditions = blank_renditions(self.size, GraphicRendition::default());
             self.line_wraps = vec![false; usize::from(self.size.rows)];
             self.line_copy_texts = vec![None; usize::from(self.size.rows)];
+            self.line_copy_sources = vec![None; usize::from(self.size.rows)];
             self.line_presentations = vec![None; usize::from(self.size.rows)];
         } else if was_alternate && is_alternate {
             previous_content.restore_current(self);
@@ -606,6 +620,7 @@ impl TerminalScreen {
         self.renditions = blank_renditions(size, GraphicRendition::default());
         self.line_wraps = vec![false; new_rows];
         self.line_copy_texts = vec![None; new_rows];
+        self.line_copy_sources = vec![None; new_rows];
         self.line_presentations = vec![None; new_rows];
         for (row_index, row) in physical_rows
             .iter()
@@ -621,6 +636,7 @@ impl TerminalScreen {
             );
             self.line_wraps[row_index] = row.wraps_to_next;
             self.line_copy_texts[row_index] = row.line.copy_text.clone();
+            self.line_copy_sources[row_index] = row.line.copy_source.clone();
             self.line_presentations[row_index] = row.line.presentation.clone();
         }
 
@@ -669,6 +685,7 @@ impl TerminalScreen {
         let mut renditions = blank_renditions(size, GraphicRendition::default());
         let mut line_wraps = vec![false; usize::from(size.rows)];
         let mut line_copy_texts = vec![None; usize::from(size.rows)];
+        let mut line_copy_sources = vec![None; usize::from(size.rows)];
         let mut line_presentations = vec![None; usize::from(size.rows)];
         let rows = old_rows.saturating_sub(row_offset).min(cells.len());
         let columns = self
@@ -684,6 +701,8 @@ impl TerminalScreen {
                 .copy_from_slice(&self.renditions[source_row][..columns]);
             line_wraps[row_index] = self.line_wraps.get(source_row).copied().unwrap_or(false);
             line_copy_texts[row_index] = self.line_copy_texts.get(source_row).cloned().flatten();
+            line_copy_sources[row_index] =
+                self.line_copy_sources.get(source_row).cloned().flatten();
             line_presentations[row_index] =
                 self.line_presentations.get(source_row).cloned().flatten();
         }
@@ -712,6 +731,7 @@ impl TerminalScreen {
                             &self.renditions[row],
                             copy_text,
                             self.line_presentations.get(row).cloned().flatten(),
+                            self.line_copy_sources.get(row).cloned().flatten(),
                             self.emoji_width,
                         ),
                         self.line_wraps.get(row).copied().unwrap_or(false),
@@ -725,6 +745,7 @@ impl TerminalScreen {
         self.renditions = renditions;
         self.line_wraps = line_wraps;
         self.line_copy_texts = line_copy_texts;
+        self.line_copy_sources = line_copy_sources;
         self.line_presentations = line_presentations;
         let max_row = self.max_row();
         let max_column = self.max_column();
@@ -801,6 +822,7 @@ impl TerminalScreen {
         self.renditions = blank_renditions(size, GraphicRendition::default());
         self.line_wraps = vec![false; new_rows];
         self.line_copy_texts = vec![None; new_rows];
+        self.line_copy_sources = vec![None; new_rows];
         self.line_presentations = vec![None; new_rows];
         for (row_index, row) in next_visible_rows.iter().take(new_rows).enumerate() {
             write_styled_line_to_row(
@@ -811,6 +833,7 @@ impl TerminalScreen {
             );
             self.line_wraps[row_index] = row.wraps_to_next;
             self.line_copy_texts[row_index] = row.line.copy_text.clone();
+            self.line_copy_sources[row_index] = row.line.copy_source.clone();
             self.line_presentations[row_index] = row.line.presentation.clone();
         }
 
@@ -889,6 +912,7 @@ impl TerminalScreen {
         self.renditions = blank_renditions(size, GraphicRendition::default());
         self.line_wraps = vec![false; new_rows];
         self.line_copy_texts = vec![None; new_rows];
+        self.line_copy_sources = vec![None; new_rows];
         self.line_presentations = vec![None; new_rows];
         for (row_index, row) in physical_rows
             .iter()
@@ -904,6 +928,7 @@ impl TerminalScreen {
             );
             self.line_wraps[row_index] = row.wraps_to_next;
             self.line_copy_texts[row_index] = row.line.copy_text.clone();
+            self.line_copy_sources[row_index] = row.line.copy_source.clone();
             self.line_presentations[row_index] = row.line.presentation.clone();
         }
 

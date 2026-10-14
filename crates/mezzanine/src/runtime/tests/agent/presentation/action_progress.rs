@@ -9,6 +9,77 @@ use mez_agent::{
     ActionPresentationProgress,
 };
 
+/// Feature-ON uses the production managed-transaction output ingress, not a
+/// fabricated presentation row. The first observed output displays one clock;
+/// later cumulative output clips the original boundary and keeps blank margin
+/// with the same entry/time. No process/provider I/O is performed by this
+/// existing typed-transaction fixture, and model context remains byte-exact.
+#[test]
+fn runtime_log_timestamps_native_preview_ingress_retains_cropped_boundary() {
+    let (mut service, turn) =
+        running_action_progress_fixture(shell_action(), "timestamp-marker", "sleep 1");
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "timestamp-preview".into(), path: None, format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary, trusted: true,
+        text: "[terminal]\nagent_log_timestamps = true\nagent_wrap_column_cap = 48\nshell_output_preview_lines = 3\n".into(),
+    }]).unwrap();
+    let context = service.agent_turn_contexts()[&turn.turn_id].clone();
+    service.presentation.occurrence_clock_millis = Some(Some(3_723_000));
+    service.record_running_shell_transaction_output("%1", b"first output\n");
+    let screen = service.agent_pane_screen("%1").unwrap();
+    let entry = screen
+        .normal_styled_content_lines()
+        .iter()
+        .find(|row| row.text.contains("first output"))
+        .unwrap()
+        .presentation
+        .clone()
+        .unwrap();
+    assert!(entry.first_row);
+    let copy = CopyMode::from_screen(screen, 24).unwrap();
+    assert!(
+        copy.lines()
+            .iter()
+            .any(|row| row.starts_with("01:02:03 │ ") && row.contains("first output"))
+    );
+    service.presentation.occurrence_clock_millis = Some(Some(99_999_000));
+    service.record_running_shell_transaction_output("%1", "later output\n".repeat(6).as_bytes());
+    let screen = service.agent_pane_screen("%1").unwrap();
+    let canonical = screen.normal_styled_content_lines();
+    let retained = canonical
+        .iter()
+        .filter_map(|row| row.presentation.as_ref())
+        .filter(|row| row.id == entry.id)
+        .collect::<Vec<_>>();
+    assert!(!retained.is_empty());
+    assert!(
+        retained
+            .iter()
+            .all(|row| !row.first_row && row.occurrence == entry.occurrence)
+    );
+    let copy = CopyMode::from_screen(screen, 24).unwrap();
+    assert!(
+        copy.lines()
+            .iter()
+            .filter(|row| row.contains("later output"))
+            .all(|row| row.starts_with("         │ "))
+    );
+    assert_eq!(service.agent_turn_contexts()[&turn.turn_id], context);
+    let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: turn.turn_id,
+        action_id: "shell-1".into(),
+        marker: "timestamp-marker".into(),
+    };
+    assert!(service.settle_agent_shell_output_preview("%1", &owner));
+    assert_eq!(
+        service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_styled_content_lines(),
+        canonical
+    );
+}
+
 /// The actual managed transaction ingress, not only typed progress helpers,
 /// knows whether a cumulative preview includes its original beginning. First
 /// short output is a boundary; later tail clipping keeps the original ID/time

@@ -2,6 +2,135 @@
 
 use super::super::*;
 
+/// Feature-ON steering moves from a real submitted pending occurrence to local
+/// actor lease admission through ClaimConfiguredAgentProviderTask. The test never
+/// calls receipt acknowledgment or mutates status itself, and never invokes a
+/// provider. Original identity/time and raw model input survive promotion; the
+/// displayed UTC clock is not remote-delivery or executor-start evidence.
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_log_timestamps_actor_admission_preserves_pending_steering() {
+    let mut service = test_service();
+    let auth_root = std::env::temp_dir().join(format!(
+        "mez-timestamp-admission-auth-{}",
+        crate::storage::token_usage::new_token_usage_event_id()
+    ));
+    service.set_auth_store(crate::security::auth::AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&auth_root),
+    ));
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "timestamp-steering-admission".into(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[terminal]
+agent_log_timestamps = true
+agent_wrap_column_cap = 80
+[agents]
+default_provider = "runtime-batch"
+default_model_profile = "default"
+shell_mode = "pane"
+[permissions]
+sandbox = "policy-only"
+[providers.runtime-batch]
+kind = "openai"
+models = ["invalid-model"]
+default_model = "invalid-model"
+[model_profiles.default]
+provider = "runtime-batch"
+model = "invalid-model"
+"#
+            .into(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("timestamp-primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "initial fixture")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "steering exact model input")
+        .unwrap();
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let agent = AgentId::opaque(task.agent_id.clone()).unwrap();
+    let original = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines()
+        .into_iter()
+        .find(|row| {
+            row.text.contains("[pending]") && row.text.contains("steering exact model input")
+        })
+        .unwrap()
+        .presentation
+        .unwrap();
+    let clock = crate::host::terminal::log_frame::occurrence_clock_cells(&original);
+    assert_ne!(clock, "        ");
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let dispatch = handle
+            .claim_configured_agent_provider_task(agent, task.turn_id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(dispatch.claim_generation > 0);
+        assert!(
+            dispatch
+                .context
+                .durable()
+                .blocks()
+                .iter()
+                .any(|block| block.content == "steering exact model input")
+        );
+        assert!(
+            dispatch
+                .context
+                .durable()
+                .blocks()
+                .iter()
+                .all(|block| !block.content.contains(&format!("{clock} │ ")))
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), exit) = tokio::join!(client, actor.run());
+    let canonical = exit
+        .service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    let settled = canonical
+        .iter()
+        .find(|row| row.text.contains("user> steering exact model input"))
+        .unwrap();
+    assert_eq!(settled.presentation.as_ref().unwrap().id, original.id);
+    assert_eq!(
+        settled.presentation.as_ref().unwrap().occurrence,
+        original.occurrence
+    );
+    assert!(!canonical.iter().any(
+        |row| row.text.contains("[pending]") && row.text.contains("steering exact model input")
+    ));
+    let copy = crate::host::terminal::CopyMode::from_screen(
+        exit.service.agent_pane_screen("%1").unwrap(),
+        40,
+    )
+    .unwrap();
+    assert!(
+        copy.lines()
+            .iter()
+            .any(|row| row.starts_with(&format!("{clock} │ "))
+                && row.contains("steering exact model input"))
+    );
+}
+
 /// Verifies that a rewritten OpenAI input detected while registering a worker
 /// lease is advisory. The claim must still dispatch and retain a fresh baseline
 /// without failing the turn or forwarding an error to the service supervisor.

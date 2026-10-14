@@ -208,8 +208,10 @@ impl CopyMode {
 
     /// Copies each selected raw source group once, in display order.
     fn copy_source_selection(&self, start: CopyPosition, end: CopyPosition) -> Result<String> {
+        self.0.validate_copy_sources()?;
         let mut copied = Vec::new();
         let mut emitted_group_starts = BTreeSet::new();
+        let mut emitted_source_ids = BTreeSet::new();
         let mut line = start.line;
         while line <= end.line {
             let selected_start = if line == start.line { start.column } else { 0 };
@@ -218,9 +220,33 @@ impl CopyMode {
             } else {
                 self.0.lines().get(line).map_or(0, |row| char_count(row))
             };
-            if self.0.log_frame(line).is_some_and(|frame| {
-                selected_end <= frame.body_origin || selected_start >= selected_end
-            }) {
+            let typed = self.0.copy_source(line);
+            let selected_owned_empty = line > start.line
+                && line < end.line
+                && typed.is_some_and(|source| {
+                    source.text.is_empty()
+                        && matches!(
+                            source.id.group(),
+                            mez_terminal::TerminalCopySourceGroup::SourceLine(_)
+                        )
+                });
+            let body_origin = self
+                .0
+                .log_frame(line)
+                .map(|frame| frame.body_origin)
+                .unwrap_or_else(|| usize::from(self.1 && typed.is_some()) * 2);
+            if ((typed.is_some() || self.0.log_frame(line).is_some())
+                && selected_end <= body_origin
+                && !selected_owned_empty)
+                || (selected_start >= selected_end && !selected_owned_empty)
+            {
+                line += 1;
+                continue;
+            }
+            if let Some(source) = typed {
+                if emitted_source_ids.insert(source.id.clone()) {
+                    copied.push(source.text.to_string());
+                }
                 line += 1;
                 continue;
             }

@@ -91,6 +91,7 @@ pub(crate) fn render_focus_label(
     (!text.trim().is_empty()).then(|| TerminalStyledLine {
         text,
         copy_text: None,
+        copy_source: None,
         presentation: None,
         style_spans: vec![TerminalStyleSpan {
             start: 0,
