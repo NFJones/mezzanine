@@ -3,6 +3,58 @@
 use crate::*;
 use mez_core::presentation::LogFramePolicy;
 
+/// Format width, not just pane dimensions or enablement, changes the tagged
+/// insertion edge. Existing content must reflow before the next scalar, and
+/// an equal-width token reorder must dirty visual generation without reflow.
+/// A wide suppressed format and the return trip preserve all inserted bytes.
+#[test]
+fn log_timestamp_format_effective_edge_cursor_survives_width_changes() {
+    let mut screen = TerminalScreen::new(TerminalSize::new(24, 8).unwrap(), 100).unwrap();
+    let entry = PresentationEntry {
+        id: "format-insertion".into(),
+        occurrence: PresentationOccurrence::default(),
+        first_row: true,
+    };
+    let policy = |format| LogFramePolicy {
+        timestamps: true,
+        wrap_cap: 24,
+        timestamp_format: mez_core::presentation::LogTimestampFormat::compile(format).unwrap(),
+    };
+    screen.set_log_frame_settings(policy("%H:%M"), GraphicRendition::default());
+    screen.feed_presentation(b"abcdefghijklmnopqr", entry.clone());
+    screen.set_log_frame_settings(policy("[%H:%M:%S]"), GraphicRendition::default());
+    assert!(
+        screen
+            .visible_styled_lines()
+            .iter()
+            .filter(|row| row.presentation.is_some())
+            .all(|row| terminal_text_width(&row.text, terminal_emoji_width()) <= 13)
+    );
+    screen.feed_presentation(b"Z", entry.clone());
+    assert!(
+        screen
+            .visible_lines()
+            .join("")
+            .contains("abcdefghijklmnopqrZ")
+    );
+    let rows = screen.normal_styled_content_lines();
+    let generation = screen.render_generation();
+    screen.set_log_frame_settings(policy("[%S:%M:%H]"), GraphicRendition::default());
+    assert_eq!(screen.normal_styled_content_lines(), rows);
+    assert_ne!(screen.render_generation(), generation);
+    for format in ["12345678901234567890123456789012", "%H:%M"] {
+        screen.set_log_frame_settings(policy(format), GraphicRendition::default());
+    }
+    screen.feed_presentation(b"END", entry);
+    assert!(
+        screen
+            .visible_lines()
+            .join("")
+            .contains("abcdefghijklmnopqrZEND")
+    );
+    assert_eq!(screen.size(), TerminalSize::new(24, 8).unwrap());
+}
+
 /// A normalized tagged cursor can sit immediately after the effective right
 /// edge while still inside the physical grid. Width resize with the same cap
 /// and a same-size OFF->ON replacement must preserve that insertion point;

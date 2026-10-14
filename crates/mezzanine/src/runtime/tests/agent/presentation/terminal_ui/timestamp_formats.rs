@@ -22,6 +22,175 @@ fn replace_format(service: &mut RuntimeSessionService, enabled: bool, cap: usize
     );
 }
 
+/// A real format-width round trip reflows already-wrapped live/history rows at
+/// unchanged physical size and cap, including suppression and a pruned first
+/// boundary. Whole-entry source ownership remains shared, selected once and
+/// byte-exact; old snapshots retain their original geometry and selection.
+#[test]
+fn runtime_log_timestamp_format_long_history_width_round_trip_is_lossless() {
+    for pruned in [false, true] {
+        let mut service = test_runtime_service_with_size(Size::new(80, 32).unwrap());
+        replace_format(&mut service, true, 32, "%H:%M");
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service.presentation.occurrence_clock_millis = Some(Some(3_723_000));
+        set_agent_pane_screen_for_test(
+            &mut service,
+            "%1",
+            TerminalScreen::new_with_history_config(
+                Size::new(32, 6).unwrap(),
+                if pruned { 2 } else { 300 },
+                1,
+            )
+            .unwrap(),
+        );
+        let source = format!("{} authored %H exact", "snow雪1️⃣👩‍💻longtoken".repeat(24));
+        service
+            .append_agent_received_peer_message_to_terminal_buffer(
+                "%1",
+                "agent-%3",
+                "text/markdown",
+                &source,
+            )
+            .unwrap();
+        let original_screen = service.agent_pane_screen("%1").unwrap();
+        assert!(original_screen.history().line_count() > 0);
+        let owners = original_screen
+            .normal_styled_content_lines()
+            .iter()
+            .filter_map(|row| row.presentation.as_ref().map(|entry| entry.id.clone()))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(owners.len(), 1);
+        let owner = owners.iter().next().unwrap();
+        let mut frozen = CopyMode::from_screen(original_screen, 6).unwrap();
+        frozen.set_agent_surface(true);
+        let first = (0..frozen.line_count())
+            .find(|row| frozen.copy_source(*row).is_some())
+            .unwrap();
+        frozen
+            .select_range(
+                CopyPosition {
+                    line: first,
+                    column: 8,
+                },
+                CopyPosition {
+                    line: first,
+                    column: mez_mux::render::char_count(&frozen.lines()[first]),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            frozen
+                .copy_selection_with_format(CopySelectionFormat::Source)
+                .unwrap(),
+            source
+        );
+        service.insert_active_copy_mode_for_presented_surface("%1", frozen.clone());
+        for format in ["[%H:%M:%S]", "12345678901234567890", "%H:%M:%S", "%H:%M"] {
+            replace_format(&mut service, true, 32, format);
+            let screen = service.agent_pane_screen("%1").unwrap();
+            assert_eq!(screen.size(), Size::new(32, 6).unwrap());
+            let (policy, _) = screen.log_frame_settings();
+            let frame = policy.frame(32);
+            let live = screen.visible_styled_lines();
+            assert!(
+                live.iter()
+                    .filter(|row| row.presentation.is_some())
+                    .all(|row| mez_terminal::terminal_text_width(
+                        &row.text,
+                        mez_terminal::terminal_emoji_width()
+                    ) <= frame.canonical_width())
+            );
+            let mut fresh = CopyMode::from_screen(screen, 6).unwrap();
+            fresh.set_agent_surface(true);
+            let owned = (0..fresh.line_count())
+                .filter(|row| {
+                    fresh
+                        .copy_source(*row)
+                        .is_some_and(|source| source.id.owner() == owner)
+                })
+                .collect::<Vec<_>>();
+            assert!(owned.len() > 1);
+            for row in &owned {
+                assert!(
+                    mez_terminal::terminal_text_width(
+                        &fresh.lines()[*row],
+                        mez_terminal::terminal_emoji_width()
+                    ) <= 32
+                );
+                let origin = fresh.log_frame(*row).map_or(2, |map| map.body_origin);
+                fresh
+                    .select_range(
+                        CopyPosition {
+                            line: *row,
+                            column: origin,
+                        },
+                        CopyPosition {
+                            line: *row,
+                            column: mez_mux::render::char_count(&fresh.lines()[*row]),
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(
+                    fresh
+                        .copy_selection_with_format(CopySelectionFormat::Source)
+                        .unwrap(),
+                    source
+                );
+            }
+            let first = owned[0];
+            let last = *owned.last().unwrap();
+            fresh
+                .select_range(
+                    CopyPosition {
+                        line: first,
+                        column: 0,
+                    },
+                    CopyPosition {
+                        line: last,
+                        column: mez_mux::render::char_count(&fresh.lines()[last]),
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                fresh
+                    .copy_selection_with_format(CopySelectionFormat::Source)
+                    .unwrap(),
+                source
+            );
+            let rows = fresh.visible_styled_lines();
+            let entries = rows
+                .iter()
+                .filter_map(|row| row.presentation.as_ref())
+                .collect::<Vec<_>>();
+            assert!(!entries.is_empty());
+            assert!(
+                entries
+                    .iter()
+                    .all(|entry| &entry.id == owner
+                        && entry.occurrence.unix_millis == Some(3_723_000))
+            );
+            if pruned {
+                assert!(entries.iter().all(|entry| !entry.first_row));
+            }
+            let position = fresh
+                .search("authored", mez_mux::copy::SearchDirection::Forward)
+                .unwrap()
+                .unwrap();
+            assert!(position.column >= frame.body_origin);
+            assert_eq!(fresh.copy_selection().unwrap(), "authored");
+            assert_eq!(
+                service
+                    .active_copy_mode_for_presented_surface("%1")
+                    .unwrap(),
+                &frozen
+            );
+        }
+    }
+}
+
 /// Equal-width formatting changes reject an old streaming candidate even when
 /// columns and body budget are unchanged. Fresh ON/OFF/custom candidates keep
 /// original occurrence, entry boundary and authored directive-looking bytes.
