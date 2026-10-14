@@ -204,6 +204,46 @@ impl RuntimeSessionService {
 mod tests {
     use super::*;
 
+    /// Reports the actual inline copy/presentation/service/actor propagation
+    /// path without constructing or boxing asynchronous test futures. Same-
+    /// compiler before/after data informs one production owner representation;
+    /// unchanged ordinary-stack MCP behavior remains the acceptance oracle.
+    #[test]
+    fn runtime_log_copy_layout_reports_inline_actor_footprints() {
+        assert!(
+            std::mem::size_of::<crate::host::terminal::CopyMode>()
+                <= 2 * std::mem::size_of::<usize>(),
+            "retained product copy snapshots must have a pointer-bounded inline owner"
+        );
+        fn future_bytes<F>(
+            _: impl FnOnce(crate::host::async_runtime::AsyncRuntimeSessionActor) -> F,
+        ) -> usize {
+            std::mem::size_of::<F>()
+        }
+        eprintln!(
+            "log copy layout bytes: buffer={} styled_copy={} copy={} cleanup={} presentation={} service={} actor={} actor_future={} screen={} styled_line={}",
+            std::mem::size_of::<mez_mux::copy::CopyBuffer>(),
+            std::mem::size_of::<mez_mux::copy::StyledCopyMode>(),
+            std::mem::size_of::<crate::host::terminal::CopyMode>(),
+            std::mem::size_of::<
+                std::cell::RefCell<
+                    Option<(
+                        String,
+                        crate::runtime::render::PaneSurfaceKind,
+                        crate::host::terminal::CopyMode,
+                        u64
+                    )>,
+                >,
+            >(),
+            std::mem::size_of::<crate::runtime::render::RuntimePresentationComponent>(),
+            std::mem::size_of::<RuntimeSessionService>(),
+            std::mem::size_of::<crate::host::async_runtime::AsyncRuntimeSessionActor>(),
+            future_bytes(crate::host::async_runtime::AsyncRuntimeSessionActor::run),
+            std::mem::size_of::<TerminalScreen>(),
+            std::mem::size_of::<mez_terminal::TerminalStyledLine>()
+        );
+    }
+
     /// Bounds, overlaps and partial Unicode endpoints reject before any parser
     /// mutation, including a valid earlier range in the same supplied plan.
     #[test]

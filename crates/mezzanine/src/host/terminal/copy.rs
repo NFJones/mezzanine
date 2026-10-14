@@ -30,8 +30,10 @@ const AGENT_COPY_ASSISTANT_LABEL: &str = "mez> ";
 /// Navigation, viewport, search, selection, terminal-derived styled rows, and
 /// source-aware copy metadata belong to `mez-mux`. This adapter retains only
 /// Mezzanine transcript/Markdown normalization and host clipboard integration.
+/// The owned frozen snapshot stays out of line so added row/source geometry
+/// cannot inflate every retained cleanup snapshot and runtime actor frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CopyMode(StyledCopyMode, bool);
+pub struct CopyMode(Box<StyledCopyMode>, bool);
 
 /// Selects the representation written for an active copy-mode selection.
 ///
@@ -82,18 +84,18 @@ impl CopyMode {
                 rendition,
             );
             return Ok(Self(
-                StyledCopyMode::from_projected_rows(
+                Box::new(StyledCopyMode::from_projected_rows(
                     screen,
                     projection.rows,
                     projection.frames,
                     viewport_rows,
                     false,
-                )?,
+                )?),
                 false,
             ));
         }
         Ok(Self(
-            StyledCopyMode::from_screen(screen, viewport_rows)?,
+            Box::new(StyledCopyMode::from_screen(screen, viewport_rows)?),
             false,
         ))
     }
@@ -109,18 +111,18 @@ impl CopyMode {
                 rendition,
             );
             return Ok(Self(
-                StyledCopyMode::from_projected_rows(
+                Box::new(StyledCopyMode::from_projected_rows(
                     screen,
                     projection.rows,
                     projection.frames,
                     viewport_rows,
                     true,
-                )?,
+                )?),
                 false,
             ));
         }
         Ok(Self(
-            StyledCopyMode::from_visible_screen(screen, viewport_rows)?,
+            Box::new(StyledCopyMode::from_visible_screen(screen, viewport_rows)?),
             false,
         ))
     }
