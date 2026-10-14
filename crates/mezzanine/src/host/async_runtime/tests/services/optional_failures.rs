@@ -1,6 +1,7 @@
 //! Optional-worker panic fixtures use per-service executors, never global hooks.
 
 use super::super::*;
+use crate::host::async_runtime::AsyncRuntimeSessionHandle;
 use crate::host::async_runtime::side_effects::run_status_pill_service_with_executors;
 
 /// Real control ingress must stay usable after optional work fails, including
@@ -17,6 +18,63 @@ async fn assert_control_progress(handle: &AsyncRuntimeSessionHandle) {
     ).await.unwrap();
     let (body, _) = decode_control_frame(&shown.output, 1024 * 1024).unwrap();
     assert!(body.contains(r#""visible":true"#), "{body}");
+}
+
+/// Exercises real child input/output after feature failure, then feeds the
+/// observed bytes through exact process-generation ingress. Terminal echo is
+/// disabled by the launch command, so output must come from the live cat.
+async fn assert_native_pane_progress(handle: &AsyncRuntimeSessionHandle) {
+    let mut processes = handle
+        .take_running_pane_process_instances_for_adapter(8)
+        .await
+        .unwrap();
+    assert_eq!(processes.len(), 2);
+    for (instance, process) in &mut processes {
+        assert!(process.poll_exit().unwrap().is_none());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut observed = Vec::new();
+            loop {
+                observed.extend(process.read_available_output(4096).unwrap());
+                if String::from_utf8_lossy(&observed).contains("native-ready") {
+                    break;
+                }
+                assert!(process.poll_exit().unwrap().is_none());
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("child must acknowledge disabled terminal echo before input proof");
+        let marker = format!("native-survivor-{}", instance.pane_id);
+        process
+            .write_input(format!("{marker}\n").as_bytes())
+            .unwrap();
+        let output = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut observed = Vec::new();
+            loop {
+                observed.extend(process.read_available_output(4096).unwrap());
+                if String::from_utf8_lossy(&observed).contains(&marker) {
+                    return observed;
+                }
+                assert!(process.poll_exit().unwrap().is_none());
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("live sibling must return actual PTY input after optional failure");
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::PaneProcess {
+            instance: instance.clone(),
+            event: PaneProcessEvent::Pane(PaneEvent::Output {
+                pane_id: instance.pane_id.clone(),
+                bytes: output,
+            }),
+        });
+        assert_eq!(
+            handle.submit_runtime_events(batch).await.unwrap().applied,
+            1
+        );
+        process.terminate(Duration::from_millis(10)).unwrap();
+    }
 }
 
 /// A panicking async window child and twelve panicking blocking pane children
@@ -49,13 +107,13 @@ error_behavior = "show_error"
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     service
-        .start_initial_pane_process(Some("cat >/dev/null"))
+        .start_initial_pane_process(Some("stty -echo; printf 'native-ready\\n'; cat"))
         .unwrap();
     service
         .split_pane_with_process(
             &primary,
             mez_mux::layout::SplitDirection::Vertical,
-            Some("cat >/dev/null"),
+            Some("stty -echo; printf 'native-ready\\n'; cat"),
         )
         .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
@@ -99,24 +157,49 @@ error_behavior = "show_error"
         .await
         .unwrap();
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(5),
-        run_status_pill_service_with_executors(
-            &handle,
-            AsyncRuntimeSideEffectServiceConfig {
-                max_polls: 1,
-                drain_limit: 16,
-                idle_interval: Duration::from_millis(1),
-            },
-            |_, _| false,
-            |_, _| async { panic!("controlled window child panic") },
-            |_| panic!("controlled blocking pane child panic"),
-        ),
-    )
-    .await
-    .unwrap();
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let worker_handle = handle.clone();
+    let shutdown_handle = handle.clone();
+    // Match SessionRuntime::run: every supervision exit requests actor shutdown.
+    let supervision = tokio::spawn(async move {
+        let result = supervise_async_runtime_services(
+            vec![
+                AsyncRuntimeService::new_auxiliary("status-pills", async move {
+                    let report = run_status_pill_service_with_executors(
+                        &worker_handle,
+                        AsyncRuntimeSideEffectServiceConfig {
+                            max_polls: 1,
+                            drain_limit: 16,
+                            idle_interval: Duration::from_millis(1),
+                        },
+                        |_, _| false,
+                        |_, _| async { panic!("controlled window child panic") },
+                        |_| panic!("controlled blocking pane child panic"),
+                    )
+                    .await?;
+                    let work_units = report.drained;
+                    let _ = result_tx.send(report);
+                    Ok(AsyncRuntimeServiceExit::completed(work_units))
+                }),
+                AsyncRuntimeService::new("live-control-lifetime", async move {
+                    let _ = stop_rx.await;
+                    Ok(AsyncRuntimeServiceExit::completed(0))
+                }),
+            ],
+            std::future::pending(),
+        )
+        .await;
+        let _ = shutdown_handle.shutdown().await;
+        result
+    });
+    let result = tokio::time::timeout(Duration::from_secs(5), result_rx)
+        .await
+        .unwrap();
 
-    // Clean real children even when the baseline containment assertion fails.
+    // Service errors trigger actor shutdown through the coupled supervisor;
+    // these requests must therefore prove progress, not merely cached health.
+    assert_control_progress(&handle).await;
     let view = handle
         .render_client_view(
             ClientViewRole::Primary,
@@ -126,32 +209,14 @@ error_behavior = "show_error"
         .await
         .unwrap()
         .unwrap();
-    let mut processes = handle
-        .take_running_pane_process_instances_for_adapter(8)
-        .await
-        .unwrap();
-    assert_eq!(processes.len(), 2);
-    for (instance, process) in &mut processes {
-        let mut batch = RuntimeEventBatch::new();
-        batch.push(RuntimeEvent::PaneProcess {
-            instance: instance.clone(),
-            event: PaneProcessEvent::Pane(PaneEvent::Output {
-                pane_id: instance.pane_id.clone(),
-                bytes: b"healthy optional-failure sibling".to_vec(),
-            }),
-        });
-        assert_eq!(
-            handle.submit_runtime_events(batch).await.unwrap().applied,
-            1
-        );
-        process.terminate(Duration::from_millis(10)).unwrap();
-    }
+    assert_native_pane_progress(&handle).await;
     assert_eq!(
         handle.lifecycle_state().await.unwrap(),
         RuntimeLifecycleState::Running
     );
-    assert_control_progress(&handle).await;
-    handle.shutdown().await.unwrap();
+    assert!(!supervision.is_finished());
+    stop_tx.send(()).unwrap();
+    assert!(!supervision.await.unwrap().unwrap().shutdown_requested);
     actor_task
         .await
         .unwrap()
@@ -193,13 +258,13 @@ async fn x11_infrastructure_failure_preserves_supervised_actor_panes_and_control
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     service
-        .start_initial_pane_process(Some("cat >/dev/null"))
+        .start_initial_pane_process(Some("stty -echo; printf 'native-ready\\n'; cat"))
         .unwrap();
     service
         .split_pane_with_process(
             &primary,
             mez_mux::layout::SplitDirection::Vertical,
-            Some("cat >/dev/null"),
+            Some("stty -echo; printf 'native-ready\\n'; cat"),
         )
         .unwrap();
     let owner = RuntimeX11RouteOwner {
@@ -229,51 +294,37 @@ async fn x11_infrastructure_failure_preserves_supervised_actor_panes_and_control
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-    let supervision = tokio::spawn(supervise_async_runtime_services(
-        vec![
-            AsyncRuntimeService::new_auxiliary("x11-proxy", async move {
-                let result = proxy.serve_with_test_faults(None, Some(rx)).await;
-                let _ = finished_tx.send(());
-                Ok(AsyncRuntimeServiceExit::completed(result?))
-            }),
-            AsyncRuntimeService::new("live-control-lifetime", async move {
-                let _ = stop_rx.await;
-                Ok(AsyncRuntimeServiceExit::completed(0))
-            }),
-        ],
-        std::future::pending(),
-    ));
+    let shutdown_handle = handle.clone();
+    let supervision = tokio::spawn(async move {
+        let result = supervise_async_runtime_services(
+            vec![
+                AsyncRuntimeService::new_auxiliary("x11-proxy", async move {
+                    let result = proxy.serve_with_test_faults(None, Some(rx)).await;
+                    let _ = finished_tx.send(());
+                    Ok(AsyncRuntimeServiceExit::completed(result?))
+                }),
+                AsyncRuntimeService::new("live-control-lifetime", async move {
+                    let _ = stop_rx.await;
+                    Ok(AsyncRuntimeServiceExit::completed(0))
+                }),
+            ],
+            std::future::pending(),
+        )
+        .await;
+        let _ = shutdown_handle.shutdown().await;
+        result
+    });
     tx.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(2), finished_rx)
         .await
         .unwrap()
         .unwrap();
     assert_control_progress(&handle).await;
-    let mut processes = handle
-        .take_running_pane_process_instances_for_adapter(8)
-        .await
-        .unwrap();
-    assert_eq!(processes.len(), 2);
-    for (instance, process) in &mut processes {
-        let mut batch = RuntimeEventBatch::new();
-        batch.push(RuntimeEvent::PaneProcess {
-            instance: instance.clone(),
-            event: PaneProcessEvent::Pane(PaneEvent::Output {
-                pane_id: instance.pane_id.clone(),
-                bytes: b"X11 failure sibling progress".to_vec(),
-            }),
-        });
-        assert_eq!(
-            handle.submit_runtime_events(batch).await.unwrap().applied,
-            1
-        );
-        process.terminate(Duration::from_millis(10)).unwrap();
-    }
+    assert_native_pane_progress(&handle).await;
     let stayed_supervised = !supervision.is_finished();
     let revoked = !proxy_handle.diagnostics().route_active;
     let _ = stop_tx.send(());
     let report = supervision.await.unwrap();
-    handle.shutdown().await.unwrap();
     actor_task
         .await
         .unwrap()

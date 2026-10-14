@@ -5,6 +5,9 @@
 //! the first process starts. Until route negotiation installs an owner, every
 //! accepted socket is closed immediately. The listener task exclusively owns
 //! its generated directory so cancellation removes all session-local artifacts.
+//! Relay identities remain outside child futures: child failure revokes only
+//! that route generation; listener loss fences and drains this optional feature.
+//! Poisoned ownership and lost task identities remain fatal service errors.
 
 use std::fmt;
 use std::fs;
@@ -153,6 +156,12 @@ pub(crate) struct RuntimeX11ProxyHandle {
 /// Copyable aggregate X11 lifecycle counters containing no route identities or secrets.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RuntimeX11ProxyDiagnosticsSnapshot {
+    /// Permanent listener degradation; new routes fail closed until a new session.
+    pub(crate) service_unavailable: bool,
+    /// Unexpected child join failures, never panic payloads or route identities.
+    pub(crate) worker_failures: u64,
+    /// Listener infrastructure failures; automatic restart is not attempted.
+    pub(crate) listener_failures: u64,
     pub(crate) route_active: bool,
     pub(crate) authority_repair_pending: bool,
     pub(crate) active_streams: usize,
@@ -173,6 +182,9 @@ pub(crate) struct RuntimeX11ProxyDiagnosticsSnapshot {
 /// Shared atomic counters for one stable session proxy.
 #[derive(Debug, Default)]
 struct RuntimeX11ProxyDiagnostics {
+    service_unavailable: AtomicBool,
+    worker_failures: AtomicU64,
+    listener_failures: AtomicU64,
     route_active: AtomicBool,
     authority_repair_pending: AtomicBool,
     active_streams: AtomicUsize,
@@ -193,6 +205,9 @@ struct RuntimeX11ProxyDiagnostics {
 impl RuntimeX11ProxyDiagnostics {
     fn snapshot(&self) -> RuntimeX11ProxyDiagnosticsSnapshot {
         RuntimeX11ProxyDiagnosticsSnapshot {
+            service_unavailable: self.service_unavailable.load(Ordering::Relaxed),
+            worker_failures: self.worker_failures.load(Ordering::Relaxed),
+            listener_failures: self.listener_failures.load(Ordering::Relaxed),
             route_active: self.route_active.load(Ordering::Relaxed),
             authority_repair_pending: self.authority_repair_pending.load(Ordering::Relaxed),
             active_streams: self.active_streams.load(Ordering::Relaxed),
@@ -234,15 +249,21 @@ enum RuntimeX11StreamOutcome {
 /// Drop-safe accounting for one accepted setup-pending or active stream.
 struct RuntimeX11StreamDiagnosticsGuard {
     diagnostics: Arc<RuntimeX11ProxyDiagnostics>,
+    cancellation: watch::Receiver<bool>,
     finished: bool,
 }
 
 impl RuntimeX11StreamDiagnosticsGuard {
-    fn started(diagnostics: Arc<RuntimeX11ProxyDiagnostics>) -> Self {
+    /// Retains revocation state for exact terminal accounting on abort/drop.
+    fn started(
+        diagnostics: Arc<RuntimeX11ProxyDiagnostics>,
+        cancellation: watch::Receiver<bool>,
+    ) -> Self {
         diagnostics.streams_started.fetch_add(1, Ordering::Relaxed);
         diagnostics.active_streams.fetch_add(1, Ordering::Relaxed);
         Self {
             diagnostics,
+            cancellation,
             finished: false,
         }
     }
@@ -277,7 +298,12 @@ impl RuntimeX11StreamDiagnosticsGuard {
 
 impl Drop for RuntimeX11StreamDiagnosticsGuard {
     fn drop(&mut self) {
-        self.finish(RuntimeX11StreamOutcome::Failed);
+        let outcome = if !std::thread::panicking() && *self.cancellation.borrow() {
+            RuntimeX11StreamOutcome::Cancelled
+        } else {
+            RuntimeX11StreamOutcome::Failed
+        };
+        self.finish(outcome);
     }
 }
 
@@ -359,6 +385,11 @@ impl RuntimeX11ProxyHandle {
                 "the session already has an active X11 route owner",
             ));
         }
+        if routes.unavailable {
+            return Err(MezError::invalid_state(
+                "session X11 listener is unavailable",
+            ));
+        }
         let mut replaced_route = false;
         if let Some(current) = routes.current.take() {
             current.cancellation.send_replace(true);
@@ -425,6 +456,11 @@ impl RuntimeX11ProxyHandle {
             let routes = self.inner.routes.lock().map_err(|_| {
                 MezError::invalid_state("session X11 route registry is unavailable")
             })?;
+            if routes.unavailable {
+                return Err(MezError::invalid_state(
+                    "session X11 listener is unavailable",
+                ));
+            }
             let route = routes.current.as_ref().ok_or_else(|| {
                 MezError::invalid_state("session X11 route reservation is no longer current")
             })?;
@@ -622,22 +658,66 @@ impl RuntimeX11ProxyHandle {
     }
 
     /// Snapshots one currently published route for a single accepted socket.
-    fn active_route(&self) -> Option<RuntimeX11ActiveRoute> {
-        let routes = self.inner.routes.lock().ok()?;
-        let route = routes.current.as_ref()?;
-        if !route.active {
-            return None;
-        }
-        Some(RuntimeX11ActiveRoute {
+    fn active_route(&self) -> Result<Option<RuntimeX11ActiveRoute>> {
+        let routes =
+            self.inner.routes.lock().map_err(|_| {
+                MezError::invalid_state("session X11 route registry is unavailable")
+            })?;
+        let Some(route) = routes
+            .current
+            .as_ref()
+            .filter(|route| route.active && !routes.unavailable)
+        else {
+            return Ok(None);
+        };
+        let Some(transport) = route.transport.as_ref() else {
+            return Ok(None);
+        };
+        Ok(Some(RuntimeX11ActiveRoute {
+            owner: route.owner.clone(),
             generation: route.generation,
             fake_cookie: route.fake_cookie.clone(),
             route_token: route.route_token.clone(),
-            transport: route.transport.as_ref()?.clone(),
+            transport: transport.clone(),
             setup_timeout: self.inner.policy.setup_timeout,
             permits: route.permits.clone(),
             cancellation: route.cancellation.subscribe(),
             diagnostics: self.inner.diagnostics.clone(),
-        })
+        }))
+    }
+
+    /// Permanently fences admission and revokes current authority under one
+    /// ownership lock. Poisoning is shared corruption and remains fatal.
+    fn disable_failed_listener(&self) -> Result<()> {
+        let mut routes =
+            self.inner.routes.lock().map_err(|_| {
+                MezError::invalid_state("session X11 route registry is unavailable")
+            })?;
+        routes.unavailable = true;
+        if let Some(route) = routes.current.take() {
+            route.cancellation.send_replace(true);
+            if route.active {
+                self.inner
+                    .diagnostics
+                    .route_deactivations
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.inner
+            .diagnostics
+            .route_active
+            .store(false, Ordering::Relaxed);
+        self.inner
+            .diagnostics
+            .service_unavailable
+            .store(true, Ordering::Relaxed);
+        self.inner
+            .diagnostics
+            .listener_failures
+            .fetch_add(1, Ordering::Relaxed);
+        drop(routes);
+        self.schedule_empty_authority_publication();
+        Ok(())
     }
 
     /// Returns whether one exact route generation is currently published.
@@ -675,6 +755,8 @@ impl Drop for RuntimeX11ProxyState {
 /// Session-local generation counter and optional current owner.
 #[derive(Default)]
 struct RuntimeX11RouteRegistry {
+    /// Permanent feature admission fence after listener infrastructure loss.
+    unavailable: bool,
     next_generation: u64,
     current: Option<RuntimeX11RouteState>,
 }
@@ -709,6 +791,7 @@ struct RuntimeX11ActiveTransport {
 
 /// Cloneable generation snapshot retained by exactly one proxy worker.
 struct RuntimeX11ActiveRoute {
+    owner: RuntimeX11RouteOwner,
     generation: u64,
     fake_cookie: X11Cookie,
     route_token: X11RouteToken,
@@ -840,10 +923,12 @@ impl RuntimeX11Proxy {
         tokio::pin!(infrastructure);
         let mut handled = 0u64;
         let mut workers = JoinSet::new();
+        let mut identities = std::collections::HashMap::new();
         loop {
             tokio::select! {
                 () = &mut infrastructure => {
-                    return Err(MezError::invalid_state("session X11 proxy accept failed"));
+                    self.retire_failed_listener(&mut workers).await?;
+                    return Ok(handled);
                 }
                 accepted = self.listener.accept() => match accepted {
                     Ok((stream, _peer)) => {
@@ -853,7 +938,7 @@ impl RuntimeX11Proxy {
                             .diagnostics
                             .sockets_accepted
                             .fetch_add(1, Ordering::Relaxed);
-                        let Some(route) = self.handle.active_route() else {
+                        let Some(route) = self.handle.active_route()? else {
                             self.handle
                                 .inner
                                 .diagnostics
@@ -862,6 +947,13 @@ impl RuntimeX11Proxy {
                             drop(stream);
                             continue;
                         };
+                        // Completed or revoked generations retain a task slot
+                        // until joined. Takeover cannot grow the ownership map.
+                        if workers.len() >= self.handle.inner.policy.max_connections_per_route {
+                            route.diagnostics.sockets_rejected_capacity.fetch_add(1, Ordering::Relaxed);
+                            drop(stream);
+                            continue;
+                        }
                         let Ok(permit) = route.permits.clone().try_acquire_owned() else {
                             route
                                 .diagnostics
@@ -872,9 +964,11 @@ impl RuntimeX11Proxy {
                         };
                         let diagnostics = RuntimeX11StreamDiagnosticsGuard::started(
                             route.diagnostics.clone(),
+                            route.cancellation.clone(),
                         );
+                        let identity = (route.owner.clone(), route.generation);
                         let relay = execute(stream, route, permit);
-                        workers.spawn(async move {
+                        let task = workers.spawn(async move {
                             let mut diagnostics = diagnostics;
                             let result = relay.await;
                             diagnostics.finish(match result {
@@ -892,25 +986,41 @@ impl RuntimeX11Proxy {
                                 }
                             });
                         });
+                        identities.insert(task.id(), identity);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(error) => {
-                        return Err(MezError::invalid_state(format!(
-                            "session X11 proxy accept failed after {handled} sockets: {error}"
-                        )));
+                    Err(_) => {
+                        self.retire_failed_listener(&mut workers).await?;
+                        return Ok(handled);
                     }
                 },
-                joined = workers.join_next(), if !workers.is_empty() => {
-                    if let Some(Err(error)) = joined
-                        && !error.is_cancelled()
-                    {
-                        return Err(MezError::invalid_state(format!(
-                            "session X11 proxy worker failed: {error}"
-                        )));
+                joined = workers.join_next_with_id(), if !workers.is_empty() => {
+                    let joined = joined.ok_or_else(|| MezError::invalid_state(
+                        "non-empty X11 worker set yielded no completion"))?;
+                    let id = match &joined {
+                        Ok((id, ())) => *id,
+                        Err(error) => error.id(),
+                    };
+                    let (owner, generation) = identities.remove(&id).ok_or_else(||
+                        MezError::invalid_state("X11 worker completion has no retained route identity"))?;
+                    if joined.is_err() {
+                        self.handle.inner.diagnostics.worker_failures.fetch_add(1, Ordering::Relaxed);
+                        self.handle.deactivate_route(&owner, generation)?;
+                        eprintln!("mez host: X11 relay child failed; exact route revoked");
                     }
                 }
             }
         }
+    }
+
+    /// Fences admission before aborting and draining this listener's bounded
+    /// worker set, releasing sockets, cancellation handles and permits once.
+    async fn retire_failed_listener(&self, workers: &mut JoinSet<()>) -> Result<()> {
+        self.handle.disable_failed_listener()?;
+        eprintln!("mez host: X11 listener unavailable; forwarding disabled for this session");
+        workers.abort_all();
+        while workers.join_next().await.is_some() {}
+        Ok(())
     }
 }
 
@@ -1572,23 +1682,89 @@ mod tests {
         assert!(revoked, "relay panic left its credential published");
     }
 
+    /// A delayed panic after explicit takeover must settle its old task and
+    /// release old capacity without touching the replacement's credential or
+    /// live stream. This exercises the task-ID map, not merely stale lease drop.
+    #[tokio::test]
+    async fn stale_relay_panic_cannot_revoke_takeover_generation() {
+        let (server, client, connection, peer) =
+            test_connection_pair(b"mez-x11-stale-panic/1", 4).await;
+        let root = test_root("stale-relay-panic");
+        let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+        let handle = proxy.handle();
+        let owner = route_owner("old-owner", &format!("iroh-{}", connection.stable_id()));
+        let (_, old) = handle
+            .reserve_route(owner.clone(), route_offer([0x76; 16], false))
+            .unwrap();
+        activate_test_route(&old, connection.clone());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(proxy.serve_with_test_faults(Some(rx), None));
+        let _old_socket = connect_proxy(&handle).await;
+        wait_for_proxy_metrics(&handle, |m| m.streams_started == 1).await;
+        let (route, replacement) = handle
+            .reserve_route(owner.clone(), route_offer([0x77; 16], true))
+            .unwrap();
+        activate_test_route(&replacement, connection);
+        let credential = fs::read(handle.authority_path()).unwrap();
+        let mut current_socket = connect_proxy(&handle).await;
+        current_socket
+            .write_all(&setup_packet(b'l', &[0x77; 16]))
+            .await
+            .unwrap();
+        let (mut send, _recv) = accept_proxy_stream(&peer, &route, [0x77; 16]).await;
+        tx.send(()).unwrap();
+        wait_for_proxy_metrics(&handle, |m| m.worker_failures == 1 && m.active_streams == 1).await;
+        assert!(!task.is_finished());
+        assert!(handle.route_is_active(&owner, route.generation));
+        assert!(!old.deactivate().unwrap());
+        assert_eq!(fs::read(handle.authority_path()).unwrap(), credential);
+        send.write_all(b"alive").await.unwrap();
+        let mut response = [0; 5];
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            current_socket.read_exact(&mut response),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&response, b"alive");
+        replacement.deactivate().unwrap();
+        wait_for_proxy_metrics(&handle, |m| m.active_streams == 0).await;
+        task.abort();
+        let _ = task.await;
+        client.close().await;
+        server.close().await;
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// Listener infrastructure loss must revoke all current X11 work, finish
     /// nonfatally, preserve stable environment paths and reject future route
     /// admission rather than claiming forwarding still works or restarting.
     #[tokio::test]
     async fn listener_failure_retires_only_x11_and_fences_new_admission() {
+        let (server, client, connection, peer) =
+            test_connection_pair(b"mez-x11-infrastructure/1", 2).await;
         let root = test_root("listener-failure");
         let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
         let handle = proxy.handle();
-        let owner = route_owner("listener-owner", "connection");
-        let (_, lease) = handle
+        let owner = route_owner(
+            "listener-owner",
+            &format!("iroh-{}", connection.stable_id()),
+        );
+        let (route, lease) = handle
             .reserve_route(owner.clone(), route_offer([0x73; 16], false))
             .unwrap();
-        lease.activate_without_transport().unwrap();
+        activate_test_route(&lease, connection);
         let display = handle.display().to_string();
         let authority = handle.authority_path().to_path_buf();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(proxy.serve_with_test_faults(None, Some(rx)));
+        let mut local = connect_proxy(&handle).await;
+        local
+            .write_all(&setup_packet(b'l', &[0x73; 16]))
+            .await
+            .unwrap();
+        let (_send, _recv) = accept_proxy_stream(&peer, &route, [0x73; 16]).await;
         tx.send(()).unwrap();
         let result = tokio::time::timeout(Duration::from_secs(2), task)
             .await
@@ -1596,11 +1772,39 @@ mod tests {
             .unwrap();
         let revoked = !handle.diagnostics().route_active;
         let refused = handle
-            .reserve_route(owner, route_offer([0x74; 16], true))
+            .reserve_route(owner.clone(), route_offer([0x74; 16], true))
             .is_err();
+        let metrics = handle.diagnostics();
+        assert!(metrics.service_unavailable);
+        assert_eq!(metrics.listener_failures, 1);
+        assert_eq!(metrics.worker_failures, 0);
+        assert_eq!(metrics.active_streams, 0);
+        assert_eq!(metrics.streams_started, 1);
+        assert_eq!(metrics.streams_cancelled, 1);
+        assert!(lease.activate_without_transport().is_err());
+        for _ in 0..8 {
+            assert!(
+                handle
+                    .reserve_route(owner.clone(), route_offer([0x74; 16], true))
+                    .is_err()
+            );
+        }
+        assert_eq!(handle.diagnostics().listener_failures, 1);
+        wait_for_proxy_metrics(&handle, |m| !m.authority_repair_pending).await;
+        assert!(fs::read(handle.authority_path()).unwrap().is_empty());
+        let mut byte = [0; 1];
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), local.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
         assert_eq!(handle.display(), display);
         assert_eq!(handle.authority_path(), authority);
         lease.deactivate().unwrap();
+        client.close().await;
+        server.close().await;
         let _ = fs::remove_dir_all(root);
         assert!(
             result.is_ok(),
@@ -1608,6 +1812,35 @@ mod tests {
         );
         assert!(revoked, "listener failure left its route active");
         assert!(refused, "dead listener admitted a new route");
+    }
+
+    /// A poisoned route registry is compromised shared ownership, not a local
+    /// relay error. The real accept path must return a sanitized critical error
+    /// instead of silently rejecting sockets or reporting optional degradation.
+    #[tokio::test]
+    async fn poisoned_route_registry_remains_fatal_to_proxy_service() {
+        let root = test_root("poisoned-registry");
+        let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+        let handle = proxy.handle();
+        let poisoned = handle.clone();
+        assert!(
+            std::panic::catch_unwind(move || {
+                let _routes = poisoned.inner.routes.lock().unwrap();
+                panic!("controlled registry corruption");
+            })
+            .is_err()
+        );
+        let task = tokio::spawn(proxy.serve());
+        let _socket = connect_proxy(&handle).await;
+        let error = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.message(), "session X11 route registry is unavailable");
+        assert!(!handle.diagnostics().service_unavailable);
+        assert_eq!(handle.diagnostics().listener_failures, 0);
+        let _ = fs::remove_dir_all(root);
     }
 
     /// One authenticated proxy socket must map to one server-opened raw Iroh
@@ -1871,7 +2104,7 @@ mod tests {
 
         let mut stalled = connect_proxy(&handle).await;
         let (local, _) = proxy.listener.accept().await.unwrap();
-        let active = handle.active_route().unwrap();
+        let active = handle.active_route().unwrap().unwrap();
         let permits = active.permits.clone();
         let permit = permits.clone().try_acquire_owned().unwrap();
         let setup = setup_packet(b'l', &[0x73; 16]);
