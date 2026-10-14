@@ -234,12 +234,23 @@ mod tests {
             );
             if harness == "pi" {
                 assert_eq!(history[1].revision, 11);
-                let pre_resume = history[1].entries.iter()
-                    .find(|entry| entry.path.ends_with("/persistent_client.mjs")).unwrap();
-                assert_eq!(pre_resume.artifact, Artifact::File {
-                    bytes: include_bytes!("history/persistent_client_pre_resume.mjs").to_vec()
-                });
-                assert!(history.iter().map(|manifest| manifest.revision).eq((2..=12).rev()));
+                let pre_resume = history[1]
+                    .entries
+                    .iter()
+                    .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
+                    .unwrap();
+                assert_eq!(
+                    pre_resume.artifact,
+                    Artifact::File {
+                        bytes: include_bytes!("history/persistent_client_pre_resume.mjs").to_vec()
+                    }
+                );
+                assert!(
+                    history
+                        .iter()
+                        .map(|manifest| manifest.revision)
+                        .eq((2..=12).rev())
+                );
             }
             let request = immediate
                 .entries

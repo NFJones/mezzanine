@@ -1567,7 +1567,10 @@ mod tests {
             if harness == "pi" {
                 assert_eq!(current.revision, 13);
                 assert_eq!(history[0].revision, 12);
-                assert!((2..=12).all(|revision| history.iter().any(|target| target.revision == revision)));
+                assert!(
+                    (2..=12)
+                        .all(|revision| history.iter().any(|target| target.revision == revision))
+                );
             }
             assert!(history.iter().any(|target| target.revision == 9));
             for target in history {
