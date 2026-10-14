@@ -1125,7 +1125,7 @@ fn merge_wrapped_physical_lines(
             // A raw edit or conflicting owner invalidates the entire logical row.
             // Reflow must not resurrect provenance from its unedited prefix.
             current_line.presentation = None;
-            current_source_consistent =
+            current_source_consistent &=
                 current_line.copy_source.is_none() && row.line.copy_source.is_none();
         }
         if !starts_logical_line && current_source_consistent {

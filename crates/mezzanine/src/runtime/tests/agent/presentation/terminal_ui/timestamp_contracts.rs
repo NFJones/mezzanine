@@ -5,6 +5,82 @@
 //! or new wire fields, clocks, durable event stores or process-global settings.
 
 use super::timestamp_settings::replace_timestamp_settings;
+
+/// A cumulative producer projection may legitimately evict an earlier whole
+/// component from bounded history+viewport. Attaching its source plan must not
+/// turn valid newest output into an error or invent old rows. This uses actual
+/// source events and projection build/apply, with a deliberately small history.
+#[test]
+fn runtime_log_timestamps_fully_cropped_stream_component_does_not_abort_newest() {
+    let mut service = test_runtime_service_with_size(Size::new(80, 32).unwrap());
+    replace_timestamp_settings(&mut service, true, 32, "");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new_with_history_config(Size::new(32, 3).unwrap(), 2, 1).unwrap(),
+    );
+    service.presentation.occurrence_clock_millis = Some(Some(3_723_000));
+    for (index, text) in [
+        (0, "earlier fully evicted".to_string()),
+        (
+            1,
+            format!("{}newest retained", "later owned row\n".repeat(24)),
+        ),
+    ] {
+        for event in [
+            mez_agent::StreamingSayEvent::Started {
+                action_index: index,
+                status: mez_agent::SayStatus::Progress,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.into(),
+            },
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: index,
+                text,
+            },
+            mez_agent::StreamingSayEvent::TextComplete {
+                action_index: index,
+            },
+        ] {
+            service
+                .apply_agent_streaming_say_event_to_terminal_buffer("%1", "crop-stream", &event)
+                .unwrap();
+        }
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "crop-stream")
+        .unwrap()
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let screen = service.agent_pane_screen("%1").unwrap();
+    assert!(
+        screen
+            .normal_content_lines()
+            .join("\n")
+            .contains("newest retained")
+    );
+    assert!(
+        !screen
+            .normal_content_lines()
+            .join("\n")
+            .contains("earlier fully evicted")
+    );
+    assert!(
+        screen
+            .normal_styled_content_lines()
+            .iter()
+            .filter(|row| row.text.contains("newest retained"))
+            .all(|row| row.copy_source.is_some())
+    );
+}
 use super::*;
 
 /// Every visible structured producer uses the same owned occurrence/frame
