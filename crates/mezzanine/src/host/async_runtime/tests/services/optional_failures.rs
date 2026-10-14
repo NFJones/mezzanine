@@ -4,6 +4,11 @@ use super::super::*;
 use crate::host::async_runtime::AsyncRuntimeSessionHandle;
 use crate::host::async_runtime::side_effects::run_status_pill_service_with_executors;
 
+/// Pane launch prepends `exec`, so compound setup needs an explicit shell.
+/// Readiness is published only after echo is disabled, then cat retains the PID.
+const NATIVE_CAT_COMMAND: &str =
+    "/bin/sh -c 'stty -echo && printf \"native-ready\\n\" && exec cat'";
+
 /// Real control ingress must stay usable after optional work fails, including
 /// agent presentation requests; lifecycle observation alone cannot prove that.
 async fn assert_control_progress(handle: &AsyncRuntimeSessionHandle) {
@@ -107,13 +112,13 @@ error_behavior = "show_error"
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     service
-        .start_initial_pane_process(Some("stty -echo && printf 'native-ready\\n' && exec cat"))
+        .start_initial_pane_process(Some(NATIVE_CAT_COMMAND))
         .unwrap();
     service
         .split_pane_with_process(
             &primary,
             mez_mux::layout::SplitDirection::Vertical,
-            Some("stty -echo && printf 'native-ready\\n' && exec cat"),
+            Some(NATIVE_CAT_COMMAND),
         )
         .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
@@ -258,13 +263,13 @@ async fn x11_infrastructure_failure_preserves_supervised_actor_panes_and_control
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     service
-        .start_initial_pane_process(Some("stty -echo && printf 'native-ready\\n' && exec cat"))
+        .start_initial_pane_process(Some(NATIVE_CAT_COMMAND))
         .unwrap();
     service
         .split_pane_with_process(
             &primary,
             mez_mux::layout::SplitDirection::Vertical,
-            Some("stty -echo && printf 'native-ready\\n' && exec cat"),
+            Some(NATIVE_CAT_COMMAND),
         )
         .unwrap();
     let owner = RuntimeX11RouteOwner {
