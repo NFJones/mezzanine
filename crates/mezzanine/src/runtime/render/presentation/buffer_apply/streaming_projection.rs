@@ -599,7 +599,7 @@ impl RuntimeSessionService {
 
     /// Applies one fenced generation and reports only whether the screen changed.
     ///
-    /// This redraw-facing compatibility boundary returns `false` for both a
+    /// This redraw-facing boundary returns `false` for both a
     /// rejection and an accepted unchanged screen. Callers deciding whether to
     /// finalize or retain source must use the explicit acceptance outcome instead.
     /// Errors propagate without requesting redraw or repeating any action.

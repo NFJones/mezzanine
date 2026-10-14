@@ -76,6 +76,7 @@ fn streamed_outbound_noop_case(
         assert!(service.apply_agent_streaming_say_projection_result(RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap()).unwrap());
     }
     let original_entry = service.agent_pane_screen("%1").unwrap().normal_styled_content_lines().iter().find(|row| row.text.contains('<')).and_then(|row| row.presentation.clone());
+    assert_eq!(original_entry.is_some(), visible, "visible streamed rows must carry real occurrence evidence");
     for event in [
         mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 },
         mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
