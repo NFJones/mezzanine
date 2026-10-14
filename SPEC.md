@@ -1307,9 +1307,15 @@ remain uncharged coverage gaps, never invoice-completeness claims.
 The immutable normalized report and reporting-publication UTC MUST be frozen
 once after readiness and reused on every telemetry-only retry. Observer reload
 MUST NOT transfer original client-local tickets or credentials to a successor.
-Process-owned recent metadata MUST be bounded at 128; eviction abandons only the
-original ticket with unknown-delivery semantics, never mints new authority or
-erases daemon deduplication. Unmatched historical/resume/fork callbacks MUST NOT
+Pi revision13 MUST synchronously reserve a process-owned active-plus-pending slot
+before asynchronous begin. The shared recent map MUST remain bounded at128 across
+settlement/reload; only definitively durable historical dedup evidence may be
+pruned. Full pending capacity MUST refuse new telemetry admission and disclose
+the existing readiness gap without delaying provider work. Pending incurred
+obligations MUST NOT be abandoned for space or conflicting callback replay.
+Unknown-delivery closed/exhausted slots may permanently saturate128 until process
+exit; this bounded retention is not a durable outbox or no-gap guarantee.
+Unmatched historical/resume/fork callbacks MUST NOT
 allocate expense. Before a genuine `agent_start`, `agent_settled` or supported
 session shutdown releases an unfinished accounting slot, the producer MUST queue
 the existing content-free finalized-counters gap before original-ticket
@@ -1321,6 +1327,31 @@ amounts, definite noncommit or a lifecycle outcome. Native
 stream grouping remains shared provider/model/project/category coverage, never
 one epoch or source per message. Cross-process unsent spool recovery is not
 supported; lost process-local metadata cannot be recovered by importing history.
+The SAME healthy ordinary Pi observer MAY recover a retained finalized report
+without another vendor callback using one unreferenced telemetry-only timer and
+at most one observer-wide queued/running recovery operation. Initial delivery
+plus at most three further `endRequest` calls MUST share one immutable slot budget
+across timer and genuine exact callbacks (the unchanged core permits at most two
+wire attempts per call: at most8 ends and9 original-marker begins total).
+Timer eligibility offsets are250/1000/4000ms after the first undurable result;
+every retry MUST recheck the absolute5000ms monotonic dispatch horizon inside the
+queue. Delayed work MUST NOT catch up in a burst; remaining backoff spacing is
+preserved. The horizon bounds dispatch, not in-flight completion. No trigger may
+reset the budget/horizon, rewrite reporting UTC, or mint a marker/source/session.
+Only original client/ticket/readiness/origin/projection/report bytes may retry;
+provider requests and synthetic lifecycle/gap-baseline facts MUST NOT be replayed.
+Exhaustion retains truthful delivery-unknown coverage and the original obligation.
+Failure, cancellation, settlement/shutdown/reload and stale-owner replacement
+MUST cancel future timers and fence captured/queued recovery closures. A genuine
+new run may open new slots but MUST NOT revive closed original slots. Already
+queued initial finalization MUST retain loss-before-retirement ordering even if
+readiness/report construction is pending. An in-flight typed ACK may settle its
+original obligation but MUST NOT restore failed/stale/closed owner status.
+New asynchronous readiness, report-clock or delivery failure diagnostics MUST
+recheck the captured current healthy/nonclosed slot before changing coverage or
+queueing a gap. A late old-owner result MUST NOT contaminate successor/shared
+coverage. This fence MUST preserve synchronously captured unfinished-close loss
+facts already ordered before original abandonment and lifecycle retirement.
 The existing capability-scoped Pi observation lane MAY accept a typed
 `usage_gap` with an allowlisted content-free reason. It MUST update only sticky
 observer-epoch coverage diagnostics shown in `/status`, including after prior

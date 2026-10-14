@@ -28,8 +28,12 @@ export function registerOrdinaryPiObserver(pi, options = {}) {
     if (typeof client?.disconnect === "function") client.disconnect();
     else client?.detach();
   };
-  const cancel = owned => {
+  const fail = owned => {
     owned.failed = true;
+    owned.cancelUsageRetries?.();
+  };
+  const cancel = owned => {
+    fail(owned);
     owned.cancelled = true;
     // Close only this process-owned telemetry transport, retaining exact
     // instance/predecessor metadata for a later genuine reload recovery.
@@ -51,7 +55,7 @@ export function registerOrdinaryPiObserver(pi, options = {}) {
     return queue(owned, async () => {
       if (owned.failed || !owned.client) return;
       const result = await owned.client.piObservation(item.event);
-      if (!result?.delivered) owned.failed = true;
+      if (!result?.delivered) fail(owned);
     });
   };
   pi.on("session_start", (event, ctx) => {
@@ -69,7 +73,11 @@ export function registerOrdinaryPiObserver(pi, options = {}) {
       projected = new Map();
       createPiObserver(session, forward)({ on(type, callback) { projected.set(type, callback); } });
       state.usageRecent ??= new Map();
-      usage = createPiUsageObserver(owned, operation => queue(owned, operation), state.usageRecent, options.now, reason => { state.usageGap = reason; });
+      usage = createPiUsageObserver(owned, operation => queue(owned, operation), state.usageRecent, options.now, reason => { state.usageGap = reason; }, {
+        retryScheduler: options.retryScheduler,
+        isCurrent: () => owner().lease === owned && !owner().closed,
+      });
+      owned.cancelUsageRetries = usage.cancelRetries;
       queue(owned, async () => {
         if (owned.cancelled) return;
         let previous = state.client;
@@ -79,10 +87,10 @@ export function registerOrdinaryPiObserver(pi, options = {}) {
           // requesting a new epoch; never guess a predecessor or reuse old IDs.
           const recovered = await previous.start();
           if (owned.cancelled) { disconnect(previous); return; }
-          if (!recovered) { owned.failed = true; return; }
+          if (!recovered) { fail(owned); return; }
           client = previous.successor(owned.instance);
         } else if (reason === "reload" && previous) {
-          owned.failed = true;
+          fail(owned);
           return;
         } else {
           const peerHelper = options.peerHelper ?? (await import("./peer_helper.mjs")).peerHelper;
@@ -92,7 +100,7 @@ export function registerOrdinaryPiObserver(pi, options = {}) {
             peerHelper, env });
         }
         if (owned.cancelled) { disconnect(client); return; }
-        if (!client) { owned.failed = true; return; }
+        if (!client) { fail(owned); return; }
         // Keep the exact attempted instance/predecessor even after reply loss.
         // A later genuine reload can recover that same attempt rather than
         // guessing from an old handle which may already have been replaced.
@@ -102,12 +110,12 @@ export function registerOrdinaryPiObserver(pi, options = {}) {
         if (previous && previous !== client) previous.detach();
         const started = await client.start();
         if (owned.cancelled) { disconnect(client); return; }
-        if (!started) { owned.failed = true; return; }
+        if (!started) { fail(owned); return; }
         const result = await client.piObservation({ type: "session_start", reason });
-        if (!result?.delivered) owned.failed = true;
+        if (!result?.delivered) fail(owned);
         if (!owned.failed && state.usageGap) {
           const gap = await client.piObservation({ type: "usage_gap", reason: state.usageGap });
-          if (!gap?.delivered) owned.failed = true;
+          if (!gap?.delivered) fail(owned);
           owned.lastUsageGap = state.usageGap;
         }
       });

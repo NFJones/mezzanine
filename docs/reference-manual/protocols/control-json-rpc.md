@@ -955,6 +955,19 @@ delivery. It never undoes committed expense or invents zero. No generic RPC,
 transcript import, provider retry, vendor launcher or extra accounting-enable
 command is supplied by this client. Vendor adapters must still associate actual
 before-request and finalized outcomes correctly.
+The ordinary Pi revision13 producer adds a telemetry-owner-only finite scheduler,
+not a generic request-core retry bus: one unreferenced timer and one queued/running
+recovery operation, initial plus three calls across all callback/timer triggers.
+Offsets250/1000/4000ms and an absolute5000ms monotonic dispatch horizon never reset;
+in-flight completion is not time-guaranteed. Every retry preserves the original
+client-local ticket, marker, source witness, admission UTC, origin and frozen
+incurred report. Failure/teardown/stale ownership fences future work, while an
+in-flight durable ACK may settle only its original obligation. No new provider
+request, lifecycle baseline, source namespace or successor ticket is invented.
+The process-wide active-plus-pending128 bound reserves before asynchronous begin;
+only durable historical dedup evidence is pruned. Full pending capacity refuses
+new telemetry, and closed/exhausted obligations may saturate capacity until
+process exit. This is truthful unknown delivery, not a durable no-gap outbox.
 Helper EOF is not creator death, but creator survival alone cannot keep an observer
 fresh. The finite 60s lease may expire under a living creator; this is telemetry
 expiry, not a process-death declaration. Public helper-observe callbacks still

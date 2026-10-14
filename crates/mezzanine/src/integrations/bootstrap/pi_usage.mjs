@@ -63,13 +63,53 @@ export function projectPiUsage(session, event) {
   } catch { /* arbitrary callback objects are not reporting authority */ }
 }
 
-/** Bounded process-owned recent metadata survives extension reload only to
- * reject replay. Original client-local tickets never acquire successor rights.
- * Eviction drops local retry evidence, not durable daemon deduplication. */
-export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.floor(Date.now() / 1000), onGap = () => {}) {
+/** One process-owned map reserves active plus finalized slots before admission.
+ * Only durable historical dedup evidence may be pruned. Unknown-delivery slots
+ * survive exhaustion/teardown/reload without transferring original tickets;
+ * 128 such obligations may refuse telemetry for the rest of the process life.
+ * Recovery is telemetry-only: one timer and one queued/running retry across the
+ * observer, with initial plus three calls shared by callbacks and timer. The
+ * 5s monotonic horizon bounds dispatch, not transport completion. No durable
+ * outbox, vendor request replay or successor authority is provided. Scheduler
+ * and current-owner injection are private adapter/offline-test dependencies. */
+export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.floor(Date.now() / 1000), onGap = () => {}, options = {}) {
   let active;
   let bindings = new WeakMap();
   let aliases = new Set();
+  let accepting = true;
+  let timer;
+  let timerGeneration = 0;
+  let recoveryBusy = false;
+  const offsets = [250, 1000, 4000];
+  const scheduler = options.retryScheduler ?? { now: () => performance.now(), setTimeout, clearTimeout };
+  const healthy = () => !owned.failed && !owned.cancelled && (options.isCurrent?.() ?? true);
+  const clearTimer = () => {
+    timerGeneration++;
+    if (timer !== undefined) {
+      try { scheduler.clearTimeout(timer); } catch { /* cancellation remains fenced */ }
+      timer = undefined;
+    }
+  };
+  const cancelRetries = () => {
+    accepting = false;
+    clearTimer();
+    for (const { slot } of recent.values()) if (slot.owner === owned) slot.retryClosed = true;
+  };
+  const clock = () => {
+    try {
+      const value = scheduler.now();
+      if (Number.isFinite(value) && value >= 0) return value;
+    } catch { /* unavailable scheduling cannot affect vendor flow */ }
+    cancelRetries();
+  };
+  const remove = slot => {
+    if (recent.get(slot.key)?.slot === slot) recent.delete(slot.key);
+  };
+  const eligible = (slot, at) => healthy() && slot.owner === owned && !slot.retryClosed
+    && !slot.durable && slot.initialDone && slot.ticket && slot.report && !slot.sending
+    && slot.retries < offsets.length && at <= slot.retryStarted + 5000;
+  const due = slot => Math.max(slot.retryStarted + offsets[slot.retries],
+    slot.lastRetryCompleted === undefined ? 0 : slot.lastRetryCompleted + offsets[slot.retries] - offsets[slot.retries - 1]);
   const lose = reason => {
     owned.usageCoverage = reason;
     const fact = reason.slice("unavailable-".length);
@@ -79,13 +119,27 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
       enqueue(async () => {
         if (owned.client && !owned.cancelled && !owned.failed) {
           const receipt = await owned.client.piObservation({ type: "usage_gap", reason: fact });
-          if (!receipt?.delivered) owned.failed = true;
+          if (!receipt?.delivered) { owned.failed = true; cancelRetries(); }
         }
       });
     }
   };
+  /** Async results can outlive synchronous EOS/lease replacement. They may
+   * settle only the original slot, never create a NEW diagnostic under an old
+   * or successor owner. In contrast, lose() called synchronously at an actual
+   * unfinished close captures its existing disclosure BEFORE retirement; that
+   * already-queued fact must retain original loss/abandon/retire ordering. */
+  const diagnose = (slot, reason) => {
+    if (healthy() && !slot.retryClosed) lose(reason);
+  };
   const abandon = slot => {
-    if (slot) enqueue(async () => { if (slot.ticket) slot.client?.abandonRequest(slot.ticket); });
+    if (slot && !slot.projection) {
+      slot.retryClosed = true;
+      enqueue(async () => {
+        if (slot.ticket) slot.client?.abandonRequest(slot.ticket);
+        remove(slot);
+      });
+    }
   };
   /** A genuine run/settlement/teardown boundary ends an unfinished request.
    * Disclose missing finalized counters first; abandonment never proves that
@@ -97,39 +151,113 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
     }
     active = undefined; bindings = new WeakMap(); aliases = new Set();
   };
-  const retain = (id, record) => {
-    if (!recent.has(id) && recent.size >= 128) {
-      const first = recent.keys().next().value;
-      const old = recent.get(first);
-      if (!old.slot.durable && old.slot.ticket) old.slot.client?.abandonRequest(old.slot.ticket);
-      recent.delete(first);
+  const reserve = slot => {
+    if (recent.size >= 128) {
+      for (const [key, record] of recent) {
+        if (record.slot.durable) { recent.delete(key); break; }
+      }
     }
-    recent.set(id, record);
+    if (recent.size >= 128) { lose("unavailable-request-readiness"); return false; }
+    slot.key = slot; // Object-key reservations cannot alias finalized digest keys.
+    recent.set(slot.key, { slot });
+    return true;
   };
-  const send = slot => enqueue(async () => {
-    if (!slot.ticket || !slot.client || owned.cancelled || owned.failed) { lose("unavailable-request-readiness"); return; }
+  /** Frozen incurred observation delivery is shared by initial/recovery work.
+   * An in-flight real ACK may settle its slot after close, but cannot revive
+   * owner status. Gap diagnostics remain sticky even after healthy recovery. */
+  const deliver = async slot => {
+    if (!slot.ticket || !slot.client || owned.cancelled || owned.failed) { diagnose(slot, "unavailable-request-readiness"); return; }
     if (!slot.report) {
       const observed_at = now();
       if (!natural(observed_at) || observed_at === 0 || observed_at < slot.ticket.admitted_at) {
-        lose("unavailable-report-clock"); slot.client.abandonRequest(slot.ticket); return;
+        diagnose(slot, "unavailable-report-clock"); slot.client.abandonRequest(slot.ticket); return;
       }
       slot.report = Object.freeze({ ...slot.projection, observed_at });
     }
-    const receipt = await slot.client.endRequest(slot.ticket, slot.report);
+    slot.sending = true;
+    let receipt;
+    try { receipt = await slot.client.endRequest(slot.ticket, slot.report); }
+    finally { slot.sending = false; }
     slot.durable = receipt?.delivered === true && receipt?.durable === true
       && typeof receipt.applied === "boolean" && natural(receipt.revision) && receipt.revision > 0;
-    if (slot.durable) owned.usageCoverage = "finalized-assistant-external-reported";
-    else lose("unavailable-durable-acknowledgment");
-  });
+    if (slot.durable) {
+      if (healthy() && !slot.retryClosed) owned.usageCoverage = "finalized-assistant-external-reported";
+    } else {
+      diagnose(slot, "unavailable-durable-acknowledgment");
+      if (healthy() && !slot.retryClosed) slot.retryStarted ??= clock();
+      if (receipt?.reason === "request-source-changed") slot.retryClosed = true;
+    }
+  };
+  /** Arm only the earliest eligible original slot; never enqueue 128 retries
+   * into the callback queue of 32. Generation fences captured stale callbacks.
+   * Delayed dispatch uses remaining backoff spacing rather than catch-up bursts. */
+  const arm = () => {
+    clearTimer();
+    if (!healthy()) { cancelRetries(); return; }
+    if (recoveryBusy) return;
+    const at = clock();
+    if (at === undefined) return;
+    let next;
+    for (const { slot } of recent.values()) {
+      if (!eligible(slot, at)) continue;
+      const when = slot.callbackPending ? at : due(slot);
+      if (when <= slot.retryStarted + 5000 && (!next || when < next.when)) next = { slot, when };
+    }
+    if (!next) return;
+    const generation = timerGeneration;
+    try {
+      timer = scheduler.setTimeout(() => {
+        if (generation !== timerGeneration) return;
+        timer = undefined;
+        dispatch(next.slot);
+      }, Math.max(0, next.when - at));
+      timer?.unref?.();
+    } catch { cancelRetries(); }
+  };
+  /** Every trigger consumes the same finite budget before queueing. Recheck
+   * original owner/slot/horizon inside the queued closure, not just at timer
+   * firing. Moving the record to the tail makes equal-deadline selection fair. */
+  const dispatch = slot => {
+    const at = clock();
+    if (at === undefined || !eligible(slot, at)) { arm(); return; }
+    if (recoveryBusy) { slot.callbackPending = true; return; }
+    clearTimer();
+    recoveryBusy = true;
+    slot.callbackPending = false;
+    slot.retries++;
+    const record = recent.get(slot.key);
+    if (record?.slot === slot) { recent.delete(slot.key); recent.set(slot.key, record); }
+    const queued = enqueue(async () => {
+      try {
+        const current = clock();
+        if (current !== undefined && healthy() && !slot.retryClosed && !slot.durable
+            && slot.owner === owned && recent.get(slot.key)?.slot === slot
+            && current <= slot.retryStarted + 5000) {
+          await deliver(slot);
+          slot.lastRetryCompleted = clock();
+        }
+      } finally { recoveryBusy = false; arm(); }
+    });
+    if (queued === false) { recoveryBusy = false; cancelRetries(); }
+  };
+  const send = slot => {
+    if (slot.initialQueued) { if (slot.initialDone && !slot.durable) dispatch(slot); return; }
+    slot.initialQueued = true;
+    enqueue(async () => {
+      try { await deliver(slot); }
+      finally { slot.initialDone = true; arm(); }
+    });
+  };
   return Object.freeze({
     /** Pi resets turnIndex at each genuine agent_start. Release only an
      * unfinished original request here; an unmatched late turn_end cannot
      * reset a currently active request or forge a new reporting boundary. */
     runStart() {
       finishUnreported();
+      if (healthy()) accepting = true;
     },
     turnStart(event) {
-      if (event?.type !== "turn_start" || !natural(event.turnIndex)) return;
+      if (!accepting || !healthy() || event?.type !== "turn_start" || !natural(event.turnIndex)) return;
       if (active && !active.finalized) {
         // A duplicate start cannot mint a fresh marker. Overlapping genuine
         // turns lose coverage rather than pair an old outcome with a new ticket.
@@ -138,21 +266,15 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
       }
       bindings = new WeakMap();
       aliases = new Set();
-      const slot = { owner: owned, turnIndex: event.turnIndex, marker: digest(["mez-pi-current-request/1", randomUUID()]), finalized: false };
+      const slot = { owner: owned, turnIndex: event.turnIndex, marker: digest(["mez-pi-current-request/1", randomUUID()]), finalized: false, retries: 0 };
+      if (!reserve(slot)) { active = undefined; return; }
       active = slot;
       enqueue(async () => {
         slot.client = owned.client;
-        if (!slot.client || owned.cancelled || owned.failed) { lose("unavailable-request-readiness"); return; }
-        // Reserve one slot before begin, not after finalization. Forgotten
-        // undurable reports remain unknown-delivery, never proven non-commit.
-        if (recent.size >= 128) {
-          const first = recent.keys().next().value;
-          const old = recent.get(first);
-          if (!old.slot.durable && old.slot.ticket) old.slot.client?.abandonRequest(old.slot.ticket);
-          recent.delete(first);
-        }
+        if (!slot.client || owned.cancelled || owned.failed) { diagnose(slot, "unavailable-request-readiness"); return; }
+        // Reservation is already process-visible before this async admission.
         slot.ticket = await slot.client.beginRequest(slot.marker);
-        if (!slot.ticket) lose("unavailable-request-readiness");
+        if (!slot.ticket) diagnose(slot, "unavailable-request-readiness");
       });
     },
     messageIdentity(event) {
@@ -185,11 +307,18 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
       if (previous && (previous.slot !== slot || previous.fingerprint !== fingerprint)) {
         slot.finalized = true; lose("unavailable-immutable-observation-conflict"); abandon(slot); return;
       }
+      if (slot.projection && JSON.stringify(slot.projection) !== fingerprint) { lose("unavailable-immutable-observation-conflict"); return; }
       slot.finalized = true;
       slot.projection ??= projection;
-      retain(projection.event_id, { slot, fingerprint });
+      if (slot.key !== projection.event_id) {
+        if (recent.get(slot.key)?.slot !== slot) return;
+        recent.delete(slot.key);
+        slot.key = projection.event_id;
+        recent.set(slot.key, { slot, fingerprint });
+      }
       if (!slot.durable) send(slot);
     },
-    close() { finishUnreported(); },
+    cancelRetries,
+    close() { finishUnreported(); cancelRetries(); },
   });
 }

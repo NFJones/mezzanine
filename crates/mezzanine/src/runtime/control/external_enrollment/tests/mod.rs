@@ -1340,6 +1340,7 @@ mod persistent_client;
 mod pi_assembled;
 mod pi_idle;
 mod pi_observation;
+mod pi_pending_recovery;
 mod pi_recovery;
 mod pi_retry;
 mod producer;
