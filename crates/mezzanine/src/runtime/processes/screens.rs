@@ -97,7 +97,10 @@ impl RuntimeSessionService {
             .process
             .agent_pane_screens
             .iter()
-            .filter(|(_, state)| state.screen().log_frame_settings() != (policy, rendition))
+            .filter(|(_, state)| {
+                let (captured, style) = state.screen().log_frame_settings();
+                captured != policy || style != rendition
+            })
             .map(|(pane, state)| {
                 (
                     pane.clone(),
@@ -112,7 +115,7 @@ impl RuntimeSessionService {
         }
         for (pane, conversation, previous_lineage, size) in panes {
             if let Some(screen) = self.agent_pane_screen_mut(&pane) {
-                screen.set_log_frame_settings(policy, rendition);
+                screen.set_log_frame_settings(policy.clone(), rendition);
             }
             if let Some(lineage) = self.agent_pane_screen_lineage(&pane, &conversation) {
                 self.presentation

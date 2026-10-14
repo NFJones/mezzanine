@@ -53,12 +53,18 @@ records remain byte-preserving and can therefore wrap at the physical pane
 width instead.
 
 Set `terminal.agent_log_timestamps = true` to show captured occurrence times in
-fixed **UTC HH:MM:SS**, once per proven structured log entry. It defaults off.
-Eight clock cells and one separator precede the existing two-cell gutter;
-continuations (including a cropped first visible row) reserve blank nine-cell
+**UTC HH:MM:SS** by default, once per proven structured log entry. It defaults off.
+`terminal.agent_log_timestamp_format` defaults to `%H:%M:%S`. It accepts printable
+ASCII literals and only `%H`, `%M`, `%S` (two zero-padded numeric cells) and `%%`
+(one literal percent), with 1–32 decoded cells and at most 64 source bytes.
+For example `%H:%M` is five cells and `[%S-%M-%H]` is ten. Empty/malformed formats,
+controls/non-ASCII, dates, fractions, locale, flags and explicit widths reject;
+this is not arbitrary chrono/strftime formatting. A format never enables display.
+The selected clock width and one separator precede the existing two-cell gutter;
+continuations (including a cropped first visible row) reserve blank width-plus-one
 padding. Unknown/unrepresentable times are blank, opaque PTY/ANSI rows remain
 untagged, and safely retained legacy record times are coarse persistence evidence.
-The whole margin counts toward the wrapping cap and is suppressed below 21
+The whole margin counts toward the wrapping cap and is suppressed below width+13
 capped cells. Composer/editor input, pane frames and physical PTY dimensions are
 unchanged. Timestamp cells share the dim foreground-only passive agent framing
 recipe, with independent category and body styling.
@@ -66,7 +72,12 @@ recipe, with independent category and body styling.
 The display uses original server wall-clock instants, not render time, durations
 or executor/remote-generation proof. Midnight or backward/equal clocks can repeat;
 UTC does not jump for local DST, and sequence order remains authoritative. There
-is no format/timezone knob or periodic refresh. Visual client frames retain the
+is no timezone knob or periodic refresh. Literal-only formats still require a
+known representable occurrence; otherwise all their cells remain blank. No date
+or fraction is supported, and clock-only formats do not restrict the year.
+Same-size/equal-width format changes refresh views from retained instants without
+rewriting source. Open copy snapshots retain their old stamp/style/map/selection;
+exit and reopen for the new format. Visual client frames retain the
 margin; content copy/search/capture/export/model observations omit it without
 rewriting authored source, including literal `HH:MM:SS` text. Margin-only source
 selection remains empty.

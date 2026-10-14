@@ -65,7 +65,7 @@ copy/replace examples such as command-rule arrays, or provider catalog fields
 that are materialized only after authentication; they are not activation
 markers.
 
-The current config schema version is `102`. On launch, Mezzanine migrates an
+The current config schema version is `103`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -74,6 +74,10 @@ running binary supports are rejected instead of interpreted best-effort.
 The v101-to-v102 migration advances schema authority without changing authored
 `terminal.agent_log_timestamps` choices or adjacent terminal settings. Absence
 inherits the default `false` in TOML, YAML and JSON, including inline TOML tables.
+
+The v102-to-v103 migration advances only schema authority, preserving every
+authored `terminal.agent_log_timestamp_format`, enablement choice and neighboring
+setting in all formats. Absent formats inherit `%H:%M:%S` without enabling display.
 
 The v94-to-v95 primary-config migration removes retired
 `agent_transcript_peer_receiver_fg` and `agent_transcript_peer_receiver_bg`
@@ -415,7 +419,8 @@ not resize the existing Tokio runtime.
 | `terminal.render_rate_limit_fps` | integer | `30` | Maximum burst render frames per second for attached terminals and remote pushed-render streams; `0` disables render rate limiting. |
 | `terminal.shell_output_preview_lines` | integer | `5` | Maximum visual rows shown for each transient shell-command output preview after grapheme-safe wrapping at the current pane width; must be positive. Long unbroken output is hard-wrapped before the newest-row tail is selected. |
 | `terminal.agent_wrap_column_cap` | integer | `120` | Maximum display-cell width for structured agent log and transcript rows, including status, error, diagnostic, action, result, and structured replay-fallback rows; must be positive. Continuations repeat the agent gutter, and unbroken ordinary log tokens split at grapheme boundaries. Retained legacy ANSI-only bytes are not rewrapped to this configured cap; they replay byte-for-byte and may instead wrap at the physical pane width. |
-| `terminal.agent_log_timestamps` | boolean | `false` | Display captured UTC `HH:MM:SS` once per proven structured log entry: eight cells plus one separator left of the two-cell gutter. Continuations/unknown times are blank. The cap includes the whole margin; it is suppressed below 21 capped cells. Legacy record timestamps are coarse persistence evidence, not occurrence/execution proof. Content copy/search/capture/export/model bytes remain undecorated; visual frames retain decoration. Fixed format, no timezone/format knob. |
+| `terminal.agent_log_timestamps` | boolean | `false` | Display captured UTC occurrence time once per proven structured log entry. The selected fixed-width format plus one separator sits left of the two-cell gutter. Continuations/unknown times are blank. The whole margin is suppressed below `format width + 13` capped cells (21 by default). Legacy timestamps are coarse persistence evidence, not occurrence/execution proof. Content copy/search/capture/export/model bytes remain undecorated; visual frames retain decoration. No timezone knob. |
+| `terminal.agent_log_timestamp_format` | string | `"%H:%M:%S"` | Bounded UTC clock format: printable ASCII literals plus `%H` (00–23), `%M` (00–59), `%S` (00–59) and `%%` (literal percent), 1–32 decoded cells and at most 64 source bytes. Examples: `%H:%M` (5 cells), `[%S-%M-%H]` (10 cells). Not arbitrary chrono/strftime: dates, fractions, locale, flags, widths, unknown/dangling directives, non-ASCII and controls reject before mutation. Literal-only formats are valid but unavailable/cropped instants blank every cell. Format-only changes never enable timestamps. Same-size/equal-width changes reproject retained instants; open copy snapshots retain old rows/maps until reopened. |
 | `terminal.cursor_style` | string | `"block"` | Cursor style: `block`, `underline`, or `bar`. |
 | `terminal.cursor_blink` | boolean | `false` | Whether Mezzanine-rendered cursors blink. |
 | `terminal.cursor_blink_interval_ms` | integer | `500` | Full blink cycle length in milliseconds. |

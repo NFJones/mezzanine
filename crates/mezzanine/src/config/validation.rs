@@ -339,6 +339,19 @@ pub(crate) fn validate_config_text_with_document(
         diagnostics.extend(validate_pane_status_config(root));
         diagnostics.extend(super::skills::validate_skills_config(root));
 
+        if let Some(value) = root.pointer("/terminal/agent_log_timestamp_format") {
+            let error = match value.as_str() {
+                Some(source) => mez_core::presentation::LogTimestampFormat::compile(source).err(),
+                None => Some("format must be a string"),
+            };
+            if let Some(message) = error {
+                diagnostics.push(ConfigDiagnostic {
+                    path: "terminal.agent_log_timestamp_format".to_string(),
+                    message: message.to_string(),
+                });
+            }
+        }
+
         if let Some(value) = root.pointer("/terminal/zen_focus_label_duration_ms")
             && !value.as_u64().is_some_and(|duration| duration <= 60000)
         {

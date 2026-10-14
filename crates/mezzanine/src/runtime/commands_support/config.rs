@@ -1312,6 +1312,7 @@ pub(crate) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "terminal.reduced_motion"
                 | "terminal.streaming_output"
                 | "terminal.agent_log_timestamps"
+                | "terminal.agent_log_timestamp_format"
                 | "terminal.resize_debounce_ms"
                 | "terminal.render_rate_limit_fps"
                 | "terminal.shell_output_preview_lines"

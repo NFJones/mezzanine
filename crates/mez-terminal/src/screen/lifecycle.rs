@@ -607,7 +607,7 @@ impl TerminalScreen {
             usize::from(size.columns),
             self.wrap_continuation_prefix.as_deref(),
             self.emoji_width,
-            self.log_frame_policy,
+            &self.log_frame_policy,
             self.preserve_presentation_copy_associations,
         );
         let visible_start = if preserve_bottom || physical_rows.len() > new_rows {
@@ -651,7 +651,7 @@ impl TerminalScreen {
                 usize::from(size.columns),
                 self.wrap_continuation_prefix.as_deref(),
                 self.emoji_width,
-                self.log_frame_policy,
+                &self.log_frame_policy,
             );
             self.cursor.row = absolute_row.saturating_sub(visible_start).min(max_row);
             self.cursor.column = column.min(max_column);
@@ -895,7 +895,7 @@ impl TerminalScreen {
             usize::from(size.columns),
             self.wrap_continuation_prefix.as_deref(),
             self.emoji_width,
-            self.log_frame_policy,
+            &self.log_frame_policy,
             self.preserve_presentation_copy_associations,
         );
         let visible_start = if preserve_bottom || physical_rows.len() > new_rows {
@@ -943,7 +943,7 @@ impl TerminalScreen {
                 usize::from(size.columns),
                 self.wrap_continuation_prefix.as_deref(),
                 self.emoji_width,
-                self.log_frame_policy,
+                &self.log_frame_policy,
             );
             self.cursor.row = absolute_row.saturating_sub(visible_start).min(max_row);
             self.cursor.column = column.min(max_column);

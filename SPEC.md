@@ -4197,9 +4197,19 @@ two-cell footprint and source-copy offsets. Editable input remains gutter-free;
 legacy ANSI-only records MUST NOT be heuristically
 rewritten to adopt current styling. Structured agent-mode log rows and rendered transcript
 presentation MAY display captured occurrence times when
-`terminal.agent_log_timestamps = true`; the default MUST be false. The fixed
-format MUST be eight ASCII UTC `HH:MM:SS` cells followed by one separator cell
-LEFT of the existing two-cell gutter. Continuations MUST reserve nine blank
+`terminal.agent_log_timestamps = true`; the default MUST be false. The default
+`terminal.agent_log_timestamp_format = "%H:%M:%S"` MUST preserve eight ASCII UTC
+`HH:MM:SS` cells followed by one separator LEFT of the existing two-cell gutter.
+Format selection alone MUST NOT enable timestamps. Accepted formats MUST contain
+only printable ASCII literals (0x20 through 0x7e), zero-padded numeric `%H`, `%M`,
+`%S`, and `%%` for a literal percent. The decoded width MUST be 1 through 32 cells
+and source length at most 64 bytes. Empty/malformed, non-ASCII/control-bearing,
+locale, date, fraction, flag, width and unsupported directives MUST reject before
+authored/effective mutation. This is not arbitrary chrono/strftime formatting.
+The compiled tokens and invariant width MUST be captured once with immutable
+settings/screens/workers, with content equality rather than pointer identity;
+terminal geometry MUST NOT parse formats or sample time. Continuations MUST
+reserve the configured width plus one blank separator (nine by default)
 cells, including authored newlines, tables, soft wraps, cropped tails and history
 rotation; a retained continuation MUST NOT be promoted to an original first row.
 Decoration MUST consume typed occurrence identity, basis and first-row metadata,
@@ -4211,11 +4221,15 @@ current-clock sampling, timezone/environment/file reads or a repaint timer.
 Clock-only text omits the date: midnight and backward/equal wall-clock values
 can repeat; UTC does not jump for local DST. Existing sequence order MUST remain
 authoritative. These clocks are not durations, executor-start evidence or proof
-of remote model generation/delivery. No format or timezone knob is introduced.
+of remote model generation/delivery. No timezone knob is introduced. Numeric
+clock-only formats MUST NOT impose a four-digit-year range on representable
+instants. Literal-only formats are permitted but all unavailable/cropped times
+MUST blank the entire configured width, including literals. No fractions are
+exposed, so coarse legacy seconds MUST NOT acquire fabricated precision.
 
 The cap MUST include timestamp margin, gutter and body. The entire optional
 margin MUST be suppressed when `min(pane content width, configured cap)` is
-less than 21 cells, preserving room for the longest fixed thinking label and
+less than `format width + 13` cells (21 by default), preserving room for the longest fixed thinking label and
 wide graphemes. Timestamp styling MUST reuse the passive agent framing's dim,
 foreground-only `agent_transcript_status` semantic rendition and MUST NOT bleed
 into independent gutter/category/body styles. Default-off rows MUST retain their
@@ -4231,10 +4245,10 @@ MUST exclude the optional margin without changing their existing content or
 Markdown representation. Authored `HH:MM:SS` text MUST remain byte-exact.
 Copy/search snapshots MUST carry matching typed body-origin geometry, and
 margin-only selection MUST NOT recover an unrelated whole source group. Same-size
-toggle/theme changes MUST invalidate projections and reject stale settings or
+toggle/theme/format changes, including equal-width formats, MUST invalidate projections and reject stale settings or
 conversation/lineage workers; no new mutable event history is permitted.
 An active copy view MAY retain its already frozen rows, styles, selection and
-matching geometry through a toggle/theme replacement; it MUST NOT combine them
+matching geometry through a toggle/theme/format replacement; it MUST NOT combine them
 with new offsets or silently discard selection. Newly opened views use the
 current policy after source/owner freshness checks.
 
@@ -5267,7 +5281,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 102 is the current implemented configuration schema version for this
+schema version 103 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -5275,6 +5289,11 @@ the binary.
 The `101 -> 102` migration MUST preserve every authored
 `terminal.agent_log_timestamps` value and neighboring terminal setting in TOML,
 YAML and JSON. Absent values inherit false; migration MUST NOT enable display.
+
+The `102 -> 103` migration MUST preserve every authored
+`terminal.agent_log_timestamp_format`, enablement choice and neighboring setting
+in TOML (including inline tables), YAML and JSON. Absent format values inherit
+`%H:%M:%S`; migration MUST NOT materialize an opt-in or normalize authored formats.
 
 The `91 -> 92` migration MUST remove every authored
 `frames.window.pills.<name>.style` leaf while preserving all other window-pill

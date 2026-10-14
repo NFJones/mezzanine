@@ -288,7 +288,7 @@ Older ANSI-only saved records are replayed unchanged and may wrap differently.
 
 ### Optional log occurrence timestamps
 
-`terminal.agent_log_timestamps` defaults to `false`. Enabling it shows fixed
+`terminal.agent_log_timestamps` defaults to `false`. Enabling it shows default
 **UTC HH:MM:SS** (eight cells and one separator) left of the two-cell log gutter,
 once at the original first row of each structured user/parent/peer message,
 thinking/rationale/say component, action header/preview/result, status/error/macro
@@ -303,11 +303,20 @@ These captured server wall-clock instants are not elapsed time, executor start
 or remote generation/delivery proof. Clock-only text omits dates, so midnight,
 equal instants and backward clock adjustments can repeat. UTC does not jump for
 local daylight-saving changes; sequence order, not clock text, orders entries.
-No format or timezone setting is introduced. Rendering never reads the current
+`terminal.agent_log_timestamp_format` defaults to `%H:%M:%S`. Custom formats
+accept printable ASCII literals and only `%H`, `%M`, `%S` (two zero-padded digits)
+and `%%` (literal percent), 1–32 decoded cells and at most 64 source bytes.
+`%H:%M` gives five cells; `[%S-%M-%H]` gives ten. This is not arbitrary
+chrono/strftime formatting: empty/malformed, non-ASCII/control, date, fraction,
+locale, flag, width and unknown directives reject before mutation. Selecting
+a format never enables timestamps; literal-only formats still blank completely
+for unavailable/cropped instants. Clock-only formats do not restrict the year.
+There is no timezone setting. Rendering never reads the current
 clock or timezone files, and there is no periodic timestamp repaint.
 
 The configured cap includes timestamp margin and gutter; the optional margin
-is suppressed below 21 capped pane cells. The editable composer and PTY size
+is suppressed below `format width + 13` capped pane cells (21 by default).
+Continuations reserve that format width plus one blank separator; the editable composer and PTY size
 do not change. Timestamps use dim foreground-only passive framing style;
 category gutters and authored body emphasis remain independent. Visual client
 frames/screenshots retain the margin. Content copy, source copy, search, capture,
@@ -315,7 +324,9 @@ history export and model observations omit it while preserving their existing
 content format, including literal timestamp-looking authored text. Selecting
 only the margin does not copy an unrelated whole source entry.
 An active copy view retains its frozen rows, styles, selection and matching
-column map through a display-setting change. Exit/reenter copy mode for the new
+column map through a display-setting change, including equal-width formats.
+Live formats reproject original instants without source rewriting or effect replay.
+Exit/reenter copy mode for the new
 appearance; content copying remains decoration-free in either snapshot.
 
 Later action logs and assistant text wait behind earlier presentation barriers.

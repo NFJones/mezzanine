@@ -43,6 +43,10 @@ Mezzanine is a terminal multiplexer with a built-in pane-local agent. Keep a
 shell, logs, editor, and agent conversation together in one recoverable session
 while you inspect, edit, and validate work.
 
+Agent logs can optionally show captured UTC occurrence times with bounded
+fixed-width clock formats, without changing copied or model-facing content.
+Timestamps default off; see [terminal appearance](docs/configuration/appearance-and-terminal.md).
+
 ## Why Mezzanine?
 
 - **A real multiplexer, not an agent wrapper:** persistent windows and panes,

@@ -33,6 +33,7 @@ mod resize_admission;
 mod resize_surfaces;
 mod streaming_identity;
 mod timestamp_contracts;
+mod timestamp_formats;
 mod timestamp_replay;
 mod timestamp_settings;
 mod timestamp_sources;

@@ -23,6 +23,7 @@ fn copy_source_scoped_feed_unicode_pruning_and_frozen_projection() {
         mez_core::presentation::LogFramePolicy {
             timestamps: true,
             wrap_cap: 24,
+            ..mez_core::presentation::LogFramePolicy::default()
         },
         GraphicRendition::default(),
     );
@@ -98,6 +99,7 @@ fn copy_source_row_ownership_survives_clone_reflow_pruning_and_alternate() {
         mez_core::presentation::LogFramePolicy {
             timestamps: true,
             wrap_cap: 24,
+            ..mez_core::presentation::LogFramePolicy::default()
         },
         GraphicRendition::default(),
     );
@@ -106,6 +108,7 @@ fn copy_source_row_ownership_survives_clone_reflow_pruning_and_alternate() {
         mez_core::presentation::LogFramePolicy {
             timestamps: false,
             wrap_cap: 24,
+            ..mez_core::presentation::LogFramePolicy::default()
         },
         GraphicRendition::default(),
     );

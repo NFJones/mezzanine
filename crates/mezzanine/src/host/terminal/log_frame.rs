@@ -7,7 +7,10 @@
 //! instant. No current clock, timezone lookup, file, environment or provider
 //! operation belongs here. Attached clients receive already formatted rows.
 
-use mez_core::presentation::{LogFrame, LogFramePolicy, PresentationEntry};
+use chrono::Timelike;
+use mez_core::presentation::{
+    LogFrame, LogFramePolicy, LogTimestampFormat, LogTimestampToken, PresentationEntry,
+};
 use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
 
 /// One explicit visual projection and its matching content-coordinate map.
@@ -18,19 +21,48 @@ pub(crate) struct ProjectedLogRows {
     pub frames: Vec<Option<LogFrame>>,
 }
 
-/// Returns exactly eight ASCII UTC clock cells, or truthful blank cells.
+/// Returns the validated number of ASCII UTC cells, or truthful blank cells.
 /// Unknown/incoherent/out-of-range evidence and original continuations are
 /// unavailable, not epoch zero. Legacy record evidence keeps coarse seconds.
-pub(crate) fn occurrence_clock_cells(entry: &PresentationEntry) -> String {
+/// No token is emitted before provenance and representability checks, even
+/// for literal-only formats. The compiled capture is never parsed during paint.
+pub(crate) fn occurrence_timestamp_cells(
+    entry: &PresentationEntry,
+    format: &LogTimestampFormat,
+) -> String {
     if !entry.first_row || !entry.is_valid() {
-        return "        ".into();
+        return " ".repeat(format.width());
     }
-    entry
+    let Some(instant) = entry
         .occurrence
         .unix_millis
         .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
-        .map(|instant| instant.format("%H:%M:%S").to_string())
-        .unwrap_or_else(|| "        ".into())
+    else {
+        return " ".repeat(format.width());
+    };
+    let mut output = String::with_capacity(format.width());
+    for token in format.tokens() {
+        let value = match token {
+            LogTimestampToken::Literal(byte) => {
+                output.push(char::from(*byte));
+                continue;
+            }
+            LogTimestampToken::Hour => instant.hour(),
+            LogTimestampToken::Minute => instant.minute(),
+            LogTimestampToken::Second => instant.second(),
+        };
+        // Chrono's captured UTC numeric components are always two-digit
+        // values here, including leap-second evidence (no fraction exposed).
+        output.push(char::from(b'0' + (value / 10) as u8));
+        output.push(char::from(b'0' + (value % 10) as u8));
+    }
+    output
+}
+
+/// Original default-format oracle retained for existing occurrence regressions.
+#[cfg(test)]
+pub(crate) fn occurrence_clock_cells(entry: &PresentationEntry) -> String {
+    occurrence_timestamp_cells(entry, &LogTimestampFormat::default())
 }
 
 /// Projects proven row metadata without changing canonical/copy source bytes.
@@ -51,8 +83,8 @@ pub(crate) fn project_log_rows(
             continue;
         }
         let stamp = entry
-            .map(occurrence_clock_cells)
-            .unwrap_or_else(|| "        ".into());
+            .map(|entry| occurrence_timestamp_cells(entry, &policy.timestamp_format))
+            .unwrap_or_else(|| " ".repeat(policy.timestamp_format.width()));
         row.text.insert_str(0, &format!("{stamp} "));
         for span in &mut row.style_spans {
             span.start += frame.margin_width();
@@ -111,6 +143,7 @@ mod tests {
             LogFramePolicy {
                 timestamps: false,
                 wrap_cap: 80,
+                ..LogFramePolicy::default()
             },
             80,
             theme.agent_framing_rendition(),
@@ -122,6 +155,7 @@ mod tests {
             LogFramePolicy {
                 timestamps: true,
                 wrap_cap: 80,
+                ..LogFramePolicy::default()
             },
             80,
             theme.agent_framing_rendition(),
@@ -177,5 +211,78 @@ mod tests {
             first_row: true,
         };
         assert_eq!(occurrence_clock_cells(&entry), "        ");
+    }
+
+    /// Custom formats have invariant ASCII width across signed instants,
+    /// rollover and chrono years outside four-digit dates. No date directive
+    /// means no artificial year restriction. Coarse legacy seconds remain
+    /// truthful, while unknown/cropped/incoherent inputs blank even literals.
+    #[test]
+    fn log_timestamp_format_numeric_edges_and_unavailable_literals_are_truthful() {
+        for (source, expected) in [
+            ("%H:%M", "01:02"),
+            ("[%S-%M-%H]", "[03-02-01]"),
+            ("UTC %H%M%S %%", "UTC 010203 %"),
+            ("literal", "literal"),
+        ] {
+            let format = LogTimestampFormat::compile(source).unwrap();
+            let mut entry = PresentationEntry {
+                id: "custom-owned".into(),
+                occurrence: PresentationOccurrence::new(
+                    Some(3_723_000),
+                    PresentationOccurrenceBasis::LocalAcceptance,
+                ),
+                first_row: true,
+            };
+            assert_eq!(occurrence_timestamp_cells(&entry, &format), expected);
+            for millis in [
+                -86_400_001,
+                -1,
+                0,
+                59_999,
+                60_000,
+                3_599_999,
+                3_600_000,
+                86_399_999,
+                86_400_000,
+                253_402_300_800_000,
+                -62_198_755_200_000,
+            ] {
+                entry.occurrence.unix_millis = Some(millis);
+                let output = occurrence_timestamp_cells(&entry, &format);
+                assert_eq!(output.len(), format.width());
+                assert!(output.is_ascii());
+                if source == "%H:%M" {
+                    let instant =
+                        chrono::DateTime::<chrono::Utc>::from_timestamp_millis(millis).unwrap();
+                    assert_eq!(output, instant.format("%H:%M").to_string());
+                }
+            }
+            entry.occurrence = PresentationOccurrence::legacy_record(3_723);
+            assert_eq!(occurrence_timestamp_cells(&entry, &format), expected);
+            for millis in [i64::MIN, i64::MAX] {
+                entry.occurrence.unix_millis = Some(millis);
+                assert_eq!(
+                    occurrence_timestamp_cells(&entry, &format),
+                    " ".repeat(format.width())
+                );
+            }
+            entry.occurrence = PresentationOccurrence::default();
+            assert_eq!(
+                occurrence_timestamp_cells(&entry, &format),
+                " ".repeat(format.width())
+            );
+            entry.occurrence.unix_millis = Some(3_723_000);
+            assert_eq!(
+                occurrence_timestamp_cells(&entry, &format),
+                " ".repeat(format.width())
+            );
+            entry.occurrence = PresentationOccurrence::legacy_record(3_723);
+            entry.first_row = false;
+            assert_eq!(
+                occurrence_timestamp_cells(&entry, &format),
+                " ".repeat(format.width())
+            );
+        }
     }
 }

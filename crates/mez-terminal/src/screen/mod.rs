@@ -1217,7 +1217,7 @@ fn reflow_logical_lines(
     columns: usize,
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
-    frame_policy: LogFramePolicy,
+    frame_policy: &LogFramePolicy,
     preserve_source_associations: bool,
 ) -> Vec<PhysicalStyledLine> {
     let columns = columns.max(1);
@@ -1243,7 +1243,7 @@ fn reflow_one_logical_line(
     columns: usize,
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
-    frame_policy: LogFramePolicy,
+    frame_policy: &LogFramePolicy,
     preserve_source_associations: bool,
     rows: &mut Vec<PhysicalStyledLine>,
 ) {
@@ -1506,7 +1506,7 @@ fn physical_position_for_logical_cursor(
     columns: usize,
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
-    frame_policy: LogFramePolicy,
+    frame_policy: &LogFramePolicy,
 ) -> (usize, usize) {
     let columns = columns.max(1);
     let row_offset = logical_lines
@@ -1539,7 +1539,7 @@ fn physical_row_count_for_line(
     columns: usize,
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
-    frame_policy: LogFramePolicy,
+    frame_policy: &LogFramePolicy,
 ) -> usize {
     let mut rows = Vec::new();
     reflow_one_logical_line(
@@ -1562,7 +1562,7 @@ fn physical_position_in_line(
     columns: usize,
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
-    frame_policy: LogFramePolicy,
+    frame_policy: &LogFramePolicy,
 ) -> (usize, usize) {
     let Some(line) = line else {
         return (0, 0);

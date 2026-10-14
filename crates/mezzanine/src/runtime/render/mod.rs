@@ -115,6 +115,8 @@ pub(crate) struct RuntimePresentationSettings {
     terminal_agent_wrap_column_cap: usize,
     /// Whether structured log projections show captured occurrence timestamps.
     pub(super) terminal_agent_log_timestamps: bool,
+    /// Validated immutable clock format shared by screens and projection workers.
+    terminal_agent_log_timestamp_format: mez_core::presentation::LogTimestampFormat,
     /// Whether optional terminal animation is disabled.
     terminal_reduced_motion: bool,
     /// Whether passive Mezzanine chrome is configured to be hidden.
@@ -169,6 +171,8 @@ impl Default for RuntimePresentationSettings {
             terminal_render_rate_limit_fps: 30,
             terminal_agent_wrap_column_cap: crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
             terminal_agent_log_timestamps: false,
+            terminal_agent_log_timestamp_format:
+                mez_core::presentation::LogTimestampFormat::default(),
             terminal_reduced_motion: false,
             terminal_zen_mode: false,
             terminal_zen_focus_label_duration_ms: 1000,
@@ -197,6 +201,7 @@ impl RuntimePresentationSettings {
             mez_core::presentation::LogFramePolicy {
                 timestamps: self.terminal_agent_log_timestamps,
                 wrap_cap: self.terminal_agent_wrap_column_cap,
+                timestamp_format: self.terminal_agent_log_timestamp_format.clone(),
             },
             self.ui_theme.agent_framing_rendition(),
         )
@@ -251,6 +256,8 @@ impl RuntimePresentationSettings {
             || self.pane_frame_visible_fields != replacement.pane_frame_visible_fields
             || self.terminal_agent_wrap_column_cap != replacement.terminal_agent_wrap_column_cap
             || self.terminal_agent_log_timestamps != replacement.terminal_agent_log_timestamps
+            || self.terminal_agent_log_timestamp_format
+                != replacement.terminal_agent_log_timestamp_format
             || self.terminal_reduced_motion != replacement.terminal_reduced_motion
             || self.terminal_zen_mode != replacement.terminal_zen_mode
             || self.terminal_streaming_output != replacement.terminal_streaming_output
@@ -306,6 +313,10 @@ impl RuntimePresentationSettings {
                 crate::runtime::runtime_terminal_agent_wrap_column_cap_from_config(root)?,
             terminal_agent_log_timestamps:
                 crate::runtime::runtime_terminal_agent_log_timestamps_from_config(root)?,
+            terminal_agent_log_timestamp_format:
+                crate::runtime::config::runtime_terminal_agent_log_timestamp_format_from_config(
+                    root,
+                )?,
             terminal_reduced_motion: crate::runtime::runtime_terminal_reduced_motion_from_config(
                 root,
             )?,
@@ -2372,7 +2383,7 @@ impl RuntimePresentationComponent {
             && preview.installed_lineage == previous_lineage
         {
             let mut baseline = preview.baseline_screen.as_ref().clone();
-            baseline.set_log_frame_settings(policy, rendition);
+            baseline.set_log_frame_settings(policy.clone(), rendition);
             baseline.resize(size)?;
             preview.baseline_screen = std::sync::Arc::new(baseline);
             preview.installed_lineage = resized_lineage;
@@ -2381,7 +2392,7 @@ impl RuntimePresentationComponent {
             && progress.installed_lineage == previous_lineage
         {
             let mut baseline = progress.baseline_screen.as_ref().clone();
-            baseline.set_log_frame_settings(policy, rendition);
+            baseline.set_log_frame_settings(policy.clone(), rendition);
             baseline.resize(size)?;
             progress.baseline_screen = std::sync::Arc::new(baseline);
             progress.installed_lineage = resized_lineage;
@@ -2391,7 +2402,7 @@ impl RuntimePresentationComponent {
             && streaming.installed_lineage == previous_lineage
         {
             let mut baseline = streaming.baseline_screen.as_ref().clone();
-            baseline.set_log_frame_settings(policy, rendition);
+            baseline.set_log_frame_settings(policy.clone(), rendition);
             baseline.resize(size)?;
             let mut provider = streaming.provider_screen.as_ref().clone();
             provider.set_log_frame_settings(policy, rendition);

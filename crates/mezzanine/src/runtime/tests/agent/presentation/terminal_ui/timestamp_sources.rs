@@ -25,6 +25,7 @@ fn runtime_log_timestamps_history_copy_keeps_merge_source_invalidation() {
             mez_core::presentation::LogFramePolicy {
                 timestamps: true,
                 wrap_cap: 24,
+                ..mez_core::presentation::LogFramePolicy::default()
             },
             GraphicRendition::default(),
         );
@@ -273,6 +274,7 @@ fn runtime_log_timestamps_copy_rejects_mixed_source_generations() {
             mez_core::presentation::LogFramePolicy {
                 timestamps: true,
                 wrap_cap: 80,
+                ..mez_core::presentation::LogFramePolicy::default()
             },
             GraphicRendition::default(),
         );

@@ -13,7 +13,7 @@ use super::*;
 pub(super) fn log_frame_columns(
     entry: Option<&PresentationEntry>,
     columns: usize,
-    policy: LogFramePolicy,
+    policy: &LogFramePolicy,
 ) -> usize {
     if policy.timestamps && entry.is_some_and(PresentationEntry::is_valid) {
         policy.frame(columns).canonical_width().max(1)
@@ -25,7 +25,7 @@ pub(super) fn log_frame_columns(
 impl TerminalScreen {
     /// Returns immutable geometry and supplied framing style for visual copies.
     pub fn log_frame_settings(&self) -> (LogFramePolicy, GraphicRendition) {
-        (self.log_frame_policy, self.log_timestamp_rendition)
+        (self.log_frame_policy.clone(), self.log_timestamp_rendition)
     }
 
     /// Replaces optional projection policy without changing physical PTY size.
@@ -40,7 +40,10 @@ impl TerminalScreen {
         }
         self.preserve_presentation_copy_associations |= policy.timestamps;
         let geometry_changed = self.log_frame_policy.timestamps != policy.timestamps
-            || (policy.timestamps && self.log_frame_policy.wrap_cap != policy.wrap_cap);
+            || (policy.timestamps
+                && (self.log_frame_policy.wrap_cap != policy.wrap_cap
+                    || self.log_frame_policy.timestamp_format.width()
+                        != policy.timestamp_format.width()));
         self.log_frame_policy = policy;
         self.log_timestamp_rendition = rendition;
         if geometry_changed && !self.alternate.active() {
@@ -97,7 +100,7 @@ impl TerminalScreen {
                 usize::from(self.size.columns),
                 self.wrap_continuation_prefix.as_deref(),
                 self.emoji_width,
-                self.log_frame_policy,
+                &self.log_frame_policy,
                 true,
                 &mut physical,
             );
@@ -125,7 +128,7 @@ impl TerminalScreen {
         log_frame_columns(
             self.active_presentation.as_ref(),
             usize::from(self.size.columns),
-            self.log_frame_policy,
+            &self.log_frame_policy,
         ) - 1
     }
 }

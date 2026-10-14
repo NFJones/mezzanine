@@ -15,6 +15,7 @@ fn log_frame_effective_edge_cursor_survives_resize_and_toggle() {
             LogFramePolicy {
                 timestamps: !toggle,
                 wrap_cap: 24,
+                ..LogFramePolicy::default()
             },
             GraphicRendition::default(),
         );
@@ -29,6 +30,7 @@ fn log_frame_effective_edge_cursor_survives_resize_and_toggle() {
                 LogFramePolicy {
                     timestamps: true,
                     wrap_cap: 24,
+                    ..LogFramePolicy::default()
                 },
                 GraphicRendition::default(),
             );
@@ -57,6 +59,7 @@ fn log_frame_expanding_grapheme_at_edge_stays_inside_budget() {
                 LogFramePolicy {
                     timestamps: true,
                     wrap_cap: 24,
+                    ..LogFramePolicy::default()
                 },
                 GraphicRendition::default(),
             );
@@ -114,6 +117,7 @@ fn log_frame_disabled_parity_and_tagged_raw_widths() {
         LogFramePolicy {
             timestamps: false,
             wrap_cap: 20,
+            ..LogFramePolicy::default()
         },
         GraphicRendition::default(),
     );
@@ -128,6 +132,7 @@ fn log_frame_disabled_parity_and_tagged_raw_widths() {
         LogFramePolicy {
             timestamps: true,
             wrap_cap: 24,
+            ..LogFramePolicy::default()
         },
         GraphicRendition::default(),
     );
@@ -167,6 +172,7 @@ fn log_frame_tagged_pending_edge_and_combining_are_lossless() {
             LogFramePolicy {
                 timestamps: true,
                 wrap_cap: 24,
+                ..LogFramePolicy::default()
             },
             GraphicRendition::default(),
         );

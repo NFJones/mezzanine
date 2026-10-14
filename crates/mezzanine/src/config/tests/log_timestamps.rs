@@ -3,6 +3,96 @@
 use super::*;
 use crate::config::parse_config_json_value;
 
+/// Every encoding preserves authored true/false, format bytes and unrelated
+/// fields during version-only migration, even when current validation rejects
+/// an authored format. Migration is not a normalization or opt-in mechanism.
+#[test]
+fn log_timestamp_format_migration_keeps_true_neighbors_and_invalid_authored_values() {
+    for enabled in [false, true] {
+        for source in ["%H:%M", "[%S-%M-%H]", "%%", "%Y"] {
+            for format in [ConfigFormat::Toml, ConfigFormat::Yaml, ConfigFormat::Json] {
+                let original = serde_json::json!({"version":102, "terminal":{
+                    "agent_log_timestamps":enabled, "agent_log_timestamp_format":source,
+                    "agent_wrap_column_cap":80, "cursor_blink":true
+                }, "history":{"lines":321}});
+                let text = match format {
+                    ConfigFormat::Toml => format!(
+                        "version = 102\nterminal = {{ agent_log_timestamps = {enabled}, agent_log_timestamp_format = '{}', agent_wrap_column_cap = 80, cursor_blink = true }}\n[history]\nlines = 321\n",
+                        source
+                    ),
+                    ConfigFormat::Yaml => serde_norway::to_string(&original).unwrap(),
+                    ConfigFormat::Json => serde_json::to_string(&original).unwrap(),
+                };
+                let plan = migrate_config_text(format, &text).unwrap();
+                let mut expected = original;
+                expected["version"] = serde_json::json!(103);
+                assert_eq!(
+                    parse_config_json_value(format, &plan.text).unwrap(),
+                    expected
+                );
+                assert_eq!(
+                    validate_config_text(format, &plan.text, ConfigScope::Primary).valid,
+                    source != "%Y"
+                );
+                let repeated = migrate_config_text(format, &plan.text).unwrap();
+                assert!(!repeated.changed);
+                assert_eq!(repeated.text, plan.text);
+            }
+        }
+    }
+}
+
+/// Validation retains structured types instead of accepting their flattened
+/// printable representation as literal formats. This applies to every config
+/// encoding and rejects malformed grammar even while timestamps are disabled.
+#[test]
+fn log_timestamp_format_all_encodings_reject_wrong_types_and_controls() {
+    for value in [
+        serde_json::json!(true),
+        serde_json::json!(17),
+        serde_json::json!([]),
+        serde_json::json!({}),
+        serde_json::Value::Null,
+        serde_json::json!(""),
+        serde_json::json!("%Y"),
+        serde_json::json!("\n"),
+        serde_json::json!("\t"),
+        serde_json::json!("\x1b"),
+        serde_json::json!("é"),
+    ] {
+        let root = serde_json::json!({"terminal":{"agent_log_timestamps":false,"agent_log_timestamp_format":value}});
+        for format in [ConfigFormat::Yaml, ConfigFormat::Json] {
+            let text = match format {
+                ConfigFormat::Yaml => serde_norway::to_string(&root).unwrap(),
+                ConfigFormat::Json => serde_json::to_string(&root).unwrap(),
+                ConfigFormat::Toml => unreachable!(),
+            };
+            let validation = validate_config_text(format, &text, ConfigScope::Primary);
+            assert!(!validation.valid);
+            assert!(
+                validation
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.path == "terminal.agent_log_timestamp_format")
+            );
+        }
+    }
+    for value in ["true", "17", "[]", "{}", "''"] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[terminal]\nagent_log_timestamp_format = {value}\n"),
+            ConfigScope::Primary,
+        );
+        assert!(!validation.valid);
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path == "terminal.agent_log_timestamp_format")
+        );
+    }
+}
+
 /// The default remains eight cells and format-only changes never opt into
 /// decoration. Custom formats must survive the ordinary mutation planner,
 /// rather than merely being accepted by a formatter hidden from configuration.
@@ -13,6 +103,17 @@ fn log_timestamp_format_default_and_custom_mutation_remain_default_off() {
         defaults.get("terminal.agent_log_timestamp_format"),
         Some(&"%H:%M:%S".to_string())
     );
+    assert_eq!(
+        defaults.get("terminal.agent_log_timestamps"),
+        Some(&"false".to_string())
+    );
+}
+
+/// Valid custom formats independently exercise the supported mutation surface;
+/// a missing generated default cannot short-circuit this acceptance regression.
+/// Format selection alone must preserve the existing disabled boolean.
+#[test]
+fn log_timestamp_format_custom_mutation_is_supported_without_enabling() {
     for value in ["%H:%M", "[%S-%M-%H]", "%%", "UTC %H%M%S", "literal"] {
         let plan = plan_config_mutation(
             ConfigFormat::Toml,

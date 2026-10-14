@@ -461,6 +461,26 @@ pub(crate) fn runtime_terminal_agent_log_timestamps_from_config(root: &Value) ->
         .ok_or_else(|| MezError::config("terminal.agent_log_timestamps must be true or false"))
 }
 
+/// Captures the finite format once before a complete immutable settings
+/// replacement. Missing values preserve the original eight-cell default;
+/// non-string or malformed authored values fail without echoing their contents.
+pub(crate) fn runtime_terminal_agent_log_timestamp_format_from_config(
+    root: &Value,
+) -> Result<mez_core::presentation::LogTimestampFormat> {
+    let Some(value) = root
+        .get("terminal")
+        .and_then(|terminal| terminal.get("agent_log_timestamp_format"))
+    else {
+        return Ok(mez_core::presentation::LogTimestampFormat::default());
+    };
+    let source = value
+        .as_str()
+        .ok_or_else(|| MezError::config("terminal.agent_log_timestamp_format must be a string"))?;
+    mez_core::presentation::LogTimestampFormat::compile(source).map_err(|message| {
+        MezError::config(format!("terminal.agent_log_timestamp_format: {message}"))
+    })
+}
+
 /// Returns whether provisional provider output should render while it arrives.
 pub(crate) fn runtime_terminal_streaming_output_from_config(root: &Value) -> Result<bool> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
