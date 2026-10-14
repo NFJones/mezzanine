@@ -7,6 +7,62 @@
 
 use super::*;
 
+#[cfg(test)]
+mod owned_scope_tests {
+    use super::*;
+
+    /// A deterministic partial parser operation unwinds with its original
+    /// payload. Both prior active fields must restore for outer None and Some;
+    /// already written prefix cells remain, and later raw bytes cannot inherit
+    /// the failed inner entry/source. This is not an atomic row rollback test.
+    #[test]
+    fn owned_source_scope_restores_both_active_fields_on_original_panic() {
+        for outer in [false, true] {
+            let mut screen = TerminalScreen::new(Size::new(24, 6).unwrap(), 16).unwrap();
+            let prior = PresentationEntry {
+                id: "prior".into(),
+                occurrence: Default::default(),
+                first_row: true,
+            };
+            let inner = PresentationEntry {
+                id: "inner".into(),
+                ..prior.clone()
+            };
+            let source = |entry: &PresentationEntry| {
+                crate::TerminalCopySource::new(
+                    crate::TerminalCopySourceId::new(
+                        entry,
+                        crate::TerminalCopySourceGroup::WholeEntry,
+                    )
+                    .unwrap(),
+                    "exact source",
+                )
+            };
+            let prior_source = source(&prior);
+            if outer {
+                screen.active_presentation = Some(prior.clone());
+                screen.active_copy_source = Some(prior_source.clone());
+            }
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                screen.with_presentation_scope(inner.clone(), Some(source(&inner)), |screen| {
+                    screen.feed(b"prefix");
+                    std::panic::panic_any(0x51_u64);
+                });
+            }))
+            .unwrap_err();
+            assert_eq!(caught.downcast_ref::<u64>(), Some(&0x51));
+            assert_eq!(screen.active_presentation, outer.then_some(prior));
+            assert_eq!(screen.active_copy_source, outer.then_some(prior_source));
+            assert!(screen.visible_lines()[0].starts_with("prefix"));
+            screen.active_presentation = None;
+            screen.active_copy_source = None;
+            screen.feed(b"\r\nraw");
+            assert!(screen.visible_styled_lines()[1].presentation.is_none());
+            assert!(screen.visible_styled_lines()[1].copy_source.is_none());
+        }
+    }
+}
+
 impl TerminalScreen {
     /// Returns the current terminal grid dimensions.
     pub fn size(&self) -> Size {
@@ -134,24 +190,42 @@ impl TerminalScreen {
         metadata: PresentationEntry,
         source: Option<Arc<TerminalCopySource>>,
     ) {
-        let previous = self.active_presentation.take();
-        let previous_source = self.active_copy_source.take();
-        if metadata.is_valid() && !self.alternate.active() {
-            self.active_presentation = Some(metadata);
-            self.active_copy_source = source;
-        }
-        self.feed(bytes);
-        self.active_presentation = previous;
-        self.active_copy_source = previous_source;
-        // A tagged logical right edge is not the physical PTY right edge.
-        // Restore raw-feed cursor semantics without overwriting the last cell;
-        // another tagged feed still wraps through its capacity check.
+        self.with_presentation_scope(metadata, source, |screen| {
+            screen.feed(bytes);
+        });
+        // Successful scoped feeds retain the established effective-edge
+        // insertion rule; an unwinding partial feed is never rewound here.
         if self.wrap_pending
             && self.cursor.column < self.max_column()
             && self.active_presentation.is_none()
         {
             self.cursor.column += 1;
             self.wrap_pending = false;
+        }
+    }
+
+    /// Owns paired transient annotation installation for one real parser
+    /// operation. The private generic callback is not stored or user-configured;
+    /// tests can deterministically exercise a partial feed and original panic.
+    fn with_presentation_scope(
+        &mut self,
+        metadata: PresentationEntry,
+        source: Option<Arc<TerminalCopySource>>,
+        operation: impl FnOnce(&mut Self),
+    ) {
+        let previous = self.active_presentation.take();
+        let previous_source = self.active_copy_source.take();
+        if metadata.is_valid() && !self.alternate.active() {
+            self.active_presentation = Some(metadata);
+            self.active_copy_source = source;
+        }
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(self)));
+        self.active_presentation = previous;
+        self.active_copy_source = previous_source;
+        if let Err(payload) = outcome {
+            // The outer presentation boundary still reports the original
+            // parser failure. Scope cleanup is not a row/cursor rollback.
+            std::panic::resume_unwind(payload);
         }
     }
 
