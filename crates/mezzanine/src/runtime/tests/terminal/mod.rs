@@ -11,6 +11,7 @@ mod draft_selection;
 mod external_agents;
 mod external_usage;
 mod input;
+mod list_agents_slash;
 mod overlays;
 mod rendering;
 mod scoped_browser;

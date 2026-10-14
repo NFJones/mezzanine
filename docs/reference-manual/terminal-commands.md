@@ -148,9 +148,14 @@ frozen token attribution or MMP project membership. External rows describe their
 bound pane, not an independently verified vendor workspace. Project paths remain
 searchable and included in saved output; lifecycle keys and authority are unchanged.
 
-The shared browser also has a typed **CurrentProject** snapshot foundation;
-`:list-agents` remains explicitly **All**, and this does not add a slash command
-or permit colon arguments. CurrentProject uses exact canonical current trusted
+The agent-shell `/list-agents` opens this same interactive browser with typed
+**CurrentProject** scope by default; `/list-agents --all` selects **All**.
+`:list-agents` remains explicitly **All** and does not permit colon arguments.
+Slash accepts only empty arguments or one raw literal `--all`, not aliases,
+quoted flags, project expressions or repeated options. Opening requires an
+existing visible agent prompt but no provider call, new turn/conversation or
+focus change. Control/textual execution returns display without retaining UI
+targets for later attached input. CurrentProject uses exact canonical current trusted
 root equality, not the display label, cwd prefixes, MMP parent membership,
 accounting origin or vendor workspace. The attached primary and invoking pane's
 process incarnation/current conversation owner are captured before the query,

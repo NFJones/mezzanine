@@ -131,6 +131,11 @@ In `list-agents`, Enter focuses the selected pane, `i` interrupts native work,
 `p` pauses/resumes, and `r` refreshes. `d` opens target-labelled close confirmation;
 `y` confirms force-close and `n` or Esc cancels. Search and save prompts take key
 precedence. Unsupported operations report an error without changing another row.
+Open the same browser with `/list-agents` for the actual invoking prompt's
+current trusted project, `/list-agents --all` for all session registrations, or
+argument-free `:list-agents` for All. Opening is read-only and does not focus,
+interrupt or resume work. Refresh and native controls retain the original scope
+and owner; removed targets cannot transfer stale confirmation to a neighbor.
 
 ## Inspect effective bindings
 

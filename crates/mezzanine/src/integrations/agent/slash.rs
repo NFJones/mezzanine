@@ -326,6 +326,15 @@ fn execute_agent_shell_command_with_context_inner(
             command,
             reason: "pending approval browsing requires the live runtime".to_string(),
         },
+        "list-agents" => {
+            mez_agent::slash::parse_list_agents_options(&invocation.args)
+                .map_err(AgentShellSessionError::invalid_args)?;
+            AgentShellCommandOutcome::RequiresRuntime {
+                command,
+                reason: "human agent browsing requires authenticated live runtime scope"
+                    .to_string(),
+            }
+        }
         "copy-context" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "model request context dumps require the live running turn".to_string(),

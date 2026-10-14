@@ -433,23 +433,31 @@ impl RuntimeSessionService {
                             .push(refresh);
                         continue;
                     }
-                    let body = match if queue_external_effects_for_adapter {
-                        self.execute_attached_agent_shell_command(
-                            primary_client_id,
-                            pane_id,
-                            &command,
-                        )
-                    } else {
-                        self.execute_agent_shell_command(primary_client_id, &command)
-                    } {
-                        Ok(body) => body,
-                        Err(error) => {
-                            self.show_primary_error_overlay(agent_prompt_error_display_lines(
-                                &error,
-                            ))?;
-                            continue;
-                        }
-                    };
+                    let mut capture = self.prepare_agent_prompt_command_capture(
+                        primary_client_id,
+                        pane_id,
+                        &command,
+                        queue_external_effects_for_adapter,
+                    );
+                    let body =
+                        match if queue_external_effects_for_adapter || capture.browser_requested {
+                            self.execute_attached_agent_shell_command(
+                                primary_client_id,
+                                pane_id,
+                                &command,
+                                &mut capture,
+                            )
+                        } else {
+                            self.execute_agent_shell_command(primary_client_id, &command)
+                        } {
+                            Ok(body) => body,
+                            Err(error) => {
+                                self.show_primary_error_overlay(agent_prompt_error_display_lines(
+                                    &error,
+                                ))?;
+                                continue;
+                            }
+                        };
                     match runtime_agent_shell_display_output(
                         &body,
                         &self.presentation.settings.ui_theme,
@@ -457,7 +465,12 @@ impl RuntimeSessionService {
                         self.presentation.settings.terminal_agent_wrap_column_cap,
                     ) {
                         Ok(display_output) => {
-                            self.set_agent_prompt_display_output(pane_id, display_output)?;
+                            self.present_captured_agent_prompt_display_output(
+                                primary_client_id,
+                                pane_id,
+                                capture,
+                                display_output,
+                            )?;
                         }
                         Err(error) => {
                             self.show_primary_error_overlay(agent_prompt_error_display_lines(
@@ -478,30 +491,38 @@ impl RuntimeSessionService {
                     if text.trim().is_empty() {
                         continue;
                     }
-                    let body = match if queue_external_effects_for_adapter {
-                        self.execute_attached_agent_shell_command_with_display(
-                            primary_client_id,
-                            pane_id,
-                            &text,
-                            &display,
-                            &collapsed_paste_ranges,
-                        )
-                    } else {
-                        self.execute_agent_shell_command_with_display(
-                            primary_client_id,
-                            &text,
-                            &display,
-                            &collapsed_paste_ranges,
-                        )
-                    } {
-                        Ok(body) => body,
-                        Err(error) => {
-                            self.show_primary_error_overlay(agent_prompt_error_display_lines(
-                                &error,
-                            ))?;
-                            continue;
-                        }
-                    };
+                    let mut capture = self.prepare_agent_prompt_command_capture(
+                        primary_client_id,
+                        pane_id,
+                        &text,
+                        queue_external_effects_for_adapter,
+                    );
+                    let body =
+                        match if queue_external_effects_for_adapter || capture.browser_requested {
+                            self.execute_attached_agent_shell_command_with_display(
+                                primary_client_id,
+                                pane_id,
+                                &text,
+                                &display,
+                                &collapsed_paste_ranges,
+                                &mut capture,
+                            )
+                        } else {
+                            self.execute_agent_shell_command_with_display(
+                                primary_client_id,
+                                &text,
+                                &display,
+                                &collapsed_paste_ranges,
+                            )
+                        } {
+                            Ok(body) => body,
+                            Err(error) => {
+                                self.show_primary_error_overlay(agent_prompt_error_display_lines(
+                                    &error,
+                                ))?;
+                                continue;
+                            }
+                        };
                     match runtime_agent_shell_display_output(
                         &body,
                         &self.presentation.settings.ui_theme,
@@ -509,7 +530,12 @@ impl RuntimeSessionService {
                         self.presentation.settings.terminal_agent_wrap_column_cap,
                     ) {
                         Ok(display_output) => {
-                            self.set_agent_prompt_display_output(pane_id, display_output)?;
+                            self.present_captured_agent_prompt_display_output(
+                                primary_client_id,
+                                pane_id,
+                                capture,
+                                display_output,
+                            )?;
                         }
                         Err(error) => {
                             self.show_primary_error_overlay(agent_prompt_error_display_lines(

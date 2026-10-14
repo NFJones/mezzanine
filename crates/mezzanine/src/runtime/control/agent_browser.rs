@@ -516,7 +516,7 @@ impl RuntimeSessionService {
         browser.set_help(Some("**Keys:** Enter focus · i interrupt · p pause/resume · d confirm close · r refresh · / search · s save · Esc dismiss. Children may continue while their parent is paused.".into()), None);
         if let Some(reason) = unavailable_reason {
             browser.set_error(Some(format!(
-                "Current project unavailable ({reason}). Use All (--all) or :list-agents."
+                "Current project unavailable ({reason}). Use All (`--all`) or :list-agents."
             )));
         } else if !trust_available {
             browser.set_error(Some(

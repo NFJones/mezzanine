@@ -71,6 +71,7 @@ mod context_documents;
 mod deferred;
 mod disposition;
 mod issues;
+pub(crate) mod list_agents;
 pub(crate) mod lists;
 mod model;
 mod model_catalog;

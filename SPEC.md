@@ -3502,8 +3502,30 @@ selection, MUST NOT be duplicated as terminal commands.
 The shared human agent-management browser MUST support typed `All` and
 `CurrentProject` snapshots. `All` means current session registrations, not saved
 conversations or other sessions. The argument-free colon `:list-agents` MUST
-remain explicitly `All`; this scope foundation does not register a slash command
-or change colon grammar.
+remain explicitly `All`. The agent-shell `/list-agents` MUST open the same typed
+interactive browser with `CurrentProject` by default; `/list-agents --all` MUST
+select `All`. Slash arguments MUST be empty or one literal `--all`, rejecting
+duplicates, unknown flags, operands, quoted or escaped spellings and malformed
+flags with pane-local `usage: /list-agents [--all]`. Colon grammar stays unchanged.
+
+Slash opening MUST be read-only, queueable and compaction-safe, working within
+an existing visible agent prompt during idle, running, blocked, waiting, paused
+or compacting work without provider calls, new turns/conversations, unpause,
+interruption, continuation, focus or input forwarding. The authenticated primary
+and actual invocation pane MUST be captured before command work, not inferred
+from later global focus. A renderer-local typed capture MUST carry the exact
+snapshot/query/targets through the existing pending pager handoff once, fenced
+by client, pane, process/conversation owner and interaction action generation.
+Only successful matching pager adoption MAY stage typed browser state; failure,
+stale ownership, malformed output or nonmatching output MUST discard it. Direct
+and control/textual calls MUST return the existing display contract without
+residual typed state available to a later attached request. Later explicit
+native admin controls retain their ordinary independent authorization; external
+rows remain focus-only. Filtering grants neither control authority nor MMP scope.
+Textual slash display MUST include the rendered nonsensitive unavailable-origin
+reason and literal `--all` hint. Raw browser copy/save exports MUST retain their
+existing distinction from transient diagnostic chrome; this does not change
+the retained records, column/metadata parity or administrative action targets.
 
 `CurrentProject` MUST capture its authenticated attached-primary client and exact
 invoking pane's process incarnation and current conversation owner before the
@@ -11886,6 +11908,11 @@ The baseline command capabilities are:
   approval bypass state.
 - `/show-approvals`: Browse pending approvals for the live session. It MAY
   accept one approval id to open that request directly.
+- `/list-agents`: Open the human interactive agent browser for the actual
+  invoking pane's current trusted project. One literal `--all` includes all
+  current session registrations, without the model discovery cap or saved
+  `/resume` conversations. Opening is a read-only diagnostic; later explicit
+  browser controls use existing independent native authorization.
 - `/approval`: Inspect or set the pane-subtree approval mode. It MUST accept
   `ask`, `auto-allow`, `full-access`, or `host-access`, and MUST accept
   `inherit` or `clear` to remove the issuing pane's explicit override.
@@ -12202,6 +12229,14 @@ The baseline command capabilities are:
   links using the standard pager link-selection treatment. It MUST provide
   detail and empty states, preserve generic `/` search, use `a` to approve the
   request represented by the focused link once, and use `d` to deny it.
+- `/list-agents`: Reuse the same typed human browser as argument-free
+  `:list-agents`, with current-project default and literal `--all` for session
+  scope. Columns, metadata, lifecycle controls, stable-ID keyboard/mouse
+  activation, search/copy/save/resize and refresh MUST reuse the existing browser
+  contracts. Every refresh and admin reconstruction MUST retain the original
+  query/owner and retire removed targets and armed confirmation without
+  transferring action to a neighboring record. Search/save typing takes
+  precedence over `i`, `p`, `d` and `r` administration.
 - `/show-context`: Browse durable transcript entries for the current pane conversation
   in transcript order. Its list MUST be a table with one selectable stable
   sequence-id link per entry. Existing record-browser Created/Updated values

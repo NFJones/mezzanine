@@ -424,6 +424,7 @@ pub(super) fn agent_argument_candidates(
     let candidates = match command {
         "directive" => value_candidates(&["status", "show", "clear", "default", "none"]),
         "loop" => flag_candidates(&["--fork", "--new", "--limit", "--goal"]),
+        "list-agents" if context.tokens_before.len() == 1 => flag_candidates(&["--all"]),
         "status" => flag_candidates(&["--extended", "--project", "--all-projects"]),
         "memory" => value_candidates(&["on", "off", "toggle", "status", "show"]),
         "plan" => value_candidates(&["on", "off", "toggle", "status"]),

@@ -106,6 +106,9 @@ pub(super) const COMMAND_EXECUTION_METADATA: &[CommandExecutionMetadata] = &[
     Entry::inline("copy", None),
     Entry::inline("directive", None),
     Entry::inline("exit", None),
+    // Exact live snapshot/target reconciliation stays actor-owned. No provider
+    // effect or prepared off-actor authority mutation accompanies opening.
+    Entry::inline("list-agents", None),
     Entry::deferred("status", true, None),
     Entry::inline("plan", None),
     Entry::inline("model", Some(Awaited::Model)),

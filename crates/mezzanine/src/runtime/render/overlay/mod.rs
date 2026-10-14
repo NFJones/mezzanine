@@ -8,6 +8,7 @@
 
 mod action_registry;
 mod agent_management;
+mod agent_shell_browser;
 mod display_content;
 mod product_content;
 mod record_adapter;

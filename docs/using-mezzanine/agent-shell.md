@@ -133,12 +133,16 @@ ownership. Explicit primary resume supplies one continuation prompt and does not
 repeat settled actions. It supersedes unissued candidates rather than carrying
 their old approvals into changed work. Peer mail, approval replies and child
 completion cannot unpause the agent; already-running children may continue.
-Use `:list-agents` from the terminal command prompt for these targeted controls:
+Use `/list-agents` in the existing agent prompt for these targeted controls, or
+`:list-agents` from the terminal command prompt:
 `p` pauses/resumes the selected native agent, `i` interrupts, and `d` arms close
-confirmation. They are not new slash commands. Enter focuses only after explicit
+confirmation. Enter focuses only after explicit
 activation. Runtime pause is not transparent process suspension across restart.
 
-The shared human browser supports typed All and CurrentProject snapshots;
+The shared human browser uses CurrentProject for `/list-agents`, and All for
+`/list-agents --all`. Slash accepts no arguments or exactly one literal `--all`;
+duplicates, quoted flags, unknown flags and positional arguments show usage in
+the pane. Command completion and `/help` expose the command and its option.
 `:list-agents` remains all-session and argument-free. CurrentProject compares
 exact canonical **current trusted roots**, not display labels, saved/MMP project
 membership or accounting origin. It retains the authenticated invoking pane's
@@ -148,8 +152,22 @@ nonsensitive reason and an All/`--all` hint, never a silent global fallback.
 Search, copy and save see only retained scoped records. Symlink aliases match,
 nested trusted roots differ, broad trusted ancestors may group repositories,
 and separate worktrees or moved children may exclude MMP peers. This is view
-filtering, not a permission or audience grant; this foundation adds no slash
-command and does not change model-facing discovery or native control rights.
+filtering, not a permission or audience grant, and does not change model-facing
+discovery or native control rights. It shows current live registrations, not
+saved `/resume` conversations, and has no model-facing discovery row cap.
+
+Opening reuses the full interactive browser, including columns and metadata,
+stable-ID keyboard/mouse focus, native controls, search, copy, save, resize and
+refresh. Search/save typing wins over admin keys. Refresh retains the original
+query and valid selection; a removed selected row retires its old action and
+close confirmation, never transfers them to a neighbor. External rows are
+focus-only. Opening is provider-free and creates no turn or conversation, and
+does not interrupt, resume or focus work: it is available in visible idle,
+running, blocked, waiting, paused and compacting prompts. Control/textual calls
+return display output without leaving a typed UI capture for a later request.
+Display output includes nonsensitive diagnostic chrome, including the unavailable
+project reason and literal `--all` hint. Raw copy/save exports intentionally omit
+transient error/notice chrome; the retained records and scope are the same.
 
 In the `/resume` picker, Enter resumes the selected conversation, `i` opens its
 transcript for inspection, and `a` toggles between the current project and all
