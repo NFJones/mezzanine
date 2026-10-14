@@ -134,6 +134,17 @@ pub struct RuntimeStatusPillRefreshPlan {
     definition: RuntimeStatusPillDefinition,
 }
 
+impl RuntimeStatusPillRefreshPlan {
+    /// Retains a failed completion before task ownership moves into execution.
+    /// Applying it uses the same definition/generation fences as success.
+    pub(crate) fn failed_event(&self) -> RuntimeStatusPillEvent {
+        RuntimeStatusPillEvent {
+            plan: self.clone(),
+            outcome: RuntimeStatusPillRefreshOutcome::Failed,
+        }
+    }
+}
+
 #[cfg(test)]
 impl RuntimeStatusPillRefreshPlan {
     /// Builds one deterministic command plan for async-runtime tests.
@@ -616,6 +627,19 @@ pub struct RuntimePaneStatusProviderRefreshPlan {
     pub(crate) launch: RuntimePaneStatusProviderLaunch,
     /// Cancellation fence shared with actor-owned lifecycle state.
     pub(crate) cancellation: RuntimePaneStatusProviderCancellation,
+}
+
+impl RuntimePaneStatusProviderRefreshPlan {
+    /// Copies only completion identity, not sandbox leases or process ownership.
+    /// A panicking child can therefore settle its exact generation once.
+    pub(crate) fn failed_event(&self) -> RuntimePaneStatusProviderEvent {
+        RuntimePaneStatusProviderEvent {
+            key: self.key.clone(),
+            generation: self.generation,
+            definition: self.definition.clone(),
+            outcome: RuntimePaneStatusProviderOutcome::Failed,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2240,6 +2264,37 @@ mod tests {
         assert_eq!(cache, cache.clone(), "inspection must remain read-only");
     }
 
+    /// A task-independent failure snapshot must clear exactly one current
+    /// provider refresh, expose failed/nonpending health, permit capacity reuse,
+    /// and leave newer work untouched when delivered again or after cancellation.
+    #[test]
+    fn pane_provider_worker_failure_completion_settles_once_and_rejects_stale() {
+        let definition = pane_provider_definition(None);
+        let key = pane_provider_key("%1", "branch", "/workspace/one");
+        let mut cache = RuntimePaneStatusProviderCache::default();
+        cache.reconcile(vec![pane_provider_request(key.clone(), definition.clone())]);
+        let plan = claim_and_admit(&mut cache, 1).remove(0);
+        let failure = plan.failed_event();
+        assert_eq!(cache.apply_event(failure.clone()), Some(false));
+        let settled = cache.diagnostic_for_context(&key, &definition, current_unix_millis());
+        assert!(!settled.pending);
+        assert!(settled.error);
+        assert_eq!(cache.apply_event(failure.clone()), None);
+        cache.states.get_mut(&key).unwrap().next_refresh_at_ms = 0;
+        cache.reconcile(vec![pane_provider_request(key.clone(), definition.clone())]);
+        let next = claim_and_admit(&mut cache, 1).remove(0);
+        assert_ne!(next.generation, plan.generation);
+        assert_eq!(cache.apply_event(failure), None);
+        assert!(
+            cache
+                .diagnostic_for_context(&key, &definition, current_unix_millis())
+                .pending
+        );
+        cache.suspend_all();
+        assert!(next.cancellation.is_cancelled());
+        assert_eq!(cache.apply_event(next.failed_event()), None);
+    }
+
     /// Verifies suspension and pane removal cancel outstanding work and fence
     /// late completions, while same-context cached text remains restorable.
     #[test]
@@ -2637,6 +2692,11 @@ mod tests {
         stale.generation = stale.generation.saturating_add(1);
 
         assert_eq!(
+            cache.apply_event(&definitions, "#{pill.used}", stale.failed_event()),
+            None
+        );
+
+        assert_eq!(
             cache.apply_event(
                 &definitions,
                 "#{pill.used}",
@@ -2660,6 +2720,25 @@ mod tests {
         );
         let visible = cache.render_active(&definitions, "#{pill.used}");
         assert_eq!(visible.get("used").map(String::as_str), Some("USED ready"));
+        let settled_generation = cache.next_generation;
+        cache.states.get_mut("used").unwrap().next_refresh_at_ms = 0;
+        cache.render_active(&definitions, "#{pill.used}");
+        let next = cache.drain_refresh_plans().remove(0);
+        let mut old = next.clone();
+        old.generation = settled_generation;
+        assert_eq!(
+            cache.apply_event(&definitions, "#{pill.used}", old.failed_event()),
+            None
+        );
+        assert_eq!(
+            cache.apply_event(&definitions, "#{pill.used}", next.failed_event()),
+            Some(true)
+        );
+        assert!(cache.states["used"].pending_generation.is_none());
+        assert_eq!(
+            cache.apply_event(&definitions, "#{pill.used}", next.failed_event()),
+            None
+        );
     }
 
     /// Verifies stdout and stderr are drained concurrently under one deadline,

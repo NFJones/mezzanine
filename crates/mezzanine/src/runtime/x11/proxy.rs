@@ -792,10 +792,59 @@ impl RuntimeX11Proxy {
 
     /// Serves active generation-fenced routes and rejects every other socket.
     pub(crate) async fn serve(self) -> Result<u64> {
+        self.serve_with_executor(relay_server_x11_socket, std::future::pending())
+            .await
+    }
+
+    /// Injects failures into this proxy only, without a real X server or globals.
+    #[cfg(test)]
+    pub(crate) async fn serve_with_test_faults(
+        self,
+        panic: Option<tokio::sync::oneshot::Receiver<()>>,
+        infrastructure: Option<tokio::sync::oneshot::Receiver<()>>,
+    ) -> Result<u64> {
+        let panic = Arc::new(Mutex::new(panic));
+        self.serve_with_executor(
+            move |stream, route, permit| {
+                let panic = panic.lock().unwrap().take();
+                async move {
+                    if let Some(panic) = panic {
+                        let _ = panic.await;
+                        panic!("controlled X11 relay panic");
+                    }
+                    relay_server_x11_socket(stream, route, permit).await
+                }
+            },
+            async move {
+                match infrastructure {
+                    Some(failure) => {
+                        let _ = failure.await;
+                    }
+                    None => std::future::pending::<()>().await,
+                }
+            },
+        )
+        .await
+    }
+
+    /// Owns real listener/task selection with service-local fixture injection.
+    async fn serve_with_executor<R, F, I>(self, execute: R, infrastructure: I) -> Result<u64>
+    where
+        R: Fn(tokio::net::TcpStream, RuntimeX11ActiveRoute, OwnedSemaphorePermit) -> F,
+        F: std::future::Future<
+                Output = std::result::Result<RuntimeX11StreamOutcome, ServerX11RelayFailure>,
+            > + Send
+            + 'static,
+        I: std::future::Future<Output = ()>,
+    {
+        tokio::pin!(infrastructure);
         let mut handled = 0u64;
         let mut workers = JoinSet::new();
         loop {
             tokio::select! {
+                () = &mut infrastructure => {
+                    return Err(MezError::invalid_state("session X11 proxy accept failed"));
+                }
                 accepted = self.listener.accept() => match accepted {
                     Ok((stream, _peer)) => {
                         handled = handled.saturating_add(1);
@@ -824,9 +873,10 @@ impl RuntimeX11Proxy {
                         let diagnostics = RuntimeX11StreamDiagnosticsGuard::started(
                             route.diagnostics.clone(),
                         );
+                        let relay = execute(stream, route, permit);
                         workers.spawn(async move {
                             let mut diagnostics = diagnostics;
-                            let result = relay_server_x11_socket(stream, route, permit).await;
+                            let result = relay.await;
                             diagnostics.finish(match result {
                                 Ok(outcome) => outcome,
                                 Err(failure) => {
@@ -1445,6 +1495,119 @@ mod tests {
 
         drop(proxy);
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// A relay panic must revoke its exact route and close a healthy idle sibling
+    /// stream without ending the listener. Fresh negotiation reuses capacity;
+    /// a delayed panic from an old generation must not revoke its replacement.
+    #[tokio::test]
+    async fn relay_panic_is_exact_generation_local_and_capacity_is_reusable() {
+        let (server, client, server_connection, client_connection) =
+            test_connection_pair(b"mez-x11-panic/1", 4).await;
+        let root = test_root("relay-panic");
+        let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+        let handle = proxy.handle();
+        let display = handle.display().to_string();
+        let authority = handle.authority_path().to_path_buf();
+        let owner = route_owner(
+            "panic-owner",
+            &format!("iroh-{}", server_connection.stable_id()),
+        );
+        let (route, lease) = handle
+            .reserve_route(owner.clone(), route_offer([0x71; 16], false))
+            .unwrap();
+        activate_test_route(&lease, server_connection.clone());
+        let (panic_tx, panic_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(proxy.serve_with_test_faults(Some(panic_rx), None));
+        let mut failed = connect_proxy(&handle).await;
+        wait_for_proxy_metrics(&handle, |m| m.streams_started == 1).await;
+        let mut sibling = connect_proxy(&handle).await;
+        sibling
+            .write_all(&setup_packet(b'l', &[0x71; 16]))
+            .await
+            .unwrap();
+        let (_send, _recv) = accept_proxy_stream(&client_connection, &route, [0x71; 16]).await;
+        panic_tx.send(()).unwrap();
+        wait_for_proxy_metrics(&handle, |m| m.active_streams == 0).await;
+        let survived = !task.is_finished();
+        let revoked = !handle.diagnostics().route_active;
+        let mut byte = [0u8; 1];
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), failed.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), sibling.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        if survived && revoked {
+            let (replacement, replacement_lease) = handle
+                .reserve_route(owner.clone(), route_offer([0x72; 16], false))
+                .unwrap();
+            activate_test_route(&replacement_lease, server_connection.clone());
+            let mut local = connect_proxy(&handle).await;
+            local
+                .write_all(&setup_packet(b'l', &[0x72; 16]))
+                .await
+                .unwrap();
+            let (_send, _recv) =
+                accept_proxy_stream(&client_connection, &replacement, [0x72; 16]).await;
+            assert_eq!(handle.display(), display);
+            assert_eq!(handle.authority_path(), authority);
+            assert!(!lease.deactivate().unwrap());
+            replacement_lease.deactivate().unwrap();
+        }
+        task.abort();
+        let _ = task.await;
+        client.close().await;
+        server.close().await;
+        let _ = fs::remove_dir_all(root);
+        assert!(survived, "relay panic killed the optional listener");
+        assert!(revoked, "relay panic left its credential published");
+    }
+
+    /// Listener infrastructure loss must revoke all current X11 work, finish
+    /// nonfatally, preserve stable environment paths and reject future route
+    /// admission rather than claiming forwarding still works or restarting.
+    #[tokio::test]
+    async fn listener_failure_retires_only_x11_and_fences_new_admission() {
+        let root = test_root("listener-failure");
+        let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+        let handle = proxy.handle();
+        let owner = route_owner("listener-owner", "connection");
+        let (_, lease) = handle
+            .reserve_route(owner.clone(), route_offer([0x73; 16], false))
+            .unwrap();
+        lease.activate_without_transport().unwrap();
+        let display = handle.display().to_string();
+        let authority = handle.authority_path().to_path_buf();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(proxy.serve_with_test_faults(None, Some(rx)));
+        tx.send(()).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        let revoked = !handle.diagnostics().route_active;
+        let refused = handle
+            .reserve_route(owner, route_offer([0x74; 16], true))
+            .is_err();
+        assert_eq!(handle.display(), display);
+        assert_eq!(handle.authority_path(), authority);
+        lease.deactivate().unwrap();
+        let _ = fs::remove_dir_all(root);
+        assert!(
+            result.is_ok(),
+            "optional listener failure escalated: {result:?}"
+        );
+        assert!(revoked, "listener failure left its route active");
+        assert!(refused, "dead listener admitted a new route");
     }
 
     /// One authenticated proxy socket must map to one server-opened raw Iroh

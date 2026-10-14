@@ -687,11 +687,19 @@ impl Drop for PaneStatusBatchCancellation {
 }
 
 /// Starts pane work only while the continuous concurrency bound has capacity.
-fn spawn_bounded_pane_status_provider_tasks(
+fn spawn_bounded_pane_status_provider_tasks<P>(
     tasks: &mut JoinSet<Result<Option<RuntimeEvent>>>,
     queue: &mut VecDeque<Box<crate::runtime::RuntimePaneStatusProviderRefreshPlan>>,
     lifecycle: &watch::Receiver<RuntimeLifecycleState>,
-) {
+    execute: &P,
+) where
+    P: Fn(
+            crate::runtime::RuntimePaneStatusProviderRefreshPlan,
+        ) -> Option<crate::runtime::RuntimePaneStatusProviderEvent>
+        + Clone
+        + Send
+        + 'static,
+{
     if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
         for plan in queue.drain(..) {
             plan.cancellation.cancel();
@@ -704,13 +712,14 @@ fn spawn_bounded_pane_status_provider_tasks(
         };
         let cancellation = plan.cancellation.clone();
         let mut lifecycle = lifecycle.clone();
+        let execute = execute.clone();
         tasks.spawn(async move {
             if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
                 cancellation.cancel();
                 return Ok(None);
             }
             let worker = tokio::task::spawn_blocking(move || {
-                execute_pane_status_provider_launch(*plan).map(RuntimeEvent::PaneStatusProvider)
+                execute(*plan).map(RuntimeEvent::PaneStatusProvider)
             });
             tokio::pin!(worker);
             loop {
@@ -744,10 +753,63 @@ fn spawn_bounded_pane_status_provider_tasks(
 pub async fn run_async_status_pill_side_effect_service<S>(
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncRuntimeSideEffectServiceConfig,
-    mut should_stop: S,
+    should_stop: S,
 ) -> Result<AsyncStatusPillSideEffectServiceReport>
 where
     S: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    run_status_pill_service_with_executors(
+        handle,
+        config,
+        should_stop,
+        execute_window_status_plan,
+        execute_pane_status_provider_launch,
+    )
+    .await
+}
+
+/// Executes a window command with the actor's terminal lifecycle fence.
+async fn execute_window_status_plan(
+    plan: crate::runtime::RuntimeStatusPillRefreshPlan,
+    mut cancellation: watch::Receiver<RuntimeLifecycleState>,
+) -> Option<crate::runtime::RuntimeStatusPillEvent> {
+    execute_runtime_status_pill_refresh_plan_with_cancellation(plan, async move {
+        loop {
+            let state = *cancellation.borrow();
+            if is_terminal_runtime_lifecycle_state(state) || cancellation.changed().await.is_err() {
+                return;
+            }
+        }
+    })
+    .await
+}
+
+/// Keeps executor injection service-local; actor ingress remains non-optional.
+pub(super) async fn run_status_pill_service_with_executors<S, W, F, P>(
+    handle: &AsyncRuntimeSessionHandle,
+    config: AsyncRuntimeSideEffectServiceConfig,
+    mut should_stop: S,
+    execute_window: W,
+    execute_pane: P,
+) -> Result<AsyncStatusPillSideEffectServiceReport>
+where
+    S: FnMut(u64, RuntimeLifecycleState) -> bool,
+    W: Fn(
+            crate::runtime::RuntimeStatusPillRefreshPlan,
+            watch::Receiver<RuntimeLifecycleState>,
+        ) -> F
+        + Clone
+        + Send
+        + 'static,
+    F: std::future::Future<Output = Option<crate::runtime::RuntimeStatusPillEvent>>
+        + Send
+        + 'static,
+    P: Fn(
+            crate::runtime::RuntimePaneStatusProviderRefreshPlan,
+        ) -> Option<crate::runtime::RuntimePaneStatusProviderEvent>
+        + Clone
+        + Send
+        + 'static,
 {
     config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
@@ -804,23 +866,12 @@ where
         for effect in effects {
             match effect {
                 RuntimeSideEffect::RefreshStatusPill { plan } => {
-                    let mut cancellation = handle.lifecycle_state_watcher();
+                    let cancellation = handle.lifecycle_state_watcher();
+                    let execute = execute_window.clone();
                     window_tasks.spawn(async move {
-                        execute_runtime_status_pill_refresh_plan_with_cancellation(
-                            plan,
-                            async move {
-                                loop {
-                                    let state = *cancellation.borrow();
-                                    if is_terminal_runtime_lifecycle_state(state)
-                                        || cancellation.changed().await.is_err()
-                                    {
-                                        return;
-                                    }
-                                }
-                            },
-                        )
-                        .await
-                        .map(RuntimeEvent::StatusPill)
+                        execute(plan, cancellation)
+                            .await
+                            .map(RuntimeEvent::StatusPill)
                     });
                 }
                 RuntimeSideEffect::RefreshPaneStatusProvider { plan } => {
@@ -833,6 +884,7 @@ where
             &mut pane_tasks,
             &mut pane_plans,
             &lifecycle_watcher,
+            &execute_pane,
         );
         while !window_tasks.is_empty() || !pane_tasks.is_empty() || !pane_plans.is_empty() {
             tokio::select! {
@@ -869,6 +921,7 @@ where
                         &mut pane_tasks,
                         &mut pane_plans,
                         &lifecycle_watcher,
+                        &execute_pane,
                     );
                 }
             }

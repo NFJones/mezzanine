@@ -2,6 +2,7 @@
 
 mod clipboard;
 mod hooks;
+mod optional_failures;
 mod pane_certification_settlement;
 mod pane_certification_spoof;
 mod pane_driver;

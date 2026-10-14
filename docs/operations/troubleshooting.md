@@ -203,6 +203,24 @@ publication clears the flag, while `authority_publication_failures` retains the
 aggregate failure count. Detach acknowledgement and stream cancellation do not
 wait for this durability work.
 
+`worker_failures` counts unexpected X11 relay task failures. Such a failure
+revokes only the relay's exact route generation and closes its sibling X11
+streams, without stopping PTYs, agents, or control connections. Negotiate a
+fresh route to resume forwarding; a late old-generation failure cannot revoke
+that replacement. Ordinary malformed setup or transport errors remain local
+to the offending stream. Worker diagnostics use fixed reason classes, never
+panic payloads.
+
+`service_unavailable = true` with a rising `listener_failures` count means the
+session's X11 listener has permanently degraded. Its routes and streams are
+retired and new forwarding offers fail closed. Existing pane `DISPLAY` and
+`XAUTHORITY` paths stay stable but cannot provide forwarding; start a new
+session to recover X11. Mezzanine does not automatically restart this feature
+or end healthy session work. A status-command worker panic similarly settles
+only its exact refresh with the configured error behavior; pane-provider
+diagnostics no longer retain that refresh as pending. Actor ingress loss or
+poisoned shared ownership is not an optional-worker failure and remains fatal.
+
 The attaching client also appends the exact local relay error to
 `x11-client.diagnostics.log` under Mezzanine's user-private configuration
 directory. The file is owner-private, bounded, and local to the attaching
