@@ -107,13 +107,13 @@ error_behavior = "show_error"
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     service
-        .start_initial_pane_process(Some("stty -echo; printf 'native-ready\\n'; cat"))
+        .start_initial_pane_process(Some("stty -echo && printf 'native-ready\\n' && exec cat"))
         .unwrap();
     service
         .split_pane_with_process(
             &primary,
             mez_mux::layout::SplitDirection::Vertical,
-            Some("stty -echo; printf 'native-ready\\n'; cat"),
+            Some("stty -echo && printf 'native-ready\\n' && exec cat"),
         )
         .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
@@ -258,13 +258,13 @@ async fn x11_infrastructure_failure_preserves_supervised_actor_panes_and_control
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     service
-        .start_initial_pane_process(Some("stty -echo; printf 'native-ready\\n'; cat"))
+        .start_initial_pane_process(Some("stty -echo && printf 'native-ready\\n' && exec cat"))
         .unwrap();
     service
         .split_pane_with_process(
             &primary,
             mez_mux::layout::SplitDirection::Vertical,
-            Some("stty -echo; printf 'native-ready\\n'; cat"),
+            Some("stty -echo && printf 'native-ready\\n' && exec cat"),
         )
         .unwrap();
     let owner = RuntimeX11RouteOwner {
