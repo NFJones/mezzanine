@@ -188,7 +188,7 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `102` | Config schema version. Do not change this. |
+| `version` | integer | `103` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
