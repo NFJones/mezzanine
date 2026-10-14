@@ -52,9 +52,8 @@ use crate::runtime::render::{
     ActionResult, AgentPresentationEntry, MezError, Result, RuntimeAgentShellPreviewOwner,
     RuntimeSessionService, RuntimeStreamingMessageSource, RuntimeStreamingSayAction,
     RuntimeStreamingSayPresentation, RuntimeStreamingSayProjectionApplyOutcome,
-    RuntimeStreamingSayProjectionContext,
-    RuntimeStreamingTextSource, Size, TerminalScreen, current_unix_seconds,
-    default_runtime_agent_prompt_input,
+    RuntimeStreamingSayProjectionContext, RuntimeStreamingTextSource, Size, TerminalScreen,
+    current_unix_seconds, default_runtime_agent_prompt_input,
 };
 use crate::runtime::{
     PeerMessageLogMode, runtime_agent_peer_message_log_mode_from_config,
