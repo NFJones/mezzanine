@@ -61,6 +61,8 @@ pub(super) struct ExternalUsageProjection {
 pub(crate) struct ExternalUsageWorkerProbe {
     /// Counts actual worker dispatches, not producer callback invocations.
     pub(crate) attempts: std::sync::atomic::AtomicUsize,
+    /// Observes the original work's sealed eligibility without changing it.
+    pub(crate) retry_enabled: OnceLock<bool>,
     /// Signals only after a real failed invocation, before actor completion.
     pub(crate) failed: tokio::sync::Notify,
     /// Fixture-owned release; no production cancellation or retry authority.

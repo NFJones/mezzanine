@@ -26,12 +26,8 @@ enum Case {
     Retired,
     /// Another exact report commits before the original retry resumes.
     CompetingReplay,
-    /// Legacy reports remain one-shot under the same real writer contention.
-    Legacy,
     /// Queue delay beyond the horizon prevents even initial socket dispatch.
     QueuedSocket,
-    /// The same delayed queue does not impose A0 policy on legacy one-shot work.
-    QueuedLegacy,
 }
 
 /// Frames a component request without printing or persisting private handles.
@@ -72,7 +68,7 @@ async fn run_case(case: Case) {
     let probe = fixture.service.probe_external_usage_worker_for_tests();
     let queued = Arc::new(tokio::sync::Notify::new());
     let queue_release = Arc::new(tokio::sync::Notify::new());
-    if matches!(case, Case::QueuedSocket | Case::QueuedLegacy) {
+    if matches!(case, Case::QueuedSocket) {
         fixture
             .service
             .gate_external_usage_worker_for_tests(queued.clone(), queue_release.clone());
@@ -95,16 +91,8 @@ async fn run_case(case: Case) {
         end["provider"] = "fixture".into();
         end["model"] = "original-model".into();
         end["counters"] = serde_json::json!({"input_tokens":10,"output_tokens":3,"cached_input_tokens":0});
-        let legacy = matches!(case, Case::Legacy | Case::QueuedLegacy);
-        let method = if legacy {
-            end.as_object_mut().unwrap().remove("request_id");
-            end["epoch"] = "legacy-fixture".into();
-            end["sequence"] = 1.into();
-            end["mode"] = "delta".into();
-            end["baseline"] = false.into();
-            "agent/external/usage"
-        } else { "agent/external/usage-end" };
-        let queued_case = matches!(case, Case::QueuedSocket | Case::QueuedLegacy);
+        let method = "agent/external/usage-end";
+        let queued_case = matches!(case, Case::QueuedSocket);
         if !queued_case { database.execute_batch("BEGIN IMMEDIATE").unwrap(); }
         let sender = handle.clone();
         let connection = fixture.connection.clone();
@@ -149,8 +137,8 @@ async fn run_case(case: Case) {
                     assert_eq!(competitor["result"]["applied"], true);
                     assert_eq!(probe.completions.load(Ordering::SeqCst), 1);
                 }
-                Case::Exhausted | Case::Legacy => {}
-                Case::QueuedSocket | Case::QueuedLegacy => unreachable!("queued branch"),
+                Case::Exhausted => {}
+                Case::QueuedSocket => unreachable!("queued branch"),
             }
             probe.release.notify_one();
         }
@@ -194,15 +182,14 @@ async fn run_case(case: Case) {
     };
     let success = matches!(
         case,
-        Case::ClosedWaiter | Case::Retired | Case::CompetingReplay | Case::QueuedLegacy
+        Case::ClosedWaiter | Case::Retired | Case::CompetingReplay
     );
     let (attempts, admissions) = match case {
         Case::Exhausted => (3, 1),
-        Case::Expired | Case::Legacy => (1, 1),
+        Case::Expired => (1, 1),
         Case::ClosedWaiter | Case::Retired => (2, 1),
         Case::CompetingReplay => (3, 2),
         Case::QueuedSocket => (0, 1),
-        Case::QueuedLegacy => (1, 1),
     };
     assert_eq!(probe.attempts.load(Ordering::SeqCst), attempts);
     assert_eq!(probe.completions.load(Ordering::SeqCst), admissions);
@@ -251,7 +238,7 @@ async fn run_case(case: Case) {
             i64::from(success)
         );
     }
-    let observation = success && !matches!(case, Case::QueuedLegacy);
+    let observation = success;
     assert_eq!(
         database
             .query_row(
@@ -338,20 +325,8 @@ async fn external_request_actor_competing_commit_returns_durable_inert_replay() 
     run_case(Case::CompetingReplay).await;
 }
 
-/// The legacy worker never adopts socket-only refusal retry under identical contention.
-#[tokio::test(flavor = "current_thread")]
-async fn external_request_actor_legacy_usage_stays_one_shot() {
-    run_case(Case::Legacy).await;
-}
-
 /// Delayed socket dispatch is fenced before initial execution under the same horizon.
 #[tokio::test(flavor = "current_thread")]
 async fn external_request_actor_queue_delay_prevents_socket_dispatch() {
     run_case(Case::QueuedSocket).await;
-}
-
-/// A0's socket deadline does not change the queued legacy one-shot completion contract.
-#[tokio::test(flavor = "current_thread")]
-async fn external_request_actor_queue_delay_does_not_change_legacy_dispatch() {
-    run_case(Case::QueuedLegacy).await;
 }

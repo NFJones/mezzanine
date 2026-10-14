@@ -8,6 +8,8 @@ use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionAct
 use crate::runtime::current_unix_seconds;
 use crate::storage::token_usage::TokenUsageStore;
 
+mod precommit_retry_controls;
+
 /// Invalid combined cache coverage must reject before actor reservations or
 /// durable writes, for both delta reports and uncharged cumulative attachment.
 /// The same original report identity remains usable after telemetry correction;

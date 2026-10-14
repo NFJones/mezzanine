@@ -55,6 +55,7 @@ pub(super) async fn execute_retained_external_usage(
         }
         #[cfg(test)]
         if let Some(probe) = &work.worker_probe {
+            let _ = probe.retry_enabled.set(work.permits_precommit_retry());
             probe
                 .attempts
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
