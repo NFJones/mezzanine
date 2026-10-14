@@ -115,10 +115,11 @@ mez --json config validate /path/to/config.toml
 Validation reports `valid` and `diagnostics` against the current schema without
 rewriting the file. A completed diagnostic response exits zero even when
 `valid` is false; missing HOME for implicit selection, ambiguity, and file I/O
-errors exit one. Legacy and future-version documents are diagnosed, not
-migrated. Runtime startup and other management commands, including `config
-init`, `get`, `layers`, and mutations, still require valid whole-primary
-security and CPU configuration; they do not fall back around invalid policy.
+errors exit one. Missing-version, legacy, and future-version documents are
+diagnosed against the current schema, not migrated. Runtime startup and other
+management commands, including `config init`, `get`, `layers`, and mutations,
+still require valid whole-primary security and CPU configuration; they do not
+fall back around invalid policy.
 
 ## Understand precedence and trust
 

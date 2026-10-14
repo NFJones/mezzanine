@@ -85,11 +85,11 @@ fn cli_removed_vendor_wrappers_reject_before_runtime_mutation() {
     }
 }
 
-/// Verifies CLI startup creates the selected private runtime directory.
+/// Verifies runtime-dependent CLI startup creates the private runtime directory.
 ///
-/// Daemon discovery and stale-socket cleanup both run before command dispatch,
-/// so a fresh installation must have its owner-only runtime directory ready
-/// even when no socket has been bound yet.
+/// Effective-config management retains normal startup cleanup and preparation,
+/// even when no socket has been bound yet. Pure version display intentionally
+/// no longer enters this path; actual-binary recovery tests cover its isolation.
 #[test]
 fn cli_startup_creates_private_runtime_directory() {
     let (env, home) = test_env("startup-runtime-directory");
@@ -99,7 +99,7 @@ fn cli_startup_creates_private_runtime_directory() {
     let mut stderr = Vec::new();
 
     run_with_plain(
-        vec!["mez".to_string(), "version".to_string()],
+        vec!["mez".to_string(), "config".to_string(), "get".to_string()],
         env,
         false,
         &mut stdout,

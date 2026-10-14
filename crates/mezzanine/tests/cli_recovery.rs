@@ -110,7 +110,10 @@ fn recovery_ignores_broken_primary_and_never_migrates() {
                 &["--json", "config", "validate", explicit.to_str().unwrap()],
                 true,
             );
-            assert_eq!(serde_json::from_str::<serde_json::Value>(&output).unwrap()["valid"], true);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&output).unwrap()["valid"],
+                true
+            );
             assert_eq!(fs::read_to_string(&path).unwrap(), primary);
         }
         assert_eq!(fs::read_to_string(explicit).unwrap(), default);
@@ -120,15 +123,67 @@ fn recovery_ignores_broken_primary_and_never_migrates() {
 
 /// Explicit-file validation requires only that file, not HOME. Invalid config
 /// is a successful diagnostic response with valid=false, not a startup error.
+/// Syntax errors keep file context and precede schema-version diagnostics.
 #[test]
 fn explicit_validation_without_home_preserves_diagnostic_exit_code() {
     let fixture = Fixture::new();
     let path = fixture.0.join("invalid.toml");
     fs::write(&path, "[broken").unwrap();
-    let output = fixture.success(&["config", "validate", path.to_str().unwrap()], false);
-    assert_eq!(serde_json::from_str::<serde_json::Value>(&output).unwrap()["valid"], false);
+    let output = fixture.success(
+        &["--json", "config", "validate", path.to_str().unwrap()],
+        false,
+    );
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["valid"], false);
+    let diagnostics = value["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1, "{output}");
+    assert_eq!(diagnostics[0]["path"], path.to_str().unwrap());
     assert_eq!(fs::read_to_string(path).unwrap(), "[broken");
     assert!(!fixture.0.join(".config").exists());
+}
+
+/// Current-schema inspection rejects missing, legacy, malformed, and future
+/// versions across every supported format without rewriting or backing up the
+/// original. Each completed diagnostic retains exit zero and one version error.
+#[test]
+fn explicit_version_diagnostics_preserve_original_documents() {
+    let fixture = Fixture::new();
+    let defaults = fixture.success(&["config", "default"], false);
+    let current = toml::from_str::<toml::Value>(&defaults).unwrap()["version"]
+        .as_integer()
+        .unwrap();
+    for extension in ["toml", "json", "yaml", "yml"] {
+        for version in [None, Some(1), Some(0), Some(current), Some(current + 1)] {
+            let text = match (extension, version) {
+                ("toml", Some(version)) => format!("version = {version}\n"),
+                ("json", Some(version)) => format!("{{\"version\":{version}}}"),
+                (_, Some(version)) => format!("version: {version}\n"),
+                ("toml", None) => String::new(),
+                (_, None) => "{}".to_string(),
+            };
+            let path = fixture.0.join(format!("original.{extension}"));
+            fs::write(&path, &text).unwrap();
+            let output = fixture.success(
+                &["--json", "config", "validate", path.to_str().unwrap()],
+                false,
+            );
+            let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(value["valid"], version == Some(current), "{text}: {output}");
+            let version_errors = value["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|diagnostic| diagnostic["path"] == "version")
+                .count();
+            assert_eq!(
+                version_errors,
+                usize::from(version != Some(current)),
+                "{output}"
+            );
+            assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        }
+    }
+    assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 4);
 }
 
 /// Selected-primary diagnostics read the original text rather than migrating
@@ -137,8 +192,12 @@ fn explicit_validation_without_home_preserves_diagnostic_exit_code() {
 fn selected_primary_diagnostics_are_read_only() {
     let fixture = Fixture::new();
     let path = fixture.primary("config.toml", "version = 1\n");
-    assert!(fixture.success(&["config", "path"], true).contains(path.to_str().unwrap()));
-    let output = fixture.success(&["config", "validate"], true);
+    assert!(
+        fixture
+            .success(&["config", "path"], true)
+            .contains(path.to_str().unwrap())
+    );
+    let output = fixture.success(&["--json", "config", "validate"], true);
     assert!(output.contains("\"valid\":false"));
     assert_eq!(fs::read_to_string(&path).unwrap(), "version = 1\n");
     fixture.primary("config.yaml", "version: 1\n");
@@ -153,10 +212,21 @@ fn selected_primary_diagnostics_are_read_only() {
 /// primary config, including CPU and security policy, before doing any work.
 #[test]
 fn normal_startup_remains_strict() {
-    for text in ["version = 103\n[runtime]\ncpu_count = 0\n", "version = 103\n[permissions]\napproval_policy = 'invalid'\n", "[broken", "version = 999999\n"] {
+    for text in [
+        "version = 103\n[runtime]\ncpu_count = 0\n",
+        "version = 103\n[permissions]\napproval_policy = 'invalid'\n",
+        "[broken",
+        "version = 999999\n",
+    ] {
         let fixture = Fixture::new();
         fixture.primary("config.toml", text);
-        for args in [vec!["serve"], vec!["host", "status"], vec!["attach"], vec!["config", "get"], vec!["config", "init"]] {
+        for args in [
+            vec!["serve"],
+            vec!["host", "status"],
+            vec!["attach"],
+            vec!["config", "get"],
+            vec!["config", "init"],
+        ] {
             let output = fixture.run(&args, true);
             assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
             assert!(!output.stderr.is_empty());
@@ -170,7 +240,14 @@ fn normal_startup_remains_strict() {
 #[test]
 fn argument_errors_and_internal_mode_precede_config() {
     let fixture = Fixture::new();
-    for args in [vec!["config", "validate", "a", "b"], vec!["--unknown"], vec!["-S", "relative", "config", "default"], vec!["-S", "/tmp/a.sock", "-L", "a", "config", "default"], vec!["-L", "../invalid", "config", "default"], vec!["--iroh-profile", "x", "config", "default"]] {
+    for args in [
+        vec!["config", "validate", "a", "b"],
+        vec!["--unknown"],
+        vec!["-S", "relative", "config", "default"],
+        vec!["-S", "/tmp/a.sock", "-L", "a", "config", "default"],
+        vec!["-L", "../invalid", "config", "default"],
+        vec!["--iroh-profile", "x", "config", "default"],
+    ] {
         let output = fixture.run(&args, false);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert!(!String::from_utf8_lossy(&output.stderr).contains("HOME is not set"));
@@ -186,17 +263,32 @@ fn argument_errors_and_internal_mode_precede_config() {
 fn valid_and_missing_primary_diagnostics() {
     let fixture = Fixture::new();
     let default = fixture.success(&["config", "default"], true);
-    let output = fixture.success(&["config", "validate"], true);
+    let output = fixture.success(&["--json", "config", "validate"], true);
     assert!(output.contains("\"valid\":true"));
-    assert!(fixture.success(&["config", "path"], true).contains("config.toml"));
+    assert!(
+        fixture
+            .success(&["config", "path"], true)
+            .contains("config.toml")
+    );
     assert!(!fixture.0.join(".config").exists());
     let path = fixture.primary("config.toml", &default);
-    assert!(fixture.success(&["config", "validate"], true).contains("\"valid\":true"));
+    assert!(
+        fixture
+            .success(&["--json", "config", "validate"], true)
+            .contains("\"valid\":true")
+    );
     assert_eq!(fs::read_to_string(path).unwrap(), default);
-    for (name, text) in [("valid.json", "{\"version\":103}"), ("valid.yaml", "version: 103\n"), ("valid.yml", "version: 103\n")] {
+    for (name, text) in [
+        ("valid.json", "{\"version\":103}"),
+        ("valid.yaml", "version: 103\n"),
+        ("valid.yml", "version: 103\n"),
+    ] {
         let path = fixture.0.join(name);
         fs::write(&path, text).unwrap();
-        let output = fixture.success(&["config", "validate", path.to_str().unwrap()], false);
+        let output = fixture.success(
+            &["--json", "config", "validate", path.to_str().unwrap()],
+            false,
+        );
         assert!(output.contains("\"valid\":true"), "{output}");
     }
 }
@@ -221,12 +313,83 @@ fn recovery_selection_and_io_errors_remain_errors() {
     }
 }
 
+/// Existing stale sockets and registry bytes belong to runtime startup, not
+/// recovery. A disconnected real Unix socket catches accidental cleanup even
+/// when no new runtime directory would otherwise be created.
+#[test]
+fn recovery_preserves_existing_runtime_state() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::net::UnixListener;
+
+    let fixture = Fixture::new();
+    let runtime = fixture.0.join("runtime");
+    let directory = runtime.join(format!("mez-{}", rustix::process::geteuid().as_raw()));
+    fs::create_dir_all(&directory).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = directory.join("stale.sock");
+    drop(UnixListener::bind(&socket).unwrap());
+    let inode = fs::symlink_metadata(&socket).unwrap().ino();
+    let registry = directory.join("registry.json");
+    fs::write(&registry, "owned runtime sentinel").unwrap();
+    for args in [
+        vec!["--help"],
+        vec!["version"],
+        vec!["completion", "bash"],
+        vec!["config"],
+        vec!["config", "default"],
+        vec!["config", "path"],
+        vec!["--json", "config", "validate"],
+    ] {
+        let output = fixture.run(&args, true);
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert_eq!(fs::symlink_metadata(&socket).unwrap().ino(), inode);
+        assert_eq!(
+            fs::read_to_string(&registry).unwrap(),
+            "owned runtime sentinel"
+        );
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+        assert!(!fixture.0.join(".config").exists());
+    }
+}
+
+/// A primary that cannot be read as UTF-8 must not block display, path lookup,
+/// or explicit validation. Implicit validation must surface the read error and
+/// preserve the original bytes, independent of privileged permission bypass.
+#[test]
+fn unreadable_primary_does_not_block_independent_recovery() {
+    let fixture = Fixture::new();
+    let primary = fixture.primary("config.toml", "");
+    fs::write(&primary, [0xff, 0xfe]).unwrap();
+    for args in [
+        vec!["--help"],
+        vec!["config", "default"],
+        vec!["config", "path"],
+    ] {
+        fixture.success(&args, true);
+    }
+    let explicit = fixture.0.join("valid.json");
+    fs::write(&explicit, "{\"version\":103}").unwrap();
+    fixture.success(
+        &["--json", "config", "validate", explicit.to_str().unwrap()],
+        true,
+    );
+    let output = fixture.run(&["config", "validate"], true);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(fs::read(primary).unwrap(), [0xff, 0xfe]);
+    assert!(!fixture.0.join("runtime").exists());
+}
+
 /// Pure recovery intent cannot depend on inherited malformed pane metadata or
 /// unusable runtime paths. Explicit historical/future diagnostics stay read-only.
 #[test]
 fn recovery_does_not_resolve_runtime_environment_or_rewrite_explicit_files() {
     let fixture = Fixture::new();
-    for args in [vec!["version"], vec!["completion", "bash"], vec!["config", "default"]] {
+    for args in [
+        vec!["version"],
+        vec!["completion", "bash"],
+        vec!["config", "default"],
+    ] {
         let output = Command::new(env!("CARGO_BIN_EXE_mez"))
             .args(&args)
             .env_remove("HOME")
@@ -240,7 +403,10 @@ fn recovery_does_not_resolve_runtime_environment_or_rewrite_explicit_files() {
     for text in ["version = 1\n", "version = 999999\n"] {
         let path = fixture.0.join("explicit.toml");
         fs::write(&path, text).unwrap();
-        let output = fixture.success(&["config", "validate", path.to_str().unwrap()], false);
+        let output = fixture.success(
+            &["--json", "config", "validate", path.to_str().unwrap()],
+            false,
+        );
         assert!(output.contains("\"valid\":false"));
         assert_eq!(fs::read_to_string(path).unwrap(), text);
         assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 1);

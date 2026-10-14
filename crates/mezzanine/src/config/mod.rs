@@ -135,7 +135,7 @@ use schema::{
     PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, PROVIDER_MODEL_KEYS, RUNTIME_KEYS, SESSION_KEYS,
     SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
 };
-pub(crate) use validation::validate_config_text_with_document;
+pub(crate) use validation::{validate_config_text_with_document, validate_current_config_file};
 
 /// Reads the Tokio worker count from the migrated primary user configuration.
 ///

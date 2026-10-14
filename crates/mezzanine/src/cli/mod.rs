@@ -21,7 +21,7 @@ use crate::config::{
     ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
     ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope, DEFAULT_CONFIG_TOML,
     DEFAULT_PROJECT_CONFIG_TOML, EffectiveConfig, compose_effective_config,
-    persist_config_mutation, validate_config_file, validate_config_text,
+    persist_config_mutation, validate_config_text,
 };
 use crate::control::{decode_control_frame, encode_control_body};
 use crate::error::{MezError, Result};
@@ -199,8 +199,8 @@ use control_client::{
     run_control_request_for_target,
 };
 use env::{
-    CliCommand, CliInvocation, CliInvocationParse, ControlTargetSelection, SocketSelection,
-    cli_idempotency_key, registry_root, render_cli_help, render_cli_version, selected_socket_path,
+    CliCommand, CliInvocation, ControlTargetSelection, SocketSelection, cli_idempotency_key,
+    registry_root, render_cli_help, render_cli_version, selected_socket_path,
     terminal_size_from_fd_or_environment,
 };
 use host::{
