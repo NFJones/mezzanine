@@ -74,7 +74,7 @@ fn external_request_cache_conservation_rejects_without_completion() {
 
 /// Normalized report fixture; its supplied project is not trusted request
 /// provenance and must be replaced by the marker's original stored origin.
-fn report(owner: &str) -> ExternalUsageReport {
+pub(super) fn report(owner: &str) -> ExternalUsageReport {
     ExternalUsageReport {
         owner: owner.into(),
         project: None,
@@ -224,7 +224,7 @@ fn external_request_observation_failure_and_marker_scope_are_atomic() {
 }
 
 /// Isolates one native source namespace and opaque request selector.
-fn fixture() -> (TokenUsageStore, String, String) {
+pub(super) fn fixture() -> (TokenUsageStore, String, String) {
     let store = TokenUsageStore::new(
         std::env::temp_dir()
             .join(format!("mez-request-{}", new_token_usage_event_id()))

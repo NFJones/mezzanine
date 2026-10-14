@@ -853,8 +853,21 @@ metadata-only eviction and retired-source cleanup; durable request/deduplication
 evidence is not evicted. After completion/restart/cache miss or lost reply, retry the same
 original begin to restore its immutable metadata, then resend the same report.
 This is telemetry-only recovery, never provider/request replay or newest lookup.
-This recovery is conditional on retaining the original normalized outcome and
-readiness, and freshly qualifying the same native accounting source. Current
+The original ordinary socket request-end worker also has a finite precommit
+contention retry: initial invocation plus at most two more,100ms then500ms spacing
+after failure, within one2000ms monotonic dispatch horizon. Only exact base
+SQLite BUSY/LOCKED at exhausted idempotent WAL setup or expense BEGIN IMMEDIATE
+qualifies. Schema/statement/COMMIT failures, extended-code variants and worker
+uncertainty do not. All attempts retain one original admission/reservation/reply,
+native source, request origin and normalized report; no new begin is minted.
+Queue delay cannot extend the horizon; a blocking operation can finish later.
+Closed reply receivers do not undo expense, and late completion cannot restore
+retired presentation or consume a replacement control owner's reservation.
+Legacy and curated helper usage remain one-shot. This is retained-task memory
+recovery, not a durable inbox or task/service/process/daemon restart guarantee.
+Producer-initiated resend/reconnect remains conditional on retaining the original
+normalized outcome/readiness and freshly qualifying the same native accounting
+source. Current
 client pending outcomes are process-local, not a durable outbox. A changed
 root/creator/session gets a distinct namespace, not permission to import its
 predecessor's completed history. No-gap delivery across actual process/daemon

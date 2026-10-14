@@ -330,32 +330,18 @@ impl AsyncRuntimeSessionActor {
         reply: tokio::sync::oneshot::Sender<crate::Result<AsyncControlInputResult>>,
     ) {
         let sender = self.sender.clone();
+        let dispatch_started = tokio::time::Instant::now();
         tokio::spawn(async move {
             #[cfg(test)]
             if let Some((started, release)) = &work.worker_gate {
                 started.notify_one();
                 release.notified().await;
             }
-            let worker = work.clone();
-            #[cfg(test)]
-            if let Some(probe) = &work.worker_probe {
-                probe
-                    .attempts
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-            let result = tokio::task::spawn_blocking(move || worker.execute())
-                .await
-                .map_err(|_| MezError::invalid_state("external accounting worker failed"))
-                .and_then(|result| result);
-            #[cfg(test)]
-            if let Err(error) = &result
-                && let Some(probe) = &work.worker_probe
-                && probe.failure.set(error.kind()).is_ok()
-            {
-                work.assert_unpublished_native_attempt_for_tests();
-                probe.failed.notify_one();
-                probe.release.notified().await;
-            }
+            let result = super::external_usage_retry::execute_retained_external_usage(
+                &work,
+                dispatch_started,
+            )
+            .await;
             let _ = sender
                 .send(AsyncRuntimeRequestEnvelope::new(
                     AsyncRuntimeRequest::CompleteExternalUsageInput {

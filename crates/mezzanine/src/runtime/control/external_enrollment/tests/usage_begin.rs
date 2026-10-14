@@ -6,6 +6,8 @@ use super::helper_presentation::enroll_producer;
 use super::*;
 
 mod pending_retry;
+mod retry_actor_controls;
+mod retry_controls;
 
 /// Retiring the only current source removes reconstructible readiness but not
 /// its durable origin. Reopening storage restores metadata without adopting

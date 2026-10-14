@@ -72,6 +72,7 @@ mod coalesce;
 mod construction;
 mod drain;
 mod events;
+mod external_usage_retry;
 mod handle;
 mod queue;
 mod requests;

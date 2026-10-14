@@ -222,10 +222,20 @@ impl TokenUsageStore {
     }
 
     pub(super) fn open(&self) -> Result<Connection> {
+        self.open_with_external_admission(&mut super::ExternalUsageAdmissionWitness::default())
+    }
+
+    /// Preserves ordinary store opening while observing only a final WAL
+    /// refusal for this invocation. Schema acquisition and writes are terminal.
+    pub(super) fn open_with_external_admission(
+        &self,
+        admission: &mut super::ExternalUsageAdmissionWitness,
+    ) -> Result<Connection> {
+        admission.clear();
         ensure_private_parent(&self.path)?;
         let connection = Connection::open(&self.path)?;
         connection.busy_timeout(Duration::from_millis(250))?;
-        initialize_schema(&connection)?;
+        initialize_schema(&connection, admission)?;
         set_private_file_permissions(&self.path)?;
         Ok(connection)
     }
@@ -235,7 +245,10 @@ impl TokenUsageStore {
 /// mode changes without invoking its busy handler, so retry only this idempotent
 /// setup operation within the ordinary connection contention budget. No usage
 /// transaction or committed observation is replayed by this owner.
-fn initialize_wal(connection: &Connection) -> Result<()> {
+fn initialize_wal(
+    connection: &Connection,
+    admission: &mut super::ExternalUsageAdmissionWitness,
+) -> Result<()> {
     let started = std::time::Instant::now();
     let budget = Duration::from_millis(250);
     loop {
@@ -256,6 +269,9 @@ fn initialize_wal(connection: &Connection) -> Result<()> {
                 );
             }
             Err(error) => {
+                // Record only this final return. Earlier busy results followed
+                // by successful WAL setup never become replay authority.
+                admission.refused(super::ExternalPrecommitPhase::WalSetup, &error);
                 return Err(MezError::invalid_state(format!(
                     "token usage WAL initialization failed: {error}"
                 )));
@@ -265,8 +281,11 @@ fn initialize_wal(connection: &Connection) -> Result<()> {
 }
 
 /// Migrates schema transactionally after bounded WAL setup succeeds.
-fn initialize_schema(connection: &Connection) -> Result<()> {
-    initialize_wal(connection)?;
+fn initialize_schema(
+    connection: &Connection,
+    admission: &mut super::ExternalUsageAdmissionWitness,
+) -> Result<()> {
+    initialize_wal(connection, admission)?;
     // Current-schema inspection needs no writer ownership. Migrations still
     // reread the version after acquiring their immediate transaction below.
     let observed_version: i64 =

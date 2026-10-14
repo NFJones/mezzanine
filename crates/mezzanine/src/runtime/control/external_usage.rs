@@ -67,6 +67,10 @@ pub(crate) struct ExternalUsageWorkerProbe {
     pub(crate) release: tokio::sync::Notify,
     /// Records the broad original error kind without retaining error content.
     pub(crate) failure: OnceLock<crate::error::MezErrorKind>,
+    /// Counts final actor completion entries, independent of a live RPC waiter.
+    pub(crate) completions: std::sync::atomic::AtomicUsize,
+    /// Wakes a waiter-loss fixture after the original actor receives completion.
+    pub(crate) completed: tokio::sync::Notify,
 }
 
 /// One absolute durable checkpoint and its pane-view reset baseline.
@@ -125,6 +129,12 @@ pub(crate) struct ExternalUsageWork {
     pub now: u64,
     /// Original ready marker for native reports; absent for legacy streams.
     request_marker: Option<String>,
+    /// Immutable ready-origin proof, heap-shared across the original work clones.
+    /// This conserves marker/project/admission time, not source authority.
+    request_origin: Option<Arc<crate::storage::token_usage::ExternalRequestOrigin>>,
+    /// Enabled only after native socket authorization and successful reservation.
+    /// Curated pre-proof and legacy work remain one-shot; no payload selects it.
+    socket_precommit_retry: bool,
     /// Exact normalized proof attached only to already-reserved legacy work.
     /// The original report/stream reservation remains unchanged; no new source
     /// or request-marker authority is inferred from this migration candidate.
@@ -170,8 +180,66 @@ impl ExternalUsageWork {
     /// Runs legacy or sealed native request accounting off actor. Native work
     /// cannot replace its originally reserved project/group with current state.
     pub(crate) fn execute(&self) -> Result<ExternalUsageCommit> {
+        self.execute_with_admission(None)
+    }
+
+    /// Executes one admitted socket attempt with a fresh invocation-local
+    /// refusal witness. No broad error, previous attempt or stored row may
+    /// supply retry authority; all other work preserves one-shot execution.
+    pub(crate) fn execute_attempt(&self) -> crate::storage::token_usage::ExternalUsageAttempt {
+        use crate::storage::token_usage::{ExternalUsageAdmissionWitness, ExternalUsageAttempt};
+        if !self.socket_precommit_retry {
+            return ExternalUsageAttempt::Completed(self.execute());
+        }
+        let mut admission = ExternalUsageAdmissionWitness::default();
+        let result = self.execute_with_admission(Some(&mut admission));
+        admission.finish(result)
+    }
+
+    /// Exposes only sealed scheduling eligibility, never a setter or RPC knob.
+    pub(crate) fn permits_precommit_retry(&self) -> bool {
+        self.socket_precommit_retry
+    }
+
+    /// Shares original normalization, origin checks and sole ledger publication.
+    /// The optional observer cannot authorize work or retry after writer entry.
+    fn execute_with_admission(
+        &self,
+        mut admission: Option<&mut crate::storage::token_usage::ExternalUsageAdmissionWitness>,
+    ) -> Result<ExternalUsageCommit> {
         if self.report != self.admitted_report {
             return Err(MezError::conflict("external admitted report changed"));
+        }
+        if self.socket_precommit_retry {
+            self.request_origin
+                .as_ref()
+                .filter(|origin| {
+                    Some(origin.request_id.as_str()) == self.request_marker.as_deref()
+                        && origin.project == self.report.project
+                        && origin.admitted_at <= self.report.observed_at
+                })
+                .ok_or_else(|| MezError::conflict("external request original origin changed"))?;
+            if self.report.mode != "observation"
+                || self.opencode_handoff.is_some()
+                || self.admission == 0
+            {
+                return Err(MezError::conflict(
+                    "external socket request admission changed",
+                ));
+            }
+            if let Some(publication) = self.published.get() {
+                if publication.group.is_some()
+                    || self.projection_id.as_deref() != Some(publication.commit.stream_id.as_str())
+                {
+                    return Err(MezError::conflict(
+                        "external request publication scope changed",
+                    ));
+                }
+                // This cell belongs to the unchanged original work/origin, not
+                // a caller result. A repeated exact invocation returns actual
+                // evidence without committing again or setting OnceLock twice.
+                return Ok(publication.commit.clone());
+            }
         }
         if let Some(pair) = &self.opencode_handoff {
             if pair.legacy() != &self.report {
@@ -193,17 +261,31 @@ impl ExternalUsageWork {
             return Ok(commit);
         }
         if let Some(marker) = &self.request_marker {
-            let frozen = self
-                .store
-                .freeze_external_request_report(&self.report, marker)?;
+            let frozen = match admission.as_deref_mut() {
+                Some(admission) => self.store.freeze_external_request_report_with_admission(
+                    &self.report,
+                    marker,
+                    admission,
+                )?,
+                None => self
+                    .store
+                    .freeze_external_request_report(&self.report, marker)?,
+            };
             if frozen.report().project != self.report.project
                 || frozen.report().epoch != self.report.epoch
+                || (self.socket_precommit_retry
+                    && self.request_origin.as_deref() != Some(frozen.origin()))
             {
                 return Err(MezError::conflict(
                     "external request original projection changed",
                 ));
             }
-            let commit = self.store.ingest_external_request(&frozen, self.now)?;
+            let commit = match admission {
+                Some(admission) => self
+                    .store
+                    .ingest_external_request_with_admission(&frozen, self.now, admission)?,
+                None => self.store.ingest_external_request(&frozen, self.now)?,
+            };
             self.published
                 .set(ExternalUsagePublication {
                     commit: commit.clone(),
@@ -256,6 +338,12 @@ impl RuntimeSessionService {
     pub(crate) fn external_usage_reservation_counts_for_tests(&self) -> (usize, usize) {
         let usage = self.control.external_usage();
         (usage.pending.len(), usage.reservations.len())
+    }
+
+    /// Counts issued actor admissions so retries cannot hide a fresh reservation.
+    #[cfg(test)]
+    pub(crate) fn external_usage_admission_count_for_tests(&self) -> u64 {
+        self.control.external_usage().next_admission
     }
 
     /// Sets a bounded projection limit for deterministic capacity regressions.
@@ -439,6 +527,8 @@ impl RuntimeSessionService {
             process: binding.process.clone(),
             now: current_unix_seconds(),
             request_marker: None,
+            request_origin: None,
+            socket_precommit_retry: false,
             projection_id: None,
             opencode_handoff: pair,
             published: Arc::new(OnceLock::new()),
@@ -507,7 +597,9 @@ impl RuntimeSessionService {
             })?;
         enrollment.authorize(connection)?;
         let work = self.external_request_work_for_binding(request.id.clone(), binding, &params)?;
-        self.reserve_external_usage_work(work)
+        let mut work = self.reserve_external_usage_work(work)?;
+        work.socket_precommit_retry = true;
+        Ok(work)
     }
 
     /// Builds only original ready-marker provenance for an already authorized
@@ -581,6 +673,8 @@ impl RuntimeSessionService {
             process: binding.process.clone(),
             now,
             request_marker: Some(marker),
+            request_origin: Some(Arc::new(origin.clone())),
+            socket_precommit_retry: false,
             projection_id: None,
             opencode_handoff: None,
             published: Arc::new(OnceLock::new()),
@@ -694,6 +788,13 @@ impl RuntimeSessionService {
         work: ExternalUsageWork,
         result: Result<ExternalUsageCommit>,
     ) -> String {
+        #[cfg(test)]
+        if let Some(probe) = &work.worker_probe {
+            probe
+                .completions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            probe.completed.notify_one();
+        }
         let projection = self.control.external_usage_mut();
         if !Arc::ptr_eq(&projection.incarnation, &work.accounting_incarnation) {
             return crate::runtime::runtime_json_rpc_error(

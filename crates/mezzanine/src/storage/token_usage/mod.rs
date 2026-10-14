@@ -13,11 +13,16 @@ use std::path::{Path, PathBuf};
 use crate::error::{MezError, Result};
 
 mod external;
+mod external_attempt;
 mod external_requests;
 mod external_sources;
 mod history;
 mod projects;
 mod store;
+
+pub(crate) use external_attempt::{
+    ExternalPrecommitPhase, ExternalUsageAdmissionWitness, ExternalUsageAttempt,
+};
 
 pub(crate) use history::checked_usage_sum as checked_history_usage_sum;
 pub(crate) use history::{

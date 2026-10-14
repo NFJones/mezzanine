@@ -1634,6 +1634,19 @@ capture begin readiness before the genuine new request and MUST NOT mint markers
 for historical/resumed/fork-inherited completed events or infer a newest marker.
 These observational facts do not attest vendor invoice amounts. Generic legacy
 `agent/external/usage` remains unchanged and rejects internal observation mode.
+One retained ordinary SOCKET request-end dispatch MAY retry only an explicitly
+refused precommit writer: final idempotent WAL setup or expense-ledger BEGIN
+IMMEDIATE with exact base SQLite BUSY/LOCKED. Schema admission, reads/writes,
+COMMIT, unexpected extended codes and worker uncertainty MUST remain terminal.
+The initial invocation and at most two further attempts MUST share the original
+work, frozen source/marker/project/admission/report/counters,32-admission budget
+and one final actor completion. Retry spacing is100ms then500ms AFTER refusal;
+a fixed2000ms monotonic horizon MUST be checked before every dispatch, including
+after queue delay. It bounds dispatch, not syscall completion. Reply loss MUST
+NOT cancel incurred expense, undo a commit or revive presentation. Legacy and
+curated helper work remain one-shot. This memory/task-retained contention retry
+adds no durable pending store, source handoff, task/service/reload/restart
+recovery or no-gap guarantee; existing explicit coverage limitations remain.
 Unreported sources remain unavailable; actually committed request reports expose
 `request-bound-external-reported` coverage, not exhaustive accounting. Vendor
 producers, legacy OpenCode layout handoff and broader

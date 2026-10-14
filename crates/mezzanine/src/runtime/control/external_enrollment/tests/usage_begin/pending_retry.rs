@@ -17,7 +17,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// Owns a generated native socket/root and immediately captured child status.
 /// Construction panic cleanup retains the real service until it can transfer to
 /// Fixture. This does not modify shared producer helpers or the Pi timer lane.
-async fn pending_fixture() -> Option<Fixture> {
+pub(super) async fn pending_fixture() -> Option<Fixture> {
     let directory = std::path::Path::new("/tmp").join(format!(
         "mez-pending-retry-{}-{:x}",
         std::process::id(),
@@ -110,7 +110,7 @@ fn pending_retry_native_child() {
 
 /// Waits for atomic publication of a complete child status record. Nonzero or
 /// malformed contents remain evidence to fail after original-owner cleanup.
-async fn child_status(
+pub(super) async fn child_status(
     directory: &std::path::Path,
 ) -> std::result::Result<String, tokio::time::error::Elapsed> {
     tokio::time::timeout(Duration::from_secs(5), async {

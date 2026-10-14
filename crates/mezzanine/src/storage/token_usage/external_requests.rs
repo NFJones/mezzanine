@@ -56,6 +56,22 @@ impl TokenUsageStore {
         report: &super::ExternalUsageReport,
         request_id: &str,
     ) -> Result<ExternalRequestReport> {
+        self.freeze_external_request_report_with_admission(
+            report,
+            request_id,
+            &mut super::ExternalUsageAdmissionWitness::default(),
+        )
+    }
+
+    /// Shares the original normalization/origin checks while exposing only this
+    /// invocation's final precommit WAL refusal to the admitted socket worker.
+    pub(crate) fn freeze_external_request_report_with_admission(
+        &self,
+        report: &super::ExternalUsageReport,
+        request_id: &str,
+        admission: &mut super::ExternalUsageAdmissionWitness,
+    ) -> Result<ExternalRequestReport> {
+        admission.clear();
         crate::integrations::harness_policy::require_active_external_harness(&report.harness)?;
         if report.mode != "observation"
             || !valid_request_id(request_id)
@@ -67,7 +83,7 @@ impl TokenUsageStore {
             ));
         }
         report.counters.validate()?;
-        let connection = self.open()?;
+        let connection = self.open_with_external_admission(admission)?;
         let row:Option<(Option<String>,u64)>=connection.query_row(
             "SELECT r.project_id,r.admitted_at FROM external_usage_requests r JOIN external_usage_sources s ON s.owner=r.owner
              WHERE r.owner=?1 AND r.request_id=?2 AND r.harness=?3 AND s.harness=?3",

@@ -362,6 +362,24 @@ impl TokenUsageStore {
         self.ingest_external_with_request(request.report(), now, Some(request), None, None)
     }
 
+    /// Uses the sole existing ledger transaction and observes only an actual
+    /// refused expense-writer acquisition. No statements or commit are replayable.
+    pub(crate) fn ingest_external_request_with_admission(
+        &self,
+        request: &super::external_requests::ExternalRequestReport,
+        now: u64,
+        admission: &mut super::ExternalUsageAdmissionWitness,
+    ) -> Result<ExternalUsageCommit> {
+        self.ingest_external_with_admission(
+            request.report(),
+            now,
+            Some(request),
+            None,
+            None,
+            admission,
+        )
+    }
+
     /// Shared legacy/native transaction owner; request binding grants no runtime
     /// admission by itself and cannot be detached from its immutable report.
     fn ingest_external_with_request(
@@ -372,6 +390,28 @@ impl TokenUsageStore {
         legacy: Option<&ExternalUsageReport>,
         group: Option<&mut Option<ExternalUsageGroupSnapshot>>,
     ) -> Result<ExternalUsageCommit> {
+        self.ingest_external_with_admission(
+            report,
+            now,
+            request,
+            legacy,
+            group,
+            &mut super::ExternalUsageAdmissionWitness::default(),
+        )
+    }
+
+    /// Shared transaction implementation; an invocation-local witness cannot
+    /// change legacy or curated scheduling and is never a ledger acknowledgment.
+    fn ingest_external_with_admission(
+        &self,
+        report: &ExternalUsageReport,
+        now: u64,
+        request: Option<&super::external_requests::ExternalRequestReport>,
+        legacy: Option<&ExternalUsageReport>,
+        group: Option<&mut Option<ExternalUsageGroupSnapshot>>,
+        admission: &mut super::ExternalUsageAdmissionWitness,
+    ) -> Result<ExternalUsageCommit> {
+        admission.clear();
         let observation = report.mode == "observation";
         crate::integrations::harness_policy::require_active_external_harness(&report.harness)?;
         report.counters.validate()?;
@@ -453,8 +493,17 @@ impl TokenUsageStore {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        let mut connection = self.open()?;
-        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let mut connection = self.open_with_external_admission(admission)?;
+        #[cfg(test)]
+        admission.install_commit_abort_for_tests(&connection);
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| {
+                // No transaction exists on this error. Later reads, writes and
+                // COMMIT use their unchanged terminal/uncertain error path.
+                admission.refused(super::ExternalPrecommitPhase::LedgerBeginImmediate, &error);
+                MezError::from(error)
+            })?;
         let request_complete = if let Some(request) = request {
             let row:Option<(String,Option<String>,u64,Option<String>)>=tx.query_row("SELECT harness,project_id,admitted_at,observation_id FROM external_usage_requests WHERE owner=?1 AND request_id=?2",
                 params![report.owner,request.origin().request_id],|row|Ok((row.get(0)?,row.get(1)?,super::store::row_u64(row,2)?,row.get(3)?))).optional()?;
