@@ -17,12 +17,12 @@ mod owned_scope_tests {
     /// API. Retained unrelated history remains source-free.
     #[test]
     fn owned_source_fixed_feed_operation_is_independent_of_history_depth() {
-        for depth in [0, 4096] {
+        for depth in [0usize, 4096] {
             let mut screen = TerminalScreen::new(Size::new(80, 6).unwrap(), 5000).unwrap();
             for _ in 0..depth {
                 screen.feed(b"old opaque row\r\n");
             }
-            assert!(screen.normal_history_line_count() >= depth.saturating_sub(6));
+            assert!(screen.history.len() >= depth.saturating_sub(6));
             let entry = PresentationEntry {
                 id: "fixed-feed".into(),
                 occurrence: Default::default(),

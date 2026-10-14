@@ -4,10 +4,12 @@
 
 use super::timestamp_settings::replace_timestamp_settings;
 use super::*;
+use mez_core::presentation::PresentationEntry;
+use mez_terminal::GraphicRendition;
 
 /// Actual server JSON retains visual rows/styles but never serializes process-
-/// local source Arcs. A source-only marker absent from rendered Markdown cannot
-/// leak through the wire as an ownership payload or a newly invented field.
+/// local source Arcs. Markdown link URLs are intentionally visual dim text;
+/// raw markup is distinct source evidence, not an extra serialized payload.
 #[test]
 fn runtime_log_timestamps_wire_json_omits_local_copy_source_payload() {
     let mut service = test_runtime_service_with_size(Size::new(80, 32).unwrap());
@@ -36,7 +38,7 @@ fn runtime_log_timestamps_wire_json_omits_local_copy_source_payload() {
             .normal_styled_content_lines()
             .iter()
             .filter_map(|row| row.copy_source.as_ref())
-            .any(|owner| owner.text.contains("copy-source-only.invalid"))
+            .any(|owner| owner.text.as_ref() == source)
     );
     let view = service
         .render_client_view(
@@ -44,9 +46,58 @@ fn runtime_log_timestamps_wire_json_omits_local_copy_source_payload() {
             Size::new(80, 32).unwrap(),
             &TerminalClientLoopConfig::default(),
         )
+        .unwrap()
         .unwrap();
     let json = crate::runtime::json::rendered_client_view_json(&view, None);
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let (visual, spans) =
+        mez_mux::presentation::compose_client_presentation_with_styles(&view, None);
+    assert!(
+        visual
+            .iter()
+            .any(|line| line.contains("copy-source-only.invalid"))
+    );
+    assert!(!visual.iter().any(|line| line.contains(source)));
+    assert_eq!(value["lines"], serde_json::json!(visual));
+    let color = |color| match color {
+        Some(mez_terminal::TerminalColor::Indexed(index)) => {
+            serde_json::json!({"kind":"indexed","index":index})
+        }
+        Some(mez_terminal::TerminalColor::Rgb(red, green, blue)) => {
+            serde_json::json!({"kind":"rgb","red":red,"green":green,"blue":blue})
+        }
+        None => serde_json::Value::Null,
+    };
+    let expected_spans = serde_json::json!(spans.iter().map(|line| line.iter().map(|span| {
+        let r = span.rendition;
+        serde_json::json!({"start":span.start,"length":span.length,"rendition":{
+            "bold":r.bold,"dim":r.dim,"italic":r.italic,"underline":r.underline,"double_underline":r.double_underline,
+            "strikethrough":r.strikethrough,"inverse":r.inverse,"hidden":r.hidden,"foreground":color(r.foreground),"background":color(r.background)
+        }})
+    }).collect::<Vec<_>>()).collect::<Vec<_>>());
+    assert_eq!(value["line_style_spans"], expected_spans);
+    let mut copy = CopyMode::from_screen(service.agent_pane_screen("%1").unwrap(), 24).unwrap();
+    copy.set_agent_surface(true);
+    let row = (0..copy.line_count())
+        .find(|row| copy.copy_source(*row).is_some())
+        .unwrap();
+    let end = mez_mux::render::char_count(&copy.lines()[row]);
+    copy.select_range(
+        CopyPosition {
+            line: row,
+            column: 0,
+        },
+        CopyPosition {
+            line: row,
+            column: end,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+            .unwrap(),
+        source
+    );
     assert!(
         value
             .get("lines")
@@ -56,7 +107,7 @@ fn runtime_log_timestamps_wire_json_omits_local_copy_source_payload() {
             .iter()
             .any(|line| line.as_str().unwrap().contains("visible label"))
     );
-    assert!(!json.contains("copy-source-only.invalid"));
+    assert!(!json.contains(source));
     assert!(!json.contains("copy_source"));
     assert!(!json.contains("copySource"));
 }
@@ -252,9 +303,9 @@ fn runtime_log_timestamps_off_raw_literal_source_survives_toggle() {
     );
     let source = format!(
         "{}literal\n{}\n{}\n01:02:03 authored",
-        mez_mux::render::COPY_SOURCE_LINE_PREFIX,
-        mez_mux::render::COPY_SOURCE_REFERENCE_PREFIX,
-        mez_mux::render::COPY_SKIP_LINE
+        mez_mux::copy::COPY_SOURCE_LINE_PREFIX,
+        mez_mux::copy::COPY_SOURCE_REFERENCE_PREFIX,
+        mez_mux::copy::COPY_SKIP_LINE
     );
     for _ in 0..2 {
         service
@@ -288,6 +339,7 @@ fn runtime_log_timestamps_off_raw_literal_source_survives_toggle() {
         assert!(!rows.is_empty());
         let first = rows[0];
         let last = *rows.last().unwrap();
+        let end = mez_mux::render::char_count(&copy.lines()[last]);
         copy.select_range(
             CopyPosition {
                 line: first,
@@ -295,7 +347,7 @@ fn runtime_log_timestamps_off_raw_literal_source_survives_toggle() {
             },
             CopyPosition {
                 line: last,
-                column: mez_mux::render::char_count(&copy.lines()[last]),
+                column: end,
             },
         )
         .unwrap();
@@ -367,9 +419,10 @@ fn runtime_log_timestamps_code_diagram_groups_are_width_independent() {
     assert_eq!(original.len(), 2);
     for width in [32, 48, 80] {
         replace_timestamp_settings(&mut service, true, width, "");
-        agent_pane_screen_for_test_mut(&mut service, "%1")
+        service
+            .agent_pane_screen_mut("%1")
             .unwrap()
-            .resize(Size::new(width, 60).unwrap())
+            .resize(Size::new(u16::try_from(width).unwrap(), 60).unwrap())
             .unwrap();
         let screen = service.agent_pane_screen("%1").unwrap();
         assert_eq!(groups(screen), original);
