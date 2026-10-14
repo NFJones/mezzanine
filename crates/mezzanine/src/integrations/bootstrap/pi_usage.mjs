@@ -124,6 +124,14 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
       });
     }
   };
+  /** Async results can outlive synchronous EOS/lease replacement. They may
+   * settle only the original slot, never create a NEW diagnostic under an old
+   * or successor owner. In contrast, lose() called synchronously at an actual
+   * unfinished close captures its existing disclosure BEFORE retirement; that
+   * already-queued fact must retain original loss/abandon/retire ordering. */
+  const diagnose = (slot, reason) => {
+    if (healthy() && !slot.retryClosed) lose(reason);
+  };
   const abandon = slot => {
     if (slot && !slot.projection) {
       slot.retryClosed = true;
@@ -158,11 +166,11 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
    * An in-flight real ACK may settle its slot after close, but cannot revive
    * owner status. Gap diagnostics remain sticky even after healthy recovery. */
   const deliver = async slot => {
-    if (!slot.ticket || !slot.client || owned.cancelled || owned.failed) { lose("unavailable-request-readiness"); return; }
+    if (!slot.ticket || !slot.client || owned.cancelled || owned.failed) { diagnose(slot, "unavailable-request-readiness"); return; }
     if (!slot.report) {
       const observed_at = now();
       if (!natural(observed_at) || observed_at === 0 || observed_at < slot.ticket.admitted_at) {
-        lose("unavailable-report-clock"); slot.client.abandonRequest(slot.ticket); return;
+        diagnose(slot, "unavailable-report-clock"); slot.client.abandonRequest(slot.ticket); return;
       }
       slot.report = Object.freeze({ ...slot.projection, observed_at });
     }
@@ -175,9 +183,9 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
     if (slot.durable) {
       if (healthy() && !slot.retryClosed) owned.usageCoverage = "finalized-assistant-external-reported";
     } else {
+      diagnose(slot, "unavailable-durable-acknowledgment");
+      if (healthy() && !slot.retryClosed) slot.retryStarted ??= clock();
       if (receipt?.reason === "request-source-changed") slot.retryClosed = true;
-      lose("unavailable-durable-acknowledgment");
-      slot.retryStarted ??= clock();
     }
   };
   /** Arm only the earliest eligible original slot; never enqueue 128 retries
@@ -263,10 +271,10 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
       active = slot;
       enqueue(async () => {
         slot.client = owned.client;
-        if (!slot.client || owned.cancelled || owned.failed) { lose("unavailable-request-readiness"); return; }
+        if (!slot.client || owned.cancelled || owned.failed) { diagnose(slot, "unavailable-request-readiness"); return; }
         // Reservation is already process-visible before this async admission.
         slot.ticket = await slot.client.beginRequest(slot.marker);
-        if (!slot.ticket) lose("unavailable-request-readiness");
+        if (!slot.ticket) diagnose(slot, "unavailable-request-readiness");
       });
     },
     messageIdentity(event) {

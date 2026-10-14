@@ -1347,6 +1347,11 @@ new run may open new slots but MUST NOT revive closed original slots. Already
 queued initial finalization MUST retain loss-before-retirement ordering even if
 readiness/report construction is pending. An in-flight typed ACK may settle its
 original obligation but MUST NOT restore failed/stale/closed owner status.
+New asynchronous readiness, report-clock or delivery failure diagnostics MUST
+recheck the captured current healthy/nonclosed slot before changing coverage or
+queueing a gap. A late old-owner result MUST NOT contaminate successor/shared
+coverage. This fence MUST preserve synchronously captured unfinished-close loss
+facts already ordered before original abandonment and lifecycle retirement.
 The existing capability-scoped Pi observation lane MAY accept a typed
 `usage_gap` with an allowlisted content-free reason. It MUST update only sticky
 observer-epoch coverage diagnostics shown in `/status`, including after prior

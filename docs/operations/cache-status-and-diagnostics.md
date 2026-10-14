@@ -57,6 +57,10 @@ full pending capacity refuses new telemetry instead of evicting incurred reports
 Closed/exhausted unknown-delivery slots remain process-local and can permanently
 saturate capacity until process exit, even across reload. This is not a durable
 outbox, invoice completeness or cross-process loss-recovery guarantee.
+Late readiness/report failures after teardown cannot create new diagnostics in
+a successor observer. Existing unfinished-close loss facts captured before
+retirement keep their original ordering; an in-flight ACK can settle only its
+original obligation, without reviving owner coverage.
 An unfinished Pi request is disclosed at a genuine new-run, settled-agent or
 session teardown boundary before its observer retires. No amount is charged
 without finalized counters, and previous totals remain intact; the retained

@@ -287,3 +287,68 @@ test("ordinary Pi lifecycle delivery failure remains latched without implicit re
   main({ type: "turn_start", turnIndex: 0 }); await owner.tail;
   assert.equal(begins, 0); assert.equal(owner.lease.failed, true);
 });
+
+/** Genuine shutdown:new/start:new replaces the callback lease synchronously,
+ * even while original readiness/end delivery is still awaited. Late old-owner
+ * failure must retain its original obligation without publishing NEW diagnostic
+ * facts into the successor's shared coverage or sending after old detach. A
+ * real typed late ACK may settle the original slot but cannot revive coverage.
+ * Client results are controlled here; this is not native authority proof. */
+test("ordinary late old-owner failure cannot contaminate successor coverage", async t => {
+  for (const mode of ["end-undurable", "begin-unavailable", "clock-invalid", "late-durable"]) await t.test(mode, async () => {
+    const owner = {}; const records = []; let release; let entered;
+    const started = new Promise(resolve => { entered = resolve; });
+    const create = () => {
+      const record = { events: [], detached: false }; records.push(record);
+      const original = records.length === 1;
+      return {
+        async start() { return true; },
+        async piObservation(event) { record.events.push({ ...event }); return { delivered: true }; },
+        async beginRequest(id) {
+          if (original && ["begin-unavailable", "clock-invalid"].includes(mode)) {
+            entered(); await new Promise(resolve => { release = resolve; });
+            if (mode === "begin-unavailable") return;
+          }
+          return Object.freeze({ request_id: id, admitted_at: 10 });
+        },
+        async endRequest() {
+          if (original) {
+            entered(); await new Promise(resolve => { release = resolve; });
+            return mode === "late-durable" ? { delivered: true, durable: true, applied: true, revision: 1 }
+              : { delivered: false, durable: false };
+          }
+          assert.fail("successor attempted inherited reporting");
+        },
+        abandonRequest() {}, detach() { record.detached = true; },
+      };
+    };
+    const main = load(owner, create, { now: () => mode === "clock-invalid" ? 0 : 20 });
+    main({ type: "session_start", reason: "startup" }); await owner.tail;
+    const old = owner.lease;
+    main({ type: "agent_start" }); main({ type: "turn_start", turnIndex: 0 });
+    const message = { role: "assistant", provider: "provider", model: "model", stopReason: "stop",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } };
+    main({ type: "message_end", message }); main({ type: "turn_end", turnIndex: 0, messageEntryId: "original-entry", message });
+    await started;
+    main({ type: "session_shutdown", reason: "new" });
+    main({ type: "session_start", reason: "new" }, "session-b");
+    const successor = owner.lease; assert.notEqual(successor, old);
+    assert.equal(owner.usageGap, undefined);
+    release();
+    for (let remaining = 32; remaining > 0; remaining--) {
+      const tail = owner.tail; await tail; if (tail === owner.tail) break;
+    }
+    assert.equal(owner.usageGap, undefined, "late old-owner failure wrote shared successor gap");
+    assert.equal(successor.lastUsageGap, undefined, "successor replayed a stale failure fact");
+    assert.equal(successor.usageCoverage, undefined);
+    assert.equal(old.usageCoverage, undefined); assert.equal(old.lastUsageGap, undefined);
+    assert.equal(records.flatMap(record => record.events).filter(event => event.type === "usage_gap").length, 0,
+      "late old-owner failure emitted new diagnostic after teardown");
+    assert.equal(records[0].detached, true); assert.equal(successor.failed, false);
+    assert.equal(owner.usageRecent.size, 1);
+    const slot = [...owner.usageRecent.values()][0].slot;
+    assert.equal(slot.owner === old, true); assert.equal(Boolean(slot.durable), mode === "late-durable");
+    assert.equal(slot.retryClosed, true); assert.equal(slot.projection !== undefined, true);
+    main({ type: "session_shutdown", reason: "quit" }, "session-b"); await owner.tail;
+  });
+});

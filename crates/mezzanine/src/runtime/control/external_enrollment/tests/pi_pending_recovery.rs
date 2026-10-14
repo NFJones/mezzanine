@@ -620,7 +620,10 @@ async fn qualify() {
                     && status.contains("unavailable-pi-usage-durable-acknowledgment"),
                 "status lost expense or sticky gap"
             );
-            assert!(!status.contains("request-bound-external-reported"), "generic coverage masked the sticky gap");
+            assert!(
+                !status.contains("request-bound-external-reported"),
+                "generic coverage masked the sticky gap"
+            );
             assert!(!status.contains("PRIVATE_PENDING_CONTENT"));
             assert!(
                 handle
