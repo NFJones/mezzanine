@@ -356,12 +356,12 @@ fn streamed_outbound_noop_case(
     // Drain only the receipt-backed presenter, never transport or send again.
     service.flush_received_peer_message_presentations().unwrap();
     assert_eq!(service.message_service().snapshot_state(), messages);
-    let receiver_conversation = &service
+    let receiver_conversation = service
         .agent_shell_store()
         .get(peer_pane)
         .unwrap()
-        .session_id;
-    let received = store.inspect_presentation(receiver_conversation).unwrap();
+        .session_id.clone();
+    let received = store.inspect_presentation(&receiver_conversation).unwrap();
     let received_ids: Vec<_> = received
         .iter()
         .filter_map(|entry| {
@@ -373,7 +373,7 @@ fn streamed_outbound_noop_case(
         .collect();
     assert_eq!(received_ids.len(), usize::from(visible));
     if let Some(identity) = received_ids.first() {
-        assert!(identity.contains(&message_id), "{identity}");
+        assert_eq!(identity, &format!("peer-message recipient={peer_agent} sequence={sequence} id={message_id}"));
     }
     for _ in 0..2 {
         service
@@ -386,6 +386,7 @@ fn streamed_outbound_noop_case(
         "presentation finalization cannot alter messages or cursors"
     );
     assert_eq!(store.inspect_presentation(&conversation).unwrap(), entries);
+    assert_eq!(store.inspect_presentation(&receiver_conversation).unwrap(), received);
     assert_eq!(
         service.agent_pane_screen("%1").unwrap(),
         &displayed,
