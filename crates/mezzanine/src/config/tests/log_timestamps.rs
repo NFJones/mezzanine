@@ -165,9 +165,18 @@ fn log_timestamp_format_invalid_values_fail_before_mutation() {
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%",
     ] {
-        let text = format!(
-            "[terminal]\nagent_log_timestamp_format = {}\n",
+        let encoded = if value == "\x7f" {
+            "\"\\u007f\"".to_string()
+        } else {
             serde_json::to_string(value).unwrap()
+        };
+        let text = format!("[terminal]\nagent_log_timestamp_format = {}\n", encoded);
+        let parsed = parse_config_json_value(ConfigFormat::Toml, &text).unwrap();
+        assert_eq!(
+            parsed
+                .pointer("/terminal/agent_log_timestamp_format")
+                .and_then(serde_json::Value::as_str),
+            Some(value)
         );
         let validation = validate_config_text(ConfigFormat::Toml, &text, ConfigScope::Primary);
         assert!(!validation.valid, "invalid format was accepted");
@@ -187,17 +196,13 @@ fn log_timestamp_format_invalid_values_fail_before_mutation() {
             .is_err()
         );
     }
-    for value in [
-        "123456789012345678901234567890123",
-        "1234567890123456789012345678901234",
-        "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%",
-    ] {
+    for value in ["a".repeat(31), "a".repeat(32), "%%".repeat(32)] {
         assert!(
             plan_config_mutation(
                 ConfigFormat::Toml,
                 source,
                 ConfigScope::Primary,
-                set_string("terminal.agent_log_timestamp_format", value)
+                set_string("terminal.agent_log_timestamp_format", &value)
             )
             .unwrap()
             .validation

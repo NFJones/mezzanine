@@ -56,7 +56,7 @@ fn runtime_log_timestamp_format_long_history_width_round_trip_is_lossless() {
             )
             .unwrap();
         let original_screen = service.agent_pane_screen("%1").unwrap();
-        assert!(original_screen.history().line_count() > 0);
+        assert!(!original_screen.history().is_empty());
         let owners = original_screen
             .normal_styled_content_lines()
             .iter()
@@ -69,6 +69,7 @@ fn runtime_log_timestamp_format_long_history_width_round_trip_is_lossless() {
         let first = (0..frozen.line_count())
             .find(|row| frozen.copy_source(*row).is_some())
             .unwrap();
+        let end = mez_mux::render::char_count(&frozen.lines()[first]);
         frozen
             .select_range(
                 CopyPosition {
@@ -77,7 +78,7 @@ fn runtime_log_timestamp_format_long_history_width_round_trip_is_lossless() {
                 },
                 CopyPosition {
                     line: first,
-                    column: mez_mux::render::char_count(&frozen.lines()[first]),
+                    column: end,
                 },
             )
             .unwrap();
@@ -121,6 +122,7 @@ fn runtime_log_timestamp_format_long_history_width_round_trip_is_lossless() {
                     ) <= 32
                 );
                 let origin = fresh.log_frame(*row).map_or(2, |map| map.body_origin);
+                let end = mez_mux::render::char_count(&fresh.lines()[*row]);
                 fresh
                     .select_range(
                         CopyPosition {
@@ -129,7 +131,7 @@ fn runtime_log_timestamp_format_long_history_width_round_trip_is_lossless() {
                         },
                         CopyPosition {
                             line: *row,
-                            column: mez_mux::render::char_count(&fresh.lines()[*row]),
+                            column: end,
                         },
                     )
                     .unwrap();
@@ -142,6 +144,7 @@ fn runtime_log_timestamp_format_long_history_width_round_trip_is_lossless() {
             }
             let first = owned[0];
             let last = *owned.last().unwrap();
+            let end = mez_mux::render::char_count(&fresh.lines()[last]);
             fresh
                 .select_range(
                     CopyPosition {
@@ -150,7 +153,7 @@ fn runtime_log_timestamp_format_long_history_width_round_trip_is_lossless() {
                     },
                     CopyPosition {
                         line: last,
-                        column: mez_mux::render::char_count(&fresh.lines()[last]),
+                        column: end,
                     },
                 )
                 .unwrap();
@@ -160,7 +163,10 @@ fn runtime_log_timestamp_format_long_history_width_round_trip_is_lossless() {
                     .unwrap(),
                 source
             );
-            let rows = fresh.visible_styled_lines();
+            // CopyMode's render adapter intentionally omits presentation
+            // metadata. Canonical rows prove provenance; projected copy rows
+            // independently prove its visual consequence and matching map.
+            let rows = screen.normal_styled_content_lines();
             let entries = rows
                 .iter()
                 .filter_map(|row| row.presentation.as_ref())
@@ -174,6 +180,37 @@ fn runtime_log_timestamp_format_long_history_width_round_trip_is_lossless() {
             );
             if pruned {
                 assert!(entries.iter().all(|entry| !entry.first_row));
+            }
+            assert_eq!(
+                entries.iter().filter(|entry| entry.first_row).count(),
+                usize::from(!pruned)
+            );
+            if frame.margin_width() > 0 {
+                let stamp = match format {
+                    "[%H:%M:%S]" => "[01:02:03]",
+                    "%H:%M:%S" => "01:02:03",
+                    "%H:%M" => "01:02",
+                    _ => unreachable!("long literal format is suppressed at this cap"),
+                };
+                assert_eq!(
+                    owned
+                        .iter()
+                        .filter(|row| fresh.lines()[**row].starts_with(&format!("{stamp} │ ")))
+                        .count(),
+                    usize::from(!pruned)
+                );
+                let blank_prefix = format!("{}│ ", " ".repeat(frame.margin_width()));
+                assert!(
+                    owned
+                        .iter()
+                        .skip(usize::from(!pruned))
+                        .all(|row| fresh.lines()[*row].starts_with(&blank_prefix))
+                );
+            } else {
+                assert!(
+                    owned.iter().all(|row| fresh.log_frame(*row).is_none()
+                        && fresh.lines()[*row].starts_with("│ "))
+                );
             }
             let position = fresh
                 .search("authored", mez_mux::copy::SearchDirection::Forward)
@@ -304,6 +341,11 @@ fn runtime_log_timestamp_format_client_snapshots_deltas_and_content_capture_agre
         .session
         .attach_observer_with_terminal("format-observer", None, 1)
         .unwrap();
+    // The content API enumerates process surfaces before resolving the
+    // presented agent surface, matching the existing capture contract fixture.
+    let mut process = TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap();
+    process.feed(b"hidden format process fixture\r\n");
+    service.set_process_pane_screen("%1", process);
     replace_format(&mut service, false, 80, "%H:%M:%S");
     service
         .agent_shell_store_mut()
@@ -321,7 +363,13 @@ fn runtime_log_timestamp_format_client_snapshots_deltas_and_content_capture_agre
     let request = r#"{"jsonrpc":"2.0","id":"format-capture","method":"pane/capture","params":{"target":{"pane_id":"%1"},"range":{"origin":"visible","start":"start","end":"end"}}}"#;
     let original: serde_json::Value =
         serde_json::from_str(&service.dispatch_runtime_control_body(request, &first)).unwrap();
+    assert!(original.get("error").is_none(), "{original}");
     assert!(original.to_string().contains("authored %H frame"));
+    assert!(
+        !original
+            .to_string()
+            .contains("hidden format process fixture")
+    );
     for (enabled, format, stamp) in [
         (true, "%H:%M", "01:02"),
         (true, "%M:%H", "02:01"),
@@ -441,8 +489,10 @@ fn runtime_log_timestamp_format_reload_preserves_frozen_copy_and_source() {
         TerminalScreen::new(Size::new(80, 24).unwrap(), 200).unwrap(),
     );
     let source = "01:02:03 authored %H:%M:%S";
+    // Markdown creates explicit source declarations; plain assistant output
+    // intentionally supports rendered copy without guessed source ownership.
     service
-        .append_agent_assistant_text_to_terminal_buffer("%1", source)
+        .append_agent_assistant_content_to_terminal_buffer("%1", source, "text/markdown")
         .unwrap();
     let original = service
         .agent_pane_screen("%1")
@@ -457,6 +507,7 @@ fn runtime_log_timestamp_format_reload_preserves_frozen_copy_and_source() {
         .iter()
         .position(|line| line.contains("authored"))
         .unwrap();
+    let end = mez_mux::render::char_count(&frozen.lines()[row]);
     frozen
         .select_range(
             CopyPosition {
@@ -465,7 +516,7 @@ fn runtime_log_timestamp_format_reload_preserves_frozen_copy_and_source() {
             },
             CopyPosition {
                 line: row,
-                column: mez_mux::render::char_count(&frozen.lines()[row]),
+                column: end,
             },
         )
         .unwrap();
@@ -479,7 +530,7 @@ fn runtime_log_timestamp_format_reload_preserves_frozen_copy_and_source() {
         (true, "[%H:%M]", "[01:02]", 7),
         (true, "%H:%M", "01:02", 5),
         (false, "%S:%M", "03:02", 5),
-        (true, "UTC %H%M%S %%", "UTC 010203 %", 11),
+        (true, "UTC %H%M%S %%", "UTC 010203 %", 12),
     ] {
         replace_format(&mut service, enabled, 80, format);
         let lineage = service
@@ -539,6 +590,7 @@ fn runtime_log_timestamp_format_reload_preserves_frozen_copy_and_source() {
             .unwrap();
         assert!(position.column >= if enabled { width + 3 } else { 2 });
         assert_eq!(fresh.copy_selection().unwrap(), "01:02:03");
+        let end = mez_mux::render::char_count(&fresh.lines()[row]);
         fresh
             .select_range(
                 CopyPosition {
@@ -547,7 +599,7 @@ fn runtime_log_timestamp_format_reload_preserves_frozen_copy_and_source() {
                 },
                 CopyPosition {
                     line: row,
-                    column: mez_mux::render::char_count(&fresh.lines()[row]),
+                    column: end,
                 },
             )
             .unwrap();
