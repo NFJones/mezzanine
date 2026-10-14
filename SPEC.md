@@ -2163,6 +2163,21 @@ identity with operating-system peer credential facilities when available. A
 peer whose effective user identity does not match the session owner MUST be
 rejected unless an explicit shared-access policy is configured.
 
+The async session control listener MUST authenticate an accepted Unix stream
+before allocating connection tasks, decoding requests, or assigning client roles.
+An owner-UID mismatch or an explicitly connection-local credential-read failure
+MUST close only that stream and leave the listener, actor, and existing panes
+available to the next native-authenticated peer. Refusals MUST NOT consume active
+connection capacity or allocate client/disconnect authority. The listener MUST
+count refusals with saturating arithmetic and report only fixed, identity-free
+reason categories at logarithmically spaced counts, not raw credential errors,
+UIDs, descriptors, paths, or request content. Unsupported credential facilities,
+invalid descriptor/API state, and unclassified authentication infrastructure
+failures MUST remain critical and fail closed; repeated peer-local refusals alone
+MUST NOT be treated as proof that essential authentication is unusable. Existing
+connection-task result isolation, reaping, and exact client-generation teardown
+MUST remain independent of this pre-spawn boundary.
+
 Mezzanine MUST set a `MEZ` environment variable in pane shells. The `MEZ`
 variable MUST contain enough structured or delimited information for `mez`
 commands invoked inside a pane to locate the current control socket and current

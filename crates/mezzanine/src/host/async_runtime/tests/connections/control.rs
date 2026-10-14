@@ -328,6 +328,395 @@ async fn async_control_listener_serves_stateful_connection_until_client_closes()
     let _ = std::fs::remove_file(&path);
 }
 
+/// Injects wrong-UID and connection-local credential-read failures before a
+/// real native admission on the same listener. Refusals must close the stream
+/// before parsing initialize, allocate no primary, and consume no task capacity.
+/// An already-attached same-name sibling answers state heartbeats throughout;
+/// two further native primaries prove exact disconnect ownership and capacity
+/// reaping while the actor and original live pane PID survive every refusal.
+#[tokio::test(flavor = "current_thread")]
+async fn async_control_peer_auth_refusals_preserve_listener_actor_and_native_pane() {
+    use crate::control::encode_control_body;
+    use crate::host::async_runtime::actor_types::serve_unix_control_listener_with_peer_auth;
+    use crate::protocol::framing::ProtocolFrameCodec;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{UnixListener, UnixStream};
+    use tokio_util::codec::Framed;
+
+    let path = std::env::temp_dir().join(format!("mez-ctl-{}-peer-auth.sock", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path).unwrap();
+    let mut service = test_service();
+    let started = service
+        .start_initial_pane_process(Some("exec sleep 30"))
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let initialize = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"same-name","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"same-name","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
+    let refusals = std::cell::RefCell::new(Vec::new());
+    let client = async {
+        let body = crate::control::decode_control_frame(&initialize, 16 * 1024)
+            .unwrap()
+            .0;
+        let stream = UnixStream::connect(&path).await.unwrap();
+        let mut sibling = Framed::new(stream, ProtocolFrameCodec::new(16 * 1024).unwrap());
+        sibling
+            .send(crate::protocol::framing::ProtocolFrame::new(
+                crate::control::CONTROL_CONTENT_TYPE,
+                body.clone(),
+            ))
+            .await
+            .unwrap();
+        let frame = sibling.next().await.unwrap().unwrap();
+        let initialized: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+        assert_eq!(
+            initialized["result"]["session"]["attached_primary_count"],
+            1
+        );
+        let sibling_id = initialized["result"]["client"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        for _ in 0..16 {
+            let mut stream = UnixStream::connect(&path).await.unwrap();
+            // Even a complete initialization must not reach the actor on refusal.
+            let _ = stream.write_all(&initialize).await;
+            let mut output = [0; 1];
+            match stream.read(&mut output).await {
+                Ok(0) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
+                    ) => {}
+                other => panic!("refused stream returned protocol output: {other:?}"),
+            }
+            // This is a real framed round trip on an existing sibling, not
+            // merely a handle probe. Refused initialize never creates a client.
+            sibling
+                .send(crate::protocol::framing::ProtocolFrame::new(
+                    crate::control::CONTROL_CONTENT_TYPE,
+                    r#"{"jsonrpc":"2.0","id":"heartbeat","method":"client/list","params":{}}"#,
+                ))
+                .await
+                .unwrap();
+            let frame = sibling.next().await.unwrap().unwrap();
+            let value: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+            let clients = value["result"]["clients"].as_array().unwrap();
+            assert_eq!(clients.len(), 1);
+            assert_eq!(clients[0]["id"], sibling_id);
+            assert_eq!(clients[0]["state"], "attached");
+        }
+        assert_eq!(refusals.borrow().len(), 5);
+        assert_eq!(
+            handle.lifecycle_state().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+        // SAFETY: signal zero probes the test-owned child without changing it.
+        assert_eq!(unsafe { libc::kill(started.primary_pid as i32, 0) }, 0);
+        let mut previous_id = None;
+        for _ in 0..2 {
+            let stream = UnixStream::connect(&path).await.unwrap();
+            let mut framed = Framed::new(stream, ProtocolFrameCodec::new(16 * 1024).unwrap());
+            let body = crate::control::decode_control_frame(&initialize, 16 * 1024)
+                .unwrap()
+                .0;
+            framed
+                .send(crate::protocol::framing::ProtocolFrame::new(
+                    crate::control::CONTROL_CONTENT_TYPE,
+                    body,
+                ))
+                .await
+                .unwrap();
+            let frame = framed.next().await.unwrap().unwrap();
+            let value: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+            assert_eq!(value["result"]["granted_role"], "primary");
+            assert_eq!(value["result"]["session"]["attached_primary_count"], 2);
+            let id = value["result"]["client"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_ne!(id, sibling_id);
+            assert_ne!(previous_id.as_ref(), Some(&id));
+            previous_id = Some(id);
+            assert_eq!(
+                handle.lifecycle_state().await.unwrap(),
+                RuntimeLifecycleState::Running
+            );
+            // The original pane has not been replaced or killed by refusal/cleanup.
+            assert_eq!(unsafe { libc::kill(started.primary_pid as i32, 0) }, 0);
+            framed.get_mut().shutdown().await.unwrap();
+            drop(framed);
+            // Wait on real sibling replies until the exact closed attachment
+            // is detached. The same-name sibling must remain authoritative.
+            loop {
+                sibling
+                    .send(crate::protocol::framing::ProtocolFrame::new(
+                        crate::control::CONTROL_CONTENT_TYPE,
+                        r#"{"jsonrpc":"2.0","id":"state","method":"session/get","params":{}}"#,
+                    ))
+                    .await
+                    .unwrap();
+                let frame = sibling.next().await.unwrap().unwrap();
+                let value: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+                if value["result"]["session"]["attached_primary_count"] == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }
+        sibling.get_mut().shutdown().await.unwrap();
+    };
+    let server = async {
+        let mut attempts = 0;
+        let accepted = serve_unix_control_listener_with_peer_auth(
+            &listener,
+            &handle,
+            AsyncRuntimeControlConnectionConfig::new(16 * 1024, current_effective_uid()).unwrap(),
+            None,
+            2,
+            |accepted, _| accepted >= 3,
+            |fd, owner| {
+                attempts += 1;
+                if (2..=17).contains(&attempts) {
+                    if attempts % 2 == 0 {
+                        crate::runtime::authorize_unix_peer_uid(owner.wrapping_add(1), owner)?;
+                    } else {
+                        let kind = [
+                            std::io::ErrorKind::ConnectionReset,
+                            std::io::ErrorKind::ConnectionAborted,
+                            std::io::ErrorKind::NotConnected,
+                            std::io::ErrorKind::BrokenPipe,
+                            std::io::ErrorKind::UnexpectedEof,
+                        ][(attempts / 2) % 5];
+                        return Err(std::io::Error::new(
+                            kind,
+                            "private credential-read detail must not be reported",
+                        )
+                        .into());
+                    }
+                }
+                crate::runtime::authenticated_unix_peer_uid(fd, owner)
+            },
+            |count, reason| refusals.borrow_mut().push((count, reason)),
+        )
+        .await
+        .expect("peer-local refusal must not end the listener");
+        assert_eq!(accepted, 3);
+        assert_eq!(attempts, 19);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Detached
+        );
+    };
+    let ((), (), mut exit) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(client, server, actor.run())
+    })
+    .await
+    .expect("refusals must not leak listener capacity or hang shutdown");
+    assert_eq!(
+        exit.service.pane_processes().primary_pid(&started.pane_id),
+        Some(started.primary_pid)
+    );
+    assert_eq!(exit.service.session().clients().len(), 3);
+    assert!(
+        exit.service
+            .session()
+            .clients()
+            .iter()
+            .all(|client| client.state != ClientState::Attached)
+    );
+    assert_eq!(
+        refusals.into_inner(),
+        vec![
+            (1, "owner-mismatch"),
+            (2, "credential-read"),
+            (4, "credential-read"),
+            (8, "credential-read"),
+            (16, "credential-read")
+        ]
+    );
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_file(path);
+}
+
+/// Repeated refusals allocate no authority even when the listener future is
+/// cancelled or the actor shuts down. Cancellation leaves the original bound
+/// listener reusable: a real same-owner initialize then fills its single slot
+/// and detaches normally. Actor shutdown must wake an idle refusal-only accept
+/// loop rather than hang waiting for another peer or a leaked connection task.
+#[tokio::test(flavor = "current_thread")]
+async fn async_control_peer_auth_refusals_allow_cancellation_and_shutdown() {
+    use crate::control::encode_control_body;
+    use crate::host::async_runtime::actor_types::serve_unix_control_listener_with_peer_auth;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::io::AsyncReadExt;
+    use tokio::net::{UnixListener, UnixStream};
+    use tokio_util::codec::Framed;
+
+    for cancel in [true, false] {
+        let path = std::env::temp_dir().join(format!(
+            "mez-ctl-{}-auth-stop-{cancel}.sock",
+            std::process::id()
+        ));
+        let listener = UnixListener::bind(&path).unwrap();
+        let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+            .build()
+            .unwrap();
+        let actor_task = tokio::spawn(actor.run());
+        let config =
+            AsyncRuntimeControlConnectionConfig::new(16 * 1024, current_effective_uid()).unwrap();
+        let refusals = std::cell::Cell::new(0);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            {
+                let server = serve_unix_control_listener_with_peer_auth(
+                    &listener, &handle, config, None, 1, |_, _| false,
+                    |_, owner| {
+                        crate::runtime::authorize_unix_peer_uid(owner.wrapping_add(1), owner)?;
+                        unreachable!("wrong owner must be refused")
+                    },
+                    |count, reason| {
+                        assert_eq!(reason, "owner-mismatch");
+                        refusals.set(count);
+                    },
+                );
+                tokio::pin!(server);
+                let client = async {
+                    for _ in 0..8 {
+                        let mut stream = UnixStream::connect(&path).await.unwrap();
+                        assert_eq!(stream.read(&mut [0; 1]).await.unwrap(), 0);
+                    }
+                    assert_eq!(refusals.get(), 8);
+                    assert_eq!(handle.lifecycle_state().await.unwrap(), RuntimeLifecycleState::Running);
+                };
+                tokio::select! {
+                    result = &mut server => panic!("refusal ended listener before cancellation/shutdown: {result:?}"),
+                    () = client => {},
+                }
+                if !cancel {
+                    handle.shutdown().await.unwrap();
+                    assert_eq!(server.await.unwrap(), 0);
+                }
+                // Dropping the pinned future here cancels it, not the bound listener.
+            }
+            if cancel {
+                let client = async {
+                    let stream = UnixStream::connect(&path).await.unwrap();
+                    let mut framed = Framed::new(stream, crate::protocol::framing::ProtocolFrameCodec::new(16 * 1024).unwrap());
+                    let initialize = encode_control_body(r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"after-cancel","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"after-cancel","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm"}},"authentication":{"mechanism":"peer_credentials"}}}"#);
+                    let body = crate::control::decode_control_frame(&initialize, 16 * 1024).unwrap().0;
+                    framed.send(crate::protocol::framing::ProtocolFrame::new(crate::control::CONTROL_CONTENT_TYPE, body)).await.unwrap();
+                    let frame = framed.next().await.unwrap().unwrap();
+                    let value: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
+                    assert_eq!(value["result"]["granted_role"], "primary");
+                    assert_eq!(value["result"]["session"]["attached_primary_count"], 1);
+                };
+                let server = crate::host::async_runtime::serve_async_runtime_control_listener_with_snapshots(
+                    &listener, &handle, config, None, 1, |accepted, _| accepted == 1,
+                );
+                let ((), accepted) = tokio::join!(client, server);
+                assert_eq!(accepted.unwrap(), 1);
+                handle.shutdown().await.unwrap();
+            }
+        }).await.expect("refusal-only cancellation and actor shutdown must be bounded");
+        let exit = actor_task.await.unwrap();
+        assert_eq!(exit.service.session().clients().len(), usize::from(cancel));
+        assert!(
+            exit.service
+                .session()
+                .clients()
+                .iter()
+                .all(|client| client.state != ClientState::Attached)
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+/// Unsupported credential APIs, invalid descriptor/API state, and unknown
+/// infrastructure failures remain essential-listener errors. Each injection
+/// uses an owned connected socket and proves fail-closed admission: no response,
+/// no client allocation, no refusal diagnostic, and no accidental success.
+#[tokio::test(flavor = "current_thread")]
+async fn async_control_peer_auth_infrastructure_failures_remain_critical() {
+    use crate::host::async_runtime::actor_types::serve_unix_control_listener_with_peer_auth;
+    use std::io::ErrorKind;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::{UnixListener, UnixStream};
+
+    let errors = [
+        ErrorKind::Unsupported,
+        ErrorKind::InvalidInput,
+        ErrorKind::InvalidData,
+        ErrorKind::PermissionDenied,
+        ErrorKind::OutOfMemory,
+        ErrorKind::Other,
+        ErrorKind::Interrupted,
+        ErrorKind::WouldBlock,
+        ErrorKind::TimedOut,
+    ]
+    .into_iter()
+    .map(|kind| std::io::Error::new(kind, "essential credential facility failed"))
+    .chain(
+        [
+            libc::EBADF,
+            libc::ENOTSOCK,
+            libc::EINVAL,
+            libc::ENOSYS,
+            libc::ENOPROTOOPT,
+        ]
+        .into_iter()
+        .map(std::io::Error::from_raw_os_error),
+    );
+    for error in errors {
+        let kind = error.kind();
+        let mut injected = Some(error);
+        let path =
+            std::env::temp_dir().join(format!("mez-ctl-{}-auth-critical.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+            .build()
+            .unwrap();
+        let client = async {
+            let mut stream = UnixStream::connect(&path).await.unwrap();
+            let mut output = [0; 1];
+            assert_eq!(stream.read(&mut output).await.unwrap(), 0);
+        };
+        let server = async {
+            let error = serve_unix_control_listener_with_peer_auth(
+                &listener,
+                &handle,
+                AsyncRuntimeControlConnectionConfig::new(4096, current_effective_uid()).unwrap(),
+                None,
+                1,
+                |_, _| false,
+                |_, _| {
+                    Err(injected
+                        .take()
+                        .expect("exactly one authentication attempt")
+                        .into())
+                },
+                |_, _| panic!("critical errors must not be counted as peer refusals"),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.io_kind(), Some(kind));
+            handle.shutdown().await.unwrap();
+        };
+        let ((), (), exit) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(client, server, actor.run())
+        })
+        .await
+        .expect("critical authentication failure must fail closed without hanging");
+        assert!(exit.service.session().clients().is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
 /// Verifies malformed input affects only its connection and the listener still
 /// accepts a valid client for the same live session afterward.
 #[tokio::test(flavor = "current_thread")]
