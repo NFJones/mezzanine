@@ -39,6 +39,8 @@ pub use attached::{
     AsyncAttachedTerminalStepRequest, plan_and_apply_async_attached_terminal_client_step,
     plan_async_attached_terminal_client_step,
 };
+#[cfg(test)]
+pub(in crate::host::async_runtime) use control::serve_unix_control_listener_with_peer_auth;
 pub(crate) use control::submit_control_connection_disconnect_event;
 #[cfg(test)]
 pub use control::{

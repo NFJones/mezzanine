@@ -1,4 +1,9 @@
 //! Async control-connection and listener adapters over the runtime actor handle.
+//!
+//! Unix admission authenticates native credentials before framing, task slots,
+//! or client authority exist. Explicit peer-local refusals close one stream;
+//! essential listener/API faults remain fatal. Spawned task reaping and exact
+//! attachment teardown are independent of this pre-spawn authentication boundary.
 
 #[cfg(test)]
 use super::UnixStream;
@@ -462,21 +467,65 @@ where
     .await
 }
 
-/// Runs the serve async runtime control listener with snapshots operation for this subsystem.
+/// Serves native-authenticated Unix peers with bounded concurrent connections.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Rejects owner mismatch and connection-local credential-read failures before
+/// allocating tasks, reporting fixed reason/count diagnostics at powers of two.
+/// Returns admitted connection count after stop/drain, or an essential listener,
+/// authentication infrastructure, or connection-task join error. Snapshots and
+/// client authority remain owned by the established connection/actor adapters.
 pub async fn serve_async_runtime_control_listener_with_snapshots<F>(
     listener: &UnixListener,
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncRuntimeControlConnectionConfig,
     snapshots: Option<SnapshotRepository>,
     max_connections: u64,
-    mut should_stop: F,
+    should_stop: F,
 ) -> Result<u64>
 where
     F: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    serve_unix_control_listener_with_peer_auth(
+        listener,
+        handle,
+        config,
+        snapshots,
+        max_connections,
+        should_stop,
+        authenticated_unix_peer_uid,
+        |count, reason| {
+            eprintln!("mez session: rejected Unix control peer: count={count}, reason={reason}");
+        },
+    )
+    .await
+}
+
+/// Owns Unix admission before any task, framing, or client state allocation.
+///
+/// Production always supplies the native UID checker. The explicit checker
+/// and payload-free refusal observer allow bounded fault injection without
+/// foreign users, credential changes, or weakening the native checker.
+/// Only exact-owner rejection and explicitly peer-local I/O failures close
+/// one stream. Unclassified errors fail the essential listener; task reaping,
+/// cancellation, and terminal draining retain their existing ownership rules.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "listener ownership, admission, lifecycle, credential check, and refusal observation are independent inputs"
+)]
+pub(in crate::host::async_runtime) async fn serve_unix_control_listener_with_peer_auth<F, A, R>(
+    listener: &UnixListener,
+    handle: &AsyncRuntimeSessionHandle,
+    config: AsyncRuntimeControlConnectionConfig,
+    snapshots: Option<SnapshotRepository>,
+    max_connections: u64,
+    mut should_stop: F,
+    mut authenticate: A,
+    mut record_refusal: R,
+) -> Result<u64>
+where
+    F: FnMut(u64, RuntimeLifecycleState) -> bool,
+    A: FnMut(std::os::fd::RawFd, u32) -> Result<u32>,
+    R: FnMut(u64, &'static str),
 {
     if max_connections == 0 {
         return Err(MezError::invalid_args(
@@ -485,6 +534,7 @@ where
     }
     let _ = crate::runtime::enable_unix_writer_credentials(listener.as_raw_fd());
     let mut accepted = 0u64;
+    let mut refused = 0u64;
     let mut tasks = JoinSet::new();
     let mut lifecycle = handle.lifecycle_state_watcher();
     loop {
@@ -513,7 +563,21 @@ where
                 continue;
             }
         };
-        let peer_uid = authenticated_unix_peer_uid(stream.as_raw_fd(), config.owner_uid)?;
+        let peer_uid = match authenticate(stream.as_raw_fd(), config.owner_uid) {
+            Ok(peer_uid) => peer_uid,
+            Err(error) => {
+                let Some(reason) = unix_peer_auth_refusal_reason(&error) else {
+                    return Err(error);
+                };
+                // Close before allocating a task, connection, or actor authority.
+                drop(stream);
+                refused = refused.saturating_add(1);
+                if refused.is_power_of_two() {
+                    record_refusal(refused, reason);
+                }
+                continue;
+            }
+        };
         let peer = AuthenticatedPeer::unix_user(peer_uid);
         let connection_handle = handle.clone();
         let connection_snapshots = snapshots.clone();
@@ -575,6 +639,33 @@ where
     }
 
     Ok(accepted)
+}
+
+/// Classifies only native exact-owner rejection and connection-local reads.
+///
+/// The native checker has one Forbidden source: exact UID inequality. OS API,
+/// descriptor, resource, permission, and unknown errors remain fatal by default;
+/// diagnostic text is never inspected or returned as a refusal category.
+fn unix_peer_auth_refusal_reason(error: &MezError) -> Option<&'static str> {
+    use crate::error::MezErrorKind;
+    use std::io::ErrorKind;
+
+    if error.kind() == MezErrorKind::Forbidden {
+        Some("owner-mismatch")
+    } else if matches!(
+        error.io_kind(),
+        Some(
+            ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::NotConnected
+                | ErrorKind::BrokenPipe
+                | ErrorKind::UnexpectedEof
+        )
+    ) {
+        Some("credential-read")
+    } else {
+        None
+    }
 }
 
 /// Joins all accepted control connections after their response loops finish.

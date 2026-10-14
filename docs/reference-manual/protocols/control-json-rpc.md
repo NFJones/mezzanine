@@ -49,6 +49,22 @@ implemented listener or CLI switch: current control capabilities advertise
 `tcp: false`. The spec's loopback-default and bearer-token requirements for a
 future TCP adapter do not enable TCP in this implementation.
 
+The async Unix session listener checks kernel peer UID before parsing or
+allocating client state. Owner mismatch and explicitly connection-local
+credential-read failures close only that accepted stream; subsequent native
+same-owner clients, the actor, and existing panes remain available. Rejected
+streams reserve no active connection slot or primary/disconnect authority.
+Diagnostics use a saturating refusal count and fixed `owner-mismatch` or
+`credential-read` category, emitted at powers of two rather than once per peer.
+No raw errors, UIDs, descriptors, paths, or request bodies are reported. An
+unsupported or invalid credential facility, or an unclassified authentication
+infrastructure error, still fails the essential listener closed. Repetition of
+peer-local refusals does not change their scope. Recoverable credential reads
+are limited to connection reset/abort, not-connected, broken-pipe, and unexpected
+EOF errors; permission, resource, interrupted, or unknown API errors do not
+silently disable authentication. This boundary does not change
+spawned connection-result isolation, reaping, or exact client teardown.
+
 The opt-in Iroh adapter uses ALPN `mezzanine/transport/1` and carries bounded
 control frames on exactly one long-lived, client-opened bidirectional control
 stream. The server accepts no client-opened unidirectional streams and lowers
