@@ -51,6 +51,7 @@ fn streamed_outbound_noop_case(
         .unwrap();
     let peer_pane = peer.pane_id.as_str();
     let peer_agent = format!("agent-{peer_pane}");
+    let recipient = format!("agent:{peer_agent}");
     let store = AgentTranscriptStore::new(temp_root("outbound-noop"));
     service.set_agent_transcript_store(store.clone());
     let conversation = service.agent_shell_store_mut().enter_or_resume("%1").unwrap().session_id.clone();
@@ -63,7 +64,7 @@ fn streamed_outbound_noop_case(
     service.presentation.occurrence_clock_millis = Some(Some(3_723_000));
     let visible = verbose || content_type != "application/json";
     for event in [
-        mez_agent::StreamingSayEvent::MessageStarted { action_index: 0, recipient: peer_agent.clone(), content_type: content_type.into() },
+        mez_agent::StreamingSayEvent::MessageStarted { action_index: 0, recipient: recipient.clone(), content_type: content_type.into() },
         mez_agent::StreamingSayEvent::MessagePayloadDelta { action_index: 0, text: payload.into() },
     ] {
         service.apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event).unwrap();
@@ -83,7 +84,7 @@ fn streamed_outbound_noop_case(
     let action = mez_agent::AgentAction {
         id: "accepted-noop-message".into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
-            recipient: peer_agent.clone(), scope: None, content_type: content_type.into(),
+            recipient, scope: None, content_type: content_type.into(),
             payload: payload.into(), correlation_id: Some("noop-correlation".into()),
         },
     };
@@ -126,6 +127,7 @@ fn streamed_outbound_noop_case(
     // test processes before the expected baseline panic. Never retry the send.
     let executed = service.execute_running_message_actions_for_turn(&turn, &mut execution);
     let message_id = format!("{}:{}", turn.turn_id, action.id);
+    assert_eq!(execution.action_results[0].status, mez_agent::ActionStatus::Succeeded, "message execution must settle successfully before projection finalization");
     assert_eq!(service.message_service().snapshot_state().accepted_messages.iter().filter(|entry| entry.envelope.id == message_id).count(), 1, "real message acceptance precedes finalization");
     let executed = match executed {
         Ok(executed) => executed,
@@ -208,6 +210,7 @@ fn runtime_streamed_empty_rationale_noop_survives_resize_replay() {
     assert!(store.inspect_presentation(&conversation).unwrap().iter().any(|entry| entry.source_text.is_some()));
     service.apply_agent_streaming_say_event_to_terminal_buffer("%1", "empty-rationale", &mez_agent::StreamingSayEvent::RationaleStarted).unwrap();
     let work = service.take_agent_streaming_say_projection_work("%1", "empty-rationale").unwrap().expect("an empty started rationale remains source");
+    service.apply_agent_streaming_say_projection_result(RuntimeSessionService::build_agent_streaming_say_projection(work.clone()).unwrap()).unwrap();
     let candidate = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
     assert!(&candidate.screen == service.agent_pane_screen("%1").unwrap(), "empty source must leave the entire prefix screen unchanged");
     let before = service.runtime_metrics().clone();
