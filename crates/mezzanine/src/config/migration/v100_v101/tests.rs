@@ -71,7 +71,12 @@ fn migration_100_naming_preserves_authored_policy_and_containers() {
             root.pointer("/agents/max_depth"),
             Some(&serde_json::json!(7))
         );
-        assert_eq!(root.pointer("/version"), Some(&serde_json::json!(101)));
+        assert_eq!(
+            root.pointer("/version"),
+            Some(&serde_json::json!(
+                crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+            ))
+        );
         let repeat = super::super::driver::migrate_config_text(format, &migrated.text).unwrap();
         assert!(!repeat.changed);
         assert_eq!(repeat.text, migrated.text);

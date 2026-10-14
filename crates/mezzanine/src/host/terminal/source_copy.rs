@@ -90,7 +90,47 @@ pub(crate) fn source_associations(
         ));
     }
     let mut declarations = raw_blocks.iter();
-    let mut encoded = BTreeMap::<u64, Arc<TerminalCopySource>>::new();
+    let mut encoded = BTreeMap::<String, Arc<TerminalCopySource>>::new();
+    let mut ordinal_identities = BTreeMap::<u64, String>::new();
+    // Trusted producer carriers may anchor at the tail to survive head pruning.
+    // Validate the entire anchor set before resolving references or feeding any
+    // candidate; raw whole-entry/block declarations never enter this decoder.
+    for (line, copy) in lines.iter().zip(copies) {
+        if matches!(
+            line.kind,
+            RichTextLineKind::MarkdownCodeBlock | RichTextLineKind::MarkdownDiagram
+        ) || copy == COPY_SKIP_LINE
+            || copy == COPY_WRAP_CONTINUATION
+        {
+            continue;
+        }
+        let Some(carrier) = copy.strip_prefix(COPY_SOURCE_LINE_PREFIX) else {
+            continue;
+        };
+        let Some((identity, raw)) = carrier.split_once(':') else {
+            return Err(MezError::invalid_state(
+                "generated copy-source carrier is malformed",
+            ));
+        };
+        let ordinal = source_line_ordinal(identity)?;
+        if let Some(previous) = ordinal_identities.insert(ordinal, identity.to_string())
+            && previous != identity
+        {
+            return Err(MezError::invalid_state(
+                "one semantic source ordinal has conflicting carrier identities",
+            ));
+        }
+        let id = TerminalCopySourceId::new(entry, TerminalCopySourceGroup::SourceLine(ordinal))
+            .ok_or_else(|| MezError::invalid_state("copy-source owner is invalid"))?;
+        let source = encoded
+            .entry(identity.to_string())
+            .or_insert_with(|| TerminalCopySource::new(id, Arc::<str>::from(raw)));
+        if source.text.as_ref() != raw {
+            return Err(MezError::invalid_state(
+                "one semantic source line has conflicting payloads",
+            ));
+        }
+    }
     let mut current = None;
     let mut sources = Vec::with_capacity(lines.len());
     for (line, copy) in lines.iter().zip(copies) {
@@ -122,15 +162,9 @@ pub(crate) fn source_associations(
                     "generated copy-source carrier is malformed",
                 ));
             };
-            let ordinal = source_line_ordinal(identity)?;
-            let Some(id) =
-                TerminalCopySourceId::new(entry, TerminalCopySourceGroup::SourceLine(ordinal))
-            else {
-                return Err(MezError::invalid_state("copy-source owner is invalid"));
-            };
-            let source = encoded
-                .entry(ordinal)
-                .or_insert_with(|| TerminalCopySource::new(id, Arc::<str>::from(raw)));
+            let source = encoded.get(identity).ok_or_else(|| {
+                MezError::invalid_state("generated copy-source anchor has no declaration")
+            })?;
             if source.text.as_ref() != raw {
                 return Err(MezError::invalid_state(
                     "one semantic source line has conflicting payloads",
@@ -139,7 +173,7 @@ pub(crate) fn source_associations(
             current = Some(source.clone());
             sources.push(current.clone());
         } else if let Some(identity) = copy.strip_prefix(COPY_SOURCE_REFERENCE_PREFIX) {
-            current = encoded.get(&source_line_ordinal(identity)?).cloned();
+            current = encoded.get(identity).cloned();
             if current.is_none() {
                 return Err(MezError::invalid_state(
                     "generated copy-source reference has no owner",
@@ -164,4 +198,75 @@ fn source_line_ordinal(identity: &str) -> Result<u64> {
         .unwrap_or(identity)
         .parse()
         .map_err(|_| MezError::invalid_state("generated source-line ordinal is invalid"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds an explicitly declared normal renderer row for plan-only tests.
+    fn normal_rows() -> [RichTextLine; 2] {
+        ["first", "last"].map(|display| RichTextLine {
+            display: display.into(),
+            style_spans: Vec::new(),
+            copy_text: None,
+            kind: RichTextLineKind::Normal,
+        })
+    }
+
+    /// Steering intentionally retains one full payload at the tail so pruning
+    /// cannot strand preceding references. The complete trusted plan resolves
+    /// that forward reference without changing original CRLF/trailing bytes.
+    #[test]
+    fn declared_source_plan_resolves_tail_anchor_and_preserves_full_identity() {
+        let entry = PresentationEntry {
+            id: "receipt-owner".into(),
+            occurrence: Default::default(),
+            first_row: true,
+        };
+        let lines = normal_rows();
+        let raw = "雪 exact\r\nsecond\n\n";
+        let copies = [
+            format!("{COPY_SOURCE_REFERENCE_PREFIX}receipt-owner/0"),
+            format!("{COPY_SOURCE_LINE_PREFIX}receipt-owner/0:{raw}"),
+        ];
+        let plan =
+            source_associations(&entry, &lines, &copies, CopySourcePlan::Declared, &[]).unwrap();
+        assert_eq!(plan[0].as_ref().unwrap().text.as_ref(), raw);
+        assert!(Arc::ptr_eq(
+            plan[0].as_ref().unwrap(),
+            plan[1].as_ref().unwrap()
+        ));
+    }
+
+    /// A same-ordinal foreign namespace cannot borrow a declared anchor, and
+    /// missing/conflicting anchors reject before a candidate plan is returned.
+    #[test]
+    fn declared_source_plan_rejects_foreign_missing_and_conflicting_anchors() {
+        let entry = PresentationEntry {
+            id: "receipt-owner".into(),
+            occurrence: Default::default(),
+            first_row: true,
+        };
+        let lines = normal_rows();
+        for copies in [
+            [
+                format!("{COPY_SOURCE_LINE_PREFIX}receipt-owner/0:exact"),
+                format!("{COPY_SOURCE_REFERENCE_PREFIX}foreign/0"),
+            ],
+            [
+                format!("{COPY_SOURCE_REFERENCE_PREFIX}receipt-owner/0"),
+                COPY_SKIP_LINE.into(),
+            ],
+            [
+                format!("{COPY_SOURCE_LINE_PREFIX}receipt-owner/0:first"),
+                format!("{COPY_SOURCE_LINE_PREFIX}receipt-owner/0:conflict"),
+            ],
+        ] {
+            assert!(
+                source_associations(&entry, &lines, &copies, CopySourcePlan::Declared, &[])
+                    .is_err()
+            );
+        }
+    }
 }
