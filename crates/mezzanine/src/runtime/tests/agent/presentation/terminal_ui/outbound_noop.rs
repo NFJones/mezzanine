@@ -1,13 +1,14 @@
 //! Real message acceptance across metadata-only streamed preview settlement.
 //!
-//! Closing a streamed payload can dirty its source without changing any screen
-//! bytes. Settlement must accept that generation, retire ownership and continue
-//! normally, never repeating transport to repair presentation.
+//! A provisional resize can invalidate projection metadata without changing the
+//! source revision or screen. Settlement must accept that current generation,
+//! retire ownership and continue, never repeating transport to repair display.
 
 use super::*;
 
 /// Exercises genuine message-service acceptance after the complete payload was
-/// already displayed while open. Plain/Markdown, hidden normal-mode JSON and
+/// already displayed, then rebased through the real provisional resize owner at
+/// unchanged geometry. Plain/Markdown, hidden normal-mode JSON and
 /// verbose JSON retain their eligibility at wide/narrow widths with timestamps
 /// on and off. Repeated finalization cannot resend, repersist or alter receipts.
 #[test]
@@ -72,9 +73,7 @@ fn streamed_outbound_noop_case(
     if let Some(work) = work {
         assert!(service.apply_agent_streaming_say_projection_result(RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap()).unwrap());
     }
-    let displayed = service.agent_pane_screen("%1").unwrap().clone();
-    let lineage = service.agent_pane_screen_lineage("%1", &conversation);
-    let original_entry = displayed.normal_styled_content_lines().iter().find_map(|row| row.presentation.clone());
+    let original_entry = service.agent_pane_screen("%1").unwrap().normal_styled_content_lines().iter().find(|row| row.text.contains('<')).and_then(|row| row.presentation.clone());
     for event in [
         mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 },
         mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
@@ -101,12 +100,21 @@ fn streamed_outbound_noop_case(
         final_turn: false, terminal_state: AgentTurnState::Running,
     };
     service.reconcile_agent_streaming_say_completion("%1", &turn.turn_id, &execution).unwrap();
+    if let Some(work) = service.take_agent_streaming_say_projection_work("%1", &turn.turn_id).unwrap() {
+        // Reconciliation advances the source-copy revision. Install that real
+        // generation first; equal glyphs alone would not establish a no-op.
+        service.apply_agent_streaming_say_projection_result(RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap()).unwrap();
+    }
+    let displayed = service.agent_pane_screen("%1").unwrap().clone();
+    service.resize_agent_screen_with_pending_steering("%1", displayed.size()).unwrap();
+    assert!(service.agent_pane_screen("%1").unwrap() == &displayed, "same-size provisional resize must retain the entire screen");
+    let lineage = service.agent_pane_screen_lineage("%1", &conversation);
     // This must not pass vacuously because the finalizer found no dirty work.
     let work = service.take_agent_streaming_say_projection_work("%1", &turn.turn_id).unwrap();
     assert_eq!(work.is_some(), visible);
     if let Some(work) = work {
         let candidate = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
-        assert_eq!(candidate.screen, displayed, "fixture must reach an identical current projection");
+        assert!(candidate.screen == displayed, "fixture must reach an identical current projection (including copy/occurrence metadata)");
         assert_eq!(Some(candidate.installed_lineage), lineage);
         assert_eq!(candidate.turn_id, turn.turn_id);
         assert_eq!(candidate.conversation_id, conversation);
@@ -114,12 +122,22 @@ fn streamed_outbound_noop_case(
     let sequence = service.message_service().next_message_sequence();
     let metrics_before = service.runtime_metrics().clone();
     service.presentation.occurrence_clock_millis = Some(Some(99_999_000));
-    // Baseline fails here AFTER message-service acceptance; do not retry sends.
-    assert_eq!(service.execute_running_message_actions_for_turn(&turn, &mut execution).unwrap(), 1);
+    // Inspect committed delivery even if presentation fails, and clean up the
+    // test processes before the expected baseline panic. Never retry the send.
+    let executed = service.execute_running_message_actions_for_turn(&turn, &mut execution);
+    let message_id = format!("{}:{}", turn.turn_id, action.id);
+    assert_eq!(service.message_service().snapshot_state().accepted_messages.iter().filter(|entry| entry.envelope.id == message_id).count(), 1, "real message acceptance precedes finalization");
+    let executed = match executed {
+        Ok(executed) => executed,
+        Err(error) => {
+            service.terminate_all_pane_processes().unwrap();
+            panic!("post-acceptance preview finalization failed: {error}");
+        }
+    };
+    assert_eq!(executed, 1);
     assert_eq!(execution.action_results[0].status, mez_agent::ActionStatus::Succeeded);
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     let result: serde_json::Value = serde_json::from_str(execution.action_results[0].structured_content_json.as_deref().unwrap()).unwrap();
-    let message_id = format!("{}:{}", turn.turn_id, action.id);
     assert_eq!(result["message_id"], message_id);
     assert_eq!(result["delivery_status"], "accepted");
     assert_eq!(result["queued_recipients"], 1);
