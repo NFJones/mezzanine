@@ -12,6 +12,7 @@ mod external_agents;
 mod external_usage;
 mod input;
 mod list_agents_slash;
+mod list_agents_slash_layout;
 mod overlays;
 mod rendering;
 mod scoped_browser;

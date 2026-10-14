@@ -8,6 +8,8 @@
 //! once under exact client/pane/interaction-generation checks; it is never
 //! stored in session/global pending state while command execution is running.
 
+use super::shell::agent_shell_invalid_command_response_json;
+use super::{EventKind, json_escape, runtime_agent_shell_command_response_json};
 use crate::error::{MezError, Result};
 use crate::integrations::agent::slash::{AgentShellCommandOutcome, AgentShellPresentation};
 use crate::runtime::RuntimeSessionService;
@@ -36,10 +38,50 @@ pub(crate) struct AgentPromptCommandCapture {
     /// Exact conversation before work; never rebound to a replacement prompt.
     pub(crate) conversation: Option<String>,
     /// Exactly the shared builder's snapshot; populated only by list-agents.
-    pub(crate) browser: Option<RuntimeRecordBrowserOverlayState>,
+    /// Out-of-line local ownership keeps the synchronous prompt frame bounded
+    /// without enlarging service/actor state or granting a global UI capability.
+    pub(crate) browser: Option<Box<RuntimeRecordBrowserOverlayState>>,
 }
 
 impl RuntimeSessionService {
+    /// Settles only an already-admitted runtime browser command. Parser/build
+    /// errors use the existing pane-local response; one lifecycle event then
+    /// checkpoint follow exactly the generic read-only command tail. Failure of
+    /// either publication step propagates Err, so the renderer drops its local
+    /// capture rather than presenting an unsettled result. Non-browser ingress,
+    /// steering, new/clear/exit and provider/MCP execution never enter this owner.
+    pub(super) fn execute_agent_shell_list_agents_response(
+        &mut self,
+        client: &ClientId,
+        pane: &str,
+        input: &str,
+        args: Option<&str>,
+        capture: Option<&mut AgentPromptCommandCapture>,
+    ) -> Result<String> {
+        let outcome = args
+            .ok_or_else(|| MezError::invalid_args(mez_agent::slash::LIST_AGENTS_USAGE))
+            .and_then(|args| {
+                mez_agent::slash::parse_list_agents_options(args).map_err(MezError::invalid_args)
+            })
+            .and_then(|options| {
+                self.execute_agent_shell_list_agents_command(client, pane, options, capture)
+            });
+        let response = match outcome {
+            Ok(outcome) => runtime_agent_shell_command_response_json(pane, input, Some(&outcome)),
+            Err(error) => agent_shell_invalid_command_response_json(pane, input, &error),
+        };
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","agent_shell_command":"{}"}}"#,
+                json_escape(pane),
+                json_escape(input)
+            ),
+        )?;
+        self.checkpoint_agent_session_metadata()?;
+        Ok(response)
+    }
+
     /// Builds one scoped snapshot and its existing display outcome. Textual
     /// callers omit capture, so they cannot leave typed targets for a later UI.
     pub(super) fn execute_agent_shell_list_agents_command(
@@ -62,7 +104,7 @@ impl RuntimeSessionService {
             if capture.client != *client || capture.pane != pane {
                 return Err(MezError::conflict("agent browser prompt owner changed"));
             }
-            capture.browser = Some(RuntimeRecordBrowserOverlayState {
+            capture.browser = Some(Box::new(RuntimeRecordBrowserOverlayState {
                 pane_id: pane.into(),
                 command: "list-agents".into(),
                 source: Some(RuntimeRecordBrowserOverlaySource::Agents {
@@ -73,7 +115,7 @@ impl RuntimeSessionService {
                 }),
                 browser,
                 stack: Vec::new(),
-            });
+            }));
         }
         Ok(AgentShellCommandOutcome::Presented {
             command: "list-agents".into(),

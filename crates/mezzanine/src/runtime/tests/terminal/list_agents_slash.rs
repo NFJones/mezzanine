@@ -1340,3 +1340,45 @@ fn list_agents_slash_rpc_unavailable_origin_includes_reason_and_all_hint() {
         assert!(fixture.service.primary_display_overlay().is_none());
     }
 }
+
+/// Read-only response settlement can fail after a valid snapshot was built.
+/// A generated whitespace-only separator exceeds the fixture event payload
+/// bound without changing strict flag grammar or production limits. The exact
+/// publication error must propagate, the renderer-local capture must be dropped,
+/// and a fresh invocation cannot inherit the failed All capability.
+#[test]
+fn list_agents_slash_publication_failure_drops_local_capture() {
+    let mut fixture = SlashFixture::new("list-agents-slash-publication-failure");
+    let input = format!("/list-agents{}--all", " ".repeat(2048));
+    let mut capture =
+        fixture
+            .service
+            .prepare_agent_prompt_command_capture(&fixture.primary, "%1", &input, false);
+    crate::runtime::control::agent_browser::take_agent_browser_project_lookup_counts();
+    let error = fixture
+        .service
+        .execute_attached_agent_shell_command(&fixture.primary, "%1", &input, &mut capture)
+        .unwrap_err();
+    assert_eq!(error.message(), "event payload exceeds configured limit");
+    assert!(
+        capture.browser.is_some(),
+        "failure must follow successful builder capture"
+    );
+    assert_eq!(
+        crate::runtime::control::agent_browser::take_agent_browser_project_lookup_counts(),
+        (1, 2)
+    );
+    drop(capture);
+    assert!(fixture.service.pending_record_browser_overlays_is_empty());
+    assert!(fixture.service.primary_display_overlay().is_none());
+    fixture.input(b"/list-agents\r");
+    assert_eq!(fixture.mounted().browser.records().len(), 1);
+    assert!(matches!(
+        fixture.mounted().source,
+        Some(RuntimeRecordBrowserOverlaySource::Agents {
+            query: AgentBrowserQuery::CurrentProject(_),
+            ..
+        })
+    ));
+    assert!(fixture.service.pending_record_browser_overlays_is_empty());
+}

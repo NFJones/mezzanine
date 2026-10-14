@@ -678,6 +678,21 @@ impl RuntimeSessionService {
                 input,
             );
         }
+        // Keep the new human browser's local capability and builder temporaries
+        // outside the generic command/steering result closure. Admission and
+        // execution-disposition selection above still own every ingress check.
+        if matches!(outcome.as_ref(), Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) if command == "list-agents")
+        {
+            return self.execute_agent_shell_list_agents_response(
+                primary_client_id,
+                &pane_id,
+                input,
+                slash_invocation
+                    .as_ref()
+                    .map(|invocation| invocation.args.as_str()),
+                prompt_capture,
+            );
+        }
         let exit_requires_runtime = outcome.as_ref().is_some_and(|outcome| {
             matches!(
                 outcome,
@@ -1085,22 +1100,6 @@ impl RuntimeSessionService {
                     let show_outcome =
                         self.execute_agent_shell_show_approvals_command(&pane_id, input)?;
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&show_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "list-agents"
-                {
-                    let invocation = slash_invocation.as_ref().ok_or_else(|| {
-                        MezError::invalid_args(mez_agent::slash::LIST_AGENTS_USAGE)
-                    })?;
-                    let options = mez_agent::slash::parse_list_agents_options(&invocation.args)
-                        .map_err(MezError::invalid_args)?;
-                    let list_outcome = self.execute_agent_shell_list_agents_command(
-                        primary_client_id,
-                        &pane_id,
-                        options,
-                        prompt_capture,
-                    )?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&list_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
                     && command == "show-context"

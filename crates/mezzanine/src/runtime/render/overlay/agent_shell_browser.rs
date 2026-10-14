@@ -66,6 +66,9 @@ impl RuntimeSessionService {
         let Some(state) = capture.browser else {
             return self.set_agent_prompt_display_output(pane, output);
         };
+        // Move the one owned snapshot only in this focused adoption frame.
+        // The box never escapes into global pending state or control output.
+        let state = *state;
         let process_is_current = match capture.process.as_ref() {
             Some(process) => self
                 .pane_process_identity(pane)
