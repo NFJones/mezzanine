@@ -190,3 +190,42 @@ fn streamed_outbound_noop_case(
     assert_eq!(service.message_service().next_message_sequence(), sequence + 1);
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// A stream can pause immediately after rationale start. That empty component
+/// owns no visible rows but remains valid source during durable resize replay.
+/// Rebuilding must accept the identical projection rather than roll back, and
+/// later text must still use the retained streaming owner normally.
+#[test]
+fn runtime_streamed_empty_rationale_noop_survives_resize_replay() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("empty-rationale-noop-replay"));
+    service.attach_primary("primary", true, Size::new(48, 12).unwrap(), 120).unwrap();
+    service.start_initial_pane_process(Some("cat >/dev/null")).unwrap();
+    service.set_agent_transcript_store(store.clone());
+    let conversation = service.agent_shell_store_mut().enter_or_resume("%1").unwrap().session_id.clone();
+    set_agent_pane_screen_for_test(&mut service, "%1", TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap());
+    service.append_agent_status_text_to_terminal_buffer("%1", "durable prefix").unwrap();
+    assert!(store.inspect_presentation(&conversation).unwrap().iter().any(|entry| entry.source_text.is_some()));
+    service.apply_agent_streaming_say_event_to_terminal_buffer("%1", "empty-rationale", &mez_agent::StreamingSayEvent::RationaleStarted).unwrap();
+    let work = service.take_agent_streaming_say_projection_work("%1", "empty-rationale").unwrap().expect("an empty started rationale remains source");
+    let candidate = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(&candidate.screen == service.agent_pane_screen("%1").unwrap(), "empty source must leave the entire prefix screen unchanged");
+    let before = service.runtime_metrics().clone();
+    let rebuilt = service.rebuild_agent_presentation_after_resize("%1", Size::new(40, 12).unwrap());
+    if let Err(error) = rebuilt {
+        service.terminate_all_pane_processes().unwrap();
+        panic!("empty-rationale resize replay failed: {error}");
+    }
+    assert!(rebuilt.unwrap());
+    let after = service.runtime_metrics();
+    assert_eq!(after.agent_streaming_projection_results, before.agent_streaming_projection_results + 1);
+    assert_eq!(after.agent_streaming_projection_installs, before.agent_streaming_projection_installs);
+    assert_eq!(after.agent_streaming_projection_rejections, before.agent_streaming_projection_rejections);
+    assert_eq!(service.agent_pane_screen("%1").unwrap().normal_content_lines().join("\n").matches("durable prefix").count(), 1);
+    assert!(service.take_agent_streaming_say_projection_work("%1", "empty-rationale").unwrap().is_none(), "accepted no-op must advance projection metadata");
+    service.apply_agent_streaming_say_event_to_terminal_buffer("%1", "empty-rationale", &mez_agent::StreamingSayEvent::RationaleTextDelta { text: "continued thinking".into() }).unwrap();
+    let work = service.take_agent_streaming_say_projection_work("%1", "empty-rationale").unwrap().unwrap();
+    assert!(service.apply_agent_streaming_say_projection_result(RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap()).unwrap());
+    assert!(service.agent_pane_screen("%1").unwrap().normal_content_lines().join("\n").contains("continued thinking"));
+    service.terminate_all_pane_processes().unwrap();
+}
