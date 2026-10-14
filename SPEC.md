@@ -5147,6 +5147,22 @@ If more than one supported primary user configuration file exists and no
 explicit primary file was selected, Mezzanine MUST fail configuration loading
 with an actionable diagnostic rather than merging ambiguous primary files.
 
+CLI argument parsing and help/version display MUST precede primary-config
+loading and configured CPU/runtime initialization. Help, version, shell
+completion, bare `mez config` help, and `mez config default` MUST work without
+`HOME` or a usable primary configuration. `mez config path` and
+`mez config validate [PATH]` MUST run synchronously without runtime bootstrap,
+configuration migration, default publication, or startup socket cleanup.
+Path and implicit validation still require `HOME` and unambiguous primary
+selection. Explicit-file validation MUST consult only the supplied file, even
+with absent `HOME` or a malformed, ambiguous, or future-version primary file.
+Validation MUST report the original document against the current schema,
+including `valid: false` for invalid documents, without rewriting it; successful
+diagnostic output retains exit status zero. Selection and file I/O failures
+retain exit status one. Other management and normal serve/host/attach workflows
+MUST retain strict whole-primary security and CPU validation before startup;
+recovery MUST NOT silently substitute defaults to bypass invalid policy.
+
 Mezzanine MUST support project overlay configuration files in TOML, YAML, and
 JSON. The default discovered project overlay paths for a directory MUST be:
 
