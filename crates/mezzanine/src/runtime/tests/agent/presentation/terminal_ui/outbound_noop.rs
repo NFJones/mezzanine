@@ -7,8 +7,8 @@
 use super::*;
 
 /// Exercises genuine message-service acceptance after the complete payload was
-/// already displayed, then rebased through the real provisional resize owner at
-/// unchanged geometry. Plain/Markdown, hidden normal-mode JSON and
+/// already displayed, then rebased through an admitted height-only PTY resize
+/// event. Plain/Markdown, hidden normal-mode JSON and
 /// verbose JSON retain their eligibility at wide/narrow widths with timestamps
 /// on and off. Repeated finalization cannot resend, repersist or alter receipts.
 #[test]
@@ -105,9 +105,9 @@ fn streamed_outbound_noop_case(
         // generation first; equal glyphs alone would not establish a no-op.
         service.apply_agent_streaming_say_projection_result(RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap()).unwrap();
     }
+    assert!(service.apply_pane_resize_completion_event("%1", Size::new(80, 25).unwrap()).unwrap(), "a genuine height change must be admitted");
     let displayed = service.agent_pane_screen("%1").unwrap().clone();
-    service.resize_agent_screen_with_pending_steering("%1", displayed.size()).unwrap();
-    assert!(service.agent_pane_screen("%1").unwrap() == &displayed, "same-size provisional resize must retain the entire screen");
+    assert_eq!(displayed.size(), Size::new(80, 25).unwrap());
     let lineage = service.agent_pane_screen_lineage("%1", &conversation);
     // This must not pass vacuously because the finalizer found no dirty work.
     let work = service.take_agent_streaming_say_projection_work("%1", &turn.turn_id).unwrap();
