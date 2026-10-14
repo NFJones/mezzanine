@@ -201,6 +201,38 @@ impl RuntimeSessionService {
 mod tests {
     use super::*;
 
+    /// Bounds, overlaps and partial Unicode endpoints reject before any parser
+    /// mutation, including a valid earlier range in the same supplied plan.
+    #[test]
+    fn owned_source_feed_rejects_invalid_complete_ranges_atomically() {
+        let entry = PresentationEntry {
+            id: "complete-range".into(),
+            occurrence: Default::default(),
+            first_row: true,
+        };
+        let bytes = "first雪".as_bytes();
+        let mut screen =
+            TerminalScreen::new(mez_terminal::TerminalSize::new(24, 6).unwrap(), 16).unwrap();
+        screen.feed(b"existing\x1b[31m");
+        for ranges in [
+            vec![(0..5, entry.clone(), None), (4..8, entry.clone(), None)],
+            vec![(0..5, entry.clone(), None), (5..9, entry.clone(), None)],
+            vec![(0..5, entry.clone(), None), (5..6, entry.clone(), None)],
+        ] {
+            let before = screen.clone();
+            assert!(
+                RuntimeSessionService::feed_presentation_source_ranges(
+                    &mut screen,
+                    bytes,
+                    &ranges,
+                    "invalid range"
+                )
+                .is_err()
+            );
+            assert_eq!(screen, before);
+        }
+    }
+
     /// A wrong source in a later logical range rejects the entire plan before
     /// bytes, cursor, styles or parser state change. Valid adjacent source groups
     /// retain their own row across unscoped CRLF and authored empty rows.

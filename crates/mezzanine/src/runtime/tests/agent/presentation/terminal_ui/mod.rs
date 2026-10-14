@@ -35,6 +35,7 @@ mod streaming_identity;
 mod timestamp_contracts;
 mod timestamp_replay;
 mod timestamp_settings;
+mod timestamp_sources;
 mod timestamps;
 mod transient_restore;
 

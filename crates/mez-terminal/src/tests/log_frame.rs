@@ -11,16 +11,36 @@ use mez_core::presentation::LogFramePolicy;
 fn log_frame_effective_edge_cursor_survives_resize_and_toggle() {
     for toggle in [false, true] {
         let mut screen = TerminalScreen::new(TerminalSize::new(24, 8).unwrap(), 100).unwrap();
-        screen.set_log_frame_settings(LogFramePolicy { timestamps: !toggle, wrap_cap: 24 }, GraphicRendition::default());
-        let entry = PresentationEntry { id: "insertion".into(), occurrence: PresentationOccurrence::default(), first_row: true };
+        screen.set_log_frame_settings(
+            LogFramePolicy {
+                timestamps: !toggle,
+                wrap_cap: 24,
+            },
+            GraphicRendition::default(),
+        );
+        let entry = PresentationEntry {
+            id: "insertion".into(),
+            occurrence: PresentationOccurrence::default(),
+            first_row: true,
+        };
         screen.feed_presentation(b"abcdefghijklmno", entry.clone());
         if toggle {
-            screen.set_log_frame_settings(LogFramePolicy { timestamps: true, wrap_cap: 24 }, GraphicRendition::default());
+            screen.set_log_frame_settings(
+                LogFramePolicy {
+                    timestamps: true,
+                    wrap_cap: 24,
+                },
+                GraphicRendition::default(),
+            );
         } else {
             screen.resize(TerminalSize::new(25, 8).unwrap()).unwrap();
         }
         screen.feed_presentation(b"Z", entry);
-        assert!(screen.visible_lines().join("").contains("abcdefghijklmnoZ"), "toggle={toggle} rows={:?}", screen.visible_lines());
+        assert!(
+            screen.visible_lines().join("").contains("abcdefghijklmnoZ"),
+            "toggle={toggle} rows={:?}",
+            screen.visible_lines()
+        );
     }
 }
 
