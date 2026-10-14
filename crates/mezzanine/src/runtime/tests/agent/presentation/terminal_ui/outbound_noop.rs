@@ -54,7 +54,7 @@ fn streamed_outbound_noop_case(
     service.set_agent_transcript_store(store.clone());
     let conversation = service.agent_shell_store_mut().enter_or_resume("%1").unwrap().session_id.clone();
     service.agent_shell_store_mut().enter_or_resume(peer_pane).unwrap();
-    service.ensure_runtime_message_identity(&peer_agent, None, "agent", &[], current_unix_seconds() * 1000).unwrap();
+    service.ensure_runtime_message_identity(&peer_agent, None, "agent", &[], crate::runtime::current_unix_millis()).unwrap();
     set_agent_pane_screen_for_test(&mut service, "%1", TerminalScreen::new(Size::new(80, 24).unwrap(), 200).unwrap());
     let started = service.start_agent_prompt_turn("%1", "send once and continue").unwrap();
     service.remove_pending_agent_provider_task(&started.turn_id);
@@ -74,6 +74,7 @@ fn streamed_outbound_noop_case(
     }
     let displayed = service.agent_pane_screen("%1").unwrap().clone();
     let lineage = service.agent_pane_screen_lineage("%1", &conversation);
+    let original_entry = displayed.normal_styled_content_lines().iter().find_map(|row| row.presentation.clone());
     for event in [
         mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 },
         mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
@@ -83,7 +84,7 @@ fn streamed_outbound_noop_case(
     let action = mez_agent::AgentAction {
         id: "accepted-noop-message".into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
-            recipient: peer_agent, scope: None, content_type: content_type.into(),
+            recipient: peer_agent.clone(), scope: None, content_type: content_type.into(),
             payload: payload.into(), correlation_id: Some("noop-correlation".into()),
         },
     };
@@ -112,6 +113,7 @@ fn streamed_outbound_noop_case(
     }
     let sequence = service.message_service().next_message_sequence();
     let metrics_before = service.runtime_metrics().clone();
+    service.presentation.occurrence_clock_millis = Some(Some(99_999_000));
     // Baseline fails here AFTER message-service acceptance; do not retry sends.
     assert_eq!(service.execute_running_message_actions_for_turn(&turn, &mut execution).unwrap(), 1);
     assert_eq!(execution.action_results[0].status, mez_agent::ActionStatus::Succeeded);
@@ -122,7 +124,7 @@ fn streamed_outbound_noop_case(
     assert_eq!(result["delivery_status"], "accepted");
     assert_eq!(result["queued_recipients"], 1);
     assert_eq!(result["sequence"], sequence);
-    assert!(!service.presentation.agent_streaming_say_presentations.contains_key("%1"));
+    assert!(!service.finalize_agent_streaming_say_presentation("%1", Some(&turn.turn_id)).unwrap(), "settlement must already have retired streaming ownership");
     assert_eq!(service.agent_pane_screen("%1").unwrap(), &displayed);
     assert_eq!(service.agent_pane_screen_lineage("%1", &conversation), lineage);
     let metrics = service.runtime_metrics();
@@ -131,6 +133,8 @@ fn streamed_outbound_noop_case(
     assert_eq!(metrics.agent_streaming_projection_rejections, metrics_before.agent_streaming_projection_rejections);
     let messages = service.message_service().snapshot_state();
     assert_eq!(messages.next_sequence, sequence + 1);
+    let receiver_cursor = messages.subscriptions.iter().find(|cursor| cursor.recipient == peer_agent).expect("receiver committed a delivery cursor");
+    assert_eq!(receiver_cursor.last_sequence, sequence);
     let accepted: Vec<_> = messages.accepted_messages.iter().filter(|entry| entry.envelope.id == message_id).collect();
     assert_eq!(accepted.len(), 1);
     assert_eq!(accepted[0].envelope.payload, payload);
@@ -139,8 +143,20 @@ fn streamed_outbound_noop_case(
     let sent: Vec<_> = entries.iter().filter(|entry| entry.source_text.as_deref().is_some_and(|source| source.contains("accepted-noop-message"))).collect();
     assert_eq!(sent.len(), usize::from(visible));
     if let Some(sent) = sent.first() {
+        assert_eq!(sent.presentation, original_entry, "sent persistence retains the first streamed occurrence, not settlement time");
         assert!(sent.source_text.as_deref().unwrap().contains("\"direction\":\"sent\""));
         assert_eq!(crate::runtime::render::peer_message_presentation_receive_identity(sent.source_content_type.as_deref().unwrap(), sent.source_text.as_deref().unwrap()), None);
+    }
+    let receiver_conversation = &service.agent_shell_store().get(peer_pane).unwrap().session_id;
+    let received = store.inspect_presentation(receiver_conversation).unwrap();
+    let received_ids: Vec<_> = received.iter().filter_map(|entry| {
+        crate::runtime::render::peer_message_presentation_receive_identity(
+            entry.source_content_type.as_deref()?, entry.source_text.as_deref()?,
+        )
+    }).collect();
+    assert_eq!(received_ids.len(), usize::from(visible));
+    if let Some(identity) = received_ids.first() {
+        assert!(identity.contains(&message_id), "{identity}");
     }
     for _ in 0..2 {
         service.finalize_settled_outbound_message_previews("%1", &turn.turn_id, &execution).unwrap();
