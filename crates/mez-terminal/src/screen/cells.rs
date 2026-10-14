@@ -97,7 +97,11 @@ impl TerminalScreen {
             *copy_text = None;
         }
         if let Some(copy_source) = self.line_copy_sources.get_mut(row) {
-            *copy_source = None;
+            *copy_source = self
+                .active_presentation
+                .as_ref()
+                .filter(|entry| entry.is_valid() && !self.alternate.active())
+                .and_then(|_| self.active_copy_source.clone());
         }
         if let Some(presentation) = self.line_presentations.get_mut(row) {
             if let Some(active) = self

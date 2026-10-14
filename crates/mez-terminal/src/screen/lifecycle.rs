@@ -261,6 +261,7 @@ impl TerminalScreen {
             line_copy_sources: vec![None; usize::from(size.rows)],
             line_presentations: vec![None; usize::from(size.rows)],
             active_presentation: None,
+            active_copy_source: None,
             log_frame_policy: LogFramePolicy::default(),
             log_timestamp_rendition: GraphicRendition::default(),
             preserve_presentation_copy_associations: false,

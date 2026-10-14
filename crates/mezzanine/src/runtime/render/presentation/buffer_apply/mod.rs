@@ -2025,6 +2025,21 @@ impl RuntimeSessionService {
         let ui_theme = self.presentation.settings.ui_theme.clone();
         let (conversation_id, mut screen, preview_presentation) =
             self.agent_shell_preview_write_base(pane_id)?;
+        let entry = self.presentation_entry(
+            pane_id,
+            mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+        );
+        let associations = if self.has_presentation_boundary(pane_id) {
+            crate::host::terminal::source_copy::source_associations(
+                &entry,
+                rendered_lines,
+                copy_lines,
+                copy_plan,
+                &[],
+            )?
+        } else {
+            vec![None; rendered_lines.len()]
+        };
         let ansi_text = {
             let mut bytes = String::new();
             let cursor = screen.cursor_state();
@@ -2037,41 +2052,24 @@ impl RuntimeSessionService {
             } else {
                 bytes.push_str("\r\n");
             }
-            let prefix_len = bytes.len();
-            for line in rendered_lines {
+            let mut ranges = Vec::new();
+            for (index, line) in rendered_lines.iter().enumerate() {
+                let start = bytes.len();
                 append_styled_agent_terminal_rendered_line(&mut bytes, style, line, &ui_theme);
                 bytes.push_str("\x1b[0m\r\n");
+                if self.has_presentation_boundary(pane_id) {
+                    let mut row_entry = entry.clone();
+                    row_entry.first_row = entry.first_row && index == 0;
+                    ranges.push((start..bytes.len(), row_entry, associations[index].clone()));
+                }
             }
-            let entry = self.presentation_entry(
-                pane_id,
-                mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
-            );
-            let ranges = if self.has_presentation_boundary(pane_id) {
-                vec![(prefix_len..bytes.len(), entry.clone())]
-            } else {
-                Vec::new()
-            };
-            Self::feed_presentation_ranges(
+            Self::feed_presentation_source_ranges(
                 &mut screen,
                 bytes.as_bytes(),
                 &ranges,
                 "appending rendered agent lines",
             )?;
             screen.set_recent_normal_copy_texts(copy_lines, AGENT_COPY_SKIP_LINE);
-            if self.has_presentation_boundary(pane_id) {
-                let associations = crate::host::terminal::source_copy::source_associations(
-                    &entry,
-                    rendered_lines,
-                    copy_lines,
-                    copy_plan,
-                    &[],
-                )?;
-                if !screen.set_recent_normal_copy_source_associations(&entry, &associations) {
-                    return Err(MezError::invalid_state(
-                        "rendered source association targets changed owner",
-                    ));
-                }
-            }
             bytes
         };
         self.install_agent_shell_preview_write(

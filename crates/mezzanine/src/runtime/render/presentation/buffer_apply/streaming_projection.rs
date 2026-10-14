@@ -182,7 +182,6 @@ impl RuntimeSessionService {
         }
         let mut first_line = true;
         let mut occurrence_ranges = Vec::new();
-        let mut source_plans = Vec::new();
         if let Some(projection) = rationale_projection.as_ref() {
             let start = bytes.len();
             for line in &projection.rendered_lines {
@@ -203,7 +202,7 @@ impl RuntimeSessionService {
                 .as_ref()
                 .and_then(|source| source.entry.clone())
             {
-                occurrence_ranges.push((start..bytes.len(), entry));
+                occurrence_ranges.push((start..bytes.len(), entry, None));
             }
         }
         let mut projection_copy_lines = Vec::new();
@@ -268,24 +267,10 @@ impl RuntimeSessionService {
                     )
                 }))
             {
-                let start = bytes.len() + if first_line { 0 } else { 2 };
-                for line in &projection.rendered_lines {
-                    if !first_line {
-                        bytes.push_str("\r\n");
-                    }
-                    append_styled_agent_terminal_rendered_line(
-                        &mut bytes,
-                        projection.style,
-                        line,
-                        &work.ui_theme,
-                    );
-                    bytes.push_str("\x1b[0m");
-                    first_line = false;
-                }
-                if let Some(entry) = entry.filter(|_| start < bytes.len()) {
+                let sources = if let Some(owner) = entry.as_ref() {
                     let whole = work.outbound_messages.get(&action_index).filter(|message| {
-                        message.entry.as_ref().is_some_and(|owner| {
-                            owner.id == entry.id && owner.occurrence == entry.occurrence
+                        message.entry.as_ref().is_some_and(|candidate| {
+                            candidate.id == owner.id && candidate.occurrence == owner.occurrence
                         }) && runtime_peer_message_presentation_is_markdown(Some(
                             &message.content_type,
                         ))
@@ -299,8 +284,8 @@ impl RuntimeSessionService {
                         .unwrap_or(crate::host::terminal::source_copy::CopySourcePlan::Blocks(
                             &projection.raw_copy_sources,
                         ));
-                    let sources = crate::host::terminal::source_copy::source_associations(
-                        &entry,
+                    crate::host::terminal::source_copy::source_associations(
+                        owner,
                         &projection.rendered_lines,
                         &projection.copy_lines,
                         plan,
@@ -316,9 +301,32 @@ impl RuntimeSessionService {
                             )
                         })
                     })
-                    .collect::<Vec<_>>();
-                    source_plans.push((entry.clone(), sources));
-                    occurrence_ranges.push((start..bytes.len(), entry));
+                    .collect::<Vec<_>>()
+                } else {
+                    vec![None; projection.rendered_lines.len()]
+                };
+                for (logical_index, line) in projection.rendered_lines.iter().enumerate() {
+                    if !first_line {
+                        bytes.push_str("\r\n");
+                    }
+                    let start = bytes.len();
+                    append_styled_agent_terminal_rendered_line(
+                        &mut bytes,
+                        projection.style,
+                        line,
+                        &work.ui_theme,
+                    );
+                    bytes.push_str("\x1b[0m");
+                    first_line = false;
+                    if let Some(owner) = entry.as_ref() {
+                        let mut row_entry = owner.clone();
+                        row_entry.first_row = owner.first_row && logical_index == 0;
+                        occurrence_ranges.push((
+                            start..bytes.len(),
+                            row_entry,
+                            sources[logical_index].clone(),
+                        ));
+                    }
                 }
                 if projection.copy_lines.is_empty() {
                     projection_copy_lines.extend(std::iter::repeat_n(
@@ -331,7 +339,7 @@ impl RuntimeSessionService {
                 }
             }
         }
-        Self::feed_presentation_ranges(
+        Self::feed_presentation_source_ranges(
             &mut candidate,
             bytes.as_bytes(),
             &occurrence_ranges,
@@ -339,13 +347,6 @@ impl RuntimeSessionService {
         )?;
         if has_projection_copy_lines {
             candidate.set_recent_normal_copy_texts(&projection_copy_lines, AGENT_COPY_SKIP_LINE);
-        }
-        for (owner, sources) in source_plans {
-            if !candidate.set_recent_normal_copy_source_associations(&owner, &sources) {
-                return Err(MezError::invalid_state(
-                    "streamed source association targets changed owner",
-                ));
-            }
         }
         let mut projected_actions = say_projections
             .iter()

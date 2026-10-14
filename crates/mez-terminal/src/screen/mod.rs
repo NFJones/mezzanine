@@ -685,6 +685,9 @@ pub struct TerminalScreen {
     pub(super) line_presentations: Vec<Option<PresentationEntry>>,
     /// Scoped producer annotation during semantic feed; absent for arbitrary PTY.
     pub(super) active_presentation: Option<PresentationEntry>,
+    /// Scoped immutable source for one producer-delimited logical-row feed.
+    /// It is never a retained registry or authority after the scope returns.
+    pub(super) active_copy_source: Option<Arc<TerminalCopySource>>,
     /// Immutable optional decoration geometry; canonical cells never contain it.
     pub(super) log_frame_policy: LogFramePolicy,
     /// Supplied semantic rendition for the product's visual projection only.

@@ -102,12 +102,47 @@ impl TerminalScreen {
     /// never guessed after pruning. Invalid metadata/alternate screens get no
     /// annotation. No clocks, history scans, or authored-byte changes occur.
     pub fn feed_presentation(&mut self, bytes: &[u8], metadata: PresentationEntry) {
+        self.feed_presentation_scoped(bytes, metadata, None);
+    }
+
+    /// Feeds one explicit normal logical row with immutable source ownership.
+    /// Rejects a wrong owner before mutation. Alternate-screen bytes remain raw
+    /// and unassociated; callers never gain normal ownership from that surface.
+    pub fn feed_presentation_with_copy_source(
+        &mut self,
+        bytes: &[u8],
+        metadata: PresentationEntry,
+        source: Option<Arc<TerminalCopySource>>,
+    ) -> bool {
+        if !metadata.is_valid()
+            || source
+                .as_ref()
+                .is_some_and(|source| source.id.owner() != metadata.id)
+        {
+            return false;
+        }
+        self.feed_presentation_scoped(bytes, metadata, source);
+        true
+    }
+
+    /// Pairs both active fields for one existing parser feed, including None.
+    /// Raw/alternate rendering never inherits an outer source. Cursor-edge
+    /// normalization retains the existing scoped-feed insertion contract.
+    fn feed_presentation_scoped(
+        &mut self,
+        bytes: &[u8],
+        metadata: PresentationEntry,
+        source: Option<Arc<TerminalCopySource>>,
+    ) {
         let previous = self.active_presentation.take();
+        let previous_source = self.active_copy_source.take();
         if metadata.is_valid() && !self.alternate.active() {
             self.active_presentation = Some(metadata);
+            self.active_copy_source = source;
         }
         self.feed(bytes);
         self.active_presentation = previous;
+        self.active_copy_source = previous_source;
         // A tagged logical right edge is not the physical PTY right edge.
         // Restore raw-feed cursor semantics without overwriting the last cell;
         // another tagged feed still wraps through its capacity check.
