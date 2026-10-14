@@ -250,6 +250,7 @@ impl TerminalScreen {
             active_presentation: None,
             log_frame_policy: LogFramePolicy::default(),
             log_timestamp_rendition: GraphicRendition::default(),
+            preserve_presentation_copy_associations: false,
             wrap_continuation_prefix: None,
             emoji_width: terminal_emoji_width(),
             cursor: Cursor { row: 0, column: 0 },
@@ -584,7 +585,7 @@ impl TerminalScreen {
             &source_rows,
             self.wrap_continuation_prefix.as_deref(),
             self.emoji_width,
-            self.log_frame_policy.timestamps,
+            self.preserve_presentation_copy_associations,
         );
         let physical_rows = reflow_logical_lines(
             &logical_lines,
@@ -592,6 +593,7 @@ impl TerminalScreen {
             self.wrap_continuation_prefix.as_deref(),
             self.emoji_width,
             self.log_frame_policy,
+            self.preserve_presentation_copy_associations,
         );
         let visible_start = if preserve_bottom || physical_rows.len() > new_rows {
             physical_rows.len().saturating_sub(new_rows)
@@ -862,7 +864,7 @@ impl TerminalScreen {
             &source_rows,
             self.wrap_continuation_prefix.as_deref(),
             self.emoji_width,
-            self.log_frame_policy.timestamps,
+            self.preserve_presentation_copy_associations,
         );
         let physical_rows = reflow_logical_lines(
             &logical_lines,
@@ -870,6 +872,7 @@ impl TerminalScreen {
             self.wrap_continuation_prefix.as_deref(),
             self.emoji_width,
             self.log_frame_policy,
+            self.preserve_presentation_copy_associations,
         );
         let visible_start = if preserve_bottom || physical_rows.len() > new_rows {
             physical_rows.len().saturating_sub(new_rows)

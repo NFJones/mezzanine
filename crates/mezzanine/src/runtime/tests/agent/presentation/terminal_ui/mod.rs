@@ -29,6 +29,8 @@ mod pending_steering;
 mod resize_admission;
 mod resize_surfaces;
 mod streaming_identity;
+mod timestamp_contracts;
+mod timestamp_settings;
 mod timestamps;
 mod transient_restore;
 

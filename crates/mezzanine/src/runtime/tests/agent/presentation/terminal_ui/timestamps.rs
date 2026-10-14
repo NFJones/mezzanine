@@ -14,22 +14,55 @@ fn runtime_log_timestamps_toggle_preserves_no_store_source_associations() {
     let mut service = test_runtime_service_with_size(Size::new(80, 32).unwrap());
     service.presentation.settings.terminal_agent_log_timestamps = true;
     service.presentation.occurrence_clock_millis = Some(Some(3_723_000));
-    service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
-    set_agent_pane_screen_for_test(&mut service, "%1", TerminalScreen::new(Size::new(80, 24).unwrap(), 200).unwrap());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 200).unwrap(),
+    );
     let source = "exacttoken".repeat(18);
-    service.append_agent_assistant_content_to_terminal_buffer("%1", &source, "text/markdown").unwrap();
-    service.agent_pane_screen_mut("%1").unwrap().resize(Size::new(32, 24).unwrap()).unwrap();
+    service
+        .append_agent_assistant_content_to_terminal_buffer("%1", &source, "text/markdown")
+        .unwrap();
+    service
+        .agent_pane_screen_mut("%1")
+        .unwrap()
+        .resize(Size::new(32, 24).unwrap())
+        .unwrap();
     for enabled in [true, false, true] {
         service.presentation.settings.terminal_agent_log_timestamps = enabled;
         service.refresh_agent_log_frame_settings().unwrap();
         let mut copy = CopyMode::from_screen(service.agent_pane_screen("%1").unwrap(), 24).unwrap();
         copy.set_agent_surface(true);
-        let rows = copy.lines().iter().enumerate().filter_map(|(row, text)| text.contains("token").then_some(row)).collect::<Vec<_>>();
+        let rows = copy
+            .lines()
+            .iter()
+            .enumerate()
+            .filter_map(|(row, text)| text.contains("token").then_some(row))
+            .collect::<Vec<_>>();
         assert!(rows.len() >= 2);
         for row in [rows[0], rows[1]] {
             let end = mez_mux::render::char_count(&copy.lines()[row]);
-            copy.select_range(CopyPosition { line: row, column: if enabled { 11 } else { 2 } }, CopyPosition { line: row, column: end }).unwrap();
-            assert_eq!(copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source).unwrap(), source, "enabled={enabled} selected={row}");
+            copy.select_range(
+                CopyPosition {
+                    line: row,
+                    column: if enabled { 11 } else { 2 },
+                },
+                CopyPosition {
+                    line: row,
+                    column: end,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                    .unwrap(),
+                source,
+                "enabled={enabled} selected={row}"
+            );
         }
     }
 }

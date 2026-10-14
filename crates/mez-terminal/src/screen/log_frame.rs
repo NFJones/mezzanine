@@ -35,7 +35,10 @@ impl TerminalScreen {
         if self.log_frame_policy == policy && self.log_timestamp_rendition == rendition {
             return;
         }
-        self.force_release_synchronized_output();
+        if self.log_frame_policy.timestamps || policy.timestamps {
+            self.force_release_synchronized_output();
+        }
+        self.preserve_presentation_copy_associations |= policy.timestamps;
         let geometry_changed = self.log_frame_policy.timestamps != policy.timestamps
             || (policy.timestamps && self.log_frame_policy.wrap_cap != policy.wrap_cap);
         self.log_frame_policy = policy;
@@ -103,6 +106,7 @@ impl TerminalScreen {
                 self.wrap_continuation_prefix.as_deref(),
                 self.emoji_width,
                 self.log_frame_policy,
+                true,
                 &mut physical,
             );
             for (index, mut row) in physical.into_iter().enumerate() {

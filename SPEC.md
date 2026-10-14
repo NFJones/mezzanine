@@ -4146,6 +4146,10 @@ Copy/search snapshots MUST carry matching typed body-origin geometry, and
 margin-only selection MUST NOT recover an unrelated whole source group. Same-size
 toggle/theme changes MUST invalidate projections and reject stale settings or
 conversation/lineage workers; no new mutable event history is permitted.
+An active copy view MAY retain its already frozen rows, styles, selection and
+matching geometry through a toggle/theme replacement; it MUST NOT combine them
+with new offsets or silently discard selection. Newly opened views use the
+current policy after source/owner freshness checks.
 
 Structured agent-mode log rows and rendered transcript
 presentation rows MUST wrap at the smaller of the pane terminal width or the

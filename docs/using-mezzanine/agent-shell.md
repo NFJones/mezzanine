@@ -283,6 +283,9 @@ frames/screenshots retain the margin. Content copy, source copy, search, capture
 history export and model observations omit it while preserving their existing
 content format, including literal timestamp-looking authored text. Selecting
 only the margin does not copy an unrelated whole source entry.
+An active copy view retains its frozen rows, styles, selection and matching
+column map through a display-setting change. Exit/reenter copy mode for the new
+appearance; content copying remains decoration-free in either snapshot.
 
 Later action logs and assistant text wait behind earlier presentation barriers.
 When a barrier releases, eligible components drain in response order. Accepted

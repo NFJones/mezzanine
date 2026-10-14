@@ -681,6 +681,11 @@ pub struct TerminalScreen {
     pub(super) log_frame_policy: LogFramePolicy,
     /// Supplied semantic rendition for the product's visual projection only.
     pub(super) log_timestamp_rendition: GraphicRendition,
+    /// Proven presentation copy payloads are whole source associations, not
+    /// string fragments. This captured semantic mode survives hiding decoration
+    /// so cloned/reflowed associations cannot later be concatenated. Untagged
+    /// PTY rows and never-framed screens retain their original copy semantics.
+    pub(super) preserve_presentation_copy_associations: bool,
     /// Optional styled line prefix repeated on soft-wrapped continuation rows.
     ///
     /// The prefix is presentation policy supplied by the product layer. The
@@ -1178,6 +1183,7 @@ fn reflow_logical_lines(
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
     frame_policy: LogFramePolicy,
+    preserve_source_associations: bool,
 ) -> Vec<PhysicalStyledLine> {
     let columns = columns.max(1);
     let mut rows = Vec::new();
@@ -1188,6 +1194,7 @@ fn reflow_logical_lines(
             continuation_prefix,
             emoji_width,
             frame_policy,
+            preserve_source_associations,
             &mut rows,
         );
     }
@@ -1202,6 +1209,7 @@ fn reflow_one_logical_line(
     continuation_prefix: Option<&str>,
     emoji_width: TerminalEmojiWidth,
     frame_policy: LogFramePolicy,
+    preserve_source_associations: bool,
     rows: &mut Vec<PhysicalStyledLine>,
 ) {
     let columns = log_frame_columns(line.presentation.as_ref(), columns, frame_policy);
@@ -1225,7 +1233,7 @@ fn reflow_one_logical_line(
                 wraps_to_next: true,
             });
             current = TerminalStyledLine::plain(String::new());
-            if frame_policy.timestamps && line.presentation.is_some() {
+            if preserve_source_associations && line.presentation.is_some() {
                 // Copy payload is opaque to the terminal. Proven structured
                 // source associations survive on every newly reflowed row;
                 // the product deduplicates their existing source identities.
@@ -1499,6 +1507,7 @@ fn physical_row_count_for_line(
         continuation_prefix,
         emoji_width,
         frame_policy,
+        false,
         &mut rows,
     );
     rows.len().max(1)
@@ -1517,7 +1526,22 @@ fn physical_position_in_line(
     let Some(line) = line else {
         return (0, 0);
     };
+    let physical_columns = columns;
     let columns = log_frame_columns(line.presentation.as_ref(), columns, frame_policy);
+    // A scoped producer can normalize delayed wrap to one-past its effective
+    // edge when that insertion cell still lies inside the physical grid. Keep
+    // that position through reflow; physical VT edges retain legacy clamping.
+    let insertion_limit = if frame_policy.timestamps
+        && line
+            .presentation
+            .as_ref()
+            .is_some_and(PresentationEntry::is_valid)
+        && columns < physical_columns
+    {
+        columns
+    } else {
+        columns.saturating_sub(1)
+    };
     let continuation_prefix = continuation_prefix
         .and_then(|prefix| continuation_prefix_from_styled_line(line, prefix, emoji_width))
         .filter(|prefix| prefix_width(prefix) < columns);
@@ -1526,7 +1550,7 @@ fn physical_position_in_line(
     let mut current_width = 0usize;
     for grapheme in terminal_graphemes(&line.text) {
         if source_column >= logical_column {
-            return (row, current_width.min(columns.saturating_sub(1)));
+            return (row, current_width.min(insertion_limit));
         }
         let width = terminal_grapheme_width(grapheme, emoji_width);
         if width == 0 {
@@ -1553,7 +1577,7 @@ fn physical_position_in_line(
         current_width = current_width.saturating_add(1);
         source_column = source_column.saturating_add(1);
     }
-    (row, current_width.min(columns.saturating_sub(1)))
+    (row, current_width.min(insertion_limit))
 }
 
 /// Runs the csi count operation for this subsystem.

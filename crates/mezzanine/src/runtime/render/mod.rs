@@ -304,11 +304,20 @@ impl RuntimePresentationSettings {
                 crate::runtime::runtime_terminal_render_rate_limit_fps_from_config(root)?,
             terminal_agent_wrap_column_cap:
                 crate::runtime::runtime_terminal_agent_wrap_column_cap_from_config(root)?,
-            // Activation stays inert until the complete frame/copy contract is qualified.
+            // Production activation stays inert until the complete contract is
+            // qualified. Tests exercise the real parser/apply/refresh path now.
             terminal_agent_log_timestamps: {
-                let _validated =
+                let requested =
                     crate::runtime::runtime_terminal_agent_log_timestamps_from_config(root)?;
-                false
+                #[cfg(test)]
+                {
+                    requested
+                }
+                #[cfg(not(test))]
+                {
+                    let _ = requested;
+                    false
+                }
             },
             terminal_reduced_motion: crate::runtime::runtime_terminal_reduced_motion_from_config(
                 root,
