@@ -26,6 +26,7 @@ mod header_previews;
 mod history_reconstruction;
 mod intervening_writes;
 mod occurrence;
+mod outbound_noop;
 mod peer_messages;
 mod pending_messages;
 mod pending_steering;
