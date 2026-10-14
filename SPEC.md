@@ -14659,7 +14659,17 @@ nothing and MUST be removed if validation, approval, or delivery fails. An
 accepted sender row proves only acceptance or queueing, never recipient
 observation, processing, agreement, acknowledgment, or task completion. It MUST
 NOT enter provider or user-trust context, approval authority, delivery routing,
-turn triggering, receiver receipts, or delivery cursors. In normal pane-log mode, canonical
+turn triggering, receiver receipts, or delivery cursors. Streaming projection
+acceptance MUST distinguish a changed screen, an accepted unchanged screen, and
+rejected stale work. An accepted unchanged projection MUST advance its current
+reconciliation metadata without replacing the screen, advancing screen lineage,
+requesting redraw, or recording a rejection. Settled outbound preview finalization
+and resize replay MUST accept that no-op; it MUST NOT fail an already accepted
+send or repeat a send, MAAP action, or provider transport to repair display.
+All ownership, source revision, lineage, geometry and rendering-policy fences
+MUST still pass before unchanged-screen acceptance, and rejected work MUST NOT
+overwrite intervening content or commit projection metadata.
+In normal pane-log mode, canonical
 `text/plain; charset=utf-8` and supported `text/markdown` are
 presentation-eligible; plaintext MUST render literally and Markdown through the
 safe Markdown renderer. All other media types MUST remain durable and

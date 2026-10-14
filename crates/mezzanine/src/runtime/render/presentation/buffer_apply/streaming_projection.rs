@@ -597,11 +597,32 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Atomically installs one complete current projection generation.
+    /// Applies one fenced generation and reports only whether the screen changed.
+    ///
+    /// This redraw-facing compatibility boundary returns `false` for both a
+    /// rejection and an accepted unchanged screen. Callers deciding whether to
+    /// finalize or retain source must use the explicit acceptance outcome instead.
+    /// Errors propagate without requesting redraw or repeating any action.
     pub(crate) fn apply_agent_streaming_say_projection_result(
         &mut self,
         result: crate::runtime::RuntimeStreamingSayProjectionResult,
     ) -> Result<bool> {
+        Ok(self
+            .apply_agent_streaming_say_projection_outcome(result)?
+            .screen_changed())
+    }
+
+    /// Atomically accepts one complete current projection or rejects stale work.
+    ///
+    /// Every ownership, lineage, geometry and policy fence is checked before
+    /// screen equality. Accepted unchanged work advances all reconciliation
+    /// metadata and the no-op metric without replacing the screen or lineage.
+    /// Errors propagate from context capture or installation; presentation
+    /// acceptance never authorizes transport replay or changes delivery evidence.
+    pub(crate) fn apply_agent_streaming_say_projection_outcome(
+        &mut self,
+        result: crate::runtime::RuntimeStreamingSayProjectionResult,
+    ) -> Result<RuntimeStreamingSayProjectionApplyOutcome> {
         let current = self
             .presentation
             .agent_streaming_say_presentations
@@ -638,7 +659,7 @@ impl RuntimeSessionService {
             self.integration
                 .runtime_metrics_mut()
                 .record_agent_streaming_projection_result(false, !screen_lineage_current);
-            return Ok(false);
+            return Ok(RuntimeStreamingSayProjectionApplyOutcome::Rejected);
         }
         let screen_is_unchanged = !self
             .presentation
@@ -683,6 +704,10 @@ impl RuntimeSessionService {
                 .runtime_metrics_mut()
                 .record_agent_streaming_projection_result(true, false);
         }
-        Ok(!screen_is_unchanged)
+        Ok(if screen_is_unchanged {
+            RuntimeStreamingSayProjectionApplyOutcome::AcceptedUnchanged
+        } else {
+            RuntimeStreamingSayProjectionApplyOutcome::AcceptedChanged
+        })
     }
 }

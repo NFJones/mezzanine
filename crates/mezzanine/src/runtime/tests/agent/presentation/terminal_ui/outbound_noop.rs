@@ -196,8 +196,9 @@ fn streamed_outbound_noop_case(
 
 /// A stream can pause immediately after rationale start. That empty component
 /// owns no visible rows but remains valid source during durable resize replay.
-/// Rebuilding must accept the identical projection rather than roll back, and
-/// later text must still use the retained streaming owner normally.
+/// Initial producer metadata and a reconstructed durable baseline can require
+/// a changed screen even with no visible rationale rows. Replay must retain the
+/// owner, and its subsequent identical candidate must be accepted without redraw.
 #[test]
 fn runtime_streamed_empty_rationale_noop_survives_resize_replay() {
     let mut service = test_runtime_service();
@@ -223,10 +224,22 @@ fn runtime_streamed_empty_rationale_noop_survives_resize_replay() {
     assert!(rebuilt.unwrap());
     let after = service.runtime_metrics();
     assert_eq!(after.agent_streaming_projection_results, before.agent_streaming_projection_results + 1);
-    assert_eq!(after.agent_streaming_projection_installs, before.agent_streaming_projection_installs);
+    assert_eq!(after.agent_streaming_projection_installs, before.agent_streaming_projection_installs + 1);
     assert_eq!(after.agent_streaming_projection_rejections, before.agent_streaming_projection_rejections);
     assert_eq!(service.agent_pane_screen("%1").unwrap().normal_content_lines().join("\n").matches("durable prefix").count(), 1);
-    assert!(service.take_agent_streaming_say_projection_work("%1", "empty-rationale").unwrap().is_none(), "accepted no-op must advance projection metadata");
+    assert!(service.take_agent_streaming_say_projection_work("%1", "empty-rationale").unwrap().is_none(), "accepted replay must advance projection metadata");
+    assert!(service.apply_pane_resize_completion_event("%1", Size::new(40, 13).unwrap()).unwrap());
+    let screen = service.agent_pane_screen("%1").unwrap().clone();
+    let lineage = service.agent_pane_screen_lineage("%1", &conversation);
+    let work = service.take_agent_streaming_say_projection_work("%1", "empty-rationale").unwrap().unwrap();
+    let candidate = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(candidate.screen == screen, "retained empty-source owner must produce an identical current candidate after height resize");
+    let before_noop = service.runtime_metrics().clone();
+    assert_eq!(service.apply_agent_streaming_say_projection_outcome(candidate).unwrap(), crate::runtime::render::RuntimeStreamingSayProjectionApplyOutcome::AcceptedUnchanged);
+    assert_eq!(service.agent_pane_screen_lineage("%1", &conversation), lineage);
+    assert!(service.agent_pane_screen("%1").unwrap() == &screen);
+    assert_eq!(service.runtime_metrics().agent_streaming_projection_installs, before_noop.agent_streaming_projection_installs);
+    assert_eq!(service.runtime_metrics().agent_streaming_projection_rejections, before_noop.agent_streaming_projection_rejections);
     service.apply_agent_streaming_say_event_to_terminal_buffer("%1", "empty-rationale", &mez_agent::StreamingSayEvent::RationaleTextDelta { text: "continued thinking".into() }).unwrap();
     let work = service.take_agent_streaming_say_projection_work("%1", "empty-rationale").unwrap().unwrap();
     assert!(service.apply_agent_streaming_say_projection_result(RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap()).unwrap());

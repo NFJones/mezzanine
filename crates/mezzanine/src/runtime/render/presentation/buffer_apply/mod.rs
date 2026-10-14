@@ -51,7 +51,8 @@ use super::{
 use crate::runtime::render::{
     ActionResult, AgentPresentationEntry, MezError, Result, RuntimeAgentShellPreviewOwner,
     RuntimeSessionService, RuntimeStreamingMessageSource, RuntimeStreamingSayAction,
-    RuntimeStreamingSayPresentation, RuntimeStreamingSayProjectionContext,
+    RuntimeStreamingSayPresentation, RuntimeStreamingSayProjectionApplyOutcome,
+    RuntimeStreamingSayProjectionContext,
     RuntimeStreamingTextSource, Size, TerminalScreen, current_unix_seconds,
     default_runtime_agent_prompt_input,
 };
