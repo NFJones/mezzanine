@@ -73,22 +73,12 @@ impl TerminalScreen {
         // concatenate with the next row. Preserve one opaque owner per logical
         // row; the product supplies continuation references without this crate
         // understanding any product-specific encoding or marker text.
-        let mut sources = Vec::new();
-        let mut source = None;
         let mut unfinished = false;
         for row in &mut history {
-            if !unfinished || source.is_none() {
-                source = row.line.copy_text.take();
-            } else {
+            if unfinished {
                 row.line.copy_text = None;
             }
             unfinished = row.wraps_to_next;
-            if !unfinished {
-                sources.push(source.take());
-            }
-        }
-        if unfinished {
-            sources.push(source);
         }
         let logical = merge_wrapped_physical_lines(
             &history,
@@ -97,8 +87,10 @@ impl TerminalScreen {
             true,
         );
         let mut rows = Vec::new();
-        for (mut line, source) in logical.into_iter().zip(sources) {
-            line.copy_text = source.clone();
+        for line in logical {
+            // The merge owns invalidation of both typed and legacy source.
+            // Never reattach a payload saved independently before that check.
+            let source = line.copy_text.clone();
             let mut physical = Vec::new();
             reflow_one_logical_line(
                 &line,

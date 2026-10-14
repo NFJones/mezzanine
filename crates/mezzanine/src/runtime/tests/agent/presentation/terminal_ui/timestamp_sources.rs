@@ -7,6 +7,141 @@ use super::*;
 use mez_core::presentation::PresentationEntry;
 use mez_terminal::GraphicRendition;
 
+/// A raw-cleared wrapped continuation must invalidate the first row's typed AND
+/// legacy source through actual history reflow and CopyMode construction. Valid
+/// typed and ordinary untyped legacy histories remain source-copy compatible;
+/// rendered bytes are retained regardless of source validity.
+#[test]
+fn runtime_log_timestamps_history_copy_keeps_merge_source_invalidation() {
+    for mode in [
+        "valid-typed",
+        "legacy",
+        "raw-cleared",
+        "foreign-owner",
+        "mixed-generation",
+    ] {
+        let mut screen = TerminalScreen::new(Size::new(24, 6).unwrap(), 32).unwrap();
+        screen.set_log_frame_settings(
+            mez_core::presentation::LogFramePolicy {
+                timestamps: true,
+                wrap_cap: 24,
+            },
+            GraphicRendition::default(),
+        );
+        let entry = PresentationEntry {
+            id: "history-owner".into(),
+            occurrence: Default::default(),
+            first_row: true,
+        };
+        let source = mez_terminal::TerminalCopySource::new(
+            mez_terminal::TerminalCopySourceId::new(
+                &entry,
+                mez_terminal::TerminalCopySourceGroup::WholeEntry,
+            )
+            .unwrap(),
+            "original source",
+        );
+        let body = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        if mode == "legacy" {
+            screen.feed_presentation(body.as_bytes(), entry.clone());
+        } else {
+            assert!(screen.feed_presentation_with_copy_source(
+                body.as_bytes(),
+                entry.clone(),
+                Some(source.clone())
+            ));
+        }
+        let encoded = format!(
+            "{}0:original source",
+            mez_mux::copy::COPY_SOURCE_LINE_PREFIX
+        );
+        screen.set_recent_normal_copy_texts(&[encoded], mez_mux::copy::COPY_SKIP_LINE);
+        if mode == "raw-cleared" {
+            screen.feed(b"\x1b[2;1H!");
+        }
+        if matches!(mode, "foreign-owner" | "mixed-generation") {
+            screen.feed(b"\x1b[2;1H");
+            let mut other = entry.clone();
+            other.first_row = false;
+            if mode == "foreign-owner" {
+                other.id = "different-owner".into();
+            }
+            let changed = mez_terminal::TerminalCopySource::projected(
+                mez_terminal::TerminalCopySourceId::new(
+                    &other,
+                    mez_terminal::TerminalCopySourceGroup::WholeEntry,
+                )
+                .unwrap(),
+                "changed source",
+                2,
+            );
+            assert!(screen.feed_presentation_with_copy_source(b"!", other, Some(changed)));
+            let rows = screen.visible_styled_lines();
+            assert_eq!(
+                rows[0].copy_source.as_ref().unwrap().text.as_ref(),
+                "original source"
+            );
+            assert_eq!(
+                rows[1].copy_source.as_ref().unwrap().text.as_ref(),
+                "changed source"
+            );
+        }
+        screen.feed(b"\x1b[6;1H\r\n\r\n\r\n\r\n\r\n\r\n");
+        assert!(
+            !screen
+                .visible_lines()
+                .iter()
+                .any(|line| line.contains("ABCDEFGHIJKLMNO") || line.contains("0123456789"))
+        );
+        let canonical = screen.normal_content_lines().join("\n");
+        assert!(canonical.contains("ABCDEFGHIJKLMNO"));
+        if !matches!(mode, "valid-typed" | "legacy") {
+            assert!(canonical.contains('!'));
+        }
+        let mut copy = CopyMode::from_screen(&screen, 6).unwrap();
+        copy.set_agent_surface(true);
+        let first = copy
+            .lines()
+            .iter()
+            .position(|line| line.contains("ABCDEFGHIJKLMNO"))
+            .unwrap();
+        let last = copy
+            .lines()
+            .iter()
+            .rposition(|line| line.contains("0123456789") || line.contains("89"))
+            .unwrap();
+        let end = mez_mux::render::char_count(&copy.lines()[last]);
+        copy.select_range(
+            CopyPosition {
+                line: first,
+                column: 0,
+            },
+            CopyPosition {
+                line: last,
+                column: end,
+            },
+        )
+        .unwrap();
+        let recovered = copy
+            .copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+            .unwrap();
+        assert_eq!(
+            recovered,
+            if !matches!(mode, "valid-typed" | "legacy") {
+                ""
+            } else {
+                "original source"
+            },
+            "{mode}"
+        );
+        assert!(
+            copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Rendered)
+                .unwrap()
+                .contains("ABCDEFGHIJKLMNO")
+        );
+    }
+}
+
 /// Actual server JSON retains visual rows/styles but never serializes process-
 /// local source Arcs. Markdown link URLs are intentionally visual dim text;
 /// raw markup is distinct source evidence, not an extra serialized payload.
