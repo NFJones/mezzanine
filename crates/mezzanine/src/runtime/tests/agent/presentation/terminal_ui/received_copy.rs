@@ -34,6 +34,7 @@ fn assert_received_copy(service: &RuntimeSessionService, identity: &str, payload
     );
     let first = owned[0];
     let last = *owned.last().unwrap();
+    let end_column = mez_mux::render::char_count(&copy.lines()[last]);
     copy.select_range(
         CopyPosition {
             line: first,
@@ -41,7 +42,7 @@ fn assert_received_copy(service: &RuntimeSessionService, identity: &str, payload
         },
         CopyPosition {
             line: last,
-            column: mez_mux::render::char_count(&copy.lines()[last]),
+            column: end_column,
         },
     )
     .unwrap();
@@ -309,11 +310,12 @@ fn runtime_received_copy_preserves_authored_line_endings() {
                 .iter()
                 .rposition(|line| line.contains("second"))
                 .unwrap();
+            let end_column = mez_mux::render::char_count(&copy.lines()[last]);
             copy.select_range(
                 CopyPosition { line: 0, column: 0 },
                 CopyPosition {
                     line: last,
-                    column: mez_mux::render::char_count(&copy.lines()[last]),
+                    column: end_column,
                 },
             )
             .unwrap();
