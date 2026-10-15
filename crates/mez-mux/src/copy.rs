@@ -1037,15 +1037,25 @@ mod tests {
                 !matches!(group, TerminalCopySourceGroup::SourceLine(_))
             );
             copy.validate_copy_sources().unwrap();
-            copy.copy_sources
-                .push(Some(TerminalCopySource::new(id.clone(), "conflict")));
-            assert!(copy.validate_copy_sources().is_err());
-            copy.copy_sources[1] = Some(TerminalCopySource::projected(
-                id,
-                COPY_SOURCE_LINE_PREFIX,
-                2,
-            ));
-            assert!(copy.validate_copy_sources().is_err());
+            for conflicting in [
+                TerminalCopySource::new(id.clone(), "conflict"),
+                TerminalCopySource::projected(id, COPY_SOURCE_LINE_PREFIX, 2),
+            ] {
+                let mut first = TerminalStyledLine::plain("first");
+                first.copy_source = Some(source.clone());
+                let mut last = TerminalStyledLine::plain("last");
+                last.copy_source = Some(conflicting);
+                let mut copy = StyledCopyMode::new(
+                    vec![first, TerminalStyledLine::plain("unrelated"), last],
+                    3,
+                    0,
+                    CopyPosition { line: 0, column: 0 },
+                    false,
+                )
+                .unwrap();
+                copy.source_associations_enabled = false;
+                assert!(copy.validate_copy_sources().is_err());
+            }
         }
     }
 
