@@ -678,7 +678,10 @@ fn build_provider_refresh_service(handle: AsyncRuntimeSessionHandle) -> AsyncRun
 }
 
 fn build_runtime_x11_proxy_service(proxy: RuntimeX11Proxy) -> AsyncRuntimeService {
-    AsyncRuntimeService::new("x11-proxy", async move {
+    // Auxiliary describes lifetime only: feature-local listener degradation is
+    // explicitly fenced by serve(), while ownership corruption still returns
+    // Err and remains fatal to supervision.
+    AsyncRuntimeService::new_auxiliary("x11-proxy", async move {
         let handled = proxy.serve().await?;
         Ok(AsyncRuntimeServiceExit::completed(handled))
     })
@@ -732,6 +735,43 @@ mod tests {
     use super::*;
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(1);
+
+    /// Production X11 composition is auxiliary lifetime work, not a primary
+    /// session owner. Once primary services drain, its idle listener must be
+    /// retired without keeping the actor's shutdown coupling alive indefinitely.
+    #[tokio::test]
+    async fn x11_proxy_builder_does_not_extend_primary_service_lifetime() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-x11-builder-{}-{}",
+            std::process::id(),
+            NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+        let report = tokio::time::timeout(
+            Duration::from_secs(2),
+            supervise_async_runtime_services(
+                vec![
+                    build_runtime_x11_proxy_service(proxy),
+                    AsyncRuntimeService::new("primary", async {
+                        Ok(AsyncRuntimeServiceExit::completed(0))
+                    }),
+                ],
+                std::future::pending(),
+            ),
+        )
+        .await
+        .expect("optional X11 listener must not retain primary session lifetime")
+        .unwrap();
+        assert!(!report.shutdown_requested);
+        assert_eq!(report.services.len(), 2);
+        assert!(
+            report
+                .services
+                .iter()
+                .any(|service| service.name == "x11-proxy")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[derive(Debug)]
     struct PanickingPowerInhibitionBackend;
