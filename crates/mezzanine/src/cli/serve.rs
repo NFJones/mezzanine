@@ -1015,6 +1015,8 @@ pub(super) async fn run_foreground_control_daemon(
             },
         },
         native,
+        #[cfg(test)]
+        None,
     )
     .await?;
     let handle = runtime.handle();

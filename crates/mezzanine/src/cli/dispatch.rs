@@ -46,20 +46,6 @@ pub fn run() -> CliExit {
     CliExit::owned(code, native)
 }
 
-/// Runs argument-only recovery before loading strict policy or creating Tokio.
-/// Errors preserve the process exit-one diagnostic boundary in `run`.
-#[cfg(test)]
-fn run_process<W: Write>(args: Vec<String>, stdout: &mut W) -> Result<u8> {
-    let mut native = CliNativeOwnership::default();
-    let result = run_process_retained(args, stdout, &mut native);
-    if native.pending_count()? != 0 {
-        return Err(MezError::invalid_state(
-            "test CLI adapter cannot discard pending native ownership",
-        ));
-    }
-    result
-}
-
 /// Keeps native ownership outside Tokio, including runtime destruction.
 fn run_process_retained<W: Write>(
     args: Vec<String>,

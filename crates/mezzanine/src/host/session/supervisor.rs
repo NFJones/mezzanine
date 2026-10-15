@@ -88,6 +88,8 @@ struct SessionSupervisorInner {
     #[cfg(test)]
     start_reservation_probe: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
     #[cfg(test)]
+    native_startup_probe: Mutex<Option<(String, u64, super::NativePaneStartupProbe)>>,
+    #[cfg(test)]
     fail_next_stop: AtomicU64,
 }
 
@@ -224,6 +226,8 @@ impl SessionSupervisor {
                 #[cfg(test)]
                 start_reservation_probe: Mutex::new(None),
                 #[cfg(test)]
+                native_startup_probe: Mutex::new(None),
+                #[cfg(test)]
                 fail_next_stop: AtomicU64::new(0),
             }),
         }
@@ -280,12 +284,34 @@ impl SessionSupervisor {
             release.notified().await;
         }
 
-        let runtime = match SessionFactory::create_with_native_owner(request, native.clone()).await
+        #[cfg(test)]
+        let native_probe = {
+            let mut probe =
+                self.inner.native_startup_probe.lock().map_err(|_| {
+                    MezError::invalid_state("native startup probe lock was poisoned")
+                })?;
+            if probe
+                .as_ref()
+                .is_some_and(|(id, epoch, _)| id == &session_id && *epoch == generation)
+            {
+                probe.take().map(|(_, _, probe)| probe)
+            } else {
+                None
+            }
+        };
+        let runtime = match SessionFactory::create_with_native_owner(
+            request,
+            native.clone(),
+            #[cfg(test)]
+            native_probe,
+        )
+        .await
         {
             Ok(runtime) => runtime,
             Err(error) => {
                 self.inner
                     .finish_start_failure(&session_id, generation, error.to_string())?;
+                reservation.disarm();
                 return Err(error);
             }
         };
@@ -316,6 +342,7 @@ impl SessionSupervisor {
                     generation,
                     "session startup was cancelled".to_string(),
                 )?;
+                reservation.disarm();
                 self.inner.changed.notify_waiters();
                 return Err(MezError::invalid_state(format!(
                     "session `{session_id}` startup was cancelled"
@@ -450,16 +477,8 @@ impl SessionSupervisor {
             native.request_shutdown(force);
             native.seal();
             let cleanup = super::drain_native_pane_retirement(&native, deadline).await;
-            if native.outstanding() == 0 {
-                self.inner.finish_runtime(
-                    session_id,
-                    generation,
-                    SessionSupervisorState::Failed,
-                    None,
-                    Some(failure),
-                )?;
-            }
-            return cleanup;
+            return self
+                .finish_native_pending_result(session_id, generation, &native, failure, cleanup);
         }
         let action = {
             let mut entries = self.inner.entries()?;
@@ -510,9 +529,62 @@ impl SessionSupervisor {
         shutdown
     }
 
+    /// Applies a native cleanup verdict independently of exact resource count.
+    /// A retained failure cannot pin an already-reaped generation forever.
+    fn finish_native_pending_result(
+        &self,
+        id: &str,
+        generation: u64,
+        native: &PaneProcessRetirementOwner,
+        failure: String,
+        cleanup: Result<()>,
+    ) -> Result<()> {
+        let disposition = if native.outstanding() == 0 {
+            self.inner.finish_runtime(
+                id,
+                generation,
+                SessionSupervisorState::Failed,
+                None,
+                Some(failure),
+            )
+        } else {
+            Ok(())
+        };
+        match (cleanup, disposition) {
+            (Ok(()), result) | (result, Ok(())) => result,
+            (Err(primary), Err(disposition)) => Err(MezError::new(
+                primary.kind(),
+                format!(
+                    "{}; native entry disposition failed: {disposition}",
+                    primary.message()
+                ),
+            )),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn fail_next_stop(&self) {
         self.inner.fail_next_stop.store(1, Ordering::SeqCst);
+    }
+
+    /// Shared test-only receipt injection, never a child/reap proof substitute.
+    #[cfg(test)]
+    pub(crate) fn retain_native_failure_for_test(&self) {
+        *self.inner.native_failure.lock().unwrap() =
+            Some("injected native signal failure receipt".to_string());
+    }
+
+    /// Shared test-only status fault used by owner and public-outcome tests.
+    /// No native resource or production authority predicate is changed.
+    #[cfg(test)]
+    pub(crate) fn poison_native_status_for_test(&self) {
+        let inner = self.inner.clone();
+        let poisoned = std::thread::spawn(move || {
+            let _guard = inner.entries.lock().unwrap();
+            panic!("test-only native status lock poison");
+        })
+        .join();
+        assert!(poisoned.is_err());
     }
 
     /// Stops every live runtime and waits boundedly for all matching tasks to settle.
@@ -523,6 +595,7 @@ impl SessionSupervisor {
             .ok_or_else(|| {
                 MezError::invalid_args("session shutdown budget is not representable")
             })?;
+        self.fence_native_admission(false)?;
         let mut session_ids = {
             let entries = self.inner.entries()?;
             entries
@@ -537,7 +610,6 @@ impl SessionSupervisor {
                 .collect::<Vec<_>>()
         };
         session_ids.sort();
-        self.fence_native_admission(false)?;
         // One future per already-admitted session, not detached tasks. Poll all
         // stop admissions rather than blocking the seventeenth behind stalled
         // actors; native work itself remains fixed-quanta and nonblocking.
@@ -969,6 +1041,248 @@ mod tests {
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(10_000);
 
+    /// A real native drain supplies the kernel proof; an injected retained error
+    /// then exercises disposition of that same now-empty exact generation. The
+    /// error is not cleared or called healthy merely to reclaim session capacity.
+    #[tokio::test]
+    async fn native_failure_verdict_does_not_pin_reaped_generation_or_erase_receipt() {
+        let supervisor = SessionSupervisor::new(0);
+        let (pid, _) = pending_native_fixture(&supervisor, "$failed-but-reaped", false);
+        let native = supervisor
+            .inner
+            .entries()
+            .unwrap()
+            .get("$failed-but-reaped")
+            .unwrap()
+            .native
+            .clone();
+        super::super::drain_native_pane_retirement(
+            &native,
+            tokio::time::Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
+        );
+        supervisor.retain_native_failure_for_test();
+        let verdict = supervisor.finish_native_pending_result(
+            "$failed-but-reaped",
+            1,
+            &native,
+            "original failure".to_string(),
+            Err(MezError::invalid_state(
+                "injected native signal failure receipt",
+            )),
+        );
+        assert!(verdict.is_err());
+        assert!(!supervisor.contains("$failed-but-reaped").unwrap());
+        assert_eq!(supervisor.native_pending_count().unwrap(), 0);
+        assert!(supervisor.native_cleanup_failure().unwrap().is_some());
+    }
+
+    /// Unavailable status remains an error even when the fixture has no child;
+    /// sealing must not manufacture a successful zero observation.
+    #[test]
+    fn native_status_fault_is_not_reported_as_empty_after_seal() {
+        let supervisor = SessionSupervisor::new(0);
+        supervisor.poison_native_status_for_test();
+        assert!(supervisor.seal_native_admission().is_err());
+        assert!(supervisor.native_pending_count().is_err());
+    }
+
+    /// Creates a new fixture root without removing or adopting an old path.
+    fn native_factory_request(name: &str) -> SessionFactoryRequest {
+        let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("mnf-{}-{id}-{nonce:x}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        test_request_at_root(name, id, root)
+    }
+
+    /// A post-spawn gate observes the actual factory child without taking it.
+    /// Cancellation and injected registry-boundary failure must both leave the
+    /// same generation reserved until production stop proves exact native reap.
+    #[tokio::test(flavor = "current_thread")]
+    async fn factory_postspawn_cancel_and_error_retain_exact_generation_until_reap() {
+        for cancel in [true, false] {
+            let supervisor = SessionSupervisor::new(0);
+            let request = native_factory_request("native-factory");
+            let id_value = request.session.id.clone();
+            let id = id_value.to_string();
+            let root = request.config.root.clone();
+            let (spawned, witness) = tokio::sync::oneshot::channel();
+            let (release, released) = tokio::sync::oneshot::channel();
+            *supervisor.inner.native_startup_probe.lock().unwrap() = Some((
+                id.clone(),
+                1,
+                super::super::NativePaneStartupProbe {
+                    spawned,
+                    release: released,
+                },
+            ));
+            let starting = supervisor.clone();
+            let task = tokio::spawn(async move { starting.start(request).await });
+            let witnesses = tokio::time::timeout(Duration::from_secs(10), witness)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(witnesses.len(), 1);
+            let (native_pid, start_token) = witnesses[0];
+            let pid = rustix::process::Pid::from_raw(i32::try_from(native_pid).unwrap()).unwrap();
+            if cancel {
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+            } else {
+                release.send(true).unwrap();
+                let error = task.await.unwrap().unwrap_err();
+                assert!(
+                    error
+                        .message()
+                        .contains("injected post-spawn registry-boundary failure")
+                );
+            }
+            assert!(supervisor.contains(&id).unwrap());
+            assert_eq!(
+                supervisor.native_pending_count().unwrap(),
+                1,
+                "{native_pid} {start_token:?}"
+            );
+            let mut duplicate = test_request_at_root("duplicate", 0, root.clone());
+            duplicate.session.id = id_value;
+            assert!(
+                supervisor
+                    .start(duplicate)
+                    .await
+                    .unwrap_err()
+                    .message()
+                    .contains("already supervised")
+            );
+            let snapshot = supervisor.snapshots().await.unwrap().pop().unwrap();
+            assert_eq!(snapshot.state, SessionSupervisorState::Stopping);
+            if !cancel {
+                assert!(
+                    snapshot
+                        .failure
+                        .unwrap()
+                        .contains("injected post-spawn registry-boundary failure"),
+                    "Drop must not replace the original startup cause"
+                );
+            }
+            supervisor.stop(&id, true).await.unwrap();
+            assert!(!supervisor.contains(&id).unwrap());
+            assert_eq!(
+                rustix::process::test_kill_process(pid),
+                Err(rustix::io::Errno::SRCH),
+                "completed native stop left original child {native_pid} {start_token:?}"
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    /// Uses the actual start/spawn closure, not a custom guard future. The
+    /// returned handle must remain Running immediately after start; destroying
+    /// that Tokio runtime must return the native child to the external host
+    /// owner, where a new caller runtime can settle it without an actor.
+    #[test]
+    fn actual_runtime_spawn_guard_survives_start_return_and_runtime_destruction() {
+        let supervisor = SessionSupervisor::new(0);
+        let request = native_factory_request("native-runtime-drop");
+        let id = request.session.id.to_string();
+        let root = request.config.root.clone();
+        let (spawned, witness) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *supervisor.inner.native_startup_probe.lock().unwrap() = Some((
+            id.clone(),
+            1,
+            super::super::NativePaneStartupProbe {
+                spawned,
+                release: released,
+            },
+        ));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (handle, witnesses) = runtime.block_on(async {
+            let producer = async {
+                let witnesses = witness.await.unwrap();
+                release.send(false).unwrap();
+                witnesses
+            };
+            let (handle, witnesses) = tokio::join!(supervisor.start(request), producer);
+            (handle.unwrap(), witnesses)
+        });
+        assert!(
+            supervisor.lookup(&id).is_ok(),
+            "whole completion guard was dropped at start return"
+        );
+        assert_eq!(witnesses.len(), 1);
+        let pid = rustix::process::Pid::from_raw(i32::try_from(witnesses[0].0).unwrap()).unwrap();
+        drop(runtime);
+        assert!(supervisor.contains(&id).unwrap());
+        assert_eq!(supervisor.native_pending_count().unwrap(), 1);
+        let retry_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        retry_runtime.block_on(supervisor.stop(&id, true)).unwrap();
+        assert_eq!(
+            rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
+        );
+        assert!(!supervisor.contains(&id).unwrap());
+        drop(handle);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Sixteen blocked startup reservations must not occupy a whole-operation
+    /// prefix that starves the seventeenth exact native owner or its identity.
+    #[tokio::test]
+    async fn native_round_robin_reaps_owner_seventeen_before_blocked_prefix_settles() {
+        let supervisor = SessionSupervisor::new(0);
+        let mut gates = Vec::new();
+        let mut roots = Vec::new();
+        for index in 0..16 {
+            let (pid, gate) =
+                pending_native_fixture(&supervisor, &format!("$blocked-{index:02}"), true);
+            roots.push(pid);
+            gates.push(gate);
+        }
+        let (later, _) = pending_native_fixture(&supervisor, "$later-cleanable", false);
+        assert!(
+            supervisor
+                .shutdown_all(true, Duration::from_millis(150))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            rustix::process::test_kill_process(later),
+            Err(rustix::io::Errno::SRCH)
+        );
+        assert!(
+            !supervisor.contains("$later-cleanable").unwrap(),
+            "settled sibling identity was held by another owner"
+        );
+        drop(gates);
+        supervisor
+            .drain_native_retirement(tokio::time::Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        for pid in roots {
+            assert_eq!(
+                rustix::process::test_kill_process(pid),
+                Err(rustix::io::Errno::SRCH)
+            );
+        }
+        assert_eq!(supervisor.native_pending_count().unwrap(), 0);
+    }
+
     /// Installs only an exact native cleanup obligation, without actor/filesystem
     /// setup. The real production stop/drain path supplies all retirement proof.
     fn pending_native_fixture(
@@ -1330,6 +1644,11 @@ mod tests {
 
     fn test_request(name: &str, id: u64) -> SessionFactoryRequest {
         let root = test_root(name, id);
+        test_request_at_root(name, id, root)
+    }
+
+    /// Shares request construction without adopting or deleting fixture roots.
+    fn test_request_at_root(name: &str, id: u64, root: PathBuf) -> SessionFactoryRequest {
         let mut session = Session::new_default(
             ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
             Size::new(80, 24).unwrap(),

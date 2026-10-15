@@ -749,7 +749,47 @@ mod tests {
         assert!(child.force_retirement().is_err());
         assert_eq!(state.kills.load(Ordering::SeqCst), 1);
         assert_eq!(owner.outstanding(), 1);
+        let failure = owner.cleanup_failure().unwrap();
+        assert!(
+            owner.reserve().is_err(),
+            "unproven native error must fence admission"
+        );
+        // Drop the failed caller before wait: the same raw resources and first
+        // failure receipt must survive, rather than depending on its future.
+        drop(child);
+        let mut retry = owner.begin_drain().unwrap();
+        let mut child = retry.take_returned().unwrap();
         assert!(child.try_wait().unwrap().is_some());
+        assert_eq!(owner.outstanding(), 0);
+        assert_eq!(owner.cleanup_failure().as_deref(), Some(failure.as_str()));
+        assert!(
+            owner.has_cleanup_failure(),
+            "zero pending does not erase native failure"
+        );
+    }
+
+    /// Explicit force retry upgrades a pending graceful owner immediately while
+    /// preserving its original absolute deadline and sent-stage information.
+    #[test]
+    fn pending_graceful_native_owner_force_upgrade_keeps_original_deadline() {
+        let owner = PaneProcessRetirementOwner::default();
+        let state = Arc::new(ChildState::default());
+        let mut child = owner
+            .reserve()
+            .unwrap()
+            .attach(Box::new(ControlledChild(state.clone())), None);
+        owner.request_shutdown(false);
+        let original = owner.cleanup_deadline();
+        assert!(child.poll_cleanup().unwrap().is_none());
+        assert_eq!(state.kills.load(Ordering::SeqCst), 0);
+        assert!(child.raw.as_ref().unwrap().progress.hup_sent);
+        drop(child);
+        owner.request_shutdown(true);
+        assert_eq!(owner.cleanup_deadline(), original);
+        let mut drain = owner.begin_drain().unwrap();
+        let mut child = drain.take_returned().unwrap();
+        assert!(child.poll_cleanup().unwrap().is_some());
+        assert_eq!(state.kills.load(Ordering::SeqCst), 1);
         assert_eq!(owner.outstanding(), 0);
     }
 
@@ -831,6 +871,58 @@ mod tests {
             0,
             "native wait releases slots before PTY owners are dropped"
         );
+    }
+
+    /// This real child encounters an injected invalid cached group at the
+    /// production signal selector. The group stage fails, but owned-root KILL
+    /// still runs. Drop that caller before wait and keep a duplicate master so
+    /// kernel PTY hangup cannot supply the retirement proof. The same retained
+    /// child must be waited/reaped, without erasing the earlier error receipt.
+    #[test]
+    fn real_native_group_failure_survives_caller_drop_and_zero_pending_reap() {
+        let owner = PaneProcessRetirementOwner::default();
+        let mut process = super::super::spawn_retained_argv_pty_process(
+            std::path::Path::new("/bin/cat"),
+            &[],
+            &[],
+            mez_terminal::TerminalSize::new(80, 24).unwrap(),
+            None,
+            owner.reserve().unwrap(),
+        )
+        .unwrap();
+        let pid =
+            rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap()).unwrap();
+        let held_master = process.duplicate_master_fd().unwrap();
+        process.child.raw.as_mut().unwrap().group = Some(-1);
+        let original = process.poll_native_termination(true);
+        assert!(
+            original.is_err(),
+            "original group failure must remain a failed operation: {original:?}"
+        );
+        let failure = owner.cleanup_failure().unwrap();
+        drop(process);
+        assert_eq!(owner.outstanding(), 1);
+        let mut drain = owner.begin_drain().unwrap();
+        let mut child = drain.take_returned().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "exact root signal did not settle"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
+        );
+        assert_eq!(owner.outstanding(), 0);
+        assert_eq!(owner.cleanup_failure().as_deref(), Some(failure.as_str()));
+        assert!(owner.has_cleanup_failure());
+        drop(held_master);
     }
 
     /// Failed pre-spawn work and settled historical peaks leave no completed

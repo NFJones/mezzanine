@@ -151,6 +151,16 @@ pub(crate) struct SessionFactoryRequest {
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct SessionFactory;
 
+/// Test-local post-spawn observation only; child ownership remains in the real
+/// manager. `true` release injects a labelled registry-boundary failure, while
+/// dropping the start future exercises actual factory cancellation cleanup.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct NativePaneStartupProbe {
+    spawned: tokio::sync::oneshot::Sender<Vec<(u32, Option<u64>)>>,
+    release: tokio::sync::oneshot::Receiver<bool>,
+}
+
 impl SessionFactory {
     /// Constructs and readies one isolated session runtime.
     ///
@@ -159,7 +169,7 @@ impl SessionFactory {
     /// deliberately last among fallible configuration and binding work.
     #[cfg(test)]
     pub(crate) async fn create(request: SessionFactoryRequest) -> Result<SessionRuntime> {
-        Self::create_with_native_owner(request, PaneProcessRetirementOwner::default()).await
+        Self::create_with_native_owner(request, PaneProcessRetirementOwner::default(), None).await
     }
 
     /// Constructs a session under a mandatory preexisting native owner.
@@ -168,6 +178,7 @@ impl SessionFactory {
     pub(crate) async fn create_with_native_owner(
         request: SessionFactoryRequest,
         native: PaneProcessRetirementOwner,
+        #[cfg(test)] native_probe: Option<NativePaneStartupProbe>,
     ) -> Result<SessionRuntime> {
         validate_request(&request)?;
         let session_id = request.session.id.to_string();
@@ -273,8 +284,31 @@ impl SessionFactory {
             return Err(error);
         }
         #[cfg(test)]
+        let injected_registry_failure = if let Some(probe) = native_probe {
+            let witnesses = service
+                .pane_processes()
+                .tracked_running_pane_ids()
+                .into_iter()
+                .filter_map(|id| service.pane_processes().primary_pid(&id))
+                .map(|pid| (pid, mez_mux::process::process_start_token_for_pid(pid)))
+                .collect();
+            let _ = probe.spawned.send(witnesses);
+            probe.release.await.unwrap_or(true)
+        } else {
+            false
+        };
+        #[cfg(test)]
         startup_timing.advance("registry-publication");
-        if let Err(error) = service.persist_registry_update() {
+        let registry_update = service.persist_registry_update();
+        #[cfg(test)]
+        let registry_update = if injected_registry_failure {
+            Err(MezError::invalid_state(
+                "injected post-spawn registry-boundary failure",
+            ))
+        } else {
+            registry_update
+        };
+        if let Err(error) = registry_update {
             service.release_native_panes_for_retirement();
             return Err(error);
         }

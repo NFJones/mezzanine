@@ -262,6 +262,38 @@ mod tests {
         }
     }
 
+    /// A late private failure receipt can arrive with zero remaining children.
+    /// Borrowed public status must remain nonzero after entry/runtime teardown;
+    /// this is a receipt-classification test, not fabricated native reap proof.
+    #[test]
+    fn native_exit_zero_pending_does_not_erase_late_failure_receipt() {
+        let host = SessionSupervisor::new(0);
+        host.seal_native_admission().unwrap();
+        let mut native = CliNativeOwnership::default();
+        native.retain_host(host.clone()).unwrap();
+        let exit = CliExit::owned(0, native);
+        assert_eq!(exit.code(), 0);
+        host.retain_native_failure_for_test();
+        assert_eq!(exit.pending_native_children().unwrap(), 0);
+        assert_eq!(exit.code(), 1);
+    }
+
+    /// Public status must fail closed on an unknown owner count, rather than
+    /// converting a private status failure into successful empty cleanup.
+    #[test]
+    fn native_exit_unknown_status_forces_nonzero_without_erasing_original_code() {
+        let host = SessionSupervisor::new(0);
+        host.poison_native_status_for_test();
+        assert!(host.seal_native_admission().is_err());
+        for original in [0, 17] {
+            let mut native = CliNativeOwnership::default();
+            native.retain_host(host.clone()).unwrap();
+            let exit = CliExit::owned(original, native);
+            assert!(exit.pending_native_children().is_err());
+            assert_eq!(exit.code(), if original == 0 { 1 } else { original });
+        }
+    }
+
     /// Expired/overflow budgets cannot signal, reap or discard an exact child.
     /// A later explicit retry proves immediate native absence, while an earlier
     /// observed cleanup failure remains a nonzero exit verdict.

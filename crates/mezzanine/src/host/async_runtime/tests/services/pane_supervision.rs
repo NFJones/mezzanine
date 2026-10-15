@@ -24,6 +24,7 @@ struct GatedNativeRetirement {
     backend: AsyncPtyPaneProcessIo,
     entered: Option<tokio::sync::oneshot::Sender<()>>,
     release: Option<tokio::sync::oneshot::Receiver<()>>,
+    after_first_native_stage: bool,
 }
 
 impl AsyncPaneProcessIo for GatedNativeRetirement {
@@ -68,6 +69,17 @@ impl AsyncPaneProcessIo for GatedNativeRetirement {
         force: bool,
     ) -> crate::host::async_runtime::pane_io::AsyncPaneIoFuture<'a, ProcessEvent> {
         Box::pin(async move {
+            let native = self.backend.terminate(force);
+            tokio::pin!(native);
+            if self.after_first_native_stage {
+                let first = futures_util::future::poll_fn(|cx| {
+                    std::task::Poll::Ready(std::future::Future::poll(native.as_mut(), cx))
+                })
+                .await;
+                if let std::task::Poll::Ready(result) = first {
+                    return result;
+                }
+            }
             if let Some(entered) = self.entered.take() {
                 let _ = entered.send(());
             }
@@ -76,7 +88,7 @@ impl AsyncPaneProcessIo for GatedNativeRetirement {
                     .await
                     .map_err(|_| MezError::invalid_state("native fixture gate closed"))?;
             }
-            self.backend.terminate(force).await
+            native.await
         })
     }
 }
@@ -108,6 +120,7 @@ async fn owned_native_worker_waits_for_gated_termination_and_reap() {
         backend: AsyncPtyPaneProcessIo::new(start.pane_id, process).unwrap(),
         entered: Some(entered),
         release: Some(release_rx),
+        after_first_native_stage: false,
     };
     let driver = AsyncPaneProcessDriver::new_for_instance(
         instance.clone(),
@@ -210,6 +223,7 @@ async fn cancelled_native_worker_retains_exact_cleanup_before_and_during_wait() 
             backend: AsyncPtyPaneProcessIo::new(start.pane_id, process).unwrap(),
             entered: Some(entered),
             release: Some(release_rx),
+            after_first_native_stage: false,
         };
         let driver = AsyncPaneProcessDriver::new_for_instance(
             instance.clone(),
@@ -264,8 +278,12 @@ async fn graceful_native_cleanup_survives_worker_cancellation_without_kill_race(
     std::fs::create_dir(&root).unwrap();
     let ready = root.join("ready");
     let marker = root.join("graceful");
+    let hup = root.join("hup");
+    let handler_release = root.join("release");
     let command = format!(
-        "/bin/sh -c 'trap \"printf graceful > {}; exit 0\" HUP; printf ready > {}; while :; do sleep 0.02; done'",
+        "/bin/sh -c 'trap \"printf H >> {}; while [ ! -e {} ]; do sleep 0.01; done; printf graceful > {}; exit 0\" HUP; printf ready > {}; while :; do sleep 0.02; done'",
+        hup.display(),
+        handler_release.display(),
         marker.display(),
         ready.display()
     );
@@ -285,10 +303,23 @@ async fn graceful_native_cleanup_survives_worker_cancellation_without_kill_race(
         .unwrap();
     let (entered, entered_rx) = tokio::sync::oneshot::channel();
     let (_release, release_rx) = tokio::sync::oneshot::channel();
+    // This exact duplicated master stays alive through native reap, so backend
+    // cancellation cannot generate the HUP that the marker test observes.
+    let held_master = process.duplicate_master_fd().unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !ready.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    native.request_shutdown(false);
+    let original_deadline = native.cleanup_deadline();
     let backend = GatedNativeRetirement {
         backend: AsyncPtyPaneProcessIo::new(start.pane_id, process).unwrap(),
         entered: Some(entered),
         release: Some(release_rx),
+        after_first_native_stage: true,
     };
     let driver = AsyncPaneProcessDriver::new_for_instance(
         instance.clone(),
@@ -308,26 +339,52 @@ async fn graceful_native_cleanup_survives_worker_cancellation_without_kill_race(
     ));
     entered_rx.await.unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
-        while !ready.exists() {
+        while !hup.exists() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await
     .unwrap();
-    native.request_shutdown(false);
-    let original_deadline = native.cleanup_deadline();
+    assert_eq!(std::fs::read_to_string(&hup).unwrap(), "H");
+    assert!(!marker.exists(), "native HUP handler must still be gated");
     worker.abort();
     assert!(worker.await.unwrap_err().is_cancelled());
     native.seal();
-    crate::host::async_runtime::drain_native_pane_retirement(
-        &native,
-        tokio::time::Instant::from_std(original_deadline),
-    )
-    .await
-    .unwrap();
+    let (early, completed) = {
+        let drain = crate::host::async_runtime::drain_native_pane_retirement(
+            &native,
+            tokio::time::Instant::from_std(original_deadline),
+        );
+        tokio::pin!(drain);
+        let early = tokio::time::timeout(Duration::from_millis(30), &mut drain).await;
+        std::fs::write(&handler_release, b"release").unwrap();
+        let completed = if early.is_err() {
+            Some(drain.await)
+        } else {
+            None
+        };
+        (early, completed)
+    };
+    // On regression failure, settle only this exact fixture before asserting
+    // the saved original verdict; a later retry cannot turn it into success.
+    if native.outstanding() != 0 {
+        crate::host::async_runtime::drain_native_pane_retirement(
+            &native,
+            tokio::time::Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+    }
+    assert!(
+        early.is_err(),
+        "cleanup returned before the issued HUP handler completed: {early:?}"
+    );
+    assert!(matches!(completed, Some(Ok(()))), "{completed:?}");
     assert_native_retired(witness);
     assert_eq!(native.cleanup_deadline(), original_deadline);
     assert_eq!(std::fs::read_to_string(&marker).unwrap(), "graceful");
+    assert_eq!(std::fs::read_to_string(&hup).unwrap(), "H");
+    drop(held_master);
     handle.shutdown().await.unwrap();
     actor.await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
@@ -371,6 +428,52 @@ async fn lost_native_handoff_reply_retains_exact_child_for_cleanup() {
     assert_native_retired(witness);
     handle.shutdown().await.unwrap();
     actor.await.unwrap();
+}
+
+/// An expired retained backend plan may observe status, but must not send a
+/// late signal. A fresh input/response from the original unreaped root proves
+/// it survived that failed operation; a separate bounded cleanup then reaps it.
+#[tokio::test]
+async fn expired_native_backend_plan_does_not_signal_original_live_root() {
+    let mut service = test_service();
+    let start = service.start_initial_pane_process(Some(
+        r#"/bin/sh -c 'stty -echo; while IFS= read -r line; do printf "native-read:%s\n" "$line"; done'"#)).unwrap();
+    let witness = native_retirement_witness(start.primary_pid);
+    let native = service.native_pane_retirement_owner();
+    let mut process = service
+        .take_running_pane_process_for_adapter(&start.pane_id)
+        .unwrap();
+    let deadline = process.begin_native_termination(true).unwrap();
+    let mut backend = AsyncPtyPaneProcessIo::new(start.pane_id, process).unwrap();
+    tokio::time::sleep_until(tokio::time::Instant::from_std(deadline) + Duration::from_millis(10))
+        .await;
+    let expired = backend.terminate(false).await.unwrap_err();
+    assert!(expired.message().contains("deadline expired"));
+    backend.write_input(b"survived-deadline\n").await.unwrap();
+    let mut bytes = Vec::new();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if let Some(chunk) = backend.read_output(4096).await.unwrap() {
+                bytes.extend(chunk);
+            }
+            if String::from_utf8_lossy(&bytes).contains("native-read:survived-deadline") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(rustix::process::test_kill_process(witness.0), Ok(()));
+    drop(backend);
+    native.seal();
+    crate::host::async_runtime::drain_native_pane_retirement(
+        &native,
+        tokio::time::Instant::now() + Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert_native_retired(witness);
 }
 
 /// Verifies that the dynamic pane-process supervisor can claim a live
