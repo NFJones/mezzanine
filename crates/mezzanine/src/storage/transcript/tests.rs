@@ -6,6 +6,8 @@ mod active_metadata;
 mod failure_countdowns;
 /// Immutable presentation occurrence encoding and fork provenance.
 mod occurrence;
+/// Content edits cannot invalidate an authoritative selective compaction summary.
+mod selective_edit_fence;
 
 use std::{
     collections::{BTreeMap, BTreeSet},

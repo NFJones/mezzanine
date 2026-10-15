@@ -9620,6 +9620,16 @@ pane-local replay counts or optional memory records. Epoch publication MUST
 NOT truncate the append-only transcript. A corrupt required epoch or failed
 publication MUST be reported visibly rather than presenting a shortened raw
 suffix without its summary.
+Content-only transcript edits MUST be refused for every row represented by the
+committed prefix or any inclusive selective range. The authoritative store MUST
+recheck current epoch coverage under the conversation write lock at SAVE, even
+when compaction published after an editor opened and the row revision is still
+unchanged. Rejection MUST precede archive, sidecar, and catalog mutation, expose
+the existing compaction-protected diagnostic, and retain a recoverable editor
+draft without changing current prompt state. Missing or corrupt required epochs
+MUST fail closed. Uncovered rows retain ordinary revision and pane-identity CAS
+checks and remain editable; no edit may delete the epoch, recompact history, or
+replay actions to bypass this protection.
 When conversation compaction runs, Mezzanine MUST summarize only a closed
 prefix of complete execution groups. It MUST NOT split request messages,
 provider-native events, assistant output, or terminal tool/action results that
