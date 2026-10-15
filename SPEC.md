@@ -4334,6 +4334,10 @@ Explicit raw whole-entry and block source declarations MUST take precedence over
 marker-looking authored text even before timestamp framing is first enabled.
 This MUST NOT change the legacy unframed source-line carrier policy or bypass
 immutable source generation and payload-conflict validation.
+Physical reflow MUST retain existing opaque copy overrides on coherent typed
+source-owned continuations even when framing is disabled. Merging those rows
+MUST retain one original override, never concatenate metadata, and conflicting
+entry, occurrence, source generation or payload evidence MUST stay invalidated.
 The explicit `/show-context activity [presentation-sequence]` view MUST provide
 client-local list/detail disclosure of identity-bearing accepted command intent,
 response-wide rationale, retained outcomes and result previews. Static and
