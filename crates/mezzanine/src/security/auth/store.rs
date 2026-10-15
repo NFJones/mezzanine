@@ -70,6 +70,12 @@ pub struct AuthStore {
 }
 
 impl AuthStore {
+    /// Returns the isolated search-auth owner without reading metadata, secrets,
+    /// environment variables, or the inference-selected model profile.
+    pub fn search_auth(&self) -> super::search::SearchAuthStore {
+        super::search::SearchAuthStore::new(self.paths.root().to_path_buf())
+    }
+
     /// Runs the new operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

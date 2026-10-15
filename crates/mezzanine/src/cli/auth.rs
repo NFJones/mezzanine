@@ -14,7 +14,35 @@ use super::{
 use crate::security::auth::selected_auth_method_from_flags;
 use mez_mux::theme::UiTheme;
 
+/// Local-only namespaced search credential commands.
+mod search;
+
 // Authentication subcommands and output formatting.
+
+/// Identifies only a grammar-selected search command for secret-safe error
+/// reporting. Partial matches are never returned for execution/authorization.
+/// Parsing can stop before selecting the command on malformed global options;
+/// this deliberately makes no claim to sanitize those unclassified invocations.
+pub(super) fn is_search_parse_target(mut command: clap::Command, args: &[String]) -> bool {
+    /// Applies tolerant parsing solely to inspect a selected subcommand path.
+    fn tolerate(command: &mut clap::Command) {
+        *command = command.clone().ignore_errors(true);
+        for child in command.get_subcommands_mut() {
+            tolerate(child);
+        }
+    }
+    tolerate(&mut command);
+    command
+        .try_get_matches_from(args)
+        .ok()
+        .and_then(|matches| {
+            matches
+                .subcommand_matches("auth")
+                .and_then(|auth| auth.subcommand_matches("search"))
+                .map(|_| ())
+        })
+        .is_some()
+}
 
 /// Structured JSON payload emitted when `mez auth logout` completes.
 #[derive(Serialize)]
@@ -39,6 +67,16 @@ pub(super) async fn run_auth<W: Write>(
     let store = AuthStore::new(AuthPaths::under_config_root(paths.root()));
 
     match parsed.command.unwrap_or(AuthCliCommand::Status) {
+        AuthCliCommand::Search(args) => {
+            search::run(
+                args,
+                store.search_auth(),
+                interactive,
+                output_format,
+                stdout,
+            )
+            .await?;
+        }
         AuthCliCommand::Status => {
             let status = run_auth_store_operation({
                 let store = store.clone();
@@ -216,6 +254,8 @@ pub(super) struct AuthCliArgs {
 /// Typed process CLI subcommands for authentication.
 #[derive(Debug, Clone, Subcommand)]
 enum AuthCliCommand {
+    /// Manages local search credentials without selecting or contacting providers.
+    Search(search::SearchCliArgs),
     /// Shows provider authentication metadata.
     Status,
     /// Starts an authentication flow.

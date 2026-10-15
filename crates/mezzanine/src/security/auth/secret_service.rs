@@ -19,8 +19,18 @@ use super::types::{
 /// on platforms where that backend is available. The command-backed
 /// `secret-tool` implementation remains as a fallback and for compatibility
 /// with previously persisted references.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeSecretServiceCredentialStore;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeSecretServiceCredentialStore {
+    /// Code-owned service domain; never selected by user metadata.
+    service: &'static str,
+}
+
+impl Default for NativeSecretServiceCredentialStore {
+    /// Preserves the established inference/MCP service domain.
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl NativeSecretServiceCredentialStore {
     /// Runs the new operation for this subsystem.
@@ -29,7 +39,16 @@ impl NativeSecretServiceCredentialStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn new() -> Self {
-        Self
+        Self {
+            service: OS_CREDENTIAL_SERVICE,
+        }
+    }
+
+    /// Reuses the native implementation in the disjoint search service domain.
+    pub(super) fn search() -> Self {
+        Self {
+            service: super::search::OS_SERVICE,
+        }
     }
 
     /// Runs the availability operation for this subsystem.
@@ -67,7 +86,7 @@ impl NativeSecretServiceCredentialStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn plan_service(&self) -> String {
-        format!("{SECRET_SERVICE_BACKEND}/{OS_CREDENTIAL_SERVICE}")
+        format!("{SECRET_SERVICE_BACKEND}/{}", self.service)
     }
 
     /// Runs the reference for provider operation for this subsystem.
@@ -82,7 +101,7 @@ impl NativeSecretServiceCredentialStore {
             "{}{}/{}/{}",
             CredentialStoreKind::OperatingSystem.reference_prefix(),
             SECRET_SERVICE_BACKEND,
-            OS_CREDENTIAL_SERVICE,
+            self.service,
             provider
         ))
     }
@@ -106,7 +125,7 @@ impl NativeSecretServiceCredentialStore {
         if backend != Some(SECRET_SERVICE_BACKEND) {
             return Ok(None);
         }
-        if parts.next().is_some() || service != Some(OS_CREDENTIAL_SERVICE) {
+        if parts.next().is_some() || service != Some(self.service) {
             return Err(MezError::config(
                 "malformed Secret Service credential reference",
             ));
@@ -134,7 +153,7 @@ impl NativeSecretServiceCredentialStore {
         let store =
             zbus_secret_service_keyring_store::Store::new().map_err(secret_service_error)?;
         store
-            .build(OS_CREDENTIAL_SERVICE, provider, None)
+            .build(self.service, provider, None)
             .map_err(secret_service_error)
     }
 }

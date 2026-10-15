@@ -11,6 +11,8 @@
 # Plain commented snippets document alternatives that replace a marked choice.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
+# `mez auth search login` is local-only and never adds provider/profile defaults.
+# Search credentials belong in their separate auth store, not this config file.
 # Schema version used for migrations. Change only through a supported migration.
 version = 103
 

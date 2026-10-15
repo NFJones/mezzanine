@@ -326,6 +326,7 @@ impl CliArgv {
     /// Parses grammar and explicit selectors without consulting process state.
     /// Clap display outcomes retain their precedence over semantic checks.
     pub(super) fn parse_or_display(args: &[String]) -> Result<CliArgvParse> {
+        use clap::CommandFactory;
         let parsed = match Self::try_parse_from(args) {
             Ok(parsed) => parsed,
             Err(error)
@@ -335,6 +336,11 @@ impl CliArgv {
                 ) =>
             {
                 return Ok(CliArgvParse::Display(error.to_string()));
+            }
+            Err(_) if super::auth::is_search_parse_target(Self::command(), args) => {
+                return Err(MezError::invalid_args(
+                    "invalid auth search arguments; use mez auth search --help; supply credentials only through masked input, --stdin, or --api-key-file PATH",
+                ));
             }
             Err(error) => return Err(MezError::invalid_args(error.to_string())),
         };

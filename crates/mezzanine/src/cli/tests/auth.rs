@@ -2,6 +2,144 @@
 
 use super::*;
 
+/// The real grammar consumes global option values/positions before identifying
+/// auth search. Its parse errors omit synthetic attempted keys in every invalid
+/// value/positional/flag shape; unrelated command diagnostics are not rewritten.
+#[test]
+fn auth_search_parse_errors_redact_only_grammar_selected_search() {
+    const CANARY: &str = "synthetic-parser-secret-canary";
+    for globals in [
+        vec![],
+        vec!["--json"],
+        vec!["-S", "/tmp/synthetic.sock"],
+        vec!["--json", "-L", "synthetic"],
+    ] {
+        for tail in [
+            vec![CANARY],
+            vec!["--token=synthetic-parser-secret-canary"],
+            vec!["--provider", CANARY],
+        ] {
+            let mut args = vec!["mez"];
+            args.extend(globals.clone());
+            args.extend(["auth", "search", "login", "work"]);
+            if !tail.contains(&"--provider") {
+                args.extend(["--provider", "brave"]);
+            }
+            args.extend(tail);
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let error = crate::cli::env::CliArgv::parse_or_display(&args).err().unwrap();
+            assert!(!format!("{error:?}").contains(CANARY));
+            assert!(error.message().starts_with("invalid auth search arguments"));
+        }
+    }
+    for args in [
+        vec!["mez", "config", "unknown-auth-search"],
+        vec![
+            "mez",
+            "auth",
+            "login",
+            "--provider",
+            "search",
+            "--unexpected",
+        ],
+        vec!["mez", "--iroh-profile", "auth", "config", "search"],
+    ] {
+        let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        let error = crate::cli::env::CliArgv::parse_or_display(&args).err().unwrap();
+        assert!(!error.message().starts_with("invalid auth search arguments"));
+    }
+    for args in [
+        vec!["mez", "auth", "search", "--help"],
+        vec!["mez", "--version"],
+    ] {
+        let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        assert!(matches!(
+            crate::cli::env::CliArgv::parse_or_display(&args).unwrap(),
+            crate::cli::env::CliArgvParse::Display(_)
+        ));
+    }
+}
+
+/// Search commands route through the existing auth family, persist no provider
+/// defaults/model auth, and report unverified local state in JSON. All input,
+/// HOME and private-file backend data are synthetic and task-local.
+#[test]
+fn auth_search_nested_routes_do_not_change_inference_configuration() {
+    let (env, home) = test_env("auth-search-nested");
+    let paths = env.config_paths().unwrap();
+    fs::create_dir_all(paths.root()).unwrap();
+    let input = home.join("synthetic-import");
+    fs::write(&input, "synthetic-search-cli-canary\n").unwrap();
+    let mut stderr = Vec::new();
+    let mut output = Vec::new();
+    run_with(
+        vec![
+            "mez",
+            "auth",
+            "search",
+            "login",
+            "work",
+            "--provider",
+            "brave",
+            "--api-key-file",
+            input.to_str().unwrap(),
+            "--credential-store",
+            "file",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+        env.clone(),
+        false,
+        &mut output,
+        &mut stderr,
+    )
+    .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["configured"], true);
+    assert_eq!(json["presence"], "present");
+    assert_eq!(json["remotely_verified"], false);
+    assert!(!String::from_utf8_lossy(&output).contains("synthetic-search-cli-canary"));
+    assert!(!paths.root().join("config.toml").exists());
+    assert!(!paths.root().join("auth.toml").exists());
+    assert!(!paths.root().join("mcp-auth.toml").exists());
+    output.clear();
+    run_with(
+        vec!["mez", "auth", "search", "logout", "work"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        env.clone(),
+        false,
+        &mut output,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&output).unwrap()["logged_out"]
+            .as_bool()
+            .unwrap()
+    );
+    output.clear();
+    run_with(
+        vec!["mez", "auth", "search", "status", "work"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        env,
+        false,
+        &mut output,
+        &mut stderr,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output).unwrap()["configured"],
+        false
+    );
+    assert!(stderr.is_empty());
+    fs::remove_dir_all(home).unwrap();
+}
+
 /// Verifies auth status and logout use dedicated auth store.
 ///
 /// This regression scenario documents the behavior being protected so a

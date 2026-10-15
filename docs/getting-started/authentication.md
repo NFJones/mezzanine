@@ -89,7 +89,53 @@ or model. In the agent shell, `/model` shows the active profile and configured
 profiles; `/model <profile-name>` selects a profile. Use `/model --list` to
 inspect the active provider's model catalog, or configure a model profile.
 
-## When sign-in fails
+## Store a search credential locally
+
+Search credentials use a separate namespace from model, ChatGPT and MCP auth:
+
+```sh
+mez auth search login work --provider brave
+mez auth search login work --provider brave --stdin --credential-store file
+mez auth search status work
+mez auth search logout work
+```
+
+The first command uses a masked interactive prompt; the second reads a key
+from stdin (for example, from a secret manager). Do not put the key itself in
+argv, a prompt transcript, shell history, or model configuration. An explicit
+`--api-key-file /secure/path/key` import is also supported and conflicts with
+`--stdin`. Input may have one final LF/CRLF; the key must otherwise be nonempty
+visible ASCII without whitespace, at most 8192 bytes. Providers are `brave`,
+`tavily`, `exa`, and `serpapi`, each with a fixed HTTPS API origin.
+
+Once the CLI grammar identifies `auth search`, parse errors use a fixed
+diagnostic rather than echoing attempted inline keys. This is not an argv
+secret-import feature and does not erase OS process arguments or shell history.
+Malformed global options can stop parsing before that command is identified;
+do not rely on diagnostic redaction to make passing secrets in argv safe.
+
+Login only stores locally. It does **not** probe the provider, activate paid
+search, select a default, or rewrite configuration. DuckDuckGo remains the
+credential-free default. Status reports `configured`, local file presence (or
+`unknown` for OS storage), `cleanup_pending`, and `remotely_verified: false`;
+it never loads the secret or proves quota, billing, or remote acceptance.
+
+Future search profiles can refer to `search-auth:work` or an explicit
+`env:SEARCH_KEY`. This foundation does not add a profile selector or runtime
+paid-search wiring. Environment values are resolved only through a future
+trusted caller's named primary-host/service getter after authorization, never
+pane environment, inferred key names, or an all-environment copy. Logical names
+start with a lowercase letter and contain up to 64 lowercase letters, digits,
+underscores or hyphens. Public refs cannot contain paths, commands or secrets.
+
+Secrets reuse the existing OS/private-file backends under an isolated service
+or directory. Non-secret metadata lives in `search-auth.json` version 1. Logout
+revokes only the exact search identity, not model or MCP auth. If cleanup fails
+after a committed change, the command reports it and retains pending cleanup;
+retry login/logout for that same name. It never restores a revoked generation.
+An already-held request snapshot is not retroactively erased by logout.
+
+## When model sign-in fails
 
 Follow the reported action requirement rather than treating an incomplete
 browser or device flow as authenticated. Verify the selected provider and retry

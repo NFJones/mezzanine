@@ -13936,6 +13936,75 @@ verbose or debug view. Status output MAY report coarse non-secret fields such as
 authenticated state, provider identity, credential kind, selected model profile,
 and token expiration metadata.
 
+### Local search credential foundation
+
+`mez auth search login <name> --provider <brave|tavily|exa|serpapi>`,
+`mez auth search status <name>`, and `mez auth search logout <name>` MUST
+manage only the dedicated search credential domain. Login MUST accept masked
+interactive input or explicit `--stdin`/`--api-key-file PATH`, never a literal
+token argument. It MUST only store locally: no HTTP probe, paid-provider
+activation, primary-config selector, model-profile/default mutation, or claim
+of provider acceptance, entitlement, quota or billing certainty. DuckDuckGo
+MUST remain credential-free and the default; this foundation does not change
+runtime search selection or approval policy.
+
+Logical names MUST start with a lowercase ASCII letter, contain only lowercase
+letters, digits, `_` and `-`, and be at most 64 bytes. Public credential refs
+MUST be exactly `search-auth:<name>` or `env:<VARIABLE>`; environment names MUST
+match `[A-Za-z_][A-Za-z0-9_]{0,127}`. Paths, commands, interpolation, inline
+secrets, fallback lists and automatic key-name/environment scanning MUST fail.
+The foundation MUST accept only an injected single-name primary host/service
+environment getter and call it lazily after the trusted caller authorizes the
+captured request. Pane environment and all-environment copies MUST NOT supply
+these secrets.
+
+Non-secret `search-auth.json` format version 1 MUST contain only bounded logical
+names, provider kind, exact code-owned origin, random opaque internal identity,
+generation, closed backend kind and pending-cleanup identities. It MUST NOT
+reuse inference `selected_model_profile`, MCP, Codex, access or refresh identity.
+Existing CredentialStore/native OS/private-file mechanisms MUST be reused with
+the fixed OS service `mez-search-auth` and sibling `search-auth-secrets`
+directory outside inference's `auth-secrets`. Internal refs MUST be reconstructed
+from validated records, never accepted as arbitrary metadata paths/URIs. Absent
+metadata creates an empty domain, not a migration from another credential type;
+unsupported versions/fields MUST fail closed without secret reads.
+
+Provider origins MUST be exactly `https://api.search.brave.com`,
+`https://api.tavily.com`, `https://api.exa.ai`, and `https://serpapi.com` for
+Brave, Tavily, Exa and SerpApi respectively. Alternate paths, ports, userinfo,
+schemes and endpoint templates MUST NOT be credential destinations. Secrets
+MUST be nonempty, at most 8192 bytes, and representable as visible ASCII HTTP
+header values without whitespace/control characters; errors MUST omit secret
+text and raw backend diagnostics. Actual wire headers/query authentication
+belong to the provider adapter, not this foundation.
+
+Metadata/status/list/config operations MUST NOT load credential values, call
+`contains_secret` implementations that load, read environment values or perform
+HTTP. Status MUST distinguish configured state from file-metadata-only
+`present`/`missing`/`store_unavailable`; OS presence is `unknown` without a
+secret read. `remotely_verified` MUST remain false. Capture MUST read only
+metadata; the future trusted runtime must authorize the exact provider/origin/
+generation binding before off-actor resolution. Current runtime search does
+not yet carry this binding: the resolver API alone MUST NOT be advertised as
+end-to-end denied/unapproved/cancellation enforcement.
+
+Resolution MUST compare the captured provider, origin, logical identity,
+generation and internal record under the existing auth commit lock before one
+secret load. Replacement/logout/recreation MUST invalidate old bindings.
+One exchange owns one SecretString snapshot for any future retry, not plaintext
+copies or repeated resolution. Already-held snapshots are not retroactively
+erased by logout; no later binding may resolve the revoked generation.
+
+Login MUST stage a unique record before atomic metadata publication. Precommit
+failure MUST preserve old metadata/credentials and attempt cleanup only of its
+own stage. After publication, rotation/revocation MUST be forward-only: delete
+errors can occur after effects, so restoring an old generation or deleting the
+new current record as rollback is forbidden. Such failures MUST report that the
+change committed and deletion is incomplete, retaining exact non-secret pending
+identities for the next login/logout of that name. Unrelated auth MUST remain
+untouched. Stage-cleanup failure before publication MUST be reported honestly;
+the existing backend contract cannot guarantee removal after an uncertain error.
+
 Anthropic Console API keys MUST be used only with `anthropic-messages` unless a user explicitly configures a compatible API-key endpoint override.
 
 Mezzanine MUST distinguish direct OpenAI API-key credentials from ChatGPT

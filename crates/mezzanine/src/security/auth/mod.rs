@@ -38,6 +38,8 @@ mod metadata;
 mod openai_oauth;
 /// Secret-safe OAuth rejection classification and session-local refresh fencing.
 mod refresh;
+/// Isolated local search credentials and generation-bound lazy resolution.
+pub mod search;
 /// Exposes the secret service module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

@@ -360,6 +360,17 @@ impl CommandBackedCredentialStore<SystemCredentialCommandRunner> {
     pub fn secret_tool() -> Self {
         Self::secret_tool_with_runner(SystemCredentialCommandRunner)
     }
+
+    /// Reuses the helper implementation with the fixed isolated search service.
+    pub(super) fn search() -> Self {
+        Self::new(
+            CommandCredentialBackend::SecretTool {
+                executable: SECRET_TOOL_PROGRAM.to_string(),
+                service: super::search::OS_SERVICE.to_string(),
+            },
+            SystemCredentialCommandRunner,
+        )
+    }
 }
 
 impl<R: CredentialCommandRunner> CommandBackedCredentialStore<R> {
@@ -501,7 +512,13 @@ impl<R: CredentialCommandRunner> CredentialStore for CommandBackedCredentialStor
         let Some(provider) = self.backend.provider_from_reference(reference)? else {
             return Ok(false);
         };
-        if self.load_secret(reference)?.is_none() {
+        // Search revocation retains exact pending records after uncertain
+        // deletion. Clear is an idempotent operation: do not first load a
+        // secret, whose missing lookup can itself fail after a prior deletion.
+        // Other auth domains retain their established presence semantics.
+        if self.backend.service() == super::search::OS_SERVICE {
+            self.ensure_available()?;
+        } else if self.load_secret(reference)?.is_none() {
             return Ok(false);
         }
 
