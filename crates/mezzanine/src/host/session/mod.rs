@@ -1082,7 +1082,7 @@ mod tests {
             ..request
         };
 
-        let runtime = SessionFactory::create(request).await.unwrap();
+        let (runtime, native, witnesses) = create_metadata_runtime(request).await;
         let registry = SessionRegistry::new(root.clone(), crate::runtime::current_effective_uid());
         assert!(control.exists());
         assert_eq!(registry.list().unwrap().len(), 1);
@@ -1091,6 +1091,7 @@ mod tests {
 
         assert!(!control.exists());
         assert!(registry.list().unwrap().is_empty());
+        retire_metadata_fixture(native, witnesses).await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1117,7 +1118,7 @@ mod tests {
             ]),
         };
 
-        let runtime = SessionFactory::create(request).await.unwrap();
+        let (runtime, native, witnesses) = create_metadata_runtime(request).await;
         tokio::time::timeout(Duration::from_secs(2), async {
             while fs::read_to_string(&observed).map_or(true, |value| value.trim().is_empty()) {
                 tokio::task::yield_now().await;
@@ -1137,6 +1138,7 @@ mod tests {
         assert_eq!(lines[2..], ["101", "37", "unset"]);
 
         drop(runtime);
+        retire_metadata_fixture(native, witnesses).await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1172,7 +1174,7 @@ mod tests {
             ]),
         };
 
-        let runtime = SessionFactory::create(request).await.unwrap();
+        let (runtime, native, witnesses) = create_metadata_runtime(request).await;
         tokio::time::timeout(Duration::from_secs(2), async {
             while fs::read_to_string(&observed).map_or(true, |value| value.lines().count() < 2) {
                 tokio::task::yield_now().await;
@@ -1206,6 +1208,7 @@ mod tests {
         drop(runtime);
         assert!(!authority_path.exists());
         assert!(!root.join("x11-sessions").exists());
+        retire_metadata_fixture(native, witnesses).await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1228,7 +1231,7 @@ mod tests {
             ]),
         };
 
-        let runtime = SessionFactory::create(request).await.unwrap();
+        let (runtime, native, witnesses) = create_metadata_runtime(request).await;
         tokio::time::timeout(Duration::from_secs(2), async {
             while fs::read_to_string(&observed).map_or(true, |value| value.lines().count() < 2) {
                 tokio::task::yield_now().await;
@@ -1240,6 +1243,7 @@ mod tests {
         assert_eq!(fs::read_to_string(&observed).unwrap(), "unset\nunset\n");
         assert!(!root.join("x11-sessions").exists());
         drop(runtime);
+        retire_metadata_fixture(native, witnesses).await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1393,6 +1397,9 @@ mod tests {
             if let Some(environment) = process.environment()
                 && !environment.is_empty()
             {
+                service
+                    .restore_running_pane_process_from_adapter(pane_id, process)
+                    .expect("return the same restored native owner after observation");
                 return environment;
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -1578,7 +1585,7 @@ mod tests {
         let mut request = test_request("initial-fragment", root.clone(), control.clone());
         let id = request.session.id.to_string();
         request.sockets.publish_control = true;
-        let runtime = SessionFactory::create(request).await.unwrap();
+        let (runtime, native, witnesses) = create_metadata_runtime(request).await;
         let connection = tokio::net::UnixStream::connect(&control).await.unwrap();
         assert!(store.load_agent_session_metadata(&id).unwrap().is_empty());
         let notice = store
@@ -1593,6 +1600,7 @@ mod tests {
         drop(connection);
         drop(runtime);
         assert!(!control.exists());
+        retire_metadata_fixture(native, witnesses).await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1674,6 +1682,63 @@ mod tests {
         );
 
         fixture.cleanup();
+    }
+
+    /// Metadata fixtures retain their native owner before actual spawn. The
+    /// existing observation-only gate captures exact witnesses without taking
+    /// children; no native completion is claimed by factory or runtime Drop.
+    async fn create_metadata_runtime(
+        request: SessionFactoryRequest,
+    ) -> (
+        SessionRuntime,
+        PaneProcessRetirementOwner,
+        Vec<(u32, Option<u64>)>,
+    ) {
+        let native = PaneProcessRetirementOwner::default();
+        let (spawned, witnesses) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let observer = async {
+            let witnesses = witnesses.await.unwrap();
+            release.send(false).unwrap();
+            witnesses
+        };
+        let (runtime, witnesses) = tokio::join!(
+            SessionFactory::create_with_native_owner(
+                request,
+                native.clone(),
+                Some(NativePaneStartupProbe {
+                    spawned,
+                    release: released
+                })
+            ),
+            observer
+        );
+        (runtime.unwrap(), native, witnesses)
+    }
+
+    /// Explicit fixture retirement occurs AFTER original metadata/artifact
+    /// assertions. It uses the production bounded drain and strict original-PID
+    /// ESRCH; it cannot substitute for the worker/session lifecycle regressions.
+    async fn retire_metadata_fixture(
+        native: PaneProcessRetirementOwner,
+        witnesses: Vec<(u32, Option<u64>)>,
+    ) {
+        native.seal();
+        drain_native_pane_retirement(
+            &native,
+            tokio::time::Instant::now() + NATIVE_PANE_RETIREMENT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert_eq!(native.outstanding(), 0);
+        for (pid, start) in witnesses {
+            let exact = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
+            assert_eq!(
+                rustix::process::test_kill_process(exact),
+                Err(rustix::io::Errno::SRCH),
+                "fixture retirement did not reap exact original child {pid} {start:?}"
+            );
+        }
     }
 
     async fn create_test_runtime(name: &str) -> SessionRuntime {
