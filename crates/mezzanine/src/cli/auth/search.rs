@@ -15,7 +15,7 @@ use secrecy::SecretString;
 use super::super::{CliOutputFormat, write_json_or_plain};
 use crate::{
     error::{MezError, Result},
-    security::auth::search::{SearchAuthStore, SearchProvider, validate_name},
+    security::auth::search::{SearchAuthStatus, SearchAuthStore, SearchProvider, validate_name},
 };
 
 /// Existing auth-family child with required, explicit local operation.
@@ -73,17 +73,24 @@ pub(super) async fn run<W: Write>(
     stdout: &mut W,
 ) -> Result<()> {
     let value = super::run_auth_store_operation(move || match args.command {
-        SearchCommand::Status(args) => serde_json::to_value(store.status(&args.name)?).map_err(|_| MezError::invalid_state("search auth status encoding failed")),
+        SearchCommand::Status(args) => status_value(store.status(&args.name)?),
         SearchCommand::Logout(args) => Ok(serde_json::json!({ "logged_out": store.logout(&args.name)?, "remotely_verified": false })),
         SearchCommand::Login(args) => {
             validate_name(&args.name)?;
             let secret = read_input(&args, interactive)?;
-            serde_json::to_value(store.login(&args.name, args.provider, &secret, args.credential_store.as_deref())?).map_err(|_| MezError::invalid_state("search auth status encoding failed"))
+            status_value(store.login(&args.name, args.provider, &secret, args.credential_store.as_deref())?)
         }
     }).await?;
     let json = serde_json::to_string(&value)
         .map_err(|_| MezError::invalid_state("search auth output encoding failed"))?;
     write_json_or_plain(stdout, output, &json)
+}
+
+/// Converts both local status and login outcomes through the same non-secret
+/// output contract, without accidentally serializing internal binding metadata.
+fn status_value(status: SearchAuthStatus) -> Result<serde_json::Value> {
+    serde_json::to_value(status)
+        .map_err(|_| MezError::invalid_state("search auth status encoding failed"))
 }
 
 /// Reads only the explicit input source. Interactive fallback is masked and
