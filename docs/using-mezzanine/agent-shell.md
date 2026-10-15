@@ -345,6 +345,15 @@ use `copy-mode --draft` from the Mezzanine command prompt. Use
 intersected collapsed paste blocks. See [Terminal input, copy, and
 history](terminal-input-copy-and-history.md) for selection controls and buffers.
 
+Received peer messages keep authored source separate from display wrapping.
+Source-format copying of a wrapped plaintext continuation recovers its original
+source line, including literal marker-looking text; a Markdown peer selection
+recovers the complete original entry. CRLF and trailing blank bytes are retained,
+including when timestamps have never been enabled. The newest source anchor is
+retained at each identity-bearing received group's tail so head pruning does not
+turn a remaining continuation into display text. Reflow and presentation retries
+do not resend the message or change its receipt identity or occurrence time.
+
 ## Choose a shell mode
 
 The default `native` mode validates the pane's local root process and runs

@@ -3,6 +3,163 @@
 use crate::*;
 use std::sync::Arc;
 
+/// Explicit opaque carrier overrides repeat through a genuine physical wrap,
+/// including the last anchor subdivision retained after pruning and reflow.
+/// The original constant-continuation setter, empty input and alternate-screen
+/// behavior stay unchanged; neither operation interprets marker-looking bytes.
+#[test]
+fn copy_source_physical_override_repetition_keeps_tail_and_legacy_contract() {
+    let entry = PresentationEntry {
+        id: "physical-owner".into(),
+        occurrence: Default::default(),
+        first_row: true,
+    };
+    let source = TerminalCopySource::new(
+        TerminalCopySourceId::new(&entry, TerminalCopySourceGroup::SourceLine(0)).unwrap(),
+        "raw source",
+    );
+    let mut screen = TerminalScreen::new(TerminalSize::new(8, 6).unwrap(), 8).unwrap();
+    assert!(screen.feed_presentation_with_copy_source(
+        b"abcdefghijklmnopqr\r\n",
+        entry,
+        Some(source.clone())
+    ));
+    let opaque = "\u{1e}opaque:anchor/0:raw source";
+    let mut legacy = screen.clone();
+    legacy.set_recent_normal_copy_texts(&[opaque.into()], "constant-skip");
+    let legacy_rows = legacy.normal_styled_content_lines();
+    let owned = legacy_rows
+        .iter()
+        .filter(|row| row.copy_source.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(owned.len(), 3);
+    assert_eq!(owned[0].copy_text.as_deref(), Some(opaque));
+    assert!(
+        owned[1..]
+            .iter()
+            .all(|row| row.copy_text.as_deref() == Some("constant-skip"))
+    );
+    screen.set_recent_normal_copy_texts_repeating_overrides(&[opaque.into()]);
+    let rows = screen.normal_styled_content_lines();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.copy_text.as_deref() == Some(opaque))
+            .count(),
+        3
+    );
+    screen.set_history_limit(1).unwrap();
+    screen.resize(TerminalSize::new(4, 2).unwrap()).unwrap();
+    let rows = screen.normal_styled_content_lines();
+    let tail = rows
+        .iter()
+        .filter(|row| row.copy_source.is_some())
+        .collect::<Vec<_>>();
+    assert!(!tail.is_empty());
+    assert!(
+        tail.iter()
+            .all(|row| !row.presentation.as_ref().unwrap().first_row)
+    );
+    assert!(
+        tail.iter()
+            .all(|row| row.copy_text.as_deref() == Some(opaque)
+                && Arc::ptr_eq(row.copy_source.as_ref().unwrap(), &source))
+    );
+    let before = screen.clone();
+    screen.set_recent_normal_copy_texts_repeating_overrides(&[]);
+    assert_eq!(screen, before);
+    screen.feed(b"\x1b[?1049h");
+    let alternate = screen.clone();
+    screen.set_recent_normal_copy_texts_repeating_overrides(&["not-installed".into()]);
+    assert_eq!(screen, alternate);
+}
+
+/// A coherent typed row retains its original opaque legacy override through
+/// repeated OFF/ON physical reflow. Neither marker-looking bytes nor source
+/// payloads are interpreted or concatenated, and pruned continuations never
+/// acquire original first-row proof. SourceLine eligibility is product-owned.
+#[test]
+fn copy_source_reflow_preserves_opaque_overrides_without_framing() {
+    for timestamps in [false, true] {
+        let entry = PresentationEntry {
+            id: "opaque-owner".into(),
+            occurrence: Default::default(),
+            first_row: true,
+        };
+        let source = TerminalCopySource::new(
+            TerminalCopySourceId::new(&entry, TerminalCopySourceGroup::SourceLine(7)).unwrap(),
+            "original\r\nsource\n",
+        );
+        let mut screen = TerminalScreen::new(TerminalSize::new(24, 8).unwrap(), 64).unwrap();
+        screen.set_log_frame_settings(
+            mez_core::presentation::LogFramePolicy {
+                timestamps,
+                wrap_cap: 80,
+                ..Default::default()
+            },
+            GraphicRendition::default(),
+        );
+        assert!(screen.feed_presentation_with_copy_source(
+            format!("{}\r\n", "abcdef雪".repeat(5)).as_bytes(),
+            entry.clone(),
+            Some(source.clone())
+        ));
+        let opaque = "\u{1e}opaque:anchor/7:raw\r\n\u{1e}literal-control";
+        screen.set_recent_normal_copy_texts(&[opaque.into()], "opaque continuation");
+        for size in [
+            TerminalSize::new(12, 8).unwrap(),
+            TerminalSize::new(32, 8).unwrap(),
+            TerminalSize::new(10, 3).unwrap(),
+        ] {
+            screen.resize(size).unwrap();
+            let rows = screen.normal_styled_content_lines();
+            let owned = rows
+                .iter()
+                .filter(|row| row.copy_source.is_some())
+                .collect::<Vec<_>>();
+            assert!(!owned.is_empty());
+            assert!(
+                owned
+                    .iter()
+                    .all(|row| row.copy_text.as_deref() == Some(opaque)),
+                "{rows:#?}"
+            );
+            assert!(
+                owned
+                    .iter()
+                    .all(|row| Arc::ptr_eq(row.copy_source.as_ref().unwrap(), &source))
+            );
+            assert_eq!(
+                owned
+                    .iter()
+                    .filter(|row| row.presentation.as_ref().unwrap().first_row)
+                    .count(),
+                1
+            );
+        }
+        screen.set_history_limit(1).unwrap();
+        screen.feed(b"\r\n\r\n");
+        screen.resize(TerminalSize::new(12, 3).unwrap()).unwrap();
+        let rows = screen.normal_styled_content_lines();
+        let tail = rows
+            .iter()
+            .filter(|row| row.copy_source.is_some())
+            .collect::<Vec<_>>();
+        assert!(!tail.is_empty());
+        assert!(
+            tail.iter()
+                .all(|row| !row.presentation.as_ref().unwrap().first_row)
+        );
+        assert!(
+            tail.iter()
+                .all(|row| row.copy_text.as_deref() == Some(opaque))
+        );
+        assert!(
+            tail.iter()
+                .all(|row| Arc::ptr_eq(row.copy_source.as_ref().unwrap(), &source))
+        );
+    }
+}
+
 /// Split UTF-8 and width-expanding clusters retain one proven source while
 /// physical wraps prune the original boundary. Alternate/frozen projections
 /// share row Arcs; arbitrary overwrite/erase never keeps entry authority.

@@ -31,6 +31,7 @@ mod peer_messages;
 mod pending_messages;
 mod pending_steering;
 mod projection_outcomes;
+mod received_copy;
 mod resize_admission;
 mod resize_surfaces;
 mod streaming_identity;

@@ -1156,9 +1156,9 @@ fn merge_wrapped_physical_lines(
             row.line.clone()
         };
         if !current_source_consistent
-            || (preserve_source_associations
-                && !starts_logical_line
-                && current_line.presentation.is_some())
+            || (!starts_logical_line
+                && ((preserve_source_associations && current_line.presentation.is_some())
+                    || has_coherent_copy_source(current_line)))
         {
             source_line.copy_text = None;
         }
@@ -1270,13 +1270,21 @@ fn reflow_one_logical_line(
             });
             current = TerminalStyledLine::plain(String::new());
             current.copy_source = line.copy_source.clone();
-            if preserve_source_associations
+            if (preserve_source_associations
                 && line.presentation.is_some()
-                && line.copy_source.is_none()
+                && line.copy_source.is_none())
+                || (has_coherent_copy_source(line)
+                    && line.copy_source.as_ref().is_some_and(|source| {
+                        matches!(
+                            source.id.group(),
+                            crate::TerminalCopySourceGroup::SourceLine(_)
+                        )
+                    }))
             {
                 // Copy payload is opaque to the terminal. Proven structured
-                // source associations survive on every newly reflowed row;
-                // the product deduplicates their existing source identities.
+                // source-line owners retain legacy carrier metadata independent
+                // of consumption policy. Raw groups use their shared typed Arc,
+                // never one full raw override allocation per physical row.
                 current.copy_text = line.copy_text.clone();
             }
             current.presentation = line.presentation.clone().map(|mut entry| {
@@ -1298,6 +1306,15 @@ fn reflow_one_logical_line(
         line: current,
         wraps_to_next: false,
     });
+}
+
+/// Reports producer-proven typed ownership without interpreting any copy bytes.
+/// Invalid or mismatched metadata cannot authorize retaining opaque overrides.
+fn has_coherent_copy_source(line: &TerminalStyledLine) -> bool {
+    line.presentation
+        .as_ref()
+        .zip(line.copy_source.as_ref())
+        .is_some_and(|(entry, source)| entry.is_valid() && source.id.owner() == entry.id)
 }
 
 /// Returns the display width occupied by a styled prefix.

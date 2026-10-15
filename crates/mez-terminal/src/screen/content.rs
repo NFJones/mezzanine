@@ -91,7 +91,17 @@ impl TerminalScreen {
         copy_texts: &[String],
         continuation_copy_text: &str,
     ) {
-        if self.set_recent_normal_copy_texts_inner(copy_texts, continuation_copy_text) > 0 {
+        if self.set_recent_normal_copy_texts_inner(copy_texts, Some(continuation_copy_text)) > 0 {
+            self.mark_render_changed();
+        }
+    }
+
+    /// Repeats each explicit producer override across its physical wrap chain.
+    /// Callers supply validated opaque carrier metadata, never raw source groups.
+    /// No bytes are interpreted and no ownership is manufactured. The existing
+    /// bounded reverse walk and alternate-screen behavior remain unchanged.
+    pub fn set_recent_normal_copy_texts_repeating_overrides(&mut self, copy_texts: &[String]) {
+        if self.set_recent_normal_copy_texts_inner(copy_texts, None) > 0 {
             self.mark_render_changed();
         }
     }
@@ -180,14 +190,14 @@ impl TerminalScreen {
         copy_texts: &[String],
         continuation_copy_text: &str,
     ) -> usize {
-        self.set_recent_normal_copy_texts_inner(copy_texts, continuation_copy_text)
+        self.set_recent_normal_copy_texts_inner(copy_texts, Some(continuation_copy_text))
     }
 
     /// Performs a bounded reverse walk over newest normal-screen logical lines.
     fn set_recent_normal_copy_texts_inner(
         &mut self,
         copy_texts: &[String],
-        continuation_copy_text: &str,
+        continuation_copy_text: Option<&str>,
     ) -> usize {
         if copy_texts.is_empty() || self.alternate.active() {
             return 0;
@@ -224,7 +234,7 @@ impl TerminalScreen {
                 if let Some(index) = self.normal_physical_line_index(offset) {
                     self.assign_normal_physical_copy_text(
                         index,
-                        Some(continuation_copy_text.to_string()),
+                        Some(continuation_copy_text.unwrap_or(copy_text).to_string()),
                     );
                 }
             }
