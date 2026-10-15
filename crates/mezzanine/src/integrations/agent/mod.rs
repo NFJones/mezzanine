@@ -57,9 +57,9 @@ use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel,
     AgentShellStore, AgentShellVisibility, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
     AllowedActionSet, ContextSourceKind, MaapBatch, McpExecutionRequest, ModelInteractionKind,
-    ModelMessage, ModelMessageRole, ModelRequest, ProviderHttpRequest,
-    TranscriptPersistence, agent_shell_help_display, agent_shell_mcp_display,
-    agent_shell_permissions_display, agent_shell_status_display,
+    ModelMessage, ModelMessageRole, ModelRequest, ProviderHttpRequest, TranscriptPersistence,
+    agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
+    agent_shell_status_display,
 };
 #[cfg(test)]
 use mez_agent::{

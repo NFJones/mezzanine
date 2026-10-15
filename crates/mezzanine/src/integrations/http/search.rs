@@ -23,6 +23,117 @@ use super::{
 #[cfg(test)]
 mod tests;
 
+/// Search-local failure distinctions; shared inference error/retry contracts
+/// remain unchanged. Status classes use only numeric HTTP evidence, not remote
+/// error tags or speculative provider-specific body interpretation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchHttpErrorKind {
+    /// Invalid local request/credential or HTTP 400/422.
+    Invalid,
+    /// HTTP 401 requires authentication correction, never automatic retry.
+    Authentication,
+    /// HTTP 403 denies this request.
+    Forbidden,
+    /// HTTP 402 is payment/quota evidence; HTTP 429 alone is not quota proof.
+    Quota,
+    /// HTTP 429 is throttling evidence without a retry decision.
+    Throttle,
+    /// A locally enforced exchange/validation phase expired.
+    Timeout(mez_agent::ProviderHttpTimeoutPhase),
+    /// Connection/body I/O failed; remote effects may already have occurred.
+    Transport,
+    /// Other non-success HTTP status or local transport state failure.
+    Provider,
+    /// Complete response is not supported strict JSON/text encoding.
+    Malformed,
+    /// HTTP 202 is accepted/pending, not a completed search result.
+    Pending,
+    /// Local body cap or HTTP 413 prevented complete JSON retention.
+    Oversize,
+    /// Known credential material was reflected in otherwise valid JSON.
+    CredentialEcho,
+}
+
+/// Bounded search error with no raw response, headers, URL or source chain.
+/// Cancellation deliberately produces no fabricated error/completion: dropping
+/// the owning future cancels scoped I/O but cannot prove no remote effect ran.
+#[derive(Debug)]
+pub(crate) struct SearchHttpError {
+    kind: SearchHttpErrorKind,
+    status: Option<u16>,
+    message: String,
+}
+
+impl SearchHttpError {
+    /// Builds an error from local fixed text and optional numeric status only.
+    fn new(kind: SearchHttpErrorKind, status: Option<u16>, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            status,
+            message: message.into(),
+        }
+    }
+
+    /// Returns the bounded local category; it never authorizes retry/fallback.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Dormant search adapter error contract.")
+    )]
+    pub(crate) fn kind(&self) -> SearchHttpErrorKind {
+        self.kind
+    }
+
+    /// Returns numeric HTTP evidence, absent for local/transport failures.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Dormant search adapter error contract.")
+    )]
+    pub(crate) fn status(&self) -> Option<u16> {
+        self.status
+    }
+
+    /// Returns a diagnostic built only from local constants/numeric evidence.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Dormant search adapter error contract.")
+    )]
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for SearchHttpError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SearchHttpError {}
+
+impl From<ProviderHttpError> for SearchHttpError {
+    /// Shared errors already contain only local categories, never reqwest
+    /// Display/source chains. Match exact local decoder/cap sentinels only;
+    /// unknown failures remain Provider rather than inferring remote semantics.
+    fn from(error: ProviderHttpError) -> Self {
+        use mez_agent::ProviderHttpErrorKind;
+        let kind = match error.kind() {
+            ProviderHttpErrorKind::InvalidArgs => SearchHttpErrorKind::Invalid,
+            ProviderHttpErrorKind::Io => SearchHttpErrorKind::Transport,
+            ProviderHttpErrorKind::Timeout(phase) => SearchHttpErrorKind::Timeout(phase),
+            ProviderHttpErrorKind::InvalidState => match error.message() {
+                "provider HTTP response exceeds configured limit" => SearchHttpErrorKind::Oversize,
+                "search HTTP unsupported content encoding"
+                | "provider HTTP response body is not UTF-8" => SearchHttpErrorKind::Malformed,
+                message if message.starts_with("provider HTTP request failed (") => {
+                    SearchHttpErrorKind::Transport
+                }
+                _ => SearchHttpErrorKind::Provider,
+            },
+        };
+        Self::new(kind, None, error.message())
+    }
+}
+
 /// Code-owned destinations; there is no production base-URL override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(
@@ -160,7 +271,7 @@ impl SearchHttpRequest {
         &self,
         credential: &SecretString,
         deadline: tokio::time::Instant,
-    ) -> ProviderHttpResult<Value> {
+    ) -> Result<Value, SearchHttpError> {
         let deadline = deadline.min(
             tokio::time::Instant::now()
                 + std::time::Duration::from_millis(self.request.timeouts.total_timeout_ms),
@@ -274,25 +385,46 @@ pub(super) fn validate_wire_url(url: &reqwest::Url) -> ProviderHttpResult<()> {
 fn checked_json(
     exchange: super::HttpExchangeResponse,
     credential: &SecretString,
-) -> ProviderHttpResult<Value> {
+) -> Result<Value, SearchHttpError> {
     if exchange.completion != HttpCompletion::Complete {
-        return Err(ProviderHttpError::invalid_state(
+        return Err(SearchHttpError::new(
+            SearchHttpErrorKind::Oversize,
+            None,
             "search JSON response is incomplete",
         ));
     }
     let response = exchange.response;
-    if !(200..300).contains(&response.status_code) {
-        return Err(ProviderHttpError::invalid_state(format!(
-            "search HTTP status {}",
-            response.status_code
-        )));
+    let status = response.status_code;
+    if status == 202 || !(200..300).contains(&status) {
+        let kind = match status {
+            400 | 422 => SearchHttpErrorKind::Invalid,
+            401 => SearchHttpErrorKind::Authentication,
+            402 => SearchHttpErrorKind::Quota,
+            403 => SearchHttpErrorKind::Forbidden,
+            413 => SearchHttpErrorKind::Oversize,
+            429 => SearchHttpErrorKind::Throttle,
+            202 => SearchHttpErrorKind::Pending,
+            _ => SearchHttpErrorKind::Provider,
+        };
+        return Err(SearchHttpError::new(
+            kind,
+            Some(status),
+            format!("search HTTP status {status}"),
+        ));
     }
-    let value: Value = serde_json::from_str(&response.body)
-        .map_err(|_| ProviderHttpError::invalid_state("search response is not complete JSON"))?;
+    let value: Value = serde_json::from_str(&response.body).map_err(|_| {
+        SearchHttpError::new(
+            SearchHttpErrorKind::Malformed,
+            Some(status),
+            "search response is not complete JSON",
+        )
+    })?;
     if contains_credential(&response.body, credential)
         || json_contains_credential(&value, credential)
     {
-        return Err(ProviderHttpError::invalid_state(
+        return Err(SearchHttpError::new(
+            SearchHttpErrorKind::CredentialEcho,
+            Some(status),
             "search response suppressed: credential echo",
         ));
     }

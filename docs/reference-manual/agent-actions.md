@@ -69,6 +69,10 @@ content type. Truncation is observed locally, not trusted from response headers.
 At a text cap, an incomplete final UTF-8 character is omitted; invalid interior
 bytes fail. Slow progress consumers may receive only a contiguous prefix; final
 results remain authoritative. Cancellation retires the scoped forwarder/body.
+Actor forwarding keeps one pending acknowledgment plus the latest cumulative
+snapshot, so held ingress cannot suspend network polling or its deadlines.
+Terminal output drops optional progress without a tail flush; queued stale
+attempts remain subject to the runtime's exact identity/revision/state guards.
 
 The authenticated-search transport foundation has fixed HTTPS destinations for
 Brave, Tavily, Exa and SerpApi. It verifies certificates, refuses redirects and
@@ -78,6 +82,12 @@ descriptions and attached only at send time; SerpApi uses query authentication,
 not an invented authentication header. Search JSON must be complete and pass a
 known-credential echo check before publication. HTTP errors expose fixed
 categories/status, never raw error bodies, headers or URL-bearing source chains.
+The internal search contract distinguishes invalid/authentication/forbidden,
+payment or quota (402), throttling (429), local phase timeout, transport,
+provider status, malformed JSON/encoding, pending (202), oversize and known-key
+suppression. A 429 is not proof of quota exhaustion, and none of these categories
+authorizes retry. Cancellation returns no invented completion or no-effect
+guarantee; the destination may already have received the request.
 
 This foundation **does not enable paid search**, add profiles/credential commands,
 or change the default search backend or legacy routing. Backend selection and

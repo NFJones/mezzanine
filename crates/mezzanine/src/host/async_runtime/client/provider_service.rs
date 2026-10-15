@@ -1081,8 +1081,12 @@ async fn execute_approved_external_action_inner(
 
 /// Drives only approved-network execution and its provisional watch snapshots.
 /// The submission closure owns actor ingress; the network result retains sole
-/// outcome authority. This extraction preserves the sequential baseline so
-/// held-ack regressions can qualify the subsequent scoped-forwarder repair.
+/// outcome authority. One scoped forwarder awaits at most one acknowledgment;
+/// the watch retains only the latest cumulative source while that ingress is
+/// pending. No watch borrow survives an await and no detached task is spawned.
+/// Terminal network readiness wins over optional progress and drops a pending
+/// submission without flushing obsolete snapshots. Already queued actor work
+/// still relies on the actor's exact-attempt/revision/Running guards.
 async fn drive_external_network_with_progress<T, Network, Submit, Submission>(
     network: Network,
     mut progress: watch::Receiver<Option<String>>,
@@ -1094,25 +1098,25 @@ where
     Submission: Future,
 {
     tokio::pin!(network);
-    let mut revision = 0_u64;
-    let result = loop {
-        tokio::select! {
-            result = &mut network => break result,
-            changed = progress.changed() => {
-                if changed.is_err() { continue; }
-                let source = { progress.borrow_and_update().clone() };
-                let Some(source) = source else { continue; };
-                revision = revision.saturating_add(1);
-                let _ = submit(source, revision).await;
-            }
+    let forward = async {
+        let mut revision = 0_u64;
+        while progress.changed().await.is_ok() {
+            let source = { progress.borrow_and_update().clone() };
+            let Some(source) = source else {
+                continue;
+            };
+            revision = revision.saturating_add(1);
+            let _ = submit(source, revision).await;
         }
     };
-    let source = { progress.borrow_and_update().clone() };
-    if let Some(source) = source {
-        revision = revision.saturating_add(1);
-        let _ = submit(source, revision).await;
+    tokio::pin!(forward);
+    tokio::select! {
+        biased;
+        result = &mut network => result,
+        // A closed watch parks forwarding permanently; it cannot manufacture
+        // completion or repeatedly wake an otherwise pending network future.
+        () = &mut forward => network.await,
     }
-    result
 }
 
 /// Runs one provider request while honoring turn cancellation.

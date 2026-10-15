@@ -4721,11 +4721,28 @@ Search output MUST pass complete JSON validation and known-credential canary
 suppression before any result/progress publication or downstream fetch. Known
 raw, once percent/form-encoded and JSON-decoded credential echoes MUST fail
 closed, including reflected result URLs. Remote request IDs, error tags and
-headers MUST NOT be exposed as unrestricted diagnostics. The caller's absolute
-deadline MUST bound send/body work and gate validated output; dropping the
-future MUST cancel its scoped work. Ordinary progress MUST use bounded tracked
+headers MUST NOT be exposed as unrestricted diagnostics.
+Search-local errors MUST retain bounded numeric status and distinguish invalid
+inputs, authentication, forbidden, payment/quota (402), throttling (429),
+local phase timeout, transport interruption, other provider status, malformed
+encoding/JSON, accepted/pending (202), oversize and credential suppression.
+HTTP 429 alone MUST NOT be interpreted as proven quota exhaustion. Cancellation
+MUST drop the scoped future without fabricating a result or remote no-effect
+proof. These classifications MUST NOT alter inference retries or authorize
+search retry/fallback; remote error bodies, tags and request IDs remain omitted.
+The caller's absolute deadline MUST bound send/body work and gate validated
+output; dropping the future MUST cancel its scoped work.
+Ordinary progress MUST use bounded tracked
 forwarding so a slow observer cannot block body draining or extend deadlines;
 only a contiguous prefix MAY be published, with final results authoritative.
+Approved-network actor forwarding MUST retain at most one in-flight provisional
+submission and one latest cumulative watch snapshot. A closed progress watch
+MUST park without polling a pending network future in a loop. Ready terminal
+network output MUST win over provisional forwarding, dropping its scoped
+submission without an awaited tail flush. Already queued progress is not
+retracted; exact attempt, revision and running-state guards MUST reject it
+after authoritative completion. The final actor completion acknowledgment
+remains mandatory and separate from optional progress.
 This foundation alone adds no search profiles, credential CLI, paid dispatch or
 default-selection change. It cannot prevent destination retention of query
 credentials, control external proxy/server logging, detect every transformed

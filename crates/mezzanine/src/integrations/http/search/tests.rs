@@ -373,6 +373,93 @@ async fn search_http_validation_is_secret_free_and_deadline_precedes_send() {
         .unwrap_err();
     assert_eq!(
         error.kind(),
-        mez_agent::ProviderHttpErrorKind::Timeout(mez_agent::ProviderHttpTimeoutPhase::Total)
+        SearchHttpErrorKind::Timeout(mez_agent::ProviderHttpTimeoutPhase::Total)
     );
+}
+
+/// Safe numeric status evidence remains typed and separate from hostile remote
+/// headers/body. Accepted/pending is not success; 429 alone is not quota proof.
+/// No category grants retry, follows a redirect or exposes a remote request ID.
+#[tokio::test]
+async fn search_http_error_categories_are_local_and_secret_free() {
+    for (status, kind) in [
+        (202, SearchHttpErrorKind::Pending),
+        (400, SearchHttpErrorKind::Invalid),
+        (401, SearchHttpErrorKind::Authentication),
+        (402, SearchHttpErrorKind::Quota),
+        (403, SearchHttpErrorKind::Forbidden),
+        (413, SearchHttpErrorKind::Oversize),
+        (422, SearchHttpErrorKind::Invalid),
+        (429, SearchHttpErrorKind::Throttle),
+        (503, SearchHttpErrorKind::Provider),
+    ] {
+        let (url, server) = fixture(
+            status,
+            "X-Request-Id: canary\r\n",
+            b"canary remote error",
+            0,
+        )
+        .await;
+        let error = request(SearchEndpoint::SerpApi, url, 4096)
+            .send_json(&key(), tokio::time::Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), kind);
+        assert_eq!(error.status(), Some(status));
+        assert_eq!(error.message(), format!("search HTTP status {status}"));
+        assert!(!format!("{error:?}").contains("canary"));
+        assert!(std::error::Error::source(&error).is_none());
+        server.await.unwrap();
+    }
+    for (headers, body, limit, kind) in [
+        (
+            "",
+            b"{broken".as_slice(),
+            100,
+            SearchHttpErrorKind::Malformed,
+        ),
+        ("", b"\xff".as_slice(), 100, SearchHttpErrorKind::Malformed),
+        (
+            "Content-Encoding: gzip\r\n",
+            b"{}".as_slice(),
+            100,
+            SearchHttpErrorKind::Malformed,
+        ),
+        ("", b"{}".as_slice(), 1, SearchHttpErrorKind::Oversize),
+    ] {
+        let (url, server) = fixture(200, headers, body, 0).await;
+        let error = request(SearchEndpoint::Exa, url, limit)
+            .send_json(&key(), tokio::time::Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), kind);
+        assert!(!format!("{error:?}").contains("canary"));
+        server.await.unwrap();
+    }
+}
+
+/// Local connection refusal and premature body EOF are transport interruptions,
+/// not authentication/provider-body verdicts. Their errors keep no URL, key,
+/// raw peer header/body, nested reqwest source or implicit retry decision.
+#[tokio::test]
+async fn search_http_transport_failure_category_is_secret_free() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/unavailable", listener.local_addr().unwrap());
+    drop(listener);
+    let error = request(SearchEndpoint::SerpApi, url, 4096)
+        .send_json(&key(), tokio::time::Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), SearchHttpErrorKind::Transport);
+    assert_eq!(error.status(), None);
+    assert!(!format!("{error:?}").contains("canary"));
+    assert!(std::error::Error::source(&error).is_none());
+    let (url, server) = fixture(200, "", b"{", 10).await;
+    let error = request(SearchEndpoint::Brave, url, 4096)
+        .send_json(&key(), tokio::time::Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), SearchHttpErrorKind::Transport);
+    assert!(std::error::Error::source(&error).is_none());
+    server.await.unwrap();
 }

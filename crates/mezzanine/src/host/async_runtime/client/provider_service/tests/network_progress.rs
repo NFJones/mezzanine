@@ -165,13 +165,19 @@ async fn outer_held_ack_cancellation_retires_ingress_and_real_http() {
 async fn outer_progress_closed_watch_does_not_complete_network() {
     let (sender, receiver) = watch::channel(None);
     drop(sender);
+    let polls = AtomicUsize::new(0);
+    let (complete, mut completion) = tokio::sync::oneshot::channel();
+    let wake = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        complete.send(17).unwrap();
+    });
     let result = tokio::time::timeout(
         Duration::from_secs(1),
         drive_external_network_with_progress(
-            async {
-                tokio::task::yield_now().await;
-                17
-            },
+            std::future::poll_fn(|context| {
+                polls.fetch_add(1, Ordering::SeqCst);
+                Pin::new(&mut completion).poll(context)
+            }),
             receiver,
             |_, _| async {
                 panic!("closed empty watch must not submit progress");
@@ -180,7 +186,62 @@ async fn outer_progress_closed_watch_does_not_complete_network() {
     )
     .await
     .unwrap();
-    assert_eq!(result, 17);
+    assert_eq!(result.unwrap(), 17);
+    wake.await.unwrap();
+    assert!(
+        polls.load(Ordering::SeqCst) < 16,
+        "closed progress must park, not repeatedly poll pending network"
+    );
+}
+
+/// One held ingress coalesces arbitrarily many cumulative snapshots into the
+/// watch's latest value. Releasing that acknowledgment admits exactly one newer
+/// revision; network completion then drops it without replaying a tail flush.
+#[tokio::test]
+async fn outer_progress_coalesces_while_one_ingress_is_pending() {
+    let (sender, receiver) = watch::channel(None);
+    sender.send_replace(Some("a".into()));
+    let (release, acknowledgment) = tokio::sync::oneshot::channel::<()>();
+    let (finish, completion) = tokio::sync::oneshot::channel::<u8>();
+    let mut acknowledgment = Some(acknowledgment);
+    let mut finish = Some(finish);
+    let calls = std::sync::Mutex::new(Vec::new());
+    let drops = Arc::new(AtomicUsize::new(0));
+    let result = drive_external_network_with_progress(completion, receiver, |source, revision| {
+        calls.lock().unwrap().push((source, revision));
+        let acknowledgment = acknowledgment.take();
+        let finish = if revision == 2 { finish.take() } else { None };
+        let guard = IngressDrop(drops.clone());
+        async move {
+            let _guard = guard;
+            if let Some(acknowledgment) = acknowledgment {
+                acknowledgment.await.unwrap();
+            } else {
+                finish.unwrap().send(29).unwrap();
+                std::future::pending::<()>().await;
+            }
+        }
+    });
+    let updates = async {
+        // The first ingress must be polled before releasing its acknowledgment.
+        while calls.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        sender.send_replace(Some("ab".into()));
+        sender.send_replace(Some("abc".into()));
+        release.send(()).unwrap();
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::join!(result, updates)
+    })
+    .await
+    .unwrap();
+    assert_eq!(result.unwrap(), 29);
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec![("a".into(), 1), ("abc".into(), 2)]
+    );
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
 
 /// When both terminal outcome and changed progress are ready, only the exact
