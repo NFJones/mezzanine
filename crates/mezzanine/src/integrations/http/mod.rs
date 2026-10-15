@@ -222,6 +222,7 @@ fn provider_http_client_builder(
         .no_zstd();
     let builder = if policy.routing == HttpRoutingPolicy::AuthenticatedSearch {
         builder.redirect(reqwest::redirect::Policy::none()).no_proxy()
+            .retry(reqwest::retry::never())
     } else {
         builder
     };
@@ -1199,6 +1200,7 @@ mod provider_transport_tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let (late_tx, late_rx) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = Vec::new();
@@ -1219,7 +1221,10 @@ mod provider_transport_tests {
             stream.write_all(b"5\r\nearly\r\n").await.unwrap();
             stream.flush().await.unwrap();
             release_rx.await.unwrap();
-            stream.write_all(b"4\r\nlate\r\n0\r\n\r\n").await.unwrap();
+            stream.write_all(b"4\r\nlate\r\n").await.unwrap();
+            stream.flush().await.unwrap();
+            late_rx.await.unwrap();
+            stream.write_all(b"0\r\n\r\n").await.unwrap();
             stream.flush().await.unwrap();
         });
         let request = ProviderHttpRequest {
@@ -1251,6 +1256,8 @@ mod provider_transport_tests {
 
         let second = progress_rx.recv().await.unwrap();
         assert_eq!(second, b"late");
+        assert!(!client.is_finished());
+        late_tx.send(()).unwrap();
         let response = client.await.unwrap().unwrap();
         server.await.unwrap();
         assert_eq!(response.completion, super::HttpCompletion::Complete);
