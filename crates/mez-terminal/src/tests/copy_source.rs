@@ -56,7 +56,7 @@ fn copy_source_reflow_preserves_opaque_overrides_without_framing() {
             assert!(
                 owned
                     .iter()
-                    .all(|row| row.copy_source.as_ref().unwrap().id == source.id)
+                    .all(|row| Arc::ptr_eq(row.copy_source.as_ref().unwrap(), &source))
             );
             assert_eq!(
                 owned
@@ -68,6 +68,7 @@ fn copy_source_reflow_preserves_opaque_overrides_without_framing() {
         }
         screen.set_history_limit(1).unwrap();
         screen.feed(b"\r\n\r\n");
+        screen.resize(TerminalSize::new(12, 3).unwrap()).unwrap();
         let rows = screen.normal_styled_content_lines();
         let tail = rows
             .iter()
@@ -81,6 +82,10 @@ fn copy_source_reflow_preserves_opaque_overrides_without_framing() {
         assert!(
             tail.iter()
                 .all(|row| row.copy_text.as_deref() == Some(opaque))
+        );
+        assert!(
+            tail.iter()
+                .all(|row| Arc::ptr_eq(row.copy_source.as_ref().unwrap(), &source))
         );
     }
 }
