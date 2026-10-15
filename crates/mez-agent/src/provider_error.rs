@@ -226,6 +226,11 @@ pub fn provider_failure_json_is_timeout(provider_failure_json: Option<&str>) -> 
 /// server errors, transient provider types, and explicit retry invitations are
 /// retryable.
 ///
+/// Output-parameter names in input-overflow advice are not output exhaustion.
+/// Only that broad message inference is suppressed by an explicit input-overflow
+/// diagnosis in the same field; structured categories and specific output-limit
+/// wording retain their precedence over generic context and transport text.
+///
 /// The classifier inputs are the typed error kind, the sanitized primary
 /// display message produced by the shared diagnostics boundary, and the
 /// sanitized structured failure payload. The unsupported-parameter check reads
@@ -522,7 +527,7 @@ fn provider_error_is_output_limit_exceeded(
             "/response/error/message",
         ],
     )
-    .any(|text| provider_error_text_is_output_limit_exceeded(&text))
+    .any(|text| provider_error_text_is_output_limit_message(&text))
 }
 
 /// Iterates the classifier inputs for one provider failure in documented order.
@@ -591,6 +596,29 @@ fn provider_error_text_is_context_limit_exceeded(text: &str) -> bool {
         || lower.contains("request too large for the model")
 }
 
+/// Distinguishes output exhaustion from input-overflow parameter advice.
+///
+/// Only unambiguous input diagnoses suppress bare parameter-name inference.
+/// Broad references to a context window or its maximum length can also describe
+/// output-budget validation, so those references alone must not suppress it.
+/// Explicit output-limit wording still wins, and structured category fields use
+/// the separate predicate below without this message-only refinement.
+fn provider_error_text_is_output_limit_message(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let input_overflow = lower.contains("context length exceeded")
+        || lower.contains("input is too large")
+        || lower.contains("input too large")
+        || lower.contains("too many input tokens")
+        || lower.contains("prompt is too long")
+        || lower.contains("request too large for the model");
+    let explicit_output = lower.contains("maximum output tokens")
+        || lower.contains("output token limit")
+        || lower.contains("output tokens limit")
+        || lower.contains("response output limit");
+    provider_error_text_is_output_limit_exceeded(text) && (!input_overflow || explicit_output)
+}
+
+/// Recognizes output markers in authoritative metadata or fallback text.
 fn provider_error_text_is_output_limit_exceeded(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     lower.contains("max_output_tokens")
@@ -921,6 +949,62 @@ mod tests {
         }
     }
 
+    /// Missing-code HTTP rejections must distinguish an input overflow from a
+    /// suggested output-budget adjustment. Exercise supported message locations
+    /// with a withheld display message as well as the text-only fallback so the
+    /// result does not depend on incidental display shaping or parameter names.
+    #[test]
+    fn input_overflow_with_output_parameter_advice_remains_context_limit() {
+        for parameter in ["max_tokens", "max_output_tokens"] {
+            let message = format!(
+                "Maximum context length exceeded: input is too large; reduce the messages or {parameter}."
+            );
+            let payloads = [
+                serde_json::json!({"status_code":400,"error":{"type":"invalid_request_error","message":message,"param":parameter}}),
+                serde_json::json!({"status_code":400,"body":{"error":{"type":"invalid_request_error","message":message,"param":parameter}}}),
+                serde_json::json!({"status_code":400,"response":{"error":{"message":message}}}),
+                serde_json::json!({"status_code":400,"message":message}),
+                serde_json::json!({"status_code":400,"body":{"message":message}}),
+            ];
+            for payload in payloads {
+                let payload = payload.to_string();
+                for display in ["[REDACTED]", message.as_str()] {
+                    assert_eq!(
+                        classify_provider_error_retry(
+                            ProviderErrorKind::InvalidState,
+                            display,
+                            Some(&payload),
+                        ),
+                        ProviderErrorRetryClass::ContextLimit,
+                        "{parameter}: {payload} display={display}"
+                    );
+                }
+            }
+            assert_eq!(
+                classify_provider_error_retry(ProviderErrorKind::InvalidState, &message, None),
+                ProviderErrorRetryClass::ContextLimit,
+            );
+            for diagnosis in [
+                "context length exceeded",
+                "input is too large",
+                "input too large",
+                "too many input tokens",
+                "prompt is too long",
+                "request too large for the model",
+            ] {
+                assert_eq!(
+                    classify_provider_error_retry(
+                        ProviderErrorKind::InvalidState,
+                        &format!("{diagnosis}; reduce {parameter}"),
+                        None,
+                    ),
+                    ProviderErrorRetryClass::ContextLimit,
+                    "{diagnosis}: {parameter}",
+                );
+            }
+        }
+    }
+
     /// Verifies quota and output-budget failures take precedence over broad
     /// context wording, preventing either path from requesting compaction.
     #[test]
@@ -968,6 +1052,48 @@ mod tests {
                 r#"{"status_code":429,"error":{"type":"rate_limit_error"}}"#,
                 ProviderErrorRetryClass::RetryableTransport,
             ),
+            (
+                "explicit output marker overrides input-like advice",
+                "input is too large; reduce max_tokens",
+                r#"{"status_code":400,"error":{"code":"max_tokens","message":"input is too large; reduce max_tokens"}}"#,
+                ProviderErrorRetryClass::OutputLimit,
+            ),
+            (
+                "explicit context marker overrides output marker",
+                "maximum output tokens exceeded",
+                r#"{"status_code":400,"error":{"code":"context_length_exceeded"},"incomplete_details":{"reason":"max_output_tokens"}}"#,
+                ProviderErrorRetryClass::ContextLimit,
+            ),
+            (
+                "explicit rate marker overrides input-like advice",
+                "input is too large; reduce max_tokens",
+                r#"{"status_code":429,"error":{"type":"rate_limit_error","message":"input is too large; reduce max_tokens"}}"#,
+                ProviderErrorRetryClass::RetryableTransport,
+            ),
+            (
+                "maximum context length output validation",
+                "max_tokens exceeds the maximum context length allowed for output",
+                r#"{"status_code":400,"error":{"type":"invalid_request_error"}}"#,
+                ProviderErrorRetryClass::OutputLimit,
+            ),
+            (
+                "specific output wording in mixed text",
+                "input is too large for max_tokens: output token limit reached",
+                r#"{"status_code":400,"error":{"type":"invalid_request_error"}}"#,
+                ProviderErrorRetryClass::OutputLimit,
+            ),
+            (
+                "separate fields do not suppress output evidence globally",
+                "reduce max_tokens",
+                r#"{"status_code":400,"error":{"message":"input is too large"}}"#,
+                ProviderErrorRetryClass::OutputLimit,
+            ),
+            (
+                "unsupported output parameter",
+                "Unsupported parameter: max_tokens",
+                r#"{"status_code":400,"error":{"message":"Unsupported parameter: max_tokens"}}"#,
+                ProviderErrorRetryClass::OutputLimit,
+            ),
         ];
         for (label, message, failure, expected) in cases {
             assert_eq!(
@@ -999,6 +1125,9 @@ mod tests {
                 Some(r#"{"error":{"message":"service temporarily unavailable"}}"#),
                 Some(r#"{"status_code":429,"retry_after":1}"#),
                 Some(r#"{"error":{"message":"you can retry your request"}}"#),
+                Some(
+                    r#"{"status_code":400,"error":{"type":"invalid_request_error","message":"Maximum context length exceeded: input is too large; reduce the messages or max_tokens."}}"#,
+                ),
             ] {
                 assert_eq!(
                     classify_provider_error_retry(kind, message, payload),
