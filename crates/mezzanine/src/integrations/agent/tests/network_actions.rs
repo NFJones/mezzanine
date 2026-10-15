@@ -7,6 +7,8 @@ use super::*;
 use crate::integrations::agent::network::execute_network_action_with_transport_async_with_progress;
 use crate::integrations::http::{HttpCompletion, HttpExchangeResponse};
 
+mod search_transport_contracts;
+
 #[tokio::test]
 /// Characterizes legacy zero/default/hard counts, exact domain conjunction and
 /// absence of a transmitted recency parameter. These are extraction fixtures,
@@ -98,6 +100,9 @@ async fn network_search_legacy_anchor_and_empty_characterization() {
             "No web results were found.",
         ),
         (202, "<html>challenge</html>", "No web results were found."),
+        (200, "<a class=\"result__a\" href=\"javascript:legacy\">Legacy</a>", "1. Legacy\n   javascript:legacy"),
+        (200, "<a class=\"result__a\" href=\"/relative\">Relative</a>", "1. Relative\n   /relative"),
+        (200, "<a class=\"result__a\" href=\"https://user:pass@example.test/\">Credentialed</a>", "1. Credentialed\n   https://user:pass@example.test/"),
     ] {
         let action = AgentAction {
             id: "search-anchors".to_string(),
@@ -170,6 +175,8 @@ async fn network_search_legacy_body_and_final_context_characterization() {
 struct ChunkedAsyncProviderHttpTransport {
     chunks: Vec<Vec<u8>>,
     response: ProviderHttpResponse,
+    completion: HttpCompletion,
+    failure: Option<mez_agent::ProviderHttpError>,
 }
 
 impl AsyncProviderHttpTransport for ChunkedAsyncProviderHttpTransport {
@@ -183,7 +190,12 @@ impl AsyncProviderHttpTransport for ChunkedAsyncProviderHttpTransport {
                 + 'a,
         >,
     > {
-        Box::pin(async move { Ok(self.response.clone()) })
+        Box::pin(async move {
+            match &self.failure {
+                Some(error) => Err(error.clone()),
+                None => Ok(self.response.clone()),
+            }
+        })
     }
 
     fn send_async_with_body_chunks<'a>(
@@ -211,7 +223,7 @@ impl AsyncProviderHttpTransport for ChunkedAsyncProviderHttpTransport {
                 .await
                 .map(|response| HttpExchangeResponse {
                     response,
-                    completion: HttpCompletion::Complete,
+                    completion: self.completion,
                 })
         })
     }
@@ -279,6 +291,8 @@ async fn network_fetch_progress_handles_split_utf8_without_raw_html() {
     };
     let transport = ChunkedAsyncProviderHttpTransport {
         chunks: vec![b"h\xC3".to_vec(), b"\xA9llo".to_vec()],
+        completion: HttpCompletion::Complete,
+        failure: None,
         response: ProviderHttpResponse {
             status_code: 200,
             headers: Default::default(),
@@ -463,6 +477,8 @@ async fn network_search_progress_emits_complete_entries_only() {
             html.as_bytes()[..split].to_vec(),
             html.as_bytes()[split..].to_vec(),
         ],
+        completion: HttpCompletion::Complete,
+        failure: None,
         response: ProviderHttpResponse {
             status_code: 200,
             headers: Default::default(),

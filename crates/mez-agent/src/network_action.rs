@@ -22,16 +22,12 @@ pub struct NetworkActionPlan {
 /// Returns the provider-independent plan for a network-backed MAAP action.
 pub fn network_action_plan(action: &AgentAction) -> Option<NetworkActionPlan> {
     match &action.payload {
-        AgentActionPayload::WebSearch { query, domains, .. } => {
-            let mut full_query = query.to_string();
-            for domain in domains {
-                full_query.push_str(" site:");
-                full_query.push_str(domain);
-            }
-            let url = format!(
-                "https://duckduckgo.com/html/?q={}",
-                urlencoding::encode(&full_query)
-            );
+        AgentActionPayload::WebSearch { query, domains, recency_days, max_results } => {
+            let request = crate::search::SearchRequest {
+                query: query.clone(), domains: domains.clone(),
+                recency_days: *recency_days, max_results: *max_results,
+            };
+            let url = request.legacy_ddg_url();
             Some(NetworkActionPlan {
                 summary: format!("I’ll search the web for `{query}`."),
                 policy_command: format!("curl {}", shell_quote(&url)),
