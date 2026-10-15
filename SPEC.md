@@ -4753,6 +4753,11 @@ submission without an awaited tail flush. Already queued progress is not
 retracted; exact attempt, revision and running-state guards MUST reject it
 after authoritative completion. The final actor completion acknowledgment
 remains mandatory and separate from optional progress.
+The concrete network branch MUST retain the sole pinned transport future;
+the forwarding scheduler may borrow it but MUST NOT extend its lifetime into
+the authoritative completion acknowledgment. Cancelling the owning branch
+MUST drop both network work and provisional forwarding; dropping a borrowed
+scheduler alone is not transport cancellation evidence.
 This foundation alone adds no search profiles, credential CLI, paid dispatch or
 default-selection change. It cannot prevent destination retention of query
 credentials, control external proxy/server logging, detect every transformed

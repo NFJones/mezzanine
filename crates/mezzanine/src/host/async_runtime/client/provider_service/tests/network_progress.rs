@@ -91,10 +91,13 @@ async fn held_ack_case(
     // exposing the runtime-private cancellation implementation to this seam.
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     let worker = async {
+        // Ownership remains inside the cancelled worker, not beside it. A
+        // borrowed scheduler alone cannot retire its caller-owned body future.
+        tokio::pin!(network);
         tokio::select! {
             biased;
             _ = cancel_rx => None,
-            result = drive_external_network_with_progress(network, receiver, submit) => Some(result),
+            result = drive_external_network_with_progress(network.as_mut(), receiver, submit) => Some(result),
         }
     };
     let cancel_after_ingress = async {
@@ -171,18 +174,16 @@ async fn outer_progress_closed_watch_does_not_complete_network() {
         tokio::time::sleep(Duration::from_millis(25)).await;
         complete.send(17).unwrap();
     });
+    let network = std::future::poll_fn(|context| {
+        polls.fetch_add(1, Ordering::SeqCst);
+        Pin::new(&mut completion).poll(context)
+    });
+    tokio::pin!(network);
     let result = tokio::time::timeout(
         Duration::from_secs(1),
-        drive_external_network_with_progress(
-            std::future::poll_fn(|context| {
-                polls.fetch_add(1, Ordering::SeqCst);
-                Pin::new(&mut completion).poll(context)
-            }),
-            receiver,
-            |_, _| async {
-                panic!("closed empty watch must not submit progress");
-            },
-        ),
+        drive_external_network_with_progress(network.as_mut(), receiver, |_, _| async {
+            panic!("closed empty watch must not submit progress");
+        }),
     )
     .await
     .unwrap();
@@ -207,21 +208,23 @@ async fn outer_progress_coalesces_while_one_ingress_is_pending() {
     let mut finish = Some(finish);
     let calls = std::sync::Mutex::new(Vec::new());
     let drops = Arc::new(AtomicUsize::new(0));
-    let result = drive_external_network_with_progress(completion, receiver, |source, revision| {
-        calls.lock().unwrap().push((source, revision));
-        let acknowledgment = acknowledgment.take();
-        let finish = if revision == 2 { finish.take() } else { None };
-        let guard = IngressDrop(drops.clone());
-        async move {
-            let _guard = guard;
-            if let Some(acknowledgment) = acknowledgment {
-                acknowledgment.await.unwrap();
-            } else {
-                finish.unwrap().send(29).unwrap();
-                std::future::pending::<()>().await;
+    tokio::pin!(completion);
+    let result =
+        drive_external_network_with_progress(completion.as_mut(), receiver, |source, revision| {
+            calls.lock().unwrap().push((source, revision));
+            let acknowledgment = acknowledgment.take();
+            let finish = if revision == 2 { finish.take() } else { None };
+            let guard = IngressDrop(drops.clone());
+            async move {
+                let _guard = guard;
+                if let Some(acknowledgment) = acknowledgment {
+                    acknowledgment.await.unwrap();
+                } else {
+                    finish.unwrap().send(29).unwrap();
+                    std::future::pending::<()>().await;
+                }
             }
-        }
-    });
+        });
     let updates = async {
         // The first ingress must be polled before releasing its acknowledgment.
         while calls.lock().unwrap().is_empty() {
@@ -250,10 +253,11 @@ async fn outer_progress_coalesces_while_one_ingress_is_pending() {
 async fn outer_progress_ready_terminal_wins_over_ready_snapshot() {
     let (sender, receiver) = watch::channel(None);
     sender.send_replace(Some("obsolete".into()));
-    let result =
-        drive_external_network_with_progress(std::future::ready(23), receiver, |_, _| async {
-            panic!("terminal result must win over provisional progress");
-        })
-        .await;
+    let network = std::future::ready(23);
+    tokio::pin!(network);
+    let result = drive_external_network_with_progress(network.as_mut(), receiver, |_, _| async {
+        panic!("terminal result must win over provisional progress");
+    })
+    .await;
     assert_eq!(result, 23);
 }

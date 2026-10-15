@@ -26,6 +26,7 @@ use crate::runtime::{
     RuntimeApprovedExternalActionProgress,
 };
 use std::future::Future;
+use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 /// Maximum ordered streaming events buffered between a provider and the actor.
@@ -1042,8 +1043,11 @@ async fn execute_approved_external_action_inner(
             &transport,
             &mut on_progress,
         );
+        // The concrete branch owns/pins transport work exactly once. The
+        // scheduler borrows it; both retire at branch exit before completion.
+        tokio::pin!(network_execution);
         let result = drive_external_network_with_progress(
-            network_execution,
+            network_execution.as_mut(),
             progress_receiver,
             |source, revision| {
                 let mut batch = RuntimeEventBatch::new();
@@ -1087,17 +1091,19 @@ async fn execute_approved_external_action_inner(
 /// Terminal network readiness wins over optional progress and drops a pending
 /// submission without flushing obsolete snapshots. Already queued actor work
 /// still relies on the actor's exact-attempt/revision/Running guards.
+/// The concrete caller must own/pin network work in the same cancellation
+/// scope: dropping this borrowing helper alone does not drop that work. Branch
+/// exit drops the owner before authoritative actor completion is awaited.
 async fn drive_external_network_with_progress<T, Network, Submit, Submission>(
-    network: Network,
+    mut network: Pin<&mut Network>,
     mut progress: watch::Receiver<Option<String>>,
     mut submit: Submit,
 ) -> T
 where
-    Network: Future<Output = T>,
+    Network: Future<Output = T> + ?Sized,
     Submit: FnMut(String, u64) -> Submission,
     Submission: Future,
 {
-    tokio::pin!(network);
     let forward = async {
         let mut revision = 0_u64;
         while progress.changed().await.is_ok() {
