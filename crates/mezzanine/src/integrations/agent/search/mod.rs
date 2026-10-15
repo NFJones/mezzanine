@@ -14,8 +14,8 @@ use mez_agent::{ProviderHttpError, ProviderHttpRequest, ProviderHttpTimeouts};
 use std::{collections::BTreeMap, future::Future, pin::Pin};
 
 mod duckduckgo;
-mod normalization;
-pub use normalization::{NormalizedSearchResult, decode_complete_json, normalize_strict};
+#[cfg(test)]
+mod normalization_tests;
 
 /// Retained legacy exchange facts used by the unchanged MAAP result envelope.
 pub(super) struct SearchExchange {

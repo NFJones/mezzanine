@@ -4,8 +4,8 @@
 //! and serialized JSON are never sliced. No output here authorizes publication,
 //! resolves credentials or establishes a vendor-specific response schema.
 
-use crate::integrations::http::{HttpCompletion, HttpExchangeResponse};
-use mez_agent::search::{SearchError, SearchLimits, SearchResult};
+use super::{SearchError, SearchLimits, SearchResult};
+use crate::http::ProviderHttpResponse;
 
 #[cfg(test)]
 mod tests;
@@ -38,11 +38,14 @@ impl NormalizedSearchResult {
 /// This is NOT a vendor schema decoder, credential scrubber, approval check or
 /// publishable output: callers must normalize and apply their trust boundary.
 /// Truncated JSON is always failure, even when its retained prefix is valid.
+/// `body_complete` MUST come only from locally observed HTTP completion: true
+/// exactly for Complete, false for HeadersOnly, Truncated or StreamDecoded. It
+/// MUST NOT be derived from response headers, JSON claims or caller requests.
 pub fn decode_complete_json(
-    exchange: &HttpExchangeResponse,
+    response: &ProviderHttpResponse,
+    body_complete: bool,
     limits: SearchLimits,
 ) -> Result<SearchResult, SearchError> {
-    let response = &exchange.response;
     match response.status_code {
         202 => return Err(SearchError::Pending),
         401 => return Err(SearchError::Authentication),
@@ -52,7 +55,7 @@ pub fn decode_complete_json(
         200..=299 => {}
         status => return Err(SearchError::Http(status)),
     }
-    if exchange.completion != HttpCompletion::Complete {
+    if !body_complete {
         return Err(SearchError::Incomplete);
     }
     if response.body.len() > limits.transport_bytes() {
@@ -66,9 +69,15 @@ pub fn decode_complete_json(
 /// Titles/excerpts/warnings may be clipped; citations are rejected if oversized.
 /// If metadata alone cannot fit, returns InvalidBounds instead of looping or
 /// emitting partial JSON. This function is NOT used by the legacy DDG path.
-pub fn normalize_strict(
+/// The trusted Rust adapter supplies structural URL validation through its
+/// existing parser: require HTTP(S), a host, empty username and no password.
+/// This is a validation-only dependency, never an I/O/config/auth extension.
+/// Lexical checks here prevent repair/userinfo/control forms but do not replace
+/// that parser. A returned value is valid only under this explicit dependency.
+pub fn normalize_strict_with_url_validator(
     mut result: SearchResult,
     limits: SearchLimits,
+    validate_url: impl Fn(&str) -> Result<(), SearchError>,
 ) -> Result<NormalizedSearchResult, SearchError> {
     result.effective_count = limits.results();
     if result.hits.len() > limits.results() {
@@ -77,6 +86,7 @@ pub fn normalize_strict(
     }
     for hit in &mut result.hits {
         validate_citation(&hit.url)?;
+        validate_url(&hit.url)?;
         result.truncated |= bound_text(&mut hit.title, 4096);
         if let Some(excerpt) = &mut hit.excerpt {
             result.truncated |= bound_text(&mut excerpt.text, 8192);
@@ -161,9 +171,8 @@ fn strict_text(result: &SearchResult) -> String {
     )
 }
 
-/// Uses the existing product URL parser, rejecting parser repair of whitespace,
-/// control bytes, backslashes, missing authorities and any userinfo. Keep the
-/// original complete citation rather than silently canonicalizing/clipping it.
+/// Rejects lexical URL repairs and userinfo before invoking the trusted adapter's
+/// structural parser. Preserves complete citations and uppercase web schemes.
 fn validate_citation(value: &str) -> Result<(), SearchError> {
     if value.is_empty()
         || value.len() > 8192
@@ -173,17 +182,12 @@ fn validate_citation(value: &str) -> Result<(), SearchError> {
     {
         return Err(SearchError::InvalidUrl);
     }
-    let url = reqwest::Url::parse(value).map_err(|_| SearchError::InvalidUrl)?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return Err(SearchError::InvalidUrl);
-    }
-    let Some((_, rest)) = value.split_once("://") else {
+    let Some((scheme, rest)) = value.split_once("://") else {
         return Err(SearchError::InvalidUrl);
     };
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return Err(SearchError::InvalidUrl);
+    }
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.is_empty() || authority.contains('@') {
         return Err(SearchError::InvalidUrl);

@@ -2,11 +2,45 @@
 //! provider wire APIs or external requests. Legacy DDG bypass is tested by the
 //! unchanged network-action characterization suite.
 
-use super::*;
+use crate::integrations::http::{HttpCompletion, HttpExchangeResponse};
 use mez_agent::ProviderHttpResponse;
 use mez_agent::search::{
-    ExcerptProvenance, ReportedSearchUsage, SearchExcerpt, SearchHit, SearchRequest,
+    ExcerptProvenance, NormalizedSearchResult, ReportedSearchUsage, SearchError, SearchExcerpt,
+    SearchHit, SearchLimits, SearchRequest, SearchResult,
 };
+
+/// Exercises the lower contract through the same existing parser future concrete
+/// adapters must use; this callback cannot grant I/O or configuration authority.
+fn normalize_strict(
+    result: SearchResult,
+    limits: SearchLimits,
+) -> Result<NormalizedSearchResult, SearchError> {
+    mez_agent::search::normalize_strict_with_url_validator(result, limits, |value| {
+        let url = reqwest::Url::parse(value).map_err(|_| SearchError::InvalidUrl)?;
+        if matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+        {
+            Ok(())
+        } else {
+            Err(SearchError::InvalidUrl)
+        }
+    })
+}
+
+/// Derives body completeness solely from typed local transport completion, not
+/// untrusted headers or JSON. Every noncomplete local outcome maps to false.
+fn decode_complete_json(
+    exchange: &HttpExchangeResponse,
+    limits: SearchLimits,
+) -> Result<SearchResult, SearchError> {
+    mez_agent::search::decode_complete_json(
+        &exchange.response,
+        exchange.completion == HttpCompletion::Complete,
+        limits,
+    )
+}
 
 /// Makes honest optional-free hits in a stable order.
 fn result() -> SearchResult {
@@ -40,6 +74,9 @@ fn result() -> SearchResult {
 /// parser repairs and clipped URLs are never accepted by the strict contract.
 fn strict_urls_reject_nonweb_userinfo_and_malformed_values() {
     let limits = SearchLimits::strict(None, 50, None).unwrap();
+    let mut uppercase = result();
+    uppercase.hits[0].url = "HTTPS://example.test/a".into();
+    assert!(normalize_strict(uppercase, limits).is_ok());
     for invalid in [
         "file:///a",
         "javascript:alert(1)",
@@ -222,6 +259,7 @@ fn strict_complete_json_rejects_incomplete_and_http_error_cases() {
             HttpCompletion::Complete,
             HttpCompletion::HeadersOnly,
             HttpCompletion::Truncated,
+            HttpCompletion::StreamDecoded,
         ] {
             exchange.completion = completion;
             for body in ["{}".into(), "x".repeat(1024 * 1024 + 1)] {
@@ -233,11 +271,17 @@ fn strict_complete_json_rejects_incomplete_and_http_error_cases() {
         }
     }
     exchange.response.status_code = 200;
-    exchange.completion = HttpCompletion::HeadersOnly;
-    assert!(matches!(
-        decode_complete_json(&exchange, limits),
-        Err(SearchError::Incomplete)
-    ));
+    for completion in [
+        HttpCompletion::HeadersOnly,
+        HttpCompletion::Truncated,
+        HttpCompletion::StreamDecoded,
+    ] {
+        exchange.completion = completion;
+        assert!(matches!(
+            decode_complete_json(&exchange, limits),
+            Err(SearchError::Incomplete)
+        ));
+    }
 }
 
 #[test]

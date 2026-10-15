@@ -10541,8 +10541,10 @@ requirement, and MUST NOT reject a repeat solely because the same URL was
 fetched earlier in the turn.
 
 Search contracts MUST remain transport/configuration/credential-I/O free in
-`mez-agent`. Concrete adapters and normalization belong to product
-`integrations/agent/search`; `network` remains the semantic-action bridge over
+`mez-agent`, including pure bounded normalization and projection. Concrete wire
+adapters and structural URL parsing belong to product `integrations/agent/search`;
+the shared strict normalizer requires the trusted adapter's existing URL parser,
+not a configurable plugin. `network` remains the semantic-action bridge over
 the existing runtime HTTP port. Search plan identities are secret-free effect
 descriptions, NOT approval receipts. Backend/profile/mode, fixed endpoint,
 request/filter digest, effective bounds and optional revision/logical credential

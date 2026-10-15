@@ -12,6 +12,10 @@ use std::fmt;
 
 mod filters;
 pub use filters::{HostnameUnion, UtcDate};
+mod normalization;
+pub use normalization::{
+    NormalizedSearchResult, decode_complete_json, normalize_strict_with_url_validator,
+};
 
 #[cfg(test)]
 mod tests;
