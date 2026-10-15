@@ -67,7 +67,7 @@ use mez_agent::{
     agent_output_content_type_is_diff, agent_output_content_type_is_markdown,
 };
 use mez_mux::{
-    copy::{COPY_WRAP_CONTINUATION, encode_copy_source_line_in_group},
+    copy::{encode_copy_source_line_in_group, encode_copy_source_reference_in_group},
     render::{
         markdown_block_copy_lines, markdown_local_continuation_indent_width,
         wrap_rich_text_line_to_width_with_continuation_indent_hard,
@@ -282,6 +282,8 @@ fn peer_message_markdown_rendered_lines(
 }
 
 /// Returns presentation and source-copy rows for one canonical plaintext peer payload.
+/// Each original ordinal has one exact tail anchor and small forward references,
+/// preserving continuation selections and head-pruned source without raw duplication.
 fn peer_message_echo_rendered_lines(
     prefix: &str,
     payload: &str,
@@ -320,19 +322,19 @@ fn peer_message_echo_rendered_lines(
                 copy_text: Some(source.clone()),
                 kind: RichTextLineKind::Normal,
             };
-            wrap_rich_text_line_to_width_with_continuation_indent_hard(
+            let mut wrapped = wrap_rich_text_line_to_width_with_continuation_indent_hard(
                 line,
                 display_width,
                 body_indent,
-            )
-            .into_iter()
-            .enumerate()
-            .map(move |(index, mut line)| {
-                if index > 0 || line.copy_text.as_deref() == Some(COPY_WRAP_CONTINUATION) {
-                    line.copy_text = Some(AGENT_COPY_SKIP_LINE.to_string());
-                }
-                line
-            })
+            );
+            let reference = encode_copy_source_reference_in_group(copy_group, source_index);
+            for line in &mut wrapped {
+                line.copy_text = Some(reference.clone());
+            }
+            if let Some(anchor) = wrapped.last_mut() {
+                anchor.copy_text = Some(source);
+            }
+            wrapped
         })
         .collect()
 }
@@ -2803,8 +2805,8 @@ mod tests {
                 .map(|line| line.copy_text.as_deref())
                 .collect::<Vec<_>>(),
             [
+                Some("\u{1e}mez-copy-source-reference:peer-wrapping/0"),
                 Some("\u{1e}mez-copy-source-line:peer-wrapping/0:alpha beta gamma"),
-                Some("\u{1e}mez-copy-skip-line"),
             ]
         );
     }
