@@ -793,6 +793,27 @@ mod tests {
         assert_eq!(owner.outstanding(), 0);
     }
 
+    /// Final-owner abandonment with a known live child and invalid group must
+    /// return a typed group error internally, still attempt the exact root and
+    /// destroy resources without panicking or forming a cycle. This tests only
+    /// best-effort disposal, deliberately not a successful native wait receipt.
+    #[test]
+    fn last_owner_live_child_invalid_group_does_not_panic_and_attempts_root() {
+        let owner = PaneProcessRetirementOwner::default();
+        let weak = Arc::downgrade(&owner.inner);
+        let state = Arc::new(ChildState::default());
+        drop(
+            owner
+                .reserve()
+                .unwrap()
+                .attach(Box::new(ControlledChild(state.clone())), Some(-1)),
+        );
+        drop(owner);
+        assert!(weak.upgrade().is_none());
+        assert_eq!(state.kills.load(Ordering::SeqCst), 1);
+        assert_eq!(state.drops.load(Ordering::SeqCst), 1);
+    }
+
     /// Poll failure is not evidence authorizing numeric group/root signaling.
     /// Final-owner disposal is explicitly unproven and must not panic or cycle.
     #[test]
