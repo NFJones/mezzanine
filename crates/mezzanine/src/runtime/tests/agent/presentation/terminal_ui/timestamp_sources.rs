@@ -470,8 +470,18 @@ fn runtime_log_timestamps_off_raw_literal_source_survives_toggle() {
         replace_timestamp_settings(&mut service, enabled, 80, "");
         let mut copy = CopyMode::from_screen(service.agent_pane_screen("%1").unwrap(), 40).unwrap();
         copy.set_agent_surface(true);
+        let canonical = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_styled_content_lines();
         let rows = (0..copy.line_count())
-            .filter(|row| copy.copy_source(*row).is_some())
+            .filter(|row| {
+                copy.copy_source(*row).is_some()
+                    || (!enabled
+                        && canonical
+                            .get(*row)
+                            .is_some_and(|line| line.copy_source.is_some()))
+            })
             .collect::<Vec<_>>();
         assert!(!rows.is_empty());
         let first = rows[0];
