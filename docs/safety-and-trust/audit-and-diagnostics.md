@@ -80,6 +80,24 @@ never deliberately put secrets into commands, configuration values, or reports.
 Private permissions do not protect against other processes running as the same
 account.
 
+The shared HTTP transport omits request/response payloads from Debug and emits
+local categorical errors rather than URL-bearing reqwest/source chains. The
+authenticated-search foundation additionally withholds raw response headers,
+request IDs and error bodies, and rejects known credential echoes (raw, once
+percent/form encoded, or JSON decoded) before returning search JSON. Unrelated
+invalid percent bytes do not defeat that known-value check. These are source
+hardening guarantees, not evidence that a private key was previously leaked.
+
+This is not universal data-loss prevention. Arbitrarily transformed, nested
+encoding, partial or unrelated secrets may evade the known-value check. Query
+authentication necessarily exposes the key to the destination's URL handling
+and logs. No local check can erase remote retention or promise that externally
+managed proxies/servers do not log credentials. Search's strict client disables
+ambient proxy discovery; legacy inference/fetch routing is unchanged. This
+transport foundation does not itself activate paid providers or create new
+audit/approval/CLI routes. Future adapters must keep credential resolution after
+authorization and never publish their private wire request.
+
 Shell sandbox records describe the actual execution boundary, enforcement,
 network mode, and reason. A sandbox backend name requires a compiled plan;
 configured intent alone is insufficient. Sandboxed records carry bounded,

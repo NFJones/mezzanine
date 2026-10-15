@@ -26,6 +26,7 @@ use crate::runtime::{
     RuntimeApprovedExternalActionProgress,
 };
 use std::future::Future;
+use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 /// Maximum ordered streaming events buffered between a provider and the actor.
@@ -1032,7 +1033,7 @@ async fn execute_approved_external_action_inner(
         (result, Some((server_id, transport)))
     } else {
         let transport = ReqwestProviderHttpTransport;
-        let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
+        let (progress_sender, progress_receiver) = tokio::sync::watch::channel(None);
         let mut on_progress = move |source| {
             let _ = progress_sender.send(Some(source));
         };
@@ -1042,54 +1043,32 @@ async fn execute_approved_external_action_inner(
             &transport,
             &mut on_progress,
         );
+        // The concrete branch owns/pins transport work exactly once. The
+        // scheduler borrows it; both retire at branch exit before completion.
         tokio::pin!(network_execution);
-        let mut revision = 0_u64;
-        let result = loop {
-            tokio::select! {
-                result = &mut network_execution => break result,
-                changed = progress_receiver.changed() => {
-                    if changed.is_err() {
-                        continue;
-                    }
-                    let Some(source) = progress_receiver.borrow_and_update().clone() else {
-                        continue;
-                    };
-                    revision = revision.saturating_add(1);
-                    let mut batch = RuntimeEventBatch::new();
-                    batch.push(RuntimeEvent::ApprovedExternalActionProgress(
-                        RuntimeApprovedExternalActionProgress {
-                            presentation: mez_agent::ActionPresentationProgress::new(
-                                turn_id.clone(),
-                                action_id.clone(),
-                                mez_agent::ActionPresentationExecutionIdentity::Attempt(attempt.clone()),
-                                revision,
-                                mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody,
-                                source,
+        let result = drive_external_network_with_progress(
+            network_execution.as_mut(),
+            progress_receiver,
+            |source, revision| {
+                let mut batch = RuntimeEventBatch::new();
+                batch.push(RuntimeEvent::ApprovedExternalActionProgress(
+                    RuntimeApprovedExternalActionProgress {
+                        presentation: mez_agent::ActionPresentationProgress::new(
+                            turn_id.clone(),
+                            action_id.clone(),
+                            mez_agent::ActionPresentationExecutionIdentity::Attempt(
+                                attempt.clone(),
                             ),
-                        },
-                    ));
-                    let _ = handle.submit_runtime_events(batch).await;
-                }
-            }
-        };
-        let final_source = { progress_receiver.borrow_and_update().clone() };
-        if let Some(source) = final_source {
-            revision = revision.saturating_add(1);
-            let mut batch = RuntimeEventBatch::new();
-            batch.push(RuntimeEvent::ApprovedExternalActionProgress(
-                RuntimeApprovedExternalActionProgress {
-                    presentation: mez_agent::ActionPresentationProgress::new(
-                        turn_id.clone(),
-                        action_id.clone(),
-                        mez_agent::ActionPresentationExecutionIdentity::Attempt(attempt.clone()),
-                        revision,
-                        mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody,
-                        source,
-                    ),
-                },
-            ));
-            let _ = handle.submit_runtime_events(batch).await;
-        }
+                            revision,
+                            mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody,
+                            source,
+                        ),
+                    },
+                ));
+                handle.submit_runtime_events(batch)
+            },
+        )
+        .await;
         (result, None)
     };
     handle
@@ -1102,6 +1081,48 @@ async fn execute_approved_external_action_inner(
         })
         .await?;
     Ok(None)
+}
+
+/// Drives only approved-network execution and its provisional watch snapshots.
+/// The submission closure owns actor ingress; the network result retains sole
+/// outcome authority. One scoped forwarder awaits at most one acknowledgment;
+/// the watch retains only the latest cumulative source while that ingress is
+/// pending. No watch borrow survives an await and no detached task is spawned.
+/// Terminal network readiness wins over optional progress and drops a pending
+/// submission without flushing obsolete snapshots. Already queued actor work
+/// still relies on the actor's exact-attempt/revision/Running guards.
+/// The concrete caller must own/pin network work in the same cancellation
+/// scope: dropping this borrowing helper alone does not drop that work. Branch
+/// exit drops the owner before authoritative actor completion is awaited.
+async fn drive_external_network_with_progress<T, Network, Submit, Submission>(
+    mut network: Pin<&mut Network>,
+    mut progress: watch::Receiver<Option<String>>,
+    mut submit: Submit,
+) -> T
+where
+    Network: Future<Output = T> + ?Sized,
+    Submit: FnMut(String, u64) -> Submission,
+    Submission: Future,
+{
+    let forward = async {
+        let mut revision = 0_u64;
+        while progress.changed().await.is_ok() {
+            let source = { progress.borrow_and_update().clone() };
+            let Some(source) = source else {
+                continue;
+            };
+            revision = revision.saturating_add(1);
+            let _ = submit(source, revision).await;
+        }
+    };
+    tokio::pin!(forward);
+    tokio::select! {
+        biased;
+        result = &mut network => result,
+        // A closed watch parks forwarding permanently; it cannot manufacture
+        // completion or repeatedly wake an otherwise pending network future.
+        () = &mut forward => network.await,
+    }
 }
 
 /// Runs one provider request while honoring turn cancellation.
@@ -2349,6 +2370,7 @@ mod tests {
     use super::*;
 
     mod incomplete;
+    mod network_progress;
 
     /// A paid cutoff followed by success, another cutoff or ordinary failure
     /// retains every reported counter through worker events and exact auxiliary

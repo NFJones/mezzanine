@@ -1061,6 +1061,23 @@ async fn runtime_deferred_fetch_http_failure_exhausts_correction_budget() {
         "network request returned HTTP 404",
     )
     .unwrap();
+    // A queued ingress request can outlive its worker future. Exact live
+    // progress is provisional; authoritative failure must retire its claim.
+    let mut delayed = crate::runtime::RuntimeApprovedExternalActionProgress {
+        presentation: mez_agent::ActionPresentationProgress::new(
+            turn.turn_id.clone(),
+            action.id.clone(),
+            mez_agent::ActionPresentationExecutionIdentity::Attempt(dispatch.attempt.clone()),
+            1,
+            mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody,
+            "provisional-network-source",
+        ),
+    };
+    assert!(
+        service
+            .apply_approved_external_action_progress(delayed.clone())
+            .unwrap()
+    );
     let key =
         mez_agent::outcome::runtime_failure_feedback_attempt_key_for_result(&turn.turn_id, &failed);
     service.set_agent_action_failure_retry_limit(1);
@@ -1087,6 +1104,12 @@ async fn runtime_deferred_fetch_http_failure_exhausts_correction_budget() {
             .turns()
             .iter()
             .any(|row| row.turn_id == turn.turn_id && row.state == AgentTurnState::Failed)
+    );
+    delayed.presentation.revision = 2;
+    assert!(
+        !service
+            .apply_approved_external_action_progress(delayed)
+            .unwrap()
     );
     service.terminate_all_pane_processes().unwrap();
 }

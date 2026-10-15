@@ -47,6 +47,10 @@ Agent logs can optionally show captured UTC occurrence times with bounded
 fixed-width clock formats, without changing copied or model-facing content.
 Timestamps default off; see [terminal appearance](docs/configuration/appearance-and-terminal.md).
 
+Shared HTTP execution keeps wire payloads out of transport diagnostics. The
+[authenticated-search foundation](docs/reference-manual/agent-actions.md#http-execution-and-authenticated-search-foundation)
+does not activate paid search or change the default backend.
+
 ## Why Mezzanine?
 
 - **A real multiplexer, not an agent wrapper:** persistent windows and panes,

@@ -4733,6 +4733,69 @@ phase so retry and user diagnostics can distinguish connection, first-byte,
 stream-stall, and total-budget failures. Cancelling or timing out an exchange
 MUST drop the in-flight request/body future so the provider slot can be
 released.
+Shared HTTP request/response Debug MUST omit URLs, headers and bodies. Transport
+errors MUST use bounded local categories and numeric status, never reqwest
+Display text, nested source chains, remote error bodies or reflected headers.
+Ordinary body completion/truncation MUST be local typed metadata, never a peer
+`x-mez-*` header. Only explicit inference response mode MAY interpret SSE;
+ordinary search JSON MUST remain ordinary even with event-stream content type.
+Complete bodies MUST use strict UTF-8. A locally truncated ordinary text prefix
+MAY drop an incomplete final scalar, but MUST reject invalid interior bytes.
+Incomplete or oversized JSON and capped nonterminal inference SSE MUST fail,
+not become empty results or successful completion.
+
+The authenticated-search HTTP foundation for Brave, Tavily, Exa and SerpApi MUST
+reuse this bounded pooled exchange. Search endpoints and credential placement
+MUST be code-owned: verified HTTPS, no redirects, no ambient proxy discovery,
+and no production insecure/base-URL override. Every variable client-construction
+policy dimension MUST be part of the pool key. These search-only restrictions
+MUST NOT silently change inference, ordinary fetch or default DuckDuckGo routing.
+Credentials MUST be resolved after authorization, remain separate from approved
+descriptions, and be attached only at the concrete send boundary as endpoint-owned
+Bearer/header/query auth; SerpApi uses `api_key` query authentication. There MUST
+be no transport retry/fallback or implicit paid-backend activation.
+
+Search output MUST pass complete JSON validation and known-credential canary
+suppression before any result/progress publication or downstream fetch. Known
+raw, once percent/form-encoded and JSON-decoded credential echoes MUST fail
+closed, including reflected result URLs. Remote request IDs, error tags and
+headers MUST NOT be exposed as unrestricted diagnostics.
+Search-local errors MUST retain bounded numeric status and distinguish invalid
+inputs, authentication, forbidden, payment/quota (402), throttling (429),
+local phase timeout, transport interruption, other provider status, malformed
+encoding/JSON, accepted/pending (202), oversize and credential suppression.
+HTTP 429 alone MUST NOT be interpreted as proven quota exhaustion. Cancellation
+MUST drop the scoped future without fabricating a result or remote no-effect
+proof. These classifications MUST NOT alter inference retries or authorize
+search retry/fallback; remote error bodies, tags and request IDs remain omitted.
+Search non-success or pending status MUST be settled from numeric headers
+without reading the irrelevant error body. Local headers-only metadata MUST
+NOT claim body EOF and MUST NOT satisfy successful JSON completion. Malformed,
+compressed, oversized or unfinished error bodies MUST NOT erase known status.
+The caller's absolute deadline MUST bound send/body work and gate validated
+output; dropping the future MUST cancel its scoped work.
+Ordinary progress MUST use bounded tracked
+forwarding so a slow observer cannot block body draining or extend deadlines;
+only a contiguous prefix MAY be published, with final results authoritative.
+Approved-network actor forwarding MUST retain at most one in-flight provisional
+submission and one latest cumulative watch snapshot. A closed progress watch
+MUST park without polling a pending network future in a loop. Ready terminal
+network output MUST win over provisional forwarding, dropping its scoped
+submission without an awaited tail flush. Already queued progress is not
+retracted; exact attempt, revision and running-state guards MUST reject it
+after authoritative completion. The final actor completion acknowledgment
+remains mandatory and separate from optional progress.
+The concrete network branch MUST retain the sole pinned transport future;
+the forwarding scheduler may borrow it but MUST NOT extend its lifetime into
+the authoritative completion acknowledgment. Cancelling the owning branch
+MUST drop both network work and provisional forwarding; dropping a borrowed
+scheduler alone is not transport cancellation evidence.
+This foundation alone adds no search profiles, credential CLI, paid dispatch or
+default-selection change. It cannot prevent destination retention of query
+credentials, control external proxy/server logging, detect every transformed
+secret echo, or preempt bounded synchronous JSON parsing; expired validation
+MUST NOT publish a successful result.
+
 At all times, a running agent turn MUST have at least one observable runtime
 progress path: pending provider dispatch, claimed provider worker, live shell
 transaction or readiness probe, focused-shell hook continuation, approval/user

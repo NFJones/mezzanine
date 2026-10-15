@@ -48,6 +48,7 @@ pub mod provider;
 pub mod slash;
 /// Exposes product-friendly subagent presentation names.
 pub mod subagent;
+use crate::integrations::http::AsyncProviderHttpTransport;
 use context::assemble_model_request;
 #[cfg(test)]
 use mez_agent::TranscriptEntry;
@@ -56,9 +57,9 @@ use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel,
     AgentShellStore, AgentShellVisibility, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
     AllowedActionSet, ContextSourceKind, MaapBatch, McpExecutionRequest, ModelInteractionKind,
-    ModelMessage, ModelMessageRole, ModelRequest, ProviderHttpRequest, ProviderHttpResponse,
-    TranscriptPersistence, agent_shell_help_display, agent_shell_mcp_display,
-    agent_shell_permissions_display, agent_shell_status_display,
+    ModelMessage, ModelMessageRole, ModelRequest, ProviderHttpRequest, TranscriptPersistence,
+    agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
+    agent_shell_status_display,
 };
 #[cfg(test)]
 use mez_agent::{
@@ -67,8 +68,8 @@ use mez_agent::{
 };
 #[cfg(test)]
 use mez_agent::{ShellTransaction, ShellTransactionOutputTransport};
+use provider::AsyncModelProvider;
 use provider::provider_error_retry_class;
-use provider::{AsyncModelProvider, AsyncProviderHttpTransport};
 
 /// Exposes the tests module boundary.
 ///

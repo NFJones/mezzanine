@@ -914,7 +914,7 @@ mod tests {
             Some("http://localhost:1234/v1"),
             &options,
             120_000,
-            crate::integrations::agent::provider::ReqwestProviderHttpTransport,
+            crate::integrations::http::ReqwestProviderHttpTransport,
         )
         .unwrap();
         let request = mez_agent::ModelRequest {

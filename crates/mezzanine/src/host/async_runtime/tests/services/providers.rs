@@ -5,6 +5,7 @@ use crate::host::async_runtime::run_async_agent_command_service;
 
 mod auth_refresh;
 mod compaction;
+mod network_cancellation;
 mod patch_recovery;
 
 /// Verifies async agent provider service polls runtime queue.
