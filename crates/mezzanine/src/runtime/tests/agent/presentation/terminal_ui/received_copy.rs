@@ -67,7 +67,7 @@ fn runtime_received_source_copy_recovers_continuation_and_pruned_tail() {
             );
             let identity = "peer-message recipient=agent-%1 sequence=1 id=turn:tail:copy";
             let payload = format!(
-                "{} tail:雪%3A\u{1e}mez-copy-source-line:literal/0:raw tailanchortoken123456",
+                "{} tail:雪%3A\u{1e}mez-copy-source-line:literal/0:raw tailtoken123",
                 "long wrapped source ".repeat(12)
             );
             service
