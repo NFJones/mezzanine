@@ -362,7 +362,8 @@ pub struct SearchSourceDate {
 }
 
 /// Ordered hit shared by text and JSON projections. Legacy DDG allows old
-/// permissive links; future paths must run the strict product normalizer first.
+/// permissive links; future paths must run shared strict normalization with the
+/// trusted adapter's structural URL validator first.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SearchHit {
