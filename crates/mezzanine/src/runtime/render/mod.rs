@@ -54,6 +54,11 @@ const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
 /// How long the copied-word highlight remains visible after a double click.
 const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 
+mod streaming_projection_outcome;
+pub(crate) use streaming_projection_outcome::{
+    RuntimeStreamingSayProjectionApplyOutcome, RuntimeStreamingSayProjectionRejection,
+};
+
 /// Exact client and pane generations used to validate one rendered primary view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeClientRenderIdentity {
@@ -941,33 +946,6 @@ struct RuntimePendingFinalSayPreview {
     installed_lineage: u64,
     /// Complete screen without the final component, ready for an atomic handoff.
     without_final_screen: std::sync::Arc<TerminalScreen>,
-}
-
-/// Acceptance of one fenced streaming projection, separate from redraw intent.
-///
-/// An unchanged candidate still commits reconciliation metadata. Rejection
-/// commits neither metadata nor screen state; only a changed acceptance needs
-/// physical output. No variant authorizes message delivery or action replay.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuntimeStreamingSayProjectionApplyOutcome {
-    /// Captured ownership, lineage, geometry or rendering policy is no longer current.
-    Rejected,
-    /// All fences passed and metadata advanced without replacing the screen.
-    AcceptedUnchanged,
-    /// All fences passed and the new screen was installed atomically.
-    AcceptedChanged,
-}
-
-impl RuntimeStreamingSayProjectionApplyOutcome {
-    /// Reports acceptance, including metadata-only reconciliation of an unchanged screen.
-    pub(crate) fn is_accepted(self) -> bool {
-        !matches!(self, Self::Rejected)
-    }
-
-    /// Reports whether the accepted result replaced the screen and needs redraw.
-    pub(crate) fn screen_changed(self) -> bool {
-        matches!(self, Self::AcceptedChanged)
-    }
 }
 
 /// Non-source inputs that determine one streaming projection generation.

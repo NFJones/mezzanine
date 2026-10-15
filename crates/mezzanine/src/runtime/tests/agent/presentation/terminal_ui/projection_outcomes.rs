@@ -6,6 +6,21 @@
 
 use super::*;
 use crate::runtime::render::RuntimeStreamingSayProjectionApplyOutcome as Outcome;
+use crate::runtime::render::RuntimeStreamingSayProjectionRejection as Rejection;
+
+/// A rejected current-screen candidate must identify the exact failed fence,
+/// not only a generic false/rejected result. The diagnostic contains no source
+/// text, peer payload or opaque owner identities.
+#[test]
+fn runtime_streaming_projection_rejection_retains_source_revision_reason() {
+    let (mut service, work, _) = current_outbound_noop_work();
+    let mut candidate = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    candidate.revision += 1;
+    let outcome = service
+        .apply_agent_streaming_say_projection_outcome(candidate)
+        .unwrap();
+    assert_eq!(format!("{outcome:?}"), "Rejected(SourceRevision)");
+}
 
 /// Builds a real current metadata-dirty outbound projection whose complete
 /// screen is already installed after an admitted height-only resize.
@@ -139,11 +154,16 @@ fn runtime_streaming_projection_outcomes_distinguish_noop_from_redraw() {
 #[test]
 fn runtime_streaming_projection_outcomes_reject_unsafe_identical_work() {
     for case in [
+        "missing-owner",
+        "retired-layout",
         "turn",
         "response",
         "conversation",
         "revision",
         "thinking",
+        "shell",
+        "theme",
+        "log-frame",
         "columns",
         "frame",
         "table",
@@ -158,11 +178,38 @@ fn runtime_streaming_projection_outcomes_reject_unsafe_identical_work() {
         let mut candidate =
             RuntimeSessionService::build_agent_streaming_say_projection(work.clone()).unwrap();
         match case {
+            "missing-owner" => {
+                service
+                    .discard_agent_streaming_say_presentation("%1", Some("outcome-turn"))
+                    .unwrap();
+            }
+            "retired-layout" => {
+                service
+                    .append_agent_status_text_to_terminal_buffer(
+                        "%1",
+                        "layout retired by durable status",
+                    )
+                    .unwrap();
+            }
             "turn" => candidate.turn_id.push_str("-stale"),
             "response" => candidate.response_index += 1,
             "conversation" => candidate.conversation_id.push_str("-stale"),
             "revision" => candidate.revision += 1,
             "thinking" => candidate.thinking_enabled = !candidate.thinking_enabled,
+            "shell" => {
+                candidate.shell_classification =
+                    if candidate.shell_classification == mez_agent::ShellClassification::Bash {
+                        mez_agent::ShellClassification::Fish
+                    } else {
+                        mez_agent::ShellClassification::Bash
+                    };
+            }
+            "theme" => candidate.ui_theme.name.push_str("-stale"),
+            "log-frame" => {
+                let (mut policy, rendition) = candidate.screen.log_frame_settings();
+                policy.timestamps = !policy.timestamps;
+                candidate.screen.set_log_frame_settings(policy, rendition);
+            }
             "columns" => candidate.presentation_columns += 1,
             "frame" => candidate.frame_width += 1,
             "table" => candidate.table_width += 1,
@@ -199,13 +246,46 @@ fn runtime_streaming_projection_outcomes_reject_unsafe_identical_work() {
             .take_agent_streaming_say_projection_work("%1", "outcome-turn")
             .unwrap();
         let before = service.runtime_metrics().clone();
+        let expected_reason = match case {
+            "missing-owner" => Rejection::MissingOwner,
+            "retired-layout" | "write" => Rejection::RetiredLayout,
+            "turn" => Rejection::Turn,
+            "response" => Rejection::Response,
+            "conversation" => Rejection::SourceConversation,
+            "revision" | "new-source" => Rejection::SourceRevision,
+            "thinking" => Rejection::Thinking,
+            "shell" => Rejection::ShellClassification,
+            "theme" => Rejection::Theme,
+            "log-frame" => Rejection::LogFrameSettings,
+            "columns" => Rejection::PresentationColumns,
+            "frame" => Rejection::FrameWidth,
+            "table" => Rejection::TableWidth,
+            "captured-size" => Rejection::ScreenSize,
+            "resize" | "settings" | "aba" => Rejection::ScreenLineage,
+            _ => unreachable!("bounded rejection cases"),
+        };
         assert_eq!(
             service
                 .apply_agent_streaming_say_projection_outcome(candidate)
                 .unwrap(),
-            Outcome::Rejected,
+            Outcome::Rejected(expected_reason),
             "{case}"
         );
+        let diagnostic = Outcome::Rejected(expected_reason)
+            .require_accepted("settled outbound preview projection was rejected")
+            .unwrap_err();
+        assert!(
+            diagnostic
+                .message()
+                .contains(&format!("reason={};", expected_reason.code()))
+        );
+        assert!(
+            diagnostic
+                .message()
+                .ends_with(env!("MEZ_OUTBOUND_PROJECTION_SHA256"))
+        );
+        assert!(!diagnostic.message().contains("current outbound source"));
+        assert!(!diagnostic.message().contains("agent:agent-%2"));
         assert!(
             service.agent_pane_screen("%1").unwrap() == &screen,
             "rejection must preserve the entire intervening screen: {case}"

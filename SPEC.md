@@ -14731,6 +14731,19 @@ send or repeat a send, MAAP action, or provider transport to repair display.
 All ownership, source revision, lineage, geometry and rendering-policy fences
 MUST still pass before unchanged-screen acceptance, and rejected work MUST NOT
 overwrite intervening content or commit projection metadata.
+Projection rejection MUST retain the first failed fence as a typed, fixed
+diagnostic category, rather than conflating missing/retired ownership, source
+identity/revision, screen lineage, active conversation, geometry and rendering
+policy. Outbound settlement and resize-replay errors MUST include that category
+without source text, payloads, commands, credentials or opaque owner IDs. These
+errors MUST also include the compiled outbound-projection source SHA-256 exposed
+by `mez --version`. This is a fingerprint of the enumerated projection owners,
+not a whole-executable attestation, Git revision, deployment proof or authority
+to replay effects. A freshly built CLI cannot identify an older running daemon;
+historical errors without a fingerprint or rejection reason remain unattributed.
+Genuine rejected work retains its integrity error; diagnostics MUST NOT relax a
+fence or automatically retry provider requests, actions or messages. Missing
+typed recovery facts MUST remain unknown, never inferred correction counts.
 In normal pane-log mode, canonical
 `text/plain; charset=utf-8` and supported `text/markdown` are
 presentation-eligible; plaintext MUST render literally and Markdown through the

@@ -221,6 +221,9 @@ fn streamed_outbound_noop_case(
         .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
         .unwrap();
     assert_eq!(work.is_some(), visible);
+    let rejection_candidate = work
+        .clone()
+        .map(|work| RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap());
     if let Some(work) = work {
         let candidate = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
         assert!(
@@ -302,6 +305,31 @@ fn streamed_outbound_noop_case(
         metrics.agent_streaming_projection_rejections,
         metrics_before.agent_streaming_projection_rejections
     );
+    // Exercise a real captured display result after production send settlement.
+    // This is deliberately after the unchanged no-op metric assertions above:
+    // a genuine stale result must increment rejection, never replay transport.
+    let settled_messages = service.message_service().snapshot_state();
+    let settled_results = execution.action_results.clone();
+    let settled_screen = service.agent_pane_screen("%1").unwrap().clone();
+    if let Some(stale) = rejection_candidate {
+        let rejected = service
+            .apply_agent_streaming_say_projection_outcome(stale)
+            .unwrap();
+        assert_eq!(
+            rejected,
+            crate::runtime::render::RuntimeStreamingSayProjectionApplyOutcome::Rejected(
+                crate::runtime::render::RuntimeStreamingSayProjectionRejection::MissingOwner
+            )
+        );
+        let error = rejected
+            .require_accepted("settled outbound preview projection was rejected")
+            .unwrap_err();
+        assert!(error.message().contains("reason=missing_owner;"));
+        assert!(!error.message().contains(payload));
+    }
+    assert_eq!(execution.action_results, settled_results);
+    assert_eq!(service.message_service().snapshot_state(), settled_messages);
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &settled_screen);
     let messages = service.message_service().snapshot_state();
     assert_eq!(messages.next_sequence, sequence + 1);
     let receiver_cursor = messages

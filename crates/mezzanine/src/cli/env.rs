@@ -184,7 +184,7 @@ pub(super) enum CliArgvParse {
 #[derive(Debug, Parser)]
 #[command(
     name = "mez",
-    version,
+    version = concat!(env!("CARGO_PKG_VERSION"), " (outbound-projection-sha256=", env!("MEZ_OUTBOUND_PROJECTION_SHA256"), ")"),
     about = "Terminal workspace and agent muxxer.",
     long_about = None,
     disable_help_subcommand = false

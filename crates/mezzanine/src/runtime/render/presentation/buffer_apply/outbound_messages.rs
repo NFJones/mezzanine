@@ -330,14 +330,8 @@ impl RuntimeSessionService {
         }
         if let Some(work) = self.take_agent_streaming_say_projection_work(pane_id, turn_id)? {
             let result = Self::build_agent_streaming_say_projection(work)?;
-            if !self
-                .apply_agent_streaming_say_projection_outcome(result)?
-                .is_accepted()
-            {
-                return Err(MezError::invalid_state(
-                    "settled outbound preview projection was rejected",
-                ));
-            }
+            self.apply_agent_streaming_say_projection_outcome(result)?
+                .require_accepted("settled outbound preview projection was rejected")?;
         }
         self.finalize_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
         Ok(())

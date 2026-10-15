@@ -85,6 +85,35 @@ true`; `/stop`, cancellation, and runtime shutdown remain effective. Repeated
 premature EOF usually indicates an unstable provider, proxy, or network path
 rather than a malformed model response.
 
+## Settled outbound preview projection was rejected
+
+This is a local sender-display settlement error, not by itself an OpenAI API
+failure or evidence that a message was not sent. A send may already have been
+accepted: do not resend it or repeat its action batch to repair the display.
+
+New diagnostics include a fixed `reason=` category and
+`outbound_projection_sha256=` value. The reason identifies the first failed
+ownership, source, screen-lineage, geometry or rendering-policy check; it does
+not contain message content or owner IDs. An accepted unchanged screen is not
+a rejection. Genuine stale results still cannot overwrite newer content.
+
+`mez --version` (also `mez version`) prints the compiled
+`outbound-projection-sha256` fingerprint. It hashes the build script and the
+projection outcome, projection builder/apply and outbound settlement source
+files, with length-delimited paths and bytes. Compare a failure's fingerprint
+with the intended build, but do not mistake a newly invoked CLI for the running
+daemon. This fingerprint is not a Git commit, whole-executable attestation or
+proof of deployment. Do not restart an active session merely to obtain it.
+
+Older builds conflated a successfully accepted identical screen with rejection;
+that mismatch was repaired by explicit accepted-unchanged/changed/rejected
+outcomes. A historical error without a reason or fingerprint cannot distinguish
+that old bug from a genuine later rejection. The original turn-113 runtime
+cannot be identified from its package version alone. Likewise, “MAAP recovery:
+provenance unavailable” means the counts/disposition are unknown, not that the
+correction budget was exhausted. Preserve the original diagnostic before
+upgrading, and avoid sharing private transcripts or message payloads.
+
 ## Project behavior is missing or blocked
 
 Check `mez sandbox trust list` and inspect the project's `.mezzanine` overlay
