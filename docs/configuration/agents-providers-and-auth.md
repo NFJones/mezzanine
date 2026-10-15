@@ -47,6 +47,15 @@ is retained once, including when cancellation occurs during retry backoff.
 Unknown incomplete reasons do not acquire retry eligibility from a failure
 summary, and context/output limits retain their distinct recovery paths.
 
+An input-context rejection can recommend reducing `max_tokens` or
+`max_output_tokens` without being an output cutoff. When no structured category
+is supplied, a recognized input-overflow diagnosis in the same message field
+keeps bounded model-backed context compaction available; the parameter mention
+alone does not select partial-output recovery. Explicit structured categories
+still take precedence, and genuine output-budget validation remains separate
+from input overflow.
+Recovery does not manufacture partial output or replay settled actions.
+
 Profile fields override configured model fields; configured model fields
 override provider discovery; discovery fills gaps ahead of built-in and
 conservative fallbacks. Lists replace lower-precedence lists, while option maps

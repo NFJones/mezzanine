@@ -142,6 +142,8 @@ mod tests {
 
     /// Direct errors and serialized worker envelopes must select the same
     /// recovery under identical captured budgets, without consuming attempts.
+    /// A missing-code input overflow mentioning an output control must compact
+    /// without fabricated partial output; stale and exhausted owners stay shut.
     #[test]
     fn provider_failure_recovery_envelope_parity_and_exhaustion() {
         use ProviderFailureRecoveryDecision as Decision;
@@ -156,6 +158,20 @@ mod tests {
             (
                 "context length exceeded",
                 Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
+                Decision::ContextLimit,
+            ),
+            (
+                "Maximum context length exceeded: input is too large; reduce the messages or max_tokens.",
+                Some(
+                    r#"{"status_code":400,"error":{"type":"invalid_request_error","message":"Maximum context length exceeded: input is too large; reduce the messages or max_tokens.","param":"max_tokens"}}"#,
+                ),
+                Decision::ContextLimit,
+            ),
+            (
+                "[REDACTED]",
+                Some(
+                    r#"{"status_code":400,"body":{"error":{"type":"invalid_request_error","message":"Maximum context length exceeded: input is too large; reduce the messages or max_output_tokens."}}}"#,
+                ),
                 Decision::ContextLimit,
             ),
             (

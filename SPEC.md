@@ -11384,6 +11384,15 @@ identical provider request. This fallback MUST retain complete execution
 groups and protected exact barriers; normal and manual compaction retain their
 configured reservation. Only after bounded replanning finds no viable
 replacement MAY recovery report that no replacement is available.
+Missing-code provider failure messages that diagnose context-length exhaustion,
+oversized input, excessive input tokens, an overlong prompt, or a request too
+large for the model MUST retain context-limit classification when the same
+message field advises reducing `max_tokens` or `max_output_tokens`. A parameter
+name in that advice MUST NOT alone select output-limit recovery, which requires
+typed partial-output evidence. Explicit structured transport, context, and output
+categories retain their precedence; genuine output-budget validation and
+specific output-limit wording MUST NOT be
+reclassified merely because they mention a context window or its maximum length.
 If the provider rejects a request because the input context exceeds a
 provider or model limit, Mezzanine MUST treat that failure as recoverable while
 the turn remains running, MUST NOT ask the provider for a failure-summary
