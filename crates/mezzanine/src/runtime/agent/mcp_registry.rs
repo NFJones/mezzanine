@@ -106,8 +106,9 @@ impl RuntimeSessionService {
                         )?);
                     }
                 };
+                let diagnostic = self.mcp_registry().server_diagnostic(server)?;
                 let structured = serde_json::json!({
-                    "server": mcp_server_record(&summary),
+                    "server": mcp_server_record(&summary, diagnostic),
                 })
                 .to_string();
                 Ok(ActionResult::succeeded(
@@ -139,7 +140,10 @@ fn mcp_directory_record(server: &mez_agent::AgentShellMcpServerSummary) -> serde
 }
 
 /// Serializes safe metadata for one MCP server lookup result.
-fn mcp_server_record(server: &mez_agent::AgentShellMcpServerSummary) -> serde_json::Value {
+fn mcp_server_record(
+    server: &mez_agent::AgentShellMcpServerSummary,
+    diagnostic: mez_agent::McpServerDiagnostic,
+) -> serde_json::Value {
     serde_json::json!({
         "server_id": server.server_id,
         "display_name": server.display_name,
@@ -149,7 +153,8 @@ fn mcp_server_record(server: &mez_agent::AgentShellMcpServerSummary) -> serde_js
         "status": server.status,
         "enabled": server.enabled,
         "retryable": server.retryable,
-        "reason": server.reason,
+        "reason": (diagnostic != mez_agent::McpServerDiagnostic::Available).then(|| diagnostic.reason()),
+        "recovery": diagnostic.recovery(),
         "tools": server.tools.iter().map(|tool| serde_json::json!({
             "name": tool.name,
             "state": tool.state,

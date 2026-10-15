@@ -123,6 +123,10 @@ A known exact configured ID can also be passed directly to `mcp_server_get`:
 prior search or directory history is not a prerequisite. Purpose and usage
 guidance are optional, not access controls. Automatically exposed selections
 retain safe unavailable-name/reason diagnostics instead of silently vanishing.
+Model-facing reasons and recovery guidance are fixed state categories, not raw
+server/transport errors: upstream errors may contain credentials or reflected
+payloads. Inspect detailed operator diagnostics separately; metadata lookup
+does not copy those private errors into the conversation.
 
 The agent uses `mcp_server_search` when it needs to find a configured server,
 `mcp_server_get` to retrieve the selected server's complete tool contracts,

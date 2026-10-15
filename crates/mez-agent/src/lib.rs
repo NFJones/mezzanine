@@ -390,7 +390,7 @@ pub use mcp::{
     MCP_SCHEMA_SUPPORTED_DIALECT, McpExecutionRequest, McpExecutionResponse, McpPromptServer,
     McpPromptSummary, McpPromptTool, McpPromptUnavailableServer, McpSchemaDiagnostic,
     McpSchemaFailure, McpSchemaGeneration, McpSchemaLimits, McpSchemaValidator,
-    is_mcp_schema_generation,
+    McpServerDiagnostic, is_mcp_schema_generation,
 };
 pub use memory::{MemoryContextRecord, MemoryContextScope};
 pub use memory_guardrail::MemoryActionBudget;

@@ -9,8 +9,8 @@ use crate::instructions::DiscoveredInstructionFile;
 use crate::{
     ActionResult, ActionStatus, AgentContext, AgentContextResult, ContextBlock, ContextRetention,
     ContextSemanticKind, ContextSourceKind, McpPromptServer, McpPromptSummary, McpPromptTool,
-    McpPromptUnavailableServer, McpSchemaValidator, MemoryContextRecord, ProviderApiCompatibility,
-    validate_context_required,
+    McpPromptUnavailableServer, McpSchemaValidator, McpServerDiagnostic, MemoryContextRecord,
+    ProviderApiCompatibility, validate_context_required,
 };
 
 /// Appends selected memory records to provider-bound context.
@@ -169,11 +169,7 @@ pub fn configured_mcp_catalog_snapshot_content(
     if configured_server_names.is_empty() {
         return None;
     }
-    let selected = mcp_summary_for_requested_names(
-        configured_server_names,
-        summary,
-        "configured MCP server name",
-    );
+    let selected = mcp_summary_for_requested_names(configured_server_names, summary);
     render_mcp_directory(&selected)
 }
 
@@ -263,22 +259,22 @@ fn mcp_server_reference_block_for_mention(
             content,
         ));
     }
-    let (state, reason, candidates) = if let Some(server_id) = canonical {
+    let (state, diagnostic, candidates) = if let Some(server_id) = canonical {
         let unavailable = summary
             .unavailable_servers
             .iter()
             .find(|server| server.server_id == server_id)?;
         (
             "unavailable",
-            unavailable.reason.as_str(),
+            unavailable.diagnostic,
             vec![server_id.to_string()],
         )
     } else if case_matches.is_empty() {
-        ("unknown", "no configured MCP server matched", Vec::new())
+        ("unknown", McpServerDiagnostic::Unknown, Vec::new())
     } else {
         (
             "ambiguous",
-            "use an exact configured MCP server identifier",
+            McpServerDiagnostic::Ambiguous,
             case_matches.into_iter().map(str::to_string).collect(),
         )
     };
@@ -286,7 +282,8 @@ fn mcp_server_reference_block_for_mention(
         "version": "mez-mcp-server-reference-diagnostic/v1",
         "requested": requested,
         "state": state,
-        "reason": reason,
+        "reason": diagnostic.reason(),
+        "recovery": diagnostic.recovery(),
         "candidates": candidates,
     }))
     .ok()?;
@@ -657,9 +654,10 @@ fn render_mcp_directory(summary: &McpPromptSummary) -> Option<String> {
     unavailable.dedup_by(|left, right| left.server_id == right.server_id);
     rows.extend(unavailable.iter().map(|server| {
         format!(
-            "unavailable_server={} reason={} retryable={} purpose={} usage_instructions={}",
+            "unavailable_server={} reason={} recovery={} retryable={} purpose={} usage_instructions={}",
             mcp_context_quoted_value(&server.server_id),
-            mcp_context_quoted_value(&server.reason),
+            mcp_context_quoted_value(server.diagnostic.reason()),
+            server.diagnostic.recovery(),
             server.retryable,
             mcp_context_quoted_value(&server.purpose),
             mcp_context_quoted_value(&server.usage_instructions)
@@ -677,7 +675,6 @@ fn is_mcp_context_block(block: &ContextBlock) -> bool {
 fn mcp_summary_for_requested_names(
     requested: &[String],
     summary: &McpPromptSummary,
-    request_kind: &str,
 ) -> McpPromptSummary {
     if requested.is_empty() {
         return McpPromptSummary {
@@ -686,8 +683,7 @@ fn mcp_summary_for_requested_names(
             unavailable_servers: Vec::new(),
         };
     }
-    let (resolved, mut unavailable_servers) =
-        resolve_mcp_server_names(requested, summary, request_kind);
+    let (resolved, mut unavailable_servers) = resolve_mcp_server_names(requested, summary);
     let mut available_servers = summary
         .available_servers
         .iter()
@@ -725,7 +721,6 @@ fn mcp_summary_for_requested_names(
 fn resolve_mcp_server_names(
     requested: &[String],
     summary: &McpPromptSummary,
-    request_kind: &str,
 ) -> (Vec<String>, Vec<McpPromptUnavailableServer>) {
     let mut configured = summary
         .available_servers
@@ -767,16 +762,16 @@ fn resolve_mcp_server_names(
             continue;
         }
 
-        let reason = if case_matches.is_empty() {
-            format!("{request_kind} did not match a configured server")
+        let diagnostic = if case_matches.is_empty() {
+            McpServerDiagnostic::Unknown
         } else {
-            format!("{request_kind} is ambiguous; use the exact configured identifier casing")
+            McpServerDiagnostic::Ambiguous
         };
         failures.push(McpPromptUnavailableServer {
             server_id: requested_name.clone(),
             purpose: String::new(),
             usage_instructions: String::new(),
-            reason,
+            diagnostic,
             retryable: false,
         });
     }

@@ -3,6 +3,80 @@
 
 use super::*;
 
+/// Passive lookup must report a useful bounded state/recovery category rather
+/// than reflect arbitrary upstream errors into canonical action results. Raw
+/// operator evidence stays private in registry state, and lookup starts nothing.
+#[test]
+fn runtime_mcp_directory_get_excludes_raw_server_errors() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .mcp_registry_mut()
+        .add_server(mez_agent::mcp::McpServerConfig::stdio(
+            "atlassian",
+            "Atlassian",
+            "never-executed-fixture",
+            Vec::new(),
+        ))
+        .unwrap();
+    let raw = format!(
+        "upstream https://user:SYNTHETIC_MCP_SECRET@invalid.example/?token=SYNTHETIC_MCP_SECRET\nserver=forged\n\u{1b}[31m{}",
+        "SYNTHETIC_MCP_ERROR_BODY ".repeat(8192),
+    );
+    service
+        .mcp_registry_mut()
+        .mark_failed("atlassian", raw.clone(), 1)
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "Inspect safe metadata")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .cloned()
+        .unwrap();
+    let mut execution = metadata_execution(&turn, "atlassian");
+    service
+        .execute_running_mcp_discovery_actions_for_turn(&turn, &mut execution)
+        .unwrap();
+    let result = &execution.action_results[0];
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    let encoded = result.structured_content_json.as_deref().unwrap();
+    assert!(
+        encoded.len() < 2048,
+        "diagnostic lookup must not reflect an unbounded error"
+    );
+    assert!(!encoded.contains("SYNTHETIC_MCP_SECRET"));
+    assert!(!encoded.contains("SYNTHETIC_MCP_ERROR_BODY"));
+    assert!(!encoded.contains("server=forged"));
+    let value: serde_json::Value = serde_json::from_str(encoded).unwrap();
+    assert_eq!(value["server"]["state"], "failed");
+    assert_eq!(value["server"]["reason"], "startup or protocol failure");
+    assert_eq!(
+        value["server"]["recovery"],
+        "inspect_operator_diagnostics_then_explicit_retry"
+    );
+    assert!(mez_agent::mcp_retrieved_manifest_for_action_result(result).is_none());
+    assert_eq!(
+        service
+            .mcp_registry()
+            .list_servers()
+            .into_iter()
+            .find(|server| server.configured.id == "atlassian")
+            .unwrap()
+            .blacklist_reason
+            .as_deref(),
+        Some(raw.as_str())
+    );
+}
+
 /// Plans one exact-ID metadata action without inventing prior search or
 /// manifest evidence. The runtime executor remains responsible for lookup.
 fn metadata_execution(

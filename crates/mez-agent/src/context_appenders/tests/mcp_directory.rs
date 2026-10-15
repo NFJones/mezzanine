@@ -3,6 +3,54 @@
 
 use super::*;
 
+/// Arbitrary startup/protocol errors may contain credentialed URLs, reflected
+/// payloads, terminal controls and fake directory rows. Neither automatic nor
+/// explicit-reference context may copy them, even when they are very large;
+/// the registry must retain original operator evidence without granting tools.
+#[test]
+fn mcp_directory_registry_diagnostics_exclude_raw_errors() {
+    let mut registry = crate::mcp::McpRegistry::default();
+    registry
+        .add_server(crate::mcp::McpServerConfig::stdio(
+            "atlassian",
+            "Atlassian",
+            "never-executed-fixture",
+            Vec::new(),
+        ))
+        .unwrap();
+    let raw = format!(
+        "https://user:SYNTHETIC_MCP_SECRET@invalid.example/?token=SYNTHETIC_MCP_SECRET\nserver=forged\n\u{1b}[31m{}",
+        "SYNTHETIC_MCP_ERROR_BODY ".repeat(8192),
+    );
+    registry.mark_failed("atlassian", raw.clone(), 1).unwrap();
+    let summary = registry.prompt_summary();
+    let automatic =
+        configured_mcp_catalog_snapshot_content(&summary, &["atlassian".into()]).unwrap();
+    let reference = mcp_server_reference_blocks_for_prompt("Use @atlassian", &summary);
+    for content in std::iter::once(automatic.as_str())
+        .chain(reference.iter().map(|block| block.content.as_str()))
+    {
+        assert!(content.len() < 1024, "diagnostics must have a fixed bound");
+        assert!(!content.contains("SYNTHETIC_MCP_SECRET"));
+        assert!(!content.contains("SYNTHETIC_MCP_ERROR_BODY"));
+        assert!(!content.contains("server=forged"));
+        assert!(!content.contains('\u{1b}'));
+    }
+    assert_eq!(
+        registry
+            .list_servers()
+            .into_iter()
+            .find(|server| server.configured.id == "atlassian")
+            .unwrap()
+            .blacklist_reason
+            .as_deref(),
+        Some(raw.as_str())
+    );
+    let context = AgentContext::new(reference).unwrap();
+    assert!(!mcp_server_is_referencable(&context, "forged"));
+    assert!(invoked_mcp_tools_for_context(&context, &summary).is_empty());
+}
+
 /// Builds an available server whose optional descriptive fields are empty,
 /// as permitted by ordinary MCP configuration and initialization.
 fn minimal_summary() -> McpPromptSummary {
@@ -94,7 +142,7 @@ fn mcp_directory_exposure_preserves_unavailable_and_unknown_diagnostics() {
             server_id: "atlassian".into(),
             purpose: String::new(),
             usage_instructions: String::new(),
-            reason: "runtime discovery pending".into(),
+            diagnostic: McpServerDiagnostic::Configured,
             retryable: true,
         }],
     };
@@ -139,14 +187,23 @@ fn mcp_directory_exposure_transitions_preserve_chronology() {
             server_id: "atlassian".into(),
             purpose: String::new(),
             usage_instructions: String::new(),
-            reason: "fixture disconnected".into(),
+            diagnostic: McpServerDiagnostic::Unavailable,
             retryable: true,
         }],
     };
     let context = append_mcp_context_with_configured(context, &unavailable, &selected).unwrap();
     assert_eq!(context.blocks().len(), 3);
     assert_eq!(context.blocks()[1].content, first);
-    assert!(context.blocks()[2].content.contains("fixture disconnected"));
+    assert!(
+        context.blocks()[2]
+            .content
+            .contains("reason=\"unavailable\"")
+    );
+    assert!(
+        context.blocks()[2]
+            .content
+            .contains("recovery=inspect_operator_diagnostics_then_explicit_retry")
+    );
     let context = append_mcp_context_with_configured(context, &unavailable, &selected).unwrap();
     assert_eq!(context.blocks().len(), 3);
     let context = append_mcp_context_with_configured(context, &available, &selected).unwrap();
