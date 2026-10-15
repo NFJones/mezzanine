@@ -317,16 +317,16 @@ impl PaneProcessRetirementDrain {
         for offset in 0..len {
             let index = (self.cursor + offset) % len;
             let slot = &mut state.slots[index];
-            if matches!(slot, Some(ChildSlot::Returned(_))) {
-                if let Some(ChildSlot::Returned(raw)) = slot.take() {
-                    *slot = Some(ChildSlot::Draining);
-                    self.cursor = (index + 1) % len;
-                    return Some(RetainedPaneChild {
-                        raw: Some(raw),
-                        reservation: Some((self.owner.clone(), index)),
-                        status: None,
-                    });
-                }
+            if matches!(slot, Some(ChildSlot::Returned(_)))
+                && let Some(ChildSlot::Returned(raw)) = slot.take()
+            {
+                *slot = Some(ChildSlot::Draining);
+                self.cursor = (index + 1) % len;
+                return Some(RetainedPaneChild {
+                    raw: Some(raw),
+                    reservation: Some((self.owner.clone(), index)),
+                    status: None,
+                });
             }
         }
         None
@@ -451,17 +451,17 @@ impl RetainedPaneChild {
 
     /// Signals the exact owned root, never a replacement found by PID lookup.
     pub fn kill(&mut self) -> io::Result<()> {
-        if self.try_wait()?.is_none() {
-            if let Err(error) = self.raw_mut()?.child.kill() {
-                // An authoritative exact-child wait can win an already-exited
-                // root race; never classify benignness by error text.
-                if let Ok(Some(status)) = self.raw_mut()?.child.try_wait() {
-                    self.record_wait(status);
-                    return Ok(());
-                }
-                self.record_failure("native root signal", &error);
-                return Err(error);
+        if self.try_wait()?.is_none()
+            && let Err(error) = self.raw_mut()?.child.kill()
+        {
+            // An authoritative exact-child wait can win an already-exited
+            // root race; never classify benignness by error text.
+            if let Ok(Some(status)) = self.raw_mut()?.child.try_wait() {
+                self.record_wait(status);
+                return Ok(());
             }
+            self.record_failure("native root signal", &error);
+            return Err(error);
         }
         Ok(())
     }
@@ -555,11 +555,11 @@ impl RetainedPaneChild {
             } else {
                 None
             };
-            if let (Some(signal), Some(group)) = (signal, raw.group) {
-                if let Err(error) = send_signal_to_pane_process_group(group, signal) {
-                    self.record_failure("native group signal", &error);
-                    return Err(error);
-                }
+            if let (Some(signal), Some(group)) = (signal, raw.group)
+                && let Err(error) = send_signal_to_pane_process_group(group, signal)
+            {
+                self.record_failure("native group signal", &error);
+                return Err(error);
             }
         }
         self.try_wait().map_err(Into::into)
@@ -617,10 +617,10 @@ impl RetainedPaneChild {
 impl Drop for RetainedPaneChild {
     /// Returns raw resources to the already allocated exact slot, without I/O.
     fn drop(&mut self) {
-        if let Some((owner, index)) = self.reservation.take() {
-            if let Some(raw) = self.raw.take() {
-                owner.state().slots[index] = Some(ChildSlot::Returned(raw));
-            }
+        if let Some((owner, index)) = self.reservation.take()
+            && let Some(raw) = self.raw.take()
+        {
+            owner.state().slots[index] = Some(ChildSlot::Returned(raw));
         }
     }
 }
