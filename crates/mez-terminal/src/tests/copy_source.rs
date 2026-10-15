@@ -3,6 +3,76 @@
 use crate::*;
 use std::sync::Arc;
 
+/// Explicit opaque carrier overrides repeat through a genuine physical wrap,
+/// including the last anchor subdivision retained after pruning and reflow.
+/// The original constant-continuation setter, empty input and alternate-screen
+/// behavior stay unchanged; neither operation interprets marker-looking bytes.
+#[test]
+fn copy_source_physical_override_repetition_keeps_tail_and_legacy_contract() {
+    let entry = PresentationEntry {
+        id: "physical-owner".into(),
+        occurrence: Default::default(),
+        first_row: true,
+    };
+    let source = TerminalCopySource::new(
+        TerminalCopySourceId::new(&entry, TerminalCopySourceGroup::SourceLine(0)).unwrap(),
+        "raw source",
+    );
+    let mut screen = TerminalScreen::new(TerminalSize::new(8, 6).unwrap(), 8).unwrap();
+    assert!(screen.feed_presentation_with_copy_source(
+        b"abcdefghijklmnopqr\r\n",
+        entry,
+        Some(source.clone())
+    ));
+    let opaque = "\u{1e}opaque:anchor/0:raw source";
+    let mut legacy = screen.clone();
+    legacy.set_recent_normal_copy_texts(&[opaque.into()], "constant-skip");
+    let legacy_rows = legacy.normal_styled_content_lines();
+    let owned = legacy_rows
+        .iter()
+        .filter(|row| row.copy_source.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(owned.len(), 3);
+    assert_eq!(owned[0].copy_text.as_deref(), Some(opaque));
+    assert!(
+        owned[1..]
+            .iter()
+            .all(|row| row.copy_text.as_deref() == Some("constant-skip"))
+    );
+    screen.set_recent_normal_copy_texts_repeating_overrides(&[opaque.into()]);
+    let rows = screen.normal_styled_content_lines();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.copy_text.as_deref() == Some(opaque))
+            .count(),
+        3
+    );
+    screen.set_history_limit(1).unwrap();
+    screen.resize(TerminalSize::new(4, 2).unwrap()).unwrap();
+    let rows = screen.normal_styled_content_lines();
+    let tail = rows
+        .iter()
+        .filter(|row| row.copy_source.is_some())
+        .collect::<Vec<_>>();
+    assert!(!tail.is_empty());
+    assert!(
+        tail.iter()
+            .all(|row| !row.presentation.as_ref().unwrap().first_row)
+    );
+    assert!(
+        tail.iter()
+            .all(|row| row.copy_text.as_deref() == Some(opaque)
+                && Arc::ptr_eq(row.copy_source.as_ref().unwrap(), &source))
+    );
+    let before = screen.clone();
+    screen.set_recent_normal_copy_texts_repeating_overrides(&[]);
+    assert_eq!(screen, before);
+    screen.feed(b"\x1b[?1049h");
+    let alternate = screen.clone();
+    screen.set_recent_normal_copy_texts_repeating_overrides(&["not-installed".into()]);
+    assert_eq!(screen, alternate);
+}
+
 /// A coherent typed row retains its original opaque legacy override through
 /// repeated OFF/ON physical reflow. Neither marker-looking bytes nor source
 /// payloads are interpreted or concatenated, and pruned continuations never

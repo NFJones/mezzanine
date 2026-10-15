@@ -57,17 +57,17 @@ fn assert_tail_source_copy(screen: &TerminalScreen, identity: &str, payload: &st
 #[test]
 fn runtime_received_source_copy_recovers_continuation_and_pruned_tail() {
     for content_type in ["text/plain; charset=utf-8", "text/markdown; charset=utf-8"] {
-        for timestamps in [false, true] {
+        for (timestamps, width) in [(false, 18), (false, 28), (true, 18), (true, 28)] {
             let mut service = test_runtime_service();
             super::timestamp_settings::replace_timestamp_settings(&mut service, timestamps, 28, "");
             set_agent_pane_screen_for_test(
                 &mut service,
                 "%1",
-                TerminalScreen::new(Size::new(28, 12).unwrap(), 300).unwrap(),
+                TerminalScreen::new(Size::new(width, 12).unwrap(), 300).unwrap(),
             );
             let identity = "peer-message recipient=agent-%1 sequence=1 id=turn:tail:copy";
             let payload = format!(
-                "{} tail:雪%3A\u{1e}mez-copy-source-line:literal/0:raw",
+                "{} tail:雪%3A\u{1e}mez-copy-source-line:literal/0:raw tailanchortoken123456",
                 "long wrapped source ".repeat(12)
             );
             service
@@ -80,6 +80,18 @@ fn runtime_received_source_copy_recovers_continuation_and_pruned_tail() {
                 )
                 .unwrap();
             let screen = service.agent_pane_screen("%1").unwrap();
+            if width == 18 && content_type.starts_with("text/plain") {
+                assert!(
+                    screen
+                        .normal_styled_content_lines()
+                        .iter()
+                        .filter_map(|row| row.copy_text.as_deref())
+                        .filter_map(mez_mux::copy::decode_copy_source_line)
+                        .count()
+                        > 1,
+                    "fixture must physically split the logical tail anchor"
+                );
+            }
             let owner = screen
                 .normal_styled_content_lines()
                 .iter()

@@ -1273,11 +1273,18 @@ fn reflow_one_logical_line(
             if (preserve_source_associations
                 && line.presentation.is_some()
                 && line.copy_source.is_none())
-                || has_coherent_copy_source(line)
+                || (has_coherent_copy_source(line)
+                    && line.copy_source.as_ref().is_some_and(|source| {
+                        matches!(
+                            source.id.group(),
+                            crate::TerminalCopySourceGroup::SourceLine(_)
+                        )
+                    }))
             {
                 // Copy payload is opaque to the terminal. Proven structured
-                // owners retain the original override on every reflowed row,
-                // independent of the product's source-consumption policy.
+                // source-line owners retain legacy carrier metadata independent
+                // of consumption policy. Raw groups use their shared typed Arc,
+                // never one full raw override allocation per physical row.
                 current.copy_text = line.copy_text.clone();
             }
             current.presentation = line.presentation.clone().map(|mut entry| {

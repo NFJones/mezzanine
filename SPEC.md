@@ -4334,8 +4334,10 @@ Explicit raw whole-entry and block source declarations MUST take precedence over
 marker-looking authored text even before timestamp framing is first enabled.
 This MUST NOT change the legacy unframed source-line carrier policy or bypass
 immutable source generation and payload-conflict validation.
-Physical reflow MUST retain existing opaque copy overrides on coherent typed
-source-owned continuations even when framing is disabled. Merging those rows
+Physical reflow MUST retain existing opaque source-line carrier overrides on
+coherent typed continuations even when framing is disabled. Raw whole-entry and
+block groups MUST share typed payload ownership without multiplying full raw
+override allocations. Merging those rows
 MUST retain one original override, never concatenate metadata, and conflicting
 entry, occurrence, source generation or payload evidence MUST stay invalidated.
 Received peer source declarations MUST retain original CRLF and trailing blank
@@ -4344,12 +4346,17 @@ the raw slice before each separating LF, with the final ordinal owning the
 complete remaining suffix; copying distinct ordinals joins them with LF.
 Markdown whole-entry declarations retain the complete original payload.
 Wrapped plaintext peer source ordinals with a distinct receiver receipt identity
-MUST retain one exact raw anchor at the group tail and shared-identity references
+MUST retain one logical raw anchor at the group tail and shared-identity references
 on preceding rows. Partial selections
 and head-pruned retained tails MUST resolve that original source without
-replicating payloads, renumbering ordinals or changing unframed SourceLine policy.
+replicating logical source declarations, renumbering ordinals or changing
+unframed SourceLine policy. Physical subdivisions MAY repeat the same encoded
+carrier override, while immutable typed source payload ownership stays shared.
 Label-grouped sender and legacy no-receipt producers MUST retain their existing
 head-anchor/skip metadata layout; display labels are not unique occurrence proof.
+Explicit generated receiver reference plans MUST retain their opaque carrier
+on physical soft wraps, preserving both references and tail anchors. Raw
+whole-entry/block declarations MUST NOT opt into that carrier operation.
 Retained numeric and delimiter-free grouped carrier identities remain opaque:
 consumers MUST NOT percent-decode old identities, guess a later colon boundary,
 or rewrite persisted identities. Source-backed replay regenerates carriers from

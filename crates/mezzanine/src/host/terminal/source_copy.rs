@@ -23,6 +23,9 @@ pub(crate) enum CopySourcePlan<'a> {
     /// Generated encoded source carriers; specialized raw declarations require
     /// their own pre-wrap plan rather than classification of arbitrary strings.
     Declared,
+    /// Explicit receiver anchor/reference rows whose physical continuations
+    /// repeat their opaque carrier, not skip markers. Raw groups never opt in.
+    DeclaredReferences,
     /// Specialized raw block owners declared before word/physical wrapping.
     Blocks(&'a [Arc<TerminalCopySource>]),
     /// A known whole-entry raw producer such as a Markdown peer message.
@@ -80,7 +83,7 @@ pub(crate) fn source_associations(
             return Ok(vec![Some(source); lines.len()]);
         }
         CopySourcePlan::Blocks(blocks) => blocks,
-        CopySourcePlan::Declared => raw_blocks,
+        CopySourcePlan::Declared | CopySourcePlan::DeclaredReferences => raw_blocks,
     };
     if copies.is_empty() {
         return Ok(vec![None; lines.len()]);
@@ -405,10 +408,9 @@ mod tests {
                 format!("{COPY_SOURCE_LINE_PREFIX}receipt-owner/0:conflict"),
             ],
         ] {
-            assert!(
-                source_associations(&entry, &lines, &copies, CopySourcePlan::Declared, &[])
-                    .is_err()
-            );
+            for plan in [CopySourcePlan::Declared, CopySourcePlan::DeclaredReferences] {
+                assert!(source_associations(&entry, &lines, &copies, plan, &[]).is_err());
+            }
         }
     }
 }

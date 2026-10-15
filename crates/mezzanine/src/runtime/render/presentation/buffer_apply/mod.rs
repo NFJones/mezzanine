@@ -959,6 +959,8 @@ impl RuntimeSessionService {
             )),
             if markdown {
                 crate::host::terminal::source_copy::CopySourcePlan::WholeEntry(presentation.payload)
+            } else if presentation.receive_identity.is_some() {
+                crate::host::terminal::source_copy::CopySourcePlan::DeclaredReferences
             } else {
                 crate::host::terminal::source_copy::CopySourcePlan::Declared
             },
@@ -2066,6 +2068,12 @@ impl RuntimeSessionService {
             pane_id,
             mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
         );
+        let reference_continuations = self.has_presentation_boundary(pane_id)
+            && entry.is_valid()
+            && matches!(
+                &copy_plan,
+                crate::host::terminal::source_copy::CopySourcePlan::DeclaredReferences
+            );
         let associations = if self.has_presentation_boundary(pane_id) {
             crate::host::terminal::source_copy::source_associations(
                 &entry,
@@ -2077,6 +2085,21 @@ impl RuntimeSessionService {
         } else {
             vec![None; rendered_lines.len()]
         };
+        if reference_continuations
+            && associations.iter().any(|source| {
+                !source.as_ref().is_some_and(|source| {
+                    source.id.owner() == entry.id
+                        && matches!(
+                            source.id.group(),
+                            mez_terminal::TerminalCopySourceGroup::SourceLine(_)
+                        )
+                })
+            })
+        {
+            return Err(MezError::invalid_state(
+                "receiver reference plan has no aligned source-line ownership",
+            ));
+        }
         let ansi_text = {
             let mut bytes = String::new();
             let cursor = screen.cursor_state();
@@ -2106,7 +2129,11 @@ impl RuntimeSessionService {
                 &ranges,
                 "appending rendered agent lines",
             )?;
-            screen.set_recent_normal_copy_texts(copy_lines, AGENT_COPY_SKIP_LINE);
+            if reference_continuations {
+                screen.set_recent_normal_copy_texts_repeating_overrides(copy_lines);
+            } else {
+                screen.set_recent_normal_copy_texts(copy_lines, AGENT_COPY_SKIP_LINE);
+            }
             bytes
         };
         self.install_agent_shell_preview_write(
