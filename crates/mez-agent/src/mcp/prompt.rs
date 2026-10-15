@@ -37,6 +37,64 @@ pub struct McpPromptServer {
     pub approval_required_tool_count: usize,
 }
 
+/// Code-owned model-facing diagnostic state, never arbitrary transport text.
+/// Raw startup/protocol errors remain in operator-owned registry evidence;
+/// model context receives only these bounded reasons and recovery categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpServerDiagnostic {
+    /// A complete live discovery is available.
+    Available,
+    /// Initial discovery has not run.
+    Configured,
+    /// Discovery is currently in progress.
+    Starting,
+    /// Operator configuration disabled the server.
+    Disabled,
+    /// The transport is not currently available.
+    Unavailable,
+    /// Startup or protocol processing failed.
+    Failed,
+    /// This session requires explicit recovery before reuse.
+    Blacklisted,
+    /// A requested name is not configured.
+    Unknown,
+    /// A requested name needs exact casing to resolve.
+    Ambiguous,
+}
+
+impl McpServerDiagnostic {
+    /// Returns a bounded explanation derived solely from typed state.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Configured => "runtime discovery pending",
+            Self::Starting => "runtime discovery in progress",
+            Self::Disabled => "disabled",
+            Self::Unavailable => "unavailable",
+            Self::Failed => "startup or protocol failure",
+            Self::Blacklisted => "blacklisted for this session",
+            Self::Unknown => "configured MCP server name did not match a configured server",
+            Self::Ambiguous => {
+                "configured MCP server name is ambiguous; use the exact configured identifier casing"
+            }
+        }
+    }
+
+    /// Returns actionable guidance without exposing error bodies or credentials.
+    pub fn recovery(self) -> &'static str {
+        match self {
+            Self::Available => "none",
+            Self::Configured => "inspect_with_list_mcp",
+            Self::Starting => "wait_for_discovery",
+            Self::Disabled => "enable_server_explicitly",
+            Self::Unavailable | Self::Failed | Self::Blacklisted => {
+                "inspect_operator_diagnostics_then_explicit_retry"
+            }
+            Self::Unknown | Self::Ambiguous => "use_exact_configured_id",
+        }
+    }
+}
+
 /// One configured MCP server unavailable to the current agent turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpPromptUnavailableServer {
@@ -46,8 +104,8 @@ pub struct McpPromptUnavailableServer {
     pub purpose: String,
     /// User-authored model usage guidance.
     pub usage_instructions: String,
-    /// Model-safe explanation of why the server is unavailable.
-    pub reason: String,
+    /// Typed state whose reason/recovery projection cannot reflect raw errors.
+    pub diagnostic: McpServerDiagnostic,
     /// Whether a later attempt may make the server available.
     pub retryable: bool,
 }

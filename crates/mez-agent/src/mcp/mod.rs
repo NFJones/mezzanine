@@ -17,7 +17,7 @@ pub use error::{McpError, McpErrorKind, McpResult};
 pub use prompt::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary,
     McpExecutionRequest, McpExecutionResponse, McpPromptServer, McpPromptSummary, McpPromptTool,
-    McpPromptUnavailableServer,
+    McpPromptUnavailableServer, McpServerDiagnostic,
 };
 pub use protocol::{
     McpJsonRpcOperation, build_mcp_default_initialize_request, build_mcp_initialize_request,

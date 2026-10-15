@@ -370,7 +370,15 @@ fn mcp_context_merges_configured_and_explicit_servers_deterministically() {
         !configured.contains("available_tool=GitHub_2/lookup"),
         "{configured}"
     );
-    assert!(!configured.contains("unavailable_server="), "{configured}");
+    assert!(
+        configured.contains("unavailable_server=\"missing\""),
+        "{configured}"
+    );
+    assert!(
+        configured.contains("did not match a configured server"),
+        "{configured}"
+    );
+    assert!(!mcp_server_is_referencable(&context, "missing"));
 }
 
 #[test]
@@ -590,7 +598,7 @@ fn mcp_context_reports_unavailable_server_mentions_without_granting_authority() 
             server_id: "gitlab".to_string(),
             purpose: "GitLab operations".to_string(),
             usage_instructions: "Use for issues.".to_string(),
-            reason: "authentication failed".to_string(),
+            diagnostic: McpServerDiagnostic::Failed,
             retryable: true,
         }],
     };
@@ -606,7 +614,7 @@ fn mcp_context_reports_unavailable_server_mentions_without_granting_authority() 
     assert!(
         context.blocks()[0]
             .content
-            .contains(r#""reason":"authentication failed""#)
+            .contains(r#""reason":"startup or protocol failure""#)
     );
     assert!(!mcp_server_is_referencable(&context, "gitlab"));
     assert!(invoked_mcp_tools_for_context(&context, &summary).is_empty());
@@ -816,7 +824,7 @@ fn mcp_context_omits_integrations_without_explicit_server_invocation() {
                 server_id: "gitlab".to_string(),
                 purpose: "GitLab issue and merge request operations".to_string(),
                 usage_instructions: "Use for GitLab issue and merge request tasks.".to_string(),
-                reason: "authentication failed".to_string(),
+                diagnostic: crate::McpServerDiagnostic::Failed,
                 retryable: true,
             }],
         },

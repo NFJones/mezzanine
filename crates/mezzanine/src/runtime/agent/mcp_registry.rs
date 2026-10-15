@@ -3,6 +3,10 @@
 //! This module executes the fixed read-only `mcp_server_search` and
 //! `mcp_server_get` MAAP actions against the live registry. It returns only
 //! safe server metadata and never starts a transport or grants tool authority.
+//! Exact configured identity is sufficient for passive lookup: prior search,
+//! descriptive prose and transport readiness are not authorization gates.
+//! Only a complete available retrieval can subsequently become manifest evidence;
+//! the separate call executor still validates live schemas and permissions.
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnExecution,
@@ -52,21 +56,7 @@ impl RuntimeSessionService {
                     ),
                 )?;
             }
-            let referencable = match &action.payload {
-                AgentActionPayload::McpServerGet { server } => {
-                    self.agent_turn_contexts()
-                        .get(&turn.turn_id)
-                        .is_some_and(|context| {
-                            mez_agent::mcp_server_is_referencable(context, server)
-                        })
-                        || execution.action_results[..index].iter().any(|result| {
-                            mez_agent::mcp_server_is_referencable_from_action_result(result, server)
-                        })
-                }
-                _ => true,
-            };
-            execution.action_results[index] =
-                self.execute_mcp_discovery_action(turn, &action, referencable)?;
+            execution.action_results[index] = self.execute_mcp_discovery_action(turn, &action)?;
             self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
             executed = executed.saturating_add(1);
         }
@@ -82,7 +72,6 @@ impl RuntimeSessionService {
         &self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
-        referencable: bool,
     ) -> Result<ActionResult> {
         match &action.payload {
             AgentActionPayload::McpServerSearch { query, limit } => {
@@ -104,18 +93,6 @@ impl RuntimeSessionService {
                 ))
             }
             AgentActionPayload::McpServerGet { server } => {
-                if !referencable {
-                    let error = MezError::forbidden(
-                        "MCP server must be returned by mcp_server_search or durable MCP directory context before retrieval",
-                    );
-                    return Ok(ActionResult::failed(
-                        turn,
-                        action,
-                        ActionStatus::Rejected,
-                        runtime_mezzanine_error_code(error.kind()),
-                        error.message().to_string(),
-                    )?);
-                }
                 let summary = match self.mcp_registry().agent_shell_server_summary(server) {
                     Ok(summary) => summary,
                     Err(error) => {
@@ -129,8 +106,9 @@ impl RuntimeSessionService {
                         )?);
                     }
                 };
+                let diagnostic = self.mcp_registry().server_diagnostic(server)?;
                 let structured = serde_json::json!({
-                    "server": mcp_server_record(&summary),
+                    "server": mcp_server_record(&summary, diagnostic),
                 })
                 .to_string();
                 Ok(ActionResult::succeeded(
@@ -162,7 +140,10 @@ fn mcp_directory_record(server: &mez_agent::AgentShellMcpServerSummary) -> serde
 }
 
 /// Serializes safe metadata for one MCP server lookup result.
-fn mcp_server_record(server: &mez_agent::AgentShellMcpServerSummary) -> serde_json::Value {
+fn mcp_server_record(
+    server: &mez_agent::AgentShellMcpServerSummary,
+    diagnostic: mez_agent::McpServerDiagnostic,
+) -> serde_json::Value {
     serde_json::json!({
         "server_id": server.server_id,
         "display_name": server.display_name,
@@ -172,7 +153,8 @@ fn mcp_server_record(server: &mez_agent::AgentShellMcpServerSummary) -> serde_js
         "status": server.status,
         "enabled": server.enabled,
         "retryable": server.retryable,
-        "reason": server.reason,
+        "reason": (diagnostic != mez_agent::McpServerDiagnostic::Available).then(|| diagnostic.reason()),
+        "recovery": diagnostic.recovery(),
         "tools": server.tools.iter().map(|tool| serde_json::json!({
             "name": tool.name,
             "state": tool.state,
