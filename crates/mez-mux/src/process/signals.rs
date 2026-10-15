@@ -39,6 +39,30 @@ pub(super) fn send_signal_to_pane_process_group(
     }
 }
 
+/// Signals a retained exact-child group without the legacy Darwin EPERM
+/// exception. Only typed ESRCH, or EPERM followed by authoritative group
+/// absence, is benign; permission/I/O failures remain unproven errors.
+pub(super) fn send_signal_to_retained_pane_group(group: i32, signal: Signal) -> Result<()> {
+    let pid = Pid::from_raw(group)
+        .filter(|_| group > 0)
+        .ok_or_else(|| MezError::invalid_state("pane process group id is invalid"))?;
+    match kill_process_group(pid, signal) {
+        Ok(()) | Err(Errno::SRCH) => Ok(()),
+        Err(Errno::PERM)
+            if matches!(
+                rustix::process::test_kill_process_group(pid),
+                Err(Errno::SRCH)
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(MezError::io(format!(
+            "native group signal {} failed for owned group {group}: {error}",
+            signal.as_raw()
+        ))),
+    }
+}
+
 /// Runs the signal number from portable name operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

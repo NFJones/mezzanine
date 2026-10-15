@@ -201,6 +201,32 @@ restart interrupts its supervised sessions, pane processes, and agent work.
 Hosted-local checkpoints recover layout/state, not the old live processes;
 remote active leases are not reconstructed after restart.
 
+Native pane cleanup is complete only after the original owned child has been
+waited for and reaped. A sent signal, closed actor channel, cancelled worker or
+disappearing socket is not that acknowledgement. Graceful termination retains
+the original HUP/TERM/KILL budget across worker cancellation; force also targets
+the exact owned root rather than trusting cached foreground-group metadata.
+
+If native cleanup cannot be proved within its deadline, the live host retains
+the exact session generation in cleanup-pending state (reported as stopping).
+Native failure details remain in private runtime diagnostics/captured stderr,
+not public host-status error strings. It is not evicted with terminal history or made
+available for identity reuse. New managed pane, restored-pane and editor child
+admission is fenced while unproven returned cleanup remains; existing sibling
+I/O is not capped or stopped merely to make room for a cleanup record. Review
+the diagnostic and retry the same session stop rather than searching for or
+killing numeric PIDs or repeating user commands.
+
+Rust embedders receive `CliExit` from `mezzanine::run_cli()`, not a bare `u8`.
+Borrow `code()` and `pending_native_children()` while retaining the outcome;
+use `retry_native_cleanup(budget)` inside a caller-owned Tokio runtime for an
+explicit bounded retry. Pending/unknown cleanup forces nonzero without losing
+an original nonzero command code. Cleanup failures remain sticky after retry.
+`Termination::report` and dropping the outcome explicitly abandon retry
+ownership; neither proves OS process exit or native reaping. Final destruction
+can provide only disclosed best-effort signaling/kernel adoption, not a healthy
+shutdown receipt. Help and exact internal-child paths remain dependency-free.
+
 Before a planned restart:
 
 1. Inspect `mez list --all` and `mez lease list --all`; notify attached users.

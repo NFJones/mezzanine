@@ -73,12 +73,23 @@ pub(super) async fn run_host<W: Write>(
     env: CliEnv,
     output_format: CliOutputFormat,
     stdout: &mut W,
+    native: &mut super::native_exit::CliNativeOwnership,
 ) -> Result<()> {
     match args.command {
         HostCliCommand::Serve {
             max_sessions,
             max_live_sessions,
-        } => run_host_serve(env, max_sessions, max_live_sessions, output_format, stdout).await,
+        } => {
+            run_host_serve(
+                env,
+                max_sessions,
+                max_live_sessions,
+                output_format,
+                stdout,
+                native,
+            )
+            .await
+        }
         HostCliCommand::Status => {
             let result = request_host(&env, "host/get", serde_json::json!({})).await?;
             write_json_or_plain(stdout, output_format, &serialize_json(&result)?)
@@ -102,6 +113,7 @@ async fn run_host_serve<W: Write>(
     max_live_sessions_override: Option<usize>,
     output_format: CliOutputFormat,
     stdout: &mut W,
+    native: &mut super::native_exit::CliNativeOwnership,
 ) -> Result<()> {
     let paths = env.config_paths()?;
     let config_path = paths.ensure_default_config()?;
@@ -183,6 +195,7 @@ async fn run_host_serve<W: Write>(
         },
         ownership,
     )?;
+    native.retain_host(server.router().native_cleanup_owner())?;
     if let Some(iroh) = iroh.as_mut() {
         iroh.set_audit_log(server.audit_log_handle());
     }

@@ -8,10 +8,11 @@
 //! remove or overwrite a replacement session with the same identity.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use mez_mux::process::PaneProcessRetirementOwner;
 use tokio::sync::{Notify, watch};
 
 use super::{SessionFactory, SessionFactoryRequest, SessionRuntimeHandle};
@@ -80,6 +81,10 @@ struct SessionSupervisorInner {
     changed: Notify,
     terminal_history_limit: usize,
     runtime_completion_handler: Option<RuntimeCompletionHandler>,
+    /// Final CLI/host cleanup closes admission before collecting native owners.
+    native_cleanup_sealed: AtomicBool,
+    /// One bounded private native receipt survives entry/history removal.
+    native_failure: Mutex<Option<String>>,
     #[cfg(test)]
     start_reservation_probe: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
     #[cfg(test)]
@@ -89,11 +94,17 @@ struct SessionSupervisorInner {
 #[derive(Debug)]
 struct SupervisorEntry {
     generation: u64,
+    /// Exists before factory startup; never stored in evictable terminal history.
+    native: PaneProcessRetirementOwner,
     state: SupervisorEntryState,
 }
 
 #[derive(Debug)]
 enum SupervisorEntryState {
+    /// The actor may be gone, but this exact generation still owns cleanup.
+    CleanupPending {
+        failure: String,
+    },
     Starting {
         cancelled: bool,
     },
@@ -143,6 +154,29 @@ impl Drop for StartupReservationGuard {
     }
 }
 
+/// Marks exact runtime task abandonment even when it is never first-polled.
+struct NativeRuntimeCompletionGuard {
+    inner: Arc<SessionSupervisorInner>,
+    session_id: String,
+    generation: u64,
+    armed: bool,
+}
+
+impl Drop for NativeRuntimeCompletionGuard {
+    /// Retains pending cleanup instead of silently leaving a dead Running entry.
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.inner.finish_runtime(
+                &self.session_id,
+                self.generation,
+                SessionSupervisorState::Failed,
+                None,
+                Some("session runtime task was cancelled before completion".to_string()),
+            );
+        }
+    }
+}
+
 impl Default for SessionSupervisor {
     fn default() -> Self {
         Self::new(DEFAULT_TERMINAL_HISTORY_LIMIT)
@@ -177,6 +211,8 @@ impl SessionSupervisor {
                 changed: Notify::new(),
                 terminal_history_limit,
                 runtime_completion_handler,
+                native_cleanup_sealed: AtomicBool::new(false),
+                native_failure: Mutex::new(None),
                 #[cfg(test)]
                 start_reservation_probe: Mutex::new(None),
                 #[cfg(test)]
@@ -196,8 +232,14 @@ impl SessionSupervisor {
     ) -> Result<SessionRuntimeHandle> {
         let session_id = request.session.id.to_string();
         let generation = self.inner.next_generation.fetch_add(1, Ordering::Relaxed);
+        let native = PaneProcessRetirementOwner::default();
         {
             let mut entries = self.inner.entries()?;
+            if self.inner.native_cleanup_sealed.load(Ordering::Acquire) {
+                return Err(MezError::invalid_state(
+                    "host native process admission is sealed",
+                ));
+            }
             if entries.contains_key(&session_id) {
                 return Err(MezError::conflict(format!(
                     "session `{session_id}` is already supervised"
@@ -207,6 +249,7 @@ impl SessionSupervisor {
                 session_id.clone(),
                 SupervisorEntry {
                     generation,
+                    native: native.clone(),
                     state: SupervisorEntryState::Starting { cancelled: false },
                 },
             );
@@ -229,7 +272,8 @@ impl SessionSupervisor {
             release.notified().await;
         }
 
-        let runtime = match SessionFactory::create(request).await {
+        let runtime = match SessionFactory::create_with_native_owner(request, native.clone()).await
+        {
             Ok(runtime) => runtime,
             Err(error) => {
                 self.inner
@@ -257,17 +301,13 @@ impl SessionSupervisor {
                 entry.state,
                 SupervisorEntryState::Starting { cancelled: true }
             ) {
-                entries.remove(&session_id);
                 drop(entries);
                 drop(runtime);
-                self.inner.push_terminal(SessionSupervisorSnapshot {
-                    session_id: session_id.clone(),
+                self.inner.finish_start_failure(
+                    &session_id,
                     generation,
-                    state: SessionSupervisorState::Stopped,
-                    runtime_state: None,
-                    power_inhibition: None,
-                    failure: None,
-                })?;
+                    "session startup was cancelled".to_string(),
+                )?;
                 self.inner.changed.notify_waiters();
                 return Err(MezError::invalid_state(format!(
                     "session `{session_id}` startup was cancelled"
@@ -292,6 +332,12 @@ impl SessionSupervisor {
 
         let inner = self.inner.clone();
         let task_session_id = session_id.clone();
+        let mut completion_guard = NativeRuntimeCompletionGuard {
+            inner: inner.clone(),
+            session_id: session_id.clone(),
+            generation,
+            armed: true,
+        };
         tokio::spawn(async move {
             let cancellation = async move {
                 if *cancellation.borrow() {
@@ -325,6 +371,7 @@ impl SessionSupervisor {
             };
             let _ =
                 inner.finish_runtime(&task_session_id, generation, state, runtime_state, failure);
+            completion_guard.armed = false;
         });
 
         Ok(handle)
@@ -341,6 +388,9 @@ impl SessionSupervisor {
         })?;
         match &entry.state {
             SupervisorEntryState::Running { handle, .. } => Ok(handle.clone()),
+            SupervisorEntryState::CleanupPending { .. } => Err(MezError::invalid_state(format!(
+                "session `{session_id}` has unproven native cleanup"
+            ))),
             SupervisorEntryState::Starting { .. } => Err(MezError::invalid_state(format!(
                 "session `{session_id}` is still starting"
             ))),
@@ -357,11 +407,49 @@ impl SessionSupervisor {
 
     /// Requests graceful or forced teardown without holding the map lock across actor awaits.
     pub(crate) async fn stop(&self, session_id: &str, force: bool) -> Result<()> {
+        self.stop_with_native_deadline(
+            session_id,
+            force,
+            tokio::time::Instant::now() + super::NATIVE_PANE_RETIREMENT_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Shares the enclosing shutdown budget with exact pending-child retry.
+    async fn stop_with_native_deadline(
+        &self,
+        session_id: &str,
+        force: bool,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
         #[cfg(test)]
         if self.inner.fail_next_stop.swap(0, Ordering::SeqCst) != 0 {
             return Err(MezError::invalid_state(
                 "injected session supervisor stop failure",
             ));
+        }
+        let pending = {
+            let entries = self.inner.entries()?;
+            entries.get(session_id).and_then(|entry| {
+                if let SupervisorEntryState::CleanupPending { failure } = &entry.state {
+                    Some((entry.generation, entry.native.clone(), failure.clone()))
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some((generation, native, failure)) = pending {
+            native.request_shutdown(force);
+            native.seal();
+            super::drain_native_pane_retirement(&native, deadline).await?;
+            self.inner.finish_runtime(
+                session_id,
+                generation,
+                SessionSupervisorState::Failed,
+                None,
+                Some(failure),
+            )?;
+            return Ok(());
         }
         let action = {
             let mut entries = self.inner.entries()?;
@@ -372,6 +460,11 @@ impl SessionSupervisor {
                 )
             })?;
             match &mut entry.state {
+                SupervisorEntryState::CleanupPending { .. } => {
+                    return Err(MezError::invalid_state(
+                        "native cleanup state changed; retry exact session stop",
+                    ));
+                }
                 SupervisorEntryState::Starting { cancelled } => {
                     *cancelled = true;
                     None
@@ -414,15 +507,46 @@ impl SessionSupervisor {
 
     /// Stops every live runtime and waits boundedly for all matching tasks to settle.
     pub(crate) async fn shutdown_all(&self, force: bool, timeout: Duration) -> Result<()> {
+        use futures_util::StreamExt;
+        let deadline = tokio::time::Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| {
+                MezError::invalid_args("session shutdown budget is not representable")
+            })?;
         let mut session_ids = {
             let entries = self.inner.entries()?;
-            entries.keys().cloned().collect::<Vec<_>>()
+            entries
+                .iter()
+                .filter_map(|(id, entry)| {
+                    entry.native.request_shutdown(force);
+                    // Pending native retries are progressed in fair quanta below,
+                    // not held as whole-lifetime futures ahead of owner seventeen.
+                    (!matches!(entry.state, SupervisorEntryState::CleanupPending { .. }))
+                        .then(|| id.clone())
+                })
+                .collect::<Vec<_>>()
         };
         session_ids.sort();
-        for session_id in session_ids {
-            self.stop(&session_id, force).await?;
+        let mut stops =
+            futures_util::stream::iter(session_ids.into_iter().map(|session_id| async move {
+                tokio::time::timeout_at(
+                    deadline,
+                    self.stop_with_native_deadline(&session_id, force, deadline),
+                )
+                .await
+                .map_err(|_| MezError::invalid_state("session supervisor stop deadline expired"))?
+            }))
+            .buffer_unordered(16);
+        let mut first_error = None;
+        while let Some(result) = stops.next().await {
+            if let Err(error) = result {
+                first_error.get_or_insert(error);
+            }
         }
-        tokio::time::timeout(timeout, async {
+        if let Err(error) = self.drain_native_retirement(deadline).await {
+            first_error.get_or_insert(error);
+        }
+        let settlement = tokio::time::timeout_at(deadline, async {
             loop {
                 let changed = self.inner.changed.notified();
                 if self.inner.entries()?.is_empty() {
@@ -432,7 +556,142 @@ impl SessionSupervisor {
             }
         })
         .await
-        .map_err(|_| MezError::invalid_state("session supervisor shutdown timed out"))?
+        .map_err(|_| MezError::invalid_state("session supervisor shutdown timed out"))
+        .and_then(|result| result);
+        match (first_error, settlement) {
+            (None, result) => result,
+            (Some(primary), Ok(())) => Err(primary),
+            (Some(primary), Err(settlement)) => Err(MezError::new(
+                primary.kind(),
+                format!(
+                    "{}; remaining session cleanup: {settlement}",
+                    primary.message()
+                ),
+            )),
+        }
+    }
+
+    /// Seals admission before any final native-owner snapshot or awaited drain.
+    pub(crate) fn seal_native_admission(&self) -> Result<()> {
+        self.inner
+            .native_cleanup_sealed
+            .store(true, Ordering::Release);
+        for entry in self.inner.entries()?.values_mut() {
+            entry.native.seal();
+            match &mut entry.state {
+                SupervisorEntryState::Starting { cancelled } => *cancelled = true,
+                SupervisorEntryState::Running { cancel, .. }
+                | SupervisorEntryState::Stopping { cancel, .. } => {
+                    let _ = cancel.send(true);
+                }
+                SupervisorEntryState::CleanupPending { .. } => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Reports monotonic closure without consulting actor or native handles.
+    pub(crate) fn native_admission_is_sealed(&self) -> bool {
+        self.inner.native_cleanup_sealed.load(Ordering::Acquire)
+    }
+
+    /// Closes host admission and drains native resources independently of actors.
+    /// The same absolute deadline covers every session, including cancelled
+    /// startup and late worker drops. Pending owners remain in exact entries.
+    pub(crate) async fn drain_native_retirement(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        self.seal_native_admission()?;
+        let owners = {
+            self.inner
+                .entries()?
+                .values()
+                .map(|entry| entry.native.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut first_error = self.native_cleanup_failure()?.map(MezError::invalid_state);
+        loop {
+            for owner in &owners {
+                if tokio::time::Instant::now() >= deadline {
+                    break;
+                }
+                if let Err(error) =
+                    crate::host::async_runtime::advance_native_pane_retirement(owner, deadline)
+                {
+                    first_error.get_or_insert(error);
+                }
+                tokio::task::yield_now().await;
+            }
+            let pending: usize = owners
+                .iter()
+                .map(PaneProcessRetirementOwner::outstanding)
+                .sum();
+            if pending == 0 {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                let pending = MezError::invalid_state(format!(
+                    "host native retirement is unproven for {pending} exact owned children"
+                ));
+                return Err(match first_error {
+                    Some(primary) => {
+                        MezError::new(primary.kind(), format!("{}; {pending}", primary.message()))
+                    }
+                    None => pending,
+                });
+            }
+            tokio::time::sleep(
+                Duration::from_millis(10)
+                    .min(deadline.saturating_duration_since(tokio::time::Instant::now())),
+            )
+            .await;
+        }
+        let settled = self
+            .inner
+            .entries()?
+            .iter()
+            .filter_map(|(id, entry)| {
+                if let SupervisorEntryState::CleanupPending { failure } = &entry.state {
+                    (entry.native.outstanding() == 0)
+                        .then(|| (id.clone(), entry.generation, failure.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        for (id, generation, failure) in settled {
+            self.inner.finish_runtime(
+                &id,
+                generation,
+                SessionSupervisorState::Failed,
+                None,
+                Some(failure),
+            )?;
+        }
+        if let Some(failure) = self.native_cleanup_failure()? {
+            first_error.get_or_insert_with(|| MezError::invalid_state(failure));
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// Returns private native failure evidence independently of terminal history.
+    pub(crate) fn native_cleanup_failure(&self) -> Result<Option<String>> {
+        self.inner
+            .native_failure
+            .lock()
+            .map(|failure| failure.clone())
+            .map_err(|_| MezError::invalid_state("native cleanup failure status is unavailable"))
+    }
+
+    /// Counts native obligations even after actor closure or runtime failure.
+    pub(crate) fn native_pending_count(&self) -> Result<usize> {
+        Ok(self
+            .inner
+            .entries()?
+            .values()
+            .map(|entry| entry.native.outstanding())
+            .sum())
     }
 
     /// Returns bounded live and recent-terminal status in stable identity order.
@@ -443,6 +702,9 @@ impl SessionSupervisor {
                 .iter()
                 .map(|(session_id, entry)| {
                     let (state, handle) = match &entry.state {
+                        SupervisorEntryState::CleanupPending { .. } => {
+                            (SessionSupervisorState::Stopping, None)
+                        }
                         SupervisorEntryState::Starting { .. } => {
                             (SessionSupervisorState::Starting, None)
                         }
@@ -454,12 +716,16 @@ impl SessionSupervisor {
                             (SessionSupervisorState::Stopping, Some(handle.clone()))
                         }
                     };
-                    (session_id.clone(), entry.generation, state, handle)
+                    let failure = match &entry.state {
+                        SupervisorEntryState::CleanupPending { failure } => Some(failure.clone()),
+                        _ => None,
+                    };
+                    (session_id.clone(), entry.generation, state, handle, failure)
                 })
                 .collect::<Vec<_>>()
         };
         let mut snapshots = Vec::with_capacity(live.len() + self.inner.terminal()?.len());
-        for (session_id, generation, state, handle) in live {
+        for (session_id, generation, state, handle, failure) in live {
             let (runtime_state, power_inhibition) = match handle {
                 Some(handle) => (
                     handle.lifecycle_state().await.ok(),
@@ -473,7 +739,7 @@ impl SessionSupervisor {
                 state,
                 runtime_state,
                 power_inhibition,
-                failure: None,
+                failure,
             });
         }
         snapshots.extend(self.inner.terminal()?.iter().cloned());
@@ -495,6 +761,34 @@ impl SessionSupervisor {
 }
 
 impl SessionSupervisorInner {
+    /// Seals an exact generation before deciding whether its entry may retire.
+    /// Pending children stay outside terminal history and identity reuse.
+    fn retain_native_pending(
+        &self,
+        session_id: &str,
+        generation: u64,
+        failure: String,
+    ) -> Result<bool> {
+        let mut entries = self.entries()?;
+        if let Some(entry) = entries.get_mut(session_id)
+            && entry.generation == generation
+        {
+            entry.native.seal();
+            if let Some(native_failure) = entry.native.cleanup_failure() {
+                let mut first = self.native_failure.lock().map_err(|_| {
+                    MezError::invalid_state("native cleanup failure status is unavailable")
+                })?;
+                first.get_or_insert(native_failure);
+            }
+            if entry.native.outstanding() != 0 {
+                entry.state = SupervisorEntryState::CleanupPending { failure };
+                self.changed.notify_waiters();
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn entries(&self) -> Result<MutexGuard<'_, HashMap<String, SupervisorEntry>>> {
         self.entries
             .lock()
@@ -513,6 +807,9 @@ impl SessionSupervisorInner {
         generation: u64,
         failure: String,
     ) -> Result<()> {
+        if self.retain_native_pending(session_id, generation, failure.clone())? {
+            return Ok(());
+        }
         let removed = {
             let mut entries = self.entries()?;
             if entries
@@ -547,6 +844,15 @@ impl SessionSupervisorInner {
         runtime_state: Option<RuntimeLifecycleState>,
         failure: Option<String>,
     ) -> Result<()> {
+        if self.retain_native_pending(
+            session_id,
+            generation,
+            failure
+                .clone()
+                .unwrap_or_else(|| "session native retirement remains unproven".to_string()),
+        )? {
+            return Ok(());
+        }
         let accepted = self
             .entries()?
             .get(session_id)
@@ -616,6 +922,159 @@ mod tests {
     use crate::host::shell::{ResolvedShell, ShellSource};
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(10_000);
+
+    /// Installs only an exact native cleanup obligation, without actor/filesystem
+    /// setup. The real production stop/drain path supplies all retirement proof.
+    fn pending_native_fixture(
+        supervisor: &SessionSupervisor,
+        id: &str,
+        gate: bool,
+    ) -> (
+        rustix::process::Pid,
+        Option<mez_mux::process::PaneProcessChildReservation>,
+    ) {
+        let native = PaneProcessRetirementOwner::default();
+        let gate = gate.then(|| native.reserve().unwrap());
+        let process = mez_mux::process::spawn_retained_argv_pty_process(
+            std::path::Path::new("/bin/cat"),
+            &[],
+            &[],
+            Size::new(80, 24).unwrap(),
+            None,
+            native.reserve().unwrap(),
+        )
+        .unwrap();
+        let pid =
+            rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap()).unwrap();
+        supervisor.inner.entries().unwrap().insert(
+            id.to_string(),
+            SupervisorEntry {
+                generation: 1,
+                native,
+                state: SupervisorEntryState::CleanupPending {
+                    failure: "original native fixture failure".to_string(),
+                },
+            },
+        );
+        drop(process);
+        (pid, gate)
+    }
+
+    /// Cleanup-pending ownership cannot be evicted by zero terminal history or
+    /// removed on a bounded unproven error. Retry uses the same closed-actor
+    /// generation and preserves the original failure diagnostic until settlement.
+    #[tokio::test]
+    async fn native_cleanup_pending_survives_history_and_bounded_retry_error() {
+        let supervisor = SessionSupervisor::new(0);
+        let (pid, gate) = pending_native_fixture(&supervisor, "$native-pending", true);
+        assert!(
+            supervisor
+                .stop_with_native_deadline(
+                    "$native-pending",
+                    true,
+                    tokio::time::Instant::now() + Duration::from_millis(30)
+                )
+                .await
+                .is_err()
+        );
+        assert!(supervisor.contains("$native-pending").unwrap());
+        assert_eq!(supervisor.remove_terminal("$native-pending").unwrap(), 0);
+        let snapshot = supervisor.snapshots().await.unwrap().pop().unwrap();
+        assert_eq!(snapshot.state, SessionSupervisorState::Stopping);
+        assert_eq!(
+            snapshot.failure.as_deref(),
+            Some("original native fixture failure")
+        );
+        drop(gate);
+        supervisor.stop("$native-pending", true).await.unwrap();
+        assert!(!supervisor.contains("$native-pending").unwrap());
+        assert_eq!(
+            rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
+        );
+    }
+
+    /// A stuck independent cleanup owner cannot prevent a sibling's exact child
+    /// from being stopped/reaped within the same enclosing shutdown budget.
+    #[tokio::test]
+    async fn native_shutdown_budget_attempts_siblings_after_one_unproven_owner() {
+        let supervisor = SessionSupervisor::new(0);
+        let (first, gate) = pending_native_fixture(&supervisor, "$a-pending", true);
+        let (sibling, _) = pending_native_fixture(&supervisor, "$b-sibling", false);
+        let start = tokio::time::Instant::now();
+        assert!(
+            supervisor
+                .shutdown_all(true, Duration::from_millis(100))
+                .await
+                .is_err()
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "shutdown restarted the budget per session"
+        );
+        assert_eq!(
+            rustix::process::test_kill_process(sibling),
+            Err(rustix::io::Errno::SRCH)
+        );
+        assert!(supervisor.contains("$a-pending").unwrap());
+        drop(gate);
+        supervisor.stop("$a-pending", true).await.unwrap();
+        assert_eq!(
+            rustix::process::test_kill_process(first),
+            Err(rustix::io::Errno::SRCH)
+        );
+    }
+
+    /// Captured completion guards run even when a runtime task never receives
+    /// its first poll. Startup-native resources return into the already retained
+    /// host generation rather than disappearing with the dropped future.
+    #[tokio::test]
+    async fn unpolled_runtime_completion_retains_preexisting_native_owner() {
+        let supervisor = SessionSupervisor::new(0);
+        let native = PaneProcessRetirementOwner::default();
+        let process = mez_mux::process::spawn_retained_argv_pty_process(
+            std::path::Path::new("/bin/cat"),
+            &[],
+            &[],
+            Size::new(80, 24).unwrap(),
+            None,
+            native.reserve().unwrap(),
+        )
+        .unwrap();
+        let pid =
+            rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap()).unwrap();
+        supervisor.inner.entries().unwrap().insert(
+            "$unpolled".to_string(),
+            SupervisorEntry {
+                generation: 7,
+                native: native.clone(),
+                state: SupervisorEntryState::Starting { cancelled: false },
+            },
+        );
+        let completion = NativeRuntimeCompletionGuard {
+            inner: supervisor.inner.clone(),
+            session_id: "$unpolled".to_string(),
+            generation: 7,
+            armed: true,
+        };
+        let task = async move {
+            let _process = process;
+            let _completion = completion;
+            std::future::pending::<()>().await;
+        };
+        drop(task);
+        assert!(supervisor.contains("$unpolled").unwrap());
+        assert!(
+            native.reserve().is_err(),
+            "abandoned generation must be sealed before retry"
+        );
+        assert_eq!(native.returned_count(), 1);
+        supervisor.stop("$unpolled", true).await.unwrap();
+        assert_eq!(
+            rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
+        );
+    }
 
     /// Duplicate concurrent identities are rejected before a second runtime is constructed.
     #[tokio::test(flavor = "current_thread")]

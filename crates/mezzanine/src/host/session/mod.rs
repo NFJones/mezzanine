@@ -18,6 +18,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use mez_mux::layout::Size;
+use mez_mux::process::PaneProcessRetirementOwner;
 use mez_mux::session::Session;
 
 use crate::config::ConfigLayer;
@@ -26,7 +27,8 @@ use crate::host::async_runtime::{
     AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeDaemonConfig,
     AsyncRuntimeDaemonListeners, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AsyncRuntimeSessionActor, AsyncRuntimeSessionHandle, AsyncRuntimeSupervisionReport,
-    build_async_runtime_daemon_services, build_async_runtime_session_services,
+    NATIVE_PANE_RETIREMENT_TIMEOUT, build_async_runtime_daemon_services,
+    build_async_runtime_session_services, drain_native_pane_retirement,
     supervise_async_runtime_services,
 };
 use crate::host::power_inhibition::{
@@ -155,7 +157,18 @@ impl SessionFactory {
     /// The returned handle is usable immediately. Any error removes sockets
     /// and registry publication created during this attempt. Pane startup is
     /// deliberately last among fallible configuration and binding work.
+    #[cfg(test)]
     pub(crate) async fn create(request: SessionFactoryRequest) -> Result<SessionRuntime> {
+        Self::create_with_native_owner(request, PaneProcessRetirementOwner::default()).await
+    }
+
+    /// Constructs a session under a mandatory preexisting native owner.
+    /// The host/foreground caller retains this owner across startup failure,
+    /// cancellation, runtime failure and later bounded cleanup retries.
+    pub(crate) async fn create_with_native_owner(
+        request: SessionFactoryRequest,
+        native: PaneProcessRetirementOwner,
+    ) -> Result<SessionRuntime> {
         validate_request(&request)?;
         let session_id = request.session.id.to_string();
         let registry = request
@@ -195,6 +208,7 @@ impl SessionFactory {
             1024,
             4096,
         )?;
+        service.install_native_pane_retirement_owner(native)?;
         if let Some(registry) = registry.clone() {
             service.set_session_registry(registry);
         }
@@ -255,13 +269,13 @@ impl SessionFactory {
         #[cfg(test)]
         startup_timing.advance("pane-startup");
         if let Err(error) = start_session(&mut service, request.startup) {
-            let _ = service.terminate_all_pane_processes();
+            service.release_native_panes_for_retirement();
             return Err(error);
         }
         #[cfg(test)]
         startup_timing.advance("registry-publication");
         if let Err(error) = service.persist_registry_update() {
-            let _ = service.terminate_all_pane_processes();
+            service.release_native_panes_for_retirement();
             return Err(error);
         }
         #[cfg(test)]
@@ -284,7 +298,7 @@ impl SessionFactory {
         let mut services = match services_result {
             Ok(services) => services,
             Err(error) => {
-                let _ = actor.terminate_owned_pane_processes();
+                actor.release_owned_native_panes();
                 return Err(error);
             }
         };
@@ -333,6 +347,11 @@ pub(crate) struct SessionRuntimeHandle {
 }
 
 impl SessionRuntimeHandle {
+    /// Shares native ownership independently of the actor's lifecycle/channel.
+    pub(crate) fn native_retirement_owner(&self) -> PaneProcessRetirementOwner {
+        self.actor.native_pane_retirement.clone()
+    }
+
     /// Stable session identity owned by this handle.
     pub(crate) fn session_id(&self) -> &str {
         &self.session_id
@@ -370,6 +389,7 @@ impl SessionRuntimeHandle {
         reason: impl Into<String>,
         force: bool,
     ) -> Result<()> {
+        self.native_retirement_owner().request_shutdown(force);
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::Shutdown(ShutdownEvent {
             reason: reason.into(),
@@ -451,8 +471,35 @@ impl SessionRuntime {
             result.and_then(|report| shutdown.map(|_| report))
         };
         let (supervision, mut actor_exit) = tokio::join!(daemon, actor.run());
-        actor_exit.service.terminate_all_pane_processes()?;
-        let supervision = supervision?;
+        let native = self.handle.native_retirement_owner();
+        native.request_shutdown(
+            supervision.is_err()
+                || matches!(
+                    actor_exit.service.lifecycle_state(),
+                    RuntimeLifecycleState::Killed | RuntimeLifecycleState::Failed
+                ),
+        );
+        native.seal();
+        actor_exit.service.release_native_panes_for_retirement();
+        let cleanup = drain_native_pane_retirement(
+            &native,
+            tokio::time::Instant::from_std(native.cleanup_deadline()),
+        )
+        .await;
+        let supervision = match (supervision, cleanup) {
+            (Ok(report), Ok(())) => report,
+            (Err(primary), Ok(())) => return Err(primary),
+            (Ok(_), Err(cleanup)) => return Err(cleanup),
+            (Err(primary), Err(cleanup)) => {
+                return Err(MezError::new(
+                    primary.kind(),
+                    format!(
+                        "{}; native cleanup also failed: {cleanup}",
+                        primary.message()
+                    ),
+                ));
+            }
+        };
         Ok(SessionRuntimeCompletion {
             service: actor_exit.service,
             supervision,
@@ -463,7 +510,7 @@ impl SessionRuntime {
 impl Drop for SessionRuntime {
     fn drop(&mut self) {
         if let Some(actor) = self.actor.as_mut() {
-            let _ = actor.terminate_owned_pane_processes();
+            actor.release_owned_native_panes();
         }
     }
 }

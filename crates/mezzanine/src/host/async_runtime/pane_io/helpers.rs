@@ -6,8 +6,8 @@ use super::{
     AsyncPaneProcessWorkerOutcome, AsyncPtyPaneProcessIo, AsyncRuntimeSessionHandle, Duration,
     HashSet, JoinSet, MezError, PaneEvent, PaneProcessEvent, PaneProcessInstance,
     PaneProcessIoEffect, ProcessEvent, Result, RuntimeEvent, RuntimeEventBatch,
-    RuntimeLifecycleState, RuntimeSideEffect, VecDeque, is_terminal_runtime_lifecycle_state,
-    run_async_pane_process_service, sleep, watch,
+    RuntimeLifecycleState, RuntimeSideEffect, VecDeque, is_terminal_runtime_lifecycle_state, sleep,
+    watch,
 };
 
 /// Number of fresh PTY foreground queries allowed after bootstrap completion.
@@ -44,6 +44,24 @@ pub(super) fn is_process_exit_event(event: &RuntimeEvent) -> bool {
     )
 }
 
+/// Requires native termination success, never merely a Failed event.
+pub(super) fn require_pane_retirement_event(event: &RuntimeEvent) -> Result<()> {
+    if is_process_exit_event(event) {
+        return Ok(());
+    }
+    let diagnostic = match event {
+        RuntimeEvent::Process(ProcessEvent::Failed { error, .. })
+        | RuntimeEvent::PaneProcess {
+            event: PaneProcessEvent::Process(ProcessEvent::Failed { error, .. }),
+            ..
+        } => error.as_str(),
+        _ => "backend did not acknowledge native termination",
+    };
+    Err(MezError::invalid_state(format!(
+        "pane native retirement failed: {diagnostic}"
+    )))
+}
+
 /// Runs the spawn owned pane process worker operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -55,6 +73,7 @@ pub(super) fn spawn_owned_pane_process_worker(
     instance: PaneProcessInstance,
     process: super::PaneProcess,
     config: AsyncPaneProcessServiceConfig,
+    stop: watch::Receiver<bool>,
 ) -> Result<()> {
     let pane_id = instance.pane_id.clone();
     let primary_pid = process.primary_pid();
@@ -62,6 +81,11 @@ pub(super) fn spawn_owned_pane_process_worker(
         let backend = match AsyncPtyPaneProcessIo::new(pane_id, process) {
             Ok(backend) => backend,
             Err(error) => {
+                super::retirement::drain_returned_native_panes(
+                    &handle.native_pane_retirement,
+                    super::Instant::now() + super::NATIVE_PANE_RETIREMENT_TIMEOUT,
+                )
+                .await?;
                 retire_failed_pane_process(&handle, &instance, primary_pid, &error).await?;
                 return Ok((instance, AsyncPaneProcessWorkerOutcome::Failed));
             }
@@ -73,36 +97,77 @@ pub(super) fn spawn_owned_pane_process_worker(
         ) {
             Ok(driver) => driver,
             Err(error) => {
+                super::retirement::drain_returned_native_panes(
+                    &handle.native_pane_retirement,
+                    super::Instant::now() + super::NATIVE_PANE_RETIREMENT_TIMEOUT,
+                )
+                .await?;
                 retire_failed_pane_process(&handle, &instance, primary_pid, &error).await?;
                 return Ok((instance, AsyncPaneProcessWorkerOutcome::Failed));
             }
         };
-        run_owned_pane_process_worker(handle, instance, primary_pid, driver, config).await
+        run_owned_pane_process_worker_until(
+            handle,
+            instance,
+            primary_pid,
+            driver,
+            config,
+            Some(stop),
+        )
+        .await
     });
     Ok(())
 }
 
 /// Runs one pane worker and applies its pane-local failure policy.
+#[cfg(test)]
 pub(crate) async fn run_owned_pane_process_worker<B>(
     handle: AsyncRuntimeSessionHandle,
     instance: PaneProcessInstance,
     primary_pid: u32,
-    mut driver: AsyncPaneProcessDriver<B>,
+    driver: AsyncPaneProcessDriver<B>,
     config: AsyncPaneProcessServiceConfig,
 ) -> Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>
 where
     B: AsyncPaneProcessIo + Send + 'static,
 {
-    let result = run_async_pane_process_service(&handle, &mut driver, config, |_, state| {
-        is_terminal_runtime_lifecycle_state(state)
-    })
+    run_owned_pane_process_worker_until(handle, instance, primary_pid, driver, config, None).await
+}
+
+/// Stops I/O cooperatively, then settles the exact backend before returning it.
+async fn run_owned_pane_process_worker_until<B>(
+    handle: AsyncRuntimeSessionHandle,
+    instance: PaneProcessInstance,
+    primary_pid: u32,
+    mut driver: AsyncPaneProcessDriver<B>,
+    config: AsyncPaneProcessServiceConfig,
+    stop: Option<watch::Receiver<bool>>,
+) -> Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>
+where
+    B: AsyncPaneProcessIo + Send + 'static,
+{
+    let result = super::process_service::run_async_pane_process_service_until(
+        &handle,
+        &mut driver,
+        config,
+        |_, state| is_terminal_runtime_lifecycle_state(state),
+        stop,
+    )
     .await;
+    // Normal/bounded stops preserve graceful policy; failure permits force.
+    let termination = driver.terminate_event(result.is_err()).await;
+    if let Err(cleanup) = require_pane_retirement_event(&termination) {
+        return Err(match result {
+            Err(primary) => {
+                MezError::new(primary.kind(), format!("{}; {cleanup}", primary.message()))
+            }
+            Ok(_) => cleanup,
+        });
+    }
     match result {
         Ok(report) => Ok((instance, AsyncPaneProcessWorkerOutcome::Completed(report))),
         Err(error) if is_terminal_pane_supervisor_error(&error) => Err(error),
         Err(error) if error.is_pane_backend_failure() => {
-            // Dropping the exact PTY owner kills its still-live process group
-            // before the actor retires that same generation.
             drop(driver);
             retire_failed_pane_process(&handle, &instance, primary_pid, &error).await?;
             Ok((instance, AsyncPaneProcessWorkerOutcome::Failed))
@@ -160,24 +225,40 @@ pub(super) fn drain_completed_pane_process_workers(
     Ok(())
 }
 
-/// Runs the drain completed pane process workers after yields operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) async fn drain_completed_pane_process_workers_after_yields(
+/// Observes all consuming worker outcomes within the existing native grace.
+/// A deadline failure cancels workers only to return exact child guards to the
+/// retained session owner; it is an error, never a native retirement receipt.
+pub(super) async fn drain_pane_process_workers(
     workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>>,
     active_panes: &mut HashSet<PaneProcessInstance>,
     report: &mut AsyncPaneProcessSupervisorServiceReport,
 ) -> Result<()> {
-    for _ in 0..16 {
-        drain_completed_pane_process_workers(workers, active_panes, report)?;
-        if workers.is_empty() {
-            return Ok(());
+    let deadline = super::Instant::now() + Duration::from_secs(2);
+    let mut first_error = None;
+    while !workers.is_empty() {
+        match tokio::time::timeout_at(deadline, workers.join_next()).await {
+            Ok(Some(joined)) => {
+                if let Err(error) = record_joined_pane_process_worker(joined, active_panes, report)
+                {
+                    first_error.get_or_insert(error);
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {
+                workers.abort_all();
+                let pending = MezError::invalid_state(
+                    "pane workers did not settle; exact native cleanup remains retained by session owner",
+                );
+                return Err(match first_error {
+                    Some(primary) => {
+                        MezError::new(primary.kind(), format!("{}; {pending}", primary.message()))
+                    }
+                    None => pending,
+                });
+            }
         }
-        tokio::task::yield_now().await;
     }
-    drain_completed_pane_process_workers(workers, active_panes, report)
+    first_error.map_or(Ok(()), Err)
 }
 
 /// Runs the record joined pane process worker operation for this subsystem.
@@ -208,7 +289,9 @@ pub(super) fn record_joined_pane_process_worker(
             Ok(())
         }
         Ok(Err(error)) => Err(error),
-        Err(error) if error.is_cancelled() => Ok(()),
+        Err(error) if error.is_cancelled() => Err(MezError::invalid_state(
+            "pane worker was cancelled without a native completion receipt; exact cleanup remains retained",
+        )),
         Err(error) => Err(MezError::invalid_state(format!(
             "async pane process worker task failed: {error}"
         ))),
@@ -292,18 +375,6 @@ pub(super) async fn wait_for_pane_process_supervisor_wakeup(
             }
         }
     }
-}
-
-/// Runs the abort pane process workers operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) async fn abort_pane_process_workers(
-    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessWorkerOutcome)>>,
-) {
-    workers.abort_all();
-    while workers.join_next().await.is_some() {}
 }
 
 /// Runs the is terminal pane supervisor error operation for this subsystem.
@@ -700,11 +771,7 @@ mod tests {
         entered_rx.await.unwrap();
 
         let (early, completed, alive_while_gated) = {
-            let drain = drain_completed_pane_process_workers_after_yields(
-                &mut workers,
-                &mut active,
-                &mut report,
-            );
+            let drain = drain_pane_process_workers(&mut workers, &mut active, &mut report);
             tokio::pin!(drain);
             let early = tokio::time::timeout(Duration::from_millis(30), &mut drain).await;
             let alive_while_gated = test_kill_process(pid);

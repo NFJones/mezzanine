@@ -220,6 +220,9 @@ pub use pane_io::{
 };
 #[cfg(test)]
 pub(crate) use pane_io::{AsyncPaneProcessWorkerOutcome, run_owned_pane_process_worker};
+pub(crate) use pane_io::{
+    NATIVE_PANE_RETIREMENT_TIMEOUT, advance_native_pane_retirement, drain_native_pane_retirement,
+};
 pub use side_effects::{
     AsyncClientOutputFlushServiceReport, AsyncRuntimeSideEffectServiceConfig,
     build_async_hook_side_effect_service, build_async_host_clipboard_side_effect_service,

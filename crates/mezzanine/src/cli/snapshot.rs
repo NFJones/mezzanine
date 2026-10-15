@@ -36,6 +36,7 @@ pub(super) async fn run_snapshot<W: Write>(
     interactive: bool,
     output_format: CliOutputFormat,
     stdout: &mut W,
+    native: &mut super::native_exit::CliNativeOwnership,
 ) -> Result<()> {
     let paths = env.config_paths()?;
     let repository = SnapshotRepository::new(paths.root().join("snapshots"));
@@ -74,6 +75,7 @@ pub(super) async fn run_snapshot<W: Write>(
                     },
                     output_format,
                     stdout,
+                    native,
                 )
                 .await?;
             } else {
@@ -108,6 +110,7 @@ pub(super) async fn run_snapshot<W: Write>(
                     },
                     output_format,
                     stdout,
+                    native,
                 )
                 .await?;
             } else {
@@ -246,6 +249,7 @@ pub(super) async fn run_restored_snapshot_daemon<W: Write>(
     request: RestoredSnapshotDaemonRequest<'_>,
     output_format: CliOutputFormat,
     stdout: &mut W,
+    native: &mut super::native_exit::CliNativeOwnership,
 ) -> Result<()> {
     let RestoredSnapshotDaemonRequest {
         mut restored,
@@ -316,6 +320,7 @@ pub(super) async fn run_restored_snapshot_daemon<W: Write>(
             payload: Box::new(payload),
             restart_command,
         },
+        native.foreground(),
     )
     .await
 }

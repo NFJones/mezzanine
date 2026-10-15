@@ -206,6 +206,12 @@ fn snapshot_id_from_json_params(params: &str) -> Option<String> {
 }
 
 impl AsyncRuntimeSessionActor {
+    /// Releases startup-owned native guards to the retained bounded drain.
+    /// This does not signal, wait, or claim successful native completion.
+    pub(crate) fn release_owned_native_panes(&mut self) {
+        self.service.release_native_panes_for_retirement();
+    }
+
     /// Terminates pane processes still owned by an actor that has not started.
     ///
     /// Reusable session construction uses this during rollback and when a
@@ -281,6 +287,7 @@ impl AsyncRuntimeSessionActor {
                 .side_effects,
         );
         let handle = AsyncRuntimeSessionHandle {
+            native_pane_retirement: service.native_pane_retirement_owner(),
             sender: sender.clone(),
             client_clipboard_route_cleanup_tx: client_clipboard_route_cleanup_tx.clone(),
             message_delivery_notify: message_delivery_notify.clone(),

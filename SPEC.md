@@ -2246,6 +2246,37 @@ before reaping it. Cached PTY process-group metadata alone MUST NOT leave the
 root alive while teardown waits for its exit. Signal and reap failures MUST
 retain process ownership for diagnosis and retry.
 
+Daemon-managed pane, restored-pane and external-editor children MUST reserve
+an exact native cleanup return slot before spawn. Manager-to-worker handoff,
+cancelled replies, backend construction failure, unpolled workers and service
+cancellation MUST preserve that same child handle until a successful native
+wait/reap. Sending a signal, joining an aborted task, an empty return queue or
+publishing a synthetic exit event MUST NOT be accepted as native completion.
+
+Native cleanup MUST use a finite absolute deadline and attempt independent
+safe sibling cleanup even after one failure. Graceful HUP/TERM/KILL progress
+and its original deadline MUST survive cancellation without restarting grace;
+force escalation MUST also address the exact owned root. Native wait success
+MUST release cleanup capacity independently of final PTY output draining.
+
+Unproven returned cleanup MUST fence new managed pane/editor/restore native
+admission until settled, without interrupting existing siblings or imposing a
+hidden normal-live-pane cap. Every already-admitted child MUST retain its own
+preallocated return slot if all children fail simultaneously. Retained state is
+bounded by admitted unreaped resources (with vacant high-water allocation
+reclaimed at idle), not by an invented absolute global process limit. Final
+shutdown sealing MUST be monotonic and MUST prevent later startup admission.
+
+A live host MUST retain cleanup-pending exact session generations outside
+evictable terminal history; actor closure MUST NOT release their child handles
+or permit identity reuse. Foreground/library CLI completion MUST carry opaque
+retryable cleanup ownership past command errors and asynchronous-runtime
+destruction. Its borrowed exit status MUST be nonzero for pending or unknown
+cleanup, while preserving an original nonzero command status. Reporting or
+dropping that outcome is explicit abandonment, not proof of OS process exit or
+native retirement. Destruction of every owner/process permits only disclosed
+best-effort signaling and kernel adoption, never a successful reap claim.
+
 ### 5.3 Shared SQLite Session-State Storage
 
 Session-state stores that adopt SQLite MUST use one database per concern. A

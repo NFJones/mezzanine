@@ -943,6 +943,8 @@ pub struct AsyncRuntimeSessionActor {
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone)]
 pub struct AsyncRuntimeSessionHandle {
+    /// Native cleanup survives actor closure and abortable worker lifetimes.
+    pub(crate) native_pane_retirement: mez_mux::process::PaneProcessRetirementOwner,
     /// Stores the sender value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

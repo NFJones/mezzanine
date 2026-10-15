@@ -213,7 +213,7 @@ pub struct PaneProcess {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) child: Box<dyn portable_pty::Child + Send + Sync>,
+    pub(super) child: super::retirement::RetainedPaneChild,
     /// Stores the master value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -813,6 +813,10 @@ impl PaneProcess {
     /// on duplicated control-flow logic.
     #[doc(hidden)]
     pub fn send_signal_to_process_group(&mut self, signal: Signal) -> Result<()> {
+        if self.poll_exit()?.is_some() {
+            return Ok(());
+        }
+        self.child.record_signal(signal)?;
         if let Some(process_group_leader) = self.process_group_leader {
             send_signal_to_pane_process_group(process_group_leader, signal)
         } else if signal == Signal::KILL {
@@ -821,6 +825,27 @@ impl PaneProcess {
         } else {
             Ok(())
         }
+    }
+
+    /// Kills the exact native root independently of cached foreground metadata.
+    /// Native completion still requires a subsequent successful poll/wait.
+    pub fn kill_owned_root(&mut self) -> Result<()> {
+        self.child.kill().map_err(Into::into)
+    }
+
+    /// Starts/continues one absolute native termination budget across handoffs.
+    pub fn begin_native_termination(&mut self, force: bool) -> Result<Instant> {
+        self.child.begin_termination(force)
+    }
+
+    /// Advances retained native signal/wait progress without blocking.
+    pub fn poll_native_termination(&mut self, force: bool) -> Result<Option<PaneExitStatus>> {
+        let Some(status) = self.child.poll_termination(force)? else {
+            return Ok(None);
+        };
+        let status = PaneExitStatus::from_portable_exit_status(status);
+        self.exit_status = Some(status);
+        Ok(Some(status))
     }
 
     /// Runs the wait until exit operation for this subsystem.
