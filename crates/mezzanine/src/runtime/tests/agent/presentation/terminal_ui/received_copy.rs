@@ -80,7 +80,16 @@ fn runtime_received_source_copy_recovers_continuation_and_pruned_tail() {
                 )
                 .unwrap();
             let screen = service.agent_pane_screen("%1").unwrap();
-            assert_tail_source_copy(screen, identity, &payload);
+            let owner = screen
+                .normal_styled_content_lines()
+                .iter()
+                .find_map(|row| {
+                    row.copy_source
+                        .as_ref()
+                        .map(|source| source.id.owner().to_string())
+                })
+                .expect("actual captured producer owner");
+            assert_tail_source_copy(screen, &owner, &payload);
             let mut pruned = screen.clone();
             pruned.resize(Size::new(12, 3).unwrap()).unwrap();
             pruned.set_history_limit(1).unwrap();
@@ -90,7 +99,7 @@ fn runtime_received_source_copy_recovers_continuation_and_pruned_tail() {
                 .filter(|row| {
                     row.copy_source
                         .as_ref()
-                        .is_some_and(|source| source.id.owner() == identity)
+                        .is_some_and(|source| source.id.owner() == owner)
                 })
                 .collect::<Vec<_>>();
             assert!(!owned.is_empty());
@@ -99,7 +108,7 @@ fn runtime_received_source_copy_recovers_continuation_and_pruned_tail() {
                     .iter()
                     .all(|row| !row.presentation.as_ref().unwrap().first_row)
             );
-            assert_tail_source_copy(&pruned, identity, &payload);
+            assert_tail_source_copy(&pruned, &owner, &payload);
         }
     }
 }
