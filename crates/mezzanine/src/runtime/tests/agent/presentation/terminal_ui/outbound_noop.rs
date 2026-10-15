@@ -351,11 +351,11 @@ fn streamed_outbound_noop_case(
             None
         );
     }
-    // An idle receiver commits its cursor while starting a peer turn; that
-    // delivery branch defers presentation until the normal presenter drain.
-    // Drain only the receipt-backed presenter, never transport or send again.
-    service.flush_received_peer_message_presentations().unwrap();
-    assert_eq!(service.message_service().snapshot_state(), messages);
+    // This sender-only regression preserves receiver commit/outbox evidence;
+    // it must not force an unrelated receiver presenter to succeed. Existing
+    // colon-bearing receipt copy carriers can fail their ordinal proof. Keep
+    // the exact pending source (or already durable receipt), never suppress the
+    // error, change an id, weaken validation, or replay transport to repair it.
     let receiver_conversation = service
         .agent_shell_store()
         .get(peer_pane)
@@ -372,13 +372,30 @@ fn streamed_outbound_noop_case(
             )
         })
         .collect();
-    assert_eq!(received_ids.len(), usize::from(visible));
+    let receipts = service.snapshot_unsettled_received_peer_message_presentations();
+    let expected_identity = format!("peer-message recipient={peer_agent} sequence={sequence} id={message_id}");
+    assert_eq!(received_ids.len() + receipts.len(), usize::from(visible), "each visible committed message must have exactly one pending or durable receiver receipt");
     if let Some(identity) = received_ids.first() {
-        assert_eq!(
-            identity,
-            &format!("peer-message recipient={peer_agent} sequence={sequence} id={message_id}")
-        );
+        assert_eq!(identity, &expected_identity);
     }
+    if let Some(receipt) = receipts.first() {
+        assert_eq!(receipt.identity, expected_identity);
+        assert_eq!(receipt.recipient_agent_id, peer_agent);
+        assert_eq!(receipt.pane_id, peer_pane);
+        assert_eq!(receipt.conversation_id, receiver_conversation);
+        assert_eq!(receipt.sequence, sequence);
+        assert_eq!(receipt.content_type, content_type);
+        assert_eq!(receipt.payload, payload);
+        assert!(receipt.presentation_eligible);
+        assert!(receipt.occurrence.is_valid());
+        receipt.validate().unwrap();
+        let receiver_turn = service.agent_turn_ledger().turn(&receipt.turn_id).unwrap();
+        assert_eq!(receiver_turn.agent_id, peer_agent);
+        assert_eq!(receiver_turn.conversation_id, receiver_conversation);
+    }
+    let context_label = crate::runtime::control::runtime_peer_message_block_label(sequence, &message_id);
+    let context_count = |service: &RuntimeSessionService| service.agent_turn_contexts().values().flat_map(|context| context.blocks()).filter(|block| block.source == mez_agent::ContextSourceKind::PeerMessage && block.label == context_label).count();
+    assert_eq!(context_count(&service), 1, "recipient context commits exactly once; sender presentation is not another context event");
     for _ in 0..2 {
         service
             .finalize_settled_outbound_message_previews("%1", &turn.turn_id, &execution)
@@ -390,6 +407,8 @@ fn streamed_outbound_noop_case(
         "presentation finalization cannot alter messages or cursors"
     );
     assert_eq!(store.inspect_presentation(&conversation).unwrap(), entries);
+    assert_eq!(service.snapshot_unsettled_received_peer_message_presentations(), receipts, "outbound finalization preserves exact pending receiver source, occurrence, eligibility and live-rendered state");
+    assert_eq!(context_count(&service), 1);
     assert_eq!(
         store.inspect_presentation(&receiver_conversation).unwrap(),
         received
