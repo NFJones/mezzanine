@@ -119,11 +119,19 @@ Use the canonical configured server ID, not an inferred service name. The
 reference lets the agent retrieve that server's safe metadata; it does not
 authenticate the server, grant approval, or expose tools by itself.
 
+A known exact configured ID can also be passed directly to `mcp_server_get`:
+prior search or directory history is not a prerequisite. Purpose and usage
+guidance are optional, not access controls. Automatically exposed selections
+retain safe unavailable-name/reason diagnostics instead of silently vanishing.
+
 The agent uses `mcp_server_search` when it needs to find a configured server,
 `mcp_server_get` to retrieve the selected server's complete tool contracts,
 and `mcp_call` to invoke an advertised tool. Search and retrieval are passive
-metadata operations. Unknown, disabled, ambiguous, or unavailable servers do
-not acquire substitute tools.
+metadata operations: retrieval can report a configured server's pending,
+disabled, failed, or blacklisted state without starting it or granting tools.
+Unknown exact IDs return not-found errors. Unknown, disabled, ambiguous, or
+unavailable servers do not acquire substitute tools. Only a complete available
+retrieval can supply a callable contract, still subject to live validation.
 
 Explicit references and search results survive restart or resume. Compaction
 clears retrieved tool contracts, so the agent must retrieve the server again

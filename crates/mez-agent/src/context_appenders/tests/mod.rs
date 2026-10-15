@@ -14,6 +14,7 @@ use crate::{
 
 mod guidance;
 mod integrations;
+mod mcp_directory;
 
 /// Synthetic prompt source for appender tests that include request assembly.
 struct TestPromptAssets;

@@ -370,7 +370,15 @@ fn mcp_context_merges_configured_and_explicit_servers_deterministically() {
         !configured.contains("available_tool=GitHub_2/lookup"),
         "{configured}"
     );
-    assert!(!configured.contains("unavailable_server="), "{configured}");
+    assert!(
+        configured.contains("unavailable_server=\"missing\""),
+        "{configured}"
+    );
+    assert!(
+        configured.contains("did not match a configured server"),
+        "{configured}"
+    );
+    assert!(!mcp_server_is_referencable(&context, "missing"));
 }
 
 #[test]

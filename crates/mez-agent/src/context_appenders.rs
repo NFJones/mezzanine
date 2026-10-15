@@ -196,9 +196,10 @@ pub fn invoked_mcp_tools_for_context_with_configured(
 
 /// Builds exact compact directory references for resolvable `@server` mentions.
 ///
-/// References make a server eligible for `mcp_server_get`, but never expose a
-/// tool contract or make `mcp_call` callable. Unknown, ambiguous, disabled,
-/// and unavailable names deliberately produce no grant.
+/// References identify a configured server for passive `mcp_server_get`, but
+/// are not a prerequisite for that exact-ID lookup and never make `mcp_call`
+/// callable. Unknown, ambiguous, disabled, and unavailable names produce
+/// diagnostics rather than fabricated tool contracts.
 pub fn mcp_server_reference_blocks_for_prompt(
     prompt: &str,
     summary: &McpPromptSummary,
@@ -329,7 +330,9 @@ pub fn mcp_server_search_result_for_action_result(result: &ActionResult) -> Opti
     })?
 }
 
-/// Returns whether a canonical server identifier has durable retrieval access.
+/// Returns whether a canonical server identifier has available directory evidence.
+/// Passive exact-ID metadata lookup does not require this evidence; it never
+/// grants tool-call authority or substitutes for a complete retrieved manifest.
 pub fn mcp_server_is_referencable(context: &AgentContext, server_id: &str) -> bool {
     valid_mcp_server_id(server_id)
         && context.blocks().iter().any(|block| match block.source {
@@ -348,8 +351,9 @@ pub fn mcp_server_is_referencable(context: &AgentContext, server_id: &str) -> bo
         })
 }
 
-/// Returns whether a prior successfully settled search result makes one
-/// canonical server identifier referencable within the same action batch.
+/// Returns whether a successful search provides available directory evidence
+/// for one canonical server identifier within the same action batch. This is
+/// discovery context, not an authorization requirement for passive lookup.
 pub fn mcp_server_is_referencable_from_action_result(
     result: &ActionResult,
     server_id: &str,
@@ -506,6 +510,8 @@ fn mcp_directory_record_value(server: &McpPromptServer) -> serde_json::Value {
 }
 
 /// Validates and canonicalizes one safe server directory record.
+/// Purpose and usage prose are optional strings, never identity or permission
+/// requirements. Malformed fields and unavailable search grants still reject.
 fn mcp_directory_record_from_value(
     value: &serde_json::Value,
     require_available_state: bool,
@@ -518,11 +524,7 @@ fn mcp_directory_record_from_value(
     let display_name = value.get("display_name")?.as_str()?.trim();
     let purpose = value.get("purpose")?.as_str()?.trim();
     let usage_instructions = value.get("usage_instructions")?.as_str()?.trim();
-    (valid_mcp_server_id(server_id)
-        && !display_name.is_empty()
-        && !purpose.is_empty()
-        && !usage_instructions.is_empty())
-    .then(|| {
+    (valid_mcp_server_id(server_id) && !display_name.is_empty()).then(|| {
         serde_json::json!({
             "server_id": server_id,
             "display_name": display_name,
@@ -631,27 +633,39 @@ fn mcp_server_id_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
 }
 
-/// Renders one compact deterministic MCP directory without tool contracts or
-/// sampled live availability. A directory entry makes a server referencable,
-/// never callable.
+/// Renders the selected directory and safe unavailability diagnostics without
+/// tool contracts. Available rows retain their canonical identity format;
+/// diagnostic rows never masquerade as available directory grants. An empty
+/// available set must not erase a configured selection's recovery information.
 fn render_mcp_directory(summary: &McpPromptSummary) -> Option<String> {
     let mut servers = summary.available_servers.clone();
     servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
-    (!servers.is_empty()).then(|| {
-        servers
-            .iter()
-            .map(|server| {
-                format!(
-                    "server={} name={} purpose={} usage_instructions={}",
-                    server.server_id,
-                    mcp_context_quoted_value(&server.display_name),
-                    mcp_context_quoted_value(&server.purpose),
-                    mcp_context_quoted_value(&server.usage_instructions)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    })
+    let mut rows = servers
+        .iter()
+        .map(|server| {
+            format!(
+                "server={} name={} purpose={} usage_instructions={}",
+                server.server_id,
+                mcp_context_quoted_value(&server.display_name),
+                mcp_context_quoted_value(&server.purpose),
+                mcp_context_quoted_value(&server.usage_instructions)
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut unavailable = summary.unavailable_servers.clone();
+    unavailable.sort_by(|left, right| left.server_id.cmp(&right.server_id));
+    unavailable.dedup_by(|left, right| left.server_id == right.server_id);
+    rows.extend(unavailable.iter().map(|server| {
+        format!(
+            "unavailable_server={} reason={} retryable={} purpose={} usage_instructions={}",
+            mcp_context_quoted_value(&server.server_id),
+            mcp_context_quoted_value(&server.reason),
+            server.retryable,
+            mcp_context_quoted_value(&server.purpose),
+            mcp_context_quoted_value(&server.usage_instructions)
+        )
+    }));
+    (!rows.is_empty()).then(|| rows.join("\n"))
 }
 
 /// Returns true when a context block is runtime-injected MCP prompt context.

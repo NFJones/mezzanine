@@ -104,7 +104,7 @@ pub fn maap_current_action_batch_description(
 /// Returns the request-independent OpenAI Responses MAAP tool description.
 pub fn maap_cache_stable_action_batch_description() -> String {
     maap_action_batch_description_with_mcp_manifest(
-        "When MCP actions are included, use a resolved @server reference as durable MCP directory context and retrieve that server directly; otherwise search configured MCP metadata, retrieve a selected server's safe metadata, then use mcp_call only when the current action surface and MCP context identify a callable server/tool pair; runtime validation rejects unavailable tools and invalid arguments.",
+        "When MCP actions are included, use a resolved @server reference as durable MCP directory context and retrieve that server directly; otherwise search configured MCP metadata, retrieve a selected server's safe metadata, then use mcp_call only when the current action surface and MCP context identify a callable server/tool pair; runtime validation rejects unavailable tools and invalid arguments. Known exact configured ids need no prior search; metadata lookup does not start transports or grant tools.",
     )
 }
 
@@ -1127,7 +1127,7 @@ pub fn maap_mcp_server_get_action_schema() -> serde_json::Value {
             serde_json::json!({
                 "type": "string",
                 "minLength": 1,
-                "description": "Configured MCP server id returned by mcp_server_search or durable MCP directory context."
+                "description": "Exact configured MCP server id. Prior search or directory context is not required for safe metadata lookup."
             }),
         )],
         &["server"],
@@ -1135,7 +1135,7 @@ pub fn maap_mcp_server_get_action_schema() -> serde_json::Value {
     if let Some(object) = schema.as_object_mut() {
         object.insert(
             "description".to_string(),
-            serde_json::json!("Retrieve safe metadata for one configured MCP server before deciding whether an external mcp_call is useful."),
+            serde_json::json!("Retrieve safe metadata and readiness for one exact configured MCP server without starting a transport. Known unavailable servers return diagnostic state; only complete available contracts can enable a later mcp_call."),
         );
     }
     schema
