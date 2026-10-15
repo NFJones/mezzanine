@@ -29,7 +29,7 @@ async fn fixture(body: &[u8], headers: &str) -> (String, tokio::task::JoinHandle
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut buffer = [0; 4096];
-        stream.read(&mut buffer).await.unwrap();
+        assert!(stream.read(&mut buffer).await.unwrap() > 0);
         stream.write_all(response.as_bytes()).await.unwrap();
         stream.write_all(&body).await.unwrap();
     });
@@ -151,7 +151,7 @@ async fn http_pending_progress_does_not_block_body_and_is_dropped() {
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut buffer = [0; 4096];
-        stream.read(&mut buffer).await.unwrap();
+        assert!(stream.read(&mut buffer).await.unwrap() > 0);
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nc")
             .await
@@ -197,7 +197,7 @@ async fn http_cancellation_drops_body_and_progress_future() {
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut bytes = [0; 4096];
-        stream.read(&mut bytes).await.unwrap();
+        assert!(stream.read(&mut bytes).await.unwrap() > 0);
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\na")
             .await
