@@ -589,6 +589,23 @@ impl SessionSupervisor {
 
     /// Stops every live runtime and waits boundedly for all matching tasks to settle.
     pub(crate) async fn shutdown_all(&self, force: bool, timeout: Duration) -> Result<()> {
+        self.shutdown_all_with_receipt_probe(
+            force,
+            timeout,
+            #[cfg(test)]
+            None,
+        )
+        .await
+    }
+
+    /// Retains the actual shutdown algorithm while allowing a test-only receipt
+    /// publication point after native completion and before entry settlement.
+    async fn shutdown_all_with_receipt_probe(
+        &self,
+        force: bool,
+        timeout: Duration,
+        #[cfg(test)] after_native: Option<fn(&Self, bool)>,
+    ) -> Result<()> {
         use futures_util::StreamExt;
         let deadline = tokio::time::Instant::now()
             .checked_add(timeout)
@@ -635,6 +652,10 @@ impl SessionSupervisor {
         };
         let (mut first_error, native) =
             tokio::join!(requests, self.drain_native_after_seal(deadline));
+        #[cfg(test)]
+        if let Some(after_native) = after_native {
+            after_native(self, native.is_ok());
+        }
         if let Err(error) = native {
             first_error = Some(match first_error {
                 Some(primary) => MezError::new(
@@ -656,6 +677,17 @@ impl SessionSupervisor {
         .await
         .map_err(|_| MezError::invalid_state("session supervisor shutdown timed out"))
         .and_then(|result| result);
+        // Entry settlement may run a completion callback after the native
+        // future finished. Its monotonic receipt must affect this verdict too.
+        match self.native_cleanup_failure() {
+            Ok(Some(failure)) => {
+                first_error.get_or_insert_with(|| MezError::invalid_state(failure));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                first_error.get_or_insert(error);
+            }
+        }
         match (first_error, settlement) {
             (None, result) => result,
             (Some(primary), Ok(())) => Err(primary),
@@ -714,6 +746,18 @@ impl SessionSupervisor {
 
     /// Fair native quanta run independently of potentially stalled actor stops.
     async fn drain_native_after_seal(&self, deadline: tokio::time::Instant) -> Result<()> {
+        self.drain_native_with_owner_receipts(deadline, PaneProcessRetirementOwner::cleanup_failure)
+            .await
+    }
+
+    /// Production reads only the retained owners. The private per-call reader
+    /// permits deterministic diagnostic-publication tests without a global hook
+    /// or any mutation of child handles, counters or native completion proof.
+    async fn drain_native_with_owner_receipts(
+        &self,
+        deadline: tokio::time::Instant,
+        mut read_owner_failure: impl FnMut(&PaneProcessRetirementOwner) -> Option<String>,
+    ) -> Result<()> {
         let owners = {
             self.inner
                 .entries()?
@@ -722,6 +766,11 @@ impl SessionSupervisor {
                 .collect::<Vec<_>>()
         };
         let mut first_error = self.native_cleanup_failure()?.map(MezError::invalid_state);
+        for owner in &owners {
+            if let Some(failure) = read_owner_failure(owner) {
+                first_error.get_or_insert_with(|| MezError::invalid_state(failure));
+            }
+        }
         loop {
             for owner in &owners {
                 if tokio::time::Instant::now() >= deadline {
@@ -740,6 +789,14 @@ impl SessionSupervisor {
                 .map(PaneProcessRetirementOwner::outstanding)
                 .sum();
             if pending == 0 {
+                // A worker may have published its receipt and reaped while the
+                // completion callback is still gated. Zero comes first; read
+                // every retained owner's monotonic receipt before success.
+                for owner in &owners {
+                    if let Some(failure) = read_owner_failure(owner) {
+                        first_error.get_or_insert_with(|| MezError::invalid_state(failure));
+                    }
+                }
                 break;
             }
             if tokio::time::Instant::now() >= deadline {
@@ -887,18 +944,37 @@ impl SessionSupervisorInner {
         generation: u64,
         failure: String,
     ) -> Result<bool> {
+        self.retain_native_with_owner_receipt(
+            session_id,
+            generation,
+            failure,
+            PaneProcessRetirementOwner::cleanup_failure,
+        )
+    }
+
+    /// Samples pending before receipt: publication precedes final slot release,
+    /// so a zero observation cannot remove a generation with an unseen error.
+    /// A prior nonzero snapshot conservatively retains it for finalization.
+    fn retain_native_with_owner_receipt(
+        &self,
+        session_id: &str,
+        generation: u64,
+        failure: String,
+        mut read_owner_failure: impl FnMut(&PaneProcessRetirementOwner) -> Option<String>,
+    ) -> Result<bool> {
         let mut entries = self.entries()?;
         if let Some(entry) = entries.get_mut(session_id)
             && entry.generation == generation
         {
             entry.native.seal();
-            if let Some(native_failure) = entry.native.cleanup_failure() {
+            let pending = entry.native.outstanding();
+            if let Some(native_failure) = read_owner_failure(&entry.native) {
                 let mut first = self.native_failure.lock().map_err(|_| {
                     MezError::invalid_state("native cleanup failure status is unavailable")
                 })?;
                 first.get_or_insert(native_failure);
             }
-            if entry.native.outstanding() != 0 {
+            if pending != 0 {
                 entry.state = SupervisorEntryState::CleanupPending { failure };
                 self.changed.notify_waiters();
                 return Ok(true);
@@ -1038,6 +1114,8 @@ mod tests {
         SessionRuntimeConfig, SessionRuntimeLimits, SessionRuntimeStartup, SessionSocketPublication,
     };
     use crate::host::shell::{ResolvedShell, ShellSource};
+
+    mod receipt_ordering;
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(10_000);
 
