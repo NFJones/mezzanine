@@ -466,7 +466,7 @@ fn runtime_log_timestamps_off_raw_literal_source_survives_toggle() {
         }
     }
     assert_eq!(ids.len(), 2);
-    for enabled in [true, false, true] {
+    for enabled in [false, true, false, true] {
         replace_timestamp_settings(&mut service, enabled, 80, "");
         let mut copy = CopyMode::from_screen(service.agent_pane_screen("%1").unwrap(), 40).unwrap();
         copy.set_agent_surface(true);

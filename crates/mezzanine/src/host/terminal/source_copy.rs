@@ -313,6 +313,74 @@ mod tests {
         );
     }
 
+    /// Whole-entry and block declarations are raw producer inputs even when
+    /// their bytes equal a generated control or malformed carrier. They never
+    /// enter the carrier parser; block owners and exact payloads remain checked.
+    #[test]
+    fn raw_source_plans_keep_literal_controls_independent_of_declared_carriers() {
+        let entry = PresentationEntry {
+            id: "raw-owner".into(),
+            occurrence: Default::default(),
+            first_row: true,
+        };
+        for raw in [
+            COPY_SKIP_LINE,
+            COPY_WRAP_CONTINUATION,
+            COPY_SOURCE_LINE_PREFIX,
+            COPY_SOURCE_REFERENCE_PREFIX,
+        ] {
+            let plan = source_associations(
+                &entry,
+                &normal_rows(),
+                &[],
+                CopySourcePlan::WholeEntry(raw),
+                &[],
+            )
+            .unwrap();
+            assert!(
+                plan.iter()
+                    .all(|source| source.as_ref().unwrap().text.as_ref() == raw)
+            );
+            assert_eq!(
+                plan[0].as_ref().unwrap().id.group(),
+                TerminalCopySourceGroup::WholeEntry
+            );
+        }
+        let raw = format!("{COPY_SOURCE_LINE_PREFIX}literal:not-an-ordinal\r\n\n");
+        let block = TerminalCopySource::new(
+            TerminalCopySourceId::new(&entry, TerminalCopySourceGroup::RawBlock(0)).unwrap(),
+            Arc::<str>::from(raw.as_str()),
+        );
+        let lines = [RichTextLine {
+            display: "code".into(),
+            style_spans: Vec::new(),
+            copy_text: Some(raw.clone()),
+            kind: RichTextLineKind::MarkdownCodeBlock,
+        }];
+        let blocks = [block.clone()];
+        let plan = source_associations(
+            &entry,
+            &lines,
+            std::slice::from_ref(&raw),
+            CopySourcePlan::Blocks(&blocks),
+            &[],
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(plan[0].as_ref().unwrap(), &block));
+        let mut foreign = entry.clone();
+        foreign.id = "foreign-owner".into();
+        assert!(
+            source_associations(
+                &foreign,
+                &lines,
+                &[raw],
+                CopySourcePlan::Blocks(&blocks),
+                &[]
+            )
+            .is_err()
+        );
+    }
+
     /// A same-ordinal foreign namespace cannot borrow a declared anchor, and
     /// missing/conflicting anchors reject before a candidate plan is returned.
     #[test]
