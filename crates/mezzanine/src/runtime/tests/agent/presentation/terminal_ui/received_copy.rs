@@ -11,7 +11,12 @@ use mez_core::ids::PaneId;
 /// Selects all rows owned by the committed receiver occurrence, and then one
 /// body cell. The full selection emits original source ordinals exactly once;
 /// partial selection recovers only its complete semantic source line.
-fn assert_received_copy(service: &RuntimeSessionService, identity: &str, payload: &str) {
+fn assert_received_copy(
+    service: &RuntimeSessionService,
+    identity: &str,
+    payload: &str,
+    stage: &str,
+) {
     let screen = service.agent_pane_screen("%1").unwrap();
     let mut copy = CopyMode::from_screen(screen, 12).unwrap();
     copy.set_agent_surface(true);
@@ -50,12 +55,17 @@ fn assert_received_copy(service: &RuntimeSessionService, identity: &str, payload
         copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
             .unwrap(),
         payload,
-        "rows={:#?}",
+        "stage={stage}, size={:?}, timestamps={}, rows={:#?}",
+        screen.size(),
+        screen.log_frame_settings().0.timestamps,
         (0..copy.line_count())
             .map(|row| (
                 row,
                 &copy.lines()[row],
                 copy.copy_line(row),
+                canonical
+                    .get(row)
+                    .and_then(|line| line.copy_text.as_deref()),
                 canonical
                     .get(row)
                     .and_then(|line| line.copy_source.as_ref())
@@ -199,7 +209,7 @@ fn runtime_received_colon_carrier_flush_copy_replay_is_once_only() {
             1
         );
         service.flush_received_peer_message_presentations().unwrap();
-        assert_received_copy(&service, &identity, payload);
+        assert_received_copy(&service, &identity, payload, "live flush");
         let installed = service.agent_pane_screen("%1").unwrap().clone();
         service.flush_received_peer_message_presentations().unwrap();
         assert_eq!(
@@ -243,7 +253,7 @@ fn runtime_received_colon_carrier_flush_copy_replay_is_once_only() {
             service
                 .replay_agent_presentation_entries_to_terminal_buffer("%1", &entries)
                 .unwrap();
-            assert_received_copy(&service, &identity, payload);
+            assert_received_copy(&service, &identity, payload, "semantic replay");
             let rows = service
                 .agent_pane_screen("%1")
                 .unwrap()
@@ -262,7 +272,7 @@ fn runtime_received_colon_carrier_flush_copy_replay_is_once_only() {
             service
                 .resize_agent_screen_with_pending_steering("%1", Size::new(24, 6).unwrap())
                 .unwrap();
-            assert_received_copy(&service, &identity, payload);
+            assert_received_copy(&service, &identity, payload, "physical resize");
         }
         assert_eq!(count_context(&service), 1);
         assert_eq!(
