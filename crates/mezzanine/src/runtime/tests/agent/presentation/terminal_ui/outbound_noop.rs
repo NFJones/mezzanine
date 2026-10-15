@@ -373,8 +373,13 @@ fn streamed_outbound_noop_case(
         })
         .collect();
     let receipts = service.snapshot_unsettled_received_peer_message_presentations();
-    let expected_identity = format!("peer-message recipient={peer_agent} sequence={sequence} id={message_id}");
-    assert_eq!(received_ids.len() + receipts.len(), usize::from(visible), "each visible committed message must have exactly one pending or durable receiver receipt");
+    let expected_identity =
+        format!("peer-message recipient={peer_agent} sequence={sequence} id={message_id}");
+    assert_eq!(
+        received_ids.len() + receipts.len(),
+        usize::from(visible),
+        "each visible committed message must have exactly one pending or durable receiver receipt"
+    );
     if let Some(identity) = received_ids.first() {
         assert_eq!(identity, &expected_identity);
     }
@@ -393,9 +398,24 @@ fn streamed_outbound_noop_case(
         assert_eq!(receiver_turn.agent_id, peer_agent);
         assert_eq!(receiver_turn.conversation_id, receiver_conversation);
     }
-    let context_label = crate::runtime::control::runtime_peer_message_block_label(sequence, &message_id);
-    let context_count = |service: &RuntimeSessionService| service.agent_turn_contexts().values().flat_map(|context| context.blocks()).filter(|block| block.source == mez_agent::ContextSourceKind::PeerMessage && block.label == context_label).count();
-    assert_eq!(context_count(&service), 1, "recipient context commits exactly once; sender presentation is not another context event");
+    let context_label =
+        crate::runtime::control::runtime_peer_message_block_label(sequence, &message_id);
+    let context_count = |service: &RuntimeSessionService| {
+        service
+            .agent_turn_contexts()
+            .values()
+            .flat_map(|context| context.blocks())
+            .filter(|block| {
+                block.source == mez_agent::ContextSourceKind::PeerMessage
+                    && block.label == context_label
+            })
+            .count()
+    };
+    assert_eq!(
+        context_count(&service),
+        1,
+        "recipient context commits exactly once; sender presentation is not another context event"
+    );
     for _ in 0..2 {
         service
             .finalize_settled_outbound_message_previews("%1", &turn.turn_id, &execution)
@@ -407,7 +427,11 @@ fn streamed_outbound_noop_case(
         "presentation finalization cannot alter messages or cursors"
     );
     assert_eq!(store.inspect_presentation(&conversation).unwrap(), entries);
-    assert_eq!(service.snapshot_unsettled_received_peer_message_presentations(), receipts, "outbound finalization preserves exact pending receiver source, occurrence, eligibility and live-rendered state");
+    assert_eq!(
+        service.snapshot_unsettled_received_peer_message_presentations(),
+        receipts,
+        "outbound finalization preserves exact pending receiver source, occurrence, eligibility and live-rendered state"
+    );
     assert_eq!(context_count(&service), 1);
     assert_eq!(
         store.inspect_presentation(&receiver_conversation).unwrap(),
@@ -418,17 +442,22 @@ fn streamed_outbound_noop_case(
         &displayed,
         "source/copy/time metadata must remain exact"
     );
+    // Keep the sentinel below the narrow timestamp-reserved body width; the
+    // previous multiword phrase legitimately wrapped across display rows.
     service
-        .append_agent_status_text_to_terminal_buffer("%1", "normal continuation")
+        .append_agent_status_text_to_terminal_buffer("%1", "continued")
         .unwrap();
-    assert!(
+    assert_eq!(
         service
             .agent_pane_screen("%1")
             .unwrap()
             .normal_content_lines()
             .join("\n")
-            .contains("normal continuation")
+            .matches("continued").count(),
+        1,
+        "type={content_type} verbose={verbose} cap={cap} timestamps={timestamps}"
     );
+    assert_eq!(store.inspect_presentation(&conversation).unwrap().iter().filter(|entry| entry.source_text.as_deref() == Some("continued")).count(), 1, "normal continuation must persist its exact source once");
     service
         .complete_running_agent_turn_and_start_ready(
             &turn,
