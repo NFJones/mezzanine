@@ -5,6 +5,288 @@
 
 use super::*;
 
+/// Adjacent accepted sender previews to one display label remain separate
+/// occurrences, including equal payloads. Legacy OFF copy must not merge their
+/// generated carrier runs or return the first payload for a second-only range.
+/// Settlement here is display-only and never executes either transport action.
+#[test]
+fn runtime_outbound_adjacent_same_label_sources_remain_distinct() {
+    for timestamps in [false, true] {
+        for equal in [false, true] {
+            let mut service = test_runtime_service();
+            super::timestamp_settings::replace_timestamp_settings(&mut service, timestamps, 24, "");
+            service
+                .agent_shell_store_mut()
+                .enter_or_resume("%1")
+                .unwrap();
+            let turn = service
+                .start_agent_prompt_turn("%1", "display adjacent sender sources")
+                .unwrap();
+            service.remove_pending_agent_provider_task(&turn.turn_id);
+            set_agent_pane_screen_for_test(
+                &mut service,
+                "%1",
+                TerminalScreen::new(Size::new(80, 24).unwrap(), 200).unwrap(),
+            );
+            let first = "first message wraps across several visible rows";
+            let second = if equal {
+                first
+            } else {
+                "second message wraps across several different visible rows"
+            };
+            for (ordinal, payload) in [first, second].into_iter().enumerate() {
+                let action = mez_agent::AgentAction {
+                    id: format!("adjacent-{ordinal}"),
+                    payload: mez_agent::AgentActionPayload::SendMessage {
+                        recipient: "agent-%2".into(),
+                        scope: None,
+                        content_type: "text/plain; charset=utf-8".into(),
+                        payload: payload.into(),
+                        correlation_id: None,
+                    },
+                };
+                service
+                    .settle_accepted_outbound_message_preview("%1", &turn.turn_id, ordinal, &action)
+                    .unwrap();
+            }
+            let screen = service.agent_pane_screen("%1").unwrap();
+            let canonical = screen.normal_styled_content_lines();
+            let owners = canonical
+                .iter()
+                .filter_map(|row| {
+                    row.copy_source
+                        .as_ref()
+                        .map(|source| source.id.owner().to_string())
+                })
+                .fold(Vec::<String>::new(), |mut owners, owner| {
+                    if owners.last() != Some(&owner) {
+                        owners.push(owner);
+                    }
+                    owners
+                });
+            assert_eq!(owners.len(), 2);
+            assert_ne!(owners[0], owners[1]);
+            let mut copy = CopyMode::from_screen(screen, 24).unwrap();
+            copy.set_agent_surface(true);
+            let rows_for = |owner: &str| {
+                (0..copy.line_count())
+                    .filter(|row| {
+                        copy.copy_source(*row)
+                            .is_some_and(|source| source.id.owner() == owner)
+                            || (!timestamps
+                                && canonical
+                                    .get(*row)
+                                    .and_then(|line| line.copy_source.as_ref())
+                                    .is_some_and(|source| source.id.owner() == owner))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let first_rows = rows_for(&owners[0]);
+            let second_rows = rows_for(&owners[1]);
+            assert!(first_rows.len() > 1 && second_rows.len() > 1);
+            let last = *second_rows.last().unwrap();
+            let end = mez_mux::render::char_count(&copy.lines()[last]);
+            copy.select_range(
+                CopyPosition {
+                    line: second_rows[0],
+                    column: 0,
+                },
+                CopyPosition {
+                    line: last,
+                    column: end,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                    .unwrap(),
+                second,
+                "second-only: timestamps={timestamps}, equal={equal}"
+            );
+            copy.select_range(
+                CopyPosition {
+                    line: first_rows[0],
+                    column: 0,
+                },
+                CopyPosition {
+                    line: last,
+                    column: end,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                    .unwrap(),
+                format!("{first}\n{second}"),
+                "both occurrences: timestamps={timestamps}, equal={equal}"
+            );
+        }
+    }
+}
+
+/// Cumulative plaintext sender growth changes which ordinal owns the final
+/// CRLF suffix. Atomic projection replacement and accepted preview settlement
+/// must retain exact current bytes while an old copy snapshot stays frozen.
+/// This display-only qualification never executes or retries a transport send.
+#[test]
+fn runtime_outbound_plaintext_crlf_growth_keeps_frozen_source() {
+    for timestamps in [false, true] {
+        let mut service = test_runtime_service();
+        super::timestamp_settings::replace_timestamp_settings(&mut service, timestamps, 80, "");
+        let store = AgentTranscriptStore::new(temp_root("outbound-crlf-growth"));
+        service.set_agent_transcript_store(store.clone());
+        let conversation = service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        let turn = service
+            .start_agent_prompt_turn("%1", "stream synthetic CRLF source")
+            .unwrap();
+        service.remove_pending_agent_provider_task(&turn.turn_id);
+        set_agent_pane_screen_for_test(
+            &mut service,
+            "%1",
+            TerminalScreen::new(Size::new(80, 12).unwrap(), 100).unwrap(),
+        );
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer(
+                "%1",
+                &turn.turn_id,
+                &mez_agent::StreamingSayEvent::MessageStarted {
+                    action_index: 0,
+                    recipient: "agent-%2".into(),
+                    content_type: "text/plain; charset=utf-8".into(),
+                },
+            )
+            .unwrap();
+        let mut frozen = None;
+        for (delta, expected) in [
+            ("first\r\n", "first\r\n"),
+            ("second\r\n\n", "first\r\nsecond\r\n\n"),
+        ] {
+            service
+                .apply_agent_streaming_say_event_to_terminal_buffer(
+                    "%1",
+                    &turn.turn_id,
+                    &mez_agent::StreamingSayEvent::MessagePayloadDelta {
+                        action_index: 0,
+                        text: delta.into(),
+                    },
+                )
+                .unwrap();
+            let work = service
+                .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+                .unwrap()
+                .unwrap();
+            assert!(
+                service
+                    .apply_agent_streaming_say_projection_result(
+                        RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap()
+                    )
+                    .unwrap()
+            );
+            let mut copy =
+                CopyMode::from_screen(service.agent_pane_screen("%1").unwrap(), 12).unwrap();
+            copy.set_agent_surface(true);
+            let last = copy
+                .lines()
+                .iter()
+                .rposition(|row| !row.trim().is_empty())
+                .unwrap();
+            let end = mez_mux::render::char_count(&copy.lines()[last]);
+            copy.select_range(
+                CopyPosition { line: 0, column: 0 },
+                CopyPosition {
+                    line: last,
+                    column: end,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                    .unwrap(),
+                expected
+            );
+            if frozen.is_none() {
+                frozen = Some(copy);
+            }
+        }
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer(
+                "%1",
+                &turn.turn_id,
+                &mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 },
+            )
+            .unwrap();
+        let action = mez_agent::AgentAction {
+            id: "growth-crlf-action".into(),
+            payload: mez_agent::AgentActionPayload::SendMessage {
+                recipient: "agent-%2".into(),
+                scope: None,
+                content_type: "text/plain; charset=utf-8".into(),
+                payload: "first\r\nsecond\r\n\n".into(),
+                correlation_id: None,
+            },
+        };
+        let messages = service.message_service().snapshot_state();
+        service
+            .settle_accepted_outbound_message_preview("%1", &turn.turn_id, 0, &action)
+            .unwrap();
+        let settled = service.agent_pane_screen("%1").unwrap().clone();
+        service
+            .settle_accepted_outbound_message_preview("%1", &turn.turn_id, 0, &action)
+            .unwrap();
+        assert_eq!(service.agent_pane_screen("%1").unwrap(), &settled);
+        assert_eq!(service.message_service().snapshot_state(), messages);
+        let mut current = CopyMode::from_screen(&settled, 12).unwrap();
+        current.set_agent_surface(true);
+        let last = current
+            .lines()
+            .iter()
+            .rposition(|row| !row.trim().is_empty())
+            .unwrap();
+        let end = mez_mux::render::char_count(&current.lines()[last]);
+        current
+            .select_range(
+                CopyPosition { line: 0, column: 0 },
+                CopyPosition {
+                    line: last,
+                    column: end,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            current
+                .copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                .unwrap(),
+            "first\r\nsecond\r\n\n"
+        );
+        assert_eq!(
+            frozen
+                .unwrap()
+                .copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                .unwrap(),
+            "first\r\n"
+        );
+        let entries = store.inspect_presentation(&conversation).unwrap();
+        let sent = entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .source_text
+                    .as_deref()
+                    .is_some_and(|source| source.contains("growth-crlf-action"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(sent.len(), 1);
+        let source: serde_json::Value =
+            serde_json::from_str(sent[0].source_text.as_deref().unwrap()).unwrap();
+        assert_eq!(source["payload"], "first\r\nsecond\r\n\n");
+    }
+}
+
 /// Verifies a presentation-eligible outbound message appears before provider
 /// completion, retains its requested recipient marker, and obeys the active
 /// transcript width cap.

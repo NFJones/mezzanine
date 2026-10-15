@@ -64,6 +64,10 @@ Saved peer messages replay with their original receipt identities, including
 runtime turn/action IDs containing colons. Internal copy metadata escapes its
 identity separators separately from message text, so resume and source-copy
 preserve authored colons, percent signs and Unicode without rewriting history.
+Source-backed replay regenerates copy carriers from the retained semantic record;
+older numeric or delimiter-free grouped carrier identities remain opaque rather
+than being percent-decoded or guessed from payload text. Legacy source-free ANSI
+and recorded-width projection behavior is unchanged.
 
 Active bindings are checkpointed separately for each Mezzanine session. New
 versions import older shared binding metadata once without rewriting a running

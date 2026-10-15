@@ -728,21 +728,23 @@ impl StyledCopyMode {
             .or_else(|| self.buffer.lines().get(line).map(String::as_str))
     }
 
-    /// Returns typed source ownership matching one frozen row. Never-framed
-    /// legacy snapshots deliberately retain their established string contract.
+    /// Returns typed source ownership matching one frozen row. Raw whole-entry
+    /// and block declarations always outrank marker-looking authored strings.
+    /// Never-framed source-line carriers retain their established string contract.
     pub fn copy_source(&self, line: usize) -> Option<&mez_terminal::TerminalCopySource> {
-        self.source_associations_enabled
-            .then(|| self.copy_sources.get(line)?.as_deref())
-            .flatten()
+        let source = self.copy_sources.get(line)?.as_deref()?;
+        (self.source_associations_enabled
+            || !matches!(
+                source.id.group(),
+                mez_terminal::TerminalCopySourceGroup::SourceLine(_)
+            ))
+        .then_some(source)
     }
 
     /// Rejects mixed immutable generations or payloads under one semantic ID.
     /// Revision is not another occurrence; conflicts cannot fall back to legacy
     /// source strings. Rendered copy and navigation do not consume this check.
     pub fn validate_copy_sources(&self) -> Result<()> {
-        if !self.source_associations_enabled {
-            return Ok(());
-        }
         let mut seen = std::collections::BTreeMap::new();
         for source in self.copy_sources.iter().flatten() {
             if let Some(previous) = seen.insert(&source.id, source.as_ref())
@@ -1004,6 +1006,58 @@ pub fn validate_position(lines: &[String], position: CopyPosition) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Raw producer declarations must remain authoritative before timestamps
+    /// have ever been enabled, while SourceLine keeps the legacy OFF policy.
+    /// Hidden or visible metadata cannot bypass payload/generation conflicts.
+    #[test]
+    fn unframed_copy_prioritizes_raw_declarations_and_validates_conflicts() {
+        use mez_core::presentation::PresentationEntry;
+        use mez_terminal::{TerminalCopySource, TerminalCopySourceGroup, TerminalCopySourceId};
+        let entry = PresentationEntry {
+            id: "raw-owner".into(),
+            occurrence: Default::default(),
+            first_row: true,
+        };
+        for group in [
+            TerminalCopySourceGroup::WholeEntry,
+            TerminalCopySourceGroup::RawBlock(0),
+            TerminalCopySourceGroup::SourceLine(0),
+        ] {
+            let id = TerminalCopySourceId::new(&entry, group).unwrap();
+            let source = TerminalCopySource::new(id.clone(), COPY_SOURCE_LINE_PREFIX);
+            let mut row = TerminalStyledLine::plain("literal");
+            row.copy_source = Some(source.clone());
+            let mut copy =
+                StyledCopyMode::new(vec![row], 1, 0, CopyPosition { line: 0, column: 0 }, false)
+                    .unwrap();
+            copy.source_associations_enabled = false;
+            assert_eq!(
+                copy.copy_source(0).is_some(),
+                !matches!(group, TerminalCopySourceGroup::SourceLine(_))
+            );
+            copy.validate_copy_sources().unwrap();
+            for conflicting in [
+                TerminalCopySource::new(id.clone(), "conflict"),
+                TerminalCopySource::projected(id, COPY_SOURCE_LINE_PREFIX, 2),
+            ] {
+                let mut first = TerminalStyledLine::plain("first");
+                first.copy_source = Some(source.clone());
+                let mut last = TerminalStyledLine::plain("last");
+                last.copy_source = Some(conflicting);
+                let mut copy = StyledCopyMode::new(
+                    vec![first, TerminalStyledLine::plain("unrelated"), last],
+                    3,
+                    0,
+                    CopyPosition { line: 0, column: 0 },
+                    false,
+                )
+                .unwrap();
+                copy.source_associations_enabled = false;
+                assert!(copy.validate_copy_sources().is_err());
+            }
+        }
+    }
 
     /// Runtime message IDs contain colons, and literal percent escapes must not
     /// alias them. Unicode and slashes remain valid identity bytes; arbitrary

@@ -533,6 +533,54 @@ mod gutter_tests {
         );
     }
 
+    /// Retained numeric and delimiter-free grouped carriers remain opaque
+    /// identities. Newly escaped groups use the same decoder without decoding
+    /// or guessing old percent-like identities; raw payload delimiters survive.
+    #[test]
+    fn transcript_copy_retains_numeric_grouped_and_escaped_carrier_contracts() {
+        let raw = "authored:colon /0: 雪";
+        for identity in [
+            "7",
+            "legacy-group/7",
+            "legacy%3Agroup/7",
+            "turn%3Aaction%253A/7",
+        ] {
+            let carrier = format!("{AGENT_COPY_SOURCE_LINE_PREFIX}{identity}:{raw}");
+            let reference = format!("{COPY_SOURCE_REFERENCE_PREFIX}{identity}");
+            let mut copy = CopyMode(
+                Box::new(
+                    StyledCopyMode::new(
+                        vec!["first", "last"]
+                            .into_iter()
+                            .zip([carrier, reference])
+                            .map(|(display, source)| {
+                                let mut row = mez_terminal::TerminalStyledLine::plain(display);
+                                row.copy_text = Some(source);
+                                row
+                            })
+                            .collect(),
+                        2,
+                        0,
+                        CopyPosition { line: 0, column: 0 },
+                        false,
+                    )
+                    .unwrap(),
+                ),
+                false,
+            );
+            copy.select_range(
+                CopyPosition { line: 1, column: 0 },
+                CopyPosition { line: 1, column: 1 },
+            )
+            .unwrap();
+            assert_eq!(
+                copy.copy_selection_with_format(CopySelectionFormat::Source)
+                    .unwrap(),
+                raw
+            );
+        }
+    }
+
     /// Current and retained legacy display gutters normalize identically,
     /// while decoded semantic source preserves authored leading glyphs.
     #[test]

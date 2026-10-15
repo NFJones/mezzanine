@@ -23,6 +23,9 @@ pub(crate) enum CopySourcePlan<'a> {
     /// Generated encoded source carriers; specialized raw declarations require
     /// their own pre-wrap plan rather than classification of arbitrary strings.
     Declared,
+    /// Explicit receiver anchor/reference rows whose physical continuations
+    /// repeat their opaque carrier, not skip markers. Raw groups never opt in.
+    DeclaredReferences,
     /// Specialized raw block owners declared before word/physical wrapping.
     Blocks(&'a [Arc<TerminalCopySource>]),
     /// A known whole-entry raw producer such as a Markdown peer message.
@@ -80,7 +83,7 @@ pub(crate) fn source_associations(
             return Ok(vec![Some(source); lines.len()]);
         }
         CopySourcePlan::Blocks(blocks) => blocks,
-        CopySourcePlan::Declared => raw_blocks,
+        CopySourcePlan::Declared | CopySourcePlan::DeclaredReferences => raw_blocks,
     };
     if copies.is_empty() {
         return Ok(vec![None; lines.len()]);
@@ -313,6 +316,74 @@ mod tests {
         );
     }
 
+    /// Whole-entry and block declarations are raw producer inputs even when
+    /// their bytes equal a generated control or malformed carrier. They never
+    /// enter the carrier parser; block owners and exact payloads remain checked.
+    #[test]
+    fn raw_source_plans_keep_literal_controls_independent_of_declared_carriers() {
+        let entry = PresentationEntry {
+            id: "raw-owner".into(),
+            occurrence: Default::default(),
+            first_row: true,
+        };
+        for raw in [
+            COPY_SKIP_LINE,
+            COPY_WRAP_CONTINUATION,
+            COPY_SOURCE_LINE_PREFIX,
+            COPY_SOURCE_REFERENCE_PREFIX,
+        ] {
+            let plan = source_associations(
+                &entry,
+                &normal_rows(),
+                &[],
+                CopySourcePlan::WholeEntry(raw),
+                &[],
+            )
+            .unwrap();
+            assert!(
+                plan.iter()
+                    .all(|source| source.as_ref().unwrap().text.as_ref() == raw)
+            );
+            assert_eq!(
+                plan[0].as_ref().unwrap().id.group(),
+                TerminalCopySourceGroup::WholeEntry
+            );
+        }
+        let raw = format!("{COPY_SOURCE_LINE_PREFIX}literal:not-an-ordinal\r\n\n");
+        let block = TerminalCopySource::new(
+            TerminalCopySourceId::new(&entry, TerminalCopySourceGroup::RawBlock(0)).unwrap(),
+            Arc::<str>::from(raw.as_str()),
+        );
+        let lines = [RichTextLine {
+            display: "code".into(),
+            style_spans: Vec::new(),
+            copy_text: Some(raw.clone()),
+            kind: RichTextLineKind::MarkdownCodeBlock,
+        }];
+        let blocks = [block.clone()];
+        let plan = source_associations(
+            &entry,
+            &lines,
+            std::slice::from_ref(&raw),
+            CopySourcePlan::Blocks(&blocks),
+            &[],
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(plan[0].as_ref().unwrap(), &block));
+        let mut foreign = entry.clone();
+        foreign.id = "foreign-owner".into();
+        assert!(
+            source_associations(
+                &foreign,
+                &lines,
+                &[raw],
+                CopySourcePlan::Blocks(&blocks),
+                &[]
+            )
+            .is_err()
+        );
+    }
+
     /// A same-ordinal foreign namespace cannot borrow a declared anchor, and
     /// missing/conflicting anchors reject before a candidate plan is returned.
     #[test]
@@ -337,10 +408,9 @@ mod tests {
                 format!("{COPY_SOURCE_LINE_PREFIX}receipt-owner/0:conflict"),
             ],
         ] {
-            assert!(
-                source_associations(&entry, &lines, &copies, CopySourcePlan::Declared, &[])
-                    .is_err()
-            );
+            for plan in [CopySourcePlan::Declared, CopySourcePlan::DeclaredReferences] {
+                assert!(source_associations(&entry, &lines, &copies, plan, &[]).is_err());
+            }
         }
     }
 }
