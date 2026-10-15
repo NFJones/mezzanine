@@ -1198,7 +1198,9 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
-    /// Installs an atomic projection only when its captured generation is current.
+    /// Applies a projection only while its captured generation is current.
+    /// Returns screen-change/redraw intent, not acceptance: accepted unchanged
+    /// candidates and rejected candidates both return false.
     pub async fn apply_streaming_say_projection(
         &self,
         result: crate::runtime::RuntimeStreamingSayProjectionResult,

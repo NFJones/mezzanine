@@ -241,7 +241,9 @@ impl RuntimeSessionService {
     ///
     /// Rejected sources are removed before rebuilding the cumulative screen, so
     /// an accepted sibling remains visible. This remains presentation-only and
-    /// does not create sender persistence.
+    /// does not create sender persistence. An accepted unchanged projection is
+    /// successful settlement, not a delivery failure; only genuinely rejected
+    /// work fails this boundary, and no outcome repeats the settled send.
     pub(crate) fn finalize_settled_outbound_message_previews(
         &mut self,
         pane_id: &str,
@@ -328,7 +330,10 @@ impl RuntimeSessionService {
         }
         if let Some(work) = self.take_agent_streaming_say_projection_work(pane_id, turn_id)? {
             let result = Self::build_agent_streaming_say_projection(work)?;
-            if !self.apply_agent_streaming_say_projection_result(result)? {
+            if !self
+                .apply_agent_streaming_say_projection_outcome(result)?
+                .is_accepted()
+            {
                 return Err(MezError::invalid_state(
                     "settled outbound preview projection was rejected",
                 ));
