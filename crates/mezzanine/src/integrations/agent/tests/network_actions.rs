@@ -100,9 +100,21 @@ async fn network_search_legacy_anchor_and_empty_characterization() {
             "No web results were found.",
         ),
         (202, "<html>challenge</html>", "No web results were found."),
-        (200, "<a class=\"result__a\" href=\"javascript:legacy\">Legacy</a>", "1. Legacy\n   javascript:legacy"),
-        (200, "<a class=\"result__a\" href=\"/relative\">Relative</a>", "1. Relative\n   /relative"),
-        (200, "<a class=\"result__a\" href=\"https://user:pass@example.test/\">Credentialed</a>", "1. Credentialed\n   https://user:pass@example.test/"),
+        (
+            200,
+            "<a class=\"result__a\" href=\"javascript:legacy\">Legacy</a>",
+            "1. Legacy\n   javascript:legacy",
+        ),
+        (
+            200,
+            "<a class=\"result__a\" href=\"/relative\">Relative</a>",
+            "1. Relative\n   /relative",
+        ),
+        (
+            200,
+            "<a class=\"result__a\" href=\"https://user:pass@example.test/\">Credentialed</a>",
+            "1. Credentialed\n   https://user:pass@example.test/",
+        ),
     ] {
         let action = AgentAction {
             id: "search-anchors".to_string(),

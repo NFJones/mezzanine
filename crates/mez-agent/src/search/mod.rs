@@ -55,7 +55,9 @@ pub enum FixedSearchEndpoint {
 impl FixedSearchEndpoint {
     /// Returns the complete code-owned endpoint, without query or credentials.
     pub const fn url(self) -> &'static str {
-        match self { Self::DuckDuckGoHtml => "https://duckduckgo.com/html/" }
+        match self {
+            Self::DuckDuckGoHtml => "https://duckduckgo.com/html/",
+        }
     }
 }
 
@@ -68,7 +70,12 @@ pub struct SearchIdentity(String);
 impl SearchIdentity {
     /// Accepts 1–128 ASCII identifier bytes; rejects arbitrary text and URLs.
     pub fn new(value: &str) -> Result<Self, SearchError> {
-        if value.is_empty() || value.len() > 128 || !value.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)) {
+        if value.is_empty()
+            || value.len() > 128
+            || !value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        {
             return Err(SearchError::InvalidRequest);
         }
         Ok(Self(value.to_string()))
@@ -76,7 +83,9 @@ impl SearchIdentity {
 }
 
 impl fmt::Debug for SearchIdentity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("SearchIdentity([redacted])") }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SearchIdentity([redacted])")
+    }
 }
 
 /// Optional future configuration identity; absent on the implicit DDG path.
@@ -104,28 +113,60 @@ impl SearchLimits {
     /// 1MiB HTML, 256KiB final context and thirty seconds. The existing context
     /// renderer appends its truncation notice outside that content cap.
     pub fn legacy_ddg(requested: Option<u64>) -> Self {
-        Self { results: requested.and_then(|n| usize::try_from(n).ok()).unwrap_or(10).min(50), transport_bytes: 1024 * 1024, normalized_bytes: 256 * 1024, deadline_ms: 30_000 }
+        Self {
+            results: requested
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(10)
+                .min(50),
+            transport_bytes: 1024 * 1024,
+            normalized_bytes: 256 * 1024,
+            deadline_ms: 30_000,
+        }
     }
 
     /// Strict future preset: ten by default, disclosed backend-lower count cap,
     /// 1MiB body, 32KiB default / 256KiB hard complete output and 30s total.
     /// Zero counts/caps/budgets are invalid; callers cannot enlarge hard bounds.
-    pub fn strict(requested: Option<u64>, backend_cap: usize, bytes: Option<usize>) -> Result<Self, SearchError> {
+    pub fn strict(
+        requested: Option<u64>,
+        backend_cap: usize,
+        bytes: Option<usize>,
+    ) -> Result<Self, SearchError> {
         let requested = requested.unwrap_or(10);
         let normalized_bytes = bytes.unwrap_or(32 * 1024);
-        if requested == 0 || backend_cap == 0 || normalized_bytes == 0 || normalized_bytes > 256 * 1024 {
+        if requested == 0
+            || backend_cap == 0
+            || normalized_bytes == 0
+            || normalized_bytes > 256 * 1024
+        {
             return Err(SearchError::InvalidBounds);
         }
-        Ok(Self { results: usize::try_from(requested).unwrap_or(usize::MAX).min(backend_cap).min(50), transport_bytes: 1024 * 1024, normalized_bytes, deadline_ms: 30_000 })
+        Ok(Self {
+            results: usize::try_from(requested)
+                .unwrap_or(usize::MAX)
+                .min(backend_cap)
+                .min(50),
+            transport_bytes: 1024 * 1024,
+            normalized_bytes,
+            deadline_ms: 30_000,
+        })
     }
     /// Effective maximum hit count, including a provider's lower cap.
-    pub const fn results(self) -> usize { self.results }
+    pub const fn results(self) -> usize {
+        self.results
+    }
     /// Maximum retained transport body bytes.
-    pub const fn transport_bytes(self) -> usize { self.transport_bytes }
+    pub const fn transport_bytes(self) -> usize {
+        self.transport_bytes
+    }
     /// Complete strict serialization/presentation budget (legacy content cap).
-    pub const fn normalized_bytes(self) -> usize { self.normalized_bytes }
+    pub const fn normalized_bytes(self) -> usize {
+        self.normalized_bytes
+    }
     /// Total exchange deadline, independent of response progress.
-    pub const fn deadline_ms(self) -> u64 { self.deadline_ms }
+    pub const fn deadline_ms(self) -> u64 {
+        self.deadline_ms
+    }
 }
 
 /// Request facts retained without interpretation by the compatibility parser.
@@ -143,7 +184,9 @@ pub struct SearchRequest {
 }
 
 impl fmt::Debug for SearchRequest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("SearchRequest([redacted])") }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SearchRequest([redacted])")
+    }
 }
 
 impl SearchRequest {
@@ -151,16 +194,25 @@ impl SearchRequest {
     /// hostname validation or recency transformation during extraction.
     pub fn legacy_ddg_full_query(&self) -> String {
         let mut query = self.query.clone();
-        for domain in &self.domains { query.push_str(" site:"); query.push_str(domain); }
+        for domain in &self.domains {
+            query.push_str(" site:");
+            query.push_str(domain);
+        }
         query
     }
     /// Constructs the exact legacy GET URL used by both policy and execution.
     pub fn legacy_ddg_url(&self) -> String {
-        format!("{}?q={}", FixedSearchEndpoint::DuckDuckGoHtml.url(), urlencoding::encode(&self.legacy_ddg_full_query()))
+        format!(
+            "{}?q={}",
+            FixedSearchEndpoint::DuckDuckGoHtml.url(),
+            urlencoding::encode(&self.legacy_ddg_full_query())
+        )
     }
     /// Hashes canonical typed fields, preserving order and Option presence.
     /// The digest is an identity, not a credential-safe logging authorization.
-    pub fn digest(&self) -> Result<SearchDigest, SearchError> { digest(self) }
+    pub fn digest(&self) -> Result<SearchDigest, SearchError> {
+        digest(self)
+    }
 }
 
 /// SHA256 identity of canonical request/filter or complete plan values.
@@ -180,7 +232,11 @@ pub struct SearchExecutionPlan {
 
 impl fmt::Debug for SearchExecutionPlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SearchExecutionPlan").field("backend", &self.backend).field("mode", &self.mode).field("limits", &self.limits).finish_non_exhaustive()
+        f.debug_struct("SearchExecutionPlan")
+            .field("backend", &self.backend)
+            .field("mode", &self.mode)
+            .field("limits", &self.limits)
+            .finish_non_exhaustive()
     }
 }
 
@@ -188,19 +244,33 @@ impl SearchExecutionPlan {
     /// Describes the implicit no-key default, with no invented configuration or
     /// credential binding. It cannot route or authorize a paid backend.
     pub fn legacy_ddg(request: &SearchRequest) -> Result<Self, SearchError> {
-        Ok(Self { backend: SearchBackend::DuckDuckGo, mode: SearchMode::Web, endpoint: FixedSearchEndpoint::DuckDuckGoHtml, request_digest: request.digest()?, limits: SearchLimits::legacy_ddg(request.max_results), binding: SearchPlanBinding::default() })
+        Ok(Self {
+            backend: SearchBackend::DuckDuckGo,
+            mode: SearchMode::Web,
+            endpoint: FixedSearchEndpoint::DuckDuckGoHtml,
+            request_digest: request.digest()?,
+            limits: SearchLimits::legacy_ddg(request.max_results),
+            binding: SearchPlanBinding::default(),
+        })
     }
     /// Full effect identity includes backend/mode/fixed endpoint/request/bounds
     /// and all optional revision/profile/credential-slot identities.
-    pub fn digest(&self) -> Result<SearchDigest, SearchError> { digest(self) }
+    pub fn digest(&self) -> Result<SearchDigest, SearchError> {
+        digest(self)
+    }
     /// Effective immutable limits for this effect.
-    pub const fn limits(&self) -> SearchLimits { self.limits }
+    pub const fn limits(&self) -> SearchLimits {
+        self.limits
+    }
 }
 
 /// Encodes canonical structs rather than ambiguous concatenated query strings.
 fn digest(value: &impl Serialize) -> Result<SearchDigest, SearchError> {
     let bytes = serde_json::to_vec(value).map_err(|_| SearchError::MalformedJson)?;
-    Ok(SearchDigest(format!("{:x}", Sha256::digest(bytes))))
+    let digest = Sha256::digest(bytes);
+    Ok(SearchDigest(
+        digest.iter().map(|byte| format!("{byte:02x}")).collect(),
+    ))
 }
 
 /// How a backend actually handled one requested filter; not a verified claim
@@ -236,7 +306,11 @@ pub struct SearchCapabilities {
 impl SearchCapabilities {
     /// Honest legacy declaration: ordered query hints and nontransmitted date
     /// labels, with no fabricated DDG snippets.
-    pub const LEGACY_DDG: Self = Self { domains: FilterDisposition::Query, dates: FilterDisposition::BestEffort, excerpts: false };
+    pub const LEGACY_DDG: Self = Self {
+        domains: FilterDisposition::Query,
+        dates: FilterDisposition::BestEffort,
+        excerpts: false,
+    };
 }
 
 /// Provenance of actual returned excerpt material.
@@ -341,7 +415,25 @@ pub struct SearchResult {
 impl SearchResult {
     /// Builds honest legacy facts without snippets/dates/usage/request IDs.
     pub fn legacy_ddg(request: &SearchRequest, hits: Vec<SearchHit>, truncated: bool) -> Self {
-        Self { requested_count: request.max_results, effective_count: SearchLimits::legacy_ddg(request.max_results).results(), hits, domains: if request.domains.is_empty() { FilterDisposition::NotRequested } else { FilterDisposition::Query }, dates: if request.recency_days.is_some() { FilterDisposition::BestEffort } else { FilterDisposition::NotRequested }, warnings: Vec::new(), truncated, request_id: None, usage: None }
+        Self {
+            requested_count: request.max_results,
+            effective_count: SearchLimits::legacy_ddg(request.max_results).results(),
+            hits,
+            domains: if request.domains.is_empty() {
+                FilterDisposition::NotRequested
+            } else {
+                FilterDisposition::Query
+            },
+            dates: if request.recency_days.is_some() {
+                FilterDisposition::BestEffort
+            } else {
+                FilterDisposition::NotRequested
+            },
+            warnings: Vec::new(),
+            truncated,
+            request_id: None,
+            usage: None,
+        }
     }
     /// Renders numbered title/link hits and optional explicitly labeled excerpts
     /// from this same value. Citation URLs are always complete.
@@ -349,7 +441,9 @@ impl SearchResult {
         let mut output = String::new();
         for (index, hit) in self.hits.iter().enumerate() {
             output.push_str(&format!("{}. {}\n   {}\n", index + 1, hit.title, hit.url));
-            if let Some(excerpt) = &hit.excerpt { output.push_str(&format!("   [{:?}] {}\n", excerpt.provenance, excerpt.text)); }
+            if let Some(excerpt) = &hit.excerpt {
+                output.push_str(&format!("   [{:?}] {}\n", excerpt.provenance, excerpt.text));
+            }
         }
         output.trim_end().to_string()
     }
@@ -396,6 +490,8 @@ pub enum SearchError {
 }
 
 impl fmt::Display for SearchError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "search contract failure: {self:?}") }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "search contract failure: {self:?}")
+    }
 }
 impl std::error::Error for SearchError {}

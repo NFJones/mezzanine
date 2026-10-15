@@ -7,11 +7,11 @@
 //! Strict future normalization is separate from the legacy DDG compatibility
 //! path. No alternate client, SDK, plugin registry or runtime is introduced.
 
-use std::{collections::BTreeMap, future::Future, pin::Pin};
-use mez_agent::{ProviderHttpError, ProviderHttpRequest, ProviderHttpTimeouts};
-use mez_agent::search::{SearchLimits, SearchRequest, SearchResult};
-use crate::integrations::http::HttpCompletion;
 use super::AsyncProviderHttpTransport;
+use crate::integrations::http::HttpCompletion;
+use mez_agent::search::{SearchLimits, SearchRequest, SearchResult};
+use mez_agent::{ProviderHttpError, ProviderHttpRequest, ProviderHttpTimeouts};
+use std::{collections::BTreeMap, future::Future, pin::Pin};
 
 mod duckduckgo;
 mod normalization;
@@ -40,12 +40,21 @@ pub(super) enum SearchExchangeError {
 /// Executes exactly one unauthenticated legacy DDG GET using ordinary HTTP
 /// completion, publishing only cumulative complete clean anchors.
 pub(super) async fn execute_legacy_ddg<T: AsyncProviderHttpTransport>(
-    transport: &T, request: &SearchRequest, on_progress: &mut (impl FnMut(String) + Send),
+    transport: &T,
+    request: &SearchRequest,
+    on_progress: &mut (impl FnMut(String) + Send),
 ) -> Result<SearchExchange, SearchExchangeError> {
     let limits = SearchLimits::legacy_ddg(request.max_results);
     let mut headers = BTreeMap::new();
     headers.insert("user-agent".to_string(), "mez".to_string());
-    let wire = ProviderHttpRequest { method: "GET".to_string(), url: request.legacy_ddg_url(), headers, body: String::new(), timeouts: ProviderHttpTimeouts::from_total(limits.deadline_ms()), max_response_bytes: Some(limits.transport_bytes()) };
+    let wire = ProviderHttpRequest {
+        method: "GET".to_string(),
+        url: request.legacy_ddg_url(),
+        headers,
+        body: String::new(),
+        timeouts: ProviderHttpTimeouts::from_total(limits.deadline_ms()),
+        max_response_bytes: Some(limits.transport_bytes()),
+    };
     let mut observed = Vec::new();
     let mut published = String::new();
     let mut on_chunk = |chunk: Vec<u8>| {
@@ -57,21 +66,39 @@ pub(super) async fn execute_legacy_ddg<T: AsyncProviderHttpTransport>(
         }
         Box::pin(async {}) as Pin<Box<dyn Future<Output = ()> + Send>>
     };
-    let exchange = transport.send_async_with_body_chunks(&wire, &mut on_chunk).await.map_err(SearchExchangeError::Transport)?;
+    let exchange = transport
+        .send_async_with_body_chunks(&wire, &mut on_chunk)
+        .await
+        .map_err(SearchExchangeError::Transport)?;
     let transport_truncated = exchange.completion == HttpCompletion::Truncated;
     let response = exchange.response;
     if !(200..=299).contains(&response.status_code) {
-        return Err(SearchExchangeError::Http { status_code: response.status_code, body_bytes: response.body.len() });
+        return Err(SearchExchangeError::Http {
+            status_code: response.status_code,
+            body_bytes: response.body.len(),
+        });
     }
-    let (body, truncated) = super::network::truncate_text_to_bytes(&response.body, limits.transport_bytes());
-    Ok(SearchExchange { result: SearchResult::legacy_ddg(request, duckduckgo::decode(&body, limits.results()), truncated || transport_truncated), status_code: response.status_code, body_bytes: response.body.len(), returned_bytes: body.len() })
+    let (body, truncated) =
+        super::network::truncate_text_to_bytes(&response.body, limits.transport_bytes());
+    Ok(SearchExchange {
+        result: SearchResult::legacy_ddg(
+            request,
+            duckduckgo::decode(&body, limits.results()),
+            truncated || transport_truncated,
+        ),
+        status_code: response.status_code,
+        body_bytes: response.body.len(),
+        returned_bytes: body.len(),
+    })
 }
 
 /// Withholds invalid UTF-8 and incomplete scalars/anchors exactly as before.
 fn legacy_progress_source(bytes: &[u8], request: &SearchRequest, limit: usize) -> String {
     let valid = match std::str::from_utf8(bytes) {
         Ok(value) => value,
-        Err(error) if error.error_len().is_none() => std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap_or(""),
+        Err(error) if error.error_len().is_none() => {
+            std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap_or("")
+        }
         Err(_) => return String::new(),
     };
     SearchResult::legacy_ddg(request, duckduckgo::decode(valid, limit), false).render_text()

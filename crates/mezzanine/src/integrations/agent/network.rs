@@ -192,8 +192,10 @@ async fn execute_web_search_action<T: AsyncProviderHttpTransport>(
     on_progress: &mut (impl FnMut(String) + Send),
 ) -> Result<ActionResult> {
     let request = mez_agent::search::SearchRequest {
-        query: request.query.to_string(), domains: request.domains.to_vec(),
-        recency_days: request.recency_days, max_results: request.max_results,
+        query: request.query.to_string(),
+        domains: request.domains.to_vec(),
+        recency_days: request.recency_days,
+        max_results: request.max_results,
     };
     let url = request.legacy_ddg_url();
     let full_query = request.legacy_ddg_full_query();
@@ -211,10 +213,17 @@ async fn execute_web_search_action<T: AsyncProviderHttpTransport>(
                 }),
             );
         }
-        Err(super::search::SearchExchangeError::Http { status_code, body_bytes }) => {
-            return network_action_failure(turn, action, "network_http_error",
+        Err(super::search::SearchExchangeError::Http {
+            status_code,
+            body_bytes,
+        }) => {
+            return network_action_failure(
+                turn,
+                action,
+                "network_http_error",
                 format!("web search returned HTTP {status_code}"),
-                serde_json::json!({ "url": url, "status_code": status_code, "body_bytes": body_bytes }));
+                serde_json::json!({ "url": url, "status_code": status_code, "body_bytes": body_bytes }),
+            );
         }
     };
     let results = response.result.render_text();

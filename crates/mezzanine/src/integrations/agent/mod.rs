@@ -31,8 +31,6 @@ pub mod context;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod network;
-/// Static search orchestration and concrete adapters over the existing HTTP port.
-pub mod search;
 /// Exposes the prompt module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -43,6 +41,8 @@ pub mod prompt;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod provider;
+/// Static search orchestration and concrete adapters over the existing HTTP port.
+pub mod search;
 /// Exposes the slash module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

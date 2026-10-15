@@ -100,8 +100,6 @@ pub mod model_profile;
 pub mod model_response;
 /// Provider-independent network action planning and result shaping.
 pub mod network_action;
-/// Bounded search values and secret-free plans; no transport or configuration I/O.
-pub mod search;
 /// OpenAI request rendering and prompt-cache diagnostics.
 pub mod openai_cache;
 /// Provider-independent OpenAI-compatible Chat Completions request shaping.
@@ -150,6 +148,8 @@ pub mod sandbox_assessment;
 pub mod scheduler;
 /// Provider-neutral MAAP action-batch schema construction.
 pub mod schema;
+/// Bounded search values and secret-free plans; no transport or configuration I/O.
+pub mod search;
 /// Deterministic semantic-patch parsing and path validation.
 pub mod semantic_patch;
 /// Deterministic semantic-patch matching and shell transaction planning.

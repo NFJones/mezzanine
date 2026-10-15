@@ -8,7 +8,15 @@ use crate::integrations::http::HttpCompletion;
 
 /// Builds a query-only search, preserving the compact public action contract.
 fn search() -> AgentAction {
-    AgentAction { id: "search-transport".into(), payload: AgentActionPayload::WebSearch { query: "fixture".into(), domains: vec![], recency_days: None, max_results: None } }
+    AgentAction {
+        id: "search-transport".into(),
+        payload: AgentActionPayload::WebSearch {
+            query: "fixture".into(),
+            domains: vec![],
+            recency_days: None,
+            max_results: None,
+        },
+    }
 }
 
 #[tokio::test]
@@ -17,12 +25,31 @@ fn search() -> AgentAction {
 async fn network_search_utf8_progress_preserves_legacy_prefix_rules() {
     let prefix = b"<a class=\"result__a\" href=\"https://example.test/a\">h";
     for (chunks, expected) in [
-        (vec![[prefix.as_slice(), b"\xc3"].concat(), b"\xa9</a>".to_vec()], vec!["1. hé\n   https://example.test/a"]),
+        (
+            vec![[prefix.as_slice(), b"\xc3"].concat(), b"\xa9</a>".to_vec()],
+            vec!["1. hé\n   https://example.test/a"],
+        ),
         (vec![[prefix.as_slice(), b"\xff</a>"].concat()], vec![]),
     ] {
-        let transport = ChunkedAsyncProviderHttpTransport { chunks, completion: HttpCompletion::Complete, failure: None, response: ProviderHttpResponse { status_code: 200, headers: Default::default(), body: "<a class=\"result__a\" href=\"https://example.test/a\">hé</a>".into() } };
+        let transport = ChunkedAsyncProviderHttpTransport {
+            chunks,
+            completion: HttpCompletion::Complete,
+            failure: None,
+            response: ProviderHttpResponse {
+                status_code: 200,
+                headers: Default::default(),
+                body: "<a class=\"result__a\" href=\"https://example.test/a\">hé</a>".into(),
+            },
+        };
         let mut progress = vec![];
-        execute_network_action_with_transport_async_with_progress(&turn(), &search(), &transport, &mut |value| progress.push(value)).await.unwrap();
+        execute_network_action_with_transport_async_with_progress(
+            &turn(),
+            &search(),
+            &transport,
+            &mut |value| progress.push(value),
+        )
+        .await
+        .unwrap();
         assert_eq!(progress, expected);
     }
 }
@@ -36,16 +63,47 @@ async fn network_search_completion_and_failure_envelopes_stay_legacy() {
         (200, None, None),
         (402, None, Some("network_http_error")),
         (429, None, Some("network_http_error")),
-        (200, Some(mez_agent::ProviderHttpError::io("fixture interruption")), Some("network_request_failed")),
-        (200, Some(mez_agent::ProviderHttpError::timeout(mez_agent::ProviderHttpTimeoutPhase::Total, 30_000, "fixture")), Some("network_request_failed")),
+        (
+            200,
+            Some(mez_agent::ProviderHttpError::io("fixture interruption")),
+            Some("network_request_failed"),
+        ),
+        (
+            200,
+            Some(mez_agent::ProviderHttpError::timeout(
+                mez_agent::ProviderHttpTimeoutPhase::Total,
+                30_000,
+                "fixture",
+            )),
+            Some("network_request_failed"),
+        ),
     ] {
-        let transport = ChunkedAsyncProviderHttpTransport { chunks: vec![], completion: HttpCompletion::Truncated, failure, response: ProviderHttpResponse { status_code: status, headers: Default::default(), body: "<html>private fixture body</html>".into() } };
-        let result = execute_network_action_with_transport_async(&turn(), &search(), &transport).await.unwrap();
+        let transport = ChunkedAsyncProviderHttpTransport {
+            chunks: vec![],
+            completion: HttpCompletion::Truncated,
+            failure,
+            response: ProviderHttpResponse {
+                status_code: status,
+                headers: Default::default(),
+                body: "<html>private fixture body</html>".into(),
+            },
+        };
+        let result = execute_network_action_with_transport_async(&turn(), &search(), &transport)
+            .await
+            .unwrap();
         assert_eq!(result.error.as_ref().map(|e| e.code.as_str()), expected);
-        let data: serde_json::Value = serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
-        if expected.is_none() { assert_eq!(data["response"]["html_truncated"], true); }
+        let data: serde_json::Value =
+            serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+        if expected.is_none() {
+            assert_eq!(data["response"]["html_truncated"], true);
+        }
         assert!(!result.content_text().contains("<html>"));
-        assert!(!result.structured_content_json.unwrap().contains("private fixture body"));
+        assert!(
+            !result
+                .structured_content_json
+                .unwrap()
+                .contains("private fixture body")
+        );
     }
 }
 
@@ -54,10 +112,23 @@ async fn network_search_completion_and_failure_envelopes_stay_legacy() {
 /// historical notice beyond the 1MiB limit, not replacement characters.
 async fn network_search_body_cap_split_scalar_remains_utf8_safe() {
     let body = format!("{}é", "x".repeat(1024 * 1024 - 1));
-    let transport = AsyncFakeProviderHttpTransport { requests: std::sync::Mutex::new(vec![]), response: ProviderHttpResponse { status_code: 200, headers: Default::default(), body } };
-    let result = execute_network_action_with_transport_async(&turn(), &search(), &transport).await.unwrap();
-    let data: serde_json::Value = serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
-    assert_eq!(data["response"]["returned_bytes"], 1024 * 1024 - 1 + "\n[mez: output truncated at 1048576 bytes]".len());
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(vec![]),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body,
+        },
+    };
+    let result = execute_network_action_with_transport_async(&turn(), &search(), &transport)
+        .await
+        .unwrap();
+    let data: serde_json::Value =
+        serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        data["response"]["returned_bytes"],
+        1024 * 1024 - 1 + "\n[mez: output truncated at 1048576 bytes]".len()
+    );
     assert_eq!(data["response"]["html_truncated"], true);
     assert_eq!(result.content_text(), "No web results were found.");
 }
