@@ -518,6 +518,119 @@ fn runtime_send_message_approval_blocks_and_resumes_after_approve() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Approval resumption retires this provisional layout through its ordinary
+/// header/write path before finalization. Even with a rejection fault armed,
+/// it must not revive a retired projection or repeat the accepted send.
+#[test]
+fn runtime_approved_send_retires_preview_before_resumption_settlement() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "approve one send")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = messaging_test_turn(&service, &started.turn_id);
+    service
+        .ensure_runtime_message_identity(
+            "agent-peer",
+            None,
+            "worker",
+            &[],
+            current_unix_seconds().saturating_mul(1000),
+        )
+        .unwrap();
+    let (action, approval_id) = block_runtime_send_message(
+        &mut service,
+        &turn,
+        "agent:agent-peer",
+        "approved retained payload",
+    );
+    let execution = service
+        .agent_turn_executions()
+        .get(&turn.turn_id)
+        .unwrap()
+        .clone();
+    service.set_agent_pane_screen(
+        "%1",
+        turn.conversation_id.clone(),
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 120).unwrap(),
+    );
+    for event in [
+        mez_agent::StreamingSayEvent::MessageStarted {
+            action_index: 0,
+            recipient: "agent:agent-peer".into(),
+            content_type: "text/plain; charset=utf-8".into(),
+        },
+        mez_agent::StreamingSayEvent::MessagePayloadDelta {
+            action_index: 0,
+            text: "approved retained payload".into(),
+        },
+        mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 },
+        mez_agent::StreamingSayEvent::ActionComplete { action_index: 0 },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
+            .unwrap();
+    }
+    service
+        .reconcile_agent_streaming_say_completion("%1", &turn.turn_id, &execution)
+        .unwrap();
+    if let Some(work) = service
+        .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+        .unwrap()
+    {
+        service
+            .apply_agent_streaming_say_projection_result(
+                crate::runtime::RuntimeSessionService::build_agent_streaming_say_projection(work)
+                    .unwrap(),
+            )
+            .unwrap();
+    }
+    let decided = approve_blocked_runtime_action(&mut service, &approval_id);
+    let controller = mez_core::ids::ClientId::opaque("client-1").unwrap();
+    service.reject_next_settled_outbound_projection_for_tests();
+    let outcome = service.resume_approved_blocked_agent_action(&approval_id, &decided, &controller);
+    service.terminate_all_pane_processes().unwrap();
+    assert_eq!(outcome.unwrap(), Some(1));
+    assert!(
+        service
+            .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+            .unwrap()
+            .is_none(),
+        "approval resumption cannot reproject the retired layout"
+    );
+    let messages = service.message_service().snapshot_state();
+    assert_eq!(messages.accepted_messages.len(), 1);
+    let retained = service.agent_turn_executions().get(&turn.turn_id).unwrap();
+    assert_eq!(retained.action_results[0].status, ActionStatus::Succeeded);
+    assert_eq!(retained.action_results[0].action_id, action.id);
+    let evidence = service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .unwrap()
+        .blocks()
+        .iter()
+        .filter(|block| block.source == mez_agent::ContextSourceKind::ActionResult)
+        .collect::<Vec<_>>();
+    assert_eq!(evidence.len(), 1);
+    assert!(
+        evidence[0]
+            .content
+            .contains(&messages.accepted_messages[0].envelope.id)
+    );
+    assert_eq!(
+        service
+            .resume_approved_blocked_agent_action(&approval_id, &decided, &controller)
+            .unwrap(),
+        None,
+        "consumed approval cannot resend an accepted message"
+    );
+    assert_eq!(service.message_service().snapshot_state(), messages);
+}
+
 /// Verifies an approved send is re-validated against the recipient and payload
 /// identity it was approved for, and delivers nothing when either changed.
 #[test]

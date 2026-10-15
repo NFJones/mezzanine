@@ -14744,6 +14744,12 @@ historical errors without a fingerprint or rejection reason remain unattributed.
 Genuine rejected work retains its integrity error; diagnostics MUST NOT relax a
 fence or automatically retry provider requests, actions or messages. Missing
 typed recovery facts MUST remain unknown, never inferred correction counts.
+If message execution settles terminal effects before preview finalization
+fails, synchronous and asynchronous result application MUST observe and retain
+those original results in canonical chronology before returning the error.
+Existing canonical recovery facts MUST accompany the causal error unchanged;
+absent facts MUST NOT be fabricated. Retention MUST preserve actor observation
+order and be idempotent, without scheduling a provider/action/message retry.
 In normal pane-log mode, canonical
 `text/plain; charset=utf-8` and supported `text/markdown` are
 presentation-eligible; plaintext MUST render literally and Markdown through the

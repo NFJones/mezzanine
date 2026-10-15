@@ -96,6 +96,10 @@ New diagnostics include a fixed `reason=` category and
 ownership, source, screen-lineage, geometry or rendering-policy check; it does
 not contain message content or owner IDs. An accepted unchanged screen is not
 a rejection. Genuine stale results still cannot overwrite newer content.
+If a send settled before finalization failed, result application retains its
+original terminal outcome in canonical context before reporting the error.
+Supplied canonical recovery facts survive that error; absent facts stay unknown.
+This is evidence retention, not a display-repair retry or a second send.
 
 `mez --version` (also `mez version`) prints the compiled
 `outbound-projection-sha256` fingerprint. It hashes the build script and the

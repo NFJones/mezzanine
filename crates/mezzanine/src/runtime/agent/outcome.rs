@@ -89,6 +89,36 @@ fn provider_tool_result_event(
 }
 
 impl RuntimeSessionService {
+    /// Retains already observed terminal effects before an application error
+    /// escapes its execution owner. This commits only original action evidence,
+    /// in observation order; it neither retries effects nor queues a provider.
+    /// A retention failure keeps the causal error and reports both failures.
+    pub(super) fn retain_settled_results_after_application_error(
+        &mut self,
+        turn_id: &str,
+        execution: &AgentTurnExecution,
+        results: &[ActionResult],
+        error: MezError,
+    ) -> MezError {
+        let facts = error
+            .recovery_facts()
+            .cloned()
+            .or_else(|| execution.recovery_facts().cloned());
+        let error = if !results.is_empty()
+            && let Err(retention) = self.commit_settled_action_results_context(turn_id, results)
+        {
+            MezError::invalid_state(format!(
+                "{error}; settled action evidence retention failed: {retention}"
+            ))
+        } else {
+            error
+        };
+        match facts {
+            Some(facts) => error.with_recovery_facts(facts),
+            None => error,
+        }
+    }
+
     /// Queues one provider continuation after model-correctable action
     /// failures.
     ///
