@@ -360,7 +360,8 @@ fn streamed_outbound_noop_case(
         .agent_shell_store()
         .get(peer_pane)
         .unwrap()
-        .session_id.clone();
+        .session_id
+        .clone();
     let received = store.inspect_presentation(&receiver_conversation).unwrap();
     let received_ids: Vec<_> = received
         .iter()
@@ -373,7 +374,10 @@ fn streamed_outbound_noop_case(
         .collect();
     assert_eq!(received_ids.len(), usize::from(visible));
     if let Some(identity) = received_ids.first() {
-        assert_eq!(identity, &format!("peer-message recipient={peer_agent} sequence={sequence} id={message_id}"));
+        assert_eq!(
+            identity,
+            &format!("peer-message recipient={peer_agent} sequence={sequence} id={message_id}")
+        );
     }
     for _ in 0..2 {
         service
@@ -386,7 +390,10 @@ fn streamed_outbound_noop_case(
         "presentation finalization cannot alter messages or cursors"
     );
     assert_eq!(store.inspect_presentation(&conversation).unwrap(), entries);
-    assert_eq!(store.inspect_presentation(&receiver_conversation).unwrap(), received);
+    assert_eq!(
+        store.inspect_presentation(&receiver_conversation).unwrap(),
+        received
+    );
     assert_eq!(
         service.agent_pane_screen("%1").unwrap(),
         &displayed,
