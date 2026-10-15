@@ -643,6 +643,107 @@ mod tests {
         PaneForegroundProcessObservation,
     };
 
+    /// A scheduler-yield budget is not a native retirement acknowledgement.
+    ///
+    /// This real PTY child belongs exclusively to the worker below. A gate
+    /// deliberately prevents its termination/reap operation from completing
+    /// while the production supervisor drain is polled. The drain must remain
+    /// pending, then observe the joined native completion after release. The
+    /// test always releases and joins its fixture before evaluating the early
+    /// completion assertion; that fixture settlement cannot turn an early
+    /// successful product return into a passing regression.
+    #[tokio::test]
+    async fn pane_worker_drain_waits_for_gated_native_reap() {
+        use rustix::process::{Pid, test_kill_process};
+        use tokio::sync::oneshot;
+
+        let process = mez_mux::process::spawn_argv_pty_process(
+            std::path::Path::new("/bin/cat"),
+            &[],
+            &[],
+            super::super::Size::new(80, 24).unwrap(),
+            None,
+        )
+        .unwrap();
+        let pid = Pid::from_raw(i32::try_from(process.primary_pid()).unwrap()).unwrap();
+        // The unreaped exact Child handle fences PID reuse throughout the gate.
+        // Linux additionally records the kernel incarnation witness for useful
+        // failure diagnostics; Darwin retains the exact Child/PID witness.
+        #[cfg(target_os = "linux")]
+        let start_witness =
+            std::fs::read_to_string(format!("/proc/{}/stat", pid.as_raw_pid())).unwrap();
+        #[cfg(not(target_os = "linux"))]
+        let start_witness = format!("owned portable-pty child {}", pid.as_raw_pid());
+        assert_eq!(test_kill_process(pid), Ok(()), "{start_witness}");
+        let instance = PaneProcessInstance {
+            pane_id: "%gated-native".to_string(),
+            generation: 1,
+        };
+        let mut active = HashSet::from([instance.clone()]);
+        let mut report =
+            AsyncPaneProcessSupervisorServiceReport::new(RuntimeLifecycleState::Running);
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let mut workers = JoinSet::new();
+        workers.spawn(async move {
+            let mut backend = AsyncPtyPaneProcessIo::new("%gated-native", process)?;
+            entered_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            backend.terminate(true).await?;
+            Ok((
+                instance,
+                AsyncPaneProcessWorkerOutcome::Completed(
+                    super::super::AsyncPaneProcessServiceReport::new(RuntimeLifecycleState::Killed),
+                ),
+            ))
+        });
+        entered_rx.await.unwrap();
+
+        let (early, completed, alive_while_gated) = {
+            let drain = drain_completed_pane_process_workers_after_yields(
+                &mut workers,
+                &mut active,
+                &mut report,
+            );
+            tokio::pin!(drain);
+            let early = tokio::time::timeout(Duration::from_millis(30), &mut drain).await;
+            let alive_while_gated = test_kill_process(pid);
+            release_tx.send(()).unwrap();
+            // Keep the same operation alive: a permanently pending drain must
+            // not pass merely because the first observation timed out.
+            let completed = if early.is_err() {
+                Some(tokio::time::timeout(Duration::from_secs(2), &mut drain).await)
+            } else {
+                None
+            };
+            (early, completed, alive_while_gated)
+        };
+        while let Some(joined) = workers.join_next().await {
+            record_joined_pane_process_worker(joined, &mut active, &mut report).unwrap();
+        }
+        let immediately_after_completed_reap = test_kill_process(pid);
+
+        assert!(
+            early.is_err(),
+            "drain reported completion before native termination/reap: {early:?}; \
+             alive_while_gated={alive_while_gated:?}; \
+             immediate_after_fixture_reap={immediately_after_completed_reap:?}; \
+             {start_witness}"
+        );
+        assert!(
+            matches!(completed, Some(Ok(Ok(())))),
+            "the same product drain must observe completion after release: {completed:?}"
+        );
+        assert_eq!(alive_while_gated, Ok(()), "{start_witness}");
+        assert_eq!(
+            immediately_after_completed_reap,
+            Err(rustix::io::Errno::SRCH),
+            "completed native operation must already have reaped its exact child: {start_witness}"
+        );
+        assert_eq!(report.completed_workers, 1);
+        assert!(active.is_empty());
+    }
+
     /// Verifies the compatibility pane-I/O owner rejects an oversized shell
     /// record before invoking its backend and reports only framing metadata.
     #[tokio::test(flavor = "current_thread")]
