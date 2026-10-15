@@ -70,9 +70,12 @@ pub(crate) fn advance_native_pane_retirement(
             first_error.get_or_insert_with(|| error.into());
         }
     }
+    // Failure publication precedes the final native slot release. Observe
+    // completion first, then read its monotonic receipt before healthy success.
+    let completed = owner.outstanding() == 0;
     match first_error.or_else(|| retained_native_failure(owner)) {
         Some(error) => Err(error),
-        None => Ok(owner.outstanding() == 0),
+        None => Ok(completed),
     }
 }
 
@@ -82,7 +85,23 @@ async fn drain_native_pane_retirement_scope(
     deadline: Instant,
     all_owners: bool,
 ) -> Result<()> {
-    let mut first_error = retained_native_failure(owner);
+    drain_native_with_failure_reader(owner, deadline, all_owners, || {
+        retained_native_failure(owner)
+    })
+    .await
+}
+
+/// Keeps the native resource algorithm identical while allowing a private,
+/// per-call receipt reader in deterministic verdict-order tests. Production
+/// always reads the same owner's durable native receipt; no global hook or
+/// child ownership/failure mutator is exposed.
+async fn drain_native_with_failure_reader(
+    owner: &PaneProcessRetirementOwner,
+    deadline: Instant,
+    all_owners: bool,
+    mut read_failure: impl FnMut() -> Option<MezError>,
+) -> Result<()> {
+    let mut first_error = read_failure();
     loop {
         let pending = if all_owners {
             owner.outstanding()
@@ -90,7 +109,9 @@ async fn drain_native_pane_retirement_scope(
             owner.returned_count()
         };
         if pending == 0 {
-            return first_error.map_or(Ok(()), Err);
+            // A competing worker may have published failure and released its
+            // last slot during our await. Never trust the pre-await snapshot.
+            return first_error.or_else(&mut read_failure).map_or(Ok(()), Err);
         }
         if Instant::now() >= deadline {
             let diagnostic = first_error
@@ -109,7 +130,8 @@ async fn drain_native_pane_retirement_scope(
             owner.returned_count()
         };
         if outstanding == 0 {
-            return first_error.map_or(Ok(()), Err);
+            // Route every completed path through the same fresh receipt read.
+            continue;
         }
         if Instant::now() >= deadline {
             let diagnostic = first_error
@@ -137,6 +159,138 @@ fn retained_native_failure(owner: &PaneProcessRetirementOwner) -> Option<MezErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Supplies only a labelled receipt-classification fault. Native ownership,
+    /// signaling and wait/reap below remain the actual production operations.
+    fn competing_receipt_reader(
+        published: &std::sync::atomic::AtomicBool,
+        mut entered: Option<tokio::sync::oneshot::Sender<()>>,
+        earlier: bool,
+    ) -> impl FnMut() -> Option<MezError> + '_ {
+        move || {
+            if let Some(entered) = entered.take() {
+                let _ = entered.send(());
+            }
+            if published.load(std::sync::atomic::Ordering::Acquire) {
+                Some(MezError::invalid_state(
+                    "injected competing native-stage receipt",
+                ))
+            } else if earlier {
+                Some(MezError::invalid_state("earlier native cleanup cause"))
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Drain A starts without a new receipt while B exclusively owns the REAL
+    /// returned child. B publishes the labelled stage receipt BEFORE exact root
+    /// signaling/native wait releases the last slot. A must reread failure at
+    /// zero, in both all-owner and returned-only modes, including cancellation
+    /// and same-owner retry. Earlier local causes keep precedence. A duplicated
+    /// master excludes kernel hangup, and strict ESRCH is proved by B's actual
+    /// native wait—not by the injected receipt or the task/operation joins.
+    #[tokio::test]
+    async fn competing_native_reap_cannot_hide_late_failure_at_zero_pending() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        for all_owners in [false, true] {
+            for cancel_first in [false, true] {
+                for earlier in [false, true] {
+                    let owner = PaneProcessRetirementOwner::default();
+                    let process = mez_mux::process::spawn_retained_argv_pty_process(
+                        std::path::Path::new("/bin/cat"),
+                        &[],
+                        &[],
+                        super::super::Size::new(80, 24).unwrap(),
+                        None,
+                        owner.reserve().unwrap(),
+                    )
+                    .unwrap();
+                    let pid = rustix::process::Pid::from_raw(
+                        i32::try_from(process.primary_pid()).unwrap(),
+                    )
+                    .unwrap();
+                    let start =
+                        mez_mux::process::process_start_token_for_pid(process.primary_pid());
+                    let held_master = process.duplicate_master_fd().unwrap();
+                    drop(process);
+                    owner.seal();
+                    let mut claim = owner.begin_drain().unwrap();
+                    let mut child = claim.take_returned().unwrap();
+                    let published = AtomicBool::new(false);
+                    let (entered, observed) = tokio::sync::oneshot::channel();
+                    let (release, released) = tokio::sync::oneshot::channel();
+                    let deadline = Instant::now() + Duration::from_secs(1);
+                    let waiting = async {
+                        if cancel_first {
+                            let first_was_pending = {
+                                let first = drain_native_with_failure_reader(
+                                    &owner,
+                                    deadline,
+                                    all_owners,
+                                    competing_receipt_reader(&published, Some(entered), earlier),
+                                );
+                                tokio::pin!(first);
+                                tokio::time::timeout(Duration::from_millis(30), &mut first)
+                                    .await
+                                    .is_err()
+                            };
+                            assert!(first_was_pending);
+                            release.send(()).unwrap();
+                            drain_native_with_failure_reader(
+                                &owner,
+                                deadline,
+                                all_owners,
+                                competing_receipt_reader(&published, None, earlier),
+                            )
+                            .await
+                        } else {
+                            release.send(()).unwrap();
+                            drain_native_with_failure_reader(
+                                &owner,
+                                deadline,
+                                all_owners,
+                                competing_receipt_reader(&published, Some(entered), earlier),
+                            )
+                            .await
+                        }
+                    };
+                    let competing = async {
+                        observed.await.unwrap();
+                        released.await.unwrap();
+                        published.store(true, Ordering::Release);
+                        child.force_retirement().unwrap();
+                        loop {
+                            if child.try_wait().unwrap().is_some() {
+                                break;
+                            }
+                            assert!(
+                                Instant::now() < deadline,
+                                "exact native wait did not settle {pid:?} {start:?}"
+                            );
+                            sleep(Duration::from_millis(5)).await;
+                        }
+                        drop(child);
+                        drop(claim);
+                    };
+                    let (verdict, ()) = tokio::join!(waiting, competing);
+                    let error = verdict.unwrap_err();
+                    assert!(error.message().contains(if earlier {
+                        "earlier native cleanup cause"
+                    } else {
+                        "competing native-stage receipt"
+                    }));
+                    assert_eq!(owner.outstanding(), 0);
+                    assert_eq!(
+                        rustix::process::test_kill_process(pid),
+                        Err(rustix::io::Errno::SRCH),
+                        "{start:?}"
+                    );
+                    drop(held_master);
+                }
+            }
+        }
+    }
 
     /// Two final/worker drains may overlap normally. A reserved-startup gate
     /// keeps the first drain active while the second waits; both must observe
