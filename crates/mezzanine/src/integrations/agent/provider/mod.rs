@@ -457,6 +457,9 @@ mod chat_completions;
 mod deepseek;
 mod errors;
 mod openai_chat_completions;
+use crate::integrations::http::AsyncProviderHttpTransport;
+#[cfg(test)]
+use crate::integrations::http::ProviderHttpTransport;
 use anthropic::AnthropicMessagesDialect;
 pub use chat_completions::ChatCompletionsProvider;
 use deepseek::DeepSeekChatCompletionsDialect;
@@ -467,9 +470,6 @@ pub(crate) use errors::{
     bounded_provider_event_kind, provider_error_retry_class, provider_error_retry_class_from_parts,
     provider_event_error_from_parts, provider_event_error_kind,
 };
-#[cfg(test)]
-use crate::integrations::http::ProviderHttpTransport;
-use crate::integrations::http::AsyncProviderHttpTransport;
 use mez_agent::OpenAiResponsesStreamDecoder;
 use mez_agent::parse_openai_models_http_body;
 use mez_agent::provider_quota_usage_from_headers;

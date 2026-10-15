@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
-use mez_agent::{ProviderHttpResult, network_action_structured_content_json};
 use crate::integrations::http::{HttpCompletion, HttpExchangeResponse};
+use mez_agent::{ProviderHttpResult, network_action_structured_content_json};
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord,

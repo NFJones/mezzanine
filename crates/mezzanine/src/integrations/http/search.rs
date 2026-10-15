@@ -15,14 +15,23 @@ use mez_agent::{ProviderHttpError, ProviderHttpRequest, ProviderHttpResult, Prov
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 
-use super::{HttpCompletion, HttpExecution, HttpResponseMode, HttpRoutingPolicy, ReqwestProviderHttpTransport};
+use super::{
+    HttpCompletion, HttpExecution, HttpResponseMode, HttpRoutingPolicy,
+    ReqwestProviderHttpTransport,
+};
 
 #[cfg(test)]
 mod tests;
 
 /// Code-owned destinations; there is no production base-URL override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(test), expect(dead_code, reason = "Fixed search endpoints await separately authorized backend consumers; no paid dispatch is activated here."))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Fixed search endpoints await separately authorized backend consumers; no paid dispatch is activated here."
+    )
+)]
 pub(crate) enum SearchEndpoint {
     /// Brave Web Search API.
     Brave,
@@ -34,7 +43,13 @@ pub(crate) enum SearchEndpoint {
     SerpApi,
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "Endpoint identity and auth placement are a dormant search adapter boundary."))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Endpoint identity and auth placement are a dormant search adapter boundary."
+    )
+)]
 impl SearchEndpoint {
     /// Returns a credential-free code-owned endpoint for approval descriptions.
     pub(crate) const fn url(self) -> &'static str {
@@ -62,7 +77,13 @@ impl SearchEndpoint {
 /// This is transport input, not an approval decision or model-facing result.
 /// Backend adapters own query/options contracts and authorization. Debug omits
 /// the complete payload, including user query and body.
-#[cfg_attr(not(test), expect(dead_code, reason = "Credential-free search input awaits separately authorized runtime adapters."))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Credential-free search input awaits separately authorized runtime adapters."
+    )
+)]
 pub(crate) struct SearchHttpRequest {
     endpoint: SearchEndpoint,
     request: ProviderHttpRequest,
@@ -70,13 +91,20 @@ pub(crate) struct SearchHttpRequest {
 
 impl std::fmt::Debug for SearchHttpRequest {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("SearchHttpRequest")
+        formatter
+            .debug_struct("SearchHttpRequest")
             .field("endpoint", &self.endpoint)
             .finish_non_exhaustive()
     }
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "Search execution is qualified offline but not wired to paid backend selection."))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Search execution is qualified offline but not wired to paid backend selection."
+    )
+)]
 impl SearchHttpRequest {
     /// Builds credential-free wire inputs for one fixed endpoint. A JSON body
     /// selects POST; otherwise GET. No custom headers, host or URL are accepted.
@@ -90,11 +118,17 @@ impl SearchHttpRequest {
         timeouts.validate()?;
         let mut url = reqwest::Url::parse(endpoint.url())
             .map_err(|_| ProviderHttpError::invalid_state("search endpoint is invalid"))?;
-        if query.iter().any(|(name, _)| name.eq_ignore_ascii_case("api_key")) {
-            return Err(ProviderHttpError::invalid_args("search credentials must be supplied separately"));
+        if query
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("api_key"))
+        {
+            return Err(ProviderHttpError::invalid_args(
+                "search credentials must be supplied separately",
+            ));
         }
         if !query.is_empty() {
-            url.query_pairs_mut().extend_pairs(query.iter().map(|(key, value)| (key, value)));
+            url.query_pairs_mut()
+                .extend_pairs(query.iter().map(|(key, value)| (key, value)));
         }
         Ok(Self {
             endpoint,
@@ -127,19 +161,24 @@ impl SearchHttpRequest {
         credential: &SecretString,
         deadline: tokio::time::Instant,
     ) -> ProviderHttpResult<Value> {
-        let deadline = deadline.min(tokio::time::Instant::now() + std::time::Duration::from_millis(self.request.timeouts.total_timeout_ms));
+        let deadline = deadline.min(
+            tokio::time::Instant::now()
+                + std::time::Duration::from_millis(self.request.timeouts.total_timeout_ms),
+        );
         let auth = self.endpoint.auth(credential);
-        let exchange = ReqwestProviderHttpTransport.send_async_with_observers(
-            &self.request,
-            HttpExecution {
-                mode: HttpResponseMode::SearchJson,
-                routing: HttpRoutingPolicy::AuthenticatedSearch,
-                deadline: Some(deadline),
-                auth,
-            },
-            None,
-            None,
-        ).await?;
+        let exchange = ReqwestProviderHttpTransport
+            .send_async_with_observers(
+                &self.request,
+                HttpExecution {
+                    mode: HttpResponseMode::SearchJson,
+                    routing: HttpRoutingPolicy::AuthenticatedSearch,
+                    deadline: Some(deadline),
+                    auth,
+                },
+                None,
+                None,
+            )
+            .await?;
         check_deadline(deadline, self.request.timeouts)?;
         let result = checked_json(exchange, credential);
         check_deadline(deadline, self.request.timeouts)?;
@@ -162,7 +201,11 @@ pub(super) enum WireAuth<'a> {
 
 impl WireAuth<'_> {
     /// Applies credentials immediately before sending, after endpoint validation.
-    pub(super) fn apply(&self, url: &mut reqwest::Url, headers: &mut reqwest::header::HeaderMap) -> ProviderHttpResult<()> {
+    pub(super) fn apply(
+        &self,
+        url: &mut reqwest::Url,
+        headers: &mut reqwest::header::HeaderMap,
+    ) -> ProviderHttpResult<()> {
         let (name, value) = match self {
             Self::None => return Ok(()),
             Self::Query(name, key) => {
@@ -179,8 +222,9 @@ impl WireAuth<'_> {
                 (*name, key.expose_secret().to_string())
             }
         };
-        let mut value = reqwest::header::HeaderValue::from_str(&value)
-            .map_err(|_| ProviderHttpError::invalid_args("search credential is not a valid HTTP header"))?;
+        let mut value = reqwest::header::HeaderValue::from_str(&value).map_err(|_| {
+            ProviderHttpError::invalid_args("search credential is not a valid HTTP header")
+        })?;
         value.set_sensitive(true);
         headers.insert(reqwest::header::HeaderName::from_static(name), value);
         Ok(())
@@ -190,7 +234,9 @@ impl WireAuth<'_> {
 /// Empty/control-bearing keys fail without rendering the supplied material.
 fn validate_credential(key: &SecretString) -> ProviderHttpResult<()> {
     if key.expose_secret().is_empty() || key.expose_secret().chars().any(char::is_control) {
-        return Err(ProviderHttpError::invalid_args("search credential is invalid"));
+        return Err(ProviderHttpError::invalid_args(
+            "search credential is invalid",
+        ));
     }
     Ok(())
 }
@@ -200,28 +246,55 @@ fn validate_credential(key: &SecretString) -> ProviderHttpResult<()> {
 pub(super) fn validate_wire_url(url: &reqwest::Url) -> ProviderHttpResult<()> {
     let secure = url.scheme() == "https";
     #[cfg(test)]
-    let secure = secure || (url.scheme() == "http" && url.host_str().is_some_and(|host| host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())));
-    if !secure || !url.username().is_empty() || url.password().is_some()
-        || url.fragment().is_some() || url.as_str().split('/').nth(2).is_some_and(|authority| authority.contains('@')) {
-        return Err(ProviderHttpError::invalid_args("search endpoint requires verified HTTPS without userinfo or fragment"));
+    let secure = secure
+        || (url.scheme() == "http"
+            && url.host_str().is_some_and(|host| {
+                host.parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+            }));
+    if !secure
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url
+            .as_str()
+            .split('/')
+            .nth(2)
+            .is_some_and(|authority| authority.contains('@'))
+    {
+        return Err(ProviderHttpError::invalid_args(
+            "search endpoint requires verified HTTPS without userinfo or fragment",
+        ));
     }
     Ok(())
 }
 
 /// Validates before returning anything that may enter model/transcript/audit or
 /// subsequent fetch calls. Status/error paths never return remote payloads.
-fn checked_json(exchange: super::HttpExchangeResponse, credential: &SecretString) -> ProviderHttpResult<Value> {
+fn checked_json(
+    exchange: super::HttpExchangeResponse,
+    credential: &SecretString,
+) -> ProviderHttpResult<Value> {
     if exchange.completion != HttpCompletion::Complete {
-        return Err(ProviderHttpError::invalid_state("search JSON response is incomplete"));
+        return Err(ProviderHttpError::invalid_state(
+            "search JSON response is incomplete",
+        ));
     }
     let response = exchange.response;
     if !(200..300).contains(&response.status_code) {
-        return Err(ProviderHttpError::invalid_state(format!("search HTTP status {}", response.status_code)));
+        return Err(ProviderHttpError::invalid_state(format!(
+            "search HTTP status {}",
+            response.status_code
+        )));
     }
     let value: Value = serde_json::from_str(&response.body)
         .map_err(|_| ProviderHttpError::invalid_state("search response is not complete JSON"))?;
-    if contains_credential(&response.body, credential) || json_contains_credential(&value, credential) {
-        return Err(ProviderHttpError::invalid_state("search response suppressed: credential echo"));
+    if contains_credential(&response.body, credential)
+        || json_contains_credential(&value, credential)
+    {
+        return Err(ProviderHttpError::invalid_state(
+            "search response suppressed: credential echo",
+        ));
     }
     Ok(value)
 }
@@ -229,10 +302,14 @@ fn checked_json(exchange: super::HttpExchangeResponse, credential: &SecretString
 /// Detects exact raw and percent/form-encoded canaries, not heuristic key names.
 fn contains_credential(value: &str, credential: &SecretString) -> bool {
     let secret = credential.expose_secret();
-    if value.contains(secret) { return true; }
+    if value.contains(secret) {
+        return true;
+    }
     [false, true].into_iter().any(|form| {
         let bytes = decode_canary_bytes(value.as_bytes(), form);
-        bytes.windows(secret.len()).any(|window| window == secret.as_bytes())
+        bytes
+            .windows(secret.len())
+            .any(|window| window == secret.as_bytes())
     })
 }
 
@@ -242,12 +319,19 @@ fn decode_canary_bytes(value: &[u8], form: bool) -> Vec<u8> {
     let mut decoded = Vec::with_capacity(value.len());
     let mut index = 0;
     while index < value.len() {
-        if value[index] == b'%' && index + 2 < value.len()
-            && let (Some(high), Some(low)) = (hex_digit(value[index + 1]), hex_digit(value[index + 2])) {
+        if value[index] == b'%'
+            && index + 2 < value.len()
+            && let (Some(high), Some(low)) =
+                (hex_digit(value[index + 1]), hex_digit(value[index + 2]))
+        {
             decoded.push(high * 16 + low);
             index += 3;
         } else {
-            decoded.push(if form && value[index] == b'+' { b' ' } else { value[index] });
+            decoded.push(if form && value[index] == b'+' {
+                b' '
+            } else {
+                value[index]
+            });
             index += 1;
         }
     }
@@ -266,9 +350,16 @@ fn hex_digit(byte: u8) -> Option<u8> {
 
 /// Synchronous JSON/echo work is byte/depth bounded and cannot be preempted;
 /// never publish a result if that work exhausted the absolute response budget.
-fn check_deadline(deadline: tokio::time::Instant, timeouts: ProviderHttpTimeouts) -> ProviderHttpResult<()> {
+fn check_deadline(
+    deadline: tokio::time::Instant,
+    timeouts: ProviderHttpTimeouts,
+) -> ProviderHttpResult<()> {
     if tokio::time::Instant::now() >= deadline {
-        return Err(ProviderHttpError::timeout(mez_agent::ProviderHttpTimeoutPhase::Total, timeouts.total_timeout_ms, "validating the search response"));
+        return Err(ProviderHttpError::timeout(
+            mez_agent::ProviderHttpTimeoutPhase::Total,
+            timeouts.total_timeout_ms,
+            "validating the search response",
+        ));
     }
     Ok(())
 }
@@ -277,8 +368,12 @@ fn check_deadline(deadline: tokio::time::Instant, timeouts: ProviderHttpTimeouts
 fn json_contains_credential(value: &Value, credential: &SecretString) -> bool {
     match value {
         Value::String(value) => contains_credential(value, credential),
-        Value::Array(values) => values.iter().any(|value| json_contains_credential(value, credential)),
-        Value::Object(values) => values.iter().any(|(key, value)| contains_credential(key, credential) || json_contains_credential(value, credential)),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| json_contains_credential(value, credential)),
+        Value::Object(values) => values.iter().any(|(key, value)| {
+            contains_credential(key, credential) || json_contains_credential(value, credential)
+        }),
         _ => false,
     }
 }

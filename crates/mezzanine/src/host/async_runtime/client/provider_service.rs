@@ -1042,22 +1042,29 @@ async fn execute_approved_external_action_inner(
             &transport,
             &mut on_progress,
         );
-        let result = drive_external_network_with_progress(network_execution, progress_receiver, |source, revision| {
-            let mut batch = RuntimeEventBatch::new();
-            batch.push(RuntimeEvent::ApprovedExternalActionProgress(
-                RuntimeApprovedExternalActionProgress {
-                    presentation: mez_agent::ActionPresentationProgress::new(
-                        turn_id.clone(),
-                        action_id.clone(),
-                        mez_agent::ActionPresentationExecutionIdentity::Attempt(attempt.clone()),
-                        revision,
-                        mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody,
-                        source,
-                    ),
-                },
-            ));
-            handle.submit_runtime_events(batch)
-        }).await;
+        let result = drive_external_network_with_progress(
+            network_execution,
+            progress_receiver,
+            |source, revision| {
+                let mut batch = RuntimeEventBatch::new();
+                batch.push(RuntimeEvent::ApprovedExternalActionProgress(
+                    RuntimeApprovedExternalActionProgress {
+                        presentation: mez_agent::ActionPresentationProgress::new(
+                            turn_id.clone(),
+                            action_id.clone(),
+                            mez_agent::ActionPresentationExecutionIdentity::Attempt(
+                                attempt.clone(),
+                            ),
+                            revision,
+                            mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody,
+                            source,
+                        ),
+                    },
+                ));
+                handle.submit_runtime_events(batch)
+            },
+        )
+        .await;
         (result, None)
     };
     handle

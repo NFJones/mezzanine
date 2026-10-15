@@ -15,18 +15,29 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// Confirms that a held ingress future was dropped instead of detached.
 struct IngressDrop(Arc<AtomicUsize>);
 impl Drop for IngressDrop {
-    fn drop(&mut self) { self.0.fetch_add(1, Ordering::SeqCst); }
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 /// Executes one real body with acknowledgment held. The peer waits for ingress
 /// to start before sending its tail or waiting for local cancellation/timeout.
-async fn held_ack_case(finish: bool, cancel: bool) -> (Option<ProviderHttpResult<HttpExchangeResponse>>, usize, usize) {
+async fn held_ack_case(
+    finish: bool,
+    cancel: bool,
+) -> (
+    Option<ProviderHttpResult<HttpExchangeResponse>>,
+    usize,
+    usize,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let request = ProviderHttpRequest {
         method: "GET".into(),
         url: format!("http://{}/held-ack", listener.local_addr().unwrap()),
-        headers: Default::default(), body: String::new(),
-        timeouts: ProviderHttpTimeouts::from_total(300), max_response_bytes: Some(20),
+        headers: Default::default(),
+        body: String::new(),
+        timeouts: ProviderHttpTimeouts::from_total(300),
+        max_response_bytes: Some(20),
     };
     let (peer_started_tx, peer_started_rx) = tokio::sync::oneshot::channel();
     let (cancel_started_tx, cancel_started_rx) = tokio::sync::oneshot::channel();
@@ -34,12 +45,21 @@ async fn held_ack_case(finish: bool, cancel: bool) -> (Option<ProviderHttpResult
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut bytes = [0; 4096];
         stream.read(&mut bytes).await.unwrap();
-        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\na").await.unwrap();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\na")
+            .await
+            .unwrap();
         peer_started_rx.await.unwrap();
         if finish {
             stream.write_all(b"b").await.unwrap();
         } else {
-            assert_eq!(tokio::time::timeout(Duration::from_secs(3), stream.read(&mut bytes)).await.unwrap().unwrap(), 0);
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(3), stream.read(&mut bytes))
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                0
+            );
         }
     });
     let (sender, receiver) = watch::channel(None);
@@ -62,25 +82,46 @@ async fn held_ack_case(finish: bool, cancel: bool) -> (Option<ProviderHttpResult
         peer_started_tx.take().unwrap().send(()).unwrap();
         cancel_started_tx.take().unwrap().send(()).unwrap();
         let guard = IngressDrop(drops.clone());
-        async move { let _guard = guard; std::future::pending::<()>().await; }
+        async move {
+            let _guard = guard;
+            std::future::pending::<()>().await;
+        }
     };
-    let cancellation = crate::runtime::processes::native_cancellation::NativeActionCancellation::new();
+    // Exercise the same biased outer cancellation/drop boundary without
+    // exposing the runtime-private cancellation implementation to this seam.
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     let worker = async {
         tokio::select! {
             biased;
-            _ = cancellation.cancelled() => None,
+            _ = cancel_rx => None,
             result = drive_external_network_with_progress(network, receiver, submit) => Some(result),
         }
     };
     let cancel_after_ingress = async {
         cancel_started_rx.await.unwrap();
-        if cancel { cancellation.cancel(); }
+        if cancel {
+            cancel_tx.send(()).unwrap();
+        } else {
+            // Keep cancellation pending for the canonical success/error case.
+            std::future::pending::<()>().await;
+        }
     };
-    let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
-        tokio::join!(worker, cancel_after_ingress)
-    }).await.expect("held presentation acknowledgment must not suspend network completion/deadlines");
+    let result = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::pin!(cancel_after_ingress);
+        tokio::pin!(worker);
+        tokio::select! {
+            result = &mut worker => result,
+            () = &mut cancel_after_ingress => worker.await,
+        }
+    })
+    .await
+    .expect("held presentation acknowledgment must not suspend network completion/deadlines");
     peer.await.unwrap();
-    (result, calls.load(Ordering::SeqCst), drops.load(Ordering::SeqCst))
+    (
+        result,
+        calls.load(Ordering::SeqCst),
+        drops.load(Ordering::SeqCst),
+    )
 }
 
 /// A held progress acknowledgment cannot prevent real body EOF or replace the
@@ -90,7 +131,10 @@ async fn outer_held_ack_does_not_block_real_http_success() {
     let (result, calls, drops) = held_ack_case(true, false).await;
     let response = result.unwrap().unwrap();
     assert_eq!(response.response.body, "ab");
-    assert_eq!(response.completion, crate::integrations::http::HttpCompletion::Complete);
+    assert_eq!(
+        response.completion,
+        crate::integrations::http::HttpCompletion::Complete
+    );
     assert_eq!((calls, drops), (1, 1));
 }
 
@@ -99,11 +143,14 @@ async fn outer_held_ack_does_not_block_real_http_success() {
 #[tokio::test]
 async fn outer_held_ack_does_not_block_real_http_deadline() {
     let (result, calls, drops) = held_ack_case(false, false).await;
-    assert_eq!(result.unwrap().unwrap_err().kind(), mez_agent::ProviderHttpErrorKind::Timeout(mez_agent::ProviderHttpTimeoutPhase::Total));
+    assert_eq!(
+        result.unwrap().unwrap_err().kind(),
+        mez_agent::ProviderHttpErrorKind::Timeout(mez_agent::ProviderHttpTimeoutPhase::Total)
+    );
     assert_eq!((calls, drops), (1, 1));
 }
 
-/// Exact outer cancellation after ingress starts drops both scoped futures and
+/// Outer cancellation after ingress starts drops both scoped futures and
 /// the unfinished HTTP body; peer EOF is not a claim that no remote effect ran.
 #[tokio::test]
 async fn outer_held_ack_cancellation_retires_ingress_and_real_http() {
@@ -118,10 +165,21 @@ async fn outer_held_ack_cancellation_retires_ingress_and_real_http() {
 async fn outer_progress_closed_watch_does_not_complete_network() {
     let (sender, receiver) = watch::channel(None);
     drop(sender);
-    let result = tokio::time::timeout(Duration::from_secs(1), drive_external_network_with_progress(
-        async { tokio::task::yield_now().await; 17 }, receiver,
-        |_, _| async { panic!("closed empty watch must not submit progress"); },
-    )).await.unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        drive_external_network_with_progress(
+            async {
+                tokio::task::yield_now().await;
+                17
+            },
+            receiver,
+            |_, _| async {
+                panic!("closed empty watch must not submit progress");
+            },
+        ),
+    )
+    .await
+    .unwrap();
     assert_eq!(result, 17);
 }
 
@@ -131,9 +189,10 @@ async fn outer_progress_closed_watch_does_not_complete_network() {
 async fn outer_progress_ready_terminal_wins_over_ready_snapshot() {
     let (sender, receiver) = watch::channel(None);
     sender.send_replace(Some("obsolete".into()));
-    let result = drive_external_network_with_progress(
-        std::future::ready(23), receiver,
-        |_, _| async { panic!("terminal result must win over provisional progress"); },
-    ).await;
+    let result =
+        drive_external_network_with_progress(std::future::ready(23), receiver, |_, _| async {
+            panic!("terminal result must win over provisional progress");
+        })
+        .await;
     assert_eq!(result, 23);
 }

@@ -69,7 +69,12 @@ struct HttpExecution<'a> {
 impl HttpExecution<'_> {
     /// Keeps legacy routing while making response interpretation explicit.
     fn legacy(mode: HttpResponseMode) -> Self {
-        Self { mode, routing: HttpRoutingPolicy::Legacy, deadline: None, auth: search::WireAuth::None }
+        Self {
+            mode,
+            routing: HttpRoutingPolicy::Legacy,
+            deadline: None,
+            auth: search::WireAuth::None,
+        }
     }
 }
 
@@ -114,16 +119,28 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<HttpExchangeResponse>> + Send + 'a>> {
         Box::pin(async move {
             request.timeouts.validate()?;
-            let deadline = tokio::time::Instant::now() + Duration::from_millis(request.timeouts.total_timeout_ms);
+            let deadline = tokio::time::Instant::now()
+                + Duration::from_millis(request.timeouts.total_timeout_ms);
             tokio::time::timeout_at(deadline, async move {
-            let response = self.send_async(request).await?;
-            if (200..300).contains(&response.status_code) && !response.body.is_empty() {
-                on_chunk(response.body.as_bytes().to_vec()).await;
-            }
-            // Compatibility transports promise a fully retained body, not a
-            // completion assertion derived from any remote header.
-            Ok(HttpExchangeResponse { response, completion: HttpCompletion::Complete })
-            }).await.map_err(|_| ProviderHttpError::timeout(ProviderHttpTimeoutPhase::Total, request.timeouts.total_timeout_ms, "completing the compatibility HTTP exchange"))?
+                let response = self.send_async(request).await?;
+                if (200..300).contains(&response.status_code) && !response.body.is_empty() {
+                    on_chunk(response.body.as_bytes().to_vec()).await;
+                }
+                // Compatibility transports promise a fully retained body, not a
+                // completion assertion derived from any remote header.
+                Ok(HttpExchangeResponse {
+                    response,
+                    completion: HttpCompletion::Complete,
+                })
+            })
+            .await
+            .map_err(|_| {
+                ProviderHttpError::timeout(
+                    ProviderHttpTimeoutPhase::Total,
+                    request.timeouts.total_timeout_ms,
+                    "completing the compatibility HTTP exchange",
+                )
+            })?
         })
     }
 
@@ -139,21 +156,30 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
         Box::pin(async move {
             request.timeouts.validate()?;
-            let deadline = tokio::time::Instant::now() + Duration::from_millis(request.timeouts.total_timeout_ms);
+            let deadline = tokio::time::Instant::now()
+                + Duration::from_millis(request.timeouts.total_timeout_ms);
             tokio::time::timeout_at(deadline, async move {
-            let response = self.send_async(request).await?;
-            if provider_http_expects_event_stream(&request.headers, &response.headers) {
-                let events = parse_sse_events(
-                    &response.body,
-                    "provider stream response did not contain SSE data events",
-                )
-                .map_err(|error| ProviderHttpError::invalid_state(error.message()))?;
-                for event in events {
-                    on_event(event).await;
+                let response = self.send_async(request).await?;
+                if provider_http_expects_event_stream(&request.headers, &response.headers) {
+                    let events = parse_sse_events(
+                        &response.body,
+                        "provider stream response did not contain SSE data events",
+                    )
+                    .map_err(|error| ProviderHttpError::invalid_state(error.message()))?;
+                    for event in events {
+                        on_event(event).await;
+                    }
                 }
-            }
-            Ok(response)
-            }).await.map_err(|_| ProviderHttpError::timeout(ProviderHttpTimeoutPhase::Total, request.timeouts.total_timeout_ms, "completing the compatibility SSE exchange"))?
+                Ok(response)
+            })
+            .await
+            .map_err(|_| {
+                ProviderHttpError::timeout(
+                    ProviderHttpTimeoutPhase::Total,
+                    request.timeouts.total_timeout_ms,
+                    "completing the compatibility SSE exchange",
+                )
+            })?
         })
     }
 }
@@ -209,9 +235,7 @@ struct ProviderHttpClientCache {
 /// verified platform-root behavior. Mezzanine owns explicit first-byte,
 /// inter-chunk, and total deadlines around reqwest operations so timeout
 /// failures retain a stable phase classification.
-fn provider_http_client_builder(
-    policy: ProviderHttpClientPolicy,
-) -> reqwest::ClientBuilder {
+fn provider_http_client_builder(policy: ProviderHttpClientPolicy) -> reqwest::ClientBuilder {
     let builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_millis(policy.connect_timeout_ms))
         .pool_idle_timeout(Duration::from_secs(90))
@@ -221,7 +245,9 @@ fn provider_http_client_builder(
         .no_deflate()
         .no_zstd();
     let builder = if policy.routing == HttpRoutingPolicy::AuthenticatedSearch {
-        builder.redirect(reqwest::redirect::Policy::none()).no_proxy()
+        builder
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
             .retry(reqwest::retry::never())
     } else {
         builder
@@ -258,9 +284,7 @@ fn provider_http_client(
 
     let client = provider_http_client_builder(policy)
         .build()
-        .map_err(|_| {
-            ProviderHttpError::invalid_state("provider HTTP client setup failed")
-        })?;
+        .map_err(|_| ProviderHttpError::invalid_state("provider HTTP client setup failed"))?;
     let mut cache = cache
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -306,10 +330,7 @@ fn provider_http_expects_event_stream(
 }
 
 /// Classifies a read failure without retaining URL-bearing errors or sources.
-fn provider_http_response_read_error(
-    status_code: u16,
-    error: reqwest::Error,
-) -> ProviderHttpError {
+fn provider_http_response_read_error(status_code: u16, error: reqwest::Error) -> ProviderHttpError {
     ProviderHttpError::io(format!(
         "provider HTTP response read failed (status {status_code}, \
          timeout {}, decode {})",
@@ -366,7 +387,9 @@ fn provider_http_request_error(
     }
     ProviderHttpError::invalid_state(format!(
         "provider HTTP request failed (connect {}, request {}, builder {})",
-        error.is_connect(), error.is_request(), error.is_builder()
+        error.is_connect(),
+        error.is_request(),
+        error.is_builder()
     ))
 }
 
@@ -420,7 +443,10 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
             let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
             let mut sender = Some(sender);
             let mut enqueue = |chunk| {
-                if sender.as_ref().is_some_and(|sender| sender.try_send(chunk).is_err()) {
+                if sender
+                    .as_ref()
+                    .is_some_and(|sender| sender.try_send(chunk).is_err())
+                {
                     sender = None;
                 }
                 Box::pin(tokio::task::yield_now()) as Pin<Box<dyn Future<Output = ()> + Send>>
@@ -445,8 +471,14 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
         on_event: &'a mut (dyn FnMut(SseEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send),
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
         Box::pin(async move {
-            self.send_async_with_observers(request, HttpExecution::legacy(HttpResponseMode::Inference), Some(on_event), None)
-                .await.map(|exchange| exchange.response)
+            self.send_async_with_observers(
+                request,
+                HttpExecution::legacy(HttpResponseMode::Inference),
+                Some(on_event),
+                None,
+            )
+            .await
+            .map(|exchange| exchange.response)
         })
     }
 }
@@ -467,7 +499,9 @@ impl ReqwestProviderHttpTransport {
                 started_at + Duration::from_millis(request.timeouts.first_byte_timeout_ms);
             let configured_deadline =
                 started_at + Duration::from_millis(request.timeouts.total_timeout_ms);
-            let total_deadline = execution.deadline.map_or(configured_deadline, |deadline| deadline.min(configured_deadline));
+            let total_deadline = execution.deadline.map_or(configured_deadline, |deadline| {
+                deadline.min(configured_deadline)
+            });
             tokio::time::timeout_at(total_deadline, async move {
             if tokio::time::Instant::now() >= total_deadline {
                 return Err(ProviderHttpError::timeout(ProviderHttpTimeoutPhase::Total, request.timeouts.total_timeout_ms, "starting the HTTP exchange"));
@@ -697,10 +731,13 @@ fn retained_utf8(mut body: Vec<u8>, truncated: bool) -> ProviderHttpResult<Strin
         if truncated && error.error_len().is_none() {
             body.truncate(error.valid_up_to());
         } else {
-            return Err(ProviderHttpError::invalid_state("provider HTTP response body is not UTF-8"));
+            return Err(ProviderHttpError::invalid_state(
+                "provider HTTP response body is not UTF-8",
+            ));
         }
     }
-    String::from_utf8(body).map_err(|_| ProviderHttpError::invalid_state("provider HTTP response body is not UTF-8"))
+    String::from_utf8(body)
+        .map_err(|_| ProviderHttpError::invalid_state("provider HTTP response body is not UTF-8"))
 }
 
 #[cfg(test)]
@@ -725,10 +762,8 @@ mod provider_transport_tests {
             .send()
             .await
             .unwrap_err();
-        let safe = super::provider_http_request_error(
-            error,
-            ProviderHttpTimeouts::from_total(1_000),
-        );
+        let safe =
+            super::provider_http_request_error(error, ProviderHttpTimeouts::from_total(1_000));
         for text in [safe.to_string(), format!("{safe:?}")] {
             assert!(!text.contains("example.invalid"));
             assert!(!text.contains("canary"));
@@ -748,7 +783,10 @@ mod provider_transport_tests {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut bytes = [0; 4096];
             stream.read(&mut bytes).await.unwrap();
-            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .unwrap();
         });
         let request = ProviderHttpRequest {
             method: "GET".into(),
@@ -758,13 +796,25 @@ mod provider_transport_tests {
             timeouts: ProviderHttpTimeouts::from_total(150),
             max_response_bytes: Some(10),
         };
-        let mut observer = |_| Box::pin(std::future::pending())
-            as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+        let mut observer = |_| {
+            Box::pin(std::future::pending())
+                as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        };
         let result = tokio::time::timeout(
             Duration::from_secs(2),
-            ReqwestProviderHttpTransport.send_async_with_observers(&request, super::HttpExecution::legacy(super::HttpResponseMode::Ordinary), None, Some(&mut observer)),
-        ).await.expect("observer must be bounded by the exchange deadline");
-        assert_eq!(result.unwrap_err().kind(), mez_agent::ProviderHttpErrorKind::Timeout(mez_agent::ProviderHttpTimeoutPhase::Total));
+            ReqwestProviderHttpTransport.send_async_with_observers(
+                &request,
+                super::HttpExecution::legacy(super::HttpResponseMode::Ordinary),
+                None,
+                Some(&mut observer),
+            ),
+        )
+        .await
+        .expect("observer must be bounded by the exchange deadline");
+        assert_eq!(
+            result.unwrap_err().kind(),
+            mez_agent::ProviderHttpErrorKind::Timeout(mez_agent::ProviderHttpTimeoutPhase::Total)
+        );
         server.await.unwrap();
     }
 
@@ -1262,7 +1312,12 @@ mod provider_transport_tests {
         server.await.unwrap();
         assert_eq!(response.completion, super::HttpCompletion::Complete);
         assert_eq!(response.response.body, "earlylate");
-        assert!(!response.response.headers.contains_key("x-mez-stream-decoded"));
+        assert!(
+            !response
+                .response
+                .headers
+                .contains_key("x-mez-stream-decoded")
+        );
     }
 
     /// Verifies callers can request a lower retained response-body cap than
@@ -1315,7 +1370,12 @@ mod provider_transport_tests {
         };
 
         let response = ReqwestProviderHttpTransport
-            .send_async_with_observers(&request, super::HttpExecution::legacy(super::HttpResponseMode::Ordinary), None, None)
+            .send_async_with_observers(
+                &request,
+                super::HttpExecution::legacy(super::HttpResponseMode::Ordinary),
+                None,
+                None,
+            )
             .await
             .unwrap();
         server.abort();
@@ -1323,7 +1383,12 @@ mod provider_transport_tests {
         assert_eq!(response.response.status_code, 200);
         assert_eq!(response.response.body, "abc");
         assert_eq!(response.completion, super::HttpCompletion::Truncated);
-        assert!(!response.response.headers.contains_key("x-mez-body-truncated"));
+        assert!(
+            !response
+                .response
+                .headers
+                .contains_key("x-mez-body-truncated")
+        );
     }
 
     /// Verifies provider body reads fail with a Mezzanine timeout when no body

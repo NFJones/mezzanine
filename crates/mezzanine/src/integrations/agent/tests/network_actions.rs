@@ -48,7 +48,12 @@ impl AsyncProviderHttpTransport for ChunkedAsyncProviderHttpTransport {
             for chunk in &self.chunks {
                 on_chunk(chunk.clone()).await;
             }
-            self.send_async(request).await.map(|response| HttpExchangeResponse { response, completion: HttpCompletion::Complete })
+            self.send_async(request)
+                .await
+                .map(|response| HttpExchangeResponse {
+                    response,
+                    completion: HttpCompletion::Complete,
+                })
         })
     }
 }

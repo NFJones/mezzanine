@@ -213,7 +213,8 @@ pub struct ProviderHttpResponse {
 impl std::fmt::Debug for ProviderHttpRequest {
     /// Renders only local resource bounds, never URL, method, headers or body.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("ProviderHttpRequest")
+        formatter
+            .debug_struct("ProviderHttpRequest")
             .field("timeouts", &self.timeouts)
             .field("max_response_bytes", &self.max_response_bytes)
             .finish_non_exhaustive()
@@ -223,7 +224,8 @@ impl std::fmt::Debug for ProviderHttpRequest {
 impl std::fmt::Debug for ProviderHttpResponse {
     /// Status and retained size are safe; remote headers and body are not.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("ProviderHttpResponse")
+        formatter
+            .debug_struct("ProviderHttpResponse")
             .field("status_code", &self.status_code)
             .field("body_bytes", &self.body.len())
             .finish_non_exhaustive()

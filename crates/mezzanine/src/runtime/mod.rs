@@ -67,7 +67,6 @@ use crate::integrations::agent::provider::{
     AsyncModelProvider, DeepSeekChatCompletionsProvider, OpenAiCompatibleChatCompletionsProvider,
     OpenAiResponsesProvider,
 };
-use crate::integrations::http::ReqwestProviderHttpTransport;
 use crate::integrations::agent::slash::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, execute_agent_shell_command_with_context,
 };
@@ -82,6 +81,7 @@ use crate::integrations::hooks::{
 use crate::integrations::hooks::{
     FocusedShellHookDispatch, FocusedShellHookDispatchStatus, HookDefinition,
 };
+use crate::integrations::http::ReqwestProviderHttpTransport;
 use crate::integrations::mcp::{
     McpStdioConnection, discover_streamable_http_mcp_server_with_auth_token,
     execute_streamable_http_exchange, spawn_stdio_mcp_connection,
