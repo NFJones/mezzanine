@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::serve::{ServeCliArgs, assign_unique_live_session_id};
+use super::serve::{OwnedRuntimeDaemonStartup, ServeCliArgs, assign_unique_live_session_id};
 use super::{
     Args, CliEnv, CliOutputFormat, ConfigPaths, LayoutLoadPlan, LoadedRuntimeConfig, MezError,
     ParsedServeOptions, RestoredSnapshotDaemonRequest, Result, RuntimeDaemonStartup,
@@ -324,11 +324,13 @@ pub(super) async fn run_restored_snapshot_daemon<W: Write>(
             root: paths.root().to_path_buf(),
         },
         options,
-        RuntimeDaemonStartup::RestoredSnapshot {
-            payload: Box::new(payload),
-            restart_command,
+        OwnedRuntimeDaemonStartup {
+            startup: RuntimeDaemonStartup::RestoredSnapshot {
+                payload: Box::new(payload),
+                restart_command,
+            },
+            native: native.foreground(),
         },
-        native.foreground(),
     )
     .await
 }

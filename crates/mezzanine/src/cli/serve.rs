@@ -661,6 +661,16 @@ impl ServeCliArgs {
     }
 }
 
+/// Pairs concrete foreground startup intent with its mandatory outer native
+/// owner. Callers obtain the owner from the retained CLI outcome before factory
+/// construction; this bundle supplies no default/untracked ownership fallback.
+pub(super) struct OwnedRuntimeDaemonStartup {
+    /// Initial/restore policy consumed by the existing session factory.
+    pub(super) startup: RuntimeDaemonStartup,
+    /// Exact cleanup owner independently retained by the outer CLI lifetime.
+    pub(super) native: mez_mux::process::PaneProcessRetirementOwner,
+}
+
 /// Carries Runtime Daemon Startup state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -831,10 +841,12 @@ pub(super) async fn run_serve<W: Write>(
             root: paths.root().to_path_buf(),
         },
         options,
-        RuntimeDaemonStartup::Initial {
-            explicit_command: None,
+        OwnedRuntimeDaemonStartup {
+            startup: RuntimeDaemonStartup::Initial {
+                explicit_command: None,
+            },
+            native: native.foreground(),
         },
-        native.foreground(),
     )
     .await
 }
@@ -970,9 +982,9 @@ pub(super) async fn run_foreground_control_daemon(
     created_at_unix_seconds: u64,
     config: LoadedRuntimeConfig,
     options: ParsedServeOptions,
-    startup: RuntimeDaemonStartup,
-    native: mez_mux::process::PaneProcessRetirementOwner,
+    owned_startup: OwnedRuntimeDaemonStartup,
 ) -> Result<()> {
+    let OwnedRuntimeDaemonStartup { startup, native } = owned_startup;
     let attached_primary_client_id = options.attached_primary_client_id.clone();
     let config_layers = direct_unix_session_config_layers(config.layers);
     let runtime = SessionFactory::create_with_native_owner(

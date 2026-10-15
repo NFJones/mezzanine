@@ -502,10 +502,10 @@ where
 
 /// Wakes only the idle loop; cancellation cannot interrupt an owned wait/reap.
 async fn wait_for_worker_stop_change(stop: &mut Option<super::watch::Receiver<bool>>) {
-    if let Some(stop) = stop {
-        if stop.changed().await.is_ok() {
-            return;
-        }
+    if let Some(stop) = stop
+        && stop.changed().await.is_ok()
+    {
+        return;
     }
     std::future::pending().await
 }

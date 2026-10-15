@@ -194,20 +194,20 @@ impl CliNativeOwnership {
         if let Some(owner) = &self.foreground {
             owner.seal();
         }
-        if let Some(host) = &self.host {
-            if let Err(error) = host.seal_native_admission() {
-                failure = Some(error);
-            }
+        if let Some(host) = &self.host
+            && let Err(error) = host.seal_native_admission()
+        {
+            failure = Some(error);
         }
-        if let Some(owner) = &self.foreground {
-            if let Err(error) = drain_native_pane_retirement(owner, deadline).await {
-                failure.get_or_insert(error);
-            }
+        if let Some(owner) = &self.foreground
+            && let Err(error) = drain_native_pane_retirement(owner, deadline).await
+        {
+            failure.get_or_insert(error);
         }
-        if let Some(host) = &self.host {
-            if let Err(error) = host.drain_native_retirement(deadline).await {
-                failure.get_or_insert(error);
-            }
+        if let Some(host) = &self.host
+            && let Err(error) = host.drain_native_retirement(deadline).await
+        {
+            failure.get_or_insert(error);
         }
         if let Some(error) = failure {
             self.cleanup_failed = true;
