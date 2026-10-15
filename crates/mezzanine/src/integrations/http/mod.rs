@@ -1,12 +1,12 @@
-//! Provider HTTP transport boundary.
+//! Shared bounded HTTP execution for product adapters.
 //!
-//! This module owns reqwest-backed I/O and transport-specific tests.
-//! Provider-neutral request/response values and response bounds live in
-//! `mez-agent`; provider-specific construction and parsing remain in the
-//! parent module.
+//! One pooled reqwest exchange owns connection/phase/total bounds and UTF-8
+//! retention. Inference explicitly opts into SSE; ordinary fetch/search cannot
+//! be switched into SSE by a peer. Search adds fixed-endpoint authentication
+//! and a strict connection policy without changing legacy network routing.
+//! Wire credentials and remote diagnostics never become transport errors.
 
 use std::collections::BTreeMap;
-use std::error::Error as StdError;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Mutex, OnceLock};
@@ -23,6 +23,55 @@ use mez_agent::{
     ProviderHttpTimeouts, ProviderSseTerminalDetector, SseEvent, SseParseError, parse_sse_events,
     provider_sse_event_is_terminal,
 };
+
+/// Adapter-owned search authentication and fixed endpoint execution.
+pub(crate) mod search;
+
+/// Locally observed completion, never inferred from a peer response header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HttpCompletion {
+    /// Ordinary body reached EOF; HTTP success is a separate question.
+    Complete,
+    /// An overflow byte was observed beyond the retained ordinary body cap.
+    Truncated,
+    /// Inference consumed a recognized terminal event through its SSE decoder.
+    StreamDecoded,
+}
+
+/// Retained response and locally authoritative completion from one exchange.
+#[derive(Debug)]
+pub(crate) struct HttpExchangeResponse {
+    /// Wire response with reserved peer metadata removed.
+    pub response: ProviderHttpResponse,
+    /// Completion established by the executing transport.
+    pub completion: HttpCompletion,
+}
+
+/// Body interpretation is caller-owned, never chosen by an ordinary peer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HttpResponseMode {
+    /// Bounded ordinary text; explicit caps may return a valid UTF-8 prefix.
+    Ordinary,
+    /// Inference may select SSE using its existing content negotiation.
+    Inference,
+    /// Search JSON must be complete, strict UTF-8 and identity encoded.
+    SearchJson,
+}
+
+/// Private execution inputs; only the fixed-endpoint search adapter adds auth.
+struct HttpExecution<'a> {
+    mode: HttpResponseMode,
+    routing: HttpRoutingPolicy,
+    deadline: Option<tokio::time::Instant>,
+    auth: search::WireAuth<'a>,
+}
+
+impl HttpExecution<'_> {
+    /// Keeps legacy routing while making response interpretation explicit.
+    fn legacy(mode: HttpResponseMode) -> Self {
+        Self { mode, routing: HttpRoutingPolicy::Legacy, deadline: None, auth: search::WireAuth::None }
+    }
+}
 
 /// Defines the Provider Http Transport behavior contract for this subsystem.
 ///
@@ -62,13 +111,19 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
         &'a self,
         request: &'a ProviderHttpRequest,
         on_chunk: &'a mut (dyn FnMut(Vec<u8>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send),
-    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<HttpExchangeResponse>> + Send + 'a>> {
         Box::pin(async move {
+            request.timeouts.validate()?;
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(request.timeouts.total_timeout_ms);
+            tokio::time::timeout_at(deadline, async move {
             let response = self.send_async(request).await?;
             if (200..300).contains(&response.status_code) && !response.body.is_empty() {
                 on_chunk(response.body.as_bytes().to_vec()).await;
             }
-            Ok(response)
+            // Compatibility transports promise a fully retained body, not a
+            // completion assertion derived from any remote header.
+            Ok(HttpExchangeResponse { response, completion: HttpCompletion::Complete })
+            }).await.map_err(|_| ProviderHttpError::timeout(ProviderHttpTimeoutPhase::Total, request.timeouts.total_timeout_ms, "completing the compatibility HTTP exchange"))?
         })
     }
 
@@ -83,6 +138,9 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
         on_event: &'a mut (dyn FnMut(SseEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send),
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
         Box::pin(async move {
+            request.timeouts.validate()?;
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(request.timeouts.total_timeout_ms);
+            tokio::time::timeout_at(deadline, async move {
             let response = self.send_async(request).await?;
             if provider_http_expects_event_stream(&request.headers, &response.headers) {
                 let events = parse_sse_events(
@@ -95,6 +153,7 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
                 }
             }
             Ok(response)
+            }).await.map_err(|_| ProviderHttpError::timeout(ProviderHttpTimeoutPhase::Total, request.timeouts.total_timeout_ms, "completing the compatibility SSE exchange"))?
         })
     }
 }
@@ -120,6 +179,17 @@ static PROVIDER_HTTP_CLIENTS: OnceLock<Mutex<ProviderHttpClientCache>> = OnceLoc
 struct ProviderHttpClientPolicy {
     plaintext_http: bool,
     connect_timeout_ms: u64,
+    /// Selects the complete code-owned redirect/proxy/TLS policy bundle.
+    routing: HttpRoutingPolicy,
+}
+
+/// Construction bundles; compression and pool limits are fixed for all clients.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum HttpRoutingPolicy {
+    /// Preserve inference/fetch/DDG ambient routing and redirect behavior.
+    Legacy,
+    /// Verified HTTPS, no redirects, and no ambient proxy discovery.
+    AuthenticatedSearch,
 }
 
 /// Bounded reusable reqwest clients keyed by construction policy.
@@ -140,18 +210,22 @@ struct ProviderHttpClientCache {
 /// inter-chunk, and total deadlines around reqwest operations so timeout
 /// failures retain a stable phase classification.
 fn provider_http_client_builder(
-    timeouts: ProviderHttpTimeouts,
-    scheme: &str,
+    policy: ProviderHttpClientPolicy,
 ) -> reqwest::ClientBuilder {
     let builder = reqwest::Client::builder()
-        .connect_timeout(Duration::from_millis(timeouts.connect_timeout_ms))
+        .connect_timeout(Duration::from_millis(policy.connect_timeout_ms))
         .pool_idle_timeout(Duration::from_secs(90))
         .pool_max_idle_per_host(MAX_PROVIDER_HTTP_IDLE_CONNECTIONS_PER_HOST)
         .no_gzip()
         .no_brotli()
         .no_deflate()
         .no_zstd();
-    if scheme == "http" {
+    let builder = if policy.routing == HttpRoutingPolicy::AuthenticatedSearch {
+        builder.redirect(reqwest::redirect::Policy::none()).no_proxy()
+    } else {
+        builder
+    };
+    if policy.plaintext_http {
         builder.tls_certs_only(std::iter::empty::<reqwest::Certificate>())
     } else {
         builder
@@ -162,10 +236,12 @@ fn provider_http_client_builder(
 fn provider_http_client(
     timeouts: ProviderHttpTimeouts,
     scheme: &str,
+    routing: HttpRoutingPolicy,
 ) -> ProviderHttpResult<reqwest::Client> {
     let policy = ProviderHttpClientPolicy {
         plaintext_http: scheme == "http",
         connect_timeout_ms: timeouts.connect_timeout_ms,
+        routing,
     };
     let cache =
         PROVIDER_HTTP_CLIENTS.get_or_init(|| Mutex::new(ProviderHttpClientCache::default()));
@@ -179,10 +255,10 @@ fn provider_http_client(
         return Ok(client);
     }
 
-    let client = provider_http_client_builder(timeouts, scheme)
+    let client = provider_http_client_builder(policy)
         .build()
-        .map_err(|error| {
-            ProviderHttpError::invalid_state(format!("provider HTTP client setup failed: {error}"))
+        .map_err(|_| {
+            ProviderHttpError::invalid_state("provider HTTP client setup failed")
         })?;
     let mut cache = cache
         .lock()
@@ -228,17 +304,14 @@ fn provider_http_expects_event_stream(
         .is_some_and(|value| value.to_ascii_lowercase().contains("text/event-stream"))
 }
 
-/// Formats a reqwest response-body read error with useful transport details.
+/// Classifies a read failure without retaining URL-bearing errors or sources.
 fn provider_http_response_read_error(
     status_code: u16,
-    content_encoding: &str,
     error: reqwest::Error,
 ) -> ProviderHttpError {
-    let source_chain = provider_http_error_source_chain(&error);
     ProviderHttpError::io(format!(
         "provider HTTP response read failed (status {status_code}, \
-         content-encoding {content_encoding}, timeout {}, decode {}, source {source_chain}): \
-         {error}",
+         timeout {}, decode {})",
         error.is_timeout(),
         error.is_decode(),
     ))
@@ -290,22 +363,10 @@ fn provider_http_request_error(
             "sending the request and waiting for response headers",
         );
     }
-    ProviderHttpError::invalid_state(format!("provider HTTP request failed: {error}"))
-}
-
-/// Returns the lower-level reqwest source chain for provider diagnostics.
-fn provider_http_error_source_chain(error: &reqwest::Error) -> String {
-    let mut sources = Vec::new();
-    let mut source = StdError::source(error);
-    while let Some(current) = source {
-        sources.push(current.to_string());
-        source = current.source();
-    }
-    if sources.is_empty() {
-        "none".to_string()
-    } else {
-        sources.join(" -> ")
-    }
+    ProviderHttpError::invalid_state(format!(
+        "provider HTTP request failed (connect {}, request {}, builder {})",
+        error.is_connect(), error.is_request(), error.is_builder()
+    ))
 }
 
 impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
@@ -350,8 +411,30 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
         &'a self,
         request: &'a ProviderHttpRequest,
         on_chunk: &'a mut (dyn FnMut(Vec<u8>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send),
-    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
-        self.send_async_with_observers(request, None, Some(on_chunk))
+    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<HttpExchangeResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            // Four bounded retained chunks plus one callback at most. Once
+            // saturated, stop progress rather than join noncontiguous bytes.
+            // This scoped forwarder is dropped with the exchange, not spawned.
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+            let mut sender = Some(sender);
+            let mut enqueue = |chunk| {
+                if sender.as_ref().is_some_and(|sender| sender.try_send(chunk).is_err()) {
+                    sender = None;
+                }
+                Box::pin(tokio::task::yield_now()) as Pin<Box<dyn Future<Output = ()> + Send>>
+            };
+            let forward = async {
+                while let Some(chunk) = receiver.recv().await {
+                    on_chunk(chunk).await;
+                }
+                std::future::pending::<()>().await;
+            };
+            tokio::select! {
+                result = self.send_async_with_observers(request, HttpExecution::legacy(HttpResponseMode::Ordinary), None, Some(&mut enqueue)) => result,
+                () = forward => unreachable!("forwarder remains pending after channel closure"),
+            }
+        })
     }
 
     /// Streams complete SSE events to the provider decoder during body reads.
@@ -360,7 +443,10 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
         request: &'a ProviderHttpRequest,
         on_event: &'a mut (dyn FnMut(SseEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send),
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
-        self.send_async_with_observers(request, Some(on_event), None)
+        Box::pin(async move {
+            self.send_async_with_observers(request, HttpExecution::legacy(HttpResponseMode::Inference), Some(on_event), None)
+                .await.map(|exchange| exchange.response)
+        })
     }
 }
 
@@ -369,23 +455,26 @@ impl ReqwestProviderHttpTransport {
     fn send_async_with_observers<'a>(
         &'a self,
         request: &'a ProviderHttpRequest,
+        execution: HttpExecution<'a>,
         mut on_event: Option<&'a mut AsyncProviderSseEventObserver<'a>>,
         mut on_body_chunk: Option<&'a mut AsyncProviderBodyChunkObserver<'a>>,
-    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<HttpExchangeResponse>> + Send + 'a>> {
         Box::pin(async move {
             request.timeouts.validate()?;
             let started_at = tokio::time::Instant::now();
             let first_byte_deadline =
                 started_at + Duration::from_millis(request.timeouts.first_byte_timeout_ms);
-            let total_deadline =
+            let configured_deadline =
                 started_at + Duration::from_millis(request.timeouts.total_timeout_ms);
+            let total_deadline = execution.deadline.map_or(configured_deadline, |deadline| deadline.min(configured_deadline));
+            tokio::time::timeout_at(total_deadline, async move {
+            if tokio::time::Instant::now() >= total_deadline {
+                return Err(ProviderHttpError::timeout(ProviderHttpTimeoutPhase::Total, request.timeouts.total_timeout_ms, "starting the HTTP exchange"));
+            }
             let method = request.method.parse::<reqwest::Method>().map_err(|_| {
-                ProviderHttpError::invalid_args(format!(
-                    "unsupported provider HTTP method {}",
-                    request.method
-                ))
+                ProviderHttpError::invalid_args("unsupported provider HTTP method")
             })?;
-            let url = request
+            let mut url = request
                 .url
                 .parse::<reqwest::Url>()
                 .map_err(|_| ProviderHttpError::invalid_args("provider HTTP URL is invalid"))?;
@@ -402,7 +491,11 @@ impl ReqwestProviderHttpTransport {
             }
             apply_provider_transport_default_headers(&mut headers);
 
-            let client = provider_http_client(request.timeouts, url.scheme())?;
+            if execution.routing == HttpRoutingPolicy::AuthenticatedSearch {
+                search::validate_wire_url(&url)?;
+            }
+            execution.auth.apply(&mut url, &mut headers)?;
+            let client = provider_http_client(request.timeouts, url.scheme(), execution.routing)?;
             let (send_deadline, total_limited) =
                 provider_http_bounded_deadline(first_byte_deadline, total_deadline);
             let mut response = tokio::time::timeout_at(
@@ -425,9 +518,10 @@ impl ReqwestProviderHttpTransport {
             })?
             .map_err(|error| provider_http_request_error(error, request.timeouts))?;
             let status_code = response.status().as_u16();
-            let mut response_headers = response
+            let response_headers = response
                 .headers()
                 .iter()
+                .filter(|(name, _)| !name.as_str().to_ascii_lowercase().starts_with("x-mez-"))
                 .filter_map(|(name, value)| {
                     value
                         .to_str()
@@ -435,12 +529,13 @@ impl ReqwestProviderHttpTransport {
                         .map(|value| (name.as_str().to_string(), value.to_string()))
                 })
                 .collect::<BTreeMap<_, _>>();
-            let content_encoding = response_headers
-                .get("content-encoding")
-                .map(String::as_str)
-                .unwrap_or("absent");
-            let expects_event_stream =
-                provider_http_expects_event_stream(&request.headers, &response_headers);
+            if execution.mode == HttpResponseMode::SearchJson
+                && provider_header_value(&response_headers, "content-encoding")
+                    .is_some_and(|value| !value.eq_ignore_ascii_case("identity")) {
+                return Err(ProviderHttpError::invalid_state("search HTTP unsupported content encoding"));
+            }
+            let expects_event_stream = execution.mode == HttpResponseMode::Inference
+                && provider_http_expects_event_stream(&request.headers, &response_headers);
             let response_limit = request
                 .max_response_bytes
                 .unwrap_or(DEFAULT_PROVIDER_MAX_RESPONSE_BYTES)
@@ -452,7 +547,6 @@ impl ReqwestProviderHttpTransport {
             let mut terminal_detector = ProviderSseTerminalDetector::default();
             let mut event_decoder = expects_event_stream.then(IncrementalSseDecoder::default);
             let mut terminal_event_seen = false;
-            let mut response_eof = false;
             let mut progress_phase = ProviderHttpTimeoutPhase::FirstByte;
             let mut progress_timeout_ms = request.timeouts.first_byte_timeout_ms;
             let mut progress_deadline = first_byte_deadline;
@@ -472,7 +566,6 @@ impl ReqwestProviderHttpTransport {
                     })? {
                     Ok(Some(chunk)) => chunk,
                     Ok(None) => {
-                        response_eof = true;
                         break;
                     }
                     Err(error) => {
@@ -488,7 +581,6 @@ impl ReqwestProviderHttpTransport {
                         }
                         return Err(provider_http_response_read_error(
                             status_code,
-                            content_encoding,
                             error,
                         ));
                     }
@@ -497,7 +589,7 @@ impl ReqwestProviderHttpTransport {
                     continue;
                 }
                 if response_bytes.saturating_add(chunk.len()) > response_limit {
-                    if request.max_response_bytes.is_none() {
+                    if request.max_response_bytes.is_none() || expects_event_stream || execution.mode == HttpResponseMode::SearchJson {
                         return Err(ProviderHttpError::invalid_state(
                             "provider HTTP response exceeds configured limit",
                         ));
@@ -573,37 +665,45 @@ impl ReqwestProviderHttpTransport {
             }
             if expects_event_stream
                 && (200..300).contains(&status_code)
-                && response_eof
                 && !terminal_event_seen
             {
                 return Err(ProviderHttpError::io(format!(
                     "provider SSE stream ended before a terminal event (status {status_code}, response_bytes={response_bytes})"
                 )));
             }
-            if body_truncated {
-                response_headers.insert("x-mez-body-truncated".to_string(), "true".to_string());
-            }
-            if expects_event_stream && !retain_body {
-                response_headers.insert(
-                    "x-mez-stream-decoded".to_string(),
-                    "incremental".to_string(),
-                );
-            }
-            let body = if body_truncated && request.max_response_bytes.is_some() {
-                String::from_utf8_lossy(&body).into_owned()
+            let completion = if body_truncated {
+                HttpCompletion::Truncated
+            } else if expects_event_stream && terminal_event_seen {
+                HttpCompletion::StreamDecoded
             } else {
-                String::from_utf8(body).map_err(|_| {
-                    ProviderHttpError::invalid_state("provider HTTP response body is not UTF-8")
-                })?
+                HttpCompletion::Complete
             };
-            Ok(ProviderHttpResponse {
+            let body = retained_utf8(body, body_truncated)?;
+            Ok(HttpExchangeResponse { completion, response: ProviderHttpResponse {
                 status_code,
                 headers: response_headers,
                 body,
-            })
+            } })
+            }).await.map_err(|_| ProviderHttpError::timeout(ProviderHttpTimeoutPhase::Total, request.timeouts.total_timeout_ms, "completing the HTTP exchange"))?
         })
     }
 }
+
+/// Drops only an incomplete final UTF-8 scalar at a locally proven byte cap.
+/// Invalid interior bytes always fail; complete responses never use loss.
+fn retained_utf8(mut body: Vec<u8>, truncated: bool) -> ProviderHttpResult<String> {
+    if let Err(error) = std::str::from_utf8(&body) {
+        if truncated && error.error_len().is_none() {
+            body.truncate(error.valid_up_to());
+        } else {
+            return Err(ProviderHttpError::invalid_state("provider HTTP response body is not UTF-8"));
+        }
+    }
+    String::from_utf8(body).map_err(|_| ProviderHttpError::invalid_state("provider HTTP response body is not UTF-8"))
+}
+
+#[cfg(test)]
+mod hardening_tests;
 
 #[cfg(test)]
 mod provider_transport_tests {
@@ -614,6 +714,58 @@ mod provider_transport_tests {
     };
     use std::collections::BTreeMap;
     use std::time::Duration;
+
+    /// Transport errors are constructed from fixed categories, never reqwest
+    /// Display or nested source text that may carry query authentication.
+    #[tokio::test]
+    async fn provider_transport_errors_exclude_url_and_source_payloads() {
+        let error = reqwest::Client::new()
+            .get("ftp://example.invalid/?api_key=canary%2Bquery")
+            .send()
+            .await
+            .unwrap_err();
+        let safe = super::provider_http_request_error(
+            error,
+            ProviderHttpTimeouts::from_total(1_000),
+        );
+        for text in [safe.to_string(), format!("{safe:?}")] {
+            assert!(!text.contains("example.invalid"));
+            assert!(!text.contains("canary"));
+            assert!(!text.contains("api_key"));
+        }
+        assert!(std::error::Error::source(&safe).is_none());
+    }
+
+    /// A slow presentation observer must not extend the absolute exchange
+    /// budget or keep an in-flight body alive after timeout.
+    #[tokio::test]
+    async fn provider_transport_bounds_pending_body_observer() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            stream.read(&mut bytes).await.unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await.unwrap();
+        });
+        let request = ProviderHttpRequest {
+            method: "GET".into(),
+            url: format!("http://{address}/observer"),
+            headers: BTreeMap::new(),
+            body: String::new(),
+            timeouts: ProviderHttpTimeouts::from_total(150),
+            max_response_bytes: Some(10),
+        };
+        let mut observer = |_| Box::pin(std::future::pending())
+            as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            ReqwestProviderHttpTransport.send_async_with_observers(&request, super::HttpExecution::legacy(super::HttpResponseMode::Ordinary), None, Some(&mut observer)),
+        ).await.expect("observer must be bounded by the exchange deadline");
+        assert_eq!(result.unwrap_err().kind(), mez_agent::ProviderHttpErrorKind::Timeout(mez_agent::ProviderHttpTimeoutPhase::Total));
+        server.await.unwrap();
+    }
 
     /// Deadline precedence follows the earlier absolute instant, with total
     /// expiry winning ties. Progress may refresh a phase but never the total.
@@ -887,7 +1039,7 @@ mod provider_transport_tests {
         let runtime_error: crate::error::MezError = error.into();
         assert_eq!(runtime_error.kind(), crate::error::MezErrorKind::Io);
         assert_eq!(
-            super::super::errors::provider_error_retry_class(&runtime_error),
+            crate::integrations::agent::provider::provider_error_retry_class(&runtime_error),
             mez_agent::ProviderErrorRetryClass::RetryableTransport
         );
     }
@@ -1032,13 +1184,7 @@ mod provider_transport_tests {
         server.await.unwrap();
         assert_eq!(response.status_code, 200);
         assert!(response.body.is_empty());
-        assert_eq!(
-            response
-                .headers
-                .get("x-mez-stream-decoded")
-                .map(String::as_str),
-            Some("incremental")
-        );
+        assert!(!response.headers.contains_key("x-mez-stream-decoded"));
     }
 
     /// Verifies ordinary retained body bytes reach semantic consumers before EOF.
@@ -1107,8 +1253,9 @@ mod provider_transport_tests {
         assert_eq!(second, b"late");
         let response = client.await.unwrap().unwrap();
         server.await.unwrap();
-        assert_eq!(response.body, "earlylate");
-        assert!(!response.headers.contains_key("x-mez-stream-decoded"));
+        assert_eq!(response.completion, super::HttpCompletion::Complete);
+        assert_eq!(response.response.body, "earlylate");
+        assert!(!response.response.headers.contains_key("x-mez-stream-decoded"));
     }
 
     /// Verifies callers can request a lower retained response-body cap than
@@ -1161,20 +1308,15 @@ mod provider_transport_tests {
         };
 
         let response = ReqwestProviderHttpTransport
-            .send_async(&request)
+            .send_async_with_observers(&request, super::HttpExecution::legacy(super::HttpResponseMode::Ordinary), None, None)
             .await
             .unwrap();
         server.abort();
 
-        assert_eq!(response.status_code, 200);
-        assert_eq!(response.body, "abc");
-        assert_eq!(
-            response
-                .headers
-                .get("x-mez-body-truncated")
-                .map(String::as_str),
-            Some("true")
-        );
+        assert_eq!(response.response.status_code, 200);
+        assert_eq!(response.response.body, "abc");
+        assert_eq!(response.completion, super::HttpCompletion::Truncated);
+        assert!(!response.response.headers.contains_key("x-mez-body-truncated"));
     }
 
     /// Verifies provider body reads fail with a Mezzanine timeout when no body

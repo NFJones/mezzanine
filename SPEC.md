@@ -4685,6 +4685,43 @@ phase so retry and user diagnostics can distinguish connection, first-byte,
 stream-stall, and total-budget failures. Cancelling or timing out an exchange
 MUST drop the in-flight request/body future so the provider slot can be
 released.
+Shared HTTP request/response Debug MUST omit URLs, headers and bodies. Transport
+errors MUST use bounded local categories and numeric status, never reqwest
+Display text, nested source chains, remote error bodies or reflected headers.
+Ordinary body completion/truncation MUST be local typed metadata, never a peer
+`x-mez-*` header. Only explicit inference response mode MAY interpret SSE;
+ordinary search JSON MUST remain ordinary even with event-stream content type.
+Complete bodies MUST use strict UTF-8. A locally truncated ordinary text prefix
+MAY drop an incomplete final scalar, but MUST reject invalid interior bytes.
+Incomplete or oversized JSON and capped nonterminal inference SSE MUST fail,
+not become empty results or successful completion.
+
+The authenticated-search HTTP foundation for Brave, Tavily, Exa and SerpApi MUST
+reuse this bounded pooled exchange. Search endpoints and credential placement
+MUST be code-owned: verified HTTPS, no redirects, no ambient proxy discovery,
+and no production insecure/base-URL override. Every variable client-construction
+policy dimension MUST be part of the pool key. These search-only restrictions
+MUST NOT silently change inference, ordinary fetch or default DuckDuckGo routing.
+Credentials MUST be resolved after authorization, remain separate from approved
+descriptions, and be attached only at the concrete send boundary as endpoint-owned
+Bearer/header/query auth; SerpApi uses `api_key` query authentication. There MUST
+be no transport retry/fallback or implicit paid-backend activation.
+
+Search output MUST pass complete JSON validation and known-credential canary
+suppression before any result/progress publication or downstream fetch. Known
+raw, once percent/form-encoded and JSON-decoded credential echoes MUST fail
+closed, including reflected result URLs. Remote request IDs, error tags and
+headers MUST NOT be exposed as unrestricted diagnostics. The caller's absolute
+deadline MUST bound send/body work and gate validated output; dropping the
+future MUST cancel its scoped work. Ordinary progress MUST use bounded tracked
+forwarding so a slow observer cannot block body draining or extend deadlines;
+only a contiguous prefix MAY be published, with final results authoritative.
+This foundation alone adds no search profiles, credential CLI, paid dispatch or
+default-selection change. It cannot prevent destination retention of query
+credentials, control external proxy/server logging, detect every transformed
+secret echo, or preempt bounded synchronous JSON parsing; expired validation
+MUST NOT publish a successful result.
+
 At all times, a running agent turn MUST have at least one observable runtime
 progress path: pending provider dispatch, claimed provider worker, live shell
 transaction or readiness probe, focused-shell hook continuation, approval/user

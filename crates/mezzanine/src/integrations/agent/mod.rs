@@ -68,7 +68,8 @@ use mez_agent::{
 #[cfg(test)]
 use mez_agent::{ShellTransaction, ShellTransactionOutputTransport};
 use provider::provider_error_retry_class;
-use provider::{AsyncModelProvider, AsyncProviderHttpTransport};
+use provider::AsyncModelProvider;
+use crate::integrations::http::AsyncProviderHttpTransport;
 
 /// Exposes the tests module boundary.
 ///

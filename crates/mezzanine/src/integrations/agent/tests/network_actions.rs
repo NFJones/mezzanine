@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::integrations::agent::network::execute_network_action_with_transport_async_with_progress;
+use crate::integrations::http::{HttpCompletion, HttpExchangeResponse};
 
 /// Streams a configured sequence of retained body chunks for network progress tests.
 struct ChunkedAsyncProviderHttpTransport {
@@ -38,7 +39,7 @@ impl AsyncProviderHttpTransport for ChunkedAsyncProviderHttpTransport {
                 ),
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<Output = mez_agent::ProviderHttpResult<ProviderHttpResponse>>
+            dyn std::future::Future<Output = mez_agent::ProviderHttpResult<HttpExchangeResponse>>
                 + Send
                 + 'a,
         >,
@@ -47,7 +48,7 @@ impl AsyncProviderHttpTransport for ChunkedAsyncProviderHttpTransport {
             for chunk in &self.chunks {
                 on_chunk(chunk.clone()).await;
             }
-            self.send_async(request).await
+            self.send_async(request).await.map(|response| HttpExchangeResponse { response, completion: HttpCompletion::Complete })
         })
     }
 }

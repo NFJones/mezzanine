@@ -65,8 +65,9 @@ use crate::integrations::agent::context::assemble_model_request;
 use crate::integrations::agent::network::execute_network_action_with_transport_async;
 use crate::integrations::agent::provider::{
     AsyncModelProvider, DeepSeekChatCompletionsProvider, OpenAiCompatibleChatCompletionsProvider,
-    OpenAiResponsesProvider, ReqwestProviderHttpTransport,
+    OpenAiResponsesProvider,
 };
+use crate::integrations::http::ReqwestProviderHttpTransport;
 use crate::integrations::agent::slash::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, execute_agent_shell_command_with_context,
 };

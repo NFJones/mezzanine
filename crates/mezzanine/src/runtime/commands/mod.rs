@@ -39,8 +39,9 @@ use super::{
     runtime_write_agent_patches_for_pane, runtime_write_agent_trace_log_for_pane,
     select_model_profile, session_state_name, shell_command_from_argv, unix_seconds_to_rfc3339,
 };
+use crate::integrations::http::ReqwestProviderHttpTransport;
 use crate::integrations::agent::provider::{
-    AsyncModelProvider, ReqwestProviderHttpTransport,
+    AsyncModelProvider,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     openai_compatible_provider_from_auth_store_with_provider_options_and_brand,
     openai_responses_provider_from_auth_store_with_provider_options,

@@ -8,14 +8,17 @@
 //! the default for every OpenAI-compatible backend.
 
 use super::{
-    AsyncModelProvider, AsyncProviderHttpTransport, DEFAULT_PROVIDER_TIMEOUT_MS, ExposeSecret,
+    AsyncModelProvider, DEFAULT_PROVIDER_TIMEOUT_MS, ExposeSecret,
     MezError, ModelRequest, ModelResponse, ProviderHttpRequest, ProviderHttpResponse,
     ProviderModelCatalog, ProviderWireObservationContext, Result, SecretString,
     SseProgressForwarder, parse_openai_models_http_body, provider_quota_usage_from_headers,
     validate_non_empty,
 };
 #[cfg(test)]
-use super::{ModelProvider, ProviderHttpTransport};
+use super::ModelProvider;
+#[cfg(test)]
+use crate::integrations::http::ProviderHttpTransport;
+use crate::integrations::http::AsyncProviderHttpTransport;
 use mez_agent::{
     SseEvent, provider_catalog_reasoning_levels,
     provider_error_detail as openai_provider_error_detail,

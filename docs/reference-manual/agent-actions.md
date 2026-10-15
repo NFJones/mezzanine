@@ -61,6 +61,30 @@ An action listed here is not necessarily enabled in your conversation, and
 listing it does not grant approval. Mezzanine rechecks live integration state,
 permissions, and arguments when the agent uses it.
 
+## HTTP execution and authenticated-search foundation
+
+Ordinary `fetch_url` and DuckDuckGo search share bounded pooled HTTP execution
+with inference, but cannot be switched into inference SSE decoding by a remote
+content type. Truncation is observed locally, not trusted from response headers.
+At a text cap, an incomplete final UTF-8 character is omitted; invalid interior
+bytes fail. Slow progress consumers may receive only a contiguous prefix; final
+results remain authoritative. Cancellation retires the scoped forwarder/body.
+
+The authenticated-search transport foundation has fixed HTTPS destinations for
+Brave, Tavily, Exa and SerpApi. It verifies certificates, refuses redirects and
+does not discover ambient proxies. Its pooled clients cannot be confused with
+legacy inference/fetch clients. Credentials are separate from approved request
+descriptions and attached only at send time; SerpApi uses query authentication,
+not an invented authentication header. Search JSON must be complete and pass a
+known-credential echo check before publication. HTTP errors expose fixed
+categories/status, never raw error bodies, headers or URL-bearing source chains.
+
+This foundation **does not enable paid search**, add profiles/credential commands,
+or change the default search backend or legacy routing. Backend selection and
+authorization are separate work. Query keys still reach the destination URL
+and may be retained there. See [Audit and diagnostics](../safety-and-trust/audit-and-diagnostics.md)
+for redaction limits; do not put credentials into prompts or `fetch_url` URLs.
+
 ## File changes and safe recovery
 
 Patch paths are normally relative to the pane working directory; parent

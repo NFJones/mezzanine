@@ -10,10 +10,11 @@ use std::future::Future;
 use std::pin::Pin;
 
 use mez_agent::{ProviderHttpResult, network_action_structured_content_json};
+use crate::integrations::http::{HttpCompletion, HttpExchangeResponse};
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord,
-    AsyncProviderHttpTransport, MezError, ProviderHttpRequest, ProviderHttpResponse, Result,
+    AsyncProviderHttpTransport, MezError, ProviderHttpRequest, Result,
 };
 
 /// Default response bytes exposed to a `fetch_url` action when the model does
@@ -146,6 +147,8 @@ async fn execute_fetch_url_action<T: AsyncProviderHttpTransport>(
                 );
             }
         };
+    let transport_truncated = response.completion == HttpCompletion::Truncated;
+    let response = response.response;
     if !(200..=299).contains(&response.status_code) {
         return network_action_failure(
             turn,
@@ -159,7 +162,6 @@ async fn execute_fetch_url_action<T: AsyncProviderHttpTransport>(
             }),
         );
     }
-    let transport_truncated = network_response_was_truncated(&response);
     let (body, truncated) = truncate_text_to_bytes(&response.body, limit);
     let truncated = truncated || transport_truncated;
     let structured = network_action_structured_content_json(
@@ -238,6 +240,8 @@ async fn execute_web_search_action<T: AsyncProviderHttpTransport>(
             );
         }
     };
+    let transport_truncated = response.completion == HttpCompletion::Truncated;
+    let response = response.response;
     if !(200..=299).contains(&response.status_code) {
         return network_action_failure(
             turn,
@@ -251,7 +255,6 @@ async fn execute_web_search_action<T: AsyncProviderHttpTransport>(
             }),
         );
     }
-    let transport_truncated = network_response_was_truncated(&response);
     let (body, truncated) = truncate_text_to_bytes(&response.body, DEFAULT_WEB_SEARCH_MAX_BYTES);
     let truncated = truncated || transport_truncated;
     let results = parse_duckduckgo_html_results(&body, limit);
@@ -300,7 +303,7 @@ async fn send_network_get_with_body_chunks<T: AsyncProviderHttpTransport>(
     url: &str,
     max_response_bytes: usize,
     on_chunk: &mut (dyn FnMut(Vec<u8>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send),
-) -> ProviderHttpResult<ProviderHttpResponse> {
+) -> ProviderHttpResult<HttpExchangeResponse> {
     let mut headers = BTreeMap::new();
     headers.insert("user-agent".to_string(), "mez".to_string());
     let request = ProviderHttpRequest {
@@ -342,13 +345,6 @@ fn safe_search_progress_source(bytes: &[u8], max_results: usize) -> String {
         Err(_) => return String::new(),
     };
     parse_duckduckgo_html_results(valid, max_results)
-}
-
-fn network_response_was_truncated(response: &ProviderHttpResponse) -> bool {
-    response
-        .headers
-        .iter()
-        .any(|(name, value)| name.eq_ignore_ascii_case("x-mez-body-truncated") && value == "true")
 }
 
 fn network_action_failure(

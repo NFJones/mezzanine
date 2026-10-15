@@ -7,6 +7,7 @@ pub(crate) mod agent;
 pub(crate) mod bootstrap;
 pub(crate) mod harness_policy;
 pub(crate) mod hooks;
+pub(crate) mod http;
 pub(crate) mod macros;
 pub(crate) mod mcp;
 pub(crate) mod shared_workflow_documents;

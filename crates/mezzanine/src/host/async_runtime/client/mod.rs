@@ -29,8 +29,9 @@ use crate::error::MezErrorKind;
 use crate::host::async_runtime::RenderInvalidationReason;
 use crate::host::terminal::TerminalFdInterest;
 use crate::integrations::agent::provider::{
-    AsyncModelProvider, ReqwestProviderHttpTransport, provider_error_retry_class,
+    AsyncModelProvider, provider_error_retry_class,
 };
+use crate::integrations::http::ReqwestProviderHttpTransport;
 use crate::runtime::runtime_execute_auto_sizing_with_async_provider;
 use mez_agent::AgentTurnRecord;
 use mez_agent::{
