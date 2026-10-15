@@ -240,6 +240,29 @@ fn runtime_outbound_plaintext_crlf_growth_keeps_frozen_source() {
             .unwrap();
         assert_eq!(service.agent_pane_screen("%1").unwrap(), &settled);
         assert_eq!(service.message_service().snapshot_state(), messages);
+        let mut current = CopyMode::from_screen(&settled, 12).unwrap();
+        current.set_agent_surface(true);
+        let last = current
+            .lines()
+            .iter()
+            .rposition(|row| !row.trim().is_empty())
+            .unwrap();
+        let end = mez_mux::render::char_count(&current.lines()[last]);
+        current
+            .select_range(
+                CopyPosition { line: 0, column: 0 },
+                CopyPosition {
+                    line: last,
+                    column: end,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            current
+                .copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                .unwrap(),
+            "first\r\nsecond\r\n\n"
+        );
         assert_eq!(
             frozen
                 .unwrap()

@@ -2850,6 +2850,23 @@ mod tests {
                 Some("\u{1e}mez-copy-source-line:peer-wrapping/0:alpha beta gamma"),
             ]
         );
+        let legacy = peer_message_echo_rendered_lines(
+            "agent-%3> ",
+            "alpha beta gamma",
+            20,
+            "peer-wrapping",
+            super::PeerMessageCopyLayout::LegacyHead,
+        );
+        assert_eq!(
+            legacy
+                .iter()
+                .map(|line| line.copy_text.as_deref())
+                .collect::<Vec<_>>(),
+            [
+                Some("\u{1e}mez-copy-source-line:peer-wrapping/0:alpha beta gamma"),
+                Some("\u{1e}mez-copy-skip-line"),
+            ]
+        );
     }
 
     /// Display trimming never changes original source slices. Interior CR bytes
