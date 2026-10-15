@@ -4338,6 +4338,11 @@ Physical reflow MUST retain existing opaque copy overrides on coherent typed
 source-owned continuations even when framing is disabled. Merging those rows
 MUST retain one original override, never concatenate metadata, and conflicting
 entry, occurrence, source generation or payload evidence MUST stay invalidated.
+Received peer source declarations MUST retain original CRLF and trailing blank
+bytes independently of display-only trimming. Plaintext line ordinals retain
+the raw slice before each separating LF, with the final ordinal owning the
+complete remaining suffix; copying distinct ordinals joins them with LF.
+Markdown whole-entry declarations retain the complete original payload.
 The explicit `/show-context activity [presentation-sequence]` view MUST provide
 client-local list/detail disclosure of identity-bearing accepted command intent,
 response-wide rationale, retained outcomes and result previews. Static and

@@ -289,17 +289,23 @@ fn peer_message_echo_rendered_lines(
     copy_group: &str,
 ) -> Vec<RichTextLine> {
     let body_indent = AGENT_MESSAGE_CONTINUATION_INDENT;
-    let payload = payload.trim_end_matches(['\r', '\n']);
-    let payload_lines = if payload.is_empty() {
+    let display_payload = payload.trim_end_matches(['\r', '\n']);
+    let payload_lines = if display_payload.is_empty() {
         vec![""]
     } else {
-        payload.lines().collect::<Vec<_>>()
+        display_payload.lines().collect::<Vec<_>>()
     };
+    // Display-only trimming must not change authored source. Each original
+    // ordinal owns its exact slice before the separating LF; the final source
+    // owns the complete remaining suffix, including trailing CR/LF/blank rows.
+    // The copy consumer joins distinct source ordinals with that separating LF.
+    let raw_lines = payload.splitn(payload_lines.len(), '\n');
     payload_lines
         .iter()
+        .zip(raw_lines)
         .enumerate()
-        .flat_map(|(source_index, payload_line)| {
-            let source = encode_copy_source_line_in_group(copy_group, source_index, payload_line);
+        .flat_map(|(source_index, (payload_line, raw_line))| {
+            let source = encode_copy_source_line_in_group(copy_group, source_index, raw_line);
             let line = RichTextLine {
                 display: format!(
                     "{}{}",
@@ -894,17 +900,12 @@ impl RuntimeSessionService {
             true,
         );
         let copy_lines = if markdown {
-            std::iter::once(
-                presentation
-                    .payload
-                    .trim_end_matches(['\r', '\n'])
-                    .to_string(),
-            )
-            .chain(std::iter::repeat_n(
-                AGENT_COPY_SKIP_LINE.to_string(),
-                rendered_lines.len().saturating_sub(1),
-            ))
-            .collect::<Vec<_>>()
+            std::iter::once(presentation.payload.to_string())
+                .chain(std::iter::repeat_n(
+                    AGENT_COPY_SKIP_LINE.to_string(),
+                    rendered_lines.len().saturating_sub(1),
+                ))
+                .collect::<Vec<_>>()
         } else {
             rendered_lines
                 .iter()
@@ -925,9 +926,7 @@ impl RuntimeSessionService {
                 AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE,
             )),
             if markdown {
-                crate::host::terminal::source_copy::CopySourcePlan::WholeEntry(
-                    presentation.payload.trim_end_matches(['\r', '\n']),
-                )
+                crate::host::terminal::source_copy::CopySourcePlan::WholeEntry(presentation.payload)
             } else {
                 crate::host::terminal::source_copy::CopySourcePlan::Declared
             },
@@ -2808,6 +2807,56 @@ mod tests {
                 Some("\u{1e}mez-copy-skip-line"),
             ]
         );
+    }
+
+    /// Display trimming never changes original source slices. Interior CR bytes
+    /// stay with their ordinal and the final source owns every trailing byte,
+    /// including an entirely blank payload. Joining ordinals reconstructs the
+    /// original input without guessing line endings at copy time.
+    #[test]
+    fn peer_plaintext_source_ordinals_preserve_original_newline_bytes() {
+        for (payload, expected) in [
+            ("", vec![""]),
+            ("\r\n\n", vec!["\r\n\n"]),
+            ("first\r\nsecond\r\n\n", vec!["first\r", "second\r\n\n"]),
+            ("a\r\n\r\nb\r\n", vec!["a\r", "\r", "b\r\n"]),
+            ("one\nlast\r", vec!["one", "last\r"]),
+        ] {
+            let rows = peer_message_echo_rendered_lines("peer> ", payload, 24, "turn:raw%3A");
+            let sources = rows
+                .iter()
+                .filter_map(|row| row.copy_text.as_deref())
+                .filter_map(mez_mux::copy::decode_copy_source_line)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                sources.iter().map(|(_, raw)| *raw).collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(
+                sources
+                    .iter()
+                    .map(|(_, raw)| *raw)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                payload
+            );
+            for (ordinal, (identity, _)) in sources.iter().enumerate() {
+                assert!(identity.ends_with(&format!("/{ordinal}")));
+            }
+            let display_only = peer_message_echo_rendered_lines(
+                "peer> ",
+                payload.trim_end_matches(['\r', '\n']),
+                24,
+                "display",
+            );
+            assert_eq!(
+                rows.iter().map(|row| &row.display).collect::<Vec<_>>(),
+                display_only
+                    .iter()
+                    .map(|row| &row.display)
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     /// A long first-row label cannot suppress a valid word boundary on a

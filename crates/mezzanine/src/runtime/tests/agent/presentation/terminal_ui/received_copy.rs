@@ -347,6 +347,32 @@ fn runtime_received_copy_preserves_authored_line_endings() {
                 payload,
                 "content_type={content_type}, timestamps={timestamps}"
             );
+            for (line, raw) in [(0, "first: 雪\r"), (last, "second\r\n\n")] {
+                let origin = copy.log_frame(line).map_or(2, |frame| frame.body_origin);
+                copy.select_range(
+                    CopyPosition {
+                        line,
+                        column: origin,
+                    },
+                    CopyPosition {
+                        line,
+                        column: origin + 1,
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    copy.copy_selection_with_format(
+                        crate::host::terminal::CopySelectionFormat::Source
+                    )
+                    .unwrap(),
+                    if content_type.starts_with("text/markdown") {
+                        payload
+                    } else {
+                        raw
+                    },
+                    "partial source ordinal: content_type={content_type}, timestamps={timestamps}"
+                );
+            }
         }
     }
 }
