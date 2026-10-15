@@ -4736,6 +4736,10 @@ HTTP 429 alone MUST NOT be interpreted as proven quota exhaustion. Cancellation
 MUST drop the scoped future without fabricating a result or remote no-effect
 proof. These classifications MUST NOT alter inference retries or authorize
 search retry/fallback; remote error bodies, tags and request IDs remain omitted.
+Search non-success or pending status MUST be settled from numeric headers
+without reading the irrelevant error body. Local headers-only metadata MUST
+NOT claim body EOF and MUST NOT satisfy successful JSON completion. Malformed,
+compressed, oversized or unfinished error bodies MUST NOT erase known status.
 The caller's absolute deadline MUST bound send/body work and gate validated
 output; dropping the future MUST cancel its scoped work.
 Ordinary progress MUST use bounded tracked

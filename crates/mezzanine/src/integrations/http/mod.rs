@@ -32,6 +32,9 @@ pub(crate) mod search;
 pub(crate) enum HttpCompletion {
     /// Ordinary body reached EOF; HTTP success is a separate question.
     Complete,
+    /// Search non-success/pending status settled from headers only. The body
+    /// was deliberately dropped unread; this is not body completion or EOF.
+    HeadersOnly,
     /// An overflow byte was observed beyond the retained ordinary body cap.
     Truncated,
     /// Inference consumed a recognized terminal event through its SSE decoder.
@@ -553,6 +556,20 @@ impl ReqwestProviderHttpTransport {
             })?
             .map_err(|error| provider_http_request_error(error, request.timeouts))?;
             let status_code = response.status().as_u16();
+            if execution.mode == HttpResponseMode::SearchJson
+                && (status_code == 202 || !(200..300).contains(&status_code)) {
+                // Search error/pending bodies have no publication authority.
+                // Preserve numeric header evidence before any untrusted body
+                // encoding/cap/EOF can erase it, without claiming body EOF.
+                return Ok(HttpExchangeResponse {
+                    completion: HttpCompletion::HeadersOnly,
+                    response: ProviderHttpResponse {
+                        status_code,
+                        headers: BTreeMap::new(),
+                        body: String::new(),
+                    },
+                });
+            }
             let response_headers = response
                 .headers()
                 .iter()

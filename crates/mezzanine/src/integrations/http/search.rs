@@ -386,13 +386,6 @@ fn checked_json(
     exchange: super::HttpExchangeResponse,
     credential: &SecretString,
 ) -> Result<Value, SearchHttpError> {
-    if exchange.completion != HttpCompletion::Complete {
-        return Err(SearchHttpError::new(
-            SearchHttpErrorKind::Oversize,
-            None,
-            "search JSON response is incomplete",
-        ));
-    }
     let response = exchange.response;
     let status = response.status_code;
     if status == 202 || !(200..300).contains(&status) {
@@ -410,6 +403,17 @@ fn checked_json(
             kind,
             Some(status),
             format!("search HTTP status {status}"),
+        ));
+    }
+    if exchange.completion != HttpCompletion::Complete {
+        return Err(SearchHttpError::new(
+            if exchange.completion == HttpCompletion::Truncated {
+                SearchHttpErrorKind::Oversize
+            } else {
+                SearchHttpErrorKind::Malformed
+            },
+            Some(status),
+            "search JSON response is incomplete",
         ));
     }
     let value: Value = serde_json::from_str(&response.body).map_err(|_| {

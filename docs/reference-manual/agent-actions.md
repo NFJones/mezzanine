@@ -88,6 +88,9 @@ provider status, malformed JSON/encoding, pending (202), oversize and known-key
 suppression. A 429 is not proof of quota exhaustion, and none of these categories
 authorizes retry. Cancellation returns no invented completion or no-effect
 guarantee; the destination may already have received the request.
+For non-success/pending status, the search exchange drops the irrelevant body
+after headers: hostile encoding, size or missing EOF cannot erase numeric status.
+This headers-only outcome is not body EOF and cannot satisfy successful JSON.
 
 This foundation **does not enable paid search**, add profiles/credential commands,
 or change the default search backend or legacy routing. Backend selection and

@@ -463,3 +463,101 @@ async fn search_http_transport_failure_category_is_secret_free() {
     assert!(std::error::Error::source(&error).is_none());
     server.await.unwrap();
 }
+
+/// Numeric non-success/pending status is authoritative even if the irrelevant
+/// error body is compressed, invalid UTF-8, over cap or never reaches EOF.
+/// Such a body must not erase authentication/payment/throttle/pending evidence
+/// or become a remote diagnostic; legacy decoding rules remain separate.
+#[tokio::test]
+async fn search_http_status_precedes_untrusted_error_body() {
+    for (status, kind) in [
+        (401, SearchHttpErrorKind::Authentication),
+        (402, SearchHttpErrorKind::Quota),
+        (429, SearchHttpErrorKind::Throttle),
+        (202, SearchHttpErrorKind::Pending),
+    ] {
+        for (headers, body, limit, missing) in [
+            ("Content-Encoding: gzip\r\n", b"canary".as_slice(), 100, 0),
+            ("", b"\xffcanary".as_slice(), 100, 0),
+            ("", b"canary".as_slice(), 0, 0),
+            ("", b"canary".as_slice(), 100, 10),
+        ] {
+            let (url, server) = fixture(status, headers, body, missing).await;
+            let error = request(SearchEndpoint::SerpApi, url, limit)
+                .send_json(&key(), tokio::time::Instant::now() + Duration::from_secs(1))
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.status(), Some(status));
+            assert_eq!(error.message(), format!("search HTTP status {status}"));
+            assert!(!format!("{error:?}").contains("canary"));
+            assert!(std::error::Error::source(&error).is_none());
+            server.await.unwrap();
+        }
+    }
+}
+
+/// A peer withholds every body byte until the local header-status result is
+/// observed. Returning HeadersOnly must therefore precede body EOF, and dropping
+/// the unread response closes its owned connection instead of draining forever.
+#[tokio::test]
+async fn search_http_header_status_finishes_before_withheld_body() {
+    for status in [202, 401, 402, 429] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/withheld", listener.local_addr().unwrap());
+        let (settled, observed) = tokio::sync::oneshot::channel::<()>();
+        let server = async {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            assert!(stream.read(&mut bytes).await.unwrap() > 0);
+            stream.write_all(format!("HTTP/1.1 {status} Fixture\r\nContent-Length: 100\r\nContent-Encoding: gzip\r\nX-Request-Id: canary\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            // The peer never sends the promised body, even after this signal.
+            observed.await.unwrap();
+            assert_eq!(stream.read(&mut bytes).await.unwrap(), 0);
+        };
+        let client = async {
+            let request = request(SearchEndpoint::SerpApi, url, 0);
+            let credential = key();
+            let exchange = ReqwestProviderHttpTransport
+                .send_async_with_observers(
+                    &request.request,
+                    HttpExecution {
+                        mode: HttpResponseMode::SearchJson,
+                        routing: HttpRoutingPolicy::AuthenticatedSearch,
+                        deadline: Some(tokio::time::Instant::now() + Duration::from_secs(1)),
+                        auth: request.endpoint.auth(&credential),
+                    },
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(exchange.completion, HttpCompletion::HeadersOnly);
+            assert_eq!(exchange.response.status_code, status);
+            assert!(exchange.response.body.is_empty());
+            assert!(exchange.response.headers.is_empty());
+            let error = checked_json(exchange, &credential).unwrap_err();
+            assert_eq!(error.status(), Some(status));
+            settled.send(()).unwrap();
+        };
+        tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(client, server)
+        })
+        .await
+        .unwrap();
+    }
+    let error = checked_json(
+        super::super::HttpExchangeResponse {
+            completion: HttpCompletion::HeadersOnly,
+            response: mez_agent::ProviderHttpResponse {
+                status_code: 200,
+                headers: Default::default(),
+                body: "{}".into(),
+            },
+        },
+        &key(),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), SearchHttpErrorKind::Malformed);
+    assert_eq!(error.status(), Some(200));
+}
