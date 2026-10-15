@@ -5,6 +5,125 @@
 
 use super::*;
 
+/// Adjacent accepted sender previews to one display label remain separate
+/// occurrences, including equal payloads. Legacy OFF copy must not merge their
+/// generated carrier runs or return the first payload for a second-only range.
+/// Settlement here is display-only and never executes either transport action.
+#[test]
+fn runtime_outbound_adjacent_same_label_sources_remain_distinct() {
+    for timestamps in [false, true] {
+        for equal in [false, true] {
+            let mut service = test_runtime_service();
+            super::timestamp_settings::replace_timestamp_settings(&mut service, timestamps, 24, "");
+            service
+                .agent_shell_store_mut()
+                .enter_or_resume("%1")
+                .unwrap();
+            let turn = service
+                .start_agent_prompt_turn("%1", "display adjacent sender sources")
+                .unwrap();
+            service.remove_pending_agent_provider_task(&turn.turn_id);
+            set_agent_pane_screen_for_test(
+                &mut service,
+                "%1",
+                TerminalScreen::new(Size::new(80, 24).unwrap(), 200).unwrap(),
+            );
+            let first = "first message wraps across several visible rows";
+            let second = if equal {
+                first
+            } else {
+                "second message wraps across several different visible rows"
+            };
+            for (ordinal, payload) in [first, second].into_iter().enumerate() {
+                let action = mez_agent::AgentAction {
+                    id: format!("adjacent-{ordinal}"),
+                    payload: mez_agent::AgentActionPayload::SendMessage {
+                        recipient: "agent-%2".into(),
+                        scope: None,
+                        content_type: "text/plain; charset=utf-8".into(),
+                        payload: payload.into(),
+                        correlation_id: None,
+                    },
+                };
+                service
+                    .settle_accepted_outbound_message_preview("%1", &turn.turn_id, ordinal, &action)
+                    .unwrap();
+            }
+            let screen = service.agent_pane_screen("%1").unwrap();
+            let canonical = screen.normal_styled_content_lines();
+            let owners = canonical
+                .iter()
+                .filter_map(|row| {
+                    row.copy_source
+                        .as_ref()
+                        .map(|source| source.id.owner().to_string())
+                })
+                .fold(Vec::<String>::new(), |mut owners, owner| {
+                    if owners.last() != Some(&owner) {
+                        owners.push(owner);
+                    }
+                    owners
+                });
+            assert_eq!(owners.len(), 2);
+            assert_ne!(owners[0], owners[1]);
+            let mut copy = CopyMode::from_screen(screen, 24).unwrap();
+            copy.set_agent_surface(true);
+            let rows_for = |owner: &str| {
+                (0..copy.line_count())
+                    .filter(|row| {
+                        copy.copy_source(*row)
+                            .is_some_and(|source| source.id.owner() == owner)
+                            || (!timestamps
+                                && canonical
+                                    .get(*row)
+                                    .and_then(|line| line.copy_source.as_ref())
+                                    .is_some_and(|source| source.id.owner() == owner))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let first_rows = rows_for(&owners[0]);
+            let second_rows = rows_for(&owners[1]);
+            assert!(first_rows.len() > 1 && second_rows.len() > 1);
+            let last = *second_rows.last().unwrap();
+            let end = mez_mux::render::char_count(&copy.lines()[last]);
+            copy.select_range(
+                CopyPosition {
+                    line: second_rows[0],
+                    column: 0,
+                },
+                CopyPosition {
+                    line: last,
+                    column: end,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                    .unwrap(),
+                second,
+                "second-only: timestamps={timestamps}, equal={equal}"
+            );
+            copy.select_range(
+                CopyPosition {
+                    line: first_rows[0],
+                    column: 0,
+                },
+                CopyPosition {
+                    line: last,
+                    column: end,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                    .unwrap(),
+                format!("{first}\n{second}"),
+                "both occurrences: timestamps={timestamps}, equal={equal}"
+            );
+        }
+    }
+}
+
 /// Cumulative plaintext sender growth changes which ordinal owns the final
 /// CRLF suffix. Atomic projection replacement and accepted preview settlement
 /// must retain exact current bytes while an old copy snapshot stays frozen.
