@@ -49,7 +49,19 @@ fn assert_received_copy(service: &RuntimeSessionService, identity: &str, payload
     assert_eq!(
         copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
             .unwrap(),
-        payload
+        payload,
+        "rows={:#?}",
+        (0..copy.line_count())
+            .map(|row| (
+                row,
+                &copy.lines()[row],
+                copy.copy_line(row),
+                canonical
+                    .get(row)
+                    .and_then(|line| line.copy_source.as_ref())
+                    .map(|source| (&source.id, source.text.as_ref()))
+            ))
+            .collect::<Vec<_>>()
     );
     let origin = copy.log_frame(first).map_or(2, |frame| frame.body_origin);
     copy.select_range(
