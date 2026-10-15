@@ -8,6 +8,176 @@ use super::*;
 use mez_agent::messaging::{Envelope, MessageScope, Recipient};
 use mez_core::ids::PaneId;
 
+/// A one-cell selection on the last retained producer-owned row must recover
+/// that exact semantic source, not a visible fragment or control marker. OFF
+/// row location uses canonical proof without changing copy consumption policy.
+fn assert_tail_source_copy(screen: &TerminalScreen, identity: &str, payload: &str) {
+    let canonical = screen.normal_styled_content_lines();
+    let mut copy = CopyMode::from_screen(screen, 12).unwrap();
+    copy.set_agent_surface(true);
+    let row = (0..copy.line_count())
+        .rfind(|row| {
+            copy.copy_source(*row)
+                .is_some_and(|source| source.id.owner() == identity)
+                || (!screen.log_frame_settings().0.timestamps
+                    && canonical
+                        .get(*row)
+                        .and_then(|line| line.copy_source.as_ref())
+                        .is_some_and(|source| source.id.owner() == identity))
+        })
+        .expect("retained producer-owned tail");
+    let origin = copy.log_frame(row).map_or(2, |frame| frame.body_origin);
+    assert!(mez_mux::render::char_count(&copy.lines()[row]) > origin);
+    copy.select_range(
+        CopyPosition {
+            line: row,
+            column: origin,
+        },
+        CopyPosition {
+            line: row,
+            column: origin + 1,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+            .unwrap(),
+        payload,
+        "tail copy: size={:?}, timestamps={}, row={}, copy={:?}",
+        screen.size(),
+        screen.log_frame_settings().0.timestamps,
+        row,
+        copy.copy_line(row)
+    );
+}
+
+/// A peer's wrapped continuation and pruned tail retain exact source ownership
+/// with timestamps initially OFF or ON. Literal carrier/control bytes remain
+/// authored input for plaintext SourceLine and Markdown WholeEntry producers.
+#[test]
+fn runtime_received_source_copy_recovers_continuation_and_pruned_tail() {
+    for content_type in ["text/plain; charset=utf-8", "text/markdown; charset=utf-8"] {
+        for timestamps in [false, true] {
+            let mut service = test_runtime_service();
+            super::timestamp_settings::replace_timestamp_settings(&mut service, timestamps, 28, "");
+            set_agent_pane_screen_for_test(
+                &mut service,
+                "%1",
+                TerminalScreen::new(Size::new(28, 12).unwrap(), 300).unwrap(),
+            );
+            let identity = "peer-message recipient=agent-%1 sequence=1 id=turn:tail:copy";
+            let payload = format!(
+                "{} tail:雪%3A\u{1e}mez-copy-source-line:literal/0:raw",
+                "long wrapped source ".repeat(12)
+            );
+            service
+                .append_agent_received_peer_message_to_terminal_buffer_with_receive_identity(
+                    "%1",
+                    Some(identity),
+                    "agent-%3",
+                    content_type,
+                    &payload,
+                )
+                .unwrap();
+            let screen = service.agent_pane_screen("%1").unwrap();
+            assert_tail_source_copy(screen, identity, &payload);
+            let mut pruned = screen.clone();
+            pruned.resize(Size::new(12, 3).unwrap()).unwrap();
+            pruned.set_history_limit(1).unwrap();
+            let rows = pruned.normal_styled_content_lines();
+            let owned = rows
+                .iter()
+                .filter(|row| {
+                    row.copy_source
+                        .as_ref()
+                        .is_some_and(|source| source.id.owner() == identity)
+                })
+                .collect::<Vec<_>>();
+            assert!(!owned.is_empty());
+            assert!(
+                owned
+                    .iter()
+                    .all(|row| !row.presentation.as_ref().unwrap().first_row)
+            );
+            assert_tail_source_copy(&pruned, identity, &payload);
+        }
+    }
+}
+
+/// Supported source-free numeric/grouped carriers persist and replay as opaque
+/// explicit copy overrides. Literal percent-like legacy identities are never
+/// decoded into a new namespace; new escaped anchors use the same lookup.
+#[test]
+fn runtime_received_copy_retained_legacy_carriers_roundtrip() {
+    for identity in ["7", "legacy/7", "legacy%3Agroup/7", "turn%3Aaction%253A/7"] {
+        let mut service = test_runtime_service();
+        let conversation = service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        let store = AgentTranscriptStore::new(temp_root("retained-copy-carriers"));
+        let raw = "authored:colon/0: 雪%3A";
+        let entry = crate::storage::transcript::AgentPresentationEntry {
+            presentation: None,
+            conversation_id: conversation.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            pane_id: "%1".into(),
+            turn_id: None,
+            terminal_width: 256,
+            style_names: vec!["status".into(); 2],
+            display_lines: vec!["first".into(), "last".into()],
+            copy_lines: vec![
+                format!("{}{identity}:{raw}", mez_mux::copy::COPY_SOURCE_LINE_PREFIX),
+                format!("{}{identity}", mez_mux::copy::COPY_SOURCE_REFERENCE_PREFIX),
+            ],
+            ansi_text: None,
+            source_text: None,
+            source_content_type: None,
+        };
+        store.append_presentation(&entry).unwrap();
+        let persisted = store.inspect_presentation(&conversation).unwrap();
+        assert_eq!(persisted, vec![entry]);
+        set_agent_pane_screen_for_test(
+            &mut service,
+            "%1",
+            TerminalScreen::new(Size::new(256, 12).unwrap(), 100).unwrap(),
+        );
+        service
+            .replay_agent_presentation_entries_to_terminal_buffer("%1", &persisted)
+            .unwrap();
+        let mut copy = CopyMode::from_screen(service.agent_pane_screen("%1").unwrap(), 12).unwrap();
+        copy.set_agent_surface(true);
+        let row = copy
+            .lines()
+            .iter()
+            .rposition(|line| line.contains("last"))
+            .unwrap();
+        copy.select_range(
+            CopyPosition {
+                line: row,
+                column: 2,
+            },
+            CopyPosition {
+                line: row,
+                column: 3,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                .unwrap(),
+            raw
+        );
+        assert_eq!(
+            store.inspect_presentation(&conversation).unwrap(),
+            persisted
+        );
+    }
+}
+
 /// Selects all rows owned by the committed receiver occurrence, and then one
 /// body cell. The full selection emits original source ordinals exactly once;
 /// partial selection recovers only its complete semantic source line.

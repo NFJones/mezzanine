@@ -5,6 +5,146 @@
 
 use super::*;
 
+/// Cumulative plaintext sender growth changes which ordinal owns the final
+/// CRLF suffix. Atomic projection replacement and accepted preview settlement
+/// must retain exact current bytes while an old copy snapshot stays frozen.
+/// This display-only qualification never executes or retries a transport send.
+#[test]
+fn runtime_outbound_plaintext_crlf_growth_keeps_frozen_source() {
+    for timestamps in [false, true] {
+        let mut service = test_runtime_service();
+        super::timestamp_settings::replace_timestamp_settings(&mut service, timestamps, 80, "");
+        let store = AgentTranscriptStore::new(temp_root("outbound-crlf-growth"));
+        service.set_agent_transcript_store(store.clone());
+        let conversation = service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        let turn = service
+            .start_agent_prompt_turn("%1", "stream synthetic CRLF source")
+            .unwrap();
+        service.remove_pending_agent_provider_task(&turn.turn_id);
+        set_agent_pane_screen_for_test(
+            &mut service,
+            "%1",
+            TerminalScreen::new(Size::new(80, 12).unwrap(), 100).unwrap(),
+        );
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer(
+                "%1",
+                &turn.turn_id,
+                &mez_agent::StreamingSayEvent::MessageStarted {
+                    action_index: 0,
+                    recipient: "agent-%2".into(),
+                    content_type: "text/plain; charset=utf-8".into(),
+                },
+            )
+            .unwrap();
+        let mut frozen = None;
+        for (delta, expected) in [
+            ("first\r\n", "first\r\n"),
+            ("second\r\n\n", "first\r\nsecond\r\n\n"),
+        ] {
+            service
+                .apply_agent_streaming_say_event_to_terminal_buffer(
+                    "%1",
+                    &turn.turn_id,
+                    &mez_agent::StreamingSayEvent::MessagePayloadDelta {
+                        action_index: 0,
+                        text: delta.into(),
+                    },
+                )
+                .unwrap();
+            let work = service
+                .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+                .unwrap()
+                .unwrap();
+            assert!(
+                service
+                    .apply_agent_streaming_say_projection_result(
+                        RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap()
+                    )
+                    .unwrap()
+            );
+            let mut copy =
+                CopyMode::from_screen(service.agent_pane_screen("%1").unwrap(), 12).unwrap();
+            copy.set_agent_surface(true);
+            let last = copy
+                .lines()
+                .iter()
+                .rposition(|row| !row.trim().is_empty())
+                .unwrap();
+            let end = mez_mux::render::char_count(&copy.lines()[last]);
+            copy.select_range(
+                CopyPosition { line: 0, column: 0 },
+                CopyPosition {
+                    line: last,
+                    column: end,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                copy.copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                    .unwrap(),
+                expected
+            );
+            if frozen.is_none() {
+                frozen = Some(copy);
+            }
+        }
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer(
+                "%1",
+                &turn.turn_id,
+                &mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 },
+            )
+            .unwrap();
+        let action = mez_agent::AgentAction {
+            id: "growth-crlf-action".into(),
+            payload: mez_agent::AgentActionPayload::SendMessage {
+                recipient: "agent-%2".into(),
+                scope: None,
+                content_type: "text/plain; charset=utf-8".into(),
+                payload: "first\r\nsecond\r\n\n".into(),
+                correlation_id: None,
+            },
+        };
+        let messages = service.message_service().snapshot_state();
+        service
+            .settle_accepted_outbound_message_preview("%1", &turn.turn_id, 0, &action)
+            .unwrap();
+        let settled = service.agent_pane_screen("%1").unwrap().clone();
+        service
+            .settle_accepted_outbound_message_preview("%1", &turn.turn_id, 0, &action)
+            .unwrap();
+        assert_eq!(service.agent_pane_screen("%1").unwrap(), &settled);
+        assert_eq!(service.message_service().snapshot_state(), messages);
+        assert_eq!(
+            frozen
+                .unwrap()
+                .copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+                .unwrap(),
+            "first\r\n"
+        );
+        let entries = store.inspect_presentation(&conversation).unwrap();
+        let sent = entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .source_text
+                    .as_deref()
+                    .is_some_and(|source| source.contains("growth-crlf-action"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(sent.len(), 1);
+        let source: serde_json::Value =
+            serde_json::from_str(sent[0].source_text.as_deref().unwrap()).unwrap();
+        assert_eq!(source["payload"], "first\r\nsecond\r\n\n");
+    }
+}
+
 /// Verifies a presentation-eligible outbound message appears before provider
 /// completion, retains its requested recipient marker, and obeys the active
 /// transcript width cap.
