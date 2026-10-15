@@ -99,26 +99,24 @@ pub fn normalize_strict_with_url_validator(
     for warning in &mut result.warnings {
         result.truncated |= bound_text(warning, 512);
     }
-    if let Some(id) = &result.request_id {
-        if id.is_empty()
+    if let Some(id) = &result.request_id
+        && (id.is_empty()
             || id.len() > 128
             || !id
                 .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
-        {
-            return Err(SearchError::InvalidRequest);
-        }
+                .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b)))
+    {
+        return Err(SearchError::InvalidRequest);
     }
-    if let Some(usage) = &result.usage {
-        if usage.unit.is_empty()
+    if let Some(usage) = &result.usage
+        && (usage.unit.is_empty()
             || usage.unit.len() > 64
             || !usage
                 .unit
                 .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b" _-".contains(&b))
-        {
-            return Err(SearchError::InvalidRequest);
-        }
+                .all(|b| b.is_ascii_alphanumeric() || b" _-".contains(&b)))
+    {
+        return Err(SearchError::InvalidRequest);
     }
     loop {
         let json = serde_json::to_vec(&result).map_err(|_| SearchError::MalformedJson)?;
