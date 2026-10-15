@@ -489,10 +489,9 @@ fn streamed_outbound_noop_case(
         );
     }
     // This sender-only regression preserves receiver commit/outbox evidence;
-    // it must not force an unrelated receiver presenter to succeed. Existing
-    // colon-bearing receipt copy carriers can fail their ordinal proof. Keep
-    // the exact pending source (or already durable receipt), never suppress the
-    // error, change an id, weaken validation, or replay transport to repair it.
+    // it must not force an unrelated receiver presenter to succeed. Keep the
+    // exact pending source (or already durable receipt) if presentation is
+    // deferred or fails; never change an id or replay transport to repair it.
     let receiver_conversation = service
         .agent_shell_store()
         .get(peer_pane)

@@ -4324,6 +4324,12 @@ records MAY instead replay their byte stream unchanged and rely on physical
 pane wrapping, because inserting boundaries into escape-bearing terminal data
 could change control semantics. Mixed histories MUST preserve presentation
 order.
+Generated source-copy carriers MUST escape group delimiters without changing
+durable receipt identities or authored payload bytes. Literal percent signs and
+colons in group identities MUST remain distinct, and source anchors and their
+references MUST use the same opaque encoded identity. Resume and resize replay
+MUST accept valid colon-bearing runtime message IDs while retaining ordinal,
+owner, reference and payload-conflict validation.
 The explicit `/show-context activity [presentation-sequence]` view MUST provide
 client-local list/detail disclosure of identity-bearing accepted command intent,
 response-wide rationale, retained outcomes and result previews. Static and
