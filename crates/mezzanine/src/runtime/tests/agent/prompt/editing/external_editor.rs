@@ -1,5 +1,8 @@
 //! External editor integration for pane-local agent prompts.
 
+/// Selective compaction published after editor launch remains authoritative at SAVE.
+mod selective_edit_fence;
+
 use super::*;
 use crate::runtime::{PaneSurfaceKind, RenderInvalidationReason};
 
