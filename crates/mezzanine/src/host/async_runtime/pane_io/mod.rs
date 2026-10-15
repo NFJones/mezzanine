@@ -57,6 +57,7 @@ pub use driver_service::{
 pub use fake::AsyncFakePaneProcessIo;
 #[cfg(test)]
 pub(crate) use helpers::run_owned_pane_process_worker;
+#[cfg(test)]
 pub use process_service::run_async_pane_process_service;
 pub use pty::AsyncPtyPaneProcessIo;
 pub(crate) use retirement::{

@@ -28,6 +28,7 @@ use super::{
 /// ownership path from racing write, resize, terminate, and output handling
 /// across independent tasks while avoiding one actor round trip per output
 /// chunk during bursty pane redraws.
+#[cfg(test)]
 pub async fn run_async_pane_process_service<B, F>(
     handle: &AsyncRuntimeSessionHandle,
     driver: &mut AsyncPaneProcessDriver<B>,

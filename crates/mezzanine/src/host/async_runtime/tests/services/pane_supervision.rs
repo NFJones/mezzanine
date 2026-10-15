@@ -253,8 +253,14 @@ async fn cancelled_native_worker_retains_exact_cleanup_before_and_during_wait() 
 /// require exact native absence before the production drain returns.
 #[tokio::test]
 async fn graceful_native_cleanup_survives_worker_cancellation_without_kill_race() {
-    let root =
-        std::path::PathBuf::from("/tmp").join(format!("mez-native-grace-{}", uuid::Uuid::new_v4()));
+    let fixture_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::path::PathBuf::from("/tmp").join(format!(
+        "mez-native-grace-{}-{fixture_id}",
+        std::process::id()
+    ));
     std::fs::create_dir(&root).unwrap();
     let ready = root.join("ready");
     let marker = root.join("graceful");

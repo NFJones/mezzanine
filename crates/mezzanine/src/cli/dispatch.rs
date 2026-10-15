@@ -688,7 +688,14 @@ fn cli_dispatch_future_has_bounded_inline_state() {
         None,
     )
     .unwrap();
-    let future = run_invocation(invocation, CliEnv::default(), false, &mut output);
+    let mut native = CliNativeOwnership::default();
+    let future = run_invocation(
+        invocation,
+        CliEnv::default(),
+        false,
+        &mut output,
+        &mut native,
+    );
     let bytes = std::mem::size_of_val(&future);
     assert!(
         bytes <= 64 * 1024,

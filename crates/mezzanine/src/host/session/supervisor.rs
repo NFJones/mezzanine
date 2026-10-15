@@ -162,6 +162,14 @@ struct NativeRuntimeCompletionGuard {
     armed: bool,
 }
 
+impl NativeRuntimeCompletionGuard {
+    /// Uses the whole guard so async disjoint-field capture cannot leave its
+    /// Drop outside the spawned future while capturing only `armed`.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
 impl Drop for NativeRuntimeCompletionGuard {
     /// Retains pending cleanup instead of silently leaving a dead Running entry.
     fn drop(&mut self) {
@@ -371,7 +379,7 @@ impl SessionSupervisor {
             };
             let _ =
                 inner.finish_runtime(&task_session_id, generation, state, runtime_state, failure);
-            completion_guard.armed = false;
+            completion_guard.disarm();
         });
 
         Ok(handle)
@@ -441,15 +449,17 @@ impl SessionSupervisor {
         if let Some((generation, native, failure)) = pending {
             native.request_shutdown(force);
             native.seal();
-            super::drain_native_pane_retirement(&native, deadline).await?;
-            self.inner.finish_runtime(
-                session_id,
-                generation,
-                SessionSupervisorState::Failed,
-                None,
-                Some(failure),
-            )?;
-            return Ok(());
+            let cleanup = super::drain_native_pane_retirement(&native, deadline).await;
+            if native.outstanding() == 0 {
+                self.inner.finish_runtime(
+                    session_id,
+                    generation,
+                    SessionSupervisorState::Failed,
+                    None,
+                    Some(failure),
+                )?;
+            }
+            return cleanup;
         }
         let action = {
             let mut entries = self.inner.entries()?;
@@ -527,24 +537,40 @@ impl SessionSupervisor {
                 .collect::<Vec<_>>()
         };
         session_ids.sort();
-        let mut stops =
-            futures_util::stream::iter(session_ids.into_iter().map(|session_id| async move {
+        self.fence_native_admission(false)?;
+        // One future per already-admitted session, not detached tasks. Poll all
+        // stop admissions rather than blocking the seventeenth behind stalled
+        // actors; native work itself remains fixed-quanta and nonblocking.
+        let mut stops: futures_util::stream::FuturesUnordered<_> = session_ids
+            .into_iter()
+            .map(|session_id| async move {
                 tokio::time::timeout_at(
                     deadline,
                     self.stop_with_native_deadline(&session_id, force, deadline),
                 )
                 .await
                 .map_err(|_| MezError::invalid_state("session supervisor stop deadline expired"))?
-            }))
-            .buffer_unordered(16);
-        let mut first_error = None;
-        while let Some(result) = stops.next().await {
-            if let Err(error) = result {
-                first_error.get_or_insert(error);
+            })
+            .collect();
+        let requests = async {
+            let mut first_error = None;
+            while let Some(result) = stops.next().await {
+                if let Err(error) = result {
+                    first_error.get_or_insert(error);
+                }
             }
-        }
-        if let Err(error) = self.drain_native_retirement(deadline).await {
-            first_error.get_or_insert(error);
+            first_error
+        };
+        let (mut first_error, native) =
+            tokio::join!(requests, self.drain_native_after_seal(deadline));
+        if let Err(error) = native {
+            first_error = Some(match first_error {
+                Some(primary) => MezError::new(
+                    primary.kind(),
+                    format!("{}; native cleanup: {error}", primary.message()),
+                ),
+                None => error,
+            });
         }
         let settlement = tokio::time::timeout_at(deadline, async {
             loop {
@@ -573,6 +599,12 @@ impl SessionSupervisor {
 
     /// Seals admission before any final native-owner snapshot or awaited drain.
     pub(crate) fn seal_native_admission(&self) -> Result<()> {
+        self.fence_native_admission(true)
+    }
+
+    /// Stop requests preserve actor lifecycle authority while independent
+    /// returned children progress. Final CLI cleanup may also cancel runtimes.
+    fn fence_native_admission(&self, cancel_running: bool) -> Result<()> {
         self.inner
             .native_cleanup_sealed
             .store(true, Ordering::Release);
@@ -582,7 +614,9 @@ impl SessionSupervisor {
                 SupervisorEntryState::Starting { cancelled } => *cancelled = true,
                 SupervisorEntryState::Running { cancel, .. }
                 | SupervisorEntryState::Stopping { cancel, .. } => {
-                    let _ = cancel.send(true);
+                    if cancel_running {
+                        let _ = cancel.send(true);
+                    }
                 }
                 SupervisorEntryState::CleanupPending { .. } => {}
             }
@@ -603,6 +637,11 @@ impl SessionSupervisor {
         deadline: tokio::time::Instant,
     ) -> Result<()> {
         self.seal_native_admission()?;
+        self.drain_native_after_seal(deadline).await
+    }
+
+    /// Fair native quanta run independently of potentially stalled actor stops.
+    async fn drain_native_after_seal(&self, deadline: tokio::time::Instant) -> Result<()> {
         let owners = {
             self.inner
                 .entries()?
@@ -623,6 +662,7 @@ impl SessionSupervisor {
                 }
                 tokio::task::yield_now().await;
             }
+            self.finalize_settled_native_entries()?;
             let pending: usize = owners
                 .iter()
                 .map(PaneProcessRetirementOwner::outstanding)
@@ -647,6 +687,15 @@ impl SessionSupervisor {
             )
             .await;
         }
+        if let Some(failure) = self.native_cleanup_failure()? {
+            first_error.get_or_insert_with(|| MezError::invalid_state(failure));
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// Retires each proved-empty pending generation even if a sibling remains
+    /// unproven. Failure receipts are preserved separately from resource slots.
+    fn finalize_settled_native_entries(&self) -> Result<()> {
         let settled = self
             .inner
             .entries()?
@@ -669,10 +718,7 @@ impl SessionSupervisor {
                 Some(failure),
             )?;
         }
-        if let Some(failure) = self.native_cleanup_failure()? {
-            first_error.get_or_insert_with(|| MezError::invalid_state(failure));
-        }
-        first_error.map_or(Ok(()), Err)
+        Ok(())
     }
 
     /// Returns private native failure evidence independently of terminal history.
