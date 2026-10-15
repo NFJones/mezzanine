@@ -1032,7 +1032,7 @@ async fn execute_approved_external_action_inner(
         (result, Some((server_id, transport)))
     } else {
         let transport = ReqwestProviderHttpTransport;
-        let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
+        let (progress_sender, progress_receiver) = tokio::sync::watch::channel(None);
         let mut on_progress = move |source| {
             let _ = progress_sender.send(Some(source));
         };
@@ -1042,39 +1042,7 @@ async fn execute_approved_external_action_inner(
             &transport,
             &mut on_progress,
         );
-        tokio::pin!(network_execution);
-        let mut revision = 0_u64;
-        let result = loop {
-            tokio::select! {
-                result = &mut network_execution => break result,
-                changed = progress_receiver.changed() => {
-                    if changed.is_err() {
-                        continue;
-                    }
-                    let Some(source) = progress_receiver.borrow_and_update().clone() else {
-                        continue;
-                    };
-                    revision = revision.saturating_add(1);
-                    let mut batch = RuntimeEventBatch::new();
-                    batch.push(RuntimeEvent::ApprovedExternalActionProgress(
-                        RuntimeApprovedExternalActionProgress {
-                            presentation: mez_agent::ActionPresentationProgress::new(
-                                turn_id.clone(),
-                                action_id.clone(),
-                                mez_agent::ActionPresentationExecutionIdentity::Attempt(attempt.clone()),
-                                revision,
-                                mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody,
-                                source,
-                            ),
-                        },
-                    ));
-                    let _ = handle.submit_runtime_events(batch).await;
-                }
-            }
-        };
-        let final_source = { progress_receiver.borrow_and_update().clone() };
-        if let Some(source) = final_source {
-            revision = revision.saturating_add(1);
+        let result = drive_external_network_with_progress(network_execution, progress_receiver, |source, revision| {
             let mut batch = RuntimeEventBatch::new();
             batch.push(RuntimeEvent::ApprovedExternalActionProgress(
                 RuntimeApprovedExternalActionProgress {
@@ -1088,8 +1056,8 @@ async fn execute_approved_external_action_inner(
                     ),
                 },
             ));
-            let _ = handle.submit_runtime_events(batch).await;
-        }
+            handle.submit_runtime_events(batch)
+        }).await;
         (result, None)
     };
     handle
@@ -1102,6 +1070,42 @@ async fn execute_approved_external_action_inner(
         })
         .await?;
     Ok(None)
+}
+
+/// Drives only approved-network execution and its provisional watch snapshots.
+/// The submission closure owns actor ingress; the network result retains sole
+/// outcome authority. This extraction preserves the sequential baseline so
+/// held-ack regressions can qualify the subsequent scoped-forwarder repair.
+async fn drive_external_network_with_progress<T, Network, Submit, Submission>(
+    network: Network,
+    mut progress: watch::Receiver<Option<String>>,
+    mut submit: Submit,
+) -> T
+where
+    Network: Future<Output = T>,
+    Submit: FnMut(String, u64) -> Submission,
+    Submission: Future,
+{
+    tokio::pin!(network);
+    let mut revision = 0_u64;
+    let result = loop {
+        tokio::select! {
+            result = &mut network => break result,
+            changed = progress.changed() => {
+                if changed.is_err() { continue; }
+                let source = { progress.borrow_and_update().clone() };
+                let Some(source) = source else { continue; };
+                revision = revision.saturating_add(1);
+                let _ = submit(source, revision).await;
+            }
+        }
+    };
+    let source = { progress.borrow_and_update().clone() };
+    if let Some(source) = source {
+        revision = revision.saturating_add(1);
+        let _ = submit(source, revision).await;
+    }
+    result
 }
 
 /// Runs one provider request while honoring turn cancellation.
@@ -2349,6 +2353,7 @@ mod tests {
     use super::*;
 
     mod incomplete;
+    mod network_progress;
 
     /// A paid cutoff followed by success, another cutoff or ordinary failure
     /// retains every reported counter through worker events and exact auxiliary

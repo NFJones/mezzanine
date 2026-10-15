@@ -188,7 +188,7 @@ async fn search_http_suppresses_credential_echoes_before_publication() {
         serde_json::json!({"url": format!("https://echo.invalid/?other=%FF&key={encoded}&tail=%ff")}).to_string(),
         serde_json::json!({"url": format!("https://echo.invalid/?key={}", encoded.replace("%2B", "%2b").replace("%2F", "%2f"))}).to_string(),
         format!("{{\"result\":\"{escaped}\"}}"),
-        serde_json::json!({credential.expose_secret(): "reflected key"}).to_string(),
+        serde_json::json!({(credential.expose_secret()): "reflected key"}).to_string(),
     ] {
         let (url, server) = fixture(200, "Location: https://echo.invalid/canary\r\nX-Request-Id: canary\r\n", body.as_bytes(), 0).await;
         let error = request(SearchEndpoint::SerpApi, url, 4096).send_json(&credential, tokio::time::Instant::now() + Duration::from_secs(1)).await.unwrap_err();
