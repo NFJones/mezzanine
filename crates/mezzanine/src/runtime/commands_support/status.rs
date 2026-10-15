@@ -330,6 +330,9 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
         format!("unknown_connections = {}", iroh_metrics.unknown_connections),
         "".to_string(),
         "[x11 forwarding]".to_string(),
+        format!("service_unavailable = {}", x11_metrics.service_unavailable),
+        format!("worker_failures = {}", x11_metrics.worker_failures),
+        format!("listener_failures = {}", x11_metrics.listener_failures),
         format!("route_active = {}", x11_metrics.route_active),
         format!(
             "authority_repair_pending = {}",

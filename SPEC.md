@@ -1814,6 +1814,16 @@ architecture MUST preserve three distinct boundaries:
    host MUST route a connection to at most one session actor and MUST NOT
    reimplement session-bound methods.
 
+Optional status-command children and X11 relay workers MUST NOT terminate a
+healthy session actor, PTYs, control connections, or agents when they panic or
+are unexpectedly cancelled. Status workers MUST retain exact refresh identity
+and generation independently of child return values and settle child failure
+once as a typed failed completion, releasing pending ownership and bounded
+worker capacity. Stale failure completions MUST obey the same fences as success.
+Actor ingress loss, poisoned shared ownership, and critical invariants MUST
+remain fatal to their compromised owner; auxiliary service lifetime alone MUST
+NOT suppress errors.
+
 Bare local `mez` MUST contact the protected local host when persistent host mode
 is active. It MUST attach to the first eligible live session that accepts a
 primary, using deterministic host policy, or create and attach a new session
@@ -5530,6 +5540,18 @@ to the exact authenticated connection and a monotonic session-local generation.
 Replacing an owner MUST require explicit takeover, invalidate the old generation
 before publishing the new one, and ensure stale cleanup cannot deactivate a
 newer route.
+
+A panicking X11 relay MUST revoke only its captured exact owner/generation and
+cancel that generation's streams; a stale panic MUST NOT revoke a replacement.
+Ordinary relay errors MUST remain stream-local. Unusable listener infrastructure
+MUST permanently fence new X11 reservation/activation for that session, revoke
+its current authority and settle its streams before the optional service ends.
+It MUST NOT restart automatically or shut down healthy session siblings.
+Stable `DISPLAY` and `XAUTHORITY` paths MUST survive this degradation. Session
+diagnostics MUST expose `service_unavailable`, `worker_failures`, and
+`listener_failures` as bounded secret-free health/counters; panic payloads MUST
+NOT be formatted into worker diagnostics. Listener recovery requires a new
+session; relay failure MAY recover through explicit fresh route negotiation.
 
 Every client-side `xauth` invocation MUST have one finite lifecycle deadline
 covering normal execution, nonblocking termination signalling, and process
