@@ -43,8 +43,12 @@ pub(super) fn send_signal_to_pane_process_group(
 /// exception. Only typed ESRCH, or EPERM followed by authoritative group
 /// absence, is benign; permission/I/O failures remain unproven errors.
 pub(super) fn send_signal_to_retained_pane_group(group: i32, signal: Signal) -> Result<()> {
+    // Rustix asserts on negative values inside from_raw; filtering afterward
+    // is too late, especially when this path runs during owner destruction.
+    if group <= 0 {
+        return Err(MezError::invalid_state("pane process group id is invalid"));
+    }
     let pid = Pid::from_raw(group)
-        .filter(|_| group > 0)
         .ok_or_else(|| MezError::invalid_state("pane process group id is invalid"))?;
     match kill_process_group(pid, signal) {
         Ok(()) | Err(Errno::SRCH) => Ok(()),
@@ -196,5 +200,16 @@ mod tests {
         let error = send_signal_to_pane_process_group(0, Signal::TERM).unwrap_err();
 
         assert!(error.message().contains("process group id is invalid"));
+    }
+
+    /// Retained cleanup must reject every nonpositive group before calling the
+    /// asserting Rustix constructor or any signal syscall. The same helper is
+    /// used during last-owner Drop, where a second panic would abort cleanup.
+    #[test]
+    fn retained_group_rejects_negative_and_zero_before_pid_construction() {
+        for group in [i32::MIN, -1, 0] {
+            let error = super::send_signal_to_retained_pane_group(group, Signal::KILL).unwrap_err();
+            assert!(error.message().contains("process group id is invalid"));
+        }
     }
 }
