@@ -4343,10 +4343,13 @@ bytes independently of display-only trimming. Plaintext line ordinals retain
 the raw slice before each separating LF, with the final ordinal owning the
 complete remaining suffix; copying distinct ordinals joins them with LF.
 Markdown whole-entry declarations retain the complete original payload.
-Wrapped plaintext peer source ordinals MUST retain one exact raw anchor at the
+Wrapped plaintext peer source ordinals with a distinct receiver receipt identity
+MUST retain one exact raw anchor at the
 group tail and shared-identity references on preceding rows. Partial selections
 and head-pruned retained tails MUST resolve that original source without
 replicating payloads, renumbering ordinals or changing unframed SourceLine policy.
+Label-grouped sender and legacy no-receipt producers MUST retain their existing
+head-anchor/skip metadata layout; display labels are not unique occurrence proof.
 The explicit `/show-context activity [presentation-sequence]` view MUST provide
 client-local list/detail disclosure of identity-bearing accepted command intent,
 response-wide rationale, retained outcomes and result previews. Static and

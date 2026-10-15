@@ -281,14 +281,24 @@ fn peer_message_markdown_rendered_lines(
     .collect()
 }
 
+/// Internal producer layout, independent of persistence or copy eligibility.
+#[derive(Clone, Copy)]
+enum PeerMessageCopyLayout {
+    /// Preserve label-grouped sender and legacy no-receipt metadata unchanged.
+    LegacyHead,
+    /// A distinct receiver receipt group retains one tail anchor plus references.
+    ReceiptTail,
+}
+
 /// Returns presentation and source-copy rows for one canonical plaintext peer payload.
-/// Each original ordinal has one exact tail anchor and small forward references,
-/// preserving continuation selections and head-pruned source without raw duplication.
+/// Only distinct receiver receipt groups use tail anchors and forward references;
+/// sender/legacy labels keep their established head-anchor/skip layout.
 fn peer_message_echo_rendered_lines(
     prefix: &str,
     payload: &str,
     display_width: usize,
     copy_group: &str,
+    layout: PeerMessageCopyLayout,
 ) -> Vec<RichTextLine> {
     let body_indent = AGENT_MESSAGE_CONTINUATION_INDENT;
     let display_payload = payload.trim_end_matches(['\r', '\n']);
@@ -327,12 +337,21 @@ fn peer_message_echo_rendered_lines(
                 display_width,
                 body_indent,
             );
-            let reference = encode_copy_source_reference_in_group(copy_group, source_index);
-            for line in &mut wrapped {
-                line.copy_text = Some(reference.clone());
-            }
-            if let Some(anchor) = wrapped.last_mut() {
-                anchor.copy_text = Some(source);
+            match layout {
+                PeerMessageCopyLayout::ReceiptTail => {
+                    let reference = encode_copy_source_reference_in_group(copy_group, source_index);
+                    for line in &mut wrapped {
+                        line.copy_text = Some(reference.clone());
+                    }
+                    if let Some(anchor) = wrapped.last_mut() {
+                        anchor.copy_text = Some(source);
+                    }
+                }
+                PeerMessageCopyLayout::LegacyHead => {
+                    for line in wrapped.iter_mut().skip(1) {
+                        line.copy_text = Some(AGENT_COPY_SKIP_LINE.to_string());
+                    }
+                }
             }
             wrapped
         })
@@ -367,7 +386,13 @@ fn streaming_outbound_message_projection_with_theme(
             table_width,
         )
     } else {
-        peer_message_echo_rendered_lines(prefix.as_str(), payload.as_str(), frame_width, &label)
+        peer_message_echo_rendered_lines(
+            prefix.as_str(),
+            payload.as_str(),
+            frame_width,
+            &label,
+            PeerMessageCopyLayout::LegacyHead,
+        )
     };
     attach_agent_name_marker_span(
         &mut rendered_lines,
@@ -873,6 +898,11 @@ impl RuntimeSessionService {
                 body.as_str(),
                 display_width,
                 copy_group,
+                if presentation.receive_identity.is_some() {
+                    PeerMessageCopyLayout::ReceiptTail
+                } else {
+                    PeerMessageCopyLayout::LegacyHead
+                },
             )
         };
         let marker_rendition = if presentation.direct_parent {
@@ -978,6 +1008,11 @@ impl RuntimeSessionService {
             peer_message_echo_payload(presentation.payload).as_str(),
             display_width,
             copy_group,
+            if presentation.receive_identity.is_some() {
+                PeerMessageCopyLayout::ReceiptTail
+            } else {
+                PeerMessageCopyLayout::LegacyHead
+            },
         );
         let source = peer_message_presentation_source(
             presentation.receive_identity,
@@ -2771,6 +2806,7 @@ mod tests {
             r#"{"output":"literal plaintext"}"#,
             80,
             "peer-canonical-plaintext",
+            super::PeerMessageCopyLayout::ReceiptTail,
         );
         assert_eq!(lines.len(), 1);
         assert_eq!(
@@ -2790,8 +2826,13 @@ mod tests {
     /// selection omits both the presentation indent and sender marker.
     #[test]
     fn peer_message_wrapping_retains_one_raw_source_copy_line() {
-        let lines =
-            peer_message_echo_rendered_lines("agent-%3> ", "alpha beta gamma", 20, "peer-wrapping");
+        let lines = peer_message_echo_rendered_lines(
+            "agent-%3> ",
+            "alpha beta gamma",
+            20,
+            "peer-wrapping",
+            super::PeerMessageCopyLayout::ReceiptTail,
+        );
         assert_eq!(
             lines
                 .iter()
@@ -2824,7 +2865,13 @@ mod tests {
             ("a\r\n\r\nb\r\n", vec!["a\r", "\r", "b\r\n"]),
             ("one\nlast\r", vec!["one", "last\r"]),
         ] {
-            let rows = peer_message_echo_rendered_lines("peer> ", payload, 24, "turn:raw%3A");
+            let rows = peer_message_echo_rendered_lines(
+                "peer> ",
+                payload,
+                24,
+                "turn:raw%3A",
+                super::PeerMessageCopyLayout::ReceiptTail,
+            );
             let sources = rows
                 .iter()
                 .filter_map(|row| row.copy_text.as_deref())
@@ -2850,6 +2897,7 @@ mod tests {
                 payload.trim_end_matches(['\r', '\n']),
                 24,
                 "display",
+                super::PeerMessageCopyLayout::ReceiptTail,
             );
             assert_eq!(
                 rows.iter().map(|row| &row.display).collect::<Vec<_>>(),
