@@ -183,7 +183,7 @@ const fn min_u64(left: u64, right: u64) -> u64 {
 }
 
 /// Provider-neutral HTTP request assembled by a model-provider adapter.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProviderHttpRequest {
     /// HTTP method.
     pub method: String,
@@ -200,7 +200,7 @@ pub struct ProviderHttpRequest {
 }
 
 /// Provider-neutral HTTP response returned by a product-owned transport.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProviderHttpResponse {
     /// HTTP status code.
     pub status_code: u16,
@@ -208,6 +208,28 @@ pub struct ProviderHttpResponse {
     pub headers: BTreeMap<String, String>,
     /// UTF-8 response body, possibly bounded by the request limit.
     pub body: String,
+}
+
+impl std::fmt::Debug for ProviderHttpRequest {
+    /// Renders only local resource bounds, never URL, method, headers or body.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderHttpRequest")
+            .field("timeouts", &self.timeouts)
+            .field("max_response_bytes", &self.max_response_bytes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for ProviderHttpResponse {
+    /// Status and retained size are safe; remote headers and body are not.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderHttpResponse")
+            .field("status_code", &self.status_code)
+            .field("body_bytes", &self.body.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// One parsed server-sent event block.
@@ -630,6 +652,32 @@ mod tests {
         parse_sse_events,
     };
     use std::collections::BTreeMap;
+
+    /// Diagnostics must never render wire material, even for query credentials
+    /// or attacker-reflected response headers and bodies.
+    #[test]
+    fn http_debug_excludes_wire_payloads() {
+        let secret = "canary+credential/with?symbols";
+        let request = ProviderHttpRequest {
+            method: "GET".into(),
+            url: format!("https://example.invalid/?api_key={secret}"),
+            headers: BTreeMap::from([("authorization".into(), secret.into())]),
+            body: secret.into(),
+            timeouts: ProviderHttpTimeouts::from_total(1_000),
+            max_response_bytes: None,
+        };
+        let response = ProviderHttpResponse {
+            status_code: 200,
+            headers: BTreeMap::from([("location".into(), request.url.clone())]),
+            body: secret.into(),
+        };
+        for diagnostic in [format!("{request:?}"), format!("{response:?}")] {
+            assert!(!diagnostic.contains(secret));
+            assert!(!diagnostic.contains("example.invalid"));
+            assert!(!diagnostic.contains("authorization"));
+            assert!(!diagnostic.contains("api_key"));
+        }
+    }
 
     #[test]
     /// Verifies provider HTTP values preserve the complete dependency-neutral

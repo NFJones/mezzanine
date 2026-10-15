@@ -245,8 +245,9 @@ mod tests {
     };
     use crate::error::MezErrorKind;
     use crate::integrations::agent::provider::{
-        AnthropicMessagesProvider, ReqwestProviderHttpTransport, provider_error_retry_class,
+        AnthropicMessagesProvider, provider_error_retry_class,
     };
+    use crate::integrations::http::ReqwestProviderHttpTransport;
     use crate::security::auth::{AuthPaths, AuthStore};
     use mez_agent::{DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass};
     use std::collections::BTreeMap;
