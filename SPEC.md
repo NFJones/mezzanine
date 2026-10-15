@@ -4330,6 +4330,10 @@ colons in group identities MUST remain distinct, and source anchors and their
 references MUST use the same opaque encoded identity. Resume and resize replay
 MUST accept valid colon-bearing runtime message IDs while retaining ordinal,
 owner, reference and payload-conflict validation.
+Explicit raw whole-entry and block source declarations MUST take precedence over
+marker-looking authored text even before timestamp framing is first enabled.
+This MUST NOT change the legacy unframed source-line carrier policy or bypass
+immutable source generation and payload-conflict validation.
 The explicit `/show-context activity [presentation-sequence]` view MUST provide
 client-local list/detail disclosure of identity-bearing accepted command intent,
 response-wide rationale, retained outcomes and result previews. Static and
