@@ -49,7 +49,8 @@ pub(crate) struct SessionSupervisorSnapshot {
     pub(crate) runtime_state: Option<RuntimeLifecycleState>,
     /// Actor-owned power status while a live runtime handle is available.
     pub(crate) power_inhibition: Option<RuntimePowerInhibitionStatus>,
-    /// Secret-free failure diagnostic for terminal failed entries.
+    /// Private operator failure diagnostic; public/model status projections
+    /// must omit raw details rather than assuming arbitrary failures are safe.
     pub(crate) failure: Option<String>,
 }
 
@@ -572,6 +573,40 @@ impl SessionSupervisor {
     pub(crate) fn retain_native_failure_for_test(&self) {
         *self.inner.native_failure.lock().unwrap() =
             Some("injected native signal failure receipt".to_string());
+    }
+
+    /// Shared diagnostic-only fixture for private/public formatting tests.
+    /// It creates no native process and must never be used as reap evidence.
+    #[cfg(test)]
+    pub(crate) fn private_diagnostic_fixture_for_test() -> Self {
+        let supervisor = Self::new(1);
+        *supervisor.inner.native_failure.lock().unwrap() =
+            Some("PRIVATE_NATIVE_HOST_RECEIPT_CANARY /private/host-receipt".to_string());
+        supervisor.inner.entries().unwrap().insert(
+            "$PRIVATE_NATIVE_ENTRY_CANARY".to_string(),
+            SupervisorEntry {
+                generation: 1,
+                native: PaneProcessRetirementOwner::default(),
+                state: SupervisorEntryState::CleanupPending {
+                    failure: "PRIVATE_NATIVE_HOST_ENTRY_CANARY /private/host-entry".to_string(),
+                },
+            },
+        );
+        supervisor
+            .inner
+            .push_terminal(SessionSupervisorSnapshot {
+                session_id: "$PRIVATE_NATIVE_TERMINAL_CANARY".to_string(),
+                generation: 0,
+                state: SessionSupervisorState::Failed,
+                runtime_state: Some(RuntimeLifecycleState::Failed),
+                power_inhibition: None,
+                failure: Some(
+                    "PRIVATE_NATIVE_HOST_TERMINAL_CANARY /private/host-terminal".to_string(),
+                ),
+            })
+            .unwrap();
+        supervisor.seal_native_admission().unwrap();
+        supervisor
     }
 
     /// Shared test-only status fault used by owner and public-outcome tests.
@@ -1118,6 +1153,22 @@ mod tests {
     mod receipt_ordering;
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(10_000);
+
+    /// The canary fixture actually retains private entry/terminal/receipt data.
+    /// Public CliExit formatting tests must redact it, not use an empty fixture.
+    #[test]
+    fn private_diagnostic_fixture_contains_only_synthetic_redaction_canaries() {
+        let supervisor = SessionSupervisor::private_diagnostic_fixture_for_test();
+        let shown = format!("{supervisor:?}");
+        for canary in [
+            "PRIVATE_NATIVE_HOST_RECEIPT_CANARY",
+            "PRIVATE_NATIVE_HOST_ENTRY_CANARY",
+            "PRIVATE_NATIVE_HOST_TERMINAL_CANARY",
+        ] {
+            assert!(shown.contains(canary));
+        }
+        assert_eq!(supervisor.native_pending_count().unwrap(), 0);
+    }
 
     /// A real native drain supplies the kernel proof; an injected retained error
     /// then exercises disposition of that same now-empty exact generation. The

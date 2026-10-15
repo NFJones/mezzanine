@@ -2276,6 +2276,8 @@ cleanup, while preserving an original nonzero command status. Reporting or
 dropping that outcome is explicit abandonment, not proof of OS process exit or
 native retirement. Destruction of every owner/process permits only disclosed
 best-effort signaling and kernel adoption, never a successful reap claim.
+Public opaque CLI Debug formatting MUST expose only coarse effective exit and
+pending/unknown status, never private retained diagnostics, owners or handles.
 
 ### 5.3 Shared SQLite Session-State Storage
 

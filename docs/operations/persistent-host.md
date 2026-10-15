@@ -226,6 +226,9 @@ an original nonzero command code. Cleanup failures remain sticky after retry.
 ownership; neither proves OS process exit or native reaping. Final destruction
 can provide only disclosed best-effort signaling/kernel adoption, not a healthy
 shutdown receipt. Help and exact internal-child paths remain dependency-free.
+Ordinary and pretty Rust Debug formatting of `CliExit` show only effective code
+and a pending count (or unknown), not private cleanup/session diagnostics or
+native owner/handle internals.
 
 Before a planned restart:
 

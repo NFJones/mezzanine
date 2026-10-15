@@ -8,6 +8,7 @@
 //! it never proves OS process exit or native retirement. No global registry,
 //! runtime-in-Drop, detached task, or generic error payload is introduced here.
 
+use std::fmt;
 use std::io::{self, Write};
 use std::process::{ExitCode, Termination};
 use std::time::Duration;
@@ -24,11 +25,25 @@ use crate::host::session::SessionSupervisor;
 /// under a caller-owned Tokio runtime. `Termination::report` is also callable
 /// by library users: it means explicit abandonment, NOT proof of process exit
 /// or child reaping. No implicit consuming numeric conversion is provided.
+/// Debug reports only effective code and a coarse pending count, never retained
+/// diagnostics, child handles or private host/session state.
 #[must_use = "retain this outcome to inspect/retry native cleanup; dropping/reporting it abandons unproven ownership"]
-#[derive(Debug)]
 pub struct CliExit {
     code: u8,
     native: CliNativeOwnership,
+}
+
+impl fmt::Debug for CliExit {
+    /// Projects only already-approved status; query errors become coarse None,
+    /// and their diagnostic payload is never formatted or traversed.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pending = self.pending_native_children().ok();
+        formatter
+            .debug_struct("CliExit")
+            .field("code", &self.code())
+            .field("pending_native_children", &pending)
+            .finish_non_exhaustive()
+    }
 }
 
 impl CliExit {
@@ -53,8 +68,8 @@ impl CliExit {
         }
         if self.native.cleanup_failed
             || !self.native.is_sealed()
-            || !matches!(self.native.has_retained_failure(), Ok(false))
             || !matches!(self.pending_native_children(), Ok(0))
+            || !matches!(self.native.has_retained_failure(), Ok(false))
         {
             1
         } else {
@@ -262,6 +277,50 @@ mod tests {
         }
     }
 
+    /// Public ordinary/pretty Debug must not traverse synthetic private
+    /// foreground diagnostics, native owner internals or host entry/receipt
+    /// state. This is formatting privacy coverage, not native resource proof.
+    #[test]
+    fn native_exit_debug_exposes_only_bounded_coarse_status() {
+        let host = SessionSupervisor::private_diagnostic_fixture_for_test();
+        for original in [0, 17] {
+            let mut native = CliNativeOwnership::default();
+            native.foreground().seal();
+            native.cleanup_failed = true;
+            native.cleanup_diagnostic = Some(
+                "PRIVATE_NATIVE_FOREGROUND_CANARY Bearer SYNTHETIC /private/foreground-debug"
+                    .to_string(),
+            );
+            native.retain_host(host.clone()).unwrap();
+            let exit = CliExit::owned(original, native);
+            let expected = if original == 0 { 1 } else { original };
+            assert_eq!(exit.code(), expected);
+            for shown in [format!("{exit:?}"), format!("{exit:#?}")] {
+                assert!(shown.contains("CliExit") && shown.contains(&format!("code: {expected}")));
+                assert!(shown.contains("pending_native_children"));
+                assert!(shown.len() < 256);
+                for private in [
+                    "PRIVATE_NATIVE_",
+                    "/private/",
+                    "Bearer",
+                    "SYNTHETIC",
+                    "cleanup_diagnostic",
+                    "CliNativeOwnership",
+                    "SessionSupervisor",
+                    "PaneProcessRetirementOwner",
+                    "RetirementState",
+                    "RawPaneChild",
+                    "Mutex",
+                ] {
+                    assert!(
+                        !shown.contains(private),
+                        "public Debug exposed a private synthetic marker: {private}"
+                    );
+                }
+            }
+        }
+    }
+
     /// A late private failure receipt can arrive with zero remaining children.
     /// Borrowed public status must remain nonzero after entry/runtime teardown;
     /// this is a receipt-classification test, not fabricated native reap proof.
@@ -291,6 +350,11 @@ mod tests {
             let exit = CliExit::owned(original, native);
             assert!(exit.pending_native_children().is_err());
             assert_eq!(exit.code(), if original == 0 { 1 } else { original });
+            for shown in [format!("{exit:?}"), format!("{exit:#?}")] {
+                assert!(shown.contains("None"));
+                assert!(!shown.contains("poison") && !shown.contains("unavailable"));
+                assert!(!shown.contains("SessionSupervisor") && shown.len() < 256);
+            }
         }
     }
 
