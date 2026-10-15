@@ -154,7 +154,8 @@ fn configured_server_is_prompt_visible_as_pending_discovery() {
     assert!(summary.available_tools.is_empty());
     let server = &summary.unavailable_servers[0];
     assert_eq!(server.server_id, "fs");
-    assert_eq!(server.reason, "runtime discovery pending");
+    assert_eq!(server.diagnostic.reason(), "runtime discovery pending");
+    assert_eq!(server.diagnostic.recovery(), "inspect_with_list_mcp");
     assert!(server.retryable);
 }
 

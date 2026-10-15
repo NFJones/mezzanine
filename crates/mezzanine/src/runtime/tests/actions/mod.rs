@@ -9,6 +9,7 @@ mod failure_recovery;
 mod issues;
 mod mcp;
 mod mcp_cancellation;
+mod mcp_directory;
 mod memory;
 mod messaging;
 mod native_integrations;

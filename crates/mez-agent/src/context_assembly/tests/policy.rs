@@ -321,7 +321,7 @@ fn assemble_model_request_keeps_mcp_availability_out_of_system_prompt() {
                 server_id: "jira".to_string(),
                 purpose: "Jira issue operations".to_string(),
                 usage_instructions: "Use for Jira issue tasks.".to_string(),
-                reason: "startup failed".to_string(),
+                diagnostic: crate::McpServerDiagnostic::Failed,
                 retryable: true,
             }],
         },

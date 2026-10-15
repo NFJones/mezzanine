@@ -13713,7 +13713,10 @@ resolution and model-visible metadata contracts as explicit invocations.
 Configured names and explicit mentions MUST be merged deterministically and
 deduplicated by canonical server identity. Unknown, disabled, unavailable, or
 case-ambiguous configured names MUST expose no fabricated tools and MUST produce
-a bounded model-visible diagnostic. The complete configured catalog MUST occupy
+a bounded model-visible diagnostic. Automatically exposed selections MUST retain
+their unavailable-name and reason diagnostics even when no selected server is
+available. Optional purpose and usage guidance MUST NOT be required to recognize
+a well-shaped directory record. The complete configured catalog MUST occupy
 an immutable cache-eligible chronological snapshot. An unchanged catalog MUST
 not append another snapshot. Configuration, discovery, schema, guidance, or
 availability changes MUST append a latest-authoritative transition without
@@ -13725,6 +13728,20 @@ The live MCP registry, not historical snapshots, MUST remain authoritative for
 call authorization and schema validation. Information selected only by an
 explicit `@<server-id>` invocation MAY remain request-local, and overlap with a
 configured server MUST be represented only by the configured snapshot.
+Safe `mcp_server_get` lookup MUST accept an exact configured server identifier
+without prior search or durable directory evidence. Unknown exact identifiers
+MUST return not-found. A known pending, disabled, unavailable, failed, or
+blacklisted server MUST return safe diagnostic state without starting a
+transport, clearing a blacklist, authenticating, or granting callable tools.
+Only a complete available retrieval may create callable-contract evidence;
+tool execution remains subject to live enablement, schemas, arguments and
+permission/approval checks. Directory history is discovery context, not an
+additional authorization requirement for this passive metadata lookup.
+Model-facing automatic-directory, explicit-reference and passive-lookup
+diagnostics MUST use shared code-owned bounded state/recovery categories,
+never arbitrary transport or server error messages, credentialed URLs or error
+bodies. Raw operator diagnostic evidence MAY remain in its existing private
+registry/log ownership but MUST NOT be copied into model directory context.
 For a resolved explicit invocation, the turn-local model context MUST identify the invoked server as referencable and direct the model to retrieve it with `mcp_server_get`; memory lookup or unrelated discovery is not a substitute. An explicit reference MUST NOT itself expose callable tools or authorize `mcp_call`. A successful retrieval MUST present every callable tool identity and description together with its complete validated input-schema contract, including required and optional fields, descriptions, nested structures, arrays, enums, and validation constraints, without silent truncation or omission. Mezzanine MUST preserve complete model-safe initialization instructions advertised by the MCP server as non-authoritative guidance, SHOULD derive a complete purpose from discovered tool metadata when operator-configured purpose is absent, and MUST preserve complete operator-configured purpose and usage guidance as higher-priority context. Credentials, transport configuration, environment variables, headers, approval internals, and other runtime-only metadata MUST remain excluded. If a provider context limit cannot accommodate the complete selected-server metadata, Mezzanine MUST fail the retrieval explicitly rather than present a partial manifest. For cache-stable provider schemas that use a generic `mcp_call` variant, post-retrieval turn-local context MUST instead identify callable server/tool pairs and their complete argument contracts, while controller and runtime validation MUST enforce those requirements before execution.
 
 Mezzanine MUST support stdio MCP servers with `command`, optional `args`,
@@ -14427,7 +14444,8 @@ terminates further provider continuation after other actions in that response
 settle. It MUST treat settled `config_change` results as authoritative over any
 turn-start or skill-invocation configuration snapshot. It MUST explain that
 `mcp_server_search` discovers configured servers and `mcp_server_get` retrieves
-one referencable server's complete safe contract. `mcp_call` is only for a tool
+one exact configured server's safe state or complete available contract without
+a prior-search prerequisite. `mcp_call` is only for a tool
 in a durable retrieval record that the live registry still validates. The stable
 system prompt MUST NOT enumerate configured MCP servers, unavailable MCP
 servers, MCP tools, or MCP availability counts. A submitted user prompt or

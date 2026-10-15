@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use super::prompt::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary, McpPromptServer,
-    McpPromptSummary, McpPromptTool, McpPromptUnavailableServer,
+    McpPromptSummary, McpPromptTool, McpPromptUnavailableServer, McpServerDiagnostic,
 };
 use super::schema::{McpSchemaDiagnostic, McpSchemaValidator};
 use super::types::{
@@ -538,7 +538,7 @@ impl McpRegistry {
                     .external_capability
                     .usage_instructions
                     .clone(),
-                reason: mcp_prompt_unavailable_reason(server),
+                diagnostic: mcp_server_diagnostic(server),
                 retryable: server.configured.enabled
                     && matches!(
                         server.status,
@@ -701,6 +701,12 @@ impl McpRegistry {
             .ok_or_else(|| MezError::not_found("MCP server not found"))
     }
 
+    /// Returns bounded model-facing diagnostic state for an exact configured id.
+    /// Raw operator errors are intentionally not inputs to this projection.
+    pub fn server_diagnostic(&self, server_id: &str) -> Result<McpServerDiagnostic> {
+        self.server(server_id).map(mcp_server_diagnostic)
+    }
+
     /// Searches safe MCP server metadata in deterministic relevance order.
     ///
     /// Exact identifiers rank first, followed by identifier prefixes,
@@ -776,21 +782,18 @@ impl McpRegistry {
     }
 }
 
-/// Returns a model-facing reason for one non-callable MCP server state.
-fn mcp_prompt_unavailable_reason(server: &McpServerState) -> String {
+/// Projects configured enablement and typed runtime state, never raw errors.
+fn mcp_server_diagnostic(server: &McpServerState) -> McpServerDiagnostic {
     if !server.configured.enabled {
-        return "disabled".to_string();
-    }
-    if let Some(reason) = &server.blacklist_reason {
-        return reason.clone();
+        return McpServerDiagnostic::Disabled;
     }
     match server.status {
-        McpServerStatus::Configured => "runtime discovery pending".to_string(),
-        McpServerStatus::Starting => "runtime discovery in progress".to_string(),
-        McpServerStatus::Unavailable => "unavailable".to_string(),
-        McpServerStatus::Blacklisted => "blacklisted for this session".to_string(),
-        McpServerStatus::Failed => "startup or protocol failure".to_string(),
-        McpServerStatus::Available => "available".to_string(),
+        McpServerStatus::Configured => McpServerDiagnostic::Configured,
+        McpServerStatus::Starting => McpServerDiagnostic::Starting,
+        McpServerStatus::Unavailable => McpServerDiagnostic::Unavailable,
+        McpServerStatus::Blacklisted => McpServerDiagnostic::Blacklisted,
+        McpServerStatus::Failed => McpServerDiagnostic::Failed,
+        McpServerStatus::Available => McpServerDiagnostic::Available,
     }
 }
 
