@@ -79,8 +79,12 @@ pub(super) async fn run_snapshot<W: Write>(
                 )
                 .await?;
             } else {
-                let output =
-                    restored_snapshot_json(restored, resume.restart_command.as_deref(), &paths)?;
+                let output = restored_snapshot_json(
+                    restored,
+                    resume.restart_command.as_deref(),
+                    &paths,
+                    native,
+                )?;
                 write_json_or_plain(stdout, output_format, &output)?;
             }
         }
@@ -118,8 +122,12 @@ pub(super) async fn run_snapshot<W: Write>(
                     resume.session_id.as_deref(),
                     resolve_shell(env.shell)?,
                 )?;
-                let output =
-                    restored_snapshot_json(restored, resume.restart_command.as_deref(), &paths)?;
+                let output = restored_snapshot_json(
+                    restored,
+                    resume.restart_command.as_deref(),
+                    &paths,
+                    native,
+                )?;
                 write_json_or_plain(stdout, output_format, &output)?;
             }
         }
@@ -395,6 +403,7 @@ pub(super) fn restored_snapshot_json(
     restored: SnapshotRestoreResult,
     restart_command: Option<&str>,
     paths: &ConfigPaths,
+    native: &mut super::native_exit::CliNativeOwnership,
 ) -> Result<String> {
     if let Some(command) = restart_command
         && command.trim().is_empty()
@@ -420,10 +429,11 @@ pub(super) fn restored_snapshot_json(
         16,
         4096,
     )?;
+    service.install_native_pane_retirement_owner(native.foreground())?;
     let starts = service.restart_restored_pane_processes(Some(command))?;
     let session_json = restored_session_json(service.session());
     let restarted_json = pane_process_starts_json(&starts);
-    service.terminate_all_pane_processes()?;
+    service.release_native_panes_for_retirement();
     Ok(format!(
         r#"{{"restored":true,"live":false,"restarted":true,"restarted_panes":{},"session":{},"resume_plan":{}}}"#,
         restarted_json,
