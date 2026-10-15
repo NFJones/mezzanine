@@ -453,11 +453,22 @@ fn streamed_outbound_noop_case(
             .unwrap()
             .normal_content_lines()
             .join("\n")
-            .matches("continued").count(),
+            .matches("continued")
+            .count(),
         1,
         "type={content_type} verbose={verbose} cap={cap} timestamps={timestamps}"
     );
-    assert_eq!(store.inspect_presentation(&conversation).unwrap().iter().filter(|entry| entry.source_text.as_deref() == Some("continued")).count(), 1, "normal continuation must persist its exact source once");
+    assert_eq!(
+        store
+            .inspect_presentation(&conversation)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.source_text.as_deref() == Some(r#"[["status","continued"]]"#)
+                && entry.source_content_type.as_deref() == Some("application/vnd.mezzanine.agent-presentation.styled-lines+json; charset=utf-8"))
+            .count(),
+        1,
+        "normal continuation must persist its exact typed status source once"
+    );
     service
         .complete_running_agent_turn_and_start_ready(
             &turn,
