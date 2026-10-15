@@ -1235,6 +1235,18 @@ fn runtime_remote_device_proof_rejects_escalation_revocation_and_unsupported_rol
         Some(&serde_json::json!(false))
     );
     assert_eq!(
+        result.pointer("/x11/service_unavailable"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        result.pointer("/x11/worker_failures"),
+        Some(&serde_json::json!(0))
+    );
+    assert_eq!(
+        result.pointer("/x11/listener_failures"),
+        Some(&serde_json::json!(0))
+    );
+    assert_eq!(
         result.pointer("/x11/authority_repair_pending"),
         Some(&serde_json::json!(false))
     );

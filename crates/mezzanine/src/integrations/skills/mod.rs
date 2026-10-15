@@ -44,6 +44,8 @@ pub const BUILTIN_ADD_ISSUES_SKILL_NAME: &str = "add-issues";
 pub const BUILTIN_ADD_RESEARCH_SKILL_NAME: &str = "add-research";
 /// Stable name for the built-in issue fixing workflow.
 pub const BUILTIN_FIX_ISSUES_SKILL_NAME: &str = "fix-issues";
+/// Stable name for coordinated issue fixing in isolated worker worktrees.
+pub const BUILTIN_FIX_ISSUES_PARALLEL_SKILL_NAME: &str = "fix-issues-parallel";
 /// Stable name for the built-in Mezzanine reference workflow.
 pub const BUILTIN_MEZ_REFERENCE_SKILL_NAME: &str = "mez-reference";
 /// Virtual path prefix used for built-in skills that do not live on disk.
@@ -62,6 +64,7 @@ const BUILTIN_ADD_ISSUES_SKILL_DESCRIPTION: &str =
 const BUILTIN_ADD_RESEARCH_SKILL_DESCRIPTION: &str =
     "Use when the user asks to save durable research findings into memory.";
 const BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION: &str = "Work the current project's mez issues to verified resolution in the main agent, using one persistent subagent only for independent review.";
+const BUILTIN_FIX_ISSUES_PARALLEL_SKILL_DESCRIPTION: &str = "Resolve the current project's mez issues in parallel using a main coordinator, medium implementation agents in isolated worktrees, and a large review agent per implementer, with verified integration into the main branch before reassignment.";
 const BUILTIN_MEZ_REFERENCE_SKILL_DESCRIPTION: &str = "Use Mezzanine terminal commands, agent slash commands, skill invocation, common workflows, and live config_change schema guidance without rediscovering the command or config surface.";
 
 #[derive(Debug, Deserialize)]
@@ -549,6 +552,10 @@ fn builtin_skill_summaries() -> Vec<SkillSummary> {
             BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION,
         ),
         (
+            BUILTIN_FIX_ISSUES_PARALLEL_SKILL_NAME,
+            BUILTIN_FIX_ISSUES_PARALLEL_SKILL_DESCRIPTION,
+        ),
+        (
             BUILTIN_MEZ_REFERENCE_SKILL_NAME,
             BUILTIN_MEZ_REFERENCE_SKILL_DESCRIPTION,
         ),
@@ -585,7 +592,8 @@ fn builtin_skill_text(name: &str) -> Option<String> {
         | BUILTIN_ADD_DOC_SKILL_NAME
         | BUILTIN_ADD_ISSUES_SKILL_NAME
         | BUILTIN_ADD_RESEARCH_SKILL_NAME
-        | BUILTIN_FIX_ISSUES_SKILL_NAME => {
+        | BUILTIN_FIX_ISSUES_SKILL_NAME
+        | BUILTIN_FIX_ISSUES_PARALLEL_SKILL_NAME => {
             embedded_builtin_skill_text(name).map(ToString::to_string)
         }
         BUILTIN_MEZ_REFERENCE_SKILL_NAME => {
@@ -787,6 +795,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    mod parallel;
     mod shared;
 
     /// Creates a unique temporary root for skill-discovery tests without
@@ -950,7 +959,7 @@ mod tests {
 
         let created = sync_managed_builtin_skills(&user_root).unwrap();
 
-        assert_eq!(created.entries.len(), 7);
+        assert_eq!(created.entries.len(), 8);
         assert_eq!(
             created.count(ManagedBuiltinSkillSyncStatus::Created),
             created.entries.len()
@@ -1043,7 +1052,7 @@ mod tests {
         let user_root = root.join("user");
 
         let created = sync_managed_builtin_skills(&user_root).unwrap();
-        assert_eq!(created.entries.len(), 7);
+        assert_eq!(created.entries.len(), 8);
         fs::write(
             user_root.join("skills/add-issues/SKILL.md"),
             "not valid skill front matter\n",
@@ -1061,7 +1070,7 @@ mod tests {
         );
 
         let catalog = discover_skill_catalog(Some(&user_root), None);
-        assert_eq!(catalog.names().len(), 7);
+        assert_eq!(catalog.names().len(), 8);
         let staging_diagnostics = catalog
             .diagnostics
             .iter()
@@ -1130,6 +1139,7 @@ mod tests {
                 "create-macro",
                 "create-skill",
                 "fix-issues",
+                "fix-issues-parallel",
                 "mez-reference",
                 "ship-it",
             ]

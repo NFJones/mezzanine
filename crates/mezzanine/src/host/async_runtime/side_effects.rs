@@ -687,11 +687,21 @@ impl Drop for PaneStatusBatchCancellation {
 }
 
 /// Starts pane work only while the continuous concurrency bound has capacity.
-fn spawn_bounded_pane_status_provider_tasks(
+fn spawn_bounded_pane_status_provider_tasks<P>(
     tasks: &mut JoinSet<Result<Option<RuntimeEvent>>>,
+    failures: &mut StatusTaskFailures,
     queue: &mut VecDeque<Box<crate::runtime::RuntimePaneStatusProviderRefreshPlan>>,
     lifecycle: &watch::Receiver<RuntimeLifecycleState>,
-) {
+    permits: &std::sync::Arc<tokio::sync::Semaphore>,
+    execute: &P,
+) where
+    P: Fn(
+            crate::runtime::RuntimePaneStatusProviderRefreshPlan,
+        ) -> Option<crate::runtime::RuntimePaneStatusProviderEvent>
+        + Clone
+        + Send
+        + 'static,
+{
     if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
         for plan in queue.drain(..) {
             plan.cancellation.cancel();
@@ -703,23 +713,51 @@ fn spawn_bounded_pane_status_provider_tasks(
             break;
         };
         let cancellation = plan.cancellation.clone();
+        let failure = RuntimeEvent::PaneStatusProvider(plan.failed_event());
+        let blocking_failure = failure.clone();
         let mut lifecycle = lifecycle.clone();
-        tasks.spawn(async move {
+        let permits = permits.clone();
+        let task_cancellation = PaneStatusBatchCancellation(vec![cancellation.clone()]);
+        let execute = execute.clone();
+        let task = tasks.spawn(async move {
+            let _task_cancellation = task_cancellation;
             if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
                 cancellation.cancel();
                 return Ok(None);
             }
+            // Private capacity is never closed; a violated invariant is fatal.
+            let permit = tokio::select! {
+                permit = permits.acquire_owned() => permit.map_err(|_| {
+                    MezError::invalid_state("pane status worker capacity ownership is unavailable")
+                })?,
+                () = async {
+                    let mut lifecycle = lifecycle.clone();
+                    loop {
+                        if is_terminal_runtime_lifecycle_state(*lifecycle.borrow())
+                            || lifecycle.changed().await.is_err()
+                        {
+                            return;
+                        }
+                    }
+                } => return Ok(None),
+            };
+            if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
+                return Ok(None);
+            }
             let worker = tokio::task::spawn_blocking(move || {
-                execute_pane_status_provider_launch(*plan).map(RuntimeEvent::PaneStatusProvider)
+                let _permit = permit;
+                execute(*plan).map(RuntimeEvent::PaneStatusProvider)
             });
             tokio::pin!(worker);
             loop {
                 tokio::select! {
                     completion = &mut worker => {
-                        return completion.map_err(|error| {
-                            MezError::invalid_state(format!(
-                                "pane status provider worker task failed: {error}"
-                            ))
+                        return Ok(match completion {
+                            Ok(event) => event,
+                            Err(_) => {
+                                eprintln!("mez host: pane status child failed; refresh unavailable");
+                                Some(blocking_failure)
+                            }
                         });
                     }
                     changed = lifecycle.changed() => {
@@ -727,27 +765,114 @@ fn spawn_bounded_pane_status_provider_tasks(
                             || is_terminal_runtime_lifecycle_state(*lifecycle.borrow())
                         {
                             cancellation.cancel();
-                            let _ = (&mut worker).await.map_err(|error| {
-                                MezError::invalid_state(format!(
-                                    "pane status provider cancellation task failed: {error}"
-                                ))
-                            })?;
+                            if (&mut worker).await.is_err() {
+                                eprintln!("mez host: cancelled pane status child failed");
+                            }
                             return Ok(None);
                         }
                     }
                 }
             }
         });
+        failures.insert(task.id(), failure);
     }
 }
 
+/// Task-owned failure identities remain outside child futures, including panic
+/// and unexpected cancellation paths. Entries are bounded by the batch size.
+type StatusTaskFailures = std::collections::HashMap<tokio::task::Id, RuntimeEvent>;
+
+#[cfg(test)]
+#[path = "tests/services/status_child_ownership.rs"]
+mod status_child_ownership_tests;
+
+/// Settles one exact task once. Missing identity indicates ownership corruption,
+/// not an optional worker error, and must remain fatal to this service.
+fn settle_status_task(
+    completion: std::result::Result<
+        (tokio::task::Id, Option<RuntimeEvent>),
+        tokio::task::JoinError,
+    >,
+    failures: &mut StatusTaskFailures,
+) -> Result<Option<RuntimeEvent>> {
+    let id = match &completion {
+        Ok((id, _)) => *id,
+        Err(error) => error.id(),
+    };
+    let failure = failures.remove(&id).ok_or_else(|| {
+        MezError::invalid_state("status child completion has no retained refresh identity")
+    })?;
+    match completion {
+        Ok((_, event)) => Ok(event),
+        Err(_) => {
+            eprintln!("mez host: status child failed; exact refresh unavailable");
+            Ok(Some(failure))
+        }
+    }
+}
+
+/// Runs optional status children outside actor ownership. Child join failures
+/// settle exact refreshes; actor drain/ingress errors remain service failures.
 pub async fn run_async_status_pill_side_effect_service<S>(
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncRuntimeSideEffectServiceConfig,
-    mut should_stop: S,
+    should_stop: S,
 ) -> Result<AsyncStatusPillSideEffectServiceReport>
 where
     S: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    run_status_pill_service_with_executors(
+        handle,
+        config,
+        should_stop,
+        execute_window_status_plan,
+        execute_pane_status_provider_launch,
+    )
+    .await
+}
+
+/// Executes a window command with the actor's terminal lifecycle fence.
+async fn execute_window_status_plan(
+    plan: crate::runtime::RuntimeStatusPillRefreshPlan,
+    mut cancellation: watch::Receiver<RuntimeLifecycleState>,
+) -> Option<crate::runtime::RuntimeStatusPillEvent> {
+    execute_runtime_status_pill_refresh_plan_with_cancellation(plan, async move {
+        loop {
+            let state = *cancellation.borrow();
+            if is_terminal_runtime_lifecycle_state(state) || cancellation.changed().await.is_err() {
+                return;
+            }
+        }
+    })
+    .await
+}
+
+/// Keeps executor injection service-local; actor ingress remains non-optional.
+pub(super) async fn run_status_pill_service_with_executors<S, W, F, P>(
+    handle: &AsyncRuntimeSessionHandle,
+    config: AsyncRuntimeSideEffectServiceConfig,
+    mut should_stop: S,
+    execute_window: W,
+    execute_pane: P,
+) -> Result<AsyncStatusPillSideEffectServiceReport>
+where
+    S: FnMut(u64, RuntimeLifecycleState) -> bool,
+    W: Fn(
+            crate::runtime::RuntimeStatusPillRefreshPlan,
+            watch::Receiver<RuntimeLifecycleState>,
+        ) -> F
+        + Clone
+        + Send
+        + 'static,
+    F: std::future::Future<Output = Option<crate::runtime::RuntimeStatusPillEvent>>
+        + Send
+        + 'static,
+    P: Fn(
+            crate::runtime::RuntimePaneStatusProviderRefreshPlan,
+        ) -> Option<crate::runtime::RuntimePaneStatusProviderEvent>
+        + Clone
+        + Send
+        + 'static,
 {
     config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
@@ -759,6 +884,10 @@ where
         applied_events: 0,
         terminal_state: *lifecycle_watcher.borrow(),
     };
+    // Detached blocking children retain permits until actual exit, across batches.
+    let pane_permits = std::sync::Arc::new(tokio::sync::Semaphore::new(
+        MAX_CONCURRENT_PANE_STATUS_PROVIDERS,
+    ));
 
     while report.polls < config.max_polls {
         let state = *lifecycle_watcher.borrow_and_update();
@@ -789,6 +918,8 @@ where
             .saturating_add(u64::try_from(effects.len()).unwrap_or(u64::MAX));
         let mut window_tasks = JoinSet::new();
         let mut pane_tasks = JoinSet::new();
+        let mut window_failures = StatusTaskFailures::new();
+        let mut pane_failures = StatusTaskFailures::new();
         let mut pane_plans = VecDeque::new();
         let _batch_cancellation = PaneStatusBatchCancellation(
             effects
@@ -804,24 +935,15 @@ where
         for effect in effects {
             match effect {
                 RuntimeSideEffect::RefreshStatusPill { plan } => {
-                    let mut cancellation = handle.lifecycle_state_watcher();
-                    window_tasks.spawn(async move {
-                        execute_runtime_status_pill_refresh_plan_with_cancellation(
-                            plan,
-                            async move {
-                                loop {
-                                    let state = *cancellation.borrow();
-                                    if is_terminal_runtime_lifecycle_state(state)
-                                        || cancellation.changed().await.is_err()
-                                    {
-                                        return;
-                                    }
-                                }
-                            },
-                        )
-                        .await
-                        .map(RuntimeEvent::StatusPill)
+                    let cancellation = handle.lifecycle_state_watcher();
+                    let failure = RuntimeEvent::StatusPill(plan.failed_event());
+                    let execute = execute_window.clone();
+                    let task = window_tasks.spawn(async move {
+                        execute(plan, cancellation)
+                            .await
+                            .map(RuntimeEvent::StatusPill)
                     });
+                    window_failures.insert(task.id(), failure);
                 }
                 RuntimeSideEffect::RefreshPaneStatusProvider { plan } => {
                     pane_plans.push_back(plan);
@@ -831,44 +953,46 @@ where
         }
         spawn_bounded_pane_status_provider_tasks(
             &mut pane_tasks,
+            &mut pane_failures,
             &mut pane_plans,
             &lifecycle_watcher,
+            &pane_permits,
+            &execute_pane,
         );
         while !window_tasks.is_empty() || !pane_tasks.is_empty() || !pane_plans.is_empty() {
             tokio::select! {
-                completion = window_tasks.join_next(), if !window_tasks.is_empty() => {
+                completion = window_tasks.join_next_with_id(), if !window_tasks.is_empty() => {
                     let Some(completion) = completion else {
                         return Err(MezError::invalid_state(
                             "non-empty window status task set yielded no completion",
                         ));
                     };
-                    let event = completion.map_err(|error| {
-                            MezError::invalid_state(format!(
-                                "status pill worker task failed: {error}"
-                            ))
-                        })?;
+                    let event = settle_status_task(completion, &mut window_failures)?;
                     if let Some(event) = event {
                         submit_status_pill_worker_event(handle, &mut report, event).await?;
                     }
                 }
-                completion = pane_tasks.join_next(), if !pane_tasks.is_empty() => {
+                completion = pane_tasks.join_next_with_id(), if !pane_tasks.is_empty() => {
                     let Some(completion) = completion else {
                         return Err(MezError::invalid_state(
                             "non-empty pane status task set yielded no completion",
                         ));
                     };
-                    let event = completion.map_err(|error| {
-                            MezError::invalid_state(format!(
-                                "pane status provider join failed: {error}"
-                            ))
-                        })??;
+                    let completion = match completion {
+                        Ok((id, event)) => Ok((id, event?)),
+                        Err(error) => Err(error),
+                    };
+                    let event = settle_status_task(completion, &mut pane_failures)?;
                     if let Some(event) = event {
                         submit_status_pill_worker_event(handle, &mut report, event).await?;
                     }
                     spawn_bounded_pane_status_provider_tasks(
                         &mut pane_tasks,
+                        &mut pane_failures,
                         &mut pane_plans,
                         &lifecycle_watcher,
+                        &pane_permits,
+                        &execute_pane,
                     );
                 }
             }

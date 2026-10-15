@@ -1149,7 +1149,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ApplyStreamingSayProjection {
         /// Generation-stamped atomic candidate returned by the worker.
         result: crate::runtime::RuntimeStreamingSayProjectionResult,
-        /// Reports whether current actor-owned state accepted the candidate.
+        /// Reports screen replacement/redraw, not acceptance: unchanged accepted
+        /// and rejected candidates both return false.
         reply: oneshot::Sender<Result<bool>>,
     },
     /// Atomically installs one worker-rendered presentation resize generation.

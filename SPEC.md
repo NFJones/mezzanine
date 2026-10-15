@@ -1814,6 +1814,16 @@ architecture MUST preserve three distinct boundaries:
    host MUST route a connection to at most one session actor and MUST NOT
    reimplement session-bound methods.
 
+Optional status-command children and X11 relay workers MUST NOT terminate a
+healthy session actor, PTYs, control connections, or agents when they panic or
+are unexpectedly cancelled. Status workers MUST retain exact refresh identity
+and generation independently of child return values and settle child failure
+once as a typed failed completion, releasing pending ownership and bounded
+worker capacity. Stale failure completions MUST obey the same fences as success.
+Actor ingress loss, poisoned shared ownership, and critical invariants MUST
+remain fatal to their compromised owner; auxiliary service lifetime alone MUST
+NOT suppress errors.
+
 Bare local `mez` MUST contact the protected local host when persistent host mode
 is active. It MUST attach to the first eligible live session that accepts a
 primary, using deterministic host policy, or create and attach a new session
@@ -5551,6 +5561,18 @@ to the exact authenticated connection and a monotonic session-local generation.
 Replacing an owner MUST require explicit takeover, invalidate the old generation
 before publishing the new one, and ensure stale cleanup cannot deactivate a
 newer route.
+
+A panicking X11 relay MUST revoke only its captured exact owner/generation and
+cancel that generation's streams; a stale panic MUST NOT revoke a replacement.
+Ordinary relay errors MUST remain stream-local. Unusable listener infrastructure
+MUST permanently fence new X11 reservation/activation for that session, revoke
+its current authority and settle its streams before the optional service ends.
+It MUST NOT restart automatically or shut down healthy session siblings.
+Stable `DISPLAY` and `XAUTHORITY` paths MUST survive this degradation. Session
+diagnostics MUST expose `service_unavailable`, `worker_failures`, and
+`listener_failures` as bounded secret-free health/counters; panic payloads MUST
+NOT be formatted into worker diagnostics. Listener recovery requires a new
+session; relay failure MAY recover through explicit fresh route negotiation.
 
 Every client-side `xauth` invocation MUST have one finite lifecycle deadline
 covering normal execution, nonblocking termination signalling, and process
@@ -11773,6 +11795,15 @@ skill catalog as filesystem skills. Built-in skills MUST have the lowest
 precedence: a user skill or trusted project skill with the same name overrides
 the built-in entry for the affected pane.
 
+The built-in `fix-issues-parallel` skill MUST be discoverable and loadable through
+that catalog and participate in managed user-scope synchronization. Its workflow
+uses a coordinator, medium implementation agents in isolated worktrees, and a
+large independent reviewer owned by each implementer. Review of the exact proposed
+changes, integration, and main-branch validation precede issue resolution and
+worker reassignment. The coordinator serializes integration and owns safe cleanup
+of completed worktrees. The skill MUST NOT grant additional permissions, raise
+agent limits, or override user/project skill precedence or discovery policy.
+
 Both user and project skill roots MUST use the same directory layout:
 
 - User skills: `~/.config/mezzanine/skills/<skill-name>/SKILL.md`.
@@ -14711,7 +14742,17 @@ nothing and MUST be removed if validation, approval, or delivery fails. An
 accepted sender row proves only acceptance or queueing, never recipient
 observation, processing, agreement, acknowledgment, or task completion. It MUST
 NOT enter provider or user-trust context, approval authority, delivery routing,
-turn triggering, receiver receipts, or delivery cursors. In normal pane-log mode, canonical
+turn triggering, receiver receipts, or delivery cursors. Streaming projection
+acceptance MUST distinguish a changed screen, an accepted unchanged screen, and
+rejected stale work. An accepted unchanged projection MUST advance its current
+reconciliation metadata without replacing the screen, advancing screen lineage,
+requesting redraw, or recording a rejection. Settled outbound preview finalization
+and resize replay MUST accept that no-op; it MUST NOT fail an already accepted
+send or repeat a send, MAAP action, or provider transport to repair display.
+All ownership, source revision, lineage, geometry and rendering-policy fences
+MUST still pass before unchanged-screen acceptance, and rejected work MUST NOT
+overwrite intervening content or commit projection metadata.
+In normal pane-log mode, canonical
 `text/plain; charset=utf-8` and supported `text/markdown` are
 presentation-eligible; plaintext MUST render literally and Markdown through the
 safe Markdown renderer. All other media types MUST remain durable and

@@ -1016,6 +1016,10 @@ fn runtime_agent_shell_list_skills_displays_effective_catalog() {
         "{response}"
     );
     assert!(
+        response.contains("| `$fix-issues-parallel` | user |"),
+        "{response}"
+    );
+    assert!(
         response.contains("| `$review` | user | Review workflow |"),
         "{response}"
     );
@@ -1065,6 +1069,10 @@ fn runtime_agent_shell_list_skills_reports_builtin_catalog_without_external_skil
         "{response}"
     );
     assert!(
+        response.contains("| `$fix-issues-parallel` | user |"),
+        "{response}"
+    );
+    assert!(
         !response.contains("No skills are currently available."),
         "{response}"
     );
@@ -1111,7 +1119,7 @@ Keep this override.
 
     assert!(response.contains("## Built-in skill sync"), "{response}");
     assert!(
-        response.contains("7 built-in skills checked; 0 changed."),
+        response.contains("8 built-in skills checked; 0 changed."),
         "{response}"
     );
     assert!(
