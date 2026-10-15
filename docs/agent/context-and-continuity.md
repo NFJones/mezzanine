@@ -291,6 +291,14 @@ or provider cache decisions.
 `/show-context` browses conversation entries. It lets you edit selected content
 with `e` or delete it with `d`; this changes later model replay, not files or
 already executed actions. It does not edit persisted context documents.
+Rows already represented by a committed compaction summary are protected from
+content edits, including both the compacted prefix and every inclusive selective
+range. SAVE rechecks this protection even if compaction finished after the editor
+opened. A refused save reports that the history is already represented by a
+compaction epoch and retains your private recovery draft; it does not change the
+current prompt or remove the summary. Uncovered rows remain editable through the
+normal revision/pane checks, and reopening shows an accepted edit once. A missing
+or corrupt required epoch fails closed rather than authorizing an edit.
 
 `/copy-context` exports the running turn's assembled provider request. When idle,
 it exports a synthetic next-request preview with a user-prompt placeholder;

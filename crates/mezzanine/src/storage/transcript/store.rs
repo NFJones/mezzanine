@@ -2,6 +2,9 @@
 //!
 //! Store methods validate conversation ids, enforce private storage
 //! permissions, and use append-only TSV records for inspectable persistence.
+//! Content edits and compaction publication share the conversation write lock:
+//! once an epoch represents a prefix or selective range, its raw source cannot
+//! change independently of that authoritative replay projection.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self as std_fs, OpenOptions};
@@ -2750,6 +2753,11 @@ impl AgentTranscriptStore {
 
     /// Replaces only one transcript entry's content when its full revision and
     /// pane identity still match, then atomically rebuilds derived metadata.
+    ///
+    /// Under the same lock used by epoch publication, refuses any row covered
+    /// by the committed prefix or an inclusive selective range. Missing or
+    /// corrupt required epoch metadata also fails before any transcript,
+    /// summary, or catalog rewrite; uncovered rows retain ordinary CAS behavior.
     pub(crate) fn compare_and_swap_entry_content(
         &self,
         conversation_id: &str,
@@ -2780,7 +2788,12 @@ impl AgentTranscriptStore {
         }
         if self
             .compaction_epoch(conversation_id)?
-            .is_some_and(|epoch| sequence <= epoch.through_sequence)
+            .is_some_and(|epoch| {
+                sequence <= epoch.through_sequence
+                    || epoch.ranges.iter().any(|range| {
+                        (range.first_sequence..=range.through_sequence).contains(&sequence)
+                    })
+            })
         {
             return Err(MezError::invalid_state(
                 "cannot edit transcript history already represented by a compaction epoch",
