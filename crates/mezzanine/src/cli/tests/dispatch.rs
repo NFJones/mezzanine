@@ -85,11 +85,32 @@ fn cli_removed_vendor_wrappers_reject_before_runtime_mutation() {
     }
 }
 
-/// Verifies CLI startup creates the selected private runtime directory.
+/// The version-only path exposes exactly one bounded compiled-source hash.
+/// It must not read runtime configuration or substitute the current checkout
+/// for the source actually compiled into this process.
+#[test]
+fn cli_projection_build_fingerprint_is_bounded_and_content_free() {
+    let fingerprint = env!("MEZ_OUTBOUND_PROJECTION_SHA256");
+    assert_eq!(fingerprint.len(), 64);
+    assert!(
+        fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    );
+    assert_eq!(
+        super::super::render_cli_version().unwrap(),
+        format!(
+            "mez {} (outbound-projection-sha256={fingerprint})\n",
+            env!("CARGO_PKG_VERSION")
+        )
+    );
+}
+
+/// Verifies runtime-dependent CLI startup creates the private runtime directory.
 ///
-/// Daemon discovery and stale-socket cleanup both run before command dispatch,
-/// so a fresh installation must have its owner-only runtime directory ready
-/// even when no socket has been bound yet.
+/// Effective-config management retains normal startup cleanup and preparation,
+/// even when no socket has been bound yet. Pure version display intentionally
+/// no longer enters this path; actual-binary recovery tests cover its isolation.
 #[test]
 fn cli_startup_creates_private_runtime_directory() {
     let (env, home) = test_env("startup-runtime-directory");
@@ -99,7 +120,7 @@ fn cli_startup_creates_private_runtime_directory() {
     let mut stderr = Vec::new();
 
     run_with_plain(
-        vec!["mez".to_string(), "version".to_string()],
+        vec!["mez".to_string(), "config".to_string(), "get".to_string()],
         env,
         false,
         &mut stdout,

@@ -669,12 +669,11 @@ pub(super) fn validate_private_socket_directory(
     Ok(())
 }
 
-/// Runs the validate socket name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn validate_socket_name(name: &str) -> Result<()> {
+/// Checks the environment-independent component rules for a socket name.
+/// Empty names, traversal/path components, and MEZ separators are rejected.
+/// Full platform pathname-length validation remains in `socket_path_for_name`
+/// after a runtime directory has been selected.
+pub(crate) fn validate_socket_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(MezError::invalid_args("socket name must not be empty"));
     }

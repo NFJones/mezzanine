@@ -41,6 +41,39 @@ pub fn validate_config_file(path: &Path, scope: ConfigScope) -> Result<ConfigVal
     Ok(validation)
 }
 
+/// Inspects an original primary document against the current schema, read-only.
+/// Unlike migration-compatible text validation, recovery must diagnose missing
+/// or legacy versions rather than accepting documents that need migration.
+/// Syntax diagnostics retain precedence; format and file I/O errors propagate.
+pub(crate) fn validate_current_config_file(path: &Path) -> Result<ConfigValidation> {
+    let format = ConfigFormat::from_path(path)?;
+    let text = fs::read_to_string(path)?;
+    let (validation, document) =
+        validate_config_text_with_document(format, &text, ConfigScope::Primary);
+    let mut diagnostics = validation.diagnostics;
+    if matches!(document, Some(Ok(_))) {
+        let values = extract_config_values(format, &text);
+        if let Ok(version) = parse_config_schema_version(values.get("version").map(String::as_str))
+            && version < CURRENT_CONFIG_SCHEMA_VERSION
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path: "version".to_string(),
+                message: format!(
+                    "configuration must declare current schema version {CURRENT_CONFIG_SCHEMA_VERSION}; original document requires migration (legacy version {version})"
+                ),
+            });
+        }
+    }
+    for diagnostic in &mut diagnostics {
+        if diagnostic.path == "$" {
+            diagnostic.path = path.display().to_string();
+        }
+    }
+    diagnostics.sort_by(|left, right| left.path.cmp(&right.path));
+    diagnostics.dedup();
+    Ok(ConfigValidation::from_diagnostics(diagnostics))
+}
+
 /// Validate a config file read through Tokio filesystem APIs.
 #[cfg(test)]
 pub async fn validate_config_file_async(

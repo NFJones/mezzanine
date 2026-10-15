@@ -137,8 +137,16 @@ impl RuntimeSessionService {
             self.execute_running_skill_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
         let message_actions_executed =
-            self.execute_running_message_actions_for_turn(turn, &mut execution)?;
+            self.execute_running_message_actions_for_turn(turn, &mut execution);
         terminal_observations.observe(&execution);
+        let message_actions_executed = message_actions_executed.map_err(|error| {
+            self.retain_settled_results_after_application_error(
+                turn_id,
+                &execution,
+                terminal_observations.results(),
+                error,
+            )
+        })?;
         let network_actions_executed = 0usize;
         let _mcp_discovery_actions_executed =
             self.execute_running_mcp_discovery_actions_for_turn(turn, &mut execution)?;
@@ -187,7 +195,15 @@ impl RuntimeSessionService {
         if execution.terminal_state == AgentTurnState::Blocked {
             self.apply_permission_request_hooks_for_execution(turn, &mut execution)?;
         }
-        self.finalize_settled_outbound_message_previews(&turn.pane_id, &turn.turn_id, &execution)?;
+        self.finalize_settled_outbound_message_previews(&turn.pane_id, &turn.turn_id, &execution)
+            .map_err(|error| {
+                self.retain_settled_results_after_application_error(
+                    turn_id,
+                    &execution,
+                    terminal_observations.results(),
+                    error,
+                )
+            })?;
         self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
         let failure_feedback_queued = self.queue_agent_failure_feedback_for_correction(
             turn,

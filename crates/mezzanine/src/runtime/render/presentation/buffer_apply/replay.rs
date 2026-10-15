@@ -523,14 +523,8 @@ impl RuntimeSessionService {
                 let projection = Self::build_agent_streaming_say_projection(work)?;
                 // Retain a current source owner even when it adds no visible
                 // rows. Redraw intent is not projection acceptance.
-                if !self
-                    .apply_agent_streaming_say_projection_outcome(projection)?
-                    .is_accepted()
-                {
-                    return Err(MezError::invalid_state(
-                        "resized streaming presentation projection was rejected",
-                    ));
-                }
+                self.apply_agent_streaming_say_projection_outcome(projection)?
+                    .require_accepted("resized streaming presentation projection was rejected")?;
             }
             Ok(())
         })();

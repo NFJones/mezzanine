@@ -1089,6 +1089,17 @@ to the processes that existed when the snapshot was taken.
 | `mez remote` | Use authenticated local Unix control for `status`, `invite`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Client-local commands are `pair --invite-file PATH [--name NAME]`, `invitation inspect PATH`, and `profile list\|show\|rename\|remove\|check`. Paired Iroh clients cannot use server trust-administration methods. |
 | `mez completion <shell>` | Generate a completion definition for `bash`, `elvish`, `fish`, `powershell`, or `zsh`. |
 
+Help/version, completion, bare `mez config`, and `mez config default` are
+synchronous displays available without HOME or usable primary configuration.
+`mez config path` and `mez config validate [PATH]` also run before configured
+runtime initialization and never migrate, publish config, or clean up sockets.
+Implicit selection requires HOME and rejects multiple primary files; explicit
+validation consults only the supplied file. Validation reports the original
+document against the current schema with exit zero even for `valid: false`;
+selection and file I/O errors exit one. All other management and runtime
+commands retain strict primary security/CPU validation. See
+[configuration recovery](../configuration/overview.md#recover-from-startup-configuration-errors).
+
 `mez config model` manages one configured provider's reusable model records by
 model ID. `add` accepts `--display-name`, comma-separated `--aliases`, token
 limits, comma-separated `--reasoning-levels` and `--capabilities`, and repeated

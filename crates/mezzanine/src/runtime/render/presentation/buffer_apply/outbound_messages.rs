@@ -7,6 +7,13 @@
 use super::*;
 
 impl RuntimeSessionService {
+    /// Forces one captured revision stale at the real settlement apply boundary.
+    /// Only tests can arm this seam; it never alters transport or accepted source.
+    #[cfg(test)]
+    pub(crate) fn reject_next_settled_outbound_projection_for_tests(&mut self) {
+        self.presentation.reject_next_settled_outbound_projection = true;
+    }
+
     /// Appends one accepted sender-side message row and retains its strict
     /// sent-only source for replay at a later geometry or theme.
     pub(super) fn append_accepted_outbound_message_presentation(
@@ -328,16 +335,27 @@ impl RuntimeSessionService {
             self.discard_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
             return Ok(());
         }
+        #[cfg(test)]
+        if self.presentation.reject_next_settled_outbound_projection
+            && let Some(presentation) = self
+                .presentation
+                .agent_streaming_say_presentations
+                .get_mut(pane_id)
+        {
+            presentation.projected_revision = None;
+        }
         if let Some(work) = self.take_agent_streaming_say_projection_work(pane_id, turn_id)? {
             let result = Self::build_agent_streaming_say_projection(work)?;
-            if !self
-                .apply_agent_streaming_say_projection_outcome(result)?
-                .is_accepted()
-            {
-                return Err(MezError::invalid_state(
-                    "settled outbound preview projection was rejected",
-                ));
-            }
+            #[cfg(test)]
+            let result = {
+                let mut result = result;
+                if std::mem::take(&mut self.presentation.reject_next_settled_outbound_projection) {
+                    result.revision = result.revision.wrapping_add(1);
+                }
+                result
+            };
+            self.apply_agent_streaming_say_projection_outcome(result)?
+                .require_accepted("settled outbound preview projection was rejected")?;
         }
         self.finalize_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
         Ok(())

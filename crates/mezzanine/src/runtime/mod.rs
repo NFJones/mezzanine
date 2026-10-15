@@ -490,7 +490,6 @@ pub(crate) use service_state::{
     RuntimeRecordBrowserRefreshIntent, RuntimeRecordBrowserRefreshOutcome,
     RuntimeRecordBrowserRefreshWork,
 };
-pub(crate) use sockets::hosted_session_socket_path;
 pub use sockets::{
     apply_registry_update, apply_registry_update_async, authenticated_unix_peer_uid,
     auxiliary_socket_path_for_control_socket, bind_control_socket, current_effective_uid,
@@ -501,6 +500,7 @@ pub use sockets::{
 pub use sockets::{
     authorize_unix_peer, authorize_unix_peer_raw_fd, authorize_unix_peer_uid, pane_environment,
 };
+pub(crate) use sockets::{hosted_session_socket_path, validate_socket_name};
 pub(crate) use status_pills::{
     MAX_CONCURRENT_PANE_STATUS_PROVIDERS, RuntimePaneStatusProviderCancellation,
 };

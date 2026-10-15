@@ -60,6 +60,11 @@ resume chrome untagged; malformed fallback source is rejected rather than shown
 as raw model history. Exact validated streamed components retain their original
 observation evidence even when ordering or geometry requires static re-rendering.
 
+Saved peer messages replay with their original receipt identities, including
+runtime turn/action IDs containing colons. Internal copy metadata escapes its
+identity separators separately from message text, so resume and source-copy
+preserve authored colons, percent signs and Unicode without rewriting history.
+
 Active bindings are checkpointed separately for each Mezzanine session. New
 versions import older shared binding metadata once without rewriting a running
 older daemon's index. The known trailing-bracket corruption is recovered only

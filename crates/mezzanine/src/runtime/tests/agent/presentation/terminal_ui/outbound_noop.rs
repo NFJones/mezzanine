@@ -29,9 +29,27 @@ fn runtime_streamed_outbound_noop_settlement_continues_exactly_once() {
     ] {
         for cap in [24, 80] {
             for timestamps in [false, true] {
-                streamed_outbound_noop_case(content_type, verbose, payload, cap, timestamps);
+                streamed_outbound_noop_case(content_type, verbose, payload, cap, timestamps, None);
             }
         }
+    }
+}
+
+/// A real accepted send followed by a rejected settlement must leave terminal
+/// action evidence in canonical context even when the owning provider handler
+/// returns an error. The one-shot fault changes only the captured revision at
+/// the actual finalizer, not the send result or projector outcome.
+#[test]
+fn runtime_outbound_settlement_failure_retains_provider_evidence() {
+    for asynchronous in [false, true] {
+        streamed_outbound_noop_case(
+            "text/plain; charset=utf-8",
+            false,
+            "accepted failure-boundary payload",
+            80,
+            false,
+            Some(asynchronous),
+        );
     }
 }
 
@@ -42,6 +60,7 @@ fn streamed_outbound_noop_case(
     payload: &str,
     cap: usize,
     timestamps: bool,
+    failure_boundary: Option<bool>,
 ) {
     let mut service = test_runtime_service();
     super::timestamp_settings::replace_timestamp_settings(
@@ -221,6 +240,9 @@ fn streamed_outbound_noop_case(
         .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
         .unwrap();
     assert_eq!(work.is_some(), visible);
+    let rejection_candidate = work
+        .clone()
+        .map(|work| RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap());
     if let Some(work) = work {
         let candidate = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
         assert!(
@@ -234,6 +256,96 @@ fn streamed_outbound_noop_case(
     let sequence = service.message_service().next_message_sequence();
     let metrics_before = service.runtime_metrics().clone();
     service.presentation.occurrence_clock_millis = Some(Some(99_999_000));
+    if let Some(asynchronous) = failure_boundary {
+        // Typed fixture provenance models the already completed canonical
+        // invocation; result application must preserve it, never infer counts.
+        let expected_facts = asynchronous.then(|| mez_agent::recovery_attribution::RecoveryFacts {
+            turn_id: execution.request.turn_id.clone(),
+            agent_id: execution.request.agent_id.clone(),
+            provider: execution.request.provider.clone(),
+            model: execution.request.model.clone(),
+            phase: 0,
+            attempts_reserved: 0,
+            attempt_limit: 2,
+            provider_calls_started: 1,
+            incomplete_retries_reserved: 0,
+            provider_call_limit: 16,
+            repair_calls_started: 0,
+            last_request_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            stage: None,
+            disposition: mez_agent::recovery_attribution::RecoveryDisposition::NotRequired,
+            batch_planned: true,
+        });
+        if let Some(facts) = &expected_facts {
+            execution.attach_recovery_facts(facts.clone());
+        }
+        service.reject_next_settled_outbound_projection_for_tests();
+        let profile = runtime_model_profile("runtime-batch", "test");
+        let outcome = if asynchronous {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(
+                    service
+                        .apply_agent_provider_execution_async_for_tests(&turn, &profile, execution),
+                )
+        } else {
+            service.apply_agent_provider_execution(&turn, &profile, "runtime-batch", execution)
+        };
+        service.terminate_all_pane_processes().unwrap();
+        let Err(error) = outcome else {
+            panic!("async={asynchronous}: expected post-acceptance settlement failure");
+        };
+        assert!(
+            error.message().contains(
+                "settled outbound preview projection was rejected: reason=source_revision;"
+            ),
+            "async={asynchronous}: {error}"
+        );
+        assert!(!error.message().contains(payload));
+        assert_eq!(
+            error.recovery_facts(),
+            expected_facts.as_ref(),
+            "preserve supplied facts exactly; do not invent absent facts"
+        );
+        let messages = service.message_service().snapshot_state();
+        assert_eq!(
+            messages.accepted_messages.len(),
+            1,
+            "send must have been accepted before the actual finalizer failed"
+        );
+        assert_eq!(messages.accepted_messages[0].envelope.payload, payload);
+        assert_eq!(messages.next_sequence, sequence + 1);
+        let evidence = service
+            .agent_turn_contexts()
+            .get(&turn.turn_id)
+            .unwrap()
+            .blocks()
+            .iter()
+            .filter(|block| block.source == mez_agent::ContextSourceKind::ActionResult)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            evidence.len(),
+            1,
+            "async={asynchronous}: accepted terminal result lost across provider-handler error"
+        );
+        assert!(
+            evidence[0]
+                .content
+                .contains(&messages.accepted_messages[0].envelope.id)
+        );
+        assert!(
+            evidence[0].content.contains("succeeded"),
+            "{}",
+            evidence[0].content
+        );
+        assert!(
+            !service.remove_pending_agent_provider_task(&turn.turn_id),
+            "presentation failure must not queue a provider retry"
+        );
+        return;
+    }
     // Inspect committed delivery even if presentation fails, and clean up the
     // test processes before the expected baseline panic. Never retry the send.
     let executed = service.execute_running_message_actions_for_turn(&turn, &mut execution);
@@ -302,6 +414,31 @@ fn streamed_outbound_noop_case(
         metrics.agent_streaming_projection_rejections,
         metrics_before.agent_streaming_projection_rejections
     );
+    // Exercise a real captured display result after production send settlement.
+    // This is deliberately after the unchanged no-op metric assertions above:
+    // a genuine stale result must increment rejection, never replay transport.
+    let settled_messages = service.message_service().snapshot_state();
+    let settled_results = execution.action_results.clone();
+    let settled_screen = service.agent_pane_screen("%1").unwrap().clone();
+    if let Some(stale) = rejection_candidate {
+        let rejected = service
+            .apply_agent_streaming_say_projection_outcome(stale)
+            .unwrap();
+        assert_eq!(
+            rejected,
+            crate::runtime::render::RuntimeStreamingSayProjectionApplyOutcome::Rejected(
+                crate::runtime::render::RuntimeStreamingSayProjectionRejection::MissingOwner
+            )
+        );
+        let error = rejected
+            .require_accepted("settled outbound preview projection was rejected")
+            .unwrap_err();
+        assert!(error.message().contains("reason=missing_owner;"));
+        assert!(!error.message().contains(payload));
+    }
+    assert_eq!(execution.action_results, settled_results);
+    assert_eq!(service.message_service().snapshot_state(), settled_messages);
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &settled_screen);
     let messages = service.message_service().snapshot_state();
     assert_eq!(messages.next_sequence, sequence + 1);
     let receiver_cursor = messages
@@ -352,10 +489,9 @@ fn streamed_outbound_noop_case(
         );
     }
     // This sender-only regression preserves receiver commit/outbox evidence;
-    // it must not force an unrelated receiver presenter to succeed. Existing
-    // colon-bearing receipt copy carriers can fail their ordinal proof. Keep
-    // the exact pending source (or already durable receipt), never suppress the
-    // error, change an id, weaken validation, or replay transport to repair it.
+    // it must not force an unrelated receiver presenter to succeed. Keep the
+    // exact pending source (or already durable receipt) if presentation is
+    // deferred or fails; never change an id or replay transport to repair it.
     let receiver_conversation = service
         .agent_shell_store()
         .get(peer_pane)

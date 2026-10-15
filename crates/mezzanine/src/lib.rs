@@ -52,13 +52,9 @@ pub fn internal_process_exit_code() -> Option<u8> {
         .or_else(|| cli::run_internal_cursor_hook_process(&arguments))
 }
 
-/// Reads the configured Tokio worker count before constructing the runtime.
-pub fn configured_runtime_cpu_count() -> Result<usize> {
-    let paths = config::ConfigPaths::from_process_env()?;
-    config::runtime_cpu_count_from_primary_config(&paths)
-}
-
-/// Runs the product command-line workflow and returns the process exit code.
-pub async fn run_cli() -> u8 {
-    cli::run().await
+/// Runs exact internal children first, then dependency-minimal CLI startup.
+/// Display/recovery never constructs the configured asynchronous runtime;
+/// normal commands retain strict whole-primary policy and CPU validation.
+pub fn run_cli() -> u8 {
+    internal_process_exit_code().unwrap_or_else(cli::run)
 }

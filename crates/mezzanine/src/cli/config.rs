@@ -1,8 +1,9 @@
-//! Cli Config implementation.
+//! Configuration command ownership and dependency-minimal diagnostics.
 //!
-//! This module owns the cli config boundary for Mezzanine. It keeps related
-//! state transitions and helper routines localized so neighboring modules
-//! interact through typed APIs instead of duplicating subsystem details.
+//! Read-only recovery runs synchronously against original documents, never
+//! migration or runtime state. Its lazy path dependency is used only for
+//! implicit primary selection; display and explicit validation need no HOME.
+//! Mutating/effective-config commands retain the normal validated startup path.
 
 use super::config_model::{ConfigModelCliArgs, run_config_model};
 use super::mcp::load_runtime_config_layers;
@@ -13,8 +14,9 @@ use super::{
     ProjectTrustStore, Result, Serialize, Subcommand, TrustDecision, Write,
     compose_effective_config, default_trust_database_path, diagnostics_json, discover_project_root,
     fs, json_escape, persist_config_mutation, render_cli_help, serialize_json,
-    validate_config_file, validate_config_text, write_json_or_plain,
+    validate_config_text, write_json_or_plain,
 };
+use crate::config::validate_current_config_file;
 
 // Configuration subcommands.
 
@@ -29,15 +31,50 @@ pub(super) async fn run_config<W: Write>(
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
+    if run_read_only_config(&parsed, || env.config_paths(), output_format, stdout)? {
+        return Ok(());
+    }
     let paths = env.config_paths()?;
 
     match parsed.command {
-        None => write!(stdout, "{}", render_cli_help(&["config"])?)?,
         Some(ConfigCliCommand::Init) => {
             let path = paths.ensure_default_config()?;
             writeln!(stdout, "{}", path.display())?;
         }
+        Some(ConfigCliCommand::Get { path }) => {
+            run_config_get(path.as_deref(), &paths, output_format, stdout)?
+        }
+        Some(ConfigCliCommand::Layers) => run_config_layers(&paths, output_format, stdout)?,
+        Some(ConfigCliCommand::Set(args)) => run_config_set(args, &paths, output_format, stdout)?,
+        Some(ConfigCliCommand::Unset(args)) => {
+            run_config_unset(args, &paths, output_format, stdout)?
+        }
+        Some(ConfigCliCommand::Model(args)) => {
+            run_config_model(*args, &paths, output_format, stdout).await?
+        }
+        _ => {
+            return Err(MezError::invalid_state(
+                "read-only config command was not handled",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Executes only synchronous recovery commands and reports whether one ran.
+/// `paths` is deliberately lazy: explicit-file validation consults only that
+/// file. Selection/I/O errors propagate, while invalid documents are output.
+pub(super) fn run_read_only_config<W: Write>(
+    parsed: &ConfigCliArgs,
+    paths: impl FnOnce() -> Result<ConfigPaths>,
+    output_format: CliOutputFormat,
+    stdout: &mut W,
+) -> Result<bool> {
+    match &parsed.command {
+        None => write!(stdout, "{}", render_cli_help(&["config"])?)?,
         Some(ConfigCliCommand::Path) => {
+            let paths = paths()?;
             let path = paths
                 .select_primary_file()?
                 .unwrap_or_else(|| paths.default_primary_file());
@@ -48,9 +85,9 @@ pub(super) async fn run_config<W: Write>(
         }
         Some(ConfigCliCommand::Validate { path }) => {
             let validation = if let Some(path) = path {
-                validate_config_file(&path, ConfigScope::Primary)?
-            } else if let Some(path) = paths.select_primary_file()? {
-                validate_config_file(&path, ConfigScope::Primary)?
+                validate_current_config_file(path)?
+            } else if let Some(path) = paths()?.select_primary_file()? {
+                validate_current_config_file(&path)?
             } else {
                 validate_config_text(
                     ConfigFormat::Toml,
@@ -65,20 +102,10 @@ pub(super) async fn run_config<W: Write>(
             );
             write_json_or_plain(stdout, output_format, &output)?;
         }
-        Some(ConfigCliCommand::Get { path }) => {
-            run_config_get(path.as_deref(), &paths, output_format, stdout)?
-        }
-        Some(ConfigCliCommand::Layers) => run_config_layers(&paths, output_format, stdout)?,
-        Some(ConfigCliCommand::Set(args)) => run_config_set(args, &paths, output_format, stdout)?,
-        Some(ConfigCliCommand::Unset(args)) => {
-            run_config_unset(args, &paths, output_format, stdout)?
-        }
-        Some(ConfigCliCommand::Model(args)) => {
-            run_config_model(*args, &paths, output_format, stdout).await?
-        }
+        _ => return Ok(false),
     }
 
-    Ok(())
+    Ok(true)
 }
 
 /// Typed process CLI arguments for `mez config`.

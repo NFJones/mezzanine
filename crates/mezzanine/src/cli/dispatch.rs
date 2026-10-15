@@ -1,21 +1,22 @@
-//! Cli Dispatch implementation.
+//! CLI startup dependency selection and asynchronous command dispatch.
 //!
-//! This module owns the cli dispatch boundary for Mezzanine. It keeps related
-//! state transitions and helper routines localized so neighboring modules
-//! interact through typed APIs instead of duplicating subsystem details.
+//! Exact internal children are selected by the product boundary first. Ordinary
+//! argv parses without environment/config dependencies; code-owned displays and
+//! read-only config diagnostics finish synchronously. Only remaining intents
+//! load strict whole-primary policy/CPU settings and construct Tokio. Socket
+//! discovery and stale-state cleanup belong exclusively to runtime dispatch.
 
 use clap::CommandFactory;
 
-use super::env::CliArgv;
+use super::env::{CliArgv, CliArgvParse};
 use super::{
-    CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
-    PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_host_available,
-    ensure_private_socket_directory, force_kill_iroh_host_session, host_create_session,
-    host_list_sessions_with_all, host_resolve_or_create_session, host_resolve_session, io,
-    json_escape, list_iroh_host_sessions, prune_stale_socket_files_in_directory, run_attach,
-    run_auth, run_config, run_control_request_for_target, run_host, run_issue, run_lease, run_list,
-    run_mcp, run_memory, run_new, run_remote, run_sandbox, run_serve, run_session_catalog,
-    run_snapshot, run_storage,
+    CliCommand, CliInvocation, ConfigPaths, IsTerminal, MezError, OsString, PathBuf, Result,
+    RuntimeEnv, Write, cli_idempotency_key, ensure_host_available, ensure_private_socket_directory,
+    force_kill_iroh_host_session, host_create_session, host_list_sessions_with_all,
+    host_resolve_or_create_session, host_resolve_session, io, json_escape, list_iroh_host_sessions,
+    prune_stale_socket_files_in_directory, run_attach, run_auth, run_config,
+    run_control_request_for_target, run_host, run_issue, run_lease, run_list, run_mcp, run_memory,
+    run_new, run_remote, run_sandbox, run_serve, run_session_catalog, run_snapshot, run_storage,
 };
 
 // Top-level CLI run and command dispatch.
@@ -25,20 +26,78 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub async fn run() -> u8 {
+pub fn run() -> u8 {
     let args = std::env::args().collect::<Vec<_>>();
-    let env = CliEnv::from_process();
-    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
 
-    match run_with(args, env, interactive, &mut stdout, &mut stderr).await {
+    match run_process(args, &mut stdout) {
         Ok(code) => code,
         Err(error) => {
             let _ = writeln!(stderr, "mez: {error}");
             1
         }
     }
+}
+
+/// Runs argument-only recovery before loading strict policy or creating Tokio.
+/// Errors preserve the process exit-one diagnostic boundary in `run`.
+fn run_process<W: Write>(args: Vec<String>, stdout: &mut W) -> Result<u8> {
+    let Some(parsed) = prepare_command(&args, ConfigPaths::from_process_env, stdout)? else {
+        return Ok(0);
+    };
+    let paths = ConfigPaths::from_process_env()?;
+    let worker_threads = crate::config::runtime_cpu_count_from_primary_config(&paths)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            MezError::invalid_state(format!("failed to construct Tokio runtime: {error}"))
+        })?;
+    let env = CliEnv::from_process();
+    let invocation = parsed.into_invocation(&env.runtime, env.mez.as_ref())?;
+    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+    runtime.block_on(Box::pin(run_invocation(
+        invocation,
+        env,
+        interactive,
+        stdout,
+    )))
+}
+
+/// Parses once and executes only dependency-minimal display/diagnostic intents.
+/// A remaining argument object must pass strict configured startup before use.
+fn prepare_command<W: Write>(
+    args: &[String],
+    paths: impl FnOnce() -> Result<ConfigPaths>,
+    stdout: &mut W,
+) -> Result<Option<CliArgv>> {
+    let parsed = match CliArgv::parse_or_display(args)? {
+        CliArgvParse::Display(display) => {
+            write!(stdout, "{display}")?;
+            return Ok(None);
+        }
+        CliArgvParse::Arguments(parsed) => *parsed,
+    };
+    match &parsed.command {
+        Some(CliCommand::Version) => write!(stdout, "{}", super::render_cli_version()?)?,
+        Some(CliCommand::Completion(args)) => {
+            clap_complete::generate(args.shell, &mut CliArgv::command(), "mez", stdout);
+        }
+        Some(CliCommand::Config(args)) => {
+            if !super::config::run_read_only_config(
+                args,
+                paths,
+                super::CliOutputFormat::from_json_flag(parsed.json),
+                stdout,
+            )? {
+                return Ok(Some(parsed));
+            }
+        }
+        _ => return Ok(Some(parsed)),
+    }
+    Ok(None)
 }
 
 /// Carries Cli Env state for this subsystem.
@@ -120,6 +179,7 @@ impl CliEnv {
 /// state includes foreground servers and framed management clients. Keeping
 /// that state on the heap prevents unrelated short-lived CLI commands from
 /// exhausting bounded caller stacks merely because they share this dispatcher.
+#[cfg(test)]
 pub fn run_with<'a, W: Write + 'a, E: Write + 'a>(
     args: Vec<String>,
     env: CliEnv,
@@ -130,6 +190,8 @@ pub fn run_with<'a, W: Write + 'a, E: Write + 'a>(
     Box::pin(run_with_inner(args, env, interactive, stdout, stderr))
 }
 
+/// Test adapter sharing argument-only recovery with the real process boundary.
+#[cfg(test)]
 async fn run_with_inner<W: Write, E: Write>(
     args: Vec<String>,
     env: CliEnv,
@@ -137,30 +199,20 @@ async fn run_with_inner<W: Write, E: Write>(
     stdout: &mut W,
     _stderr: &mut E,
 ) -> Result<u8> {
-    let invocation = match CliInvocation::parse_or_display(&args, &env.runtime, env.mez.as_ref())? {
-        CliInvocationParse::Invocation(invocation) => *invocation,
-        CliInvocationParse::Display(display) => {
-            write!(stdout, "{display}")?;
-            return Ok(0);
-        }
+    let Some(parsed) = prepare_command(&args, || env.config_paths(), stdout)? else {
+        return Ok(0);
     };
-    if !invocation.control_target.is_unix()
-        && !matches!(
-            invocation.command.as_ref(),
-            Some(
-                CliCommand::Attach(_)
-                    | CliCommand::New(_)
-                    | CliCommand::List(_)
-                    | CliCommand::Kill(_)
-                    | CliCommand::Detach(_)
-                    | CliCommand::Lease(_)
-            )
-        )
-    {
-        return Err(MezError::invalid_args(
-            "explicit Iroh targets support attach, new, list, kill, and detach",
-        ));
-    }
+    let invocation = parsed.into_invocation(&env.runtime, env.mez.as_ref())?;
+    Box::pin(run_invocation(invocation, env, interactive, stdout)).await
+}
+
+/// Dispatches a runtime-dependent intent; recovery has already returned.
+async fn run_invocation<W: Write>(
+    invocation: CliInvocation,
+    env: CliEnv,
+    interactive: bool,
+    stdout: &mut W,
+) -> Result<u8> {
     if invocation.control_target.is_unix()
         && !matches!(
             invocation.command.as_ref(),
@@ -562,21 +614,27 @@ async fn run_with_inner<W: Write, E: Write>(
     Ok(exit_code)
 }
 
-/// Every invocation shares this future even when it only lists sessions.
+/// Every runtime-dependent invocation shares this substantive dispatch future.
 /// Bound retained inline state independently of OS stack-size tuning so adding
 /// an adapter cannot silently make unrelated nested control fixtures overflow.
+/// Measure the dispatcher itself, not the boxed recovery/test adapter wrapper.
 #[cfg(test)]
 #[test]
 fn cli_dispatch_future_has_bounded_inline_state() {
     let mut output = Vec::new();
-    let mut error = Vec::new();
-    let future = run_with_inner(
-        vec!["mez".into(), "version".into()],
-        CliEnv::default(),
-        false,
-        &mut output,
-        &mut error,
-    );
+    let invocation = CliInvocation::parse(
+        &[
+            "mez".into(),
+            "-S".into(),
+            "/tmp/unused.sock".into(),
+            "config".into(),
+            "get".into(),
+        ],
+        &RuntimeEnv::default(),
+        None,
+    )
+    .unwrap();
+    let future = run_invocation(invocation, CliEnv::default(), false, &mut output);
     let bytes = std::mem::size_of_val(&future);
     assert!(
         bytes <= 64 * 1024,

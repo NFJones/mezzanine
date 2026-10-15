@@ -89,7 +89,7 @@ subsystem modules rather than expanding `crates/mezzanine/src/main.rs`.
 
 ## Testing Requirements
 - Use `just check` for fast type-checking while developing.
-- All changes must pass `just fmt`, `just clippy`, and `just test` before handoff.
+- All changes must pass all CI checks capable of running on the current machine before handoff.
 - Prefer end-to-end coverage for feature changes whenever possible.
 
 ## Commit & Pull Request Requirements

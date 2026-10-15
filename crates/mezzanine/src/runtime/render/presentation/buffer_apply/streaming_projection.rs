@@ -623,43 +623,14 @@ impl RuntimeSessionService {
         &mut self,
         result: crate::runtime::RuntimeStreamingSayProjectionResult,
     ) -> Result<RuntimeStreamingSayProjectionApplyOutcome> {
-        let current = self
-            .presentation
-            .agent_streaming_say_presentations
-            .get(&result.pane_id)
-            .is_some_and(|presentation| {
-                !presentation.layout_retired
-                    && presentation.turn_id == result.turn_id
-                    && presentation.response_index == result.response_index
-                    && presentation.conversation_id == result.conversation_id
-                    && presentation.revision == result.revision
-            });
         let screen_lineage_current = self
             .agent_pane_screen_lineage(&result.pane_id, &result.conversation_id)
             == Some(result.installed_lineage);
-        let conversation_current = self
-            .agent_shell_store()
-            .get(&result.pane_id)
-            .is_some_and(|session| session.session_id == result.conversation_id);
-        if !current
-            || !screen_lineage_current
-            || !conversation_current
-            || self
-                .agent_pane_screen(&result.pane_id)
-                .is_none_or(|screen| screen.size() != result.screen_size)
-            || self.agent_thinking_enabled(&result.pane_id) != result.thinking_enabled
-            || self.shell_classification_for_pane(&result.pane_id) != result.shell_classification
-            || self.agent_terminal_presentation_columns(&result.pane_id)?
-                != result.presentation_columns
-            || self.agent_terminal_markdown_frame_width(&result.pane_id)? != result.frame_width
-            || self.agent_terminal_markdown_terminal_width(&result.pane_id)? != result.table_width
-            || self.presentation.settings.ui_theme != result.ui_theme
-            || result.screen.log_frame_settings() != self.presentation.settings.log_frame_settings()
-        {
+        if let Some(reason) = self.agent_streaming_say_projection_rejection_reason(&result)? {
             self.integration
                 .runtime_metrics_mut()
                 .record_agent_streaming_projection_result(false, !screen_lineage_current);
-            return Ok(RuntimeStreamingSayProjectionApplyOutcome::Rejected);
+            return Ok(RuntimeStreamingSayProjectionApplyOutcome::Rejected(reason));
         }
         let screen_is_unchanged = !self
             .presentation
@@ -709,5 +680,75 @@ impl RuntimeSessionService {
         } else {
             RuntimeStreamingSayProjectionApplyOutcome::AcceptedChanged
         })
+    }
+
+    /// Checks the existing fences in order, retaining only the first failed
+    /// category. Captured values and source text never enter diagnostic codes.
+    fn agent_streaming_say_projection_rejection_reason(
+        &self,
+        result: &crate::runtime::RuntimeStreamingSayProjectionResult,
+    ) -> Result<Option<RuntimeStreamingSayProjectionRejection>> {
+        use RuntimeStreamingSayProjectionRejection as Rejection;
+        let Some(presentation) = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get(&result.pane_id)
+        else {
+            return Ok(Some(Rejection::MissingOwner));
+        };
+        let reason = if presentation.layout_retired {
+            Some(Rejection::RetiredLayout)
+        } else if presentation.turn_id != result.turn_id {
+            Some(Rejection::Turn)
+        } else if presentation.response_index != result.response_index {
+            Some(Rejection::Response)
+        } else if presentation.conversation_id != result.conversation_id {
+            Some(Rejection::SourceConversation)
+        } else if presentation.revision != result.revision {
+            Some(Rejection::SourceRevision)
+        } else if self.agent_pane_screen_lineage(&result.pane_id, &result.conversation_id)
+            != Some(result.installed_lineage)
+        {
+            Some(Rejection::ScreenLineage)
+        } else if self
+            .agent_shell_store()
+            .get(&result.pane_id)
+            .is_none_or(|session| session.session_id != result.conversation_id)
+        {
+            Some(Rejection::ActiveConversation)
+        } else if let Some(screen) = self.agent_pane_screen(&result.pane_id) {
+            if screen.size() != result.screen_size {
+                Some(Rejection::ScreenSize)
+            } else if self.agent_thinking_enabled(&result.pane_id) != result.thinking_enabled {
+                Some(Rejection::Thinking)
+            } else if self.shell_classification_for_pane(&result.pane_id)
+                != result.shell_classification
+            {
+                Some(Rejection::ShellClassification)
+            } else if self.agent_terminal_presentation_columns(&result.pane_id)?
+                != result.presentation_columns
+            {
+                Some(Rejection::PresentationColumns)
+            } else if self.agent_terminal_markdown_frame_width(&result.pane_id)?
+                != result.frame_width
+            {
+                Some(Rejection::FrameWidth)
+            } else if self.agent_terminal_markdown_terminal_width(&result.pane_id)?
+                != result.table_width
+            {
+                Some(Rejection::TableWidth)
+            } else if self.presentation.settings.ui_theme != result.ui_theme {
+                Some(Rejection::Theme)
+            } else if result.screen.log_frame_settings()
+                != self.presentation.settings.log_frame_settings()
+            {
+                Some(Rejection::LogFrameSettings)
+            } else {
+                None
+            }
+        } else {
+            Some(Rejection::MissingScreen)
+        };
+        Ok(reason)
     }
 }

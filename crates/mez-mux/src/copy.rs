@@ -29,12 +29,36 @@ pub fn encode_copy_source_line(source_index: usize, copy_line: &str) -> String {
 }
 
 /// Encodes one source line scoped to a distinct rendered presentation group.
+/// Group colons and percent signs are escaped so the first colon always marks
+/// the raw payload boundary. The payload itself is retained byte-for-byte.
 pub fn encode_copy_source_line_in_group(
     group: &str,
     source_index: usize,
     copy_line: &str,
 ) -> String {
-    format!("{COPY_SOURCE_LINE_PREFIX}{group}/{source_index}:{copy_line}")
+    let identity = copy_source_identity_in_group(group, source_index);
+    format!("{COPY_SOURCE_LINE_PREFIX}{identity}:{copy_line}")
+}
+
+/// Encodes a payload-free reference using exactly the same identity as its anchor.
+pub fn encode_copy_source_reference_in_group(group: &str, source_index: usize) -> String {
+    let identity = copy_source_identity_in_group(group, source_index);
+    format!("{COPY_SOURCE_REFERENCE_PREFIX}{identity}")
+}
+
+/// Builds an injective, delimiter-safe identity while preserving its final ordinal.
+/// Escaping percent before colon keeps literal `%3A` distinct from an authored
+/// colon. Consumers compare this opaque identity without decoding the group.
+fn copy_source_identity_in_group(group: &str, source_index: usize) -> String {
+    let group = group.replace('%', "%25").replace(':', "%3A");
+    format!("{group}/{source_index}")
+}
+
+/// Decodes a generated source carrier into its opaque identity and exact raw text.
+/// Returns `None` for a missing marker or payload delimiter. Group escaping is
+/// deliberately not undone: anchors and references compare the encoded identity.
+pub fn decode_copy_source_line(line: &str) -> Option<(&str, &str)> {
+    line.strip_prefix(COPY_SOURCE_LINE_PREFIX)?.split_once(':')
 }
 
 /// Identifies one terminal-cell position in a copy-mode buffer.
@@ -980,6 +1004,52 @@ pub fn validate_position(lines: &[String], position: CopyPosition) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Runtime message IDs contain colons, and literal percent escapes must not
+    /// alias them. Unicode and slashes remain valid identity bytes; arbitrary
+    /// raw payload delimiters, CRLF and trailing newlines are never interpreted.
+    #[test]
+    fn grouped_copy_carriers_preserve_distinct_identities_and_exact_payloads() {
+        let raw = "authored: text /0: 雪\r\n\u{1e}mez-copy-source-line:\n\n";
+        let mut identities = std::collections::BTreeSet::new();
+        for group in [
+            "turn:action",
+            "turn%3Aaction",
+            "turn%253Aaction",
+            "雪/a:42%",
+            "",
+        ] {
+            let carrier = encode_copy_source_line_in_group(group, 42, raw);
+            let (identity, decoded) = decode_copy_source_line(&carrier).unwrap();
+            assert_eq!(decoded, raw);
+            assert!(identity.ends_with("/42"));
+            assert!(!identity.contains(':'));
+            assert!(identities.insert(identity.to_string()));
+            assert_eq!(
+                encode_copy_source_reference_in_group(group, 42)
+                    .strip_prefix(COPY_SOURCE_REFERENCE_PREFIX),
+                Some(identity)
+            );
+        }
+        let carrier = encode_copy_source_line(7, raw);
+        assert_eq!(decode_copy_source_line(&carrier), Some(("7", raw)));
+    }
+
+    /// Missing marker and delimiter fail closed instead of inventing a source.
+    /// An empty payload remains a valid authored blank source line.
+    #[test]
+    fn copy_carrier_decoder_rejects_malformed_carriers_and_keeps_empty_payloads() {
+        assert_eq!(decode_copy_source_line("ordinary: text"), None);
+        assert_eq!(decode_copy_source_line(COPY_SOURCE_LINE_PREFIX), None);
+        assert_eq!(
+            decode_copy_source_line(&format!("{COPY_SOURCE_LINE_PREFIX}group/0")),
+            None
+        );
+        assert_eq!(
+            decode_copy_source_line(&encode_copy_source_line(0, "")),
+            Some(("0", ""))
+        );
+    }
 
     /// Verifies copy mode classifies navigation, selection, cancellation, and
     /// unbound input without forwarding owned keystrokes to a pane process.

@@ -11,6 +11,7 @@ use crate::error::{MezError, Result};
 use mez_core::presentation::PresentationEntry;
 use mez_mux::copy::{
     COPY_SKIP_LINE, COPY_SOURCE_LINE_PREFIX, COPY_SOURCE_REFERENCE_PREFIX, COPY_WRAP_CONTINUATION,
+    decode_copy_source_line,
 };
 use mez_mux::render::{RichTextLine, RichTextLineKind};
 use mez_terminal::{TerminalCopySource, TerminalCopySourceGroup, TerminalCopySourceId};
@@ -104,10 +105,10 @@ pub(crate) fn source_associations(
         {
             continue;
         }
-        let Some(carrier) = copy.strip_prefix(COPY_SOURCE_LINE_PREFIX) else {
+        if !copy.starts_with(COPY_SOURCE_LINE_PREFIX) {
             continue;
-        };
-        let Some((identity, raw)) = carrier.split_once(':') else {
+        }
+        let Some((identity, raw)) = decode_copy_source_line(copy) else {
             return Err(MezError::invalid_state(
                 "generated copy-source carrier is malformed",
             ));
@@ -156,8 +157,8 @@ pub(crate) fn source_associations(
             sources.push(current.clone());
             continue;
         }
-        if let Some(carrier) = copy.strip_prefix(COPY_SOURCE_LINE_PREFIX) {
-            let Some((identity, raw)) = carrier.split_once(':') else {
+        if copy.starts_with(COPY_SOURCE_LINE_PREFIX) {
+            let Some((identity, raw)) = decode_copy_source_line(copy) else {
                 return Err(MezError::invalid_state(
                     "generated copy-source carrier is malformed",
                 ));
@@ -237,6 +238,79 @@ mod tests {
             plan[0].as_ref().unwrap(),
             plan[1].as_ref().unwrap()
         ));
+    }
+
+    /// Runtime peer receipt identities contain the turn/action colon separator.
+    /// Generated carriers must retain the true ordinal and exact payload instead
+    /// of treating part of that identity as raw text during live or replay plans.
+    #[test]
+    fn declared_source_plan_accepts_colon_bearing_peer_receipt_identity() {
+        let entry = PresentationEntry {
+            id: "peer-owner".into(),
+            occurrence: Default::default(),
+            first_row: true,
+        };
+        let group = "peer-message recipient=agent-%1 sequence=1 id=turn:action/雪%3A";
+        let raw = "authored: text /0: exact\r\nsecond\n\n";
+        let copy = mez_mux::copy::encode_copy_source_line_in_group(group, 0, raw);
+        let plan = source_associations(
+            &entry,
+            &normal_rows(),
+            &[copy.clone(), copy],
+            CopySourcePlan::Declared,
+            &[],
+        )
+        .unwrap();
+        let source = plan[0].as_ref().unwrap();
+        assert_eq!(source.text.as_ref(), raw);
+        assert_eq!(
+            source.id,
+            TerminalCopySourceId::new(&entry, TerminalCopySourceGroup::SourceLine(0)).unwrap()
+        );
+        assert!(Arc::ptr_eq(source, plan[1].as_ref().unwrap()));
+    }
+
+    /// Colon-bearing steering occurrences use the same escaped identity for
+    /// forward references and the tail anchor, preserving exact source bytes.
+    #[test]
+    fn declared_source_plan_resolves_escaped_tail_anchor() {
+        let entry = PresentationEntry {
+            id: "receipt:owner%3A".into(),
+            occurrence: Default::default(),
+            first_row: true,
+        };
+        let raw = "source: /0: 雪\r\n\n";
+        let copies = [
+            mez_mux::copy::encode_copy_source_reference_in_group(&entry.id, 0),
+            mez_mux::copy::encode_copy_source_line_in_group(&entry.id, 0, raw),
+        ];
+        let plan = source_associations(
+            &entry,
+            &normal_rows(),
+            &copies,
+            CopySourcePlan::Declared,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(plan[0].as_ref().unwrap().text.as_ref(), raw);
+        assert!(Arc::ptr_eq(
+            plan[0].as_ref().unwrap(),
+            plan[1].as_ref().unwrap()
+        ));
+        let conflicting = [
+            copies[1].clone(),
+            mez_mux::copy::encode_copy_source_line_in_group("receipt%3Aowner%3A", 0, raw),
+        ];
+        assert!(
+            source_associations(
+                &entry,
+                &normal_rows(),
+                &conflicting,
+                CopySourcePlan::Declared,
+                &[],
+            )
+            .is_err()
+        );
     }
 
     /// A same-ordinal foreign namespace cannot borrow a declared anchor, and

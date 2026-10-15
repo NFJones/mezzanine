@@ -4324,6 +4324,12 @@ records MAY instead replay their byte stream unchanged and rely on physical
 pane wrapping, because inserting boundaries into escape-bearing terminal data
 could change control semantics. Mixed histories MUST preserve presentation
 order.
+Generated source-copy carriers MUST escape group delimiters without changing
+durable receipt identities or authored payload bytes. Literal percent signs and
+colons in group identities MUST remain distinct, and source anchors and their
+references MUST use the same opaque encoded identity. Resume and resize replay
+MUST accept valid colon-bearing runtime message IDs while retaining ordinal,
+owner, reference and payload-conflict validation.
 The explicit `/show-context activity [presentation-sequence]` view MUST provide
 client-local list/detail disclosure of identity-bearing accepted command intent,
 response-wide rationale, retained outcomes and result previews. Static and
@@ -5225,6 +5231,22 @@ after the corresponding provider authenticates successfully.
 If more than one supported primary user configuration file exists and no
 explicit primary file was selected, Mezzanine MUST fail configuration loading
 with an actionable diagnostic rather than merging ambiguous primary files.
+
+CLI argument parsing and help/version display MUST precede primary-config
+loading and configured CPU/runtime initialization. Help, version, shell
+completion, bare `mez config` help, and `mez config default` MUST work without
+`HOME` or a usable primary configuration. `mez config path` and
+`mez config validate [PATH]` MUST run synchronously without runtime bootstrap,
+configuration migration, default publication, or startup socket cleanup.
+Path and implicit validation still require `HOME` and unambiguous primary
+selection. Explicit-file validation MUST consult only the supplied file, even
+with absent `HOME` or a malformed, ambiguous, or future-version primary file.
+Validation MUST report the original document against the current schema,
+including `valid: false` for invalid documents, without rewriting it; successful
+diagnostic output retains exit status zero. Selection and file I/O failures
+retain exit status one. Other management and normal serve/host/attach workflows
+MUST retain strict whole-primary security and CPU validation before startup;
+recovery MUST NOT silently substitute defaults to bypass invalid policy.
 
 Mezzanine MUST support project overlay configuration files in TOML, YAML, and
 JSON. The default discovered project overlay paths for a directory MUST be:
@@ -14769,6 +14791,25 @@ send or repeat a send, MAAP action, or provider transport to repair display.
 All ownership, source revision, lineage, geometry and rendering-policy fences
 MUST still pass before unchanged-screen acceptance, and rejected work MUST NOT
 overwrite intervening content or commit projection metadata.
+Projection rejection MUST retain the first failed fence as a typed, fixed
+diagnostic category, rather than conflating missing/retired ownership, source
+identity/revision, screen lineage, active conversation, geometry and rendering
+policy. Outbound settlement and resize-replay errors MUST include that category
+without source text, payloads, commands, credentials or opaque owner IDs. These
+errors MUST also include the compiled outbound-projection source SHA-256 exposed
+by `mez --version`. This is a fingerprint of the enumerated projection owners,
+not a whole-executable attestation, Git revision, deployment proof or authority
+to replay effects. A freshly built CLI cannot identify an older running daemon;
+historical errors without a fingerprint or rejection reason remain unattributed.
+Genuine rejected work retains its integrity error; diagnostics MUST NOT relax a
+fence or automatically retry provider requests, actions or messages. Missing
+typed recovery facts MUST remain unknown, never inferred correction counts.
+If message execution settles terminal effects before preview finalization
+fails, synchronous and asynchronous result application MUST observe and retain
+those original results in canonical chronology before returning the error.
+Existing canonical recovery facts MUST accompany the causal error unchanged;
+absent facts MUST NOT be fabricated. Retention MUST preserve actor observation
+order and be idempotent, without scheduling a provider/action/message retry.
 In normal pane-log mode, canonical
 `text/plain; charset=utf-8` and supported `text/markdown` are
 presentation-eligible; plaintext MUST render literally and Markdown through the

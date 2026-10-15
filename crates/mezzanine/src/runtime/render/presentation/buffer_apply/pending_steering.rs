@@ -26,10 +26,7 @@ fn steering_source_rendered_lines(
 /// Retains one exact payload at the group tail and small references on preceding
 /// rows. Keeping the anchor last preserves source when older history is evicted.
 fn attach_steering_copy_source(lines: &mut [RichTextLine], display: &str, occurrence: &str) {
-    let reference = format!(
-        "{}{occurrence}/0",
-        mez_mux::copy::COPY_SOURCE_REFERENCE_PREFIX
-    );
+    let reference = mez_mux::copy::encode_copy_source_reference_in_group(occurrence, 0);
     for line in lines.iter_mut() {
         line.copy_text = Some(reference.clone());
     }

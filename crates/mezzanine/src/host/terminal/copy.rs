@@ -8,10 +8,12 @@ use std::collections::BTreeSet;
 use std::ops::{Deref, DerefMut};
 
 use super::{Result, TerminalScreen};
+#[cfg(test)]
+use mez_mux::copy::COPY_SOURCE_LINE_PREFIX as AGENT_COPY_SOURCE_LINE_PREFIX;
 use mez_mux::copy::{
-    COPY_SKIP_LINE as AGENT_COPY_SKIP_LINE,
-    COPY_SOURCE_LINE_PREFIX as AGENT_COPY_SOURCE_LINE_PREFIX, COPY_SOURCE_REFERENCE_PREFIX,
-    CopyPosition, StyledCopyMode, normalize_selection, validate_position,
+    COPY_SKIP_LINE as AGENT_COPY_SKIP_LINE, COPY_SOURCE_REFERENCE_PREFIX, CopyPosition,
+    StyledCopyMode, decode_copy_source_line as decode_agent_copy_source_line, normalize_selection,
+    validate_position,
 };
 #[cfg(test)]
 use mez_mux::paste::PasteBuffers;
@@ -380,13 +382,6 @@ impl CopyMode {
     }
 }
 
-/// Decodes one source-line copy marker into its presentation-group identity and
-/// raw line text.
-fn decode_agent_copy_source_line(line: &str) -> Option<(&str, &str)> {
-    let encoded = line.strip_prefix(AGENT_COPY_SOURCE_LINE_PREFIX)?;
-    encoded.split_once(':')
-}
-
 /// Removes current or retained legacy transcript decoration only at row start.
 fn strip_agent_copy_indicator(line: &str) -> Option<&str> {
     line.strip_prefix(AGENT_COPY_INDICATOR_PREFIX)
@@ -524,6 +519,19 @@ fn strip_leading_chars(line: &str, count: usize) -> String {
 #[cfg(test)]
 mod gutter_tests {
     use super::*;
+
+    /// Legacy selection normalization shares the carrier decoder with typed
+    /// source plans. Escaped groups deduplicate exactly once without modifying
+    /// authored colons, slashes, percent signs or trailing newline bytes.
+    #[test]
+    fn transcript_copy_decodes_escaped_group_identity_without_changing_payload() {
+        let raw = "authored: /0: 雪%3A\r\n\n";
+        let source = mez_mux::copy::encode_copy_source_line_in_group("turn:action%3A", 0, raw);
+        assert_eq!(
+            normalize_copied_selection_lines(vec![source.clone(), source]),
+            vec![raw]
+        );
+    }
 
     /// Current and retained legacy display gutters normalize identically,
     /// while decoded semantic source preserves authored leading glyphs.

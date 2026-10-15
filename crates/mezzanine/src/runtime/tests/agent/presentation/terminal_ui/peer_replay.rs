@@ -5,6 +5,99 @@
 
 use super::*;
 
+/// Direct resume must rebuild received plaintext peer sources whose durable
+/// receipt IDs include runtime turn/action colons. Exercise deferred projection
+/// and installation, not merely a parser, and keep persistence and copy bytes
+/// unchanged while replacing stale saved display rows at the active geometry.
+#[test]
+fn runtime_resume_replays_colon_bearing_peer_receipt_identity() {
+    let mut service = test_runtime_service();
+    let store = AgentTranscriptStore::new(temp_root("resume-peer-copy-identity"));
+    let conversation = "018f6b3a-1b2c-7000-9000-cafebabefeed";
+    store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: conversation.into(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "saved-turn".into(),
+            agent_id: "agent-%9".into(),
+            pane_id: "%9".into(),
+            content: "saved prompt".into(),
+        })
+        .unwrap();
+    let payload = "authored: peer /0: 雪%3A evidence";
+    let receive_identity = "peer-message recipient=agent-%9 sequence=1 id=turn:action/雪%3A";
+    store
+        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            presentation: None,
+            conversation_id: conversation.into(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            pane_id: "%9".into(),
+            turn_id: None,
+            terminal_width: 120,
+            style_names: vec!["user-prompt".into()],
+            display_lines: vec!["stale cached display".into()],
+            copy_lines: Vec::new(),
+            ansi_text: None,
+            source_text: Some(
+                serde_json::json!({
+                    "direction": "received",
+                    "peer": "agent-%3",
+                    "receive_identity": receive_identity,
+                    "content_type": "text/plain; charset=utf-8",
+                    "payload": payload,
+                    "direct_parent": false,
+                    "presentation_eligible": true,
+                })
+                .to_string(),
+            ),
+            source_content_type: Some(
+                "application/vnd.mezzanine.agent-presentation.peer-message+json; charset=utf-8"
+                    .into(),
+            ),
+        })
+        .unwrap();
+    let before = store.inspect_presentation(conversation).unwrap();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(28, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, &format!("/resume {conversation}"))
+        .unwrap();
+    let response = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .unwrap();
+    assert!(
+        !response.contains("generated source-line ordinal"),
+        "{response}"
+    );
+    assert_eq!(
+        service.agent_shell_store().get("%1").unwrap().session_id,
+        conversation
+    );
+    let screen = service.agent_pane_screen("%1").unwrap();
+    let rows = screen.normal_styled_content_lines();
+    let rendered = rows.iter().map(|row| row.text.as_str()).collect::<String>();
+    assert!(!rendered.contains("stale cached display"), "{rendered}");
+    assert!(rendered.contains("authored:"), "{rendered}");
+    let sources = rows
+        .iter()
+        .filter_map(|row| row.copy_source.as_ref())
+        .collect::<Vec<_>>();
+    assert!(!sources.is_empty());
+    assert!(sources.iter().all(|source| source.text.as_ref() == payload));
+    assert_eq!(store.inspect_presentation(conversation).unwrap(), before);
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies logged peer and parent lines colorize their name markers only.
 ///
 /// The marker is the bounded name plus its received-message glyph. The payload

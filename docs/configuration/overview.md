@@ -95,6 +95,32 @@ arbitrary path. Use `mez config set --scope project` to create or update a
 managed overlay, then run `mez config layers` from that project to inspect its
 state and diagnostics.
 
+### Recover from startup configuration errors
+
+Help (`mez --help`, `mez help`, and command-specific help), `mez --version`,
+`mez version`, shell completion, bare `mez config`, and `mez config default`
+work without `$HOME` or a valid primary file. `mez config path` selects a path
+without parsing its contents; multiple primary files still cause an error.
+`mez config validate` reads the selected primary document as-is, or validates
+the built-in defaults when no primary exists. These read-only operations do not
+migrate or create configuration, construct the runtime, or clean up sockets.
+
+To diagnose a separate file even when the primary config is broken or ambiguous
+(or `$HOME` is absent), pass its path explicitly:
+
+```sh
+mez --json config validate /path/to/config.toml
+```
+
+Validation reports `valid` and `diagnostics` against the current schema without
+rewriting the file. A completed diagnostic response exits zero even when
+`valid` is false; missing HOME for implicit selection, ambiguity, and file I/O
+errors exit one. Missing-version, legacy, and future-version documents are
+diagnosed against the current schema, not migrated. Runtime startup and other
+management commands, including `config init`, `get`, `layers`, and mutations,
+still require valid whole-primary security and CPU configuration; they do not
+fall back around invalid policy.
+
 ## Understand precedence and trust
 
 The effective configuration layers, from lowest to highest precedence, are
