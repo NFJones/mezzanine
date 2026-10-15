@@ -124,6 +124,13 @@ workflow can help install a skill:
 $create-skill Create a user skill for read-only release-checklist reviews.
 ```
 
+For issue work, `$fix-issues` keeps implementation in the main agent with an
+independent reviewer. The built-in `$fix-issues-parallel` instead coordinates
+medium implementation agents in isolated worktrees, each with a large independent
+reviewer. Its coordinator serializes integration and validates the main branch
+before resolving an issue, reassigning its worker, or cleaning up its worktree.
+It respects configured agent limits and does not automatically push changes.
+
 User skills live under `~/.config/mezzanine/skills/<name>/SKILL.md`; trusted
 project skills live under `.mezzanine/skills/<name>/SKILL.md`, with additive shared
 placement at `.agents/skills/<name>/SKILL.md` using the same format. Both roots

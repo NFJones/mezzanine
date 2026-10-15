@@ -11758,6 +11758,15 @@ skill catalog as filesystem skills. Built-in skills MUST have the lowest
 precedence: a user skill or trusted project skill with the same name overrides
 the built-in entry for the affected pane.
 
+The built-in `fix-issues-parallel` skill MUST be discoverable and loadable through
+that catalog and participate in managed user-scope synchronization. Its workflow
+uses a coordinator, medium implementation agents in isolated worktrees, and a
+large independent reviewer owned by each implementer. Review of the exact proposed
+changes, integration, and main-branch validation precede issue resolution and
+worker reassignment. The coordinator serializes integration and owns safe cleanup
+of completed worktrees. The skill MUST NOT grant additional permissions, raise
+agent limits, or override user/project skill precedence or discovery policy.
+
 Both user and project skill roots MUST use the same directory layout:
 
 - User skills: `~/.config/mezzanine/skills/<skill-name>/SKILL.md`.
