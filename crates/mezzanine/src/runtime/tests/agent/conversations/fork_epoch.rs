@@ -118,7 +118,7 @@ fn runtime_saved_fork_selective_epoch_encoded_anchors_and_native_ownership() {
             native_item.clone(),
         ])
         .unwrap();
-        let rows = (1..=10)
+        let rows = (1..=11)
             .map(|sequence| {
                 let mut row = TranscriptEntry {
                     conversation_id: "fork-source".into(),
@@ -134,28 +134,33 @@ fn runtime_saved_fork_selective_epoch_encoded_anchors_and_native_ownership() {
                     pane_id: "%1".into(),
                     content: format!("FORK_ROW_{sequence:03}"),
                 };
-                if matches!(sequence, 2..=3 | 6..=7 | 10) {
+                if matches!(sequence, 2..=3 | 6..=7 | 10..=11) {
                     row.role = TranscriptRole::System;
+                    if sequence >= 10 {
+                        // Native continuity requires its neutral assistant twin
+                        // before provider output in the same complete group.
+                        row.turn_id = "native-turn".into();
+                    }
                     let (group, ordinal) = match sequence {
                         2..=3 => ("first", sequence - 1),
                         6..=7 => ("second", sequence - 5),
-                        _ => ("native", 1),
+                        _ => ("native", sequence - 9),
                     };
                     row.content = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-                        if sequence == 10 {
+                        if sequence == 11 {
                             ContextSourceKind::TranscriptTool
                         } else {
                             ContextSourceKind::TranscriptAssistant
                         },
                         "answer",
-                        if sequence == 10 {
+                        if sequence == 11 {
                             native.to_transcript_content()
                         } else {
                             row.content
                         },
                         mez_agent::ContextExecutionGroupId::new(group).unwrap(),
                         ordinal,
-                        (sequence == 10).then(|| owner.clone()),
+                        (sequence == 11).then(|| owner.clone()),
                     )
                     .unwrap()
                     .to_transcript_content();
@@ -200,7 +205,7 @@ fn runtime_saved_fork_selective_epoch_encoded_anchors_and_native_ownership() {
         let epoch_bytes = fs::read(&epoch_path).unwrap();
         service
             .agent_shell_store_mut()
-            .bind_conversation("%1", "fork-source", 10)
+            .bind_conversation("%1", "fork-source", 11)
             .unwrap();
         let response = service
             .execute_agent_shell_command(&primary, "/fork fork-target")
@@ -282,14 +287,14 @@ fn runtime_saved_fork_selective_epoch_encoded_anchors_and_native_ownership() {
                 .any(|event| event.provider_owner() == Some(&owner))
         );
         let mut later = rows[0].clone();
-        later.sequence = 11;
+        later.sequence = 12;
         later.content = "FORK_ROW_PARENT_ONLY".into();
         store.append(&later).unwrap();
         later.conversation_id = "fork-target".into();
-        later.content = "FORK_ROW_011".into();
+        later.content = "FORK_ROW_012".into();
         store.append(&later).unwrap();
         let mut expected = expected;
-        expected.push(("user".into(), "FORK_ROW_011".into()));
+        expected.push(("user".into(), "FORK_ROW_012".into()));
         assert_eq!(encoded_history(&mut reopened, "%1"), expected);
     }
 }
