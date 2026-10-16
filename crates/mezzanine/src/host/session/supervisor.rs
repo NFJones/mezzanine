@@ -929,6 +929,7 @@ impl SessionSupervisor {
     /// Closes host admission and drains native resources independently of actors.
     /// The same absolute deadline covers every session, including cancelled
     /// startup and late worker drops. Pending owners remain in exact entries.
+    #[cfg(test)]
     pub(crate) async fn drain_native_retirement(
         &self,
         deadline: tokio::time::Instant,
