@@ -2718,6 +2718,14 @@ impl AsyncRuntimeSessionActor {
             }
             AsyncRuntimeRequest::CompleteBookkeepingCandidate { work, history } => {
                 let previous_id = self.side_effect_routes.next_transcript_claim_id();
+                let receive_owner_current = self
+                    .service
+                    .agent_shell_store()
+                    .get(&work.candidate.turn.pane_id)
+                    .is_some_and(|session| {
+                        session.session_id == work.candidate.turn.conversation_id
+                    })
+                    && !self.service.pane_is_closing(&work.candidate.turn.pane_id);
                 let result = self.service.complete_bookkeeping_candidate(work, history);
                 if result.as_ref().is_ok_and(|applied| *applied) {
                     let _ = self.service.start_ready_agent_turns();
@@ -2728,6 +2736,20 @@ impl AsyncRuntimeSessionActor {
                         TranscriptReceiptReply::Startup,
                     );
                     self.dispatch_pending_agent_prompt_history();
+                    // Reconcile current recipients only after exact checked
+                    // adoption, including an accepted empty append. Terminal
+                    // handoff receipts remain fenced until persistence wakes
+                    // this same owner. No captured pane or old turn is replayed.
+                    if receive_owner_current
+                        && let Err(error) = self.queue_peer_message_delivery_timer_if_needed(
+                            crate::runtime::current_unix_millis(),
+                        )
+                    {
+                        let _ = self.service.append_runtime_diagnostic_event(format!(
+                            r#"{{"kind":"peer_receive_settlement_wake_failed","error_kind":"{:?}"}}"#,
+                            error.kind(),
+                        ));
+                    }
                 }
                 self.dispatch_bookkeeping_candidates();
                 self.notify_event_delivery();

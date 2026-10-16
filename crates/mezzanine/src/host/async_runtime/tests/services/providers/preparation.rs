@@ -251,15 +251,112 @@ async fn exercise_live_preparation_failure(missing_profile: bool) {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// Waits for the fixture's intended native executable before capturing any
+/// management target. Polling is bounded and observes kernel identity rather
+/// than assuming a fixed startup delay or refreshing an already captured target.
+fn preparation_cat_is_ready(service: &RuntimeSessionService) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if service.pane_process_identity("%1").is_ok_and(|process| {
+            process
+                .executable_path
+                .file_name()
+                .is_some_and(|name| name == "cat")
+        }) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// A controlled native shell-to-cat exec preserves the root incarnation while
+/// changing the executable witness. A pre-exec management target must fail
+/// closed, and only an independently captured post-exec target may pause the
+/// same task. This diagnoses startup readiness without refreshing stale targets
+/// or weakening the production target comparison.
+#[test]
+fn async_provider_preparation_pause_target_fences_native_exec() {
+    let (mut service, primary, root) = preparation_service("pause-exec");
+    let ready = root.join("ready");
+    let release = root.join("release");
+    let command = format!(
+        "/bin/sh -c 'printf ready > \"{}\"; while [ ! -f \"{}\" ]; do sleep 0.005; done; exec /bin/cat >/dev/null'",
+        ready.display(),
+        release.display()
+    );
+    service.start_initial_pane_process(Some(&command)).unwrap();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !ready.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "native shell readiness"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        service
+            .execute_agent_shell_command(&primary, "pause exec witness")
+            .unwrap();
+        let before = service
+            .capture_agent_lifecycle_target(&primary, "%1")
+            .unwrap();
+        std::fs::write(&release, b"release").unwrap();
+        assert!(preparation_cat_is_ready(&service), "native cat exec");
+        let after = service
+            .capture_agent_lifecycle_target(&primary, "%1")
+            .unwrap();
+        assert_eq!(before.client_id, after.client_id);
+        assert_eq!(before.pane_id, after.pane_id);
+        assert_eq!(before.agent_id, after.agent_id);
+        assert_eq!(before.conversation_id, after.conversation_id);
+        assert_eq!(before.turn_id, after.turn_id);
+        assert_eq!(before.attempts, after.attempts);
+        let original = before.process.as_ref().unwrap();
+        let current = after.process.as_ref().unwrap();
+        assert!(original.same_incarnation(current));
+        assert_ne!(original.executable_path, current.executable_path);
+        assert_eq!(
+            service
+                .pause_agent_lifecycle_target(&primary, &before)
+                .unwrap_err()
+                .kind(),
+            crate::error::MezErrorKind::Conflict
+        );
+        service
+            .pause_agent_lifecycle_target(&primary, &after)
+            .unwrap();
+        service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
+    }));
+    let _ = std::fs::write(&release, b"release");
+    service.terminate_all_pane_processes().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 /// Human pause must inhibit preparation before any MCP registry mutation, even
 /// when a previously captured provider dispatch is presented directly. The
 /// shared post-I/O claim gate must preserve the same pause without retiring it.
+/// Observe the fixture's cat exec before its first target capture; startup exec
+/// is legitimately a different full target and must not become a timing race.
 #[test]
 fn async_provider_preparation_human_pause_prevents_external_work() {
     let (mut service, primary, root) = preparation_service("paused");
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
+    let ready = preparation_cat_is_ready(&service);
+    if !ready {
+        service.terminate_all_pane_processes().unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    assert!(ready, "native cat exec before management target capture");
     service
         .execute_agent_shell_command(&primary, "paused task")
         .unwrap();
