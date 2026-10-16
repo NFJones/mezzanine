@@ -16,7 +16,7 @@ fn runtime_saved_fork_waits_for_accepted_source_chronology() {
         let (mut service, primary, store, root) = fork_transaction_fixture("fork-paused-source");
         let row = TranscriptEntry {
             sequence: 2,
-            content: "ACCEPTED_SOURCE_SUFFIX".into(),
+            content: "FORK_ROW_ACCEPTED_SOURCE_SUFFIX".into(),
             ..store.inspect("fork-source").unwrap()[0].clone()
         };
         let path = store.transcript_path("fork-source").unwrap();
@@ -93,7 +93,7 @@ fn runtime_saved_fork_waits_for_accepted_source_chronology() {
             encoded_history(&mut service, &pane),
             vec![
                 ("developer".into(), "FORK_SUMMARY".into()),
-                ("user".into(), "ACCEPTED_SOURCE_SUFFIX".into()),
+                ("user".into(), "FORK_ROW_ACCEPTED_SOURCE_SUFFIX".into()),
             ],
             "{state}"
         );
