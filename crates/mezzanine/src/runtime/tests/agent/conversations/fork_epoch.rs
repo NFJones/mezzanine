@@ -5,6 +5,80 @@
 
 use super::*;
 
+/// Failure after successful epoch publication but before pane setup completes
+/// removes every new target artifact, including its epoch and required marker,
+/// while keeping the compacted parent's exact durable bytes and live binding.
+#[test]
+fn runtime_saved_fork_epoch_setup_failure_removes_only_published_target() {
+    let root = temp_root("runtime-fork-epoch-setup-fault");
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&TranscriptEntry {
+            conversation_id: "fork-source".into(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "source-turn".into(),
+            agent_id: "agent-%1".into(),
+            pane_id: "%1".into(),
+            content: "source prompt".into(),
+        })
+        .unwrap();
+    store
+        .save_compaction_epoch("fork-source", 1, "source model summary")
+        .unwrap();
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "fork-source", 1)
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+    let before = fs::read_dir(root.join("fork-source"))
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            (path.clone(), fs::read(path).unwrap())
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let panes = service.session().windows()[0].panes().len();
+    service.fail_next_agent_fork_after_persistence_for_tests();
+    let response=service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"epoch-setup-fault","method":"agent/shell/command","params":{"idempotency_key":"epoch-setup-fault","input":"/fork fork-target"}}"#,
+        &primary,
+    );
+    service.terminate_all_pane_processes().unwrap();
+    assert!(
+        response.contains("injected agent fork failure after persistence"),
+        "{response}"
+    );
+    assert_eq!(service.session().windows()[0].panes().len(), panes);
+    assert!(!root.join("fork-target").exists());
+    assert!(store.saved_session("fork-target").unwrap().is_none());
+    assert_eq!(
+        service.agent_shell_store().get("%1").unwrap().session_id,
+        "fork-source"
+    );
+    let after = fs::read_dir(root.join("fork-source"))
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            (path.clone(), fs::read(path).unwrap())
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(after, before);
+}
+
 /// Selective epochs without reconstructible terminal witnesses must survive a
 /// real fork and the first encoded request after reopen. Inclusive ranges keep
 /// their original anchors, user barriers and assistant roles remain ordered,
