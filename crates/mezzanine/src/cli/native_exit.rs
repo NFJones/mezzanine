@@ -287,6 +287,114 @@ mod tests {
         }
     }
 
+    /// A genuinely new explicit caller budget must be able to force and reap
+    /// its exact returned root after an earlier intent-only plan expired. Hold
+    /// the master throughout; save product result/count/SRCH BEFORE independent
+    /// fixture-finish input and try_wait-only cleanup. The old plan is never
+    /// polled before expiry, so no earlier failure receipt is invented/erased.
+    #[tokio::test(flavor = "current_thread")]
+    async fn explicit_retry_after_expired_child_plan_reaps_original_root() {
+        /// Reads only this fixture's held nonblocking PTY for a child marker.
+        async fn marker(master: &std::os::fd::OwnedFd, expected: &str) -> bool {
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+            let mut output = Vec::new();
+            while tokio::time::Instant::now() < deadline {
+                let mut bytes = [0u8; 4096];
+                match rustix::io::read(master, &mut bytes) {
+                    Ok(0) => break,
+                    Ok(count) => output.extend_from_slice(&bytes[..count]),
+                    Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {}
+                    Err(_) => break,
+                }
+                if String::from_utf8_lossy(&output).contains(expected) {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            false
+        }
+        /// Writes only bounded fixture protocol input, never a numeric signal.
+        async fn input(master: &std::os::fd::OwnedFd, mut bytes: &[u8]) -> bool {
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+            while !bytes.is_empty() && tokio::time::Instant::now() < deadline {
+                match rustix::io::write(master, bytes) {
+                    Ok(0) => return false,
+                    Ok(count) => bytes = &bytes[count..],
+                    Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {}
+                    Err(_) => return false,
+                }
+                if !bytes.is_empty() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }
+            bytes.is_empty()
+        }
+        let mut native = CliNativeOwnership::default();
+        let owner = native.foreground();
+        let mut process = mez_mux::process::spawn_retained_argv_pty_process(
+            std::path::Path::new("/bin/sh"),
+            &["-c".into(), "trap '' HUP TERM; stty -echo; printf 'retry-ready\\n'; while IFS= read -r line; do if [ \"$line\" = retry-fixture-finish ]; then exit 0; fi; printf 'retry-child:%s\\n' \"$line\"; done".into()],
+            &[], mez_mux::layout::Size::new(80, 24).unwrap(), None, owner.reserve().unwrap()).unwrap();
+        let pid =
+            rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap()).unwrap();
+        let master = process.duplicate_master_fd().unwrap();
+        let ready = marker(&master, "retry-ready").await;
+        let original_deadline = process.begin_native_termination(true).unwrap();
+        drop(process);
+        owner.seal();
+        let mut exit = CliExit::owned(0, native);
+        tokio::time::sleep_until(
+            tokio::time::Instant::from_std(original_deadline) + Duration::from_millis(10),
+        )
+        .await;
+        let started = tokio::time::Instant::now();
+        let retry = if ready {
+            exit.retry_native_cleanup(Duration::from_millis(200)).await
+        } else {
+            Err(MezError::invalid_state(
+                "retry fixture protocol was not ready",
+            ))
+        };
+        let elapsed = started.elapsed();
+        let product_reaped = owner.outstanding() == 0;
+        let product_absent =
+            rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH);
+        // Everything above is the desired operation's verdict. A later fixture
+        // wait is not allowed to supply any of those saved completion facts.
+        let mut original_live_response = false;
+        let mut fixture_settled = product_reaped;
+        if !product_reaped {
+            let live = rustix::process::test_kill_process(pid) == Ok(());
+            let written = input(&master, b"fresh-retry-probe\n").await;
+            original_live_response =
+                live && written && marker(&master, "retry-child:fresh-retry-probe").await;
+            let finished = input(&master, b"retry-fixture-finish\n").await;
+            let mut drain = owner.begin_drain().unwrap();
+            if let Some(mut child) = drain.take_returned() {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+                while tokio::time::Instant::now() < deadline {
+                    if matches!(child.try_wait(), Ok(Some(_))) {
+                        fixture_settled = finished;
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }
+        }
+        let fixture_absent =
+            rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH);
+        drop(master);
+        assert!(
+            fixture_settled && fixture_absent && owner.outstanding() == 0,
+            "owned fixture did not naturally settle after saved product verdict"
+        );
+        assert!(ready, "HUP/TERM-resistant retry fixture never became Ready");
+        assert!(
+            retry.is_ok() && product_reaped && product_absent,
+            "new explicit retry failed to retire original root before fixture cleanup: retry={retry:?}, elapsed={elapsed:?}, reaped={product_reaped}, absent={product_absent}, original_live_response={original_live_response}"
+        );
+    }
+
     /// Creates only a test-owned PTY child with its mandatory pre-spawn slot.
     fn live_native_outcome(
         code: u8,
