@@ -7,6 +7,8 @@
 
 use super::*;
 
+mod loop_routing;
+
 /// Owns one private generated session and its native delegation fixtures.
 struct CleanupFixture {
     service: RuntimeSessionService,
