@@ -603,3 +603,113 @@ fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
         );
     }
 }
+
+/// A fresh generated owner must never acquire canonical direct mail addressed
+/// to a retired raw identity. Check both public history projections as well as
+/// allocation, while preserving exact envelopes/receipts and avoiding a raw
+/// non-sender floor that could otherwise grow with disconnect churn.
+fn assert_retained_recipient_reserved_after_restore(service: &MessageService, retired: &AgentId) {
+    let snapshot = service.snapshot_state();
+    assert!(
+        snapshot
+            .registered_agents
+            .iter()
+            .all(|identity| identity.agent_id != retired.as_str())
+    );
+    assert!(
+        snapshot
+            .retired_delivery_floors
+            .iter()
+            .all(|floor| floor.identity.agent_id != retired.as_str())
+    );
+    let mut restored = MessageService::from_snapshot_state(&snapshot).unwrap();
+    let replacement = restored.register_agent(None, None, "replacement", Vec::new());
+    let received = restored.receive_for(&replacement.agent_id, 20);
+    assert!(
+        received.is_empty(),
+        "new generated owner {} acquired old direct mail for {retired}: {received:?}",
+        replacement.agent_id
+    );
+    assert_ne!(replacement.agent_id, *retired);
+    restored
+        .subscribe_from_retained_start(&replacement.agent_id)
+        .unwrap();
+    assert!(
+        restored
+            .receive_subscribed(&replacement.agent_id, 20, 100)
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+    let after = restored.snapshot_state();
+    assert_eq!(after.retained_messages, snapshot.retained_messages);
+    assert_eq!(after.accepted_messages, snapshot.accepted_messages);
+    assert_eq!(
+        after.retired_delivery_floors,
+        snapshot.retired_delivery_floors
+    );
+}
+
+/// A raw peer that has never sent owns no authored provenance floor, but its
+/// retained direct-recipient identity still belongs to the old mail. Restoring
+/// that snapshot must reserve the ID without recreating an idle registration,
+/// subscription or raw floor, so a later generated owner cannot read the mail.
+#[test]
+fn fresh_non_sender_recipient_is_not_reallocated_after_restore() {
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", Vec::new());
+    let raw = service.register_agent(None, None, "raw-recipient", Vec::new());
+    service.subscribe(&raw.agent_id).unwrap();
+    service
+        .accept_at_with_scope(
+            &sender.agent_id,
+            mail(&sender, &raw.agent_id, "retired-recipient-only"),
+            MessageScope::Session,
+            10,
+        )
+        .unwrap();
+    service
+        .retire_fresh_observational_identity(&raw.agent_id)
+        .unwrap();
+    assert_retained_recipient_reserved_after_restore(&service, &raw.agent_id);
+}
+
+/// Retained direct mail can outlive a raw peer's final authored envelope. Once
+/// FIFO eviction removes that authored provenance, recipient reservation must
+/// still prevent ID reuse without extending the expired sender floor or
+/// rewriting either the later mail or its acceptance receipt.
+#[test]
+fn fresh_recipient_is_reserved_after_authored_floor_evicts() {
+    let mut service = MessageService::with_limits(2, 4096);
+    let sender = service.register_agent(None, None, "sender", Vec::new());
+    let raw = service.register_agent(None, None, "raw-recipient", Vec::new());
+    service
+        .accept_at_with_scope(
+            &raw.agent_id,
+            mail(&raw, &sender.agent_id, "evict-this-authored-evidence"),
+            MessageScope::Session,
+            10,
+        )
+        .unwrap();
+    service
+        .accept_at_with_scope(
+            &sender.agent_id,
+            mail(&sender, &raw.agent_id, "retain-this-direct-recipient"),
+            MessageScope::Session,
+            11,
+        )
+        .unwrap();
+    service
+        .retire_fresh_observational_identity(&raw.agent_id)
+        .unwrap();
+    assert_eq!(service.snapshot_state().retired_delivery_floors.len(), 1);
+    service
+        .accept_at_with_scope(
+            &sender.agent_id,
+            mail(&sender, &sender.agent_id, "evict-old-sender-floor"),
+            MessageScope::Session,
+            12,
+        )
+        .unwrap();
+    assert_retained_recipient_reserved_after_restore(&service, &raw.agent_id);
+}

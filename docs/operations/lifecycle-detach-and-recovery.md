@@ -54,6 +54,12 @@ Snapshot schema4 preserves exact sent objective versions and rejects forged or
 unreferenced versions; schemas1–3 cannot adopt that data. This does not relax
 active/reusable-owner validation or change shared mail and acceptance receipts.
 
+Raw MMP retirement can remove an idle non-sender without leaving a sender floor.
+Recovery still reserves any direct-recipient ID referenced by retained mail, so
+a fresh generated owner cannot inherit another recipient's historical mail.
+This reservation follows existing retained envelopes; it does not revive the
+old connection, subscription, registration, or an extra identity history.
+
 For an explicitly paired remote session, use `mez --iroh-profile PROFILE
 attach`, pair without attaching with `mez remote pair --invite-file PATH --name
 NAME`, or first pair and attach with `mez --iroh-invite-file PATH --save-as NAME

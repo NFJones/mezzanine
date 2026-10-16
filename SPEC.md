@@ -12953,6 +12953,11 @@ MUST reject fresh-version data, even an empty list. Active and reusable-owner
 snapshot identity comparisons MUST retain their existing exact semantics;
 this fresh-retirement boundary does not provide general live-owner objective
 history restoration or reconnect authority.
+Restored generated-agent allocation MUST also reserve direct agent-recipient
+IDs referenced by canonical retained envelopes, even when their former raw
+owner has no sender floor. Reservation MUST derive from retained mail without
+reviving registrations, extending sender floors, or adding unbounded identity
+history. New owners MUST NOT acquire another recipient's retained direct mail.
 
 ### 12.3 Framing
 

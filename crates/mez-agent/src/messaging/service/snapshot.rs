@@ -4,6 +4,8 @@
 //! sparse delivery floors; queue indexes remain projections of retained mail.
 //! Schema4 records exact fresh raw sender objective versions without rewriting
 //! envelopes or receipts. Legacy reusable floor semantics remain independent.
+//! Restoration reserves retained direct-recipient IDs independently of sender
+//! floors so a fresh owner cannot acquire another identity's canonical mail.
 
 use super::snapshot_validation::validate_message_service_snapshot;
 use super::*;
@@ -176,10 +178,22 @@ impl MessageService {
             );
         }
 
-        // Retired senders still own retained provenance. A generated hello
-        // must not alias those ids after restore, even without live presence.
-        let ids =
-            IdFactory::after_existing_ids(registered.keys().chain(retired_delivery_floors.keys()));
+        // Retained senders and direct recipients still own canonical evidence.
+        // Recipient-only raw identities deliberately leave no authored floor;
+        // reserve their IDs from bounded mail, without reviving registrations
+        // or keeping independent tombstones after that mail has evicted.
+        let recipient_ids = queue
+            .iter()
+            .filter_map(|queued| match &queued.envelope.recipient {
+                Recipient::Agent(agent_id) => Some(agent_id),
+                _ => None,
+            });
+        let ids = IdFactory::after_existing_ids(
+            registered
+                .keys()
+                .chain(retired_delivery_floors.keys())
+                .chain(recipient_ids),
+        );
         let mut service = Self {
             ids,
             registered,

@@ -263,6 +263,11 @@ floor. This bounds version count by retained authored occurrences, not by the
 payload-only byte budget. Schemas1–3 reject the fresh-version field even when
 empty. Active/reusable-owner exact validation is unchanged; this is not general
 live-owner objective-history repair or a raw reconnect/rebind operation.
+Snapshot restoration also reserves direct recipient IDs still referenced by
+retained mail, including raw non-senders and senders whose authored floor has
+already evicted. A fresh generated owner cannot acquire that recipient's old
+direct mail through historical reads. This uses existing bounded mail rather
+than restoring idle registrations or keeping extra identity tombstones.
 
 ## Payloads and MAAP bridge
 
