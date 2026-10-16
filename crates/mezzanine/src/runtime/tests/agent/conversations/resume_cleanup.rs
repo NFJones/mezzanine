@@ -244,6 +244,60 @@ fn runtime_cleanup_keeps_same_conversation_live_subtree_obligation() {
     }
 }
 
+/// An ordinary first fork/new loop iteration is a code-owned temporary child
+/// binding, not independent resume. Root close must still retire the actual
+/// delegated child and its preexisting no-join native grandchild while the
+/// first iteration is active, without requiring any second-iteration rebind.
+#[test]
+fn runtime_cleanup_first_owned_loop_iteration_retains_native_subtree() {
+    for mode in ["--fork", "--new"] {
+        let mut fixture = CleanupFixture::new();
+        let child = fixture.spawn("agent-%1");
+        let grandchild = fixture.spawn(&child);
+        let child_native = fixture.native_identity(&child);
+        let grandchild_native = fixture.native_identity(&grandchild);
+        let pane = child.strip_prefix("agent-").unwrap();
+        let original = fixture
+            .service
+            .agent_shell_store()
+            .get(pane)
+            .unwrap()
+            .session_id
+            .clone();
+        fixture
+            .service
+            .execute_agent_shell_loop_command(
+                pane,
+                &format!("/loop {mode} --limit 1 first owned iteration"),
+            )
+            .unwrap();
+        assert_eq!(fixture.service.agent_loop_state(pane).unwrap().iteration, 1);
+        assert_ne!(
+            fixture
+                .service
+                .agent_shell_store()
+                .get(pane)
+                .unwrap()
+                .session_id,
+            original
+        );
+        fixture.assert_native_identity(&child, child_native);
+        fixture.assert_native_identity(&grandchild, grandchild_native);
+        fixture.close("agent-%1");
+        assert!(
+            !fixture.present(&child),
+            "{mode}: live child survived root close during first iteration"
+        );
+        assert!(!fixture.present(&grandchild));
+        for (pid, token) in [child_native, grandchild_native] {
+            assert_ne!(
+                mez_mux::process::process_start_token_for_pid(pid),
+                Some(token)
+            );
+        }
+    }
+}
+
 /// Verifies historical-only structure in the middle of an otherwise live
 /// delegation chain cuts off ancestor teardown. The independently rebound
 /// intermediate still retains cleanup obligations for its own genuine child.
