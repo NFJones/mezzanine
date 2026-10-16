@@ -193,9 +193,23 @@ fn runtime_saved_fork_selective_epoch_encoded_anchors_and_native_ownership() {
             .unwrap();
         assert!(settled.contains("resumed=true"), "{settled}");
         assert_eq!(encoded_history(&mut reopened, "%1"), expected);
+        assert!(
+            encoded_body(&mut reopened, "%1")["input"]
+                .as_array()
+                .unwrap()
+                .contains(&native_item)
+        );
+        assert!(
+            reopened
+                .agent_context_for_pane_prompt("%1", "continue", 0)
+                .unwrap()
+                .chronology()
+                .iter()
+                .any(|event| event.provider_owner() == Some(&owner))
+        );
         let mut later = rows[0].clone();
         later.sequence = 11;
-        later.content = "parent only work".into();
+        later.content = "FORK_ROW_PARENT_ONLY".into();
         store.append(&later).unwrap();
         later.conversation_id = "fork-target".into();
         later.content = "FORK_ROW_011".into();
