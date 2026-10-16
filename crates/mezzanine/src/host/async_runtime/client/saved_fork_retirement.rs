@@ -20,9 +20,40 @@ pub(in crate::host::async_runtime) struct SavedForkServiceRetirement {
     pub(super) shutdown: Arc<AtomicBool>,
     /// Shares the command lane's existing total capacity, not a second lane.
     workers: Arc<Mutex<JoinSet<Result<()>>>>,
+    /// Owned-fixture pause after durable publication, before actor adoption.
+    #[cfg(test)]
+    publication_gate: Arc<Mutex<Option<ForkPublicationGate>>>,
+    /// Owned-fixture evidence that normal service retirement has begun.
+    #[cfg(test)]
+    draining: Arc<AtomicBool>,
 }
 
+/// Two-phase test handshake; production workers have no pause or new deadline.
+#[cfg(test)]
+pub(in crate::host::async_runtime) type ForkPublicationGate =
+    (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>);
+
 impl SavedForkServiceRetirement {
+    /// Installs an exact worker pause for postpublication cancellation controls.
+    #[cfg(test)]
+    pub(in crate::host::async_runtime) fn gate_publication_for_tests(&self) -> ForkPublicationGate {
+        let gate = (Arc::default(), Arc::default());
+        *self.publication_gate.lock().unwrap() = Some(gate.clone());
+        gate
+    }
+
+    /// Moves the configured gate into its sole blocking publication owner.
+    #[cfg(test)]
+    pub(super) fn take_publication_gate_for_tests(&self) -> Option<ForkPublicationGate> {
+        self.publication_gate.lock().unwrap().take()
+    }
+
+    /// Reports entry into normal service cleanup before auxiliary abort.
+    #[cfg(test)]
+    pub(in crate::host::async_runtime) fn draining_for_tests(&self) -> bool {
+        self.draining.load(Ordering::Acquire)
+    }
+
     /// Exposes only retained task count to owned lifecycle regression fixtures.
     #[cfg(test)]
     pub(in crate::host::async_runtime) fn retained_workers_for_tests(&self) -> usize {
@@ -68,6 +99,8 @@ impl SavedForkServiceRetirement {
     /// is moved into this future: supervisor ownership survives its cancellation.
     pub(super) async fn retire_in_service(&self) -> Result<u64> {
         self.request_stop();
+        #[cfg(test)]
+        self.draining.store(true, Ordering::Release);
         let mut completed = 0u64;
         let mut failure = None;
         while self.len()? != 0 {

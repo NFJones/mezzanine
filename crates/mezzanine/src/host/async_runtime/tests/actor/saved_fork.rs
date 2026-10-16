@@ -12,7 +12,7 @@ use super::super::*;
 /// command wrapper. The source lease stays held until supervision has returned.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths() {
-    for mode in ["shutdown", "last-primary", "error"] {
+    for mode in ["shutdown", "last-primary", "error", "published", "draining"] {
         let root =
             std::env::temp_dir().join(format!("mez-fork-supervision-{}", rand::random::<u64>()));
         let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
@@ -47,9 +47,16 @@ async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths
         let started = std::sync::Arc::new(tokio::sync::Notify::new());
         let release = std::sync::Arc::new(tokio::sync::Notify::new());
         service.set_deferred_agent_command_probe_for_tests(started.clone(), release.clone());
-        let (source_lock, _, _) = store
-            .lock_presentation_snapshot("supervised-source")
-            .unwrap();
+        let source_lock = if matches!(mode, "published" | "draining") {
+            None
+        } else {
+            Some(
+                store
+                    .lock_presentation_snapshot("supervised-source")
+                    .unwrap()
+                    .0,
+            )
+        };
         let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
             .build()
             .unwrap();
@@ -64,6 +71,8 @@ async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths
             )
             .unwrap();
             let retirement = command_service.saved_fork_retirement.clone().unwrap();
+            let publication_gate = matches!(mode, "published" | "draining")
+                .then(|| retirement.gate_publication_for_tests());
             let (primary_tx, primary_rx) = tokio::sync::oneshot::channel();
             let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
             let primary_service = AsyncRuntimeService::new("owned-primary", async move {
@@ -74,7 +83,7 @@ async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths
                     Ok(AsyncRuntimeServiceExit::completed(1))
                 }
             });
-            let supervisor = tokio::spawn(supervise_async_runtime_services(
+            let mut supervisor = tokio::spawn(supervise_async_runtime_services(
                 vec![primary_service, command_service],
                 async move {
                     let _ = cancel_rx.await;
@@ -104,10 +113,40 @@ async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths
                 .await
                 .unwrap();
             assert_eq!(retirement.retained_workers_for_tests(), 1);
-            if mode == "shutdown" {
+            if let Some((published, _)) = &publication_gate {
+                tokio::time::timeout(Duration::from_secs(2), published.notified())
+                    .await
+                    .unwrap();
+                assert!(root.join("supervised-target").is_dir());
+                if mode == "draining" {
+                    retirement.request_stop();
+                    tokio::time::timeout(Duration::from_secs(2), async {
+                        while !retirement.draining_for_tests() {
+                            tokio::task::yield_now().await;
+                        }
+                    })
+                    .await
+                    .unwrap();
+                }
+            }
+            if matches!(mode, "shutdown" | "published" | "draining") {
                 cancel_tx.send(()).unwrap();
             } else {
                 primary_tx.send(()).unwrap();
+            }
+            if let Some((_, release)) = publication_gate {
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(25), &mut supervisor)
+                        .await
+                        .is_err(),
+                    "supervisor must not finish before its publication owner retires"
+                );
+                assert_eq!(
+                    retirement.retained_workers_for_tests(),
+                    0,
+                    "supervisor must have taken exact worker ownership before release"
+                );
+                release.notify_one();
             }
             let result = tokio::time::timeout(Duration::from_secs(2), supervisor)
                 .await
@@ -122,7 +161,7 @@ async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths
                 );
             } else {
                 let report = result.unwrap();
-                assert_eq!(report.shutdown_requested, mode == "shutdown");
+                assert_eq!(report.shutdown_requested, mode != "last-primary");
                 assert!(
                     report
                         .services

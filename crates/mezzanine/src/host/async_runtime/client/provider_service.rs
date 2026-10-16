@@ -417,7 +417,7 @@ where
                     retirement.spawn(execute_deferred_agent_command(
                         handle.clone(),
                         dispatch,
-                        Some(retirement.shutdown.clone()),
+                            Some(retirement.clone()),
                     ))?;
                 } else {
                     workers.spawn(execute_deferred_agent_command(
@@ -470,7 +470,7 @@ where
 async fn execute_deferred_agent_command(
     handle: AsyncRuntimeSessionHandle,
     dispatch: RuntimeSideEffect,
-    fork_shutdown: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    fork_owner: Option<super::SavedForkServiceRetirement>,
 ) -> Result<()> {
     let RuntimeSideEffect::DispatchAgentCommand {
         primary_client_id,
@@ -504,10 +504,14 @@ async fn execute_deferred_agent_command(
     let Some(mut work) = claimed else {
         return Ok(());
     };
-    if let (Some(shutdown), crate::runtime::RuntimeAgentCommandPrepared::SavedFork(fork)) =
-        (fork_shutdown, &mut work.prepared)
+    #[cfg(test)]
+    let publication_gate = fork_owner
+        .as_ref()
+        .and_then(|owner| owner.take_publication_gate_for_tests());
+    if let (Some(owner), crate::runtime::RuntimeAgentCommandPrepared::SavedFork(fork)) =
+        (fork_owner, &mut work.prepared)
     {
-        fork.supervisor_cancelled = Some(shutdown);
+        fork.supervisor_cancelled = Some(owner.shutdown.clone());
     }
     #[cfg(test)]
     if let (Some(started), Some(release)) = (
@@ -556,6 +560,11 @@ async fn execute_deferred_agent_command(
         let outcome = if let crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read) =
             outcome
         {
+            #[cfg(test)]
+            if let Some((published, release)) = publication_gate {
+                published.notify_one();
+                adoption_runtime.block_on(release.notified());
+            }
             let reply = adoption_runtime.block_on(async {
                 tokio::time::timeout(
                     DEFERRED_AGENT_COMMAND_DEADLINE,
