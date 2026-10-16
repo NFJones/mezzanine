@@ -16022,6 +16022,8 @@ owner on the target, without changing source bytes or replaying actions.
 These guarantees serialize cooperating store writers, not arbitrary external
 file changes. Forking MUST NOT recharge inherited usage or grant filesystem,
 MCP, approval, or message authority from historical evidence.
+Saved root forks MUST receive their own prompt-cache lineage as well as a new
+conversation id; archival execution occurrence ownership remains historical.
 It MUST bind the forked conversation to a
 new agent-mode pane in the same window instead of rebinding or mutating the
 source pane's active conversation. The new pane's agent prompt MUST be seeded

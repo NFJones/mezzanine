@@ -133,11 +133,14 @@ impl AgentTranscriptStore {
     pub(super) fn acquire_fork_conversation_lock(
         &self,
         conversation_id: &str,
-        cancelled: &std::sync::atomic::AtomicBool,
+        cancelled: &[&std::sync::atomic::AtomicBool],
     ) -> Result<File> {
         let file = self.open_conversation_lock(conversation_id)?;
         loop {
-            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            if cancelled
+                .iter()
+                .any(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+            {
                 return Err(MezError::invalid_state(
                     "saved fork worker cancelled before publication",
                 ));

@@ -6,6 +6,149 @@
 
 use super::super::*;
 
+/// Stopping the real command service during source-lock acquisition requests
+/// fork cancellation and observes its wrapper through actual blocking retirement.
+/// The fixture keeps the source locked until the service returns: shutdown must
+/// not depend on a successful copy or leave a delayed target writer behind.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_saved_fork_stop_retires_blocked_publication_owner() {
+    blocked_saved_fork_retirement(false).await;
+}
+
+/// Exercises the real unchanged 120-second command deadline, not a shortened
+/// test budget. Its error must settle while source ownership remains unavailable,
+/// then service stop must observe the original blocking owner before returning.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_saved_fork_deadline_observes_blocked_owner_retirement() {
+    blocked_saved_fork_retirement(true).await;
+}
+
+/// Runs either deadline or explicit-stop retirement with an owned source lease.
+/// The source remains locked until both supervisor and its fork owner have exited.
+async fn blocked_saved_fork_retirement(deadline: bool) {
+    let root = std::env::temp_dir().join(format!("mez-fork-stop-{}", rand::random::<u64>()));
+    let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+    store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "stop-source".into(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "fixture-turn".into(),
+            agent_id: "agent-%1".into(),
+            pane_id: "%1".into(),
+            content: "owned source".into(),
+        })
+        .unwrap();
+    store
+        .save_compaction_epoch("stop-source", 1, "owned summary")
+        .unwrap();
+    let mut service = test_service();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "stop-source", 1)
+        .unwrap();
+    let started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    service.set_deferred_agent_command_probe_for_tests(started.clone(), release.clone());
+    let (source_lock, _, _) = store.lock_presentation_snapshot("stop-source").unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let client = async {
+        let worker_handle = handle.clone();
+        let worker_stop = stop.clone();
+        let worker = tokio::spawn(async move {
+            run_async_agent_command_service(
+                &worker_handle,
+                AsyncAgentProviderServiceConfig::new(1)
+                    .unwrap()
+                    .with_idle_interval(Duration::from_millis(5))
+                    .unwrap(),
+                move |_, _| worker_stop.load(std::sync::atomic::Ordering::Acquire),
+            )
+            .await
+        });
+        handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        b"/fork stop-target\r".to_vec(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        release.notify_one();
+        if deadline {
+            tokio::time::timeout(Duration::from_secs(150), async {
+                loop {
+                    let view = handle
+                        .render_client_view(
+                            ClientViewRole::Primary,
+                            Size::new(80, 24).unwrap(),
+                            TerminalClientLoopConfig::default(),
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    if view.lines.join("\n").contains("exceeded its") {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("unchanged command deadline must settle without releasing source");
+        }
+        stop.store(true, std::sync::atomic::Ordering::Release);
+        tokio::time::timeout(Duration::from_secs(2), worker)
+            .await
+            .expect("stop must cancel and observe lock acquisition without releasing source")
+            .unwrap()
+            .unwrap();
+        assert!(!root.join("stop-target").exists());
+        drop(source_lock);
+        let view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!view.lines.join("\n").contains("forked=true"));
+        assert_eq!(store.inspect("stop-source").unwrap().len(), 1);
+        assert!(store.saved_session("stop-target").unwrap().is_none());
+        handle.shutdown().await.unwrap();
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// A held source lease blocks the real command worker, not the actor. The actual
 /// supervisor must publish/adopt the inherited epoch, settle the projected result
 /// and queue binding persistence without recursively locking its target lease.
@@ -107,18 +250,19 @@ async fn async_actor_saved_fork_store_lock_keeps_control_responsive_and_checkpoi
         assert!(view.lines.join("\n").contains("command running"));
         assert!(!root.join("actor-target").exists());
         drop(source_lock);
+        let mut checkpoints = Vec::new();
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                let view = handle
-                    .render_client_view(
-                        ClientViewRole::Primary,
-                        Size::new(80, 24).unwrap(),
-                        TerminalClientLoopConfig::default(),
-                    )
-                    .await
-                    .unwrap()
-                    .unwrap();
-                if view.lines.join("\n").contains("forked=true") {
+                for effect in handle.drain_runtime_side_effects(128).await.unwrap() {
+                    if let RuntimeSideEffect::PersistAgentSessionMetadata { .. } = &effect {
+                        checkpoints.push(effect);
+                    }
+                }
+                if checkpoints.iter().any(|effect| {
+                    matches!(effect,
+                    RuntimeSideEffect::PersistAgentSessionMetadata { records, .. }
+                        if records.iter().any(|record| record.conversation_id == "actor-target"))
+                }) {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -127,7 +271,7 @@ async fn async_actor_saved_fork_store_lock_keeps_control_responsive_and_checkpoi
         .await
         .expect("actual supervisor adoption must settle without target-lock recursion");
         let mut persisted = false;
-        for effect in handle.drain_runtime_side_effects(128).await.unwrap() {
+        for effect in checkpoints {
             if let RuntimeSideEffect::PersistAgentSessionMetadata {
                 store,
                 mezzanine_session_id,

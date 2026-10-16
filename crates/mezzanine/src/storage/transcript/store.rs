@@ -3854,7 +3854,7 @@ impl AgentTranscriptStore {
             source_conversation_id,
             target_conversation_id,
             created_at_unix_seconds,
-            None,
+            &[],
         )
     }
 
@@ -3866,7 +3866,7 @@ impl AgentTranscriptStore {
         source_conversation_id: &str,
         target_conversation_id: &str,
         created_at_unix_seconds: u64,
-        cancelled: Option<&std::sync::atomic::AtomicBool>,
+        cancelled: &[&std::sync::atomic::AtomicBool],
     ) -> Result<ForkPublication> {
         validate_conversation_id(source_conversation_id)?;
         validate_conversation_id(target_conversation_id)?;
@@ -3877,9 +3877,12 @@ impl AgentTranscriptStore {
         ids.sort_unstable();
         let mut conversation_locks = ids
             .into_iter()
-            .map(|id| match cancelled {
-                Some(cancelled) => self.acquire_fork_conversation_lock(id, cancelled),
-                None => self.acquire_conversation_lock(id),
+            .map(|id| {
+                if cancelled.is_empty() {
+                    self.acquire_conversation_lock(id)
+                } else {
+                    self.acquire_fork_conversation_lock(id, cancelled)
+                }
             })
             .collect::<Result<Vec<_>>>()?;
         if self.conversation_exists(target_conversation_id)?
@@ -3917,7 +3920,10 @@ impl AgentTranscriptStore {
             self.begin_fork_publication(target_conversation_id)?;
             let mut frozen_rows = Vec::new();
             for entry in entries {
-                if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+                if cancelled
+                    .iter()
+                    .any(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+                {
                     return Err(MezError::invalid_state(
                         "saved fork worker cancelled during publication",
                     ));

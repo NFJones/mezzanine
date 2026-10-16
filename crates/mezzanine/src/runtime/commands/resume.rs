@@ -49,6 +49,8 @@ pub(crate) struct SavedForkWork {
     created_at: u64,
     /// Deadline/shutdown cancellation observed only by the fork storage worker.
     pub(crate) cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Independent service-stop signal; one job's deadline never poisons it.
+    pub(crate) supervisor_cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Worker-owned durable publication retained across both actor round trips.
@@ -91,11 +93,15 @@ pub(super) fn read_saved_fork(work: &SavedForkWork) -> Result<SavedForkRead> {
         &work.store.prompt_history(&work.source)?,
         &work.input,
     );
+    let mut cancellation = vec![work.cancelled.as_ref()];
+    if let Some(supervisor) = &work.supervisor_cancelled {
+        cancellation.push(supervisor.as_ref());
+    }
     let publication = work.store.fork_owned_cancellable(
         &work.source,
         &work.target,
         work.created_at,
-        Some(&work.cancelled),
+        &cancellation,
     )?;
     Ok(SavedForkRead {
         work: work.clone(),
@@ -1613,6 +1619,7 @@ impl RuntimeSessionService {
             input: input.to_owned(),
             created_at: current_unix_seconds().max(1),
             cancelled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            supervisor_cancelled: None,
         })
     }
 
@@ -1647,6 +1654,11 @@ impl RuntimeSessionService {
                 .work
                 .cancelled
                 .load(std::sync::atomic::Ordering::Acquire)
+            || read
+                .work
+                .supervisor_cancelled
+                .as_ref()
+                .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
             || !self
                 .session
                 .is_attached_primary(&read.work.primary_client_id)
@@ -1662,6 +1674,9 @@ impl RuntimeSessionService {
             )));
             return Ok(false);
         }
+        // No pane operation has run yet. The installer revokes this proof just
+        // before its first mutating split and re-establishes it only on rollback.
+        adoption.cleanup_safe = true;
         let outcome = self.install_saved_fork_command(&work.pane_id, read, &mut adoption);
         adoption.result = Some(outcome.map(|outcome| {
             super::runtime_agent_shell_command_response_json(
@@ -1780,13 +1795,10 @@ impl RuntimeSessionService {
         })?;
         let source_start_directory = self.pane_current_working_directory(pane_id);
         let prompt_seed = read.prompt_seed.clone();
-        let source_lineage = self
-            .agent_shell_store()
-            .get(pane_id)
-            .map(|session| session.prompt_cache_lineage_id.clone());
         let copied_shell_mode = self.agent_shell_mode_override(pane_id);
         let startup_mode = copied_shell_mode.unwrap_or_else(|| self.agent_default_shell_mode());
         let previous_primary_names = self.snapshot_primary_agent_names();
+        adoption.cleanup_safe = false;
         let previous_processes = self.tracked_runtime_pane_process_ids();
         let previous_panes = self
             .tracked_pane_descriptors()
@@ -1835,7 +1847,7 @@ impl RuntimeSessionService {
                         &started.pane_id,
                         &summary.conversation_id,
                         summary.entries as u64,
-                        source_lineage,
+                        None,
                     )?;
                 (
                     session.session_id.clone(),
