@@ -751,7 +751,10 @@ mod tests {
     /// Spawns an exclusively owned root that reports received graceful signals
     /// and child-generated probe replies, without relying on terminal echo.
     fn signal_observer(owner: &PaneProcessRetirementOwner) -> super::super::PaneProcess {
-        signal_observer_with_environment(owner, &[])
+        signal_observer_with_environment(
+            owner,
+            &[("MEZ_TEST_SIGNAL_RECEIPT".into(), String::new())],
+        )
     }
 
     /// Adds only fake fixture environment, including an optional private trap
