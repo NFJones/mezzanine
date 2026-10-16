@@ -453,8 +453,8 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
     let input: u64 = usage.values().map(|value| value.input_tokens).sum();
     let output: u64 = usage.values().map(|value| value.output_tokens).sum();
     let cutoff = u64::from(retry == RetryPath::OutputLimit);
-    assert_eq!(input, report.executions as u64 * 100 + cutoff * 10);
-    assert_eq!(output, report.executions as u64 * 10 + cutoff);
+    assert_eq!(input, report.executions * 100 + cutoff * 10);
+    assert_eq!(output, report.executions * 10 + cutoff);
     let epoch = store.compaction_epoch(&conversation).unwrap().unwrap();
     if manual {
         assert!(epoch.summary.contains(&corrected));

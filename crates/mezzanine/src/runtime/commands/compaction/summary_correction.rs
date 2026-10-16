@@ -39,8 +39,12 @@ impl RuntimeSessionService {
                 false,
             ),
         };
-        let (summary, malformed) = completed_summary(response, &task.request)
-            .map_or_else(|()| (String::new(), true), |summary| (summary, false));
+        let (summary, malformed) = runtime_model_compaction_summary_from_response(
+            response,
+            &task.request.turn_id,
+            &task.request.agent_id,
+        )
+        .map_or_else(|_| (String::new(), true), |summary| (summary, false));
         let validation = if malformed {
             Err(ModelCompactionSummaryRejection {
                 defect: ModelCompactionSummaryDefect::Malformed,
@@ -266,9 +270,10 @@ fn prepare_summary_correction(
 /// provider API or wire controls. Ordinary JSON/code summaries remain text unless
 /// they identify themselves as a MAAP envelope. Malformed frames consume the
 /// same finite correction budget as already-parsed malformed batches.
-fn completed_summary(
+pub(super) fn completed_summary(
     response: &ModelResponse,
-    request: &ModelRequest,
+    turn_id: &str,
+    agent_id: &str,
 ) -> std::result::Result<String, ()> {
     let raw = response.raw_text.trim();
     let decoded = if response.action_batch.is_none() {
@@ -283,20 +288,12 @@ fn completed_summary(
         };
         if envelope {
             Some(
-                mez_agent::parse_maap_action_batch_json_for_turn(
-                    raw,
-                    &request.turn_id,
-                    &request.agent_id,
-                )
-                .map_err(|_| ())?,
+                mez_agent::parse_maap_action_batch_json_for_turn(raw, turn_id, agent_id)
+                    .map_err(|_| ())?,
             )
         } else {
-            mez_agent::parse_fenced_maap_action_batch_for_turn(
-                raw,
-                &request.turn_id,
-                &request.agent_id,
-            )
-            .map_err(|_| ())?
+            mez_agent::parse_fenced_maap_action_batch_for_turn(raw, turn_id, agent_id)
+                .map_err(|_| ())?
         }
     } else {
         None

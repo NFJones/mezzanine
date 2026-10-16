@@ -3715,29 +3715,16 @@ fn runtime_redact_compaction_blocks(blocks: &[ContextBlock]) -> Vec<ContextBlock
         .collect()
 }
 
-/// Extracts the model-authored markdown summary from a compaction response.
+/// Extracts the completed payload through the same local optional-frame decoder
+/// used before frozen-budget validation. Parser errors carry no response text.
 pub(super) fn runtime_model_compaction_summary_from_response(
     response: &ModelResponse,
+    turn_id: &str,
+    agent_id: &str,
 ) -> Result<String> {
-    let summary = response
-        .action_batch
-        .as_ref()
-        .and_then(|batch| {
-            batch.actions.iter().find_map(|action| {
-                if let AgentActionPayload::Say { text, .. } = &action.payload {
-                    Some(text.trim().to_string())
-                } else {
-                    None
-                }
-            })
-        })
-        .unwrap_or_else(|| response.raw_text.trim().to_string());
-    if summary.trim().is_empty() {
-        return Err(MezError::invalid_state(
-            "model compaction response did not contain a summary",
-        ));
-    }
-    Ok(summary)
+    summary_correction::completed_summary(response, turn_id, agent_id).map_err(|()| {
+        MezError::invalid_state("model compaction response contained a malformed summary frame")
+    })
 }
 
 /// Formats the durable memory record stored after model-authored compaction.
