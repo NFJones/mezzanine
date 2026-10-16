@@ -57,6 +57,22 @@ Darwin access to another process remains rejected until its supplementary
 groups can be independently verified; matching UID/GID is insufficient.
 These guards do not enable production process-free patch dispatch.
 
+### Native lifecycle evidence and uncertain completion
+
+Native sandbox status is captured on a separate trusted pipe, never inferred
+from stdout or stderr. Closure is proven only when the joined status reader
+actually reads EOF. A late completion notification does not invalidate that
+proof, but cancellation, loss of the cancellation owner, a read error or a
+reader panic cannot establish it. Bytes retained from an unclosed pipe remain
+insufficient even if they look like valid status records or the launcher exited.
+
+Post-exit draining remains bounded. Invalid UTF-8, malformed, truncated,
+unclosed or contradictory status stays fail-closed; stderr diagnostics are
+bounded and credential-redacted. Closed, valid child-only status can report
+missing completion without claiming the payload never ran. No such failure
+authorizes automatic replay or an unsandboxed retry. EOF of one pipe also does
+not establish whole-command completion.
+
 ## Grant filesystem access narrowly
 
 `permissions.read_scopes` and `permissions.write_scopes` define user filesystem

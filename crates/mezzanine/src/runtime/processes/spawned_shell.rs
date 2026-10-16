@@ -7,6 +7,11 @@
 //! working directory, captures stdout and stderr through pipes within a
 //! bounded budget, and kills the whole child process group on timeout or
 //! interruption. Nothing is written to or read from the pane PTY.
+//!
+//! Reader completion notifications only bound scheduling of post-exit draining.
+//! Trusted lifecycle closure comes exclusively from actual read(0), carried in
+//! the joined capture. Cancellation, channel disconnect, read failure and panic
+//! cannot certify EOF, even when a reader has sent a completion notification.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -151,12 +156,26 @@ impl SpawnedChildPipe {
     }
 }
 
-/// Bounded bytes captured from one child pipe.
+/// Reader-owned reason a successful drain stopped; only an actual read(0)
+/// establishes EOF. Read failures and panics remain errors at the join boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PipeReadTermination {
+    /// The owned pipe read returned zero bytes.
+    Eof,
+    /// The collector explicitly requested bounded shutdown.
+    Cancelled,
+    /// The cancellation owner disappeared before EOF was observed.
+    CancellationDisconnected,
+}
+
+/// Bounded bytes and the actual terminal reason returned by one pipe reader.
 struct CapturedPipeOutput {
     /// Bytes retained up to the configured stream budget.
     bytes: Vec<u8>,
     /// Bytes discarded after the retained budget was exhausted.
     dropped: usize,
+    /// Reader-owned closure evidence, independent of notification consumption.
+    termination: PipeReadTermination,
 }
 
 /// Cancelable reader and its completion notification state.
@@ -167,7 +186,7 @@ struct SpawnedChildPipeReader {
     cancel: mpsc::Sender<()>,
     /// Reader thread joined only after EOF or cancellation.
     handle: JoinHandle<Result<CapturedPipeOutput>>,
-    /// Whether the reader reported completion through the shared channel.
+    /// Whether collection consumed a done notice; a scheduling hint, not EOF.
     completed: bool,
 }
 
@@ -912,6 +931,8 @@ fn configure_output_reader_nonblocking(stream: SpawnedChildPipe, reader: &impl A
 }
 
 /// Drains one child output stream while permitting bounded cancellation.
+/// Returns bounded bytes, dropped-byte accounting and the precise stop reason;
+/// only read(0) establishes EOF. Descriptor setup and read failures return errors.
 fn drain_output_stream<R>(
     stream: SpawnedChildPipe,
     mut reader: R,
@@ -926,13 +947,16 @@ where
     let mut retained = Vec::new();
     let mut dropped = 0_usize;
     let mut buffer = [0_u8; 8192];
-    loop {
+    let termination = loop {
         match cancellation.try_recv() {
-            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+            Ok(()) => break PipeReadTermination::Cancelled,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                break PipeReadTermination::CancellationDisconnected;
+            }
             Err(mpsc::TryRecvError::Empty) => {}
         }
         match reader.read(&mut buffer) {
-            Ok(0) => break,
+            Ok(0) => break PipeReadTermination::Eof,
             Ok(count) => {
                 if let Some(progress) = progress.as_ref() {
                     progress.report(stream, &buffer[..count]);
@@ -944,7 +968,10 @@ where
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 match cancellation.recv_timeout(SPAWNED_CHILD_POLL_INTERVAL) {
-                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Ok(()) => break PipeReadTermination::Cancelled,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        break PipeReadTermination::CancellationDisconnected;
+                    }
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                 }
             }
@@ -955,10 +982,11 @@ where
                 )));
             }
         }
-    }
+    };
     Ok(CapturedPipeOutput {
         bytes: retained,
         dropped,
+        termination,
     })
 }
 
@@ -990,7 +1018,7 @@ fn wait_for_reader_completion(
     drain_reader_completions(done, stdout, stderr, status);
 }
 
-/// Marks the matching reader as complete.
+/// Records a matching done notice for scheduling, without asserting pipe EOF.
 fn record_reader_completion(
     completed: SpawnedChildPipe,
     stdout: &mut SpawnedChildPipeReader,
@@ -1008,7 +1036,7 @@ fn record_reader_completion(
     }
 }
 
-/// Reports whether any reader still waits for EOF from inherited writers.
+/// Reports whether collection still awaits any reader's done notification.
 fn readers_are_pending(
     stdout: &SpawnedChildPipeReader,
     stderr: &SpawnedChildPipeReader,
@@ -1017,7 +1045,8 @@ fn readers_are_pending(
     !stdout.completed || !stderr.completed || status.is_some_and(|reader| !reader.completed)
 }
 
-/// Requests shutdown only when EOF has not already completed the reader.
+/// Requests shutdown when collection has not consumed a reader's done notice.
+/// A late request cannot erase EOF already observed by the reader itself.
 fn cancel_pending_reader(reader: &SpawnedChildPipeReader) {
     if !reader.completed {
         let _ = reader.cancel.send(());
@@ -1034,15 +1063,15 @@ fn join_output_reader(reader: SpawnedChildPipeReader) -> Result<CapturedPipeOutp
     })?
 }
 
-/// Validates trusted sandbox lifecycle evidence captured outside stdout and
-/// stderr for one completed typed child launch.
+/// Joins trusted status capture and validates only its reader-owned EOF proof.
+/// Notification timing cannot certify or discard closure; read errors and
+/// panics map to uncertain Transport evidence without parsed record presence.
 fn join_and_validate_spawned_child_status(
     status_reader: SpawnedChildPipeReader,
     backend: crate::runtime::SandboxBackend,
     output: &ShellExecutionOutput,
     stderr_dropped: usize,
 ) -> Result<()> {
-    let status_complete = status_reader.completed;
     let status_capture = join_output_reader(status_reader).map_err(|_| {
         spawned_lifecycle_error(
             backend,
@@ -1056,7 +1085,7 @@ fn join_and_validate_spawned_child_status(
         backend,
         &status_capture.bytes,
         status_capture.dropped,
-        status_complete,
+        status_capture.termination == PipeReadTermination::Eof,
         output,
         stderr_dropped,
     )

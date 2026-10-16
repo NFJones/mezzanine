@@ -10983,6 +10983,12 @@ exit/signal, and the status parse or transport failure classification. Invalid
 status MUST leave record presence unknown. Missing completion evidence MUST NOT
 claim that the payload did not run, authorize automatic replay, or weaken the
 sandbox boundary; stdout MUST NOT substitute for trusted lifecycle status.
+Status pipe closure MUST be proven by the joined reader's actual zero-byte read,
+not by consumption of a reader completion notification or the direct child's
+exit. Late or undrained notifications MUST NOT discard actual EOF evidence.
+Cancellation, cancellation-owner disconnect, read failure and reader panic MUST
+NOT establish EOF; retained bytes alone cannot prove closure. The bounded
+post-exit drain period and strict capture/parse limits MUST remain in force.
 Valid, closed missing-exit evidence MAY enter bounded action-failure feedback
 to the acting model for a narrower diagnostic or sandbox-preserving alternative.
 This guidance MUST consume the existing failure-feedback budget and MUST NOT
