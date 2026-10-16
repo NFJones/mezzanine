@@ -459,89 +459,136 @@ fn runtime_cleanup_keeps_live_child_below_self_historical_parent() {
 #[test]
 fn runtime_cleanup_macro_decisions_do_not_close_resumed_child_binding() {
     for outcome in ["stop_failure", "finish_success"] {
-        let mut fixture = CleanupFixture::new();
-        let macro_dir = fixture.root.join("macros/cleanup-fixture");
-        fs::create_dir_all(&macro_dir).unwrap();
-        fs::write(macro_dir.join("MACRO.md"),
-            "---\nname: cleanup-fixture\ndescription: Generated cleanup fixture\n---\n\n# Macro: cleanup-fixture\n\n## Steps\n\n1. Report generated fixture result.\n").unwrap();
-        fixture.service.set_config_root(fixture.root.clone());
-        let response = fixture
-            .service
-            .execute_agent_shell_command(&fixture.primary, "#cleanup-fixture")
-            .unwrap();
-        assert!(response.contains(r#""kind":"turn_started""#), "{response}");
-        let parent = fixture
-            .service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.agent_id == "agent-%1")
-            .unwrap()
-            .clone();
-        let child = fixture
-            .service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.cooperation_mode.as_deref() == Some("macro-step"))
-            .unwrap()
-            .clone();
-        fixture
-            .service
-            .complete_running_agent_turn_and_start_ready(
-                &child,
-                AgentTurnState::Completed,
-                "generated macro child completed",
-            )
-            .unwrap();
+        assert_macro_terminal_cleanup_binding(outcome, true, false);
+    }
+}
+
+/// Both terminal macro outcomes must actually retire their exact owned native
+/// child without an attached layout client. Each outcome also exercises an
+/// independently resumed negative control, whose same process must survive.
+#[test]
+fn runtime_cleanup_macro_decisions_without_layout_retire_only_owned_child() {
+    for outcome in ["stop_failure", "finish_success"] {
+        for independent in [false, true] {
+            assert_macro_terminal_cleanup_binding(outcome, independent, true);
+        }
+    }
+}
+
+/// Runs a generated terminal macro decision against a real completed child,
+/// optionally rebound independently and detached from its primary client.
+/// Native kernel identity distinguishes actual retirement from metadata removal.
+fn assert_macro_terminal_cleanup_binding(outcome: &str, independent: bool, detach_primary: bool) {
+    let mut fixture = CleanupFixture::new();
+    let macro_dir = fixture.root.join("macros/cleanup-fixture");
+    fs::create_dir_all(&macro_dir).unwrap();
+    fs::write(macro_dir.join("MACRO.md"),
+        "---\nname: cleanup-fixture\ndescription: Generated cleanup fixture\n---\n\n# Macro: cleanup-fixture\n\n## Steps\n\n1. Report generated fixture result.\n").unwrap();
+    fixture.service.set_config_root(fixture.root.clone());
+    let response = fixture
+        .service
+        .execute_agent_shell_command(&fixture.primary, "#cleanup-fixture")
+        .unwrap();
+    assert!(response.contains(r#""kind":"turn_started""#), "{response}");
+    let parent = fixture
+        .service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == "agent-%1")
+        .unwrap()
+        .clone();
+    let child = fixture
+        .service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.cooperation_mode.as_deref() == Some("macro-step"))
+        .unwrap()
+        .clone();
+    fixture
+        .service
+        .complete_running_agent_turn_and_start_ready(
+            &child,
+            AgentTurnState::Completed,
+            "generated macro child completed",
+        )
+        .unwrap();
+    if independent {
         fixture.save("independent-macro-child", Some("agent-%1"));
         fixture.resume(&child.agent_id, "independent-macro-child");
-        let pid = fixture
-            .service
-            .primary_pid_for_live_pane_process(&child.pane_id)
-            .unwrap();
-        let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
-        let provider = RuntimeBatchProvider {
-            response: mez_agent::ModelResponse {
-                provider: "runtime-batch".to_string(), model: "test".to_string(),
-                raw_text: serde_json::json!({"outcome":outcome,"step_success": outcome == "finish_success",
-                    "rationale":"generated terminal decision","adapted_prompt":null,"user_message":"Generated terminal result"}).to_string(),
-                usage: Default::default(), latest_request_usage: None, quota_usage: Default::default(),
-                action_batch: None, provider_transcript_events: Vec::new(),
-            },
-        };
+    }
+    if detach_primary {
         fixture
             .service
-            .execute_agent_turn_with_provider(
-                &parent.turn_id,
-                &provider,
-                runtime_model_profile("runtime-batch", "test"),
-            )
+            .session
+            .detach_client_self(&fixture.primary)
             .unwrap();
+        assert!(fixture.service.session.layout_owner_client_id().is_none());
+    }
+    let pid = fixture
+        .service
+        .primary_pid_for_live_pane_process(&child.pane_id)
+        .unwrap();
+    let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(), model: "test".to_string(),
+            raw_text: serde_json::json!({"outcome":outcome,"step_success": outcome == "finish_success",
+                "rationale":"generated terminal decision","adapted_prompt":null,"user_message":"Generated terminal result"}).to_string(),
+            usage: Default::default(), latest_request_usage: None, quota_usage: Default::default(),
+            action_batch: None, provider_transcript_events: Vec::new(),
+        },
+    };
+    fixture
+        .service
+        .execute_agent_turn_with_provider(
+            &parent.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    if !independent {
         assert!(
-            fixture.present(&child.agent_id),
-            "{outcome} adopted the independently resumed child"
+            !fixture.present(&child.agent_id),
+            "{outcome} leaked its live child"
         );
-        assert_eq!(
+        assert!(
             fixture
                 .service
                 .agent_shell_store()
                 .get(&child.pane_id)
-                .unwrap()
-                .session_id,
-            "independent-macro-child"
+                .is_none()
         );
-        assert_eq!(
-            fixture
-                .service
-                .primary_pid_for_live_pane_process(&child.pane_id),
-            Some(pid)
-        );
-        assert_eq!(
+        assert_ne!(
             mez_mux::process::process_start_token_for_pid(pid),
             Some(token)
         );
+        return;
     }
+    assert!(
+        fixture.present(&child.agent_id),
+        "{outcome} adopted the independently resumed child"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_shell_store()
+            .get(&child.pane_id)
+            .unwrap()
+            .session_id,
+        "independent-macro-child"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .primary_pid_for_live_pane_process(&child.pane_id),
+        Some(pid)
+    );
+    assert_eq!(
+        mez_mux::process::process_start_token_for_pid(pid),
+        Some(token)
+    );
 }
 
 /// A validated live obligation closes through the session owner even when no
