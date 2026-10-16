@@ -7,9 +7,9 @@
 
 use super::*;
 
+mod canonical_convergence;
 mod summary_correction;
 mod transport_retries;
-mod canonical_convergence;
 
 /// Under-budget eligible history still runs actual model compaction. Both direct
 /// and attached input routes must remain visibly compacting while the provider

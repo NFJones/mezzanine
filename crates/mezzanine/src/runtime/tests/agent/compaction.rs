@@ -6778,7 +6778,10 @@ fn runtime_manual_compaction_rejects_oversized_post_summary_request() {
         .max(1);
     assert!(queued.preserve_summary_output_budget);
     assert_eq!(queued.summary_correction.manual_words, Some(source_words));
-    assert_eq!(queued.request.max_output_tokens, queued.model_profile.max_output_tokens());
+    assert_eq!(
+        queued.request.max_output_tokens,
+        queued.model_profile.max_output_tokens()
+    );
     complete_runtime_test_compaction(
         &mut service,
         "%1",

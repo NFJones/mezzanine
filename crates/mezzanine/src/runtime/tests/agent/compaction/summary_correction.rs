@@ -411,6 +411,75 @@ fn runtime_compaction_summary_correction_exhausts_without_publication() {
     }
 }
 
+/// A frozen-valid summary is accepted even after guidance reached one. A later
+/// still-invalid but improving completion at that issued floor fails finitely
+/// and reports real auxiliary counts without manufacturing MAAP attribution.
+#[test]
+fn runtime_compaction_summary_correction_floor_validates_before_exhaustion() {
+    for valid in [true, false] {
+        let (mut service, store, turn) = queue_observed_input_compaction_with_exact_history();
+        let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
+        let RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } = &task.target else {
+            panic!("active turn");
+        };
+        let budget = plan.summary_budget_words();
+        let conversation = task.conversation_id.clone();
+        task.summary_correction.guidance_target = Some(1);
+        task.summary_correction.source_generation = Some(task.task_generation);
+        task.summary_correction.corrections_admitted = 3;
+        task.compaction_request_shape = Some((
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            Default::default(),
+            false,
+        ));
+        task.summary_correction.last_rejection = Some(
+            mez_agent::context_compaction::ModelCompactionSummaryRejection {
+                defect: mez_agent::context_compaction::ModelCompactionSummaryDefect::Budget,
+                cost: budget + 2,
+                bytes: 2 * (budget + 2),
+                budget,
+                estimated_tokens: false,
+            },
+        );
+        service.queue_agent_compaction_task(task);
+        let response = if valid {
+            "valid bounded summary".to_string()
+        } else {
+            "x ".repeat(budget + 1)
+        };
+        complete_runtime_test_compaction(&mut service, "%1", &response);
+        assert!(!service.agent_is_compacting("%1"));
+        if valid {
+            assert!(service.agent_provider_task_is_pending(&turn));
+            assert!(store.compaction_epoch(&conversation).unwrap().is_some());
+        } else {
+            assert!(!service.agent_provider_task_is_pending(&turn));
+            assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+            let execution = service.agent_turn_executions().get(&turn).unwrap();
+            assert!(execution.recovery_facts().is_none());
+            assert!(
+                execution
+                    .response
+                    .raw_text
+                    .contains("disposition=GuidanceFloor")
+            );
+            assert!(
+                execution
+                    .response
+                    .raw_text
+                    .contains("corrections_admitted=3")
+            );
+            assert!(
+                execution
+                    .response
+                    .raw_text
+                    .contains("openai_max_output_tokens_transmitted=Some(false)")
+            );
+            assert!(!execution.response.raw_text.contains(&response));
+        }
+    }
+}
+
 /// A selected-source rewrite is an integrity failure even when output is blank.
 /// Correctable output must not mask a genuinely changed frozen chronology or
 /// queue another inference against corrupt evidence.

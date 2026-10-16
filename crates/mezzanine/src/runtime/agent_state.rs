@@ -686,8 +686,9 @@ pub struct RuntimeSummaryCorrection {
     /// Manual frozen word allowance, captured by preparation, never from a
     /// correction target or provider output allocation. Active tasks use plan.
     pub manual_words: Option<usize>,
-    /// Genuine complete-candidate tightening in estimated INPUT tokens. Only
-    /// the final-fit owner may replace this, independently of frozen words.
+    /// Advisory complete-candidate replan target in estimated INPUT tokens.
+    /// Only the measured final-fit owner may replace it. Frozen-valid output
+    /// still reaches complete-fit/no-progress validation above this target.
     pub effective_input_tokens: Option<usize>,
     /// Empty/malformed corrections consumed for this source; always finite.
     pub empty_attempts: u8,
@@ -700,13 +701,18 @@ pub struct RuntimeSummaryCorrection {
     pub corrections_admitted: u32,
     /// Advisory nonzero target, never an acceptance threshold or wire cap.
     pub guidance_target: Option<usize>,
+    /// Unit attached to guidance_target, not inferred from another target.
+    pub guidance_is_input_tokens: bool,
 }
 
 impl RuntimeSummaryCorrection {
     /// Starts manual work with an immutable word allowance independent of the
     /// provider allocation. Progress resets must retain this authority.
     pub fn for_manual_words(words: usize) -> Self {
-        Self { manual_words: Some(words), ..Self::default() }
+        Self {
+            manual_words: Some(words),
+            ..Self::default()
+        }
     }
 
     /// Advances a valid chunk/source without forgetting frozen/effective
@@ -717,6 +723,7 @@ impl RuntimeSummaryCorrection {
         self.source_generation = None;
         self.corrections_admitted = 0;
         self.guidance_target = None;
+        self.guidance_is_input_tokens = false;
     }
 }
 

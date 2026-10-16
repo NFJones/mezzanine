@@ -817,7 +817,10 @@ impl RuntimeSessionService {
             compaction_epoch: prepared_epoch,
             transport_retry_attempts: 0,
             transport_retry_delay_ms: None,
-            summary_correction: crate::runtime::agent_state::RuntimeSummaryCorrection::for_manual_words(summary_budget_words),
+            summary_correction:
+                crate::runtime::agent_state::RuntimeSummaryCorrection::for_manual_words(
+                    summary_budget_words,
+                ),
             pane_id: pane_id.to_string(),
             accounting_origin: self.capture_accounting_origin_for_pane(pane_id),
             conversation_id: conversation_id.clone(),
@@ -2287,7 +2290,11 @@ impl RuntimeSessionService {
                             Some((candidate_tokens, attempts.saturating_add(1)));
                         task.summary_correction.effective_input_tokens = Some(next_budget);
                         task.summary_correction.reset_progress();
-                        summary_correction::communicate_summary_target(&mut task.request, next_budget, true);
+                        summary_correction::communicate_summary_target(
+                            &mut task.request,
+                            next_budget,
+                            true,
+                        );
                         self.queue_agent_compaction_task(task.clone());
                         return Ok(());
                     }
@@ -2329,11 +2336,17 @@ impl RuntimeSessionService {
                 error
             } else {
                 error.with_compaction_failure(summary_correction::compaction_failure_evidence(
-                    &task, None, crate::error::CompactionFailurePhase::CompleteCandidate,
-                    crate::error::CompactionFailureDisposition::CandidateRejected))
+                    &task,
+                    None,
+                    crate::error::CompactionFailurePhase::CompleteCandidate,
+                    crate::error::CompactionFailureDisposition::CandidateRejected,
+                ))
             };
             if let Some(facts) = error.compaction_failure() {
-                self.append_agent_status_text_to_terminal_buffer(pane_id, &facts.diagnostic_line())?;
+                self.append_agent_status_text_to_terminal_buffer(
+                    pane_id,
+                    &facts.diagnostic_line(),
+                )?;
             }
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
@@ -2494,8 +2507,9 @@ impl RuntimeSessionService {
         summary: &str,
     ) -> Result<AgentContext> {
         let summary_words = model_context_text_word_count(summary);
-        let summary_budget_words = task.summary_correction.manual_words.ok_or_else(||
-            MezError::invalid_state("manual compaction frozen word allowance is missing"))?;
+        let summary_budget_words = task.summary_correction.manual_words.ok_or_else(|| {
+            MezError::invalid_state("manual compaction frozen word allowance is missing")
+        })?;
         if summary_words > summary_budget_words {
             return Err(MezError::invalid_state(format!(
                 "manual compaction summary exceeds its frozen output budget: summary_words={summary_words} summary_budget_words={summary_budget_words}"
@@ -2916,7 +2930,10 @@ impl RuntimeSessionService {
             {
                 if let Err(error) = self.correct_malformed_compaction_response(&mut task) {
                     if let Some(facts) = error.compaction_failure() {
-                        self.append_agent_status_text_to_terminal_buffer(pane_id, &facts.diagnostic_line())?;
+                        self.append_agent_status_text_to_terminal_buffer(
+                            pane_id,
+                            &facts.diagnostic_line(),
+                        )?;
                     }
                     self.append_agent_status_text_to_terminal_buffer(
                         pane_id,
@@ -2926,11 +2943,7 @@ impl RuntimeSessionService {
                         ),
                     )?;
                     if let Some(turn) = task.resume_turn_id.as_deref() {
-                        self.fail_running_turn_after_compaction_error(
-                            turn,
-                            &task.source,
-                            &error,
-                        )?;
+                        self.fail_running_turn_after_compaction_error(turn, &task.source, &error)?;
                     }
                 }
                 return Ok(true);
@@ -3180,7 +3193,11 @@ impl RuntimeSessionService {
         source: &str,
         message: &str,
     ) -> Result<()> {
-        self.fail_running_turn_after_compaction_error(turn_id, source, &MezError::invalid_state(message))
+        self.fail_running_turn_after_compaction_error(
+            turn_id,
+            source,
+            &MezError::invalid_state(message),
+        )
     }
 
     /// Preserves typed auxiliary provenance while adding automatic-recovery
@@ -3213,7 +3230,9 @@ impl RuntimeSessionService {
         ));
         let error = if let Some(facts) = cause.compaction_failure() {
             error.with_compaction_failure(facts.clone())
-        } else { error };
+        } else {
+            error
+        };
         if let Err(application_error) = self.fail_agent_turn_for_provider_error(
             &turn,
             &model_profile.provider,
@@ -3476,20 +3495,17 @@ fn runtime_rebuild_active_turn_compaction_request(
         &blocks,
         task.request.allowed_actions.clone(),
     )?;
-    runtime_limit_compaction_summary_output(
-        &mut task.request,
-        plan.summary_budget_words(),
-    );
+    runtime_limit_compaction_summary_output(&mut task.request, plan.summary_budget_words());
     let effective = final_request_retry.summary_ceiling;
     task.summary_correction.effective_input_tokens = effective;
-    let ceiling = task.summary_correction.guidance_target
-        .or(effective)
-        .unwrap_or(plan.summary_budget_words());
-    summary_correction::communicate_summary_target(
-        &mut task.request,
-        ceiling,
-        effective.is_some() || plan.planning_budget().1,
-    );
+    let (ceiling, tokens) = if let Some(target) = task.summary_correction.guidance_target {
+        (target, task.summary_correction.guidance_is_input_tokens)
+    } else if let Some(target) = effective {
+        (target, true)
+    } else {
+        (plan.summary_budget_words(), plan.planning_budget().1)
+    };
+    summary_correction::communicate_summary_target(&mut task.request, ceiling, tokens);
     let mut messages = task.request.messages.iter().cloned().collect::<Vec<_>>();
     for message in correction_guidance {
         messages.insert(2.min(messages.len()), message);

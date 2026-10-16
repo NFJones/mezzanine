@@ -6,8 +6,10 @@
 //! retry and exact claim/expense settlement remain owned by the parent subsystem.
 
 use super::*;
-use crate::error::{CompactionCostUnit, CompactionFailureDisposition,
-    CompactionFailureEvidence, CompactionFailurePhase};
+use crate::error::{
+    CompactionCostUnit, CompactionFailureDisposition, CompactionFailureEvidence,
+    CompactionFailurePhase,
+};
 use mez_agent::context_compaction::{
     ModelCompactionSummaryDefect, ModelCompactionSummaryRejection,
     validate_model_compaction_summary,
@@ -30,10 +32,12 @@ impl RuntimeSessionService {
             RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } => {
                 (plan.summary_budget_words(), plan.planning_budget().1)
             }
-            RuntimeAgentCompactionTarget::Conversation => {
-                (task.summary_correction.manual_words.ok_or_else(||
-                    MezError::invalid_state("manual compaction frozen word allowance is missing"))?, false)
-            }
+            RuntimeAgentCompactionTarget::Conversation => (
+                task.summary_correction.manual_words.ok_or_else(|| {
+                    MezError::invalid_state("manual compaction frozen word allowance is missing")
+                })?,
+                false,
+            ),
         };
         let (summary, malformed) = match response.action_batch.as_ref() {
             Some(batch) => match batch.actions.as_slice() {
@@ -60,14 +64,10 @@ impl RuntimeSessionService {
         } else {
             validate_model_compaction_summary(&summary, budget, tokens)
         };
-        // A complete-fit replan can establish a second predicate in a different
-        // unit. Never numerically min words and estimated input tokens, and
-        // always evaluate the original frozen allowance first.
-        let validation = validation.and_then(|()| {
-            task.summary_correction.effective_input_tokens.map_or(Ok(()), |effective| {
-                validate_model_compaction_summary(&summary, effective, true)
-            })
-        });
+        // A frozen-valid summary MUST reach the existing complete-candidate
+        // owner, even above its advisory replan target. Only that owner measures
+        // full fit and enforces candidate decrease; diverting here would grant
+        // a fresh correction budget to an already non-reducing final candidate.
         if validation.is_ok() {
             // Reset only after bounded output is accepted for this source. Final
             // request progress accounting is separate and is never reset here.
@@ -92,10 +92,12 @@ impl RuntimeSessionService {
             RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } => {
                 (plan.summary_budget_words(), plan.planning_budget().1)
             }
-            RuntimeAgentCompactionTarget::Conversation => {
-                (task.summary_correction.manual_words.ok_or_else(||
-                    MezError::invalid_state("manual compaction frozen word allowance is missing"))?, false)
-            }
+            RuntimeAgentCompactionTarget::Conversation => (
+                task.summary_correction.manual_words.ok_or_else(|| {
+                    MezError::invalid_state("manual compaction frozen word allowance is missing")
+                })?,
+                false,
+            ),
         };
         self.correct_rejected_compaction_summary(
             task,
@@ -116,11 +118,15 @@ impl RuntimeSessionService {
         task: &mut RuntimeAgentCompactionTask,
         rejected: ModelCompactionSummaryRejection,
     ) -> Result<()> {
-        self.validate_compaction_correction_source(task).map_err(|error| {
-            error.with_compaction_failure(compaction_failure_evidence(task,
-                Some(rejected), CompactionFailurePhase::Summary,
-                CompactionFailureDisposition::SourceIntegrity))
-        })?;
+        self.validate_compaction_correction_source(task)
+            .map_err(|error| {
+                error.with_compaction_failure(compaction_failure_evidence(
+                    task,
+                    Some(rejected),
+                    CompactionFailurePhase::Summary,
+                    CompactionFailureDisposition::SourceIntegrity,
+                ))
+            })?;
         prepare_summary_correction(task, rejected)?;
         self.append_agent_trace_turn_event(
             &task.pane_id,
@@ -190,16 +196,23 @@ fn prepare_summary_correction(
     task: &mut RuntimeAgentCompactionTask,
     rejected: ModelCompactionSummaryRejection,
 ) -> Result<()> {
-    let next = next_summary_target(&mut task.summary_correction, rejected).map_err(|disposition| {
-        MezError::invalid_state(disposition.message()).with_compaction_failure(
-            compaction_failure_evidence(task, Some(rejected),
-                CompactionFailurePhase::Summary, disposition))
-    })?;
+    let next =
+        next_summary_target(&mut task.summary_correction, rejected).map_err(|disposition| {
+            MezError::invalid_state(disposition.message()).with_compaction_failure(
+                compaction_failure_evidence(
+                    task,
+                    Some(rejected),
+                    CompactionFailurePhase::Summary,
+                    disposition,
+                ),
+            )
+        })?;
     let state = &mut task.summary_correction;
     state.source_generation.get_or_insert(task.task_generation);
     state.corrections_admitted = state.corrections_admitted.saturating_add(1);
     state.last_rejection = Some(rejected);
     state.guidance_target = Some(next);
+    state.guidance_is_input_tokens = rejected.estimated_tokens;
     // Reuse the frozen current request: it already owns the exact redacted
     // chunk/synthesis source. Only bounded developer guidance changes. Keep
     // configured generation allocation for framing/reasoning on providers that
@@ -267,15 +280,36 @@ pub(super) fn compaction_failure_evidence(
     disposition: CompactionFailureDisposition,
 ) -> CompactionFailureEvidence {
     let (frozen_allowance, tokens, synthesis) = match &task.target {
-        RuntimeAgentCompactionTarget::ActiveTurn { plan, synthesis_source_bytes, .. } =>
-            (plan.summary_budget_words(), plan.planning_budget().1, synthesis_source_bytes.is_some()),
-        RuntimeAgentCompactionTarget::Conversation =>
-            (task.summary_correction.manual_words.unwrap_or(0), false,
-                task.conversation_chunks.as_ref().is_some_and(|chunks| chunks.synthesis_source_bytes.is_some())),
+        RuntimeAgentCompactionTarget::ActiveTurn {
+            plan,
+            synthesis_source_bytes,
+            ..
+        } => (
+            Some(plan.summary_budget_words()),
+            plan.planning_budget().1,
+            synthesis_source_bytes.is_some(),
+        ),
+        RuntimeAgentCompactionTarget::Conversation => (
+            task.summary_correction.manual_words,
+            false,
+            task.conversation_chunks
+                .as_ref()
+                .is_some_and(|chunks| chunks.synthesis_source_bytes.is_some()),
+        ),
     };
-    let unit = |tokens| if tokens { CompactionCostUnit::EstimatedInputTokens } else { CompactionCostUnit::Words };
+    let unit = |tokens| {
+        if tokens {
+            CompactionCostUnit::EstimatedInputTokens
+        } else {
+            CompactionCostUnit::Words
+        }
+    };
     CompactionFailureEvidence {
-        phase: if phase == CompactionFailurePhase::Summary && synthesis { CompactionFailurePhase::Synthesis } else { phase },
+        phase: if phase == CompactionFailurePhase::Summary && synthesis {
+            CompactionFailurePhase::Synthesis
+        } else {
+            phase
+        },
         source_generation: task.summary_correction.source_generation,
         task_generation: task.task_generation,
         defect: rejected.map(|value| value.defect),
@@ -287,10 +321,26 @@ pub(super) fn compaction_failure_evidence(
         measured_bytes: rejected.map(|value| value.bytes),
         byte_bound: SUMMARY_BYTES,
         guidance_target: task.summary_correction.guidance_target,
+        guidance_unit: unit(task.summary_correction.guidance_is_input_tokens),
+        size_progress: rejected
+            .zip(task.summary_correction.last_rejection)
+            .and_then(|(now, prior)| {
+                if now.estimated_tokens != prior.estimated_tokens || now.budget != prior.budget {
+                    None
+                } else {
+                    Some(
+                        (now.cost <= now.budget || now.cost < prior.cost)
+                            && (now.bytes <= SUMMARY_BYTES || now.bytes < prior.bytes),
+                    )
+                }
+            }),
         corrections_admitted: task.summary_correction.corrections_admitted,
         disposition,
-        openai_max_output_tokens_transmitted: task.compaction_request_shape.as_ref()
-            .and_then(|(api, _, _)| (*api == mez_agent::ProviderApiCompatibility::OpenAiResponses).then_some(false)),
+        openai_max_output_tokens_transmitted: task.compaction_request_shape.as_ref().and_then(
+            |(api, _, _)| {
+                (*api == mez_agent::ProviderApiCompatibility::OpenAiResponses).then_some(false)
+            },
+        ),
     }
 }
 
@@ -309,4 +359,94 @@ pub(super) fn communicate_summary_target(request: &mut ModelRequest, budget: usi
         content: format!("[compaction summary target]\nAim for a nonempty summary within {budget} {} and {SUMMARY_BYTES} UTF-8 bytes. This is local semantic guidance, not evidence of a transmitted provider output control. Return a complete final say wrapper.", if tokens { "estimated input tokens (approximately four UTF-8 bytes per token)" } else { "whitespace-delimited words" }),
     });
     request.messages = messages.into();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::agent_state::RuntimeSummaryCorrection;
+
+    /// Local targets never become zero for zero/one/two-token allowances. A
+    /// still-invalid completion after the issued floor terminates, whereas
+    /// semantic validity is independently decided against the frozen allowance.
+    #[test]
+    fn summary_correction_tiny_targets_have_finite_nonzero_floor() {
+        for budget in [0, 1, 2, 128] {
+            let mut state = RuntimeSummaryCorrection::default();
+            let mut cost = budget + 100;
+            for attempt in 0..usize::BITS {
+                let rejected = ModelCompactionSummaryRejection {
+                    defect: ModelCompactionSummaryDefect::Budget,
+                    bytes: cost * 4,
+                    cost,
+                    budget,
+                    estimated_tokens: true,
+                };
+                let target = next_summary_target(&mut state, rejected);
+                if state.guidance_target == Some(1) {
+                    assert_eq!(target, Err(CompactionFailureDisposition::GuidanceFloor));
+                    break;
+                }
+                let target = target.unwrap();
+                assert!(target > 0);
+                state.guidance_target = Some(target);
+                state.last_rejection = Some(rejected);
+                cost -= 1;
+                assert!(
+                    attempt < usize::BITS - 1,
+                    "floor must bound this exact source"
+                );
+            }
+            assert_eq!(state.guidance_target, Some(1));
+        }
+        assert!(validate_model_compaction_summary("x", 1, true).is_ok());
+        assert!(validate_model_compaction_summary("x", 0, true).is_err());
+    }
+
+    /// Fixed byte and semantic dimensions must improve independently. A smaller
+    /// byte count does not excuse a repeated invalid semantic cost and vice
+    /// versa; the advisory target is not substituted for either fixed bound.
+    #[test]
+    fn summary_correction_progress_uses_fixed_invalid_dimensions() {
+        let prior = ModelCompactionSummaryRejection {
+            defect: ModelCompactionSummaryDefect::Bytes,
+            bytes: SUMMARY_BYTES + 10,
+            cost: 130,
+            budget: 128,
+            estimated_tokens: true,
+        };
+        for (cost, bytes) in [(130, SUMMARY_BYTES + 1), (129, SUMMARY_BYTES + 10)] {
+            let mut state = RuntimeSummaryCorrection {
+                last_rejection: Some(prior),
+                guidance_target: Some(64),
+                ..Default::default()
+            };
+            assert_eq!(
+                next_summary_target(
+                    &mut state,
+                    ModelCompactionSummaryRejection {
+                        cost,
+                        bytes,
+                        ..prior
+                    }
+                ),
+                Err(CompactionFailureDisposition::NoProgress)
+            );
+        }
+        let mut state = RuntimeSummaryCorrection {
+            last_rejection: Some(prior),
+            ..Default::default()
+        };
+        assert_eq!(
+            next_summary_target(
+                &mut state,
+                ModelCompactionSummaryRejection {
+                    cost: 129,
+                    bytes: SUMMARY_BYTES + 1,
+                    ..prior
+                }
+            ),
+            Ok(64)
+        );
+    }
 }

@@ -43,9 +43,13 @@ impl CompactionFailureDisposition {
     /// Returns a stable content-free cause for the local correction owner.
     pub(crate) fn message(self) -> &'static str {
         match self {
-            Self::EmptyOrMalformedExhausted => "compaction empty/malformed-summary correction budget exhausted",
+            Self::EmptyOrMalformedExhausted => {
+                "compaction empty/malformed-summary correction budget exhausted"
+            }
             Self::NoProgress => "compaction invalid-summary correction made no size progress",
-            Self::GuidanceFloor => "compaction invalid-summary correction remains invalid at semantic guidance floor",
+            Self::GuidanceFloor => {
+                "compaction invalid-summary correction remains invalid at semantic guidance floor"
+            }
             Self::SourceIntegrity => "compaction frozen source validation failed",
             Self::CandidateRejected => "compaction complete candidate rejected before publication",
         }
@@ -64,10 +68,11 @@ pub(crate) struct CompactionFailureEvidence {
     /// Last observed validation defect, absent for an unmeasured fit failure.
     pub defect: Option<mez_agent::context_compaction::ModelCompactionSummaryDefect>,
     /// Original frozen allowance and its actual semantic unit.
-    pub frozen_allowance: usize,
+    pub frozen_allowance: Option<usize>,
     /// Unit of the original frozen allowance.
     pub frozen_unit: CompactionCostUnit,
-    /// Independently derived complete-fit allowance in estimated input tokens.
+    /// Independently derived advisory final-fit target in estimated input
+    /// tokens, not semantic acceptance authority; complete request fit decides.
     pub effective_input_tokens: Option<usize>,
     /// Measured invalid cost, if a completed output was validated.
     pub measured_cost: Option<usize>,
@@ -79,6 +84,11 @@ pub(crate) struct CompactionFailureEvidence {
     pub byte_bound: usize,
     /// Last issued advisory target, not an acceptance limit or wire cap.
     pub guidance_target: Option<usize>,
+    /// Unit attached to the issued target, not inferred from final-fit guidance.
+    pub guidance_unit: CompactionCostUnit,
+    /// Progress on the measured dimension relative to a comparable predecessor;
+    /// absent when there is no such observation, never inferred as zero retries.
+    pub size_progress: Option<bool>,
     /// Corrections actually admitted for the current source.
     pub corrections_admitted: u32,
     /// Typed exhaustion/integrity/complete-fit outcome.
@@ -91,11 +101,25 @@ pub(crate) struct CompactionFailureEvidence {
 impl CompactionFailureEvidence {
     /// Renders only typed enums/numeric measurements; no ordinary MAAP counts.
     pub(crate) fn diagnostic_line(&self) -> String {
-        format!("Auxiliary compaction: phase={:?}; source_generation={:?}; task_generation={}; defect={:?}; frozen_allowance={} {:?}; effective_input_tokens={:?}; measured_cost={:?} {:?}; bytes={:?}/{}; guidance_target={:?}; corrections_admitted={}; disposition={:?}; openai_max_output_tokens_transmitted={:?}",
-            self.phase, self.source_generation, self.task_generation, self.defect,
-            self.frozen_allowance, self.frozen_unit, self.effective_input_tokens,
-            self.measured_cost, self.measured_unit, self.measured_bytes, self.byte_bound,
-            self.guidance_target, self.corrections_admitted, self.disposition,
-            self.openai_max_output_tokens_transmitted)
+        format!(
+            "Auxiliary compaction: phase={:?}; source_generation={:?}; task_generation={}; defect={:?}; frozen_allowance={:?} {:?}; final_fit_guidance_input_tokens={:?}; measured_cost={:?} {:?}; bytes={:?}/{}; guidance_target={:?} {:?}; size_progress={:?}; corrections_admitted={}; disposition={:?}; openai_max_output_tokens_transmitted={:?}",
+            self.phase,
+            self.source_generation,
+            self.task_generation,
+            self.defect,
+            self.frozen_allowance,
+            self.frozen_unit,
+            self.effective_input_tokens,
+            self.measured_cost,
+            self.measured_unit,
+            self.measured_bytes,
+            self.byte_bound,
+            self.guidance_target,
+            self.guidance_unit,
+            self.size_progress,
+            self.corrections_admitted,
+            self.disposition,
+            self.openai_max_output_tokens_transmitted
+        )
     }
 }
