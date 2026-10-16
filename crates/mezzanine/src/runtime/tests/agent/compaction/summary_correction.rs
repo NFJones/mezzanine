@@ -41,7 +41,7 @@ fn runtime_compaction_summary_correction_token_budget_requires_size_progress() {
     let first = service
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
-    assert_eq!(first.request.max_output_tokens, Some(budget));
+    let allocation = first.request.max_output_tokens;
     assert!(
         first
             .request
@@ -55,6 +55,7 @@ fn runtime_compaction_summary_correction_token_budget_requires_size_progress() {
     complete_runtime_test_compaction(&mut service, "%1", &corrected);
     assert!(!service.agent_is_compacting("%1"));
     assert!(service.agent_provider_task_is_pending(&turn));
+    assert_eq!(allocation, Some(budget));
 }
 
 /// Manual compaction uses the same bounded completed-output repair and frozen
