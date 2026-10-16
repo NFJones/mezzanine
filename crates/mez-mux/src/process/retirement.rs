@@ -834,59 +834,63 @@ mod tests {
         assert_eq!(state.drops.load(Ordering::SeqCst), 1);
     }
 
-    /// The same nonblocking path used by the async backend must kill its exact
-    /// root even when group metadata names another exclusively test-owned root.
-    /// Both owned children are waited/reaped; no process discovery is involved.
+    /// Corrupt cleanup metadata must never authorize signaling another root.
+    /// Hold both masters open so PTY hangup cannot explain root retirement.
+    /// Require exact root wait/SRCH and a fresh child-generated reply from the
+    /// other root before independently cleaning it up. No PID discovery/reuse
+    /// forcing is involved, and even the red assertion follows fixture cleanup.
     #[test]
     fn retained_native_escalation_kills_exact_root_with_different_owned_group() {
-        let mut manager = super::super::PaneProcessManager::new();
-        let environment = super::super::PaneProcessEnvironment {
-            mez: "native-test".into(),
-            session: "native-test".into(),
-            window: "@native".into(),
-            pane: "%native".into(),
-            term: "xterm".into(),
-        };
-        let launch = super::super::PaneProcessLaunch::new("/bin/sh".into());
+        let owner = PaneProcessRetirementOwner::default();
         let size = mez_terminal::TerminalSize::new(80, 24).unwrap();
-        let root_pid = manager
-            .spawn_for_pane("%root", &launch, Some("sleep 5"), &environment, size)
-            .unwrap();
-        let other_pid = manager
-            .spawn_for_pane("%other", &launch, Some("sleep 5"), &environment, size)
-            .unwrap();
-        let owner = manager.retirement_owner();
-        let mut root = manager.take_running_pane_process("%root").unwrap();
-        let mut other = manager.take_running_pane_process("%other").unwrap();
+        let mut root = super::super::spawn_retained_argv_pty_process(
+            std::path::Path::new("/bin/cat"), &[], &[], size, None,
+            owner.reserve().unwrap(),
+        ).unwrap();
+        let mut other = super::super::spawn_retained_argv_pty_process(
+            std::path::Path::new("/bin/sh"),
+            &["-c".into(), "while IFS= read -r line; do printf 'child-reply:%s\\n' \"$line\"; done".into()],
+            &[], size, None, owner.reserve().unwrap(),
+        ).unwrap();
+        let root_pid = root.primary_pid();
+        let other_pid = other.primary_pid();
+        let held_root = root.duplicate_master_fd().unwrap();
+        let held_other = other.duplicate_master_fd().unwrap();
         root.child.raw.as_mut().unwrap().group = Some(i32::try_from(other_pid).unwrap());
+        // A rejected authority is still an error, but independent root cleanup
+        // must run. Poll the actual child even if the signal operation failed.
+        let signal_result = root.poll_native_termination(true);
         let deadline = Instant::now() + Duration::from_secs(1);
-        loop {
-            if root.poll_native_termination(true).unwrap().is_some() {
+        let mut root_reaped = false;
+        while Instant::now() < deadline {
+            if matches!(root.poll_exit(), Ok(Some(_))) {
+                root_reaped = true;
                 break;
             }
-            assert!(
-                Instant::now() < deadline,
-                "exact native root did not retire"
-            );
             std::thread::sleep(Duration::from_millis(5));
         }
-        loop {
-            if other.poll_exit().unwrap().is_some() {
+        let pid = rustix::process::Pid::from_raw(i32::try_from(root_pid).unwrap()).unwrap();
+        let root_absent = rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH);
+        let other_live = matches!(other.poll_exit(), Ok(None));
+        let input_ok = other.write_input(b"fresh-authority-probe\n").is_ok();
+        let mut output = Vec::new();
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while input_ok && Instant::now() < deadline {
+            let Ok(bytes) = other.read_available_output(4096) else { break };
+            output.extend(bytes);
+            if String::from_utf8_lossy(&output).contains("child-reply:fresh-authority-probe") {
                 break;
             }
-            assert!(
-                Instant::now() < deadline,
-                "owned signal target did not retire"
-            );
             std::thread::sleep(Duration::from_millis(5));
         }
-        for pid in [root_pid, other_pid] {
-            let pid = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
-            assert_eq!(
-                rustix::process::test_kill_process(pid),
-                Err(rustix::io::Errno::SRCH)
-            );
-        }
+        let responded = String::from_utf8_lossy(&output).contains("child-reply:fresh-authority-probe");
+        let root_cleanup = root.terminate(Duration::from_millis(10));
+        let other_cleanup = other.terminate(Duration::from_millis(10));
+        drop((held_root, held_other));
+        assert!(root_cleanup.is_ok() && other_cleanup.is_ok(), "fixture cleanup failed");
+        assert!(root_reaped && root_absent, "exact root was not waited/reaped before sibling probe");
+        assert!(other_live && responded, "cleanup signaled the other owned group; live={other_live}, response={responded}");
+        assert_eq!(signal_result.unwrap_err().kind(), crate::MuxErrorKind::InvalidState);
         assert_eq!(
             owner.outstanding(),
             0,
