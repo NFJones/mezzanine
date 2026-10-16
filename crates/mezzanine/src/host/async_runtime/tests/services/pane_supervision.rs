@@ -432,12 +432,14 @@ async fn lost_native_handoff_reply_retains_exact_child_for_cleanup() {
 
 /// An expired retained backend plan may observe status, but must not send a
 /// late signal. A fresh input/response from the original unreaped root proves
-/// it survived that failed operation; a separate bounded cleanup then reaps it.
+/// it survived that failed operation. A fixture-only input marker then lets the
+/// original root exit naturally; exact backend polling/wait proves reaping
+/// without renewing its deadline or issuing forbidden late cleanup signals.
 #[tokio::test]
 async fn expired_native_backend_plan_does_not_signal_original_live_root() {
     let mut service = test_service();
     let start = service.start_initial_pane_process(Some(
-        r#"/bin/sh -c 'stty -echo; while IFS= read -r line; do printf "native-read:%s\n" "$line"; done'"#)).unwrap();
+        r#"/bin/sh -c 'stty -echo; while IFS= read -r line; do if [ "$line" = native-fixture-finish ]; then exit 0; fi; printf "native-read:%s\n" "$line"; done'"#)).unwrap();
     let witness = native_retirement_witness(start.primary_pid);
     let native = service.native_pane_retirement_owner();
     let mut process = service
@@ -465,15 +467,20 @@ async fn expired_native_backend_plan_does_not_signal_original_live_root() {
     .await
     .unwrap();
     assert_eq!(rustix::process::test_kill_process(witness.0), Ok(()));
-    drop(backend);
-    native.seal();
-    crate::host::async_runtime::drain_native_pane_retirement(
-        &native,
-        tokio::time::Instant::now() + Duration::from_secs(1),
-    )
+    backend
+        .write_input(b"native-fixture-finish\n")
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while backend.poll_exit().await.unwrap().is_none() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
     .await
     .unwrap();
     assert_native_retired(witness);
+    assert_eq!(native.outstanding(), 0);
+    drop(backend);
 }
 
 /// Verifies that the dynamic pane-process supervisor can claim a live
