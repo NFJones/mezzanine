@@ -128,6 +128,14 @@ pane environment, inferred key names, or an all-environment copy. Logical names
 start with a lowercase letter and contain up to 64 lowercase letters, digits,
 underscores or hyphens. Public refs cannot contain paths, commands or secrets.
 
+For that future integration, the primary service inherits its environment when
+it starts. Exporting `SEARCH_KEY` in a pane or a later CLI client does not change
+the environment of an already-running Mez daemon. Set the variable in the
+service's launch environment and restart/relaunch the primary service to change
+its available value. An exchange that already resolved a key retains its
+original snapshot for retries. These references do not yet activate runtime
+search profiles in this foundation.
+
 Secrets reuse the existing OS/private-file backends under an isolated service
 or directory. Non-secret metadata lives in `search-auth.json` version 1. Logout
 revokes only the exact search identity, not model or MCP auth. If cleanup fails

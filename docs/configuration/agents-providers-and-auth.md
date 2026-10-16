@@ -74,6 +74,17 @@ store authentication secrets. Use `mez auth login`, `mez auth status`, and
 `mez auth logout` for credentials and account state. Do not put API keys,
 tokens, or bearer credentials in `config.toml`.
 
+Search credentials have their own `mez auth search login|status|logout`
+namespace and do not change model authentication or activate paid search. The
+local foundation accepts future `search-auth:<name>` and explicit
+`env:<VARIABLE>` selectors, not literal keys in configuration. Future environment
+resolution uses the primary service's inherited environment: exporting a key in
+a pane or a later client does not update a running daemon. Change the service
+launch environment and restart/relaunch it to change that source; an already
+resolved request keeps its own key snapshot for retries. Runtime search-profile
+wiring is separate. See [Search credentials](../getting-started/authentication.md#store-a-search-credential-locally)
+for local storage and environment lifetime.
+
 ## Configure identities and long-lived assistance
 
 `subagents` defines named profiles and their narrower defaults. `personalities`
