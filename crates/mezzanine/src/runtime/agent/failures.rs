@@ -174,6 +174,12 @@ impl RuntimeSessionService {
             Some(raw_text) => format!("{raw_text}\nprovider_error: {error}"),
             None => format!("provider_error: {error}"),
         };
+        if let Some(facts) = error.compaction_failure() {
+            // A typed auxiliary record is rendered independently of ordinary
+            // MAAP attribution. Only enums/counters/units enter the transcript.
+            raw_text.push('\n');
+            raw_text.push_str(&facts.diagnostic_line());
+        }
         let safe_fallbacks = match self
             .agent
             .agent_turn_configured_model_profiles

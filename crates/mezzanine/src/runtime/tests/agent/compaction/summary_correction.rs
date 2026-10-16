@@ -218,14 +218,15 @@ fn runtime_compaction_summary_correction_respects_human_pause_and_stop() {
 }
 
 /// Context rejection during a correction splits only temporary input. The
-/// fresh request must retain the stricter output ceiling/unit and correction
+/// fresh request must retain the advisory target/unit and correction
 /// guidance, then complete frozen chunks and synthesis without ordinary replay.
 #[test]
 fn runtime_compaction_summary_correction_preserves_ceiling_after_context_split() {
     let (mut service, store, turn) = queue_observed_input_compaction_with_exact_history();
     complete_runtime_test_compaction(&mut service, "%1", &"too big ".repeat(50_000));
     let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    let ceiling = task.request.max_output_tokens.unwrap();
+    let allocation = task.request.max_output_tokens;
+    let guidance = task.summary_correction.guidance_target;
     let epoch = task.compaction_epoch;
     let conversation = task.conversation_id.clone();
     task.compaction_request_shape = Some((
@@ -247,7 +248,8 @@ fn runtime_compaction_summary_correction_preserves_ceiling_after_context_split()
     let split = service
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
-    assert_eq!(split.request.max_output_tokens, Some(ceiling));
+    assert_eq!(split.request.max_output_tokens, allocation);
+    assert_eq!(split.summary_correction.guidance_target, guidance);
     assert_eq!(split.compaction_epoch, epoch);
     assert!(
         split

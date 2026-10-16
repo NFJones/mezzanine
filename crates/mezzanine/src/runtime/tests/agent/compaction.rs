@@ -1955,7 +1955,8 @@ fn runtime_observed_compaction_retries_oversized_final_request() {
         panic!("expected active turn retry")
     };
     assert_eq!(final_request_retry.attempts, 1);
-    assert!(retry.request.max_output_tokens.unwrap() < initial_budget.unwrap());
+    assert_eq!(retry.request.max_output_tokens, initial_budget);
+    assert!(retry.summary_correction.effective_input_tokens.is_some());
     complete_runtime_test_compaction(&mut service, "%1", "shorter final summary");
     let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
     assert_eq!(epoch.ranges.len(), 1);
@@ -6776,12 +6777,8 @@ fn runtime_manual_compaction_rejects_oversized_post_summary_request() {
         .unwrap_or_default()
         .max(1);
     assert!(queued.preserve_summary_output_budget);
-    assert!(
-        queued
-            .request
-            .max_output_tokens
-            .is_some_and(|limit| limit <= source_words)
-    );
+    assert_eq!(queued.summary_correction.manual_words, Some(source_words));
+    assert_eq!(queued.request.max_output_tokens, queued.model_profile.max_output_tokens());
     complete_runtime_test_compaction(
         &mut service,
         "%1",
