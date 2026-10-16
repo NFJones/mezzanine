@@ -22,6 +22,9 @@ fn spawn_routed_cleanup_grandchild(
     service: &mut RuntimeSessionService,
     worker: &mez_agent::AgentTurnRecord,
 ) -> (String, (u32, u64)) {
+    service.set_agent_transcript_store(AgentTranscriptStore::new(temp_root(
+        "routed-cleanup-grandchild",
+    )));
     service.configure_subagent_policy(8, 8, 8, 8, SubagentWaitPolicy::Detach);
     let mut action = runtime_spawn_agent_action("cleanup-grandchild", "");
     let mez_agent::AgentActionPayload::SpawnAgent {
