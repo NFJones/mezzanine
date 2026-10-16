@@ -5,11 +5,25 @@
 //! runtime-only edges. Each edge binds both conversations and the exclusive
 //! manager or generation-qualified adapter that owns each native process.
 //! Nothing here is serialized or reconstructed from saved lineage. Native
-//! handoff/exit witnesses must preserve a proven owner, never infer one from
+//! ownership transitions must preserve a proven owner, never infer one from
 //! an unreadable executable, a missing process, a label, or a root/depth field.
 
 use super::*;
 use crate::runtime::PaneProcessInstance;
+
+/// Instance-owned runtime capability state, never serialized or shared.
+///
+/// Live proofs and pending qualification form one lifecycle boundary: pending
+/// records cannot authorize effects, and only exact native owners can publish
+/// live edges. The enclosing agent component owns this box exclusively, which
+/// avoids copying inline map storage through large actor state transitions.
+#[derive(Default)]
+pub(super) struct RuntimeSubagentCleanupState {
+    /// Exact live edges permitted to participate in destructive cleanup.
+    pub(super) ownership: BTreeMap<String, RuntimeSubagentCleanupOwnership>,
+    /// Nonauthorizing successful-restore qualification awaiting native owners.
+    pub(super) pending_restore: BTreeMap<String, PendingCleanupRestore>,
+}
 
 /// Current exclusive native owner of one captured conversation binding.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,7 +77,7 @@ impl RuntimeSessionService {
     /// Starts a binding restore without allowing a prior partial operation's
     /// pending qualifications to attach to later native process installations.
     pub(crate) fn begin_subagent_cleanup_restore(&mut self) {
-        self.agent.pending_subagent_cleanup_restore.clear();
+        self.agent.subagent_cleanup.pending_restore.clear();
     }
 
     /// Invalidates pending restore qualification when either endpoint is rebound.
@@ -71,7 +85,8 @@ impl RuntimeSessionService {
     /// standalone resume, even if it happens to name the same saved conversation.
     pub(super) fn retire_pending_cleanup_restore_for_agent(&mut self, agent_id: &str) {
         self.agent
-            .pending_subagent_cleanup_restore
+            .subagent_cleanup
+            .pending_restore
             .retain(|child, pending| child != agent_id && pending.parent_agent_id != agent_id);
     }
 
@@ -82,7 +97,7 @@ impl RuntimeSessionService {
         &mut self,
         installed: &BTreeSet<(String, String)>,
     ) {
-        self.agent.pending_subagent_cleanup_restore.clear();
+        self.agent.subagent_cleanup.pending_restore.clear();
         for (child, persistent) in &self.agent.persistent_subagents {
             if installed.contains(&(child.clone(), persistent.conversation_id.clone()))
                 && installed.contains(&(
@@ -97,7 +112,7 @@ impl RuntimeSessionService {
                 let child_process = child
                     .strip_prefix("agent-")
                     .and_then(|pane| self.cleanup_process_owner(pane));
-                self.agent.pending_subagent_cleanup_restore.insert(
+                self.agent.subagent_cleanup.pending_restore.insert(
                     child.clone(),
                     PendingCleanupRestore {
                         parent_agent_id: persistent.parent_agent_id.clone(),
@@ -116,7 +131,7 @@ impl RuntimeSessionService {
     /// exist and both installed conversations still match. Called again by the
     /// native startup owner after installation, never by a saved-lineage loader.
     pub(crate) fn finalize_pending_subagent_cleanup_restore(&mut self) {
-        let pending = self.agent.pending_subagent_cleanup_restore.clone();
+        let pending = self.agent.subagent_cleanup.pending_restore.clone();
         for (child_agent_id, mut pending) in pending {
             let child_pane = child_agent_id.strip_prefix("agent-");
             let parent_pane = pending.parent_agent_id.strip_prefix("agent-");
@@ -128,7 +143,8 @@ impl RuntimeSessionService {
                     .is_some_and(|shell| shell.session_id == pending.parent_conversation_id);
             if !bindings_match {
                 self.agent
-                    .pending_subagent_cleanup_restore
+                    .subagent_cleanup
+                    .pending_restore
                     .remove(&child_agent_id);
                 continue;
             }
@@ -146,7 +162,8 @@ impl RuntimeSessionService {
                     .is_some_and(|owner| *owner != binding.process)
             }) {
                 self.agent
-                    .pending_subagent_cleanup_restore
+                    .subagent_cleanup
+                    .pending_restore
                     .remove(&child_agent_id);
                 continue;
             }
@@ -159,11 +176,13 @@ impl RuntimeSessionService {
             if child.is_some() && parent.is_some() {
                 self.record_subagent_cleanup_ownership(&child_agent_id);
                 self.agent
-                    .pending_subagent_cleanup_restore
+                    .subagent_cleanup
+                    .pending_restore
                     .remove(&child_agent_id);
             } else {
                 self.agent
-                    .pending_subagent_cleanup_restore
+                    .subagent_cleanup
+                    .pending_restore
                     .insert(child_agent_id, pending);
             }
         }
@@ -175,10 +194,12 @@ impl RuntimeSessionService {
     pub(crate) fn invalidate_subagent_cleanup_native_install(&mut self, pane_id: &str) {
         let agent_id = format!("agent-{pane_id}");
         self.agent
-            .subagent_cleanup_ownership
+            .subagent_cleanup
+            .ownership
             .retain(|_, edge| edge.parent.agent_id != agent_id && edge.child.agent_id != agent_id);
         self.agent
-            .pending_subagent_cleanup_restore
+            .subagent_cleanup
+            .pending_restore
             .retain(|child, pending| {
                 !(child == &agent_id && pending.child_process.is_some()
                     || pending.parent_agent_id == agent_id && pending.parent_process.is_some())
@@ -230,14 +251,14 @@ impl RuntimeSessionService {
         next: CleanupProcessOwner,
     ) {
         let agent_id = format!("agent-{pane_id}");
-        for edge in self.agent.subagent_cleanup_ownership.values_mut() {
+        for edge in self.agent.subagent_cleanup.ownership.values_mut() {
             for endpoint in [&mut edge.parent, &mut edge.child] {
                 if endpoint.agent_id == agent_id && endpoint.process == previous {
                     endpoint.process = next.clone();
                 }
             }
         }
-        for (child, pending) in &mut self.agent.pending_subagent_cleanup_restore {
+        for (child, pending) in &mut self.agent.subagent_cleanup.pending_restore {
             if pending.parent_agent_id == agent_id
                 && pending.parent_process.as_ref() == Some(&previous)
             {
@@ -273,7 +294,7 @@ impl RuntimeSessionService {
     /// Publishes cleanup ownership only after actual local child setup succeeds.
     /// Missing bindings or native ownership leave no destructive authority.
     pub(crate) fn record_subagent_cleanup_ownership(&mut self, child_agent_id: &str) {
-        self.agent.subagent_cleanup_ownership.remove(child_agent_id);
+        self.agent.subagent_cleanup.ownership.remove(child_agent_id);
         let Some(lineage) = self.subagent_lineage(child_agent_id) else {
             return;
         };
@@ -297,7 +318,7 @@ impl RuntimeSessionService {
         {
             return;
         }
-        self.agent.subagent_cleanup_ownership.insert(
+        self.agent.subagent_cleanup.ownership.insert(
             child_agent_id.to_string(),
             RuntimeSubagentCleanupOwnership { parent, child },
         );
@@ -318,7 +339,7 @@ impl RuntimeSessionService {
         {
             return None;
         }
-        let edge = self.agent.subagent_cleanup_ownership.get(child_agent_id)?;
+        let edge = self.agent.subagent_cleanup.ownership.get(child_agent_id)?;
         if self
             .subagent_lineage(child_agent_id)
             .is_some_and(|lineage| lineage.parent_agent_id != edge.parent.agent_id)
@@ -428,7 +449,8 @@ impl RuntimeSessionService {
                 .is_some_and(|binding| binding.process == ownership.parent.process)
         {
             self.agent
-                .subagent_cleanup_ownership
+                .subagent_cleanup
+                .ownership
                 .insert(child_agent_id.to_string(), ownership);
         }
     }
@@ -446,7 +468,8 @@ impl RuntimeSessionService {
         }
         let mut descendants = self
             .agent
-            .subagent_cleanup_ownership
+            .subagent_cleanup
+            .ownership
             .keys()
             .filter_map(|child| {
                 self.subagent_cleanup_distance(child, parent_agent_id, original_parent_conversation)

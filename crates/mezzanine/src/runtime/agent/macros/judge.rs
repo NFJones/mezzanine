@@ -369,7 +369,7 @@ impl RuntimeSessionService {
                                     ),
                                 )?;
                             } else {
-                                self.cleanup_removed_pane_runtime_state(child_pane_id.as_str())?;
+                                self.close_runtime_owned_subagent_pane(child_pane_id.as_str())?;
                             }
                         } else {
                             self.cleanup_removed_pane_runtime_state(child_pane_id.as_str())?;
@@ -434,7 +434,7 @@ impl RuntimeSessionService {
                                     ),
                                 )?;
                             } else {
-                                self.cleanup_removed_pane_runtime_state(child_pane_id.as_str())?;
+                                self.close_runtime_owned_subagent_pane(child_pane_id.as_str())?;
                             }
                         } else {
                             self.cleanup_removed_pane_runtime_state(child_pane_id.as_str())?;
