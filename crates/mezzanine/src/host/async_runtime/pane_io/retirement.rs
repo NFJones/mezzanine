@@ -114,12 +114,7 @@ async fn drain_native_with_failure_reader(
             return first_error.or_else(&mut read_failure).map_or(Ok(()), Err);
         }
         if Instant::now() >= deadline {
-            let diagnostic = first_error
-                .map(|error| format!("; first cleanup failure: {error}"))
-                .unwrap_or_default();
-            return Err(MezError::invalid_state(format!(
-                "native pane retirement is unproven for {pending} exact owned children{diagnostic}"
-            )));
+            return Err(native_pending_deadline_error(pending, first_error));
         }
         if let Err(error) = advance_native_pane_retirement(owner, deadline) {
             first_error.get_or_insert(error);
@@ -134,12 +129,7 @@ async fn drain_native_with_failure_reader(
             continue;
         }
         if Instant::now() >= deadline {
-            let diagnostic = first_error
-                .map(|error| format!("; first cleanup failure: {error}"))
-                .unwrap_or_default();
-            return Err(MezError::invalid_state(format!(
-                "native pane retirement is unproven for {outstanding} exact owned children{diagnostic}"
-            )));
+            return Err(native_pending_deadline_error(outstanding, first_error));
         }
         // Includes late cancellation of nested, not-yet-polled workers.
         tokio::task::yield_now().await;
@@ -148,8 +138,29 @@ async fn drain_native_with_failure_reader(
     }
 }
 
+/// Adds pending/deadline context at either drain exit without overwriting an
+/// available first error's kind/cause. Only absence of a prior typed error
+/// synthesizes InvalidState for the unproven completion barrier.
+fn native_pending_deadline_error(pending: usize, first: Option<MezError>) -> MezError {
+    let kind = first
+        .as_ref()
+        .map_or(crate::MezErrorKind::InvalidState, MezError::kind);
+    let diagnostic = first
+        .map(|error| format!("; first cleanup failure: {error}"))
+        .unwrap_or_default();
+    MezError::new(
+        kind,
+        format!(
+            "native pane retirement is unproven for {pending} exact owned children{diagnostic}"
+        ),
+    )
+}
+
 /// Converts only the owner's bounded native-stage receipt, never arbitrary
 /// actor/provider errors or raw process output, into the cleanup result.
+/// Durable receipts intentionally retain bounded diagnostic evidence, not the
+/// original typed OS error. Retry reports an InvalidState unproven/failure
+/// barrier; a typed first error still available in this call keeps its kind.
 fn retained_native_failure(owner: &PaneProcessRetirementOwner) -> Option<MezError> {
     owner.cleanup_failure().map(|failure| {
         MezError::invalid_state(format!("retained native cleanup failure: {failure}"))
@@ -159,6 +170,62 @@ fn retained_native_failure(owner: &PaneProcessRetirementOwner) -> Option<MezErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both deadline exits use the same constructor: pending counts and added
+    /// context must retain an available Io first cause, not replace its kind.
+    /// Without a first cause the unproven barrier is explicitly InvalidState.
+    #[test]
+    fn native_deadline_context_keeps_available_first_error_kind() {
+        for pending in [1, 17] {
+            let error = native_pending_deadline_error(
+                pending,
+                Some(MezError::io("classified native fixture failure")),
+            );
+            assert_eq!(error.kind(), crate::MezErrorKind::Io);
+            assert!(
+                error
+                    .message()
+                    .contains("classified native fixture failure")
+            );
+            assert!(
+                error
+                    .message()
+                    .contains(&format!("{pending} exact owned children"))
+            );
+            assert_eq!(
+                native_pending_deadline_error(pending, None).kind(),
+                crate::MezErrorKind::InvalidState
+            );
+        }
+    }
+
+    /// A classified per-call Io receipt at an exhausted deadline must retain
+    /// its category and original cause while an admitted reservation remains
+    /// owned. This injects classification, not an OS I/O fault or child reap.
+    #[tokio::test]
+    async fn expired_native_drain_retains_io_cause_and_pending_reservation() {
+        let owner = PaneProcessRetirementOwner::default();
+        let reservation = owner.reserve().unwrap();
+        let error = drain_native_with_failure_reader(&owner, Instant::now(), true, || {
+            Some(MezError::io("classified deadline receipt"))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), crate::MezErrorKind::Io);
+        assert!(error.message().contains("classified deadline receipt"));
+        assert!(error.message().contains("1 exact owned children"));
+        assert_eq!(
+            owner.outstanding(),
+            1,
+            "deadline fabricated native completion"
+        );
+        drop(reservation);
+        assert_eq!(
+            owner.outstanding(),
+            0,
+            "empty reservation alone can be released"
+        );
+    }
 
     /// Exact native root force must not block a current-thread executor on
     /// portable-pty's HUP grace. Four roots prove trap installation before the

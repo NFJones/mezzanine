@@ -218,6 +218,10 @@ effective interval and KILL at two from the original termination start. This
 reserves force/wait capacity within the same finite deadline. Handoff
 does not replay completed stages or delay a force upgrade. Expired cleanup
 observes status without issuing new signals and remains unproven until wait.
+Within one cleanup call, added pending/deadline context preserves the first
+typed failure's kind and cause. Durable cancellation/host receipts retain only
+bounded private diagnostic evidence and sticky failure status; retries expose
+an unproven/failure barrier, not a reconstructed original OS-error category.
 
 If native cleanup cannot be proved within its deadline, the live host retains
 the exact session generation in cleanup-pending state (reported as stopping).
