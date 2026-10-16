@@ -17,7 +17,7 @@ use crate::runtime::PaneProcessInstance;
 /// records cannot authorize effects, and only exact native owners can publish
 /// live edges. The enclosing agent component owns this box exclusively, which
 /// avoids copying inline map storage through large actor state transitions.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(super) struct RuntimeSubagentCleanupState {
     /// Exact live edges permitted to participate in destructive cleanup.
     pub(super) ownership: BTreeMap<String, RuntimeSubagentCleanupOwnership>,
