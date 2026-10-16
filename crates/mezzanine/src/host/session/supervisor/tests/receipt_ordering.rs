@@ -85,7 +85,13 @@ async fn host_zero_native_count_refreshes_owner_receipt_before_callback() {
             if earlier {
                 supervisor.retain_native_failure_for_test();
             }
-            let mut claim = native.begin_drain().unwrap();
+            let authority = native
+                .capture_cleanup_attempt(std::time::Instant::now() + Duration::from_secs(1))
+                .unwrap();
+            let mut claim = native
+                .try_begin_drain_for_attempt(&authority)
+                .unwrap()
+                .unwrap();
             let mut child = claim.take_returned().unwrap();
             let published = AtomicBool::new(false);
             let (entered, observed) = tokio::sync::oneshot::channel();
@@ -187,7 +193,13 @@ fn callback_observes_pending_before_receipt_and_retains_racing_generation() {
     let supervisor = SessionSupervisor::new(0);
     let id = "$callback-order";
     let (native, pid, start, master) = returned_starting_owner(&supervisor, id);
-    let mut claim = native.begin_drain().unwrap();
+    let authority = native
+        .capture_cleanup_attempt(std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    let mut claim = native
+        .try_begin_drain_for_attempt(&authority)
+        .unwrap()
+        .unwrap();
     let mut child = claim.take_returned().unwrap();
     let published = Arc::new(AtomicBool::new(false));
     let (release, released) = std::sync::mpsc::channel();
