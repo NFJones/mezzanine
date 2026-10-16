@@ -452,6 +452,9 @@ where
         }
     }
     }.await;
+    if let Err(error) = &result {
+        retirement.remember_service_failure(error)?;
+    }
     retirement.request_stop();
     workers.abort_all();
     while workers.join_next().await.is_some() {}

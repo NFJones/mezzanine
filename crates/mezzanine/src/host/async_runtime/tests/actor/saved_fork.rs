@@ -12,7 +12,14 @@ use super::super::*;
 /// command wrapper. The source lease stays held until supervision has returned.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths() {
-    for mode in ["shutdown", "last-primary", "error", "published", "draining"] {
+    for mode in [
+        "shutdown",
+        "last-primary",
+        "error",
+        "published",
+        "draining",
+        "failed-draining",
+    ] {
         let root =
             std::env::temp_dir().join(format!("mez-fork-supervision-{}", rand::random::<u64>()));
         let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
@@ -47,7 +54,7 @@ async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths
         let started = std::sync::Arc::new(tokio::sync::Notify::new());
         let release = std::sync::Arc::new(tokio::sync::Notify::new());
         service.set_deferred_agent_command_probe_for_tests(started.clone(), release.clone());
-        let source_lock = if matches!(mode, "published" | "draining") {
+        let source_lock = if matches!(mode, "published" | "draining" | "failed-draining") {
             None
         } else {
             Some(
@@ -64,14 +71,14 @@ async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths
             let command_service = crate::host::async_runtime::build_async_agent_command_service(
                 "commands",
                 handle.clone(),
-                AsyncAgentProviderServiceConfig::new(1)
+                AsyncAgentProviderServiceConfig::new(2)
                     .unwrap()
                     .with_idle_interval(Duration::from_millis(5))
                     .unwrap(),
             )
             .unwrap();
             let retirement = command_service.saved_fork_retirement.clone().unwrap();
-            let publication_gate = matches!(mode, "published" | "draining")
+            let publication_gate = matches!(mode, "published" | "draining" | "failed-draining")
                 .then(|| retirement.gate_publication_for_tests());
             let (primary_tx, primary_rx) = tokio::sync::oneshot::channel();
             let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
@@ -83,7 +90,7 @@ async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths
                     Ok(AsyncRuntimeServiceExit::completed(1))
                 }
             });
-            let mut supervisor = tokio::spawn(supervise_async_runtime_services(
+            let supervisor = tokio::spawn(supervise_async_runtime_services(
                 vec![primary_service, command_service],
                 async move {
                     let _ = cancel_rx.await;
@@ -118,8 +125,12 @@ async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths
                     .await
                     .unwrap();
                 assert!(root.join("supervised-target").is_dir());
-                if mode == "draining" {
-                    retirement.request_stop();
+                if matches!(mode, "draining" | "failed-draining") {
+                    if mode == "failed-draining" {
+                        retirement.fail_worker_for_tests();
+                    } else {
+                        retirement.request_stop();
+                    }
                     tokio::time::timeout(Duration::from_secs(2), async {
                         while !retirement.draining_for_tests() {
                             tokio::task::yield_now().await;
@@ -129,30 +140,47 @@ async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths
                     .unwrap();
                 }
             }
-            if matches!(mode, "shutdown" | "published" | "draining") {
+            if matches!(
+                mode,
+                "shutdown" | "published" | "draining" | "failed-draining"
+            ) {
                 cancel_tx.send(()).unwrap();
             } else {
                 primary_tx.send(()).unwrap();
             }
             if let Some((_, release)) = publication_gate {
+                let takeover = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    retirement.wait_for_takeover_for_tests(),
+                )
+                .await;
+                let premature = supervisor.is_finished();
+                // Release even on a failed phase assertion so the fixture never
+                // strands an owned blocking producer behind its own test gate.
+                release.notify_one();
+                takeover.expect("supervisor must causally take exact worker ownership");
                 assert!(
-                    tokio::time::timeout(Duration::from_millis(25), &mut supervisor)
-                        .await
-                        .is_err(),
-                    "supervisor must not finish before its publication owner retires"
+                    !premature,
+                    "supervisor must wait for the gated publication owner"
                 );
                 assert_eq!(
                     retirement.retained_workers_for_tests(),
                     0,
                     "supervisor must have taken exact worker ownership before release"
                 );
-                release.notify_one();
             }
             let result = tokio::time::timeout(Duration::from_secs(2), supervisor)
                 .await
                 .expect("supervisor must cancel held acquisition and observe true retirement")
                 .unwrap();
-            if mode == "error" {
+            if mode == "failed-draining" {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .message()
+                        .contains("owned consumed worker failure")
+                );
+            } else if mode == "error" {
                 assert!(
                     result
                         .unwrap_err()

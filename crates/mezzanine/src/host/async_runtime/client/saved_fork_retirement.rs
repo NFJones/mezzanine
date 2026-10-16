@@ -20,12 +20,26 @@ pub(in crate::host::async_runtime) struct SavedForkServiceRetirement {
     pub(super) shutdown: Arc<AtomicBool>,
     /// Shares the command lane's existing total capacity, not a second lane.
     workers: Arc<Mutex<JoinSet<Result<()>>>>,
+    /// Observed causes retained across cancellation of service cleanup.
+    failures: Arc<Mutex<SavedForkFailures>>,
     /// Owned-fixture pause after durable publication, before actor adoption.
     #[cfg(test)]
     publication_gate: Arc<Mutex<Option<ForkPublicationGate>>>,
     /// Owned-fixture evidence that normal service retirement has begun.
     #[cfg(test)]
     draining: Arc<AtomicBool>,
+    /// Exact supervisor takeover acknowledgment, independent of scheduling delay.
+    #[cfg(test)]
+    takeover: Arc<tokio::sync::Notify>,
+}
+
+/// Bounded service and worker causes; neither grants cleanup authority.
+#[derive(Debug, Default)]
+struct SavedForkFailures {
+    /// Primary service cause captured before its first cleanup await.
+    service: Option<(crate::error::MezErrorKind, String)>,
+    /// First removed worker failure retained independently of its wrapper.
+    worker: Option<(crate::error::MezErrorKind, String)>,
 }
 
 /// Two-phase test handshake; production workers have no pause or new deadline.
@@ -34,6 +48,19 @@ pub(in crate::host::async_runtime) type ForkPublicationGate =
     (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>);
 
 impl SavedForkServiceRetirement {
+    /// Inserts a failed sibling in an owned two-slot command-lane fixture.
+    #[cfg(test)]
+    pub(in crate::host::async_runtime) fn fail_worker_for_tests(&self) {
+        self.spawn(async { Err(MezError::invalid_state("owned consumed worker failure")) })
+            .unwrap();
+    }
+
+    /// Awaits actual supervisor takeover rather than a fixed scheduling delay.
+    #[cfg(test)]
+    pub(in crate::host::async_runtime) async fn wait_for_takeover_for_tests(&self) {
+        self.takeover.notified().await;
+    }
+
     /// Installs an exact worker pause for postpublication cancellation controls.
     #[cfg(test)]
     pub(in crate::host::async_runtime) fn gate_publication_for_tests(&self) -> ForkPublicationGate {
@@ -65,6 +92,41 @@ impl SavedForkServiceRetirement {
         self.shutdown.store(true, Ordering::Release);
     }
 
+    /// Retains the service cause synchronously before cleanup can be cancelled.
+    pub(super) fn remember_service_failure(&self, error: &MezError) -> Result<()> {
+        self.failures
+            .lock()
+            .map_err(|_| Self::poisoned())?
+            .service
+            .get_or_insert_with(|| (error.kind(), error.message().to_owned()));
+        Ok(())
+    }
+
+    /// Retains a removed worker failure before any subsequent await or abort.
+    fn remember_worker_failure(&self, error: &MezError) -> Result<()> {
+        self.failures
+            .lock()
+            .map_err(|_| Self::poisoned())?
+            .worker
+            .get_or_insert_with(|| (error.kind(), error.message().to_owned()));
+        Ok(())
+    }
+
+    /// Reconstructs distinct service and worker causes without consuming evidence.
+    fn observed_failure(&self) -> Result<Option<MezError>> {
+        let failures = self.failures.lock().map_err(|_| Self::poisoned())?;
+        Ok(match (&failures.service, &failures.worker) {
+            (Some((kind, service)), Some((_, worker))) if service != worker => Some(MezError::new(
+                *kind,
+                format!("{service}; saved fork worker retirement failed: {worker}"),
+            )),
+            (Some((kind, message)), _) | (_, Some((kind, message))) => {
+                Some(MezError::new(*kind, message.clone()))
+            }
+            (None, None) => None,
+        })
+    }
+
     /// Reports worker slots still occupied, including completed unobserved jobs.
     pub(super) fn len(&self) -> Result<usize> {
         Ok(self.workers.lock().map_err(|_| Self::poisoned())?.len())
@@ -87,9 +149,17 @@ impl SavedForkServiceRetirement {
         let mut workers = self.workers.lock().map_err(|_| Self::poisoned())?;
         let mut completed = 0u64;
         while let Some(joined) = workers.try_join_next() {
-            joined.map_err(|error| {
-                MezError::invalid_state(format!("saved fork command worker task failed: {error}"))
-            })??;
+            let result = joined
+                .map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "saved fork command worker task failed: {error}"
+                    ))
+                })
+                .and_then(|result| result);
+            if let Err(error) = result {
+                self.remember_worker_failure(&error)?;
+                return Err(error);
+            }
             completed = completed.saturating_add(1);
         }
         Ok(completed)
@@ -102,18 +172,16 @@ impl SavedForkServiceRetirement {
         #[cfg(test)]
         self.draining.store(true, Ordering::Release);
         let mut completed = 0u64;
-        let mut failure = None;
         while self.len()? != 0 {
             match self.drain_completed() {
                 Ok(count) => completed = completed.saturating_add(count),
-                Err(error) if failure.is_none() => failure = Some(error),
                 Err(_) => {}
             }
             if self.len()? != 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         }
-        match failure {
+        match self.observed_failure()? {
             Some(error) => Err(error),
             None => Ok(completed),
         }
@@ -124,8 +192,9 @@ impl SavedForkServiceRetirement {
     pub(in crate::host::async_runtime) async fn retire(&self) -> Result<u64> {
         self.request_stop();
         let mut workers = std::mem::take(&mut *self.workers.lock().map_err(|_| Self::poisoned())?);
+        #[cfg(test)]
+        self.takeover.notify_one();
         let mut completed = 0u64;
-        let mut failure = None;
         while let Some(joined) = workers.join_next().await {
             completed = completed.saturating_add(1);
             let result = joined
@@ -133,11 +202,11 @@ impl SavedForkServiceRetirement {
                     MezError::invalid_state(format!("saved fork retirement task failed: {error}"))
                 })
                 .and_then(|result| result);
-            if failure.is_none() {
-                failure = result.err();
+            if let Err(error) = result {
+                self.remember_worker_failure(&error)?;
             }
         }
-        match failure {
+        match self.observed_failure()? {
             Some(error) => Err(error),
             None => Ok(completed),
         }
