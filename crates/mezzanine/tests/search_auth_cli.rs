@@ -34,6 +34,9 @@ impl Fixture {
             .env_clear()
             .env("HOME", &self.0)
             .env("XDG_CONFIG_HOME", self.0.join("config"))
+            // Keep default socket discovery inside this exclusive test root;
+            // parallel workspace tests must never share /tmp/mez-<uid> here.
+            .env("MEZ_TMPDIR", &self.0)
             .env("PATH", "/usr/bin:/bin")
             .env("TERM", "dumb")
             .args(args)
