@@ -10,9 +10,11 @@ use std::{
     collections::BTreeMap,
     fs,
     io::{Read, Write},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
+use rustix::fs::{AtFlags, Mode, OFlags, open, openat, renameat, unlinkat};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +34,18 @@ struct Metadata {
     version: u32,
     /// Logical identities, including tombstones needed for pending deletion.
     entries: BTreeMap<String, Entry>,
+}
+
+/// Metadata publication phase, separate from pre-rename errors. Directory
+/// syncing covers this metadata entry only, not credential backend durability
+/// or newly created ancestor directories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "published-but-unsynced metadata must not trigger precommit credential cleanup"]
+enum Publication {
+    /// The exact directory used for relative publication was synced.
+    DirectorySynced,
+    /// New metadata is visible but directory sync failed or is uncertain.
+    PublishedUnsynced,
 }
 
 impl Default for Metadata {
@@ -172,6 +186,12 @@ pub struct SearchAuthStore {
     /// Deterministic fake-only failure at the Nth metadata publication.
     #[cfg(test)]
     fail_write_at: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Deterministic fake-only post-rename directory-sync failure.
+    #[cfg(test)]
+    fail_directory_sync_at: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Deterministic metadata-stage collision fixture, absent in production.
+    #[cfg(test)]
+    metadata_stage_name: Option<String>,
 }
 
 impl SearchAuthStore {
@@ -182,6 +202,10 @@ impl SearchAuthStore {
             root,
             #[cfg(test)]
             fail_write_at: Default::default(),
+            #[cfg(test)]
+            fail_directory_sync_at: Default::default(),
+            #[cfg(test)]
+            metadata_stage_name: None,
         }
     }
 
@@ -194,13 +218,19 @@ impl SearchAuthStore {
     fn read(&self) -> Result<Metadata> {
         let path = self.path();
         reject_existing_symlink_components(&path)?;
-        let file = match fs::File::open(path) {
+        let file = match fs::OpenOptions::new()
+            .read(true)
+            .custom_flags((OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC).bits() as i32)
+            .open(path)
+        {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Metadata::default());
             }
             Err(_) => return Err(MezError::config("search auth metadata unavailable")),
         };
+        let owned = file.metadata().map_err(|_| MezError::config("search auth metadata unavailable"))?;
+        validate_metadata_file(&owned, rustix::process::geteuid().as_raw())?;
         let mut bytes = Vec::new();
         file.take(1024 * 1024 + 1)
             .read_to_end(&mut bytes)
@@ -214,11 +244,11 @@ impl SearchAuthStore {
         Ok(metadata)
     }
 
-    /// Publishes private non-secret metadata atomically. No error is returned
-    /// after rename, so callers never mistake a committed generation for a
-    /// precommit failure. Secret text is never included in diagnostics.
-    fn write(&self, metadata: &Metadata) -> Result<()> {
-        use std::os::unix::fs::OpenOptionsExt;
+    /// Publishes private metadata relative to one retained directory descriptor.
+    /// Err is possible ONLY before rename. Directory-sync uncertainty after
+    /// publication is explicit, never a precommit credential-cleanup signal.
+    /// This is not a multi-store transaction or whole-backend crash guarantee.
+    fn write(&self, metadata: &Metadata) -> Result<Publication> {
         metadata.validate()?;
         #[cfg(test)]
         if self.fail_write_at.fetch_update(
@@ -233,33 +263,49 @@ impl SearchAuthStore {
         }
         ensure_private_dir(&self.root)?;
         reject_existing_symlink_components(&self.path())?;
-        let temporary = self.root.join(format!(".search-auth-{}.tmp", new_id()));
+        let directory = fs::File::from(open(&self.root, OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())
+            .map_err(|_| MezError::config("search auth metadata directory unavailable"))?);
+        let directory_metadata = directory.metadata().map_err(|_| MezError::config("search auth metadata directory unavailable"))?;
+        if !directory_metadata.is_dir() || directory_metadata.uid() != rustix::process::geteuid().as_raw() || directory_metadata.mode() & 0o077 != 0 {
+            return Err(MezError::forbidden("search auth metadata directory must be owned and private"));
+        }
+        let temporary = format!(".search-auth-{}.tmp", new_id());
+        #[cfg(test)]
+        let temporary = self.metadata_stage_name.clone().unwrap_or(temporary);
         let bytes = serde_json::to_vec(metadata)
             .map_err(|_| MezError::config("search auth metadata encoding failed"))?;
         if bytes.len() > 1024 * 1024 {
             return Err(MezError::config("search auth metadata too large"));
         }
+        // Cleanup ownership begins ONLY after exclusive creation succeeds.
+        // An existing generated pathname is not ours to remove on EEXIST.
+        let descriptor = openat(&directory, temporary.as_str(), OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::RUSR | Mode::WUSR)
+            .map_err(|_| MezError::config("search auth metadata staging creation failed"))?;
         let result = (|| {
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&temporary)?;
+            let mut file = fs::File::from(descriptor);
             file.write_all(&bytes)?;
             file.sync_all()?;
             drop(file);
-            fs::rename(&temporary, self.path())?;
+            renameat(&directory, temporary.as_str(), &directory, "search-auth.json").map_err(std::io::Error::from)?;
             Ok(())
         })();
         if result.is_err() {
-            let cleanup = fs::remove_file(&temporary);
-            if cleanup.is_err_and(|error| error.kind() != std::io::ErrorKind::NotFound) {
+            let cleanup = unlinkat(&directory, temporary.as_str(), AtFlags::empty());
+            if cleanup.is_err_and(|error| error != rustix::io::Errno::NOENT) {
                 return Err(MezError::config(
                     "search auth metadata update failed; temporary metadata cleanup incomplete",
                 ));
             }
         }
-        result.map_err(|_: std::io::Error| MezError::config("search auth metadata update failed"))
+        result.map_err(|_: std::io::Error| MezError::config("search auth metadata update failed"))?;
+        #[cfg(test)]
+        if self.fail_directory_sync_at.fetch_update(std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst, |remaining| remaining.checked_sub(1)) == Ok(1) {
+            return Ok(Publication::PublishedUnsynced);
+        }
+        Ok(match directory.sync_all() {
+            Ok(()) => Publication::DirectorySynced,
+            Err(_) => Publication::PublishedUnsynced,
+        })
     }
 
     /// Reports configuration and safe filesystem presence only. OS keyring
@@ -496,14 +542,14 @@ impl SearchAuthStore {
                 pending,
             },
         );
-        if let Err(error) = self.write(&metadata) {
-            return Err(if store.delete_secret(&expected).is_err() {
-                MezError::invalid_state(
-                    "search credential update failed before commit; staged credential cleanup incomplete",
-                )
-            } else {
-                error
-            });
+        match self.write(&metadata) {
+            Err(error) => {
+                return Err(if store.delete_secret(&expected).is_err() {
+                    MezError::invalid_state("search credential update failed before commit; staged credential cleanup incomplete")
+                } else { error });
+            }
+            Ok(Publication::PublishedUnsynced) => return Err(publication_uncertain()),
+            Ok(Publication::DirectorySynced) => {}
         }
         self.cleanup(&mut metadata, name, cleanup_store)?;
         self.status(name).map_err(|_| {
@@ -536,7 +582,9 @@ impl SearchAuthStore {
             entry.pending.push(record);
         }
         entry.generation = new_id();
-        self.write(&metadata)?;
+        if self.write(&metadata)? == Publication::PublishedUnsynced {
+            return Err(publication_uncertain());
+        }
         self.cleanup(&mut metadata, name, backend)?;
         Ok(changed)
     }
@@ -558,14 +606,35 @@ impl SearchAuthStore {
         }
         if !entry.pending.is_empty() {
             entry.pending.clear();
-            self.write(metadata).map_err(|_| {
+            let publication = self.write(metadata).map_err(|_| {
                 MezError::invalid_state(
                     "search credential change committed; cleanup bookkeeping incomplete",
                 )
             })?;
+            if publication == Publication::PublishedUnsynced {
+                return Err(publication_uncertain());
+            }
         }
         Ok(())
     }
+}
+
+/// Validates the opened metadata inode before reading. Nonblocking open avoids
+/// FIFO rendezvous; private regular/single-link checks reject special-node and
+/// hardlink aliases. Ancestor checks are not an atomic ancestor-CAS guarantee.
+fn validate_metadata_file(metadata: &fs::Metadata, expected_uid: u32) -> Result<()> {
+    if !metadata.is_file() || metadata.nlink() != 1 || metadata.uid() != expected_uid || metadata.mode() & 0o077 != 0 {
+        return Err(MezError::forbidden("search auth metadata must be an owned private single-link regular file"));
+    }
+    if metadata.len() > 1024 * 1024 {
+        return Err(MezError::config("search auth metadata too large"));
+    }
+    Ok(())
+}
+
+/// A visible publication must never be treated as a failed staging attempt.
+fn publication_uncertain() -> MezError {
+    MezError::invalid_state("search credential metadata published; directory sync uncertain; current generation retained")
 }
 
 /// Validates exact origin equality, rejecting alternate scheme/port/path/query,

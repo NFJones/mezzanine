@@ -14029,7 +14029,12 @@ belong to the provider adapter, not this foundation.
 
 Metadata/status/list/config operations MUST NOT load credential values, call
 `contains_secret` implementations that load, read environment values or perform
-HTTP. Status MUST distinguish configured state from file-metadata-only
+HTTP. Metadata reads MUST use no-follow,
+nonblocking opened descriptors, validate current ownership, private mode,
+regular single-link inode and bounded size before reading, and MUST reject
+FIFO/special nodes without blocking or repairing their permissions. Existing
+ancestor checks do not promise atomic ancestor-path replacement fencing.
+Status MUST distinguish configured state from file-metadata-only
 `present`/`missing`/`store_unavailable`; OS presence is `unknown` without a
 secret read. `remotely_verified` MUST remain false. Capture MUST read only
 metadata; the future trusted runtime must authorize the exact provider/origin/
@@ -14046,7 +14051,16 @@ erased by logout; no later binding may resolve the revoked generation.
 
 Login MUST stage a unique record before atomic metadata publication. Precommit
 failure MUST preserve old metadata/credentials and attempt cleanup only of its
-own stage. After publication, rotation/revocation MUST be forward-only: delete
+own stage. Metadata publication MUST retain
+one directory descriptor for relative stage/rename and sync that same directory
+after rename. Post-rename sync failure MUST be reported as published with
+directory-sync uncertainty, never as a precommit error. For initial replacement
+or revocation publication, retain the new key/tombstone and pending old records
+and defer destructive cleanup. Later cleanup-bookkeeping uncertainty MUST NOT
+claim that already-completed secret deletion was deferred or rolled back. This sync
+covers the metadata entry only, not credential-backend durability, created
+ancestor directories, a multi-store transaction, or power-loss certification.
+After publication, rotation/revocation MUST remain forward-only: delete
 errors can occur after effects, so restoring an old generation or deleting the
 new current record as rollback is forbidden. Such failures MUST report that the
 change committed and deletion is incomplete, retaining exact non-secret pending

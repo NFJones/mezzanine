@@ -610,7 +610,7 @@ fn search_full_binding_comparison_rejects_validly_shaped_substitution() {
                 entry.current.as_mut().unwrap().provider = SearchProvider::Exa;
             }
         }
-        f.store.write(&metadata).unwrap();
+        assert_eq!(f.store.write(&metadata).unwrap(), Publication::DirectorySynced);
         assert!(f.resolve(&binding).is_err());
     }
     assert_eq!(f.loads(), 0);
@@ -703,6 +703,204 @@ fn search_status_reports_filesystem_failures_without_secret_reads() {
     assert!(f.store.status("work").is_err());
     assert!(f.resolve(&binding).is_err());
     assert_eq!(f.loads(), 0);
+}
+
+/// Every metadata-consuming core operation rejects an unsafe node with zero
+/// operations on the injected credential port. Public login may first probe
+/// backend availability; this helper does not claim that probe is exercised.
+fn assert_unsafe_metadata_without_store(f: &Fixture, binding: &SearchBinding) {
+    let calls = f.backend.state.borrow().calls.len();
+    assert!(f.store.status("work").is_err());
+    assert!(f.store.capture(&SearchCredentialRef::Stored("work".into()), SearchProvider::Brave, SearchProvider::Brave.origin()).is_err());
+    assert!(f.login("replacement-synthetic-key").is_err());
+    assert!(f.logout().is_err());
+    assert!(f.resolve(binding).is_err());
+    assert_eq!(f.backend.state.borrow().calls.len(), calls);
+}
+
+/// A no-writer FIFO must fail promptly, not hang inside metadata open while a
+/// mutation holds the common auth lock. A controlled nonblocking writer releases
+/// the OLD blocking implementation after the negative witness, so a regression
+/// fails without leaving a detached hung thread. Remaining consumers are checked
+/// only after the prompt result has been proven.
+#[test]
+fn search_metadata_fifo_is_rejected_without_blocking_or_store_access() {
+    use std::time::Duration;
+    let f = Fixture::new();
+    f.login(CANARY).unwrap();
+    let binding = f.capture();
+    let original = fs::read(f.store.path()).unwrap();
+    fs::remove_file(f.store.path()).unwrap();
+    rustix::fs::mkfifoat(rustix::fs::CWD, f.store.path(), Mode::RUSR | Mode::WUSR).unwrap();
+    let owned = f.store.clone();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || sender.send(owned.status("work")).unwrap());
+    let early = receiver.recv_timeout(Duration::from_secs(2));
+    let prompt = early.is_ok();
+    if !prompt {
+        let mut writer = fs::OpenOptions::new().write(true).custom_flags(OFlags::NONBLOCK.bits() as i32).open(f.store.path()).unwrap();
+        writer.write_all(b"{}").unwrap();
+    }
+    let result = match early { Ok(result) => result, Err(_) => receiver.recv_timeout(Duration::from_secs(2)).unwrap() };
+    worker.join().unwrap();
+    assert!(prompt, "metadata FIFO open blocked until the owned writer released it");
+    assert!(result.is_err());
+    assert_unsafe_metadata_without_store(&f, &binding);
+    assert!(std::os::unix::fs::FileTypeExt::is_fifo(&fs::symlink_metadata(f.store.path()).unwrap().file_type()));
+    fs::remove_file(f.store.path()).unwrap();
+    fs::write(f.store.path(), &original).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(f.store.path(), fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(f.resolve(&binding).unwrap().expose_secret(), CANARY);
+}
+
+/// Private-file validation rejects overbroad modes, hardlinks, oversized files,
+/// directories and symlinks without repairing/chmodding/reading unsafe inputs or
+/// touching any secret backend. Owner checking is exercised without chown/root.
+#[test]
+fn search_metadata_opened_inode_validation_preserves_unsafe_inputs() {
+    use std::os::unix::fs::PermissionsExt;
+    for kind in 0..5 {
+        let f = Fixture::new();
+        f.login(CANARY).unwrap();
+        let binding = f.capture();
+        let original = fs::read(f.store.path()).unwrap();
+        let alias = f.store.root.join("synthetic-metadata-alias");
+        let private = fs::metadata(f.store.path()).unwrap();
+        assert!(validate_metadata_file(&private, private.uid()).is_ok());
+        assert!(validate_metadata_file(&private, private.uid().wrapping_add(1)).is_err());
+        match kind {
+            0 => fs::set_permissions(f.store.path(), fs::Permissions::from_mode(0o644)).unwrap(),
+            1 => fs::hard_link(f.store.path(), &alias).unwrap(),
+            2 => fs::write(f.store.path(), vec![b' '; 1024 * 1024 + 1]).unwrap(),
+            3 => { fs::remove_file(f.store.path()).unwrap(); fs::create_dir(f.store.path()).unwrap(); }
+            _ => { fs::rename(f.store.path(), &alias).unwrap(); std::os::unix::fs::symlink(&alias, f.store.path()).unwrap(); }
+        }
+        let before = fs::symlink_metadata(f.store.path()).unwrap();
+        assert_unsafe_metadata_without_store(&f, &binding);
+        let after = fs::symlink_metadata(f.store.path()).unwrap();
+        assert_eq!((after.mode(), after.nlink(), after.len()), (before.mode(), before.nlink(), before.len()));
+        if kind == 0 || kind == 1 { assert_eq!(fs::read(f.store.path()).unwrap(), original); }
+        if kind == 1 || kind == 4 { assert_eq!(fs::read(&alias).unwrap(), original); }
+    }
+}
+
+/// First-login post-rename uncertainty retains the newly visible credential;
+/// replacement uncertainty keeps both new current and old pending records.
+/// Neither outcome can enter precommit stage deletion or revive a stale binding.
+#[test]
+fn search_published_unsynced_login_conserves_current_and_pending_credentials() {
+    let f = Fixture::new();
+    f.store.fail_directory_sync_at.store(1, std::sync::atomic::Ordering::SeqCst);
+    let error = f.login(CANARY).unwrap_err();
+    assert!(error.message().contains("published") && error.message().contains("sync uncertain"));
+    assert_eq!(f.backend.state.borrow().secrets.len(), 1);
+    assert!(!f.backend.state.borrow().calls.iter().any(|(op, _)| op == "delete"));
+    assert!(SearchAuthStore::new(f.store.root.clone()).status("work").unwrap().configured);
+    let old = f.capture();
+    f.store.fail_directory_sync_at.store(1, std::sync::atomic::Ordering::SeqCst);
+    let error = f.login("replacement-synthetic-key").unwrap_err();
+    assert!(error.message().contains("published"));
+    assert_eq!(f.backend.state.borrow().secrets.len(), 2);
+    assert!(!f.backend.state.borrow().calls.iter().any(|(op, _)| op == "delete"));
+    assert!(f.store.status("work").unwrap().cleanup_pending);
+    let loads = f.loads();
+    assert!(f.resolve(&old).is_err());
+    assert_eq!(f.loads(), loads);
+    assert_eq!(f.resolve(&f.capture()).unwrap().expose_secret(), "replacement-synthetic-key");
+    assert!(f.logout().unwrap());
+    assert!(f.backend.state.borrow().secrets.is_empty());
+}
+
+/// Logout publishes its tombstone before syncing, and sync uncertainty defers
+/// ALL destructive cleanup. A fresh owner sees revocation; later exact cleanup
+/// is safe and cannot touch unrelated inference/MCP records.
+#[test]
+fn search_published_unsynced_logout_retains_revocation_and_defers_deletion() {
+    let f = Fixture::new();
+    f.login(CANARY).unwrap();
+    let old = f.capture();
+    f.backend.state.borrow_mut().secrets.insert("unrelated-inference".into(), SecretString::from("inference-canary"));
+    f.store.fail_directory_sync_at.store(1, std::sync::atomic::Ordering::SeqCst);
+    assert!(f.logout().unwrap_err().message().contains("published"));
+    let reopened = SearchAuthStore::new(f.store.root.clone());
+    assert!(!reopened.status("work").unwrap().configured);
+    assert!(reopened.status("work").unwrap().cleanup_pending);
+    assert_eq!(f.backend.state.borrow().secrets.len(), 2);
+    assert!(!f.backend.state.borrow().calls.iter().any(|(op, _)| op == "delete"));
+    let loads = f.loads();
+    assert!(f.resolve(&old).is_err());
+    assert_eq!(f.loads(), loads);
+    assert!(f.logout().unwrap());
+    assert_eq!(f.backend.state.borrow().secrets.len(), 1);
+    assert!(f.backend.state.borrow().secrets.contains_key("unrelated-inference"));
+}
+
+/// A sync failure during cleanup bookkeeping is already postcommit: the new
+/// key stays current even though old exact deletion happened. A later mutation
+/// recovers without resurrecting the old generation or removing the new key.
+#[test]
+fn search_published_unsynced_cleanup_bookkeeping_keeps_new_generation() {
+    let f = Fixture::new();
+    f.login(CANARY).unwrap();
+    let old = f.capture();
+    f.store.fail_directory_sync_at.store(2, std::sync::atomic::Ordering::SeqCst);
+    let error = f.login("replacement-synthetic-key").unwrap_err();
+    assert!(error.message().contains("published"));
+    assert!(!error.message().contains("cleanup deferred"));
+    assert_eq!(f.backend.state.borrow().calls.iter().filter(|(op, _)| op == "delete").count(), 1);
+    assert_eq!(f.backend.state.borrow().secrets.len(), 1);
+    assert!(f.resolve(&old).is_err());
+    assert_eq!(f.resolve(&f.capture()).unwrap().expose_secret(), "replacement-synthetic-key");
+    assert!(f.logout().unwrap());
+    assert!(f.backend.state.borrow().secrets.is_empty());
+}
+
+/// An existing metadata staging name is never owned merely because it was
+/// generated. Failed exclusive creation must preserve its bytes/mode/inode,
+/// old metadata and old current key while cleaning only the new secret stage.
+#[test]
+fn search_metadata_stage_collision_preserves_unowned_file_and_old_generation() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = Fixture::new();
+    f.login(CANARY).unwrap();
+    let old = f.capture();
+    let metadata_before = fs::read(f.store.path()).unwrap();
+    let stage = f.store.root.join(".synthetic-existing-stage.tmp");
+    fs::write(&stage, "nonsecret-existing-stage-sentinel").unwrap();
+    fs::set_permissions(&stage, fs::Permissions::from_mode(0o600)).unwrap();
+    let before = fs::metadata(&stage).unwrap();
+    f.store.metadata_stage_name = Some(".synthetic-existing-stage.tmp".into());
+    assert!(f.login("replacement-synthetic-key").is_err());
+    let after = fs::metadata(&stage).unwrap();
+    assert_eq!((after.ino(), after.dev(), after.mode(), after.nlink()), (before.ino(), before.dev(), before.mode(), before.nlink()));
+    assert_eq!(fs::read_to_string(stage).unwrap(), "nonsecret-existing-stage-sentinel");
+    assert_eq!(fs::read(f.store.path()).unwrap(), metadata_before);
+    assert_eq!(f.backend.state.borrow().secrets.len(), 1);
+    assert_eq!(f.resolve(&old).unwrap().expose_secret(), CANARY);
+}
+
+/// Preexisting pending cleanup must not be retried when a new publication is
+/// visible but unsynced. The current generation and every pending credential
+/// remain conserved until a later successfully synced exact-name mutation.
+#[test]
+fn search_unsynced_replacement_does_not_start_existing_pending_cleanup() {
+    let f = Fixture::new();
+    f.login(CANARY).unwrap();
+    f.backend.state.borrow_mut().delete_error = true;
+    assert!(f.login("second-synthetic-key").is_err());
+    let old = f.capture();
+    { let mut state = f.backend.state.borrow_mut(); state.delete_error = false; state.calls.clear(); state.secrets.insert("unrelated-mcp".into(), SecretString::from("mcp-canary")); }
+    f.store.fail_directory_sync_at.store(1, std::sync::atomic::Ordering::SeqCst);
+    assert!(f.login("third-synthetic-key").unwrap_err().message().contains("published"));
+    assert_eq!(f.backend.state.borrow().secrets.len(), 4);
+    assert_eq!(f.store.read().unwrap().entries["work"].pending.len(), 2);
+    assert!(!f.backend.state.borrow().calls.iter().any(|(op, _)| op == "delete"));
+    assert!(f.resolve(&old).is_err());
+    assert_eq!(f.loads(), 0);
+    assert!(f.logout().unwrap());
+    assert_eq!(f.backend.state.borrow().secrets.len(), 1);
+    assert!(f.backend.state.borrow().secrets.contains_key("unrelated-mcp"));
 }
 
 /// Search and inference use the same private-file mechanism but disjoint

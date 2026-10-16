@@ -135,6 +135,16 @@ after a committed change, the command reports it and retains pending cleanup;
 retry login/logout for that same name. It never restores a revoked generation.
 An already-held request snapshot is not retroactively erased by logout.
 
+Metadata must be an owned private single-link regular file; FIFO/special nodes,
+unsafe permissions, symlinks, hardlinks and oversized metadata fail closed
+without reading credentials. Publication syncs the same metadata directory used
+for its atomic rename. If that sync fails after initial replacement/revocation
+publication, the visible new generation or logout tombstone remains in place and
+secret deletion is deferred. A later cleanup-bookkeeping sync can be uncertain
+after old keys were already deleted; that does not undo deletion. The command
+reports directory-sync uncertainty instead of rolling back. This is
+not a guarantee of whole-backend or newly created directory crash durability.
+
 ## When model sign-in fails
 
 Follow the reported action requirement rather than treating an incomplete
