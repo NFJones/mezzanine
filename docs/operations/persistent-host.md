@@ -216,8 +216,9 @@ descendant, session or cgroup; normal kernel/shell PTY hangup behavior remains.
 Synchronous custom grace is capped at the default 500 ms, using TERM at one
 effective interval and KILL at two from the original termination start. This
 reserves force/wait capacity within the same finite deadline. Handoff
-does not replay completed stages or delay a force upgrade. Expired cleanup
-observes status without issuing new signals and remains unproven until wait.
+does not replay completed stages or delay a force upgrade. Continuations of an
+expired attempt observe status without new signals and remain unproven until
+wait; cancellation, automatic retry and Drop do not renew that attempt.
 Within one cleanup call, added pending/deadline context preserves the first
 typed failure's kind and cause. Durable cancellation/host receipts retain only
 bounded private diagnostic evidence and sticky failure status; retries expose
@@ -230,8 +231,10 @@ not public host-status error strings. It is not evicted with terminal history or
 available for identity reuse. New managed pane, restored-pane and editor child
 admission is fenced while unproven returned cleanup remains; existing sibling
 I/O is not capped or stopped merely to make room for a cleanup record. Review
-the diagnostic and retry the same session stop rather than searching for or
-killing numeric PIDs or repeating user commands.
+the diagnostic rather than searching for or killing numeric PIDs or repeating
+user commands. Ordinary repeated Host stop/maintenance continues its existing
+attempt and can observe later waits; it does not grant a fresh post-expiry
+signal budget. Administrative Host retry authority is not added by this repair.
 
 A repeated stop may arrive after the original actor channel has closed but
 before its native drain and completion callback settle. Only typed transport
@@ -252,6 +255,17 @@ Borrow `code()` and `pending_native_children()` while retaining the outcome;
 use `retry_native_cleanup(budget)` inside a caller-owned Tokio runtime for an
 explicit bounded retry. Pending/unknown cleanup forces nonzero without losing
 an original nonzero command code. Cleanup failures remain sticky after retry.
+The explicit call captures its creation-time budget and exact owner/source/
+attempt preparation before the returned future is polled. Admission happens
+only after a caller runtime is available. A sealed, quiescent all-Returned owner
+whose real prior attempt expired can receive a new checked retry epoch; busy or
+stale owners are left untouched while eligible siblings still progress. A new
+epoch may force owned roots without replaying graceful stages or erasing the
+original elapsed timeline or failure receipt. Initial/no-plan work still uses
+initial authority, and one pane's local deadline never poisons healthy siblings.
+Old suspended or unpolled scopes cannot adopt the new epoch. Automatic initial
+CLI cleanup and Host finalization never mint it, including lease replay and
+maintenance. This path grants no authority over arbitrary numeric processes.
 `Termination::report` and dropping the outcome explicitly abandon retry
 ownership; neither proves OS process exit or native reaping. Final destruction
 can provide only disclosed best-effort signaling/kernel adoption, not a healthy

@@ -8,7 +8,7 @@
 //! and pre-spawn reservations participate in the barrier as well as queued
 //! children, so joining an outer task cannot falsely certify nested cleanup.
 
-use mez_mux::process::PaneProcessRetirementOwner;
+use mez_mux::process::{PaneProcessCleanupAttempt, PaneProcessRetirementOwner};
 
 use super::{Duration, Instant, MezError, Result, sleep};
 
@@ -24,28 +24,42 @@ const NATIVE_RETIREMENT_BURST: usize = 16;
 /// returned obligations settle. Errors retain unreaped children in `owner`;
 /// even after one signal/wait failure, all other safely owned children are
 /// attempted. Signal errors remain errors even if the root is later reaped.
-pub(crate) async fn drain_native_pane_retirement(
-    owner: &PaneProcessRetirementOwner,
+pub(crate) fn drain_native_pane_retirement<'a>(
+    owner: &'a PaneProcessRetirementOwner,
     deadline: Instant,
-) -> Result<()> {
-    drain_native_pane_retirement_scope(owner, deadline, true).await
+) -> impl std::future::Future<Output = Result<()>> + 'a {
+    drain_native_pane_retirement_scope(owner, deadline, true)
 }
 
 /// Settles returned failures without waiting for healthy sibling lifetimes.
-pub(super) async fn drain_returned_native_panes(
-    owner: &PaneProcessRetirementOwner,
+pub(super) fn drain_returned_native_panes<'a>(
+    owner: &'a PaneProcessRetirementOwner,
     deadline: Instant,
-) -> Result<()> {
-    drain_native_pane_retirement_scope(owner, deadline, false).await
+) -> impl std::future::Future<Output = Result<()>> + 'a {
+    drain_native_pane_retirement_scope(owner, deadline, false)
 }
 
-/// Performs one bounded native quantum without waiting for another owner.
-/// `false` is pending/busy, never completion; every exact guard is returned
-/// before yielding so host round-robin cleanup can progress owner seventeen.
-pub(crate) fn advance_native_pane_retirement(
+/// Drains only the exact already-admitted caller token. This never prepares or
+/// mints a retry and is shared by the explicit CLI caller's committed attempts.
+pub(crate) fn drain_native_pane_retirement_for_attempt<'a>(
+    owner: &'a PaneProcessRetirementOwner,
+    attempt: &'a PaneProcessCleanupAttempt,
+    deadline: Instant,
+) -> impl std::future::Future<Output = Result<()>> + 'a {
+    drain_native_with_attempt_and_failure_reader(owner, deadline, true, Ok(attempt.clone()), || {
+        retained_native_failure(owner)
+    })
+}
+
+/// Advances one fixed captured token, rejecting stale/foreign authority before
+/// any claim. The original scope deadline and token budget can only shorten.
+pub(crate) fn advance_native_pane_retirement_for_attempt(
     owner: &PaneProcessRetirementOwner,
+    attempt: &PaneProcessCleanupAttempt,
     deadline: Instant,
 ) -> Result<bool> {
+    attempt.validate(owner)?;
+    let deadline = deadline.min(Instant::from_std(attempt.deadline()));
     if owner.outstanding() == 0 {
         return retained_native_failure(owner).map_or(Ok(true), Err);
     }
@@ -55,7 +69,7 @@ pub(crate) fn advance_native_pane_retirement(
             owner.outstanding()
         )));
     }
-    let Some(mut drain) = owner.try_begin_drain() else {
+    let Some(mut drain) = owner.try_begin_drain_for_attempt(attempt)? else {
         return Ok(false);
     };
     let mut first_error = None;
@@ -80,29 +94,66 @@ pub(crate) fn advance_native_pane_retirement(
 }
 
 /// Shares bounded exact-handle I/O; only final shutdown uses the all-owner barrier.
-async fn drain_native_pane_retirement_scope(
-    owner: &PaneProcessRetirementOwner,
+fn drain_native_pane_retirement_scope<'a>(
+    owner: &'a PaneProcessRetirementOwner,
     deadline: Instant,
     all_owners: bool,
-) -> Result<()> {
+) -> impl std::future::Future<Output = Result<()>> + 'a {
     drain_native_with_failure_reader(owner, deadline, all_owners, || {
         retained_native_failure(owner)
     })
-    .await
 }
 
 /// Keeps the native resource algorithm identical while allowing a private,
 /// per-call receipt reader in deterministic verdict-order tests. Production
 /// always reads the same owner's durable native receipt; no global hook or
 /// child ownership/failure mutator is exposed.
-async fn drain_native_with_failure_reader(
+fn drain_native_with_failure_reader<'a>(
+    owner: &'a PaneProcessRetirementOwner,
+    deadline: Instant,
+    all_owners: bool,
+    read_failure: impl FnMut() -> Option<MezError> + 'a,
+) -> impl std::future::Future<Output = Result<()>> + 'a {
+    let attempt = owner
+        .capture_cleanup_attempt(deadline.into_std())
+        .map_err(MezError::from);
+    drain_native_with_attempt_and_failure_reader(owner, deadline, all_owners, attempt, read_failure)
+}
+
+/// Runs the common resource algorithm using authority captured by its factory,
+/// including precreated-but-unpolled futures and explicit caller admissions.
+async fn drain_native_with_attempt_and_failure_reader(
     owner: &PaneProcessRetirementOwner,
     deadline: Instant,
     all_owners: bool,
+    attempt: Result<PaneProcessCleanupAttempt>,
     mut read_failure: impl FnMut() -> Option<MezError>,
 ) -> Result<()> {
     let mut first_error = read_failure();
+    let initial_pending = if all_owners {
+        owner.outstanding()
+    } else {
+        owner.returned_count()
+    };
+    if initial_pending == 0 {
+        return first_error.or_else(&mut read_failure).map_or(Ok(()), Err);
+    }
+    let attempt = match attempt {
+        Ok(attempt) => match attempt.bind_first_source(owner) {
+            Ok(attempt) => attempt,
+            Err(error) => return Err(first_error.unwrap_or_else(|| error.into())),
+        },
+        Err(error) => {
+            return Err(native_pending_deadline_error(
+                initial_pending,
+                first_error.or(Some(error)),
+            ));
+        }
+    };
     loop {
+        if let Err(error) = attempt.validate(owner) {
+            return Err(first_error.unwrap_or_else(|| error.into()));
+        }
         let pending = if all_owners {
             owner.outstanding()
         } else {
@@ -116,7 +167,7 @@ async fn drain_native_with_failure_reader(
         if Instant::now() >= deadline {
             return Err(native_pending_deadline_error(pending, first_error));
         }
-        if let Err(error) = advance_native_pane_retirement(owner, deadline) {
+        if let Err(error) = advance_native_pane_retirement_for_attempt(owner, &attempt, deadline) {
             first_error.get_or_insert(error);
         }
         let outstanding = if all_owners {
@@ -170,6 +221,8 @@ fn retained_native_failure(owner: &PaneProcessRetirementOwner) -> Option<MezErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod cleanup_attempts;
 
     /// Both deadline exits use the same constructor: pending counts and added
     /// context must retain an available Io first cause, not replace its kind.

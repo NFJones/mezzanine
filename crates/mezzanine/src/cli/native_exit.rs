@@ -13,11 +13,13 @@ use std::io::{self, Write};
 use std::process::{ExitCode, Termination};
 use std::time::Duration;
 
-use mez_mux::process::PaneProcessRetirementOwner;
+use mez_mux::process::{
+    PaneProcessCleanupAttempt, PaneProcessRetirementOwner, PreparedPaneProcessCleanupRetry,
+};
 
 use crate::error::{MezError, Result};
-use crate::host::async_runtime::drain_native_pane_retirement;
-use crate::host::session::SessionSupervisor;
+use crate::host::async_runtime::drain_native_pane_retirement_for_attempt;
+use crate::host::session::{PreparedCliNativeRetry, SessionSupervisor};
 
 /// Opaque command status retaining any unproven native cleanup ownership.
 ///
@@ -92,21 +94,37 @@ impl CliExit {
     /// same owners in this outcome. Original command errors and cleanup failure
     /// status are sticky even if a later retry succeeds. Empty outcomes require
     /// no runtime; nonempty outcomes without a current runtime return an error.
-    pub async fn retry_native_cleanup(&mut self, budget: Duration) -> Result<()> {
-        if self.native.is_empty() {
-            return Ok(());
-        }
-        if tokio::runtime::Handle::try_current().is_err() {
-            return Err(MezError::invalid_state(
-                "native cleanup retry requires a caller-owned Tokio runtime",
-            ));
-        }
-        let deadline = tokio::time::Instant::now()
-            .checked_add(budget)
-            .ok_or_else(|| {
-                MezError::invalid_args("native cleanup retry budget is not representable")
+    /// Preparation and the absolute clock are captured at this method call,
+    /// before the returned future is first polled. Runtime validation precedes
+    /// single-use admission. Only a sealed all-Returned expired owner can gain
+    /// a new retry epoch; busy/stale sources never renew, and automatic cleanup
+    /// uses a separate continuation-only path.
+    pub fn retry_native_cleanup(
+        &mut self,
+        budget: Duration,
+    ) -> impl std::future::Future<Output = Result<()>> + '_ {
+        let empty = self.native.is_empty();
+        // Read-only preparation and the absolute clock are captured NOW, not
+        // when a delayed/unpolled future first acquires a runtime.
+        let prepared = if empty {
+            Ok(None)
+        } else {
+            self.native.prepare_retry(budget).map(Some)
+        };
+        async move {
+            if empty {
+                return Ok(());
+            }
+            if tokio::runtime::Handle::try_current().is_err() {
+                return Err(MezError::invalid_state(
+                    "native cleanup retry requires a caller-owned Tokio runtime",
+                ));
+            }
+            let prepared = prepared?.ok_or_else(|| {
+                MezError::invalid_state("native cleanup retry preparation is unavailable")
             })?;
-        self.native.cleanup(deadline).await
+            self.native.retry_prepared(prepared).await
+        }
     }
 }
 
@@ -140,7 +158,91 @@ pub(super) struct CliNativeOwnership {
     pub(super) cleanup_diagnostic: Option<String>,
 }
 
+/// One explicit caller's read-only owner preparations and creation-time budget.
+/// No automatic finalization helper can construct or admit this implicitly.
+struct PreparedNativeRetry {
+    deadline: tokio::time::Instant,
+    foreground: Option<(
+        PaneProcessRetirementOwner,
+        Result<PreparedPaneProcessCleanupRetry>,
+    )>,
+    host: Option<(SessionSupervisor, Result<PreparedCliNativeRetry>)>,
+}
+
 impl CliNativeOwnership {
+    /// Prepares all retained sources independently without runtime effects.
+    fn prepare_retry(&self, budget: Duration) -> Result<PreparedNativeRetry> {
+        let deadline = std::time::Instant::now()
+            .checked_add(budget)
+            .ok_or_else(|| {
+                MezError::invalid_args("native cleanup retry budget is not representable")
+            })?;
+        if deadline <= std::time::Instant::now() {
+            return Err(MezError::invalid_args(
+                "native cleanup retry budget expired",
+            ));
+        }
+        let deadline = tokio::time::Instant::from_std(deadline);
+        Ok(PreparedNativeRetry {
+            deadline,
+            foreground: self.foreground.as_ref().map(|owner| {
+                (
+                    owner.clone(),
+                    owner
+                        .prepare_explicit_cleanup_retry(deadline.into_std())
+                        .map_err(MezError::from),
+                )
+            }),
+            host: self
+                .host
+                .as_ref()
+                .map(|host| (host.clone(), host.prepare_cli_native_retry(deadline))),
+        })
+    }
+
+    /// Records only the first private command-level cleanup diagnostic. It is
+    /// sticky independently of later native counts or a successful retry.
+    fn record_cleanup_result(&mut self, result: Result<()>) -> Result<()> {
+        if let Err(error) = &result {
+            self.cleanup_failed = true;
+            self.cleanup_diagnostic
+                .get_or_insert_with(|| error.to_string());
+        }
+        result
+    }
+
+    /// Runs the sole explicit mint path after runtime validation. Busy/rejected
+    /// foreground authority does not prevent eligible host siblings progressing.
+    async fn retry_prepared(&mut self, prepared: PreparedNativeRetry) -> Result<()> {
+        let PreparedNativeRetry {
+            deadline,
+            foreground,
+            host,
+        } = prepared;
+        let foreground = async move {
+            let Some((owner, prepared)) = foreground else {
+                return Ok(());
+            };
+            owner.seal();
+            let prior = owner.cleanup_failure().map(MezError::invalid_state);
+            let attempt =
+                match prepared.and_then(|prepared| prepared.admit().map_err(MezError::from)) {
+                    Ok(attempt) => attempt,
+                    Err(error) => return Err(prior.unwrap_or(error)),
+                };
+            let result = drain_native_pane_retirement_for_attempt(&owner, &attempt, deadline).await;
+            prior.map_or(result, Err)
+        };
+        let host = async move {
+            match host {
+                Some((host, prepared)) => host.finish_cli_native_retry(prepared, deadline).await,
+                None => Ok(()),
+            }
+        };
+        let (foreground, host) = tokio::join!(foreground, host);
+        self.record_cleanup_result(combine_cleanup_results(foreground, host))
+    }
+
     /// Captures foreground ownership before the factory or first native spawn.
     pub(super) fn foreground(&mut self) -> PaneProcessRetirementOwner {
         self.foreground
@@ -216,38 +318,66 @@ impl CliNativeOwnership {
     }
 
     /// Drains while Tokio is alive; ownership remains here through runtime Drop.
-    pub(super) async fn cleanup(&mut self, deadline: tokio::time::Instant) -> Result<()> {
-        let mut failure: Option<MezError> = None;
-        if let Some(owner) = &self.foreground {
-            owner.seal();
+    pub(super) fn cleanup(
+        &mut self,
+        deadline: tokio::time::Instant,
+    ) -> impl std::future::Future<Output = Result<()>> + '_ {
+        let foreground = self.foreground.as_ref().map(|owner| {
+            (
+                owner.clone(),
+                owner
+                    .capture_cleanup_attempt(deadline.into_std())
+                    .map_err(MezError::from),
+            )
+        });
+        let host = self.host.as_ref().map(|host| {
+            (
+                host.clone(),
+                host.capture_native_continuation_scope(deadline),
+            )
+        });
+        async move {
+            let foreground = async move {
+                let Some((owner, attempt)) = foreground else {
+                    return Ok(());
+                };
+                owner.seal();
+                let attempt: PaneProcessCleanupAttempt = attempt?;
+                drain_native_pane_retirement_for_attempt(&owner, &attempt, deadline).await
+            };
+            let host = async move {
+                match host {
+                    Some((host, scope)) => {
+                        host.finish_native_retirement_captured(scope, deadline)
+                            .await
+                    }
+                    None => Ok(()),
+                }
+            };
+            let (foreground, host) = tokio::join!(foreground, host);
+            self.record_cleanup_result(combine_cleanup_results(foreground, host))
         }
-        if let Some(host) = &self.host
-            && let Err(error) = host.seal_native_admission()
-        {
-            failure = Some(error);
-        }
-        if let Some(owner) = &self.foreground
-            && let Err(error) = drain_native_pane_retirement(owner, deadline).await
-        {
-            failure.get_or_insert(error);
-        }
-        if let Some(host) = &self.host
-            && let Err(error) = host.finish_native_retirement(deadline).await
-        {
-            failure.get_or_insert(error);
-        }
-        if let Some(error) = failure {
-            self.cleanup_failed = true;
-            self.cleanup_diagnostic = Some(error.to_string());
-            return Err(error);
-        }
-        Ok(())
+    }
+}
+
+/// Preserves the first available typed cause after both independent sources
+/// have been attempted under the same caller deadline.
+fn combine_cleanup_results(foreground: Result<()>, host: Result<()>) -> Result<()> {
+    match (foreground, host) {
+        (Err(primary), Err(host)) => Err(MezError::new(
+            primary.kind(),
+            format!("{}; host cleanup also failed: {host}", primary.message()),
+        )),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        _ => Ok(()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod cleanup_attempts;
 
     /// Real native wait/SRCH may complete before a host callback. With sealed
     /// admission and zero actual children, borrowed status must still be nonzero

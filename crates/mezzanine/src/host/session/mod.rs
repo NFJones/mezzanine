@@ -23,12 +23,14 @@ use mez_mux::session::Session;
 
 use crate::config::ConfigLayer;
 use crate::error::{MezError, Result};
+#[cfg(test)]
+use crate::host::async_runtime::drain_native_pane_retirement;
 use crate::host::async_runtime::{
     AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeDaemonConfig,
     AsyncRuntimeDaemonListeners, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AsyncRuntimeSessionActor, AsyncRuntimeSessionHandle, AsyncRuntimeSupervisionReport,
     NATIVE_PANE_RETIREMENT_TIMEOUT, build_async_runtime_daemon_services,
-    build_async_runtime_session_services, drain_native_pane_retirement,
+    build_async_runtime_session_services, drain_native_pane_retirement_for_attempt,
     supervise_async_runtime_services,
 };
 use crate::host::power_inhibition::{
@@ -56,7 +58,10 @@ mod supervisor;
     unused_imports,
     reason = "the persistent host consumes these supervisor contracts in the next architecture phase"
 )]
-pub(crate) use supervisor::{SessionSupervisor, SessionSupervisorSnapshot, SessionSupervisorState};
+pub(crate) use supervisor::{
+    NativeContinuationScope, PreparedCliNativeRetry, SessionSupervisor, SessionSupervisorSnapshot,
+    SessionSupervisorState,
+};
 
 /// Configuration layers and protected storage root used by one session.
 #[derive(Debug, Clone)]
@@ -547,7 +552,7 @@ impl SessionRuntime {
         // actor cleanup failures when supervision itself completed normally.
         let supervision = supervision.and_then(|report| shutdown.map(|()| report));
         let native = self.handle.native_retirement_owner();
-        native.request_shutdown(
+        let attempt = native.initial_shutdown_attempt(
             supervision.is_err()
                 || matches!(
                     actor_exit.service.lifecycle_state(),
@@ -556,11 +561,20 @@ impl SessionRuntime {
         );
         native.seal();
         actor_exit.service.release_native_panes_for_retirement();
-        let cleanup = drain_native_pane_retirement(
-            &native,
-            tokio::time::Instant::from_std(native.cleanup_deadline()),
-        )
-        .await;
+        let cleanup = match attempt {
+            Ok(Some(attempt)) => {
+                drain_native_pane_retirement_for_attempt(
+                    &native,
+                    &attempt,
+                    tokio::time::Instant::from_std(attempt.deadline()),
+                )
+                .await
+            }
+            Ok(None) => native
+                .cleanup_failure()
+                .map_or(Ok(()), |failure| Err(MezError::invalid_state(failure))),
+            Err(error) => Err(error.into()),
+        };
         let supervision = match (supervision, cleanup) {
             (Ok(report), Ok(())) => report,
             (Err(primary), Ok(())) => return Err(primary),

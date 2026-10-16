@@ -2271,9 +2271,31 @@ MUST release cleanup capacity independently of final PTY output draining.
 Synchronous and asynchronous advancement MUST share retained sent-stage and
 force-upgrade decisions. Custom synchronous grace is an absolute stage offset
 from the original start, capped at the default 500 ms to reserve force/wait
-capacity, not a renewed per-call wait. Once that retained
-deadline expires, further cleanup calls MUST observe status only and retain
-failure/ownership rather than issue late signals.
+capacity, not a renewed per-call wait. Once an attempt's retained deadline
+expires, continuations of THAT attempt MUST observe status only and retain
+failure/ownership rather than issue late signals. Cancellation, dropped futures,
+automatic reentry and destruction MUST NOT create or renew retry authority.
+
+An explicit `CliExit::retry_native_cleanup(budget)` call MAY admit a new finite
+attempt for the exact sealed native owner only after all remaining resources
+are Returned, no reservation/lease/drain is active, and their actual prior
+authority has expired. Owner/source/attempt identity and the caller's absolute
+creation-time deadline MUST be captured before first poll; runtime validation
+MUST precede admission. Busy, stale, foreign, expired or exhausted-generation
+admission MUST reject before changing resources, epochs, budgets or progress.
+The new attempt MUST preserve original native origins, HUP/TERM sent stages,
+monotonic force intent, successful-force progress and the first failure receipt.
+It MAY force the exact root under its new budget, never restart graceful stages.
+Initial registration is identity only: pane-local deadlines MUST NOT become a
+shared budget for healthy siblings or newly admitted children. Only a genuine
+owner-wide shutdown request supplies an initial shared plan. Successful source
+reuse at native idle MUST fence old scopes without retaining completed-child
+history. Automatic host stop, reconciliation, expiry, rollback and lease replay
+may bind a preallocated no-admission owner only to its FIRST initial source,
+with the original creation budget; this MUST NOT bind a reused source or retry
+epoch. These automatic paths
+MUST NOT mint this explicit retry authority; no administrative Host retry mint
+is implied by this CLI/library contract.
 
 Unproven returned cleanup MUST fence new managed pane/editor/restore native
 admission until settled, without interrupting existing siblings or imposing a

@@ -64,7 +64,10 @@ pub use process_metadata::{
     process_environment_for_pid, process_executable_identity_for_pid,
     process_executable_path_for_pid, process_start_token_for_pid,
 };
-pub use retirement::{PaneProcessChildReservation, PaneProcessRetirementOwner, RetainedPaneChild};
+pub use retirement::{
+    PaneProcessChildReservation, PaneProcessCleanupAttempt, PaneProcessCleanupIdentity,
+    PaneProcessRetirementOwner, PreparedPaneProcessCleanupRetry, RetainedPaneChild,
+};
 pub use spawn::{
     pane_command_plan, shell_command_from_argv, spawn_argv_pty_process, spawn_pane_process,
     spawn_pane_process_with_start_directory, spawn_retained_argv_pty_process,

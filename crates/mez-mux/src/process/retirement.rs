@@ -29,6 +29,12 @@ use rustix::process::Signal;
 use super::signals::send_signal_to_retained_pane_group as send_signal_to_pane_process_group;
 use crate::{MuxError as MezError, Result};
 
+mod attempt;
+use attempt::{CleanupAttemptState, CleanupBinding};
+pub use attempt::{
+    PaneProcessCleanupAttempt, PaneProcessCleanupIdentity, PreparedPaneProcessCleanupRetry,
+};
+
 /// Session-scoped owner retained independently of abortable pane workers.
 #[derive(Clone, Debug, Default)]
 pub struct PaneProcessRetirementOwner {
@@ -39,6 +45,10 @@ pub struct PaneProcessRetirementOwner {
 #[derive(Debug, Default)]
 struct RetirementState {
     slots: Vec<Option<ChildSlot>>,
+    /// Bounded source-incarnation fence; no completed child history is kept.
+    source_epoch: u64,
+    /// Initial registration has no shared budget; retry budgets are explicit.
+    attempt: Option<CleanupAttemptState>,
     sealed: bool,
     draining: bool,
     drain_cursor: usize,
@@ -76,6 +86,8 @@ enum ChildSlot {
 #[derive(Debug)]
 struct RawPaneChild {
     child: Box<dyn Child + Send + Sync>,
+    /// Captured scalar authority, never a reference back into the owner slots.
+    binding: CleanupBinding,
     /// Boundary-minted birth-root PGID; immutable throughout production cleanup.
     group: Option<i32>,
     /// Successful root signal is not a wait receipt, but avoids repeat signals.
@@ -85,12 +97,31 @@ struct RawPaneChild {
 }
 
 impl RawPaneChild {
+    /// Effective effect budget. Initial continuations keep their own raw plan
+    /// cap; only a validated explicit retry binding can replace that cap.
+    fn signal_deadline(&self) -> Option<Instant> {
+        if self.binding.epoch != 0 {
+            return self.binding.deadline;
+        }
+        [
+            self.binding.deadline,
+            self.progress.plan.map(|plan| plan.deadline),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
     /// Fences new effects after the retained deadline, including direct signal
     /// methods and final-owner best effort. Status observation remains allowed.
     fn signal_budget_remaining(&self) -> bool {
-        self.progress
-            .plan
-            .is_none_or(|plan| Instant::now() < plan.deadline)
+        (self.binding.epoch == 0 || self.binding.deadline.is_some())
+            && (self.binding.deadline.is_none()
+                || self.binding.started.is_some()
+                || self.progress.plan.is_some())
+            && self
+                .signal_deadline()
+                .is_none_or(|deadline| Instant::now() < deadline)
     }
 
     /// Checks birth authority against the still-owned native child, not a PID
@@ -162,11 +193,32 @@ impl Drop for RetirementState {
                 "mezzanine: native child retirement remains unproven at final owner destruction"
             );
         }
+        let source = self.source_epoch;
+        let epoch = self.attempt.map_or(0, |attempt| attempt.epoch);
+        let shared = self.shutdown;
         for slot in &mut self.slots {
             if let Some(ChildSlot::Returned(raw)) = slot {
+                if raw.binding.source != source || raw.binding.epoch != epoch {
+                    continue;
+                }
+                if epoch == 0
+                    && let Some(shared) = shared
+                {
+                    match &mut raw.progress.plan {
+                        Some(plan) => {
+                            plan.started = plan.started.min(shared.started);
+                            plan.deadline = plan.deadline.min(shared.deadline);
+                            plan.force |= shared.force;
+                        }
+                        None => raw.progress.plan = Some(shared),
+                    }
+                }
                 // Poll before any numeric group signal; an already reaped PID
                 // must never authorize signaling a reused group.
-                if matches!(raw.child.try_wait(), Ok(None)) {
+                if matches!(raw.child.try_wait(), Ok(None))
+                    && raw.binding.source == source
+                    && raw.binding.epoch == epoch
+                {
                     let _ = raw.signal_group(Signal::KILL);
                     let _ = raw.kill_root();
                 }
@@ -200,6 +252,14 @@ impl PaneProcessRetirementOwner {
                 "managed native process admission is fenced by pending retirement",
             ));
         }
+        let idle = state.slots.iter().all(Option::is_none);
+        let next_source = if idle {
+            state.source_epoch.checked_add(1).ok_or_else(|| {
+                MezError::invalid_state("native cleanup source generation exhausted")
+            })?
+        } else {
+            state.source_epoch
+        };
         let index = match state.slots.iter().position(Option::is_none) {
             Some(index) => index,
             None => {
@@ -213,6 +273,12 @@ impl PaneProcessRetirementOwner {
             }
         };
         state.slots[index] = Some(ChildSlot::Reserved);
+        if idle {
+            // Publish the new source only after allocation and Reserved commit.
+            state.source_epoch = next_source;
+            state.attempt = None;
+            state.drain_cursor = 0;
+        }
         Ok(PaneProcessChildReservation {
             owner: self.clone(),
             index: Some(index),
@@ -228,6 +294,16 @@ impl PaneProcessRetirementOwner {
     /// Repeated requests can only upgrade force, never renew the original budget.
     pub fn request_shutdown(&self, force: bool) {
         let mut state = self.state();
+        if state.attempt.is_none() && state.slots.iter().any(Option::is_some) {
+            state.attempt = Some(CleanupAttemptState {
+                epoch: 0,
+                deadline: None,
+                force: false,
+            });
+        }
+        if let Some(attempt) = &mut state.attempt {
+            attempt.force |= force;
+        }
         match &mut state.shutdown {
             Some(plan) => plan.force |= force,
             None => {
@@ -306,7 +382,47 @@ impl PaneProcessRetirementOwner {
         Some(PaneProcessRetirementDrain {
             owner: self.clone(),
             cursor: state.drain_cursor,
+            binding: CleanupBinding {
+                source: state.source_epoch,
+                epoch: state.attempt.map_or(0, |attempt| attempt.epoch),
+                deadline: state.attempt.and_then(|attempt| attempt.deadline),
+                force: state.attempt.is_some_and(|attempt| attempt.force),
+                started: None,
+            },
         })
+    }
+
+    /// Claims serialization for the exact captured owner/source/attempt. Both
+    /// identity and busy checks precede every resource/bookkeeping mutation.
+    pub fn try_begin_drain_for_attempt(
+        &self,
+        attempt: &PaneProcessCleanupAttempt,
+    ) -> Result<Option<PaneProcessRetirementDrain>> {
+        if !Arc::ptr_eq(&self.inner, &attempt.owner.inner) {
+            return Err(MezError::invalid_state(
+                "native cleanup attempt belongs to another owner",
+            ));
+        }
+        let mut state = self.state();
+        if state.source_epoch != attempt.binding.source
+            || state.attempt.map_or(0, |current| current.epoch) != attempt.binding.epoch
+        {
+            return Err(MezError::invalid_state("native cleanup attempt is stale"));
+        }
+        if state.draining
+            || state
+                .slots
+                .iter()
+                .any(|slot| matches!(slot, Some(ChildSlot::Draining)))
+        {
+            return Ok(None);
+        }
+        state.draining = true;
+        Ok(Some(PaneProcessRetirementDrain {
+            owner: self.clone(),
+            cursor: state.drain_cursor,
+            binding: attempt.binding,
+        }))
     }
 
     /// Releases only a completed native wait or a reservation with no child.
@@ -350,12 +466,23 @@ impl PaneProcessChildReservation {
         group: Option<i32>,
     ) -> RetainedPaneChild {
         let index = self.index.take();
-        if let Some(index) = index {
-            self.owner.state().slots[index] = Some(ChildSlot::Leased);
-        }
+        let binding = {
+            let mut state = self.owner.state();
+            if let Some(index) = index {
+                state.slots[index] = Some(ChildSlot::Leased);
+            }
+            CleanupBinding {
+                source: state.source_epoch,
+                epoch: state.attempt.map_or(0, |attempt| attempt.epoch),
+                deadline: None,
+                force: false,
+                started: None,
+            }
+        };
         RetainedPaneChild {
             raw: Some(RawPaneChild {
                 child,
+                binding,
                 group,
                 force_requested: false,
                 progress: NativeTerminationProgress::default(),
@@ -381,20 +508,48 @@ impl Drop for PaneProcessChildReservation {
 pub struct PaneProcessRetirementDrain {
     owner: PaneProcessRetirementOwner,
     cursor: usize,
+    binding: CleanupBinding,
 }
 
 impl PaneProcessRetirementDrain {
     /// Claims one exact returned child using its existing reservation.
     pub fn take_returned(&mut self) -> Option<RetainedPaneChild> {
         let mut state = self.owner.state();
+        if state.source_epoch != self.binding.source
+            || state.attempt.map_or(0, |attempt| attempt.epoch) != self.binding.epoch
+        {
+            return None;
+        }
+        let shared = state.shutdown;
         let len = state.slots.len();
         for offset in 0..len {
             let index = (self.cursor + offset) % len;
             let slot = &mut state.slots[index];
             if matches!(slot, Some(ChildSlot::Returned(_)))
-                && let Some(ChildSlot::Returned(raw)) = slot.take()
+                && let Some(ChildSlot::Returned(mut raw)) = slot.take()
             {
                 *slot = Some(ChildSlot::Draining);
+                raw.binding = self.binding;
+                if raw.progress.plan.is_none()
+                    && let Some(deadline) = self.binding.deadline
+                {
+                    if self.binding.epoch == 0 {
+                        if let Some(started) =
+                            self.binding.started.or(shared.map(|plan| plan.started))
+                        {
+                            let mut plan = shared.unwrap_or(NativeShutdownPlan {
+                                started,
+                                deadline,
+                                force: true,
+                            });
+                            plan.deadline = plan.deadline.min(deadline);
+                            plan.force |= self.binding.force;
+                            raw.progress.plan = Some(plan);
+                        }
+                    } else if let Some(shared) = shared {
+                        raw.progress.plan = Some(shared);
+                    }
+                }
                 self.cursor = (index + 1) % len;
                 return Some(RetainedPaneChild {
                     raw: Some(raw),
@@ -411,7 +566,11 @@ impl Drop for PaneProcessRetirementDrain {
     /// Releases drain serialization, not native ownership or admission sealing.
     fn drop(&mut self) {
         let mut state = self.owner.state();
-        state.drain_cursor = self.cursor;
+        if state.source_epoch == self.binding.source
+            && state.attempt.map_or(0, |attempt| attempt.epoch) == self.binding.epoch
+        {
+            state.drain_cursor = self.cursor;
+        }
         state.draining = false;
     }
 }
@@ -447,7 +606,15 @@ impl RetainedPaneChild {
         }
         let mut reservation = owner.reserve()?;
         if let Some(index) = reservation.index.take() {
-            owner.state().slots[index] = Some(ChildSlot::Leased);
+            let mut state = owner.state();
+            state.slots[index] = Some(ChildSlot::Leased);
+            self.raw_mut()?.binding = CleanupBinding {
+                source: state.source_epoch,
+                epoch: state.attempt.map_or(0, |attempt| attempt.epoch),
+                deadline: None,
+                force: false,
+                started: None,
+            };
             self.reservation = Some((owner.clone(), index));
         }
         Ok(())
@@ -459,6 +626,7 @@ impl RetainedPaneChild {
         Self {
             raw: Some(RawPaneChild {
                 child,
+                binding: CleanupBinding::default(),
                 group,
                 force_requested: false,
                 progress: NativeTerminationProgress::default(),
@@ -525,9 +693,14 @@ impl RetainedPaneChild {
 
     /// Signals the exact owned root, never a replacement found by PID lookup.
     pub fn kill(&mut self) -> io::Result<()> {
-        if self.try_wait()?.is_none()
-            && let Err(error) = self.raw_mut()?.kill_root()
-        {
+        if self.try_wait()?.is_some() {
+            return Ok(());
+        }
+        self.validate_cleanup_binding().map_err(io::Error::other)?;
+        if self.raw_mut()?.force_requested {
+            return Ok(());
+        }
+        if let Err(error) = self.raw_mut()?.kill_root() {
             // An authoritative exact-child wait can win an already-exited
             // root race; never classify benignness by error text.
             if let Ok(Some(status)) = self.raw_mut()?.child.try_wait() {
@@ -537,6 +710,7 @@ impl RetainedPaneChild {
             self.record_failure("native root signal", &error);
             return Err(error);
         }
+        self.raw_mut()?.force_requested = true;
         Ok(())
     }
 
@@ -564,30 +738,84 @@ impl RetainedPaneChild {
         }
     }
 
+    /// Checks the scalar binding without updating source, attempt, budget or
+    /// failure state. Leased/Draining ownership excludes retry replacement
+    /// between this check and syscall. Cached native status remains inert.
+    fn validate_cleanup_binding(&self) -> Result<()> {
+        let raw = self
+            .raw
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("native child guard has been consumed"))?;
+        if let Some((owner, _)) = &self.reservation {
+            let state = owner.state();
+            if raw.binding.source != state.source_epoch
+                || raw.binding.epoch != state.attempt.map_or(0, |attempt| attempt.epoch)
+            {
+                return Err(MezError::invalid_state(
+                    "native child cleanup binding is stale",
+                ));
+            }
+        }
+        if raw.binding.epoch != 0 && raw.binding.deadline.is_none() {
+            return Err(MezError::invalid_state(
+                "native retry binding has no finite budget",
+            ));
+        }
+        Ok(())
+    }
+
     /// Starts/continues the same exact-child timeline across every handoff.
     pub(super) fn begin_termination(&mut self, force: bool) -> Result<Instant> {
-        let shared = self
-            .reservation
-            .as_ref()
-            .and_then(|(owner, _)| owner.state().shutdown);
+        self.validate_cleanup_binding()?;
+        let shared = if let Some((owner, _)) = &self.reservation {
+            let mut state = owner.state();
+            if state.attempt.is_none() {
+                // Registration is visible to Prepared(None), but deliberately
+                // has no owner-wide child-local deadline.
+                state.attempt = Some(CleanupAttemptState {
+                    epoch: 0,
+                    deadline: None,
+                    force: false,
+                });
+            }
+            state.shutdown
+        } else {
+            None
+        };
         let raw = self.raw_mut()?;
+        let binding = raw.binding;
+        if binding.epoch != 0 && raw.progress.plan.is_none() && shared.is_none() {
+            return Err(MezError::invalid_state(
+                "native retry has no original child or owner plan",
+            ));
+        }
         let plan = raw.progress.plan.get_or_insert_with(|| {
-            shared.unwrap_or_else(|| {
+            let mut plan = shared.unwrap_or_else(|| {
                 let started = Instant::now();
                 NativeShutdownPlan {
                     started,
                     deadline: started + Duration::from_secs(if force { 1 } else { 2 }),
                     force,
                 }
-            })
+            });
+            if binding.epoch == 0
+                && let Some(deadline) = binding.deadline
+            {
+                plan.deadline = plan.deadline.min(deadline);
+            }
+            plan
         });
-        if let Some(shared) = shared {
+        if binding.epoch == 0
+            && let Some(shared) = shared
+        {
             plan.started = plan.started.min(shared.started);
             plan.deadline = plan.deadline.min(shared.deadline);
             plan.force |= shared.force;
         }
-        plan.force |= force;
-        Ok(plan.deadline)
+        plan.force |= force || binding.force;
+        raw.signal_deadline().ok_or_else(|| {
+            MezError::invalid_state("native termination has no finite effect deadline")
+        })
     }
 
     /// Records an explicit signal stage once, honoring force upgrades and the
@@ -627,6 +855,7 @@ impl RetainedPaneChild {
         if self.try_wait()?.is_some() {
             return Ok(());
         }
+        self.validate_cleanup_binding()?;
         let result = self.raw_mut()?.signal_group(signal);
         if let Err(error) = &result {
             self.record_failure("native group signal", error);
@@ -661,7 +890,7 @@ impl RetainedPaneChild {
             .progress
             .plan
             .ok_or_else(|| MezError::invalid_state("native termination plan is missing"))?;
-        if Instant::now() >= plan.deadline {
+        if !raw.signal_budget_remaining() {
             let error = MezError::invalid_state(
                 "native termination deadline expired; exact ownership retained",
             );
@@ -747,6 +976,8 @@ impl Drop for RetainedPaneChild {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    mod cleanup_attempts;
 
     /// Spawns an exclusively owned root that reports received graceful signals
     /// and child-generated probe replies, without relying on terminal echo.
