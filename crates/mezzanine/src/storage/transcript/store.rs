@@ -3855,6 +3855,7 @@ impl AgentTranscriptStore {
             target_conversation_id,
             created_at_unix_seconds,
             &[],
+            0,
         )
     }
 
@@ -3867,6 +3868,7 @@ impl AgentTranscriptStore {
         target_conversation_id: &str,
         created_at_unix_seconds: u64,
         cancelled: &[&std::sync::atomic::AtomicBool],
+        minimum_source_entries: u64,
     ) -> Result<ForkPublication> {
         validate_conversation_id(source_conversation_id)?;
         validate_conversation_id(target_conversation_id)?;
@@ -3885,6 +3887,10 @@ impl AgentTranscriptStore {
                 }
             })
             .collect::<Result<Vec<_>>>()?;
+        // Accepted rows can own chronology before any archive/catalog exists.
+        // Both identities are locked, so receipt admission/retirement cannot
+        // race this fence. Settlement belongs to the existing persistence owner.
+        self.ensure_fork_receipts_settled(source_conversation_id, target_conversation_id)?;
         if self.conversation_exists(target_conversation_id)?
             || self.fork_target_recovery_artifacts_exist(target_conversation_id)?
             || (catalog::catalog_path(self).exists()
@@ -3901,6 +3907,11 @@ impl AgentTranscriptStore {
             ));
         }
         let entries = self.inspect_validated_transcript(source_conversation_id)?;
+        if (entries.len() as u64) < minimum_source_entries {
+            return Err(MezError::conflict(
+                "saved fork archive does not cover accepted source chronology",
+            ));
+        }
         if entries.is_empty() {
             return Err(MezError::invalid_state(
                 "source conversation has no entries",

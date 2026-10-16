@@ -366,7 +366,21 @@ where
 pub async fn run_async_agent_command_service<F>(
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncAgentProviderServiceConfig,
+    should_stop: F,
+) -> Result<u64>
+where
+    F: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    run_async_agent_command_service_owned(handle, config, should_stop, Default::default()).await
+}
+
+/// Runs command work with a fork owner retained separately by the supervisor.
+/// Every normal/error exit cancels and drains fork jobs before returning.
+pub(in crate::host::async_runtime) async fn run_async_agent_command_service_owned<F>(
+    handle: &AsyncRuntimeSessionHandle,
+    config: AsyncAgentProviderServiceConfig,
     mut should_stop: F,
+    retirement: super::SavedForkServiceRetirement,
 ) -> Result<u64>
 where
     F: FnMut(u64, RuntimeLifecycleState) -> bool,
@@ -377,11 +391,10 @@ where
     let mut workers = JoinSet::new();
     // Unlike read-only commands, forks can own durable state before adoption.
     // Keep their wrappers observed on stop until the blocking owner retires.
-    let mut fork_workers = JoinSet::new();
-    let fork_shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut polls = 0u64;
     let mut executions = 0u64;
 
+    let result = async {
     loop {
         let state = *lifecycle.borrow();
         while let Some(joined) = workers.try_join_next() {
@@ -390,35 +403,22 @@ where
             })??;
             executions = executions.saturating_add(1);
         }
-        while let Some(joined) = fork_workers.try_join_next() {
-            joined.map_err(|error| {
-                MezError::invalid_state(format!("saved fork command worker task failed: {error}"))
-            })??;
-            executions = executions.saturating_add(1);
-        }
-        if should_stop(polls, state) {
-            fork_shutdown.store(true, std::sync::atomic::Ordering::Release);
-            workers.abort_all();
-            while workers.join_next().await.is_some() {}
-            while let Some(joined) = fork_workers.join_next().await {
-                joined.map_err(|error| {
-                    MezError::invalid_state(format!("saved fork retirement failed: {error}"))
-                })??;
-                executions = executions.saturating_add(1);
-            }
+        executions = executions.saturating_add(retirement.drain_completed()?);
+        if retirement.shutdown.load(std::sync::atomic::Ordering::Acquire)
+            || should_stop(polls, state) {
             return Ok(executions);
         }
 
-        while workers.len() + fork_workers.len() < config.max_tasks_per_poll {
+        while workers.len() + retirement.len()? < config.max_tasks_per_poll {
             let dispatches = handle.drain_agent_command_dispatch_side_effects(1).await?;
             if let Some(dispatch) = dispatches.into_iter().next() {
                 if matches!(&dispatch, RuntimeSideEffect::DispatchAgentCommand { command, .. } if command == "fork")
                 {
-                    fork_workers.spawn(execute_deferred_agent_command(
+                    retirement.spawn(execute_deferred_agent_command(
                         handle.clone(),
                         dispatch,
-                        Some(fork_shutdown.clone()),
-                    ));
+                        Some(retirement.shutdown.clone()),
+                    ))?;
                 } else {
                     workers.spawn(execute_deferred_agent_command(
                         handle.clone(),
@@ -434,12 +434,6 @@ where
 
         polls = polls.saturating_add(1);
         tokio::select! {
-            joined = fork_workers.join_next(), if !fork_workers.is_empty() => {
-                if let Some(joined) = joined {
-                    joined.map_err(|error| MezError::invalid_state(format!("saved fork command worker task failed: {error}")))??;
-                    executions = executions.saturating_add(1);
-                }
-            }
             joined = workers.join_next(), if !workers.is_empty() => {
                 if let Some(joined) = joined {
                     joined.map_err(|error| {
@@ -456,6 +450,19 @@ where
             }
             _ = sleep(config.idle_interval) => {}
         }
+    }
+    }.await;
+    retirement.request_stop();
+    workers.abort_all();
+    while workers.join_next().await.is_some() {}
+    let retired = retirement.retire_in_service().await;
+    match (result, retired) {
+        (Ok(completed), Ok(retired)) => Ok(completed.saturating_add(retired)),
+        (Err(primary), Err(retirement)) => Err(MezError::new(
+            primary.kind(),
+            format!("{primary}; saved fork retirement also failed: {retirement}"),
+        )),
+        (Err(error), _) | (_, Err(error)) => Err(error),
     }
 }
 
@@ -536,6 +543,14 @@ async fn execute_deferred_agent_command(
     let adoption_handle = handle.clone();
     let adoption_runtime = tokio::runtime::Handle::current();
     let mut execution = tokio::task::spawn_blocking(move || {
+        // The second fork-only probe proves the blocking owner actually started,
+        // not merely that its async wrapper passed command claim.
+        #[cfg(test)]
+        if execution_work.command == "fork"
+            && let Some(started) = &execution_work.deferred_agent_command_started
+        {
+            started.notify_one();
+        }
         let outcome =
             crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&execution_work);
         let outcome = if let crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read) =

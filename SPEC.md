@@ -16010,8 +16010,14 @@ The `/fork` command MUST clone the current conversation into a new thread with
 a fresh identity while preserving the original transcript and any presentation
 log associated with that transcript. The fork MUST capture a validated complete
 archive, its authoritative compaction epoch, and presentation under the source
-conversation's existing mutation ownership. A committed prefix or selective
-epoch MUST retain its exact model-authored summaries, inclusive coverage,
+conversation's existing mutation ownership. A fork MUST NOT capture a shorter
+materialized archive while accepted
+source chronology or terminal bookkeeping remains unsettled. Fork admission
+MUST fail closed until the existing persistence owner settles that work; retained
+append receipts also reserve a target identity before its archive exists. No
+fork path may replay or retire those receipts on the persistence owner's behalf.
+A committed prefix or selective epoch MUST retain its exact model-authored
+summaries, inclusive coverage,
 execution ownership, uncovered rows, and order in the target's first provider
 request and after reopen. Missing or corrupt required source epochs MUST fail
 closed, not turn into raw-history forks. Target publication MUST validate the
@@ -16046,7 +16052,11 @@ prior target absence or creation success. If adoption, pane/process teardown, or
 an actor reply is uncertain, the complete target MUST be retained with a visible
 diagnostic rather than risking deletion of live or foreign history. Cancellation
 MUST NOT discard the sole publication/cleanup owner or silently lose secondary
-cleanup errors. These rules do not grant rights from retained historical data.
+cleanup errors. Actual auxiliary-service cancellation, last-primary completion,
+and service errors MUST observe retained fork workers through retirement before
+reporting successful supervision. Retirement uncertainty MUST remain a failure
+separate from the original service cause, not an unreported detached task.
+These rules do not grant rights from retained historical data.
 
 ## 20. Hooks
 

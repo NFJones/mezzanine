@@ -5,6 +5,104 @@
 
 use super::*;
 
+/// Paused source persistence must fail closed, whether the row remains queued,
+/// was claimed by a worker, exists only as an accepted receipt, or is known by
+/// the actor highwater without a materialized archive row. After the original
+/// owner settles, the actual command's first encoding includes the exact suffix
+/// once and the inherited summary without changing the source on rejection.
+#[test]
+fn runtime_saved_fork_waits_for_accepted_source_chronology() {
+    for state in ["queued", "claimed", "receipt", "highwater"] {
+        let (mut service, primary, store, root) = fork_transaction_fixture("fork-paused-source");
+        let row = TranscriptEntry {
+            sequence: 2,
+            content: "ACCEPTED_SOURCE_SUFFIX".into(),
+            ..store.inspect("fork-source").unwrap()[0].clone()
+        };
+        let path = store.transcript_path("fork-source").unwrap();
+        let before = fs::read(&path).unwrap();
+        if matches!(state, "queued" | "claimed") {
+            service
+                .persistence
+                .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+                    path: path.clone(),
+                    store: store.clone(),
+                    entries: vec![row.clone()],
+                });
+            if state == "claimed" {
+                assert_eq!(service.persistence.take_transcript_effects().len(), 1);
+            }
+        } else if state == "receipt" {
+            store
+                .accept_append_receipt(std::slice::from_ref(&row), 1)
+                .unwrap();
+        }
+        service
+            .agent_shell_store_mut()
+            .bind_conversation("%1", "fork-source", 2)
+            .unwrap();
+        service
+            .execute_agent_shell_command(&primary, "/fork fork-target")
+            .unwrap();
+        let rejected = service
+            .run_pending_deferred_agent_command_for_tests()
+            .unwrap();
+        if matches!(state, "queued" | "claimed") {
+            assert!(rejected.is_none());
+        } else {
+            assert!(rejected.unwrap().contains("error"), "{state}");
+        }
+        assert!(!root.join("fork-target").exists(), "{state}");
+        assert_eq!(fs::read(&path).unwrap(), before, "{state}");
+        assert_eq!(
+            service.agent_command_lifecycle_phase_for_tests("%1"),
+            Some(crate::runtime::RuntimeAgentCommandLifecyclePhase::Failed)
+        );
+        if state == "receipt" {
+            store.recover_append_receipts().unwrap();
+        } else {
+            store.append(&row).unwrap();
+            if state == "queued" {
+                service.persistence.take_transcript_effects();
+            }
+            if matches!(state, "queued" | "claimed") {
+                assert!(service.persistence.settle_transcript_write_at_path(
+                    "fork-source",
+                    2,
+                    &path,
+                    std::slice::from_ref(&row)
+                ));
+            }
+        }
+        service
+            .execute_agent_shell_command(&primary, "/fork fork-target")
+            .unwrap();
+        let forked = service
+            .run_pending_deferred_agent_command_for_tests()
+            .unwrap()
+            .unwrap();
+        assert!(forked.contains("forked=true"), "{state}: {forked}");
+        let pane = service
+            .agent_shell_store()
+            .sessions()
+            .find(|session| session.session_id == "fork-target")
+            .unwrap()
+            .pane_id
+            .clone();
+        assert_eq!(
+            encoded_history(&mut service, &pane),
+            vec![
+                ("developer".into(), "FORK_SUMMARY".into()),
+                ("user".into(), "ACCEPTED_SOURCE_SUFFIX".into()),
+            ],
+            "{state}"
+        );
+        assert_eq!(store.inspect("fork-source").unwrap().last(), Some(&row));
+        service.terminate_all_pane_processes().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// A reader stopped immediately before taking the target lease must re-read its
 /// discovery/history after compensation, not adopt a deleted fork from an earlier
 /// snapshot. The pre-lock handshake also fails on the old read-before-lock order.
@@ -176,6 +274,18 @@ fn runtime_saved_fork_mcp_invalidation_keeps_usage_and_authority_independent() {
         .agent_shell_store_mut()
         .bind_conversation("%1", "fork-source", 4)
         .unwrap();
+    let historical_actions = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::ShellCommand,
+    ]);
+    service.set_agent_enabled_actions(historical_actions.clone());
+    assert_eq!(
+        service
+            .capture_agent_session_allowed_actions_for_pane("%1")
+            .unwrap(),
+        historical_actions
+    );
+    service.set_agent_enabled_actions(mez_agent::AllowedActionSet::say_only());
     let (_, profile) = service
         .active_model_profile_for_pane("%1", "agent-%1", None)
         .unwrap();
@@ -233,6 +343,18 @@ fn runtime_saved_fork_mcp_invalidation_keeps_usage_and_authority_independent() {
         source_usage
     );
     assert_ne!(target.prompt_cache_lineage_id, parent_lineage);
+    assert_eq!(
+        target.allowed_actions,
+        Some(mez_agent::AllowedActionSet::say_only())
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .allowed_actions,
+        Some(historical_actions)
+    );
     assert_eq!(
         target.conversation_kind,
         mez_agent::AgentConversationKind::Root

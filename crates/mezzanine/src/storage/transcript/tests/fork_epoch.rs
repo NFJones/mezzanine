@@ -6,6 +6,54 @@
 use super::*;
 use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 
+/// Accepted append receipts own chronology even before an archive directory or
+/// catalog exists. Fork must neither overwrite a receipt-only target nor omit
+/// a receipt-only source suffix. Rejection preserves every receipt byte and
+/// leaves ordinary checked recovery able to settle the original work.
+#[test]
+fn fork_epoch_rejects_receipt_owned_target_and_unsettled_source() {
+    for target_receipt in [true, false] {
+        let root = temp_root("fork-receipt-ownership");
+        let store = AgentTranscriptStore::new(root.clone());
+        store
+            .append(&entry("source", 1, TranscriptRole::User))
+            .unwrap();
+        let receipt_row = if target_receipt {
+            entry("target", 1, TranscriptRole::User)
+        } else {
+            entry("source", 2, TranscriptRole::Assistant)
+        };
+        store
+            .accept_append_receipt(std::slice::from_ref(&receipt_row), 1)
+            .unwrap();
+        let receipts = || {
+            fs::read_dir(root.join(".append-receipts"))
+                .unwrap()
+                .map(|path| {
+                    let path = path.unwrap().path();
+                    (path.clone(), fs::read(path).unwrap())
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let before = receipts();
+        let source_before = source_bytes(&root);
+        assert!(store.fork("source", "target", 99).is_err());
+        assert!(!root.join("target").exists());
+        assert_eq!(receipts(), before);
+        assert_eq!(source_bytes(&root), source_before);
+        store.recover_append_receipts().unwrap();
+        assert_eq!(
+            store.inspect(&receipt_row.conversation_id).unwrap().last(),
+            Some(&receipt_row)
+        );
+        if !target_receipt {
+            store.fork("source", "target", 99).unwrap();
+            assert_eq!(store.inspect("target").unwrap().len(), 2);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// A reusable target id is not ownership. A successful fork receipt must never
 /// compensate a later conversation after cooperating deletion and recreation,
 /// even if that replacement contains byte-identical archive and epoch payloads.

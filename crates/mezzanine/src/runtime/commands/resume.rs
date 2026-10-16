@@ -41,6 +41,8 @@ pub(crate) struct SavedForkWork {
     primary_client_id: mez_core::ids::ClientId,
     /// Conversation whose exact active projection is inherited.
     source: String,
+    /// Actor-observed accepted chronology that the materialized archive must cover.
+    source_entries: u64,
     /// Fresh conversation id requested or generated at claim time.
     target: String,
     /// Original command used to exclude itself from the prompt seed.
@@ -102,6 +104,7 @@ pub(super) fn read_saved_fork(work: &SavedForkWork) -> Result<SavedForkRead> {
         &work.target,
         work.created_at,
         &cancellation,
+        work.source_entries,
     )?;
     Ok(SavedForkRead {
         work: work.clone(),
@@ -1602,6 +1605,19 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?
             .session_id
             .clone();
+        // Unlike logical context replay, a saved fork promises a wholly durable
+        // archive and projection. Queued and claimed writes remain owned by the
+        // persistence component; never expose their shorter materialized prefix.
+        if self.persistence.bookkeeping_pending(&source)
+            || !self
+                .persistence
+                .pending_transcript_entries(&source)
+                .is_empty()
+        {
+            return Err(MezError::conflict(
+                "conversation persistence must settle before saved fork capture",
+            ));
+        }
         let target = invocation
             .args
             .split_whitespace()
@@ -1614,6 +1630,11 @@ impl RuntimeSessionService {
                 .cloned_transcript_store()
                 .ok_or_else(|| MezError::invalid_state("saved-session store unavailable"))?,
             primary_client_id: primary_client_id.clone(),
+            source_entries: self
+                .agent_shell_store()
+                .get(pane_id)
+                .ok_or_else(|| MezError::invalid_state("saved fork source disappeared"))?
+                .transcript_entries,
             source,
             target,
             input: input.to_owned(),

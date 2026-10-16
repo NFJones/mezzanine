@@ -6,6 +6,143 @@
 
 use super::super::*;
 
+/// The real supervisor aborts auxiliary services on explicit cancellation,
+/// last-primary completion, and primary error. Its report must wait for the
+/// separately retained fork owner, not detach a blocking task when aborting the
+/// command wrapper. The source lease stays held until supervision has returned.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths() {
+    for mode in ["shutdown", "last-primary", "error"] {
+        let root =
+            std::env::temp_dir().join(format!("mez-fork-supervision-{}", rand::random::<u64>()));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: "supervised-source".into(),
+                sequence: 1,
+                created_at_unix_seconds: 1,
+                role: mez_agent::transcript::TranscriptRole::User,
+                turn_id: "owned-turn".into(),
+                agent_id: "agent-%1".into(),
+                pane_id: "%1".into(),
+                content: "owned source".into(),
+            })
+            .unwrap();
+        let mut service = test_service();
+        service.set_agent_transcript_store(store.clone());
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        service
+            .start_initial_pane_process(Some("cat >/dev/null"))
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .bind_conversation("%1", "supervised-source", 1)
+            .unwrap();
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        service.set_deferred_agent_command_probe_for_tests(started.clone(), release.clone());
+        let (source_lock, _, _) = store
+            .lock_presentation_snapshot("supervised-source")
+            .unwrap();
+        let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+            .build()
+            .unwrap();
+        let client = async {
+            let command_service = crate::host::async_runtime::build_async_agent_command_service(
+                "commands",
+                handle.clone(),
+                AsyncAgentProviderServiceConfig::new(1)
+                    .unwrap()
+                    .with_idle_interval(Duration::from_millis(5))
+                    .unwrap(),
+            )
+            .unwrap();
+            let retirement = command_service.saved_fork_retirement.clone().unwrap();
+            let (primary_tx, primary_rx) = tokio::sync::oneshot::channel();
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+            let primary_service = AsyncRuntimeService::new("owned-primary", async move {
+                primary_rx.await.unwrap();
+                if mode == "error" {
+                    Err(MezError::invalid_state("owned primary failure"))
+                } else {
+                    Ok(AsyncRuntimeServiceExit::completed(1))
+                }
+            });
+            let supervisor = tokio::spawn(supervise_async_runtime_services(
+                vec![primary_service, command_service],
+                async move {
+                    let _ = cancel_rx.await;
+                },
+            ));
+            handle
+                .apply_attached_terminal_step_plan(
+                    primary.clone(),
+                    AttachedTerminalClientStepPlan {
+                        actions: vec![TerminalClientLoopAction::ForwardToPane(
+                            b"/fork supervised-target\r".to_vec(),
+                        )],
+                        output_lines: Vec::new(),
+                        output_line_style_spans: Vec::new(),
+                        input_hangup: false,
+                        output_hangup: false,
+                        error_roles: Vec::new(),
+                    },
+                )
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), started.notified())
+                .await
+                .unwrap();
+            release.notify_one();
+            tokio::time::timeout(Duration::from_secs(2), started.notified())
+                .await
+                .unwrap();
+            assert_eq!(retirement.retained_workers_for_tests(), 1);
+            if mode == "shutdown" {
+                cancel_tx.send(()).unwrap();
+            } else {
+                primary_tx.send(()).unwrap();
+            }
+            let result = tokio::time::timeout(Duration::from_secs(2), supervisor)
+                .await
+                .expect("supervisor must cancel held acquisition and observe true retirement")
+                .unwrap();
+            if mode == "error" {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .message()
+                        .contains("owned primary failure")
+                );
+            } else {
+                let report = result.unwrap();
+                assert_eq!(report.shutdown_requested, mode == "shutdown");
+                assert!(
+                    report
+                        .services
+                        .iter()
+                        .any(|service| service.name == "commands")
+                );
+            }
+            assert_eq!(retirement.retained_workers_for_tests(), 0);
+            assert!(!root.join("supervised-target").exists());
+            drop(source_lock);
+            assert!(store.saved_session("supervised-target").unwrap().is_none());
+            assert_eq!(store.inspect("supervised-source").unwrap().len(), 1);
+            handle.shutdown().await.unwrap();
+        };
+        let ((), mut exit) = tokio::join!(client, actor.run());
+        exit.service.terminate_all_pane_processes().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// Stopping the real command service during source-lock acquisition requests
 /// fork cancellation and observes its wrapper through actual blocking retirement.
 /// The fixture keeps the source locked until the service returns: shutdown must

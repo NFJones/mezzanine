@@ -546,9 +546,21 @@ impl RuntimeSessionService {
                     }),
                 }
             }
-            RuntimeAgentCommandFamily::SavedFork => RuntimeAgentCommandPrepared::SavedFork(
-                Box::new(self.prepare_saved_fork_work(_primary_client_id, pane_id, input)?),
-            ),
+            RuntimeAgentCommandFamily::SavedFork => {
+                match self.prepare_saved_fork_work(_primary_client_id, pane_id, input) {
+                    Ok(fork) => RuntimeAgentCommandPrepared::SavedFork(Box::new(fork)),
+                    Err(error) => {
+                        return self.fail_agent_command_before_claim(
+                            pane_id,
+                            conversation_id,
+                            command,
+                            input,
+                            claim_generation,
+                            error.message(),
+                        );
+                    }
+                }
+            }
             RuntimeAgentCommandFamily::ModifiedFiles => {
                 RuntimeAgentCommandPrepared::ModifiedFiles {
                     files: self.retained_agent_modified_files(pane_id).cloned(),

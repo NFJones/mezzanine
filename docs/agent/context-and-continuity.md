@@ -37,6 +37,9 @@ archive remains inspectable; covered raw rows do not reappear as active context.
 Missing or corrupt required compaction state fails visibly rather than creating
 a raw-history fork. Fork publication and any eligible saved terminal-handoff
 reconciliation affect only the new target, never the parent's stored bytes.
+If source persistence or terminal bookkeeping has not settled, the fork fails
+visibly instead of cloning a shorter archive. Retry after the original storage
+owner settles; retained append receipts reserve target identities as well.
 Failed cloning or pane setup removes only the newly created target; requesting
 an existing target does not overwrite or delete it. Forks retain source occurrence
 times while receiving their own conversation/catalog creation time, identity,
@@ -48,6 +51,9 @@ removes only its own unadopted target generation. If pane teardown or the adopti
 reply is uncertain, Mezzanine retains the complete target and reports the failure
 instead of risking live history; retained recovery intent owns any incomplete
 safe cleanup. A waiting resume rechecks the target under the same storage lease.
+Command-service cancellation and supervisor shutdown retain and observe fork
+workers until they retire; a service error does not turn cleanup into detached
+background work or erase the original failure.
 Conversation continuity is not proof that a command completed or that the
 filesystem is unchanged: verify interrupted work before asking the agent to
 continue.
