@@ -266,6 +266,25 @@ normalized to `text/plain; charset=utf-8`. `config_change`, `spawn_agent`, and
 MCP actions remain subject to their respective runtime validation and approval
 rules.
 
+Search execution uses shared typed request/result contracts and a static
+DuckDuckGo adapter over that same HTTP executor. The implicit no-key default is
+unchanged: HTTPS HTML GET, ten results by default, fifty maximum, 1MiB retained
+HTML, 30s deadline and independently bounded 256KiB final-content context.
+Numbered title/link output and complete-clean-anchor progress are retained.
+Compatibility `domains` append ordered `site:` terms; `recency_days` is not sent
+to DDG and only produces a best-effort warning. Requested zero, incomplete
+anchors, permissive nonblank links and successful empty/challenge HTML remain
+legacy quirks, not stronger filtering or false-empty classification guarantees.
+
+Future strict contracts are separate: checked HTTP(S) links without userinfo,
+explicit snippet/extractive/generated provenance, optional observed dates and
+usage (never invented charges), hostname-union/subdomain and checked UTC date
+semantics, and complete bounded text/JSON from one normalized result. The future
+preset is ten results (or a disclosed lower backend cap), 1MiB transport,
+32KiB normal/256KiB hard normalized output, and 30s total. Whole hits may be
+dropped to fit; citations and JSON are never sliced. No paid backend selection,
+configuration, authentication or wire routing is enabled by these value types.
+
 ### Peer messaging and discovery
 
 `list_agents` is read-only and available in every approval mode without a

@@ -10550,6 +10550,45 @@ action count cap, MUST NOT impose an additional active-context URL-provenance
 requirement, and MUST NOT reject a repeat solely because the same URL was
 fetched earlier in the turn.
 
+Search contracts MUST remain transport/configuration/credential-I/O free in
+`mez-agent`, including pure bounded normalization and projection. Concrete wire
+adapters and structural URL parsing belong to product `integrations/agent/search`;
+the shared strict normalizer requires the trusted adapter's existing URL parser,
+not a configurable plugin. `network` remains the semantic-action bridge over
+the existing runtime HTTP port. Search plan identities are secret-free effect
+descriptions, NOT approval receipts. Backend/profile/mode, fixed endpoint,
+request/filter digest, effective bounds and optional revision/logical credential
+binding MUST be captured by future approved plans; the implicit default has no
+configuration revision or credential binding. This contract alone MUST NOT
+activate paid providers, retries, fallback, pagination, hidden page fetches,
+caching, deepening or generated answers. Required compact MAAP remains query-only.
+
+The implicit no-key DuckDuckGo adapter MUST preserve the legacy HTTPS
+`https://duckduckgo.com/html/` GET query, ordered ` site:` compatibility terms,
+numbered title/link output, default ten/hard fifty results (including requested
+zero), 1MiB transport cap, 256KiB final-content projection and 30s total deadline.
+Progress MUST contain only complete cleaned anchors from valid UTF-8 prefixes.
+Legacy recency is not transmitted and MUST be labeled best-effort, not verified
+source-date filtering. Legacy successful-empty/202, malformed/incomplete-anchor,
+permissive nonblank-href and truncation-notice-outside-cap behavior is explicitly
+preserved by extraction, not evidence of strict future semantics.
+
+Strict future search contracts MUST preserve ordered HTTP(S) citations without
+userinfo, never clip citation URLs, and label actual excerpts as snippet,
+extractive or generated. Missing dates, date bases, request IDs and usage MUST
+remain absent; estimates are not invoices and charges/scores MUST NOT be
+fabricated. One normalized value MUST drive text and JSON projections without
+duplicating the full corpus in model context. UTF-8 field/list bounds and final
+complete serialized/text bounds MUST include escaping and metadata; dropping
+whole trailing hits MUST mark truncation, and impossible budgets MUST fail.
+The strict preset is ten initially, a disclosed backend-lower count cap, 1MiB
+transport, 32KiB default/256KiB hard complete normalized output and 30s total.
+Truncated or malformed strict JSON MUST fail, never become empty success.
+Strict hostname-only filters describe a union including dot-delimited subdomains,
+and source dates use checked UTC calendar days; native/query/local/best-effort/
+unsupported dispositions MUST distinguish enforcement strength. These strict
+contracts MUST NOT be falsely attributed to legacy DDG compatibility filters.
+
 Semantic action required fields are:
 
 - `apply_patch`: `patch`.

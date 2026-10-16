@@ -7,10 +7,188 @@ use super::*;
 use crate::integrations::agent::network::execute_network_action_with_transport_async_with_progress;
 use crate::integrations::http::{HttpCompletion, HttpExchangeResponse};
 
+mod search_transport_contracts;
+
+#[tokio::test]
+/// Characterizes legacy zero/default/hard counts, exact domain conjunction and
+/// absence of a transmitted recency parameter. These are extraction fixtures,
+/// not new semantics: zero deliberately remains a successful empty result.
+async fn network_search_legacy_wire_and_count_characterization() {
+    for (requested, count) in [(None, 10), (Some(0), 0), (Some(99), 50)] {
+        let action = AgentAction {
+            id: "search-count".to_string(),
+            payload: AgentActionPayload::WebSearch {
+                query: "a & b".to_string(),
+                domains: vec!["one.test".to_string(), "two.test/path".to_string()],
+                recency_days: Some(7),
+                max_results: requested,
+            },
+        };
+        let transport = AsyncFakeProviderHttpTransport {
+            requests: std::sync::Mutex::new(Vec::new()),
+            response: ProviderHttpResponse {
+                status_code: 200,
+                headers: Default::default(),
+                body: (0..60)
+                    .map(|i| {
+                        format!(
+                            "<a class=\"result__a\" href=\"https://example.test/{i}\">Title {i}</a>"
+                        )
+                    })
+                    .collect(),
+            },
+        };
+        let result = execute_network_action_with_transport_async(&turn(), &action, &transport)
+            .await
+            .unwrap();
+        assert_eq!(result.status, ActionStatus::Succeeded);
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(
+            requests[0].url,
+            "https://duckduckgo.com/html/?q=a%20%26%20b%20site%3Aone.test%20site%3Atwo.test%2Fpath"
+        );
+        assert_eq!(requests[0].headers.len(), 1);
+        assert_eq!(
+            requests[0].headers.get("user-agent").map(String::as_str),
+            Some("mez")
+        );
+        assert_eq!(requests[0].max_response_bytes, Some(1024 * 1024));
+        assert_eq!(
+            requests[0].timeouts,
+            mez_agent::ProviderHttpTimeouts::from_total(30_000)
+        );
+        let content = result.content_text();
+        assert_eq!(
+            content
+                .lines()
+                .filter(|line| line.starts_with("   https://"))
+                .count(),
+            count
+        );
+        assert!(content.ends_with("[mez: recency filtering is best-effort for this backend]"));
+        if count == 0 {
+            assert!(content.starts_with("No web results were found."));
+        }
+        let structured: serde_json::Value =
+            serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+        assert_eq!(structured["response"]["max_results"], count);
+        assert!(
+            structured["policy_command"]
+                .as_str()
+                .unwrap()
+                .contains(&requests[0].url)
+        );
+    }
+}
+
+#[tokio::test]
+/// Pins legacy HTML scanning, including nested-title cleanup, incomplete-anchor
+/// withholding and successful empty HTML/202 responses. False-empty response
+/// classification is intentionally a separate issue, not this extraction.
+async fn network_search_legacy_anchor_and_empty_characterization() {
+    for (status, body, expected) in [
+        (
+            200,
+            "<a class=\"result__a\" href=\"https://example.test/a\"><b>A</b> &amp; B</a><a class=\"result__a\" href=\"https://example.test/b\">unfinished",
+            "1. A & B\n   https://example.test/a",
+        ),
+        (
+            200,
+            "<a class=\"result__a\" href=\"https://example.test/a\">unfinished",
+            "No web results were found.",
+        ),
+        (202, "<html>challenge</html>", "No web results were found."),
+        (
+            200,
+            "<a class=\"result__a\" href=\"javascript:legacy\">Legacy</a>",
+            "1. Legacy\n   javascript:legacy",
+        ),
+        (
+            200,
+            "<a class=\"result__a\" href=\"/relative\">Relative</a>",
+            "1. Relative\n   /relative",
+        ),
+        (
+            200,
+            "<a class=\"result__a\" href=\"https://user:pass@example.test/\">Credentialed</a>",
+            "1. Credentialed\n   https://user:pass@example.test/",
+        ),
+    ] {
+        let action = AgentAction {
+            id: "search-anchors".to_string(),
+            payload: AgentActionPayload::WebSearch {
+                query: "fixture".to_string(),
+                domains: Vec::new(),
+                recency_days: None,
+                max_results: None,
+            },
+        };
+        let transport = AsyncFakeProviderHttpTransport {
+            requests: std::sync::Mutex::new(Vec::new()),
+            response: ProviderHttpResponse {
+                status_code: status,
+                headers: Default::default(),
+                body: body.to_string(),
+            },
+        };
+        let result = execute_network_action_with_transport_async(&turn(), &action, &transport)
+            .await
+            .unwrap();
+        assert_eq!(result.status, ActionStatus::Succeeded);
+        assert_eq!(result.content_text(), expected);
+    }
+}
+
+#[tokio::test]
+/// Distinguishes transport/body retention from the independently bounded final
+/// action context. The old body truncator appends its notice beyond the cap;
+/// its byte metadata and UTF-8 boundary are retained during extraction.
+async fn network_search_legacy_body_and_final_context_characterization() {
+    let action = AgentAction {
+        id: "search-bounds".to_string(),
+        payload: AgentActionPayload::WebSearch {
+            query: "fixture".to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    let prefix = "<a class=\"result__a\" href=\"https://example.test/a\">";
+    let body = format!(
+        "{prefix}{}</a>{}",
+        "é".repeat(140_000),
+        "x".repeat(1024 * 1024)
+    );
+    let body_bytes = body.len();
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body,
+        },
+    };
+    let result = execute_network_action_with_transport_async(&turn(), &action, &transport)
+        .await
+        .unwrap();
+    let structured: serde_json::Value =
+        serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+    assert_eq!(structured["response"]["body_bytes"], body_bytes);
+    assert_eq!(structured["response"]["html_truncated"], true);
+    assert!(structured["response"]["returned_bytes"].as_u64().unwrap() > 1024 * 1024);
+    let context = action_result_context_content(&result);
+    assert!(context.contains("[mez: action result content truncated after 262144 bytes]"));
+    assert!(!context.contains('�'));
+}
+
 /// Streams a configured sequence of retained body chunks for network progress tests.
 struct ChunkedAsyncProviderHttpTransport {
     chunks: Vec<Vec<u8>>,
     response: ProviderHttpResponse,
+    completion: HttpCompletion,
+    failure: Option<mez_agent::ProviderHttpError>,
 }
 
 impl AsyncProviderHttpTransport for ChunkedAsyncProviderHttpTransport {
@@ -24,7 +202,12 @@ impl AsyncProviderHttpTransport for ChunkedAsyncProviderHttpTransport {
                 + 'a,
         >,
     > {
-        Box::pin(async move { Ok(self.response.clone()) })
+        Box::pin(async move {
+            match &self.failure {
+                Some(error) => Err(error.clone()),
+                None => Ok(self.response.clone()),
+            }
+        })
     }
 
     fn send_async_with_body_chunks<'a>(
@@ -52,7 +235,7 @@ impl AsyncProviderHttpTransport for ChunkedAsyncProviderHttpTransport {
                 .await
                 .map(|response| HttpExchangeResponse {
                     response,
-                    completion: HttpCompletion::Complete,
+                    completion: self.completion,
                 })
         })
     }
@@ -120,6 +303,8 @@ async fn network_fetch_progress_handles_split_utf8_without_raw_html() {
     };
     let transport = ChunkedAsyncProviderHttpTransport {
         chunks: vec![b"h\xC3".to_vec(), b"\xA9llo".to_vec()],
+        completion: HttpCompletion::Complete,
+        failure: None,
         response: ProviderHttpResponse {
             status_code: 200,
             headers: Default::default(),
@@ -304,6 +489,8 @@ async fn network_search_progress_emits_complete_entries_only() {
             html.as_bytes()[..split].to_vec(),
             html.as_bytes()[split..].to_vec(),
         ],
+        completion: HttpCompletion::Complete,
+        failure: None,
         response: ProviderHttpResponse {
             status_code: 200,
             headers: Default::default(),

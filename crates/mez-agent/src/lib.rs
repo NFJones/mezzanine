@@ -148,6 +148,8 @@ pub mod sandbox_assessment;
 pub mod scheduler;
 /// Provider-neutral MAAP action-batch schema construction.
 pub mod schema;
+/// Bounded search values and secret-free plans; no transport or configuration I/O.
+pub mod search;
 /// Deterministic semantic-patch parsing and path validation.
 pub mod semantic_patch;
 /// Deterministic semantic-patch matching and shell transaction planning.

@@ -23,8 +23,6 @@ const DEFAULT_FETCH_URL_MAX_BYTES: usize = 16 * 1024;
 /// Hard response-body cap for one `fetch_url` action, even when the model asks
 /// for a larger value.
 const MAX_FETCH_URL_MAX_BYTES: usize = 256 * 1024;
-/// Maximum response bytes used when parsing web search result HTML.
-const DEFAULT_WEB_SEARCH_MAX_BYTES: usize = 1024 * 1024;
 /// Timeout applied to runtime-owned network actions.
 const NETWORK_ACTION_TIMEOUT_MS: u64 = 30_000;
 
@@ -193,41 +191,17 @@ async fn execute_web_search_action<T: AsyncProviderHttpTransport>(
     request: WebSearchRequest<'_>,
     on_progress: &mut (impl FnMut(String) + Send),
 ) -> Result<ActionResult> {
-    let mut full_query = request.query.to_string();
-    for domain in request.domains {
-        full_query.push_str(" site:");
-        full_query.push_str(domain);
-    }
-    let url = format!(
-        "https://duckduckgo.com/html/?q={}",
-        urlencoding::encode(&full_query)
-    );
-    let limit = request
-        .max_results
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(10)
-        .min(50);
-    let mut observed = Vec::new();
-    let mut published = String::new();
-    let mut on_chunk = |chunk: Vec<u8>| {
-        observed.extend_from_slice(&chunk);
-        let source = safe_search_progress_source(&observed, limit);
-        if !source.is_empty() && source != published {
-            published.clone_from(&source);
-            on_progress(source);
-        }
-        Box::pin(async {}) as Pin<Box<dyn Future<Output = ()> + Send>>
+    let request = mez_agent::search::SearchRequest {
+        query: request.query.to_string(),
+        domains: request.domains.to_vec(),
+        recency_days: request.recency_days,
+        max_results: request.max_results,
     };
-    let response = match send_network_get_with_body_chunks(
-        transport,
-        &url,
-        DEFAULT_WEB_SEARCH_MAX_BYTES,
-        &mut on_chunk,
-    )
-    .await
-    {
+    let url = request.legacy_ddg_url();
+    let full_query = request.legacy_ddg_full_query();
+    let response = match super::search::execute_legacy_ddg(transport, &request, on_progress).await {
         Ok(response) => response,
-        Err(error) => {
+        Err(super::search::SearchExchangeError::Transport(error)) => {
             return network_action_failure(
                 turn,
                 action,
@@ -239,25 +213,20 @@ async fn execute_web_search_action<T: AsyncProviderHttpTransport>(
                 }),
             );
         }
+        Err(super::search::SearchExchangeError::Http {
+            status_code,
+            body_bytes,
+        }) => {
+            return network_action_failure(
+                turn,
+                action,
+                "network_http_error",
+                format!("web search returned HTTP {status_code}"),
+                serde_json::json!({ "url": url, "status_code": status_code, "body_bytes": body_bytes }),
+            );
+        }
     };
-    let transport_truncated = response.completion == HttpCompletion::Truncated;
-    let response = response.response;
-    if !(200..=299).contains(&response.status_code) {
-        return network_action_failure(
-            turn,
-            action,
-            "network_http_error",
-            format!("web search returned HTTP {}", response.status_code),
-            serde_json::json!({
-                "url": url,
-                "status_code": response.status_code,
-                "body_bytes": response.body.len()
-            }),
-        );
-    }
-    let (body, truncated) = truncate_text_to_bytes(&response.body, DEFAULT_WEB_SEARCH_MAX_BYTES);
-    let truncated = truncated || transport_truncated;
-    let results = parse_duckduckgo_html_results(&body, limit);
+    let results = response.result.render_text();
     let mut content = if results.trim().is_empty() {
         "No web results were found.".to_string()
     } else {
@@ -273,10 +242,10 @@ async fn execute_web_search_action<T: AsyncProviderHttpTransport>(
             "query": request.query,
             "full_query": full_query,
             "status_code": response.status_code,
-            "body_bytes": response.body.len(),
-            "returned_bytes": body.len(),
-            "html_truncated": truncated,
-            "max_results": limit,
+            "body_bytes": response.body_bytes,
+            "returned_bytes": response.returned_bytes,
+            "html_truncated": response.result.truncated,
+            "max_results": response.result.effective_count,
             "recency_days": request.recency_days
         }),
     )?;
@@ -335,18 +304,6 @@ fn safe_fetch_progress_source(bytes: &[u8]) -> String {
     valid.to_string()
 }
 
-/// Returns only complete parsed search entries from a cumulative HTML prefix.
-fn safe_search_progress_source(bytes: &[u8], max_results: usize) -> String {
-    let valid = match std::str::from_utf8(bytes) {
-        Ok(value) => value,
-        Err(error) if error.error_len().is_none() => {
-            std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap_or("")
-        }
-        Err(_) => return String::new(),
-    };
-    parse_duckduckgo_html_results(valid, max_results)
-}
-
 fn network_action_failure(
     turn: &AgentTurnRecord,
     action: &AgentAction,
@@ -363,7 +320,9 @@ fn network_action_failure(
     Ok(result)
 }
 
-fn truncate_text_to_bytes(value: &str, limit: usize) -> (String, bool) {
+/// Applies the legacy UTF-8 body cap and notice accounting shared by network
+/// actions. The notice is intentionally outside the retained-byte cap.
+pub(super) fn truncate_text_to_bytes(value: &str, limit: usize) -> (String, bool) {
     if value.len() <= limit {
         return (value.to_string(), false);
     }
@@ -374,84 +333,4 @@ fn truncate_text_to_bytes(value: &str, limit: usize) -> (String, bool) {
     let mut truncated = value[..end].to_string();
     truncated.push_str(&format!("\n[mez: output truncated at {limit} bytes]"));
     (truncated, true)
-}
-
-fn parse_duckduckgo_html_results(body: &str, max_results: usize) -> String {
-    let mut output = String::new();
-    let mut remainder = body;
-    let mut index = 1usize;
-    while index <= max_results {
-        let Some(class_pos) = remainder.find("result__a") else {
-            break;
-        };
-        remainder = &remainder[class_pos..];
-        let Some(href_attr_pos) = remainder.find("href=\"") else {
-            break;
-        };
-        let href_start = href_attr_pos + "href=\"".len();
-        let Some(href_end) = remainder[href_start..].find('"') else {
-            break;
-        };
-        let href = &remainder[href_start..href_start + href_end];
-        let Some(title_start) = remainder[href_start + href_end..].find('>') else {
-            break;
-        };
-        let title_start = href_start + href_end + title_start + 1;
-        let Some(title_end) = remainder[title_start..].find("</a>") else {
-            break;
-        };
-        let title = clean_html_text(&remainder[title_start..title_start + title_end]);
-        let href = clean_duckduckgo_href(href);
-        if !title.trim().is_empty() && !href.trim().is_empty() {
-            output.push_str(&format!("{index}. {title}\n   {href}\n"));
-            index += 1;
-        }
-        remainder = &remainder[title_start + title_end..];
-    }
-    output.trim_end().to_string()
-}
-
-fn clean_html_text(value: &str) -> String {
-    let mut cleaned = String::new();
-    let mut in_tag = false;
-    for ch in value.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => cleaned.push(ch),
-            _ => {}
-        }
-    }
-    decode_html_entities(&cleaned)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn clean_duckduckgo_href(value: &str) -> String {
-    let decoded = decode_html_entities(value);
-    if let Some(encoded) = query_param_value(&decoded, "uddg") {
-        return urlencoding::decode(encoded)
-            .map(|value| value.into_owned())
-            .unwrap_or_else(|_| encoded.to_string());
-    }
-    decoded
-}
-
-fn query_param_value<'a>(url: &'a str, name: &str) -> Option<&'a str> {
-    let marker = format!("{name}=");
-    let start = url.find(&marker)? + marker.len();
-    let rest = &url[start..];
-    let end = rest.find('&').unwrap_or(rest.len());
-    Some(&rest[..end])
-}
-
-fn decode_html_entities(value: &str) -> String {
-    value
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&#x27;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
 }
