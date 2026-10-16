@@ -2829,9 +2829,34 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
-            AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask { turn_id, reply } => {
-                let result = self.service.prepare_agent_provider_work(&turn_id);
+            AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+                agent_id,
+                turn_id,
+                reply,
+            } => {
+                let result = match self
+                    .service
+                    .prepare_pending_agent_provider_work(&agent_id, &turn_id)
+                {
+                    Ok(work) => Ok(work),
+                    Err(error) => self
+                        .service
+                        .fail_configured_agent_provider_task(&turn_id, &error)
+                        .map(|_| None),
+                };
+                // Admission can retire stale ownership, dispatch stored shell
+                // work, or fail a live turn. Publish those transitions just as
+                // the later claim handler does, even when no work is returned.
+                let result = result.and_then(|work| {
+                    self.queue_deferred_pane_io_side_effects_from_service()?;
+                    self.queue_shell_transaction_timer_side_effects()?;
+                    Ok(work)
+                });
+                let should_notify = result.is_ok();
                 let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
                 false
             }
             AsyncRuntimeRequest::ClaimConfiguredAgentProviderTask {

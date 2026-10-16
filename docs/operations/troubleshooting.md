@@ -43,6 +43,15 @@ mode or retrying an action that may already have effects.
 
 ## Provider, authentication, or MCP is unavailable
 
+Provider preparation discards obsolete dispatches after a turn stops and
+respects human pause before refreshing credentials or discovering MCP tools.
+Preparation faults on a live turn fail only that turn with a pane-local
+diagnostic; they must not terminate the provider service or detach the session.
+An older build reporting `provider preparation model profile is unavailable`
+after a turn stops may have hit a stale-dispatch race, not a missing configured
+model profile. Preserve the diagnostic and upgrade rather than changing model
+settings or credentials solely because of that message.
+
 Run `mez auth status` and verify the selected model with `/model`. Complete the
 reported sign-in action rather than treating a partial browser or device flow
 as authenticated. For MCP, use `/list-mcp` to inspect a server's enabled,

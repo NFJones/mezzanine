@@ -7,6 +7,7 @@ mod auth_refresh;
 mod compaction;
 mod network_cancellation;
 mod patch_recovery;
+mod preparation;
 
 /// Verifies async agent provider service polls runtime queue.
 ///

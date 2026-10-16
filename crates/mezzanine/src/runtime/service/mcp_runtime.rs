@@ -216,6 +216,23 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Admits external preparation only for a currently dispatchable turn.
+    ///
+    /// The same lifecycle gate runs again when the worker returns. Stale or
+    /// deferred dispatches return no work before reading retained model state
+    /// or marking MCP plans as starting; live preparation faults remain errors
+    /// for the actor to settle on the owning turn.
+    pub(crate) fn prepare_pending_agent_provider_work(
+        &mut self,
+        agent_id: &mez_core::ids::AgentId,
+        turn_id: &str,
+    ) -> Result<Option<RuntimeAgentProviderPreparationWork>> {
+        if self.ready_agent_provider_turn(agent_id, turn_id)?.is_none() {
+            return Ok(None);
+        }
+        self.prepare_agent_provider_work(turn_id).map(Some)
+    }
+
     /// Extracts immutable provider preparation work from actor-owned state.
     ///
     /// MCP startup plans are marked as starting before they cross the actor

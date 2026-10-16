@@ -8,6 +8,20 @@ use super::super::*;
 /// must still complete while the provider claim waits outside actor ownership.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_processes_lifecycle_commands_while_provider_preparation_is_pending() {
+    exercise_provider_preparation_lifecycle(false).await;
+}
+
+/// Stopping a turn while external MCP preparation is held must make the late
+/// claim a no-op. The returned discovery outcome may be adopted, but cannot
+/// restore the retired profile, claim a worker, or revive the interrupted turn.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_stop_during_provider_preparation_discards_late_claim() {
+    exercise_provider_preparation_lifecycle(true).await;
+}
+
+/// Holds real stdio MCP initialization while an unrelated command or `/stop`
+/// executes through the actor. File gates make the ordering deterministic.
+async fn exercise_provider_preparation_lifecycle(stop: bool) {
     let root = std::env::temp_dir().join(format!(
         "mez-provider-preparation-responsiveness-{}-{:?}",
         std::process::id(),
@@ -87,9 +101,15 @@ done"#,
         .await
         .expect("MCP preparation should reach the gated fixture");
 
+        if stop {
+            handle
+                .execute_agent_shell_command(primary.clone(), "/stop".to_string())
+                .await
+                .unwrap();
+        }
         let output = tokio::time::timeout(
             Duration::from_millis(250),
-            handle.execute_terminal_command(primary, "new-window responsive".to_string()),
+            handle.execute_terminal_command(primary.clone(), "new-window responsive".to_string()),
         )
         .await
         .expect("new-window must not queue behind provider preparation")
@@ -97,7 +117,20 @@ done"#,
         assert!(output.contains("window"), "{output}");
 
         std::fs::write(&release_path, b"release").unwrap();
-        let _ = claim.await.unwrap();
+        let dispatch = claim.await.unwrap().unwrap();
+        if stop {
+            assert!(
+                dispatch.is_none(),
+                "late preparation must not revive a stopped turn"
+            );
+            assert!(
+                handle
+                    .pending_agent_provider_tasks()
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
         assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running
@@ -106,6 +139,16 @@ done"#,
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.service.session().windows().len(), 2);
+    if stop {
+        let turn = exit.service.agent_turn_ledger().turns().last().unwrap();
+        assert_eq!(turn.state, mez_agent::AgentTurnState::Interrupted);
+        assert!(
+            exit.service
+                .agent_turn_model_profile(&turn.turn_id)
+                .is_none()
+        );
+        assert!(!exit.service.agent_provider_task_is_claimed(&turn.turn_id));
+    }
     exit.service.terminate_all_pane_processes().unwrap();
     let _ = std::fs::remove_dir_all(root);
 }

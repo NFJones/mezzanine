@@ -4811,6 +4811,15 @@ copyable failure details in the pane terminal buffer. Such errors MUST NOT
 terminate the session daemon, detach the primary client, or prevent other panes
 and agents from continuing.
 
+Provider preparation MUST validate current turn identity and dispatch admission
+inside the session actor before reading retained model state or starting
+credential/MCP work. Stale, stopped, missing, or no-longer-pending dispatches
+MUST return no work; human pause and other claim-admission fences MUST also
+inhibit preparation. Genuine preparation faults on live owned work MUST settle
+only that turn with a pane-local diagnostic, including when retained model
+state is missing. Claims MUST revalidate admission after external preparation
+so late outcomes cannot revive a stopped or replaced turn.
+
 Runtime command errors encountered while the pane is in agent mode, including
 invalid arguments, invalid state, conflicts, not-found cases, forbidden
 operations, configuration failures, I/O failures, and unimplemented operations,

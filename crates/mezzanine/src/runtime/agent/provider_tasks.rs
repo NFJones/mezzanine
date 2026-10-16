@@ -732,16 +732,18 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Runs the try claim configured agent provider task operation for this subsystem.
+    /// Admits preparation or claiming against current actor-owned turn state.
     ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn try_claim_configured_agent_provider_task(
+    /// Obsolete work is discarded, paused or temporarily inhibited work is
+    /// deferred, and fenced or replaced conversations are interrupted. Both
+    /// preparation and the post-I/O claim must call this gate so no external
+    /// preparation starts for stale work and late outcomes cannot revive it.
+    /// Returns the ready turn, no work, or a lifecycle/identity error.
+    pub(crate) fn ready_agent_provider_turn(
         &mut self,
         agent_id: &AgentId,
         turn_id: &str,
-    ) -> Result<Option<RuntimeAgentProviderDispatch>> {
+    ) -> Result<Option<AgentTurnRecord>> {
         self.require_live()?;
         if self.agent_turn_is_human_paused(turn_id) {
             return Ok(None);
@@ -801,6 +803,20 @@ impl RuntimeSessionService {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(None);
         }
+        Ok(Some(turn))
+    }
+
+    /// Revalidates dispatch admission after external preparation, then builds
+    /// the provider request and claims its pending task. Returns no dispatch
+    /// for obsolete/deferred work, or an error for invalid live request state.
+    fn try_claim_configured_agent_provider_task(
+        &mut self,
+        agent_id: &AgentId,
+        turn_id: &str,
+    ) -> Result<Option<RuntimeAgentProviderDispatch>> {
+        let Some(turn) = self.ready_agent_provider_turn(agent_id, turn_id)? else {
+            return Ok(None);
+        };
         // Every transport captures authority and accounting from current trust.
         // Native filesystem preflight is not a freshness boundary for managed
         // providers. Refresh failure contracts authority and prevents dispatch.
@@ -1301,9 +1317,32 @@ impl RuntimeSessionService {
         let Some(model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned() else {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             self.agent.claimed_agent_provider_tasks.remove(turn_id);
-            return Err(MezError::invalid_state(
-                "runtime agent turn has no model profile",
-            ));
+            // Live preparation can discover missing retained profile state.
+            // Request assembly/auditing cannot invent a replacement profile;
+            // settle through the profile-independent terminal cleanup path.
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                turn_id,
+                &format!(
+                    "provider_task failed reason=missing_model_profile error_kind={}",
+                    runtime_mezzanine_error_code(error.kind())
+                ),
+            )?;
+            self.append_agent_error_text_to_terminal_buffer(
+                &turn.pane_id,
+                &format!(
+                    "agent: provider task failed without a retained model profile: {}",
+                    error.message()
+                ),
+            )?;
+            self.integration
+                .runtime_metrics_mut()
+                .record_provider_failure();
+            return self.complete_running_agent_turn_and_start_ready(
+                &turn,
+                AgentTurnState::Failed,
+                "provider_missing_model_profile",
+            );
         };
         self.agent.pending_agent_provider_tasks.remove(turn_id);
         self.agent.claimed_agent_provider_tasks.remove(turn_id);
