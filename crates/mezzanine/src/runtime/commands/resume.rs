@@ -1536,8 +1536,14 @@ impl RuntimeSessionService {
                 shell_mode: startup_mode,
             },
         )?;
+        // A failed store fork owns no target: it may have rejected an existing
+        // conversation (including the source itself), or already compensated
+        // its own incomplete publication. Only successful creation transfers
+        // responsibility for later pane/setup compensation to this command.
+        let mut target_created = false;
         let setup_result = (|| -> Result<_> {
             let summary = store.fork(&source, &target, current_unix_seconds().max(1))?;
+            target_created = true;
             #[cfg(test)]
             if self.take_agent_fork_after_persistence_failure_for_tests() {
                 return Err(MezError::invalid_state(
@@ -1593,18 +1599,32 @@ impl RuntimeSessionService {
                     ),
                 );
                 let pane_cleanup_failed = self.find_pane_descriptor(&started.pane_id).is_some();
-                let storage_cleanup = store.delete(&target);
+                let storage_cleanup = if target_created {
+                    store.delete(&target)
+                } else {
+                    Ok(false)
+                };
                 if pane_cleanup_failed || storage_cleanup.is_err() {
                     return Err(MezError::invalid_state(format!(
                         "agent fork setup failed: {error}; rollback failed: pane={}; storage={}",
                         pane_cleanup
                             .err()
                             .map(|cleanup| cleanup.to_string())
-                            .unwrap_or_else(|| "pane still exists".to_string()),
+                            .unwrap_or_else(|| if pane_cleanup_failed {
+                                "pane still exists"
+                            } else {
+                                "removed"
+                            }
+                            .to_string()),
                         storage_cleanup
                             .err()
                             .map(|cleanup| cleanup.to_string())
-                            .unwrap_or_else(|| "removed".to_string())
+                            .unwrap_or_else(|| if target_created {
+                                "removed"
+                            } else {
+                                "not created by this fork"
+                            }
+                            .to_string())
                     )));
                 }
                 return Err(error);
