@@ -1207,7 +1207,14 @@ impl RuntimeSessionService {
         failure: Option<&super::child_failures::OwnedChildFailure>,
     ) -> Result<usize> {
         let agent_id = format!("agent-{pane_id}");
-        if self.agent_shell_store().get(pane_id).is_none() {
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
+            return Ok(0);
+        };
+        // Candidates and terminal handoff receipts belong to this exact
+        // conversation, not the pane's earlier or future binding. Defer before
+        // speculative history/context, loop accounting, or cursor mutation;
+        // accepted envelopes and owned-child receipts remain with their owners.
+        if self.persistence.bookkeeping_pending(&session.session_id) {
             return Ok(0);
         }
         if self.subagent_descendant_is_fenced(&agent_id) {
@@ -1405,7 +1412,9 @@ impl RuntimeSessionService {
     /// direct user input resets the counter, so it must not keep re-arming the
     /// delivery timer (and re-reporting the limit) once per tick. Runtime-owned
     /// bridge traffic never starts a turn, so it keeps the ordinary pending
-    /// behavior that also drives TTL expiry.
+    /// behavior that also drives TTL expiry. Exact-conversation bookkeeping
+    /// waits for checked settlement, not repeated history attempts; finite TTL
+    /// still uses the existing one-second maintenance cadence until expiry.
     pub(crate) fn has_pending_peer_messages(&mut self, now_ms: u64) -> bool {
         if self.has_pending_owned_child_failure_handoff() {
             return true;
@@ -1429,22 +1438,27 @@ impl RuntimeSessionService {
             return true;
         }
         let loop_limit = self.agent_peer_message_loop_limit();
-        let ready = self.control.message_service_mut().fanout_ready(now_ms, 1);
-        ready.into_iter().any(|fanout| {
-            let recipient = fanout.recipient.as_str().to_string();
-            if !recipient.starts_with("agent-") {
-                return true;
-            }
-            if fanout.batch.messages.iter().all(|message| {
-                crate::runtime::control::runtime_owned_bridge_message(&message.envelope)
-            }) {
-                return true;
-            }
-            if self.runtime_agent_active_turn(&recipient).is_some() {
-                return true;
-            }
-            self.agent_peer_message_turn_count(&recipient) < loop_limit
-        })
+        self.control
+            .message_service()
+            .has_ready_delivery_matching(now_ms, |recipient, envelope| {
+                let recipient = recipient.as_str();
+                if !recipient.starts_with("agent-") {
+                    return true;
+                }
+                if crate::runtime::control::runtime_owned_bridge_message(envelope) {
+                    return true;
+                }
+                if self.runtime_agent_active_turn(recipient).is_some() {
+                    return true;
+                }
+                if self.agent_peer_message_turn_count(recipient) >= loop_limit {
+                    return false;
+                }
+                let pane = recipient.trim_start_matches("agent-");
+                !self.agent_shell_store().get(pane).is_some_and(|session| {
+                    self.persistence.bookkeeping_pending(&session.session_id)
+                }) || envelope.ttl_ms.is_some()
+            })
     }
 
     /// Returns the queued, running, or blocked turn owned by one agent.

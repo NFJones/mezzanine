@@ -6,6 +6,50 @@
 use super::*;
 
 impl MessageService {
+    /// Reports possibly actionable unread mail without materializing payloads
+    /// or moving the fair fanout cursor. Direct recipients use exact lookups;
+    /// selector mail checks at most the ordinary recipient budget per retained
+    /// envelope. Exhausting that budget conservatively retains a delivery wake,
+    /// never claims there is no work beyond an inspected page. The retained
+    /// envelope count/bytes remain bounded by this service's retention policy.
+    ///
+    /// The predicate borrows authenticated recipient and envelope metadata only.
+    /// Presence, accepted audience, expiry and the durable acknowledgement cursor
+    /// are checked first. This query neither acknowledges nor delivers anything.
+    pub fn has_ready_delivery_matching(
+        &self,
+        now_ms: u64,
+        mut eligible: impl FnMut(&AgentId, &Envelope) -> bool,
+    ) -> bool {
+        self.queue.iter().any(|queued| {
+            if expired(queued, now_ms) {
+                return false;
+            }
+            let mut matches = |recipient: &AgentId| {
+                self.subscriptions.get(recipient).is_some_and(|cursor| {
+                    cursor.last_sequence < queued.sequence
+                        && self.recipient_is_available(recipient)
+                        && self.registered.get(recipient).is_some_and(|identity| {
+                            recipient_matches(identity, &queued.envelope.recipient)
+                                && audience_matches(identity, &queued.audience)
+                                && eligible(recipient, &queued.envelope)
+                        })
+                })
+            };
+            if let Recipient::Agent(recipient) = &queued.envelope.recipient {
+                return matches(recipient);
+            }
+            let limit = FanoutBudget::default().max_recipients;
+            let mut recipients = self.subscription_order.values();
+            for recipient in recipients.by_ref().take(limit) {
+                if matches(recipient) {
+                    return true;
+                }
+            }
+            recipients.next().is_some()
+        })
+    }
+
     /// Selects ready subscriber batches using the default aggregate budget.
     pub fn fanout_ready(&mut self, now_ms: u64, limit_per_recipient: usize) -> Vec<FanoutBatch> {
         self.fanout_ready_with_budget(now_ms, limit_per_recipient, FanoutBudget::default())
