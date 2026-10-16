@@ -610,7 +610,10 @@ fn search_full_binding_comparison_rejects_validly_shaped_substitution() {
                 entry.current.as_mut().unwrap().provider = SearchProvider::Exa;
             }
         }
-        assert_eq!(f.store.write(&metadata).unwrap(), Publication::DirectorySynced);
+        assert_eq!(
+            f.store.write(&metadata).unwrap(),
+            Publication::DirectorySynced
+        );
         assert!(f.resolve(&binding).is_err());
     }
     assert_eq!(f.loads(), 0);
@@ -711,7 +714,15 @@ fn search_status_reports_filesystem_failures_without_secret_reads() {
 fn assert_unsafe_metadata_without_store(f: &Fixture, binding: &SearchBinding) {
     let calls = f.backend.state.borrow().calls.len();
     assert!(f.store.status("work").is_err());
-    assert!(f.store.capture(&SearchCredentialRef::Stored("work".into()), SearchProvider::Brave, SearchProvider::Brave.origin()).is_err());
+    assert!(
+        f.store
+            .capture(
+                &SearchCredentialRef::Stored("work".into()),
+                SearchProvider::Brave,
+                SearchProvider::Brave.origin()
+            )
+            .is_err()
+    );
     assert!(f.login("replacement-synthetic-key").is_err());
     assert!(f.logout().is_err());
     assert!(f.resolve(binding).is_err());
@@ -738,15 +749,27 @@ fn search_metadata_fifo_is_rejected_without_blocking_or_store_access() {
     let early = receiver.recv_timeout(Duration::from_secs(2));
     let prompt = early.is_ok();
     if !prompt {
-        let mut writer = fs::OpenOptions::new().write(true).custom_flags(OFlags::NONBLOCK.bits() as i32).open(f.store.path()).unwrap();
+        let mut writer = fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(OFlags::NONBLOCK.bits() as i32)
+            .open(f.store.path())
+            .unwrap();
         writer.write_all(b"{}").unwrap();
     }
-    let result = match early { Ok(result) => result, Err(_) => receiver.recv_timeout(Duration::from_secs(2)).unwrap() };
+    let result = match early {
+        Ok(result) => result,
+        Err(_) => receiver.recv_timeout(Duration::from_secs(2)).unwrap(),
+    };
     worker.join().unwrap();
-    assert!(prompt, "metadata FIFO open blocked until the owned writer released it");
+    assert!(
+        prompt,
+        "metadata FIFO open blocked until the owned writer released it"
+    );
     assert!(result.is_err());
     assert_unsafe_metadata_without_store(&f, &binding);
-    assert!(std::os::unix::fs::FileTypeExt::is_fifo(&fs::symlink_metadata(f.store.path()).unwrap().file_type()));
+    assert!(std::os::unix::fs::FileTypeExt::is_fifo(
+        &fs::symlink_metadata(f.store.path()).unwrap().file_type()
+    ));
     fs::remove_file(f.store.path()).unwrap();
     fs::write(f.store.path(), &original).unwrap();
     use std::os::unix::fs::PermissionsExt;
@@ -773,15 +796,28 @@ fn search_metadata_opened_inode_validation_preserves_unsafe_inputs() {
             0 => fs::set_permissions(f.store.path(), fs::Permissions::from_mode(0o644)).unwrap(),
             1 => fs::hard_link(f.store.path(), &alias).unwrap(),
             2 => fs::write(f.store.path(), vec![b' '; 1024 * 1024 + 1]).unwrap(),
-            3 => { fs::remove_file(f.store.path()).unwrap(); fs::create_dir(f.store.path()).unwrap(); }
-            _ => { fs::rename(f.store.path(), &alias).unwrap(); std::os::unix::fs::symlink(&alias, f.store.path()).unwrap(); }
+            3 => {
+                fs::remove_file(f.store.path()).unwrap();
+                fs::create_dir(f.store.path()).unwrap();
+            }
+            _ => {
+                fs::rename(f.store.path(), &alias).unwrap();
+                std::os::unix::fs::symlink(&alias, f.store.path()).unwrap();
+            }
         }
         let before = fs::symlink_metadata(f.store.path()).unwrap();
         assert_unsafe_metadata_without_store(&f, &binding);
         let after = fs::symlink_metadata(f.store.path()).unwrap();
-        assert_eq!((after.mode(), after.nlink(), after.len()), (before.mode(), before.nlink(), before.len()));
-        if kind == 0 || kind == 1 { assert_eq!(fs::read(f.store.path()).unwrap(), original); }
-        if kind == 1 || kind == 4 { assert_eq!(fs::read(&alias).unwrap(), original); }
+        assert_eq!(
+            (after.mode(), after.nlink(), after.len()),
+            (before.mode(), before.nlink(), before.len())
+        );
+        if kind == 0 || kind == 1 {
+            assert_eq!(fs::read(f.store.path()).unwrap(), original);
+        }
+        if kind == 1 || kind == 4 {
+            assert_eq!(fs::read(&alias).unwrap(), original);
+        }
     }
 }
 
@@ -791,23 +827,49 @@ fn search_metadata_opened_inode_validation_preserves_unsafe_inputs() {
 #[test]
 fn search_published_unsynced_login_conserves_current_and_pending_credentials() {
     let f = Fixture::new();
-    f.store.fail_directory_sync_at.store(1, std::sync::atomic::Ordering::SeqCst);
+    f.store
+        .fail_directory_sync_at
+        .store(1, std::sync::atomic::Ordering::SeqCst);
     let error = f.login(CANARY).unwrap_err();
     assert!(error.message().contains("published") && error.message().contains("sync uncertain"));
     assert_eq!(f.backend.state.borrow().secrets.len(), 1);
-    assert!(!f.backend.state.borrow().calls.iter().any(|(op, _)| op == "delete"));
-    assert!(SearchAuthStore::new(f.store.root.clone()).status("work").unwrap().configured);
+    assert!(
+        !f.backend
+            .state
+            .borrow()
+            .calls
+            .iter()
+            .any(|(op, _)| op == "delete")
+    );
+    assert!(
+        SearchAuthStore::new(f.store.root.clone())
+            .status("work")
+            .unwrap()
+            .configured
+    );
     let old = f.capture();
-    f.store.fail_directory_sync_at.store(1, std::sync::atomic::Ordering::SeqCst);
+    f.store
+        .fail_directory_sync_at
+        .store(1, std::sync::atomic::Ordering::SeqCst);
     let error = f.login("replacement-synthetic-key").unwrap_err();
     assert!(error.message().contains("published"));
     assert_eq!(f.backend.state.borrow().secrets.len(), 2);
-    assert!(!f.backend.state.borrow().calls.iter().any(|(op, _)| op == "delete"));
+    assert!(
+        !f.backend
+            .state
+            .borrow()
+            .calls
+            .iter()
+            .any(|(op, _)| op == "delete")
+    );
     assert!(f.store.status("work").unwrap().cleanup_pending);
     let loads = f.loads();
     assert!(f.resolve(&old).is_err());
     assert_eq!(f.loads(), loads);
-    assert_eq!(f.resolve(&f.capture()).unwrap().expose_secret(), "replacement-synthetic-key");
+    assert_eq!(
+        f.resolve(&f.capture()).unwrap().expose_secret(),
+        "replacement-synthetic-key"
+    );
     assert!(f.logout().unwrap());
     assert!(f.backend.state.borrow().secrets.is_empty());
 }
@@ -820,20 +882,38 @@ fn search_published_unsynced_logout_retains_revocation_and_defers_deletion() {
     let f = Fixture::new();
     f.login(CANARY).unwrap();
     let old = f.capture();
-    f.backend.state.borrow_mut().secrets.insert("unrelated-inference".into(), SecretString::from("inference-canary"));
-    f.store.fail_directory_sync_at.store(1, std::sync::atomic::Ordering::SeqCst);
+    f.backend.state.borrow_mut().secrets.insert(
+        "unrelated-inference".into(),
+        SecretString::from("inference-canary"),
+    );
+    f.store
+        .fail_directory_sync_at
+        .store(1, std::sync::atomic::Ordering::SeqCst);
     assert!(f.logout().unwrap_err().message().contains("published"));
     let reopened = SearchAuthStore::new(f.store.root.clone());
     assert!(!reopened.status("work").unwrap().configured);
     assert!(reopened.status("work").unwrap().cleanup_pending);
     assert_eq!(f.backend.state.borrow().secrets.len(), 2);
-    assert!(!f.backend.state.borrow().calls.iter().any(|(op, _)| op == "delete"));
+    assert!(
+        !f.backend
+            .state
+            .borrow()
+            .calls
+            .iter()
+            .any(|(op, _)| op == "delete")
+    );
     let loads = f.loads();
     assert!(f.resolve(&old).is_err());
     assert_eq!(f.loads(), loads);
     assert!(f.logout().unwrap());
     assert_eq!(f.backend.state.borrow().secrets.len(), 1);
-    assert!(f.backend.state.borrow().secrets.contains_key("unrelated-inference"));
+    assert!(
+        f.backend
+            .state
+            .borrow()
+            .secrets
+            .contains_key("unrelated-inference")
+    );
 }
 
 /// A sync failure during cleanup bookkeeping is already postcommit: the new
@@ -844,14 +924,28 @@ fn search_published_unsynced_cleanup_bookkeeping_keeps_new_generation() {
     let f = Fixture::new();
     f.login(CANARY).unwrap();
     let old = f.capture();
-    f.store.fail_directory_sync_at.store(2, std::sync::atomic::Ordering::SeqCst);
+    f.store
+        .fail_directory_sync_at
+        .store(2, std::sync::atomic::Ordering::SeqCst);
     let error = f.login("replacement-synthetic-key").unwrap_err();
     assert!(error.message().contains("published"));
     assert!(!error.message().contains("cleanup deferred"));
-    assert_eq!(f.backend.state.borrow().calls.iter().filter(|(op, _)| op == "delete").count(), 1);
+    assert_eq!(
+        f.backend
+            .state
+            .borrow()
+            .calls
+            .iter()
+            .filter(|(op, _)| op == "delete")
+            .count(),
+        1
+    );
     assert_eq!(f.backend.state.borrow().secrets.len(), 1);
     assert!(f.resolve(&old).is_err());
-    assert_eq!(f.resolve(&f.capture()).unwrap().expose_secret(), "replacement-synthetic-key");
+    assert_eq!(
+        f.resolve(&f.capture()).unwrap().expose_secret(),
+        "replacement-synthetic-key"
+    );
     assert!(f.logout().unwrap());
     assert!(f.backend.state.borrow().secrets.is_empty());
 }
@@ -873,8 +967,14 @@ fn search_metadata_stage_collision_preserves_unowned_file_and_old_generation() {
     f.store.metadata_stage_name = Some(".synthetic-existing-stage.tmp".into());
     assert!(f.login("replacement-synthetic-key").is_err());
     let after = fs::metadata(&stage).unwrap();
-    assert_eq!((after.ino(), after.dev(), after.mode(), after.nlink()), (before.ino(), before.dev(), before.mode(), before.nlink()));
-    assert_eq!(fs::read_to_string(stage).unwrap(), "nonsecret-existing-stage-sentinel");
+    assert_eq!(
+        (after.ino(), after.dev(), after.mode(), after.nlink()),
+        (before.ino(), before.dev(), before.mode(), before.nlink())
+    );
+    assert_eq!(
+        fs::read_to_string(stage).unwrap(),
+        "nonsecret-existing-stage-sentinel"
+    );
     assert_eq!(fs::read(f.store.path()).unwrap(), metadata_before);
     assert_eq!(f.backend.state.borrow().secrets.len(), 1);
     assert_eq!(f.resolve(&old).unwrap().expose_secret(), CANARY);
@@ -890,17 +990,44 @@ fn search_unsynced_replacement_does_not_start_existing_pending_cleanup() {
     f.backend.state.borrow_mut().delete_error = true;
     assert!(f.login("second-synthetic-key").is_err());
     let old = f.capture();
-    { let mut state = f.backend.state.borrow_mut(); state.delete_error = false; state.calls.clear(); state.secrets.insert("unrelated-mcp".into(), SecretString::from("mcp-canary")); }
-    f.store.fail_directory_sync_at.store(1, std::sync::atomic::Ordering::SeqCst);
-    assert!(f.login("third-synthetic-key").unwrap_err().message().contains("published"));
+    {
+        let mut state = f.backend.state.borrow_mut();
+        state.delete_error = false;
+        state.calls.clear();
+        state
+            .secrets
+            .insert("unrelated-mcp".into(), SecretString::from("mcp-canary"));
+    }
+    f.store
+        .fail_directory_sync_at
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        f.login("third-synthetic-key")
+            .unwrap_err()
+            .message()
+            .contains("published")
+    );
     assert_eq!(f.backend.state.borrow().secrets.len(), 4);
     assert_eq!(f.store.read().unwrap().entries["work"].pending.len(), 2);
-    assert!(!f.backend.state.borrow().calls.iter().any(|(op, _)| op == "delete"));
+    assert!(
+        !f.backend
+            .state
+            .borrow()
+            .calls
+            .iter()
+            .any(|(op, _)| op == "delete")
+    );
     assert!(f.resolve(&old).is_err());
     assert_eq!(f.loads(), 0);
     assert!(f.logout().unwrap());
     assert_eq!(f.backend.state.borrow().secrets.len(), 1);
-    assert!(f.backend.state.borrow().secrets.contains_key("unrelated-mcp"));
+    assert!(
+        f.backend
+            .state
+            .borrow()
+            .secrets
+            .contains_key("unrelated-mcp")
+    );
 }
 
 /// Search and inference use the same private-file mechanism but disjoint

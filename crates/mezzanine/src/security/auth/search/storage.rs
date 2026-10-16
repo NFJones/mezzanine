@@ -229,7 +229,9 @@ impl SearchAuthStore {
             }
             Err(_) => return Err(MezError::config("search auth metadata unavailable")),
         };
-        let owned = file.metadata().map_err(|_| MezError::config("search auth metadata unavailable"))?;
+        let owned = file
+            .metadata()
+            .map_err(|_| MezError::config("search auth metadata unavailable"))?;
         validate_metadata_file(&owned, rustix::process::geteuid().as_raw())?;
         let mut bytes = Vec::new();
         file.take(1024 * 1024 + 1)
@@ -263,11 +265,24 @@ impl SearchAuthStore {
         }
         ensure_private_dir(&self.root)?;
         reject_existing_symlink_components(&self.path())?;
-        let directory = fs::File::from(open(&self.root, OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())
-            .map_err(|_| MezError::config("search auth metadata directory unavailable"))?);
-        let directory_metadata = directory.metadata().map_err(|_| MezError::config("search auth metadata directory unavailable"))?;
-        if !directory_metadata.is_dir() || directory_metadata.uid() != rustix::process::geteuid().as_raw() || directory_metadata.mode() & 0o077 != 0 {
-            return Err(MezError::forbidden("search auth metadata directory must be owned and private"));
+        let directory = fs::File::from(
+            open(
+                &self.root,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|_| MezError::config("search auth metadata directory unavailable"))?,
+        );
+        let directory_metadata = directory
+            .metadata()
+            .map_err(|_| MezError::config("search auth metadata directory unavailable"))?;
+        if !directory_metadata.is_dir()
+            || directory_metadata.uid() != rustix::process::geteuid().as_raw()
+            || directory_metadata.mode() & 0o077 != 0
+        {
+            return Err(MezError::forbidden(
+                "search auth metadata directory must be owned and private",
+            ));
         }
         let temporary = format!(".search-auth-{}.tmp", new_id());
         #[cfg(test)]
@@ -279,14 +294,25 @@ impl SearchAuthStore {
         }
         // Cleanup ownership begins ONLY after exclusive creation succeeds.
         // An existing generated pathname is not ours to remove on EEXIST.
-        let descriptor = openat(&directory, temporary.as_str(), OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::RUSR | Mode::WUSR)
-            .map_err(|_| MezError::config("search auth metadata staging creation failed"))?;
+        let descriptor = openat(
+            &directory,
+            temporary.as_str(),
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .map_err(|_| MezError::config("search auth metadata staging creation failed"))?;
         let result = (|| {
             let mut file = fs::File::from(descriptor);
             file.write_all(&bytes)?;
             file.sync_all()?;
             drop(file);
-            renameat(&directory, temporary.as_str(), &directory, "search-auth.json").map_err(std::io::Error::from)?;
+            renameat(
+                &directory,
+                temporary.as_str(),
+                &directory,
+                "search-auth.json",
+            )
+            .map_err(std::io::Error::from)?;
             Ok(())
         })();
         if result.is_err() {
@@ -297,9 +323,15 @@ impl SearchAuthStore {
                 ));
             }
         }
-        result.map_err(|_: std::io::Error| MezError::config("search auth metadata update failed"))?;
+        result
+            .map_err(|_: std::io::Error| MezError::config("search auth metadata update failed"))?;
         #[cfg(test)]
-        if self.fail_directory_sync_at.fetch_update(std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst, |remaining| remaining.checked_sub(1)) == Ok(1) {
+        if self.fail_directory_sync_at.fetch_update(
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+            |remaining| remaining.checked_sub(1),
+        ) == Ok(1)
+        {
             return Ok(Publication::PublishedUnsynced);
         }
         Ok(match directory.sync_all() {
@@ -545,8 +577,12 @@ impl SearchAuthStore {
         match self.write(&metadata) {
             Err(error) => {
                 return Err(if store.delete_secret(&expected).is_err() {
-                    MezError::invalid_state("search credential update failed before commit; staged credential cleanup incomplete")
-                } else { error });
+                    MezError::invalid_state(
+                        "search credential update failed before commit; staged credential cleanup incomplete",
+                    )
+                } else {
+                    error
+                });
             }
             Ok(Publication::PublishedUnsynced) => return Err(publication_uncertain()),
             Ok(Publication::DirectorySynced) => {}
@@ -623,8 +659,14 @@ impl SearchAuthStore {
 /// FIFO rendezvous; private regular/single-link checks reject special-node and
 /// hardlink aliases. Ancestor checks are not an atomic ancestor-CAS guarantee.
 fn validate_metadata_file(metadata: &fs::Metadata, expected_uid: u32) -> Result<()> {
-    if !metadata.is_file() || metadata.nlink() != 1 || metadata.uid() != expected_uid || metadata.mode() & 0o077 != 0 {
-        return Err(MezError::forbidden("search auth metadata must be an owned private single-link regular file"));
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != expected_uid
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(MezError::forbidden(
+            "search auth metadata must be an owned private single-link regular file",
+        ));
     }
     if metadata.len() > 1024 * 1024 {
         return Err(MezError::config("search auth metadata too large"));
@@ -634,7 +676,9 @@ fn validate_metadata_file(metadata: &fs::Metadata, expected_uid: u32) -> Result<
 
 /// A visible publication must never be treated as a failed staging attempt.
 fn publication_uncertain() -> MezError {
-    MezError::invalid_state("search credential metadata published; directory sync uncertain; current generation retained")
+    MezError::invalid_state(
+        "search credential metadata published; directory sync uncertain; current generation retained",
+    )
 }
 
 /// Validates exact origin equality, rejecting alternate scheme/port/path/query,
