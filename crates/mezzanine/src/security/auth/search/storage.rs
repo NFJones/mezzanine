@@ -302,6 +302,7 @@ impl SearchAuthStore {
 
     /// Captures only metadata for one explicit selector and exact destination.
     /// This does not authorize the future request or inspect environment values.
+    #[allow(dead_code, reason = "future trusted search dispatch must capture metadata before authorization; runtime wiring is separately owned")]
     pub fn capture(
         &self,
         reference: &SearchCredentialRef,

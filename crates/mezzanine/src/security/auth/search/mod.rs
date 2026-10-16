@@ -55,14 +55,17 @@ impl SearchProvider {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchCredentialRef {
     /// A logical identity in the dedicated search auth domain.
+    #[allow(dead_code, reason = "stored search selection is consumed by the separately integrated trusted runtime binding")]
     Stored(String),
     /// Exactly one explicitly selected primary host/service environment name.
+    #[allow(dead_code, reason = "named host environment selection is consumed by the separately integrated trusted runtime binding")]
     Environment(String),
 }
 
 impl SearchCredentialRef {
     /// Parses a bounded explicit reference without reading any environment or
     /// storage. Errors deliberately never quote the supplied text.
+    #[allow(dead_code, reason = "non-secret reference parsing is a contract for future search profiles and trusted dispatch")]
     pub fn parse(value: &str) -> Result<Self> {
         if let Some(name) = value.strip_prefix("search-auth:") {
             validate_name(name)?;
