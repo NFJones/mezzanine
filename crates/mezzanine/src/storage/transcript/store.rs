@@ -2204,29 +2204,6 @@ impl AgentTranscriptStore {
         catalog::upsert(self, &candidate, entry.created_at_unix_seconds)
     }
 
-    /// Reads all presentation entries and their durable latest sequence under
-    /// the conversation lock.
-    ///
-    /// A caller can retain the returned sequence as a source token and reject
-    /// a projection when another writer appended presentation state later.
-    pub fn inspect_presentation_snapshot(
-        &self,
-        conversation_id: &str,
-    ) -> Result<(Vec<AgentPresentationEntry>, u64)> {
-        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
-        let entries = self.inspect_presentation_unlocked(conversation_id)?;
-        let sequence = self
-            .read_presentation_index(conversation_id)?
-            .unwrap_or_else(|| {
-                entries
-                    .iter()
-                    .map(|entry| entry.sequence)
-                    .max()
-                    .unwrap_or_default()
-            });
-        Ok((entries, sequence))
-    }
-
     /// Acquires the presentation mutation lock and returns a coherent snapshot.
     ///
     /// The returned lock remains held until its owner drops it. Direct resume

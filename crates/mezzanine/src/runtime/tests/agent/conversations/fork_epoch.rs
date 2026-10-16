@@ -195,7 +195,10 @@ fn claim_saved_fork(
     let acknowledgement = service
         .execute_agent_shell_command(primary, "/fork fork-target")
         .unwrap();
-    assert!(acknowledgement.contains("deferred"), "{acknowledgement}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&acknowledgement).unwrap(),
+        serde_json::json!({"pane_id":"%1", "input":"/fork fork-target", "kind":"mutated", "command":"fork", "body":null, "turn":null})
+    );
     let dispatch = service
         .take_pending_deferred_agent_commands()
         .pop()
@@ -329,7 +332,7 @@ fn runtime_saved_fork_mcp_invalidation_keeps_usage_and_authority_independent() {
         .unwrap();
     assert!(
         !context
-            .blocks
+            .blocks()
             .iter()
             .any(|block| block.content.contains("OBSOLETE_FORK_MCP_MANIFEST"))
     );
@@ -388,7 +391,7 @@ fn runtime_saved_fork_mcp_invalidation_keeps_usage_and_authority_independent() {
         .unwrap();
     assert!(
         !context
-            .blocks
+            .blocks()
             .iter()
             .any(|block| block.content.contains("OBSOLETE_FORK_MCP_MANIFEST"))
     );
@@ -576,7 +579,7 @@ fn runtime_saved_fork_secondary_cleanup_error_remains_recoverable() {
         "{message}"
     );
     assert!(store.saved_session("fork-target").unwrap().is_none());
-    store.recover_archive_transactions().unwrap();
+    store.initialize(200).unwrap();
     assert!(!root.join("fork-target").exists());
     assert_eq!(store.inspect("fork-source").unwrap().len(), 1);
     service.terminate_all_pane_processes().unwrap();
@@ -631,11 +634,14 @@ fn runtime_saved_fork_epoch_setup_failure_removes_only_published_target() {
         .collect::<std::collections::BTreeMap<_, _>>();
     let panes = service.session().windows()[0].panes().len();
     service.fail_next_agent_fork_after_persistence_for_tests();
-    let response=service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"epoch-setup-fault","method":"agent/shell/command","params":{"idempotency_key":"epoch-setup-fault","input":"/fork fork-target"}}"#,
-        &primary,
+    let response = service
+        .execute_agent_shell_command(&primary, "/fork fork-target")
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&response).unwrap()["body"],
+        serde_json::Value::Null
     );
-    assert!(response.contains("deferred"), "{response}");
+    assert!(service.agent_command_is_active("%1"));
     let response = service
         .run_pending_deferred_agent_command_for_tests()
         .unwrap()
@@ -793,7 +799,11 @@ fn runtime_saved_fork_selective_epoch_encoded_anchors_and_native_ownership() {
         let response = service
             .execute_agent_shell_command(&primary, "/fork fork-target")
             .unwrap();
-        assert!(response.contains("deferred"), "{response}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response).unwrap()["body"],
+            serde_json::Value::Null
+        );
+        assert!(service.agent_command_is_active("%1"));
         let response = service
             .run_pending_deferred_agent_command_for_tests()
             .unwrap()
@@ -948,10 +958,14 @@ fn runtime_saved_fork_rejected_target_preserves_existing_and_source_bytes() {
                 })
                 .collect::<std::collections::BTreeMap<_, _>>()
         });
-        let response = service.dispatch_runtime_control_body(&format!(
-            r#"{{"jsonrpc":"2.0","id":"existing-fork","method":"agent/shell/command","params":{{"idempotency_key":"existing-fork","input":"/fork {target}"}}}}"#
-        ), &primary);
-        assert!(response.contains("deferred"), "{response}");
+        let response = service
+            .execute_agent_shell_command(&primary, &format!("/fork {target}"))
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response).unwrap()["body"],
+            serde_json::Value::Null
+        );
+        assert!(service.agent_command_is_active("%1"));
         let response = service
             .run_pending_deferred_agent_command_for_tests()
             .unwrap()
@@ -1119,7 +1133,11 @@ fn runtime_saved_fork_epoch_first_encoded_request_survives_reopen() {
     let forked = service
         .execute_agent_shell_command(&primary, "/fork fork-target")
         .unwrap();
-    assert!(forked.contains("deferred"), "{forked}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&forked).unwrap()["body"],
+        serde_json::Value::Null
+    );
+    assert!(service.agent_command_is_active("%1"));
     let forked = service
         .run_pending_deferred_agent_command_for_tests()
         .unwrap()

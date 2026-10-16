@@ -35,7 +35,11 @@ fn runtime_saved_fork_preserves_bookkeeping_candidate_admission_fence() {
         let response = service
             .execute_agent_shell_command(&primary, "/fork bookkeeping-fork-target")
             .unwrap();
-        assert!(response.contains("deferred"), "{state}: {response}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response).unwrap()["body"],
+            serde_json::Value::Null
+        );
+        assert!(service.agent_command_is_active("%1"), "{state}");
         assert!(
             service
                 .run_pending_deferred_agent_command_for_tests()

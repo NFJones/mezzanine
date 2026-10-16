@@ -5,6 +5,7 @@
 //! No provider requests, credentials or historical actions are executed.
 
 use super::super::*;
+use crate::host::async_runtime::run_async_agent_command_service;
 
 /// The real supervisor aborts auxiliary services on explicit cancellation,
 /// last-primary completion, and primary error. Its report must wait for the
@@ -68,15 +69,16 @@ async fn async_actor_saved_fork_supervisor_observes_retirement_on_all_exit_paths
             .build()
             .unwrap();
         let client = async {
-            let command_service = crate::host::async_runtime::build_async_agent_command_service(
-                "commands",
-                handle.clone(),
-                AsyncAgentProviderServiceConfig::new(2)
-                    .unwrap()
-                    .with_idle_interval(Duration::from_millis(5))
-                    .unwrap(),
-            )
-            .unwrap();
+            let command_service =
+                crate::host::async_runtime::provider::build_async_agent_command_service(
+                    "commands",
+                    handle.clone(),
+                    AsyncAgentProviderServiceConfig::new(2)
+                        .unwrap()
+                        .with_idle_interval(Duration::from_millis(5))
+                        .unwrap(),
+                )
+                .unwrap();
             let retirement = command_service.saved_fork_retirement.clone().unwrap();
             let publication_gate = matches!(mode, "published" | "draining" | "failed-draining")
                 .then(|| retirement.gate_publication_for_tests());

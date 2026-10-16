@@ -285,7 +285,7 @@ impl AgentTranscriptStore {
     }
 
     /// Returns the active directory path without exposing store internals publicly.
-    fn session_dir_path(&self, conversation_id: &str) -> Result<PathBuf> {
+    pub(super) fn session_dir_path(&self, conversation_id: &str) -> Result<PathBuf> {
         validate_conversation_id(conversation_id)?;
         Ok(self.root.join(conversation_id))
     }
