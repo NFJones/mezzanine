@@ -3,6 +3,7 @@
 use super::*;
 
 mod bookkeeping;
+mod fork_epoch;
 mod lifecycle;
 mod metadata;
 mod resume_prompt;
