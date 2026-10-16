@@ -2724,7 +2724,8 @@ impl AsyncRuntimeSessionActor {
                     .get(&work.candidate.turn.pane_id)
                     .is_some_and(|session| {
                         session.session_id == work.candidate.turn.conversation_id
-                    });
+                    })
+                    && !self.service.pane_is_closing(&work.candidate.turn.pane_id);
                 let result = self.service.complete_bookkeeping_candidate(work, history);
                 if result.as_ref().is_ok_and(|applied| *applied) {
                     let _ = self.service.start_ready_agent_turns();

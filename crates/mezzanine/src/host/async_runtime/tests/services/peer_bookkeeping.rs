@@ -65,9 +65,6 @@ async fn async_peer_bookkeeping_deferral_preserves_timer_supervisor_and_panes() 
         }])
         .await
         .unwrap();
-    let (deferred_tx, deferred_rx) = tokio::sync::oneshot::channel();
-    let (settle_tx, settle_rx) = tokio::sync::oneshot::channel();
-    let (delivered_tx, delivered_rx) = tokio::sync::oneshot::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
     let timer_handle = handle.clone();
     let shutdown_handle = handle.clone();
@@ -76,29 +73,18 @@ async fn async_peer_bookkeeping_deferral_preserves_timer_supervisor_and_panes() 
             vec![
                 AsyncRuntimeService::new_auxiliary("peer-delivery-timers", async move {
                     let config = AsyncRuntimeSideEffectServiceConfig {
-                        max_polls: 4,
+                        max_polls: u64::MAX,
                         drain_limit: 64,
                         idle_interval: Duration::from_millis(1),
                     };
-                    let first = run_async_runtime_timer_side_effect_service(
+                    let report = run_async_runtime_timer_side_effect_service(
                         &timer_handle,
                         config,
                         now,
                         |_, _| false,
                     )
                     .await?;
-                    let _ = deferred_tx.send(first);
-                    let _ = settle_rx.await;
-                    let second = run_async_runtime_timer_side_effect_service(
-                        &timer_handle,
-                        config,
-                        crate::runtime::current_unix_millis(),
-                        |_, _| false,
-                    )
-                    .await?;
-                    let fired = second.fired;
-                    let _ = delivered_tx.send(second);
-                    Ok(AsyncRuntimeServiceExit::completed(fired))
+                    Ok(AsyncRuntimeServiceExit::completed(report.fired))
                 }),
                 AsyncRuntimeService::new("live-session-lifetime", async move {
                     let _ = stop_rx.await;
@@ -114,11 +100,7 @@ async fn async_peer_bookkeeping_deferral_preserves_timer_supervisor_and_panes() 
         let _ = shutdown_handle.shutdown().await;
         result
     });
-    let first = tokio::time::timeout(Duration::from_secs(5), deferred_rx)
-        .await
-        .unwrap()
-        .expect("timer must defer without failing supervised service");
-    assert!(first.fired >= 1);
+    wait_for_peer_task(&handle, "agent-%2").await;
     assert_eq!(
         handle.lifecycle_state().await.unwrap(),
         RuntimeLifecycleState::Running
@@ -159,17 +141,13 @@ async fn async_peer_bookkeeping_deferral_preserves_timer_supervisor_and_panes() 
         ))
         .await
         .unwrap();
-    // FIFO request proves completion adoption before resuming the timer worker.
+    // FIFO request proves checked adoption; the same continuously supervised
+    // timer worker must consume its ordinary settlement wake.
     assert_eq!(
         handle.lifecycle_state().await.unwrap(),
         RuntimeLifecycleState::Running
     );
-    settle_tx.send(()).unwrap();
-    let second = tokio::time::timeout(Duration::from_secs(5), delivered_rx)
-        .await
-        .unwrap()
-        .expect("checked settlement must wake retained delivery");
-    assert!(second.fired >= 1, "{second:?}");
+    wait_for_peer_task(&handle, "agent-%1").await;
     let tasks = handle.pending_agent_provider_tasks().await.unwrap();
     assert_eq!(
         tasks
@@ -221,6 +199,36 @@ async fn async_peer_bookkeeping_deferral_preserves_timer_supervisor_and_panes() 
         0
     );
     exit.service.terminate_all_pane_processes().unwrap();
+}
+
+/// Waits on actor-owned side-effect revisions until the specific recipient's
+/// task exists. No explicit sweep, timer resubmission, provider execution or
+/// fixed sleep can substitute for the production timer's actual admission.
+async fn wait_for_peer_task(
+    handle: &crate::host::async_runtime::AsyncRuntimeSessionHandle,
+    agent: &str,
+) {
+    let mut watcher = handle.side_effect_delivery_watcher();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let _ = watcher.borrow_and_update();
+            if handle
+                .pending_agent_provider_tasks()
+                .await
+                .unwrap()
+                .iter()
+                .any(|task| task.agent_id == agent)
+            {
+                return;
+            }
+            watcher
+                .changed()
+                .await
+                .expect("actor must stay live while awaiting timer delivery");
+        }
+    })
+    .await
+    .expect("supervised timer must admit the specific peer recipient");
 }
 
 /// Accepts ordinary model-originated mail, not a runtime lifecycle bridge.
