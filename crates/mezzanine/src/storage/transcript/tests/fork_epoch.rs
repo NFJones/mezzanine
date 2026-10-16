@@ -6,6 +6,189 @@
 use super::*;
 use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 
+/// Cooperating appends and compaction publications race repeated forks. Each
+/// fork must contain a contiguous source prefix with an applicable captured
+/// epoch; source work after capture cannot leak into an already-created target.
+/// Two creators racing the same target must produce one winner without cleanup
+/// deleting that winner. A barrier starts real workers, without sleeps or CAS
+/// claims against unsupported arbitrary external writers.
+#[test]
+fn fork_epoch_concurrent_capture_and_exclusive_target_creation() {
+    let root = temp_root("fork-concurrent-epoch");
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("source", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .save_compaction_epoch("source", 1, "summary-1")
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let writer = {
+        let store = store.clone();
+        let barrier = barrier.clone();
+        thread::spawn(move || {
+            barrier.wait();
+            for sequence in 2..=16 {
+                store
+                    .append(&entry("source", sequence, TranscriptRole::User))
+                    .unwrap();
+                store
+                    .save_compaction_epoch("source", sequence, &format!("summary-{sequence}"))
+                    .unwrap();
+            }
+        })
+    };
+    barrier.wait();
+    for index in 0..8 {
+        let target = format!("target-{index}");
+        store.fork("source", &target, 99).unwrap();
+        let rows = store.inspect(&target).unwrap();
+        let epoch = store.compaction_epoch(&target).unwrap().unwrap();
+        assert!(epoch.through_sequence <= rows.len() as u64);
+        assert_eq!(epoch.summary, format!("summary-{}", epoch.through_sequence));
+        for (index, row) in rows.iter().enumerate() {
+            assert_eq!(row.sequence, index as u64 + 1);
+            assert_eq!(row.content, format!("content {}", row.sequence));
+        }
+    }
+    writer.join().unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let creators = (0..2)
+        .map(|_| {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                store.fork("source", "exclusive", 100)
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = creators
+        .into_iter()
+        .map(|task| task.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+    assert_eq!(store.inspect("exclusive").unwrap().len(), 16);
+    assert_eq!(
+        store
+            .compaction_epoch("exclusive")
+            .unwrap()
+            .unwrap()
+            .through_sequence,
+        16
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Pending terminal witnesses with a nonempty prefix baseline reconcile only on
+/// the target. Already-covered witnesses remain idempotent, while foreign or
+/// stale baseline evidence fails closed and compensates only the target.
+#[test]
+fn fork_epoch_terminal_handoffs_translate_and_reconcile_only_target() {
+    use crate::storage::transcript::compaction_handoff::{
+        TerminalCompactionHandoff, TerminalCompactionReplacement,
+    };
+    for state in ["pending", "covered", "foreign", "stale"] {
+        let root = temp_root("fork-terminal-handoff");
+        let store = AgentTranscriptStore::new(root.clone());
+        let rows = rows();
+        store.append_many(&rows).unwrap();
+        store
+            .save_compaction_epoch("source", 1, "prefix model summary")
+            .unwrap();
+        let mut baseline = store.compaction_epoch("source").unwrap();
+        if state == "foreign" {
+            baseline.as_mut().unwrap().conversation_id = "foreign".into();
+        }
+        let mut witness = entry("source", 10, TranscriptRole::System);
+        witness.content = TerminalCompactionHandoff {
+            baseline,
+            replacements: vec![TerminalCompactionReplacement {
+                sources: rows[1..3].iter().map(|row| row.content.clone()).collect(),
+                summary: "accepted model handoff summary".into(),
+            }],
+        }
+        .to_content()
+        .unwrap();
+        // Single append deliberately leaves the witness unreconciled, as after
+        // an interrupted append-receipt handoff; it does not execute actions.
+        store.append(&witness).unwrap();
+        if state == "covered" {
+            store
+                .publish_terminal_compaction_handoffs("source")
+                .unwrap();
+        } else if state == "stale" {
+            store
+                .save_compaction_epoch("source", 1, "newer independent summary")
+                .unwrap();
+        }
+        let before = source_bytes(&root);
+        let result = store.fork("source", "target", 99);
+        if matches!(state, "foreign" | "stale") {
+            assert!(result.is_err(), "{state}");
+            assert!(!root.join("target").exists(), "{state}");
+        } else {
+            result.unwrap();
+            let epoch = store.compaction_epoch("target").unwrap().unwrap();
+            assert_eq!(epoch.conversation_id, "target");
+            assert_eq!(epoch.through_sequence, 1);
+            assert_eq!(epoch.summary, "prefix model summary");
+            assert_eq!(
+                epoch.ranges,
+                vec![AgentCompactionRange {
+                    first_sequence: 2,
+                    through_sequence: 3,
+                    summary: "accepted model handoff summary".into(),
+                }]
+            );
+            store
+                .publish_terminal_compaction_handoffs("target")
+                .unwrap();
+            assert_eq!(store.compaction_epoch("target").unwrap(), Some(epoch));
+            assert_eq!(store.inspect("target").unwrap()[1].content, rows[1].content);
+        }
+        assert_eq!(source_bytes(&root), before, "{state}");
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// Historical no-epoch forks retain raw history unchanged, while repeated prefix
+/// compactions capture only the latest summary and never absorb later parent
+/// appends. Empty active tails remain backed by the complete copied archive.
+#[test]
+fn fork_epoch_latest_prefix_empty_tail_and_legacy_no_epoch() {
+    for boundary in [None, Some(0), Some(5), Some(9)] {
+        let root = temp_root("fork-prefix-variants");
+        let store = AgentTranscriptStore::new(root.clone());
+        store.append_many(&rows()).unwrap();
+        if let Some(boundary) = boundary {
+            store
+                .save_compaction_epoch("source", 0, "older model summary")
+                .unwrap();
+            store
+                .save_compaction_epoch("source", boundary, "latest model summary")
+                .unwrap();
+        }
+        let before = source_bytes(&root);
+        store.fork("source", "target", 99).unwrap();
+        assert_eq!(source_bytes(&root), before);
+        let target_epoch = store.compaction_epoch("target").unwrap();
+        assert_eq!(
+            target_epoch.as_ref().map(|epoch| epoch.through_sequence),
+            boundary
+        );
+        if let Some(epoch) = target_epoch {
+            assert_eq!(epoch.summary, "latest model summary");
+        }
+        store
+            .append(&entry("source", 10, TranscriptRole::User))
+            .unwrap();
+        assert_eq!(store.inspect("target").unwrap().len(), 9);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// Creates a valid complete typed group at each selected sequence, with raw
 /// user barriers in the uncovered gaps and distinct stable occurrence identity.
 fn rows() -> Vec<TranscriptEntry> {

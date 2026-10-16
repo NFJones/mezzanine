@@ -5,6 +5,86 @@
 
 use super::*;
 
+/// A rejected existing-target or source-equals-target request owns no durable
+/// target. Runtime compensation must close only its newly created pane and
+/// preserve both existing conversations byte-for-byte, including epoch markers.
+#[test]
+fn runtime_saved_fork_rejected_target_preserves_existing_and_source_bytes() {
+    for target in ["fork-source", "existing-target"] {
+        let root = temp_root("runtime-fork-existing-target");
+        let store = AgentTranscriptStore::new(root.clone());
+        for conversation in ["fork-source", "existing-target"] {
+            store
+                .append(&TranscriptEntry {
+                    conversation_id: conversation.into(),
+                    sequence: 1,
+                    created_at_unix_seconds: 1,
+                    role: TranscriptRole::User,
+                    turn_id: "original-turn".into(),
+                    agent_id: "agent-%1".into(),
+                    pane_id: "%1".into(),
+                    content: format!("original {conversation}"),
+                })
+                .unwrap();
+            store
+                .save_compaction_epoch(conversation, 1, "original summary")
+                .unwrap();
+        }
+        let mut service = test_runtime_service();
+        service.set_agent_transcript_store(store);
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        service
+            .start_initial_pane_process(Some("cat >/dev/null"))
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .bind_conversation("%1", "fork-source", 1)
+            .unwrap();
+        let before = service.session().windows()[0].panes().len();
+        let snapshots = ["fork-source", "existing-target"].map(|conversation| {
+            fs::read_dir(root.join(conversation))
+                .unwrap()
+                .map(|entry| {
+                    let path = entry.unwrap().path();
+                    (path.clone(), fs::read(path).unwrap())
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+        });
+        let response = service.dispatch_runtime_control_body(&format!(
+            r#"{{"jsonrpc":"2.0","id":"existing-fork","method":"agent/shell/command","params":{{"idempotency_key":"existing-fork","input":"/fork {target}"}}}}"#
+        ), &primary);
+        service.terminate_all_pane_processes().unwrap();
+        assert!(
+            response.contains("target conversation already exists"),
+            "{response}"
+        );
+        assert_eq!(service.session().windows()[0].panes().len(), before);
+        assert_eq!(
+            service.agent_shell_store().get("%1").unwrap().session_id,
+            "fork-source"
+        );
+        for (conversation, expected) in ["fork-source", "existing-target"]
+            .into_iter()
+            .zip(snapshots)
+        {
+            let actual = fs::read_dir(root.join(conversation))
+                .unwrap()
+                .map(|entry| {
+                    let path = entry.unwrap().path();
+                    (path.clone(), fs::read(path).unwrap())
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(actual, expected, "{conversation}");
+        }
+    }
+}
+
 /// Encodes the first prompt and extracts ordered provider text items, rather
 /// than relying on substring matches in metadata or on archive preservation.
 fn encoded_history(service: &mut RuntimeSessionService, pane: &str) -> Vec<(String, String)> {

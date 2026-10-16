@@ -1320,11 +1320,24 @@ impl AgentTranscriptStore {
         frozen_rows: &[TranscriptEntry],
         baseline: &Option<AgentCompactionEpoch>,
     ) -> Result<()> {
-        self.save_compaction_projection(epoch, Some(frozen_rows), Some(baseline))
+        self.save_compaction_projection_locked(epoch, Some(frozen_rows), Some(baseline))
     }
 
     /// Shares the crash-safe v1 and v2 publication boundary.
     fn save_compaction_projection(
+        &self,
+        epoch: AgentCompactionEpoch,
+        frozen_rows: Option<&[TranscriptEntry]>,
+        baseline: Option<&Option<AgentCompactionEpoch>>,
+    ) -> Result<()> {
+        let _conversation_lock = self.acquire_conversation_lock(&epoch.conversation_id)?;
+        self.save_compaction_projection_locked(epoch, frozen_rows, baseline)
+    }
+
+    /// Validates and publishes one epoch while the caller owns the conversation
+    /// mutation lock. Forks and terminal witnesses use the identical publication
+    /// contract without recursively acquiring an independent `flock` descriptor.
+    fn save_compaction_projection_locked(
         &self,
         epoch: AgentCompactionEpoch,
         frozen_rows: Option<&[TranscriptEntry]>,
@@ -1342,7 +1355,6 @@ impl AgentTranscriptStore {
                 "compaction epoch summary is empty or exceeds the accepted size limit",
             ));
         }
-        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
         let latest_sequence = match self.next_sequence(conversation_id) {
             Ok(next) => Some(next.saturating_sub(1)),
             Err(error) if error.kind() == MezErrorKind::NotFound => None,
@@ -1933,12 +1945,18 @@ impl AgentTranscriptStore {
     /// Presentation rows are user-interface replay state. They intentionally
     /// live beside, not inside, model-facing transcript history.
     pub fn append_presentation(&self, entry: &AgentPresentationEntry) -> Result<()> {
+        let _conversation_lock = self.acquire_conversation_lock(&entry.conversation_id)?;
+        self.append_presentation_locked(entry)
+    }
+
+    /// Uses the ordinary presentation append path under existing ownership.
+    /// Fork capture holds the target lock through epoch and metadata publication.
+    fn append_presentation_locked(&self, entry: &AgentPresentationEntry) -> Result<()> {
         let entry = entry.normalized_for_agent_log_wrap();
         entry.validate()?;
         if entry.source_content_type.as_deref() == Some(super::steering::CONTENT_TYPE) {
-            return self.append_presentation_many(&[entry]).map(|_| ());
+            return self.append_presentation_many_locked(&[entry]).map(|_| ());
         }
-        let _conversation_lock = self.acquire_conversation_lock(&entry.conversation_id)?;
         self.ensure_session_dir(&entry.conversation_id)?;
         let path = self.presentation_path_for(&entry.conversation_id)?;
         let encoded = entry.encode()?;
@@ -1964,6 +1982,15 @@ impl AgentTranscriptStore {
         let Some(first) = entries.first() else {
             return Ok(0);
         };
+        let _conversation_lock = self.acquire_conversation_lock(&first.conversation_id)?;
+        self.append_presentation_many_locked(entries)
+    }
+
+    /// Assigns and persists a batch while its conversation lock is already held.
+    fn append_presentation_many_locked(&self, entries: &[AgentPresentationEntry]) -> Result<usize> {
+        let Some(first) = entries.first() else {
+            return Ok(0);
+        };
         validate_conversation_id(&first.conversation_id)?;
         if entries
             .iter()
@@ -1973,7 +2000,6 @@ impl AgentTranscriptStore {
                 "presentation batch entries must share one conversation",
             ));
         }
-        let _conversation_lock = self.acquire_conversation_lock(&first.conversation_id)?;
         let mut steering_sources = BTreeMap::new();
         if entries.iter().any(|entry| {
             entry.source_content_type.as_deref() == Some(super::steering::CONTENT_TYPE)
@@ -3705,24 +3731,39 @@ impl AgentTranscriptStore {
     /// Forks an existing conversation into a new conversation id.
     ///
     /// Returns a conflict error when the target already exists and an invalid
-    /// state error when the source conversation has no entries.
+    /// state error when the source has no entries or required history is invalid.
+    /// Deterministically ordered conversation locks fence cooperating writers
+    /// through capture, target publication and compensation. The source is never
+    /// modified, including when committed terminal witnesses await publication.
+    /// This does not claim atomicity against arbitrary external file writers.
     pub fn fork(
         &self,
         source_conversation_id: &str,
         target_conversation_id: &str,
         created_at_unix_seconds: u64,
     ) -> Result<ConversationSummary> {
+        validate_conversation_id(source_conversation_id)?;
         validate_conversation_id(target_conversation_id)?;
+        if source_conversation_id == target_conversation_id {
+            return Err(MezError::conflict("target conversation already exists"));
+        }
+        let mut ids = [source_conversation_id, target_conversation_id];
+        ids.sort_unstable();
+        let _conversation_locks = ids
+            .into_iter()
+            .map(|id| self.acquire_conversation_lock(id))
+            .collect::<Result<Vec<_>>>()?;
         if self.conversation_exists(target_conversation_id)? {
             return Err(MezError::conflict("target conversation already exists"));
         }
-        let entries = self.inspect(source_conversation_id)?;
+        let entries = self.inspect_validated_transcript(source_conversation_id)?;
         if entries.is_empty() {
             return Err(MezError::invalid_state(
                 "source conversation has no entries",
             ));
         }
-        let presentations = self.inspect_presentation(source_conversation_id)?;
+        let epoch = self.compaction_epoch(source_conversation_id)?;
+        let presentations = self.inspect_presentation_unlocked(source_conversation_id)?;
         let fallback_source = if presentations.is_empty() {
             Some(super::fallback::Source::from_records(&entries)?.encode()?)
         } else {
@@ -3730,19 +3771,38 @@ impl AgentTranscriptStore {
         };
         let fallback_pane = entries[0].pane_id.clone();
         let fork_result = (|| {
+            let mut frozen_rows = Vec::new();
             for entry in entries {
-                let forked = TranscriptEntry {
+                let mut forked = TranscriptEntry {
                     conversation_id: target_conversation_id.to_string(),
                     created_at_unix_seconds,
                     ..entry
                 };
-                self.append(&forked)?;
+                if forked.role == mez_agent::transcript::TranscriptRole::System
+                    && let Some(content) =
+                        super::compaction_handoff::TerminalCompactionHandoff::fork_content(
+                            &forked.content,
+                            source_conversation_id,
+                            target_conversation_id,
+                        )?
+                {
+                    forked.content = content;
+                }
+                forked.validate()?;
+                self.append_one_locked(&forked)?;
+                if epoch.as_ref().is_some_and(|epoch| {
+                    epoch.ranges.iter().any(|range| {
+                        (range.first_sequence..=range.through_sequence).contains(&forked.sequence)
+                    })
+                }) {
+                    frozen_rows.push(forked);
+                }
             }
             // Transcript creation time remains fork-local. Only a genuinely
             // transcript-only source needs original bounded record evidence in
             // the existing presentation channel; later forks copy it unchanged.
             if let Some(source) = fallback_source {
-                self.append_presentation(&AgentPresentationEntry {
+                self.append_presentation_locked(&AgentPresentationEntry {
                     conversation_id: target_conversation_id.to_string(),
                     sequence: 1,
                     created_at_unix_seconds,
@@ -3782,18 +3842,30 @@ impl AgentTranscriptStore {
                     source.conversation_id = target_conversation_id.to_string();
                     forked.source_text = Some(source.encode()?);
                 }
-                self.append_presentation(&forked)?;
+                self.append_presentation_locked(&forked)?;
             }
+            if let Some(mut epoch) = epoch {
+                epoch.conversation_id = target_conversation_id.to_string();
+                self.save_compaction_projection_locked(epoch, Some(&frozen_rows), Some(&None))?;
+            }
+            // Reconcile only the new target. The existing owner validates the
+            // translated baseline and exact copied occurrence payloads; it never
+            // reconstructs summaries or executes historical actions.
+            self.publish_terminal_compaction_handoffs_locked(target_conversation_id)?;
             self.saved_session(target_conversation_id)?
                 .map(|session| session.summary)
                 .ok_or_else(|| MezError::invalid_state("forked conversation summary missing"))
         })();
-        if fork_result.is_err()
-            && let Err(cleanup_error) = self.delete(target_conversation_id)
-        {
-            return Err(MezError::invalid_state(format!(
-                "conversation fork failed and target cleanup failed: {cleanup_error}"
-            )));
+        if let Err(error) = fork_result {
+            return match self.delete_locked(target_conversation_id) {
+                Ok(_) => Err(error),
+                Err(cleanup_error) => Err(MezError::new(
+                    error.kind(),
+                    format!(
+                        "conversation fork failed: {error}; target cleanup failed: {cleanup_error}"
+                    ),
+                )),
+            };
         }
         fork_result
     }
