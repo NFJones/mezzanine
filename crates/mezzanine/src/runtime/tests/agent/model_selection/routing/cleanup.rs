@@ -309,6 +309,9 @@ fn runtime_routed_cleanup_owned_binding_seam_requires_original_native_edge() {
             )
             .unwrap();
         if replace_parent {
+            service
+                .terminate_runtime_pane_process("%1", true)
+                .unwrap();
             service.start_initial_pane_process(Some("cat")).unwrap();
         }
         let committed =
