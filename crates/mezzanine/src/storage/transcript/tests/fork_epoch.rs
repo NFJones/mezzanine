@@ -6,6 +6,89 @@
 use super::*;
 use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 
+/// The existing active-delete recovery intent hides a provisional fork from
+/// exact lookup, catalog rebuild and model replay even after a crash. Restart
+/// cleans only that provisional target and leaves parent bytes untouched.
+#[test]
+fn fork_epoch_pending_publication_is_hidden_and_recovered() {
+    use crate::storage::transcript::ConversationTranscriptRead;
+    let root = temp_root("fork-pending-publication");
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("source", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .save_compaction_epoch("source", 1, "source summary")
+        .unwrap();
+    let before = source_bytes(&root);
+    store.begin_fork_publication("target").unwrap();
+    store
+        .append(&entry("target", 1, TranscriptRole::User))
+        .unwrap();
+    assert!(store.saved_session("target").unwrap().is_none());
+    assert!(
+        store
+            .list()
+            .unwrap()
+            .iter()
+            .all(|summary| summary.conversation_id != "target")
+    );
+    assert!(
+        store
+            .conversation_transcript_view("target", ConversationTranscriptRead::All, true, &[])
+            .is_err()
+    );
+    assert!(
+        store
+            .publish_terminal_compaction_handoffs("target")
+            .is_err()
+    );
+    assert!(
+        store
+            .catalog_migration_candidates()
+            .unwrap()
+            .iter()
+            .all(|candidate| candidate.summary.conversation_id != "target")
+    );
+    // Rebuilding enumerates retained files before the existing recovery owner
+    // compensates pending target payloads; neither step may expose the fork.
+    store.rebuild_catalog(100).unwrap();
+    assert!(store.saved_session("target").unwrap().is_none());
+    let reopened = AgentTranscriptStore::new(root.clone());
+    reopened.recover_archive_transactions().unwrap();
+    assert!(!root.join("target").exists());
+    assert_eq!(source_bytes(&root), before);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Failed provisional-journal publication and its blocked compensation must
+/// report both failures. A file at the recovery-directory name produces a
+/// portable filesystem error without privilege changes or injected authority.
+#[test]
+fn fork_epoch_cleanup_failure_retains_original_and_secondary_diagnostics() {
+    let root = temp_root("fork-secondary-cleanup");
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("source", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .save_compaction_epoch("source", 1, "source summary")
+        .unwrap();
+    let before = source_bytes(&root);
+    fs::write(root.join(".archive-recovery"), "blocked journal directory").unwrap();
+    let error = store.fork("source", "target", 99).unwrap_err();
+    assert!(
+        error.to_string().contains("conversation fork failed"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("target cleanup failed"),
+        "{error}"
+    );
+    assert_eq!(source_bytes(&root), before);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Cooperating appends and compaction publications race repeated forks. Each
 /// fork must contain a contiguous source prefix with an applicable captured
 /// epoch; source work after capture cannot leak into an already-created target.

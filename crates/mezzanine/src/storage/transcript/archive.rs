@@ -527,6 +527,12 @@ impl AgentTranscriptStore {
             }
             let journal = read_archive_recovery_journal(self, &path)?;
             let _lock = self.acquire_conversation_lock(&journal.conversation_id)?;
+            // A live fork may have completed while recovery waited for this
+            // conversation. Never replay the pre-lock compensation snapshot.
+            if !path.exists() {
+                continue;
+            }
+            let journal = read_archive_recovery_journal(self, &path)?;
             self.recover_archive_transaction(&journal)?;
             remove_if_exists(&path)?;
         }
@@ -670,6 +676,47 @@ impl AgentTranscriptStore {
             ));
         }
         remove_if_exists(&archive_recovery_journal_path(self, conversation_id))
+    }
+
+    /// Reports an unfinished active deletion or provisional new-fork target.
+    /// A fork writes this existing rollback intent only after proving target
+    /// absence under its mutation lock. Until durable completion retires it,
+    /// discovery and active replay must not expose the provisional payload.
+    pub(super) fn active_delete_pending(&self, conversation_id: &str) -> Result<bool> {
+        let path = archive_recovery_journal_path(self, conversation_id);
+        if !path.exists() {
+            return Ok(false);
+        }
+        let journal = read_archive_recovery_journal(self, &path)?;
+        Ok(
+            journal.operation == ArchiveRecoveryOperation::DeleteActive
+                && !journal.delete_committed,
+        )
+    }
+
+    /// Durably records compensation intent for an exclusively owned new target.
+    /// The existing recovery owner deletes an interrupted fork; no new journal
+    /// representation, source mutation, or historical effect replay is needed.
+    pub(super) fn begin_fork_publication(&self, conversation_id: &str) -> Result<()> {
+        self.write_archive_recovery_journal(
+            conversation_id,
+            ArchiveRecoveryOperation::DeleteActive,
+            CatalogPayloadLayout::Directory,
+        )?;
+        File::open(archive_recovery_directory(self))?.sync_all()?;
+        File::open(&self.root)?.sync_all()?;
+        Ok(())
+    }
+
+    /// Makes a fully validated target durable before retiring its rollback fence.
+    /// Callers still own the conversation lock and publish discovery metadata
+    /// afterwards. A failure is compensated as a failed, newly owned fork.
+    pub(super) fn complete_fork_publication(&self, conversation_id: &str) -> Result<()> {
+        File::open(self.session_dir_path(conversation_id)?)?.sync_all()?;
+        File::open(&self.root)?.sync_all()?;
+        self.remove_archive_recovery_journal(conversation_id)?;
+        File::open(archive_recovery_directory(self))?.sync_all()?;
+        Ok(())
     }
 
     /// Retires a committed active-delete tombstone before a new payload reuses its id.

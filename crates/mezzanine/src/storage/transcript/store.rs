@@ -804,6 +804,9 @@ impl AgentTranscriptStore {
     /// owns reclaiming those rows.
     pub fn saved_session(&self, conversation_id: &str) -> Result<Option<SavedAgentSession>> {
         validate_conversation_id(conversation_id)?;
+        if self.active_delete_pending(conversation_id)? {
+            return Ok(None);
+        }
         if self.is_unrestorable_legacy_subagent(conversation_id)? {
             return Ok(None);
         }
@@ -935,6 +938,9 @@ impl AgentTranscriptStore {
         conversation_id: &str,
     ) -> Result<Option<CatalogCandidate>> {
         validate_conversation_id(conversation_id)?;
+        if self.active_delete_pending(conversation_id)? {
+            return Ok(None);
+        }
         let existing = catalog::record_for_mutation(self, conversation_id)?;
         let named = self.read_named_sessions_index()?.remove(conversation_id);
         let session_dir = self.session_dir_for(conversation_id)?;
@@ -1313,8 +1319,9 @@ impl AgentTranscriptStore {
         self.save_compaction_projection(epoch, Some(frozen_rows), None)
     }
 
-    /// Fences a distinct terminal handoff against its exact authoritative epoch.
-    pub(super) fn save_terminal_compaction_ranges_with_proof(
+    /// Fences a distinct terminal handoff against its exact authoritative epoch
+    /// while its caller holds the conversation mutation lock.
+    pub(super) fn save_terminal_compaction_ranges_with_proof_locked(
         &self,
         epoch: AgentCompactionEpoch,
         frozen_rows: &[TranscriptEntry],
@@ -2090,6 +2097,9 @@ impl AgentTranscriptStore {
 
     /// Updates one catalog row after a presentation append without replaying history.
     fn upsert_catalog_after_presentation(&self, entry: &AgentPresentationEntry) -> Result<()> {
+        if self.active_delete_pending(&entry.conversation_id)? {
+            return Ok(());
+        }
         let existing = catalog::record_for_mutation(self, &entry.conversation_id)?;
         let named = if existing.is_none() {
             self.read_named_sessions_index()?
@@ -2634,6 +2644,11 @@ impl AgentTranscriptStore {
         // emits the row and its terminator in separate writes, so an unlocked
         // scan can otherwise mistake a healthy in-flight append for corruption.
         let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        if self.active_delete_pending(conversation_id)? {
+            return Err(MezError::invalid_state(
+                "conversation publication or deletion is incomplete",
+            ));
+        }
         if matches!(read, ConversationTranscriptRead::Latest(_)) {
             let path = self.existing_transcript_path_for(conversation_id)?;
             if !path.exists() {
@@ -3360,6 +3375,9 @@ impl AgentTranscriptStore {
         payload_layout: CatalogPayloadLayout,
         named: Option<&NamedAgentSession>,
     ) -> Result<Option<CatalogCandidate>> {
+        if self.active_delete_pending(conversation_id)? {
+            return Ok(None);
+        }
         if self.is_unrestorable_legacy_subagent(conversation_id)? {
             return Ok(None);
         }
@@ -3753,8 +3771,16 @@ impl AgentTranscriptStore {
             .into_iter()
             .map(|id| self.acquire_conversation_lock(id))
             .collect::<Result<Vec<_>>>()?;
-        if self.conversation_exists(target_conversation_id)? {
+        if self.conversation_exists(target_conversation_id)?
+            || archived_payloads_exist(self, target_conversation_id)?
+            || self.active_delete_pending(target_conversation_id)?
+        {
             return Err(MezError::conflict("target conversation already exists"));
+        }
+        if self.active_delete_pending(source_conversation_id)? {
+            return Err(MezError::invalid_state(
+                "source conversation publication or deletion is incomplete",
+            ));
         }
         let entries = self.inspect_validated_transcript(source_conversation_id)?;
         if entries.is_empty() {
@@ -3771,6 +3797,9 @@ impl AgentTranscriptStore {
         };
         let fallback_pane = entries[0].pane_id.clone();
         let fork_result = (|| {
+            // The existing active-delete journal owns compensation until all
+            // target payloads and its authoritative projection are durable.
+            self.begin_fork_publication(target_conversation_id)?;
             let mut frozen_rows = Vec::new();
             for entry in entries {
                 let mut forked = TranscriptEntry {
@@ -3852,6 +3881,8 @@ impl AgentTranscriptStore {
             // translated baseline and exact copied occurrence payloads; it never
             // reconstructs summaries or executes historical actions.
             self.publish_terminal_compaction_handoffs_locked(target_conversation_id)?;
+            self.complete_fork_publication(target_conversation_id)?;
+            self.upsert_catalog_from_files(target_conversation_id, None)?;
             self.saved_session(target_conversation_id)?
                 .map(|session| session.summary)
                 .ok_or_else(|| MezError::invalid_state("forked conversation summary missing"))

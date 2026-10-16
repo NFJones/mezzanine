@@ -170,6 +170,11 @@ impl AgentTranscriptStore {
     /// leaves the old epoch authoritative and returns an explicit error.
     pub(crate) fn publish_terminal_compaction_handoffs(&self, conversation_id: &str) -> Result<()> {
         let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        if self.active_delete_pending(conversation_id)? {
+            return Err(MezError::invalid_state(
+                "conversation publication or deletion is incomplete",
+            ));
+        }
         self.publish_terminal_compaction_handoffs_locked(conversation_id)
     }
 
@@ -288,6 +293,6 @@ impl AgentTranscriptStore {
         epoch.ranges.extend(additions);
         epoch.ranges.sort_by_key(|range| range.first_sequence);
         frozen.sort_by_key(|row| row.sequence);
-        self.save_terminal_compaction_ranges_with_proof(epoch, &frozen, &previous)
+        self.save_terminal_compaction_ranges_with_proof_locked(epoch, &frozen, &previous)
     }
 }
