@@ -123,6 +123,39 @@ enum StagedActivePayload {
 impl AgentTranscriptStore {
     /// Acquires the exclusive advisory lock shared by one conversation's mutations.
     pub(super) fn acquire_conversation_lock(&self, conversation_id: &str) -> Result<File> {
+        let file = self.open_conversation_lock(conversation_id)?;
+        flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        Ok(file)
+    }
+
+    /// Acquires ordinary mutation ownership for a cancellable fork worker. The
+    /// deadline owner sets cancellation; no store-specific deadline is extended.
+    pub(super) fn acquire_fork_conversation_lock(
+        &self,
+        conversation_id: &str,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<File> {
+        let file = self.open_conversation_lock(conversation_id)?;
+        loop {
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                return Err(MezError::invalid_state(
+                    "saved fork worker cancelled before publication",
+                ));
+            }
+            match flock(&file, FlockOperation::NonBlockingLockExclusive)
+                .map_err(std::io::Error::from)
+            {
+                Ok(()) => return Ok(file),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    /// Opens the existing private lock identity without claiming ownership yet.
+    fn open_conversation_lock(&self, conversation_id: &str) -> Result<File> {
         validate_conversation_id(conversation_id)?;
         fs::create_dir_all(&self.root)?;
         set_private_dir_permissions(&self.root)?;
@@ -137,7 +170,6 @@ impl AgentTranscriptStore {
             .truncate(false)
             .open(&path)?;
         set_private_file_permissions(&path)?;
-        flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
         Ok(file)
     }
 

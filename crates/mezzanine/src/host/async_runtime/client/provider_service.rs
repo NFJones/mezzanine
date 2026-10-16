@@ -464,26 +464,110 @@ async fn execute_deferred_agent_command(
     }
     let execution_work = work.clone();
     let command = work.command.clone();
-    let outcome = bounded_deferred_agent_command_outcome(
-        DEFERRED_AGENT_COMMAND_DEADLINE,
-        &command,
-        tokio::task::spawn_blocking(move || {
-            let outcome = crate::runtime::RuntimeSessionService::execute_deferred_agent_command(
-                &execution_work,
-            );
-            crate::runtime::RuntimeSessionService::project_deferred_agent_command_outcome(
-                &execution_work,
-                outcome,
-            )
-            .unwrap_or_else(|error| {
-                crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
-                    message: error.message().to_string(),
-                    kind: error.kind(),
-                }
-            })
-        }),
-    )
-    .await;
+    /// Cancels only fork storage acquisition if its async supervisor is dropped.
+    /// This performs no I/O and never launches an unobserved cleanup task.
+    struct ForkCancellation(Option<std::sync::Arc<std::sync::atomic::AtomicBool>>);
+    impl Drop for ForkCancellation {
+        /// Requests retirement; the blocking owner keeps any publication receipt.
+        fn drop(&mut self) {
+            if let Some(flag) = &self.0 {
+                flag.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+    }
+    let cancellation = ForkCancellation(match &work.prepared {
+        crate::runtime::RuntimeAgentCommandPrepared::SavedFork(fork) => {
+            Some(fork.cancelled.clone())
+        }
+        _ => None,
+    });
+    // A fork has a durable result before actor adoption. Keep its sole cleanup
+    // owner inside this blocking task across the actor round trip, including
+    // deadline/cancellation paths. No Drop
+    // task or actor filesystem deletion may guess whether adoption succeeded.
+    let adoption_handle = handle.clone();
+    let adoption_runtime = tokio::runtime::Handle::current();
+    let mut execution = tokio::task::spawn_blocking(move || {
+        let outcome =
+            crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&execution_work);
+        let outcome = if let crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read) =
+            outcome
+        {
+            let reply = adoption_runtime.block_on(async {
+                tokio::time::timeout(
+                    DEFERRED_AGENT_COMMAND_DEADLINE,
+                    adoption_handle.complete_agent_command_work(
+                        execution_work.clone(),
+                        crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read.clone()),
+                    ),
+                )
+                .await
+                .unwrap_or_else(|_| {
+                    Err(MezError::invalid_state(
+                        "saved fork actor adoption reply deadline exceeded",
+                    ))
+                })
+            });
+            crate::runtime::RuntimeSessionService::finish_saved_fork_worker(&read, reply)
+        } else {
+            outcome
+        };
+        if execution_work.command == "fork"
+            && let crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { message, .. } =
+                &outcome
+        {
+            // A stale display claim may discard the final response. Keep
+            // setup/secondary-cleanup evidence observable independently.
+            eprintln!("mezzanine saved fork worker: {message}");
+        }
+        crate::runtime::RuntimeSessionService::project_deferred_agent_command_outcome(
+            &execution_work,
+            outcome,
+        )
+        .unwrap_or_else(
+            |error| crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
+                message: error.message().to_string(),
+                kind: error.kind(),
+            },
+        )
+    });
+    let outcome = if let Some(cancelled) = &cancellation.0 {
+        match tokio::time::timeout(DEFERRED_AGENT_COMMAND_DEADLINE, &mut execution).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(error)) => RuntimeAgentCommandAsyncOutcome::Failed {
+                message: format!(
+                    "saved fork worker join failed; any uncertain target retained: {error}"
+                ),
+                kind: MezErrorKind::InvalidState,
+            },
+            Err(_) => {
+                cancelled.store(true, std::sync::atomic::Ordering::Release);
+                let settlement = handle
+                    .complete_agent_command_work(
+                        work.clone(),
+                        RuntimeAgentCommandAsyncOutcome::Failed {
+                            message: format!(
+                                "deferred command `{command}` exceeded its {} ms deadline",
+                                DEFERRED_AGENT_COMMAND_DEADLINE.as_millis()
+                            ),
+                            kind: MezErrorKind::InvalidState,
+                        },
+                    )
+                    .await;
+                // Keep the command concurrency slot until its real owner has
+                // retired. Cancellation interrupts flock acquisition; an actor
+                // reply has the same finite bound, never an indefinite block_on.
+                execution.await.map_err(|error| {
+                    MezError::invalid_state(format!("saved fork retirement join failed: {error}",))
+                })?;
+                settlement?;
+                return Ok(());
+            }
+        }
+    } else {
+        bounded_deferred_agent_command_outcome(DEFERRED_AGENT_COMMAND_DEADLINE, &command, execution)
+            .await
+    };
     handle.complete_agent_command_work(work, outcome).await?;
     Ok(())
 }

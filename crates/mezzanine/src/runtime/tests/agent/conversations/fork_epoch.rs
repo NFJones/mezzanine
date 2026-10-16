@@ -5,6 +5,462 @@
 
 use super::*;
 
+/// A reader stopped immediately before taking the target lease must re-read its
+/// discovery/history after compensation, not adopt a deleted fork from an earlier
+/// snapshot. The pre-lock handshake also fails on the old read-before-lock order.
+#[test]
+fn runtime_saved_fork_waiting_resume_rechecks_after_compensation() {
+    let (mut service, primary, store, root) = fork_transaction_fixture("fork-waiting-resume");
+    let work = claim_saved_fork(&mut service, &primary);
+    let read = publish_saved_fork(&work);
+    let (observed_tx, observed_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    store.gate_next_presentation_lock_for_tests(observed_tx, resume_rx);
+    let reader_store = store.clone();
+    let reader = std::thread::spawn(move || {
+        crate::runtime::commands::read_direct_resume(&reader_store, "fork-target", None)
+    });
+    observed_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    service.agent.cancel_agent_command("%1");
+    let reply = service.complete_agent_command_work(
+        &work,
+        crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read.clone()),
+    );
+    assert!(!reply.as_ref().unwrap());
+    RuntimeSessionService::finish_saved_fork_worker(&read, reply);
+    resume_tx.send(()).unwrap();
+    assert!(
+        reader.join().unwrap().is_err(),
+        "deleted target must not produce an adoptable resume snapshot"
+    );
+    assert!(store.saved_session("fork-target").unwrap().is_none());
+    assert_eq!(store.inspect("fork-source").unwrap().len(), 1);
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Creates an owned shell fixture with a compacted source; no provider, external
+/// process, credential or user conversation participates in these transactions.
+fn fork_transaction_fixture(
+    label: &str,
+) -> (
+    RuntimeSessionService,
+    mez_core::ids::ClientId,
+    AgentTranscriptStore,
+    std::path::PathBuf,
+) {
+    let root = temp_root(label);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&TranscriptEntry {
+            conversation_id: "fork-source".into(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "source-turn".into(),
+            agent_id: "agent-%1".into(),
+            pane_id: "%1".into(),
+            content: "FORK_ROW_001".into(),
+        })
+        .unwrap();
+    store
+        .save_compaction_epoch("fork-source", 1, "FORK_SUMMARY")
+        .unwrap();
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "fork-source", 1)
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+    (service, primary, store, root)
+}
+
+/// Claims the real deferred command but leaves its two-phase worker settlement
+/// under test control so rebinds, dropped replies and cleanup faults are causal.
+fn claim_saved_fork(
+    service: &mut RuntimeSessionService,
+    primary: &mez_core::ids::ClientId,
+) -> crate::runtime::RuntimeAgentCommandAsyncWork {
+    let acknowledgement = service
+        .execute_agent_shell_command(primary, "/fork fork-target")
+        .unwrap();
+    assert!(acknowledgement.contains("deferred"), "{acknowledgement}");
+    let dispatch = service
+        .take_pending_deferred_agent_commands()
+        .pop()
+        .unwrap();
+    service
+        .claim_agent_command_work(
+            &dispatch.primary_client_id,
+            &dispatch.pane_id,
+            &dispatch.command,
+            &dispatch.input,
+            dispatch.claim_generation,
+            &dispatch.conversation_id,
+        )
+        .unwrap()
+        .unwrap()
+}
+
+/// Executes the actual worker publication and returns its sole adoption receipt.
+/// This lease must remain on the worker until actor adoption or compensation.
+fn publish_saved_fork(
+    work: &crate::runtime::RuntimeAgentCommandAsyncWork,
+) -> std::sync::Arc<crate::runtime::commands::SavedForkRead> {
+    let crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read) =
+        RuntimeSessionService::execute_deferred_agent_command(work)
+    else {
+        panic!("saved fork worker must publish a typed receipt")
+    };
+    read
+}
+
+/// Saved MCP retrievals remain inert evidence. Their durable invalidation epoch
+/// survives compaction/fork/reopen; it cannot resurrect stale manifests, execute
+/// tools or transfer source usage/permissions into the new conversation identity.
+#[test]
+fn runtime_saved_fork_mcp_invalidation_keeps_usage_and_authority_independent() {
+    let (mut service, primary, store, root) = fork_transaction_fixture("fork-mcp-accounting");
+    let group = mez_agent::ContextExecutionGroupId::new("saved-mcp-group").unwrap();
+    let contents = [
+        mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+            ContextSourceKind::TranscriptAssistant,
+            "assistant",
+            "retrieved a historical manifest",
+            group.clone(),
+            1,
+            None,
+        )
+        .unwrap()
+        .to_transcript_content(),
+        mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+            ContextSourceKind::McpRetrievedManifest,
+            "manifest",
+            "OBSOLETE_FORK_MCP_MANIFEST",
+            group,
+            2,
+            None,
+        )
+        .unwrap()
+        .to_transcript_content(),
+        mez_agent::TranscriptContextEvent::McpCompactionEpoch.to_transcript_content(),
+    ];
+    for (index, content) in contents.into_iter().enumerate() {
+        store
+            .append(&TranscriptEntry {
+                conversation_id: "fork-source".into(),
+                sequence: index as u64 + 2,
+                created_at_unix_seconds: 2,
+                role: TranscriptRole::System,
+                turn_id: "mcp-turn".into(),
+                agent_id: "agent-%1".into(),
+                pane_id: "%1".into(),
+                content,
+            })
+            .unwrap();
+    }
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "fork-source", 4)
+        .unwrap();
+    let (_, profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    let usage = mez_agent::ModelTokenUsage {
+        input_tokens: 100,
+        output_tokens: 20,
+        reasoning_tokens: 3,
+        cached_input_tokens: Some(10),
+        cache_write_input_tokens: None,
+    };
+    service.record_agent_provider_token_usage_with_profile("%1", usage, usage, Some(&profile));
+    let source_usage = service.agent_token_usage_for_conversation("fork-source");
+    assert!(!source_usage.is_empty());
+    let parent_lineage = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .prompt_cache_lineage_id
+        .clone();
+    let parent_projection = encoded_history(&mut service, "%1");
+    service
+        .execute_agent_shell_command(&primary, "/fork fork-target")
+        .unwrap();
+    let settled = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .unwrap();
+    assert!(settled.contains("forked=true"), "{settled}");
+    let target = service
+        .agent_shell_store()
+        .sessions()
+        .find(|session| session.session_id == "fork-target")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        encoded_history(&mut service, &target.pane_id),
+        parent_projection
+    );
+    let context = service
+        .agent_context_for_pane_prompt(&target.pane_id, "continue", 0)
+        .unwrap();
+    assert!(
+        !context
+            .blocks
+            .iter()
+            .any(|block| block.content.contains("OBSOLETE_FORK_MCP_MANIFEST"))
+    );
+    assert!(
+        service
+            .agent_token_usage_for_conversation("fork-target")
+            .is_empty()
+    );
+    assert_eq!(
+        service.agent_token_usage_for_conversation("fork-source"),
+        source_usage
+    );
+    assert_ne!(target.prompt_cache_lineage_id, parent_lineage);
+    assert_eq!(
+        target.conversation_kind,
+        mez_agent::AgentConversationKind::Root
+    );
+    assert!(
+        service
+            .subagent_lineage(&format!("agent-{}", target.pane_id))
+            .is_none()
+    );
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert_eq!(store.inspect("fork-target").unwrap().len(), 4);
+    service.terminate_all_pane_processes().unwrap();
+    let mut reopened = test_runtime_service();
+    reopened.set_agent_transcript_store(AgentTranscriptStore::new(root.clone()));
+    let primary = reopened
+        .attach_primary("reopened", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    reopened
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    reopened
+        .execute_agent_shell_command(&primary, "/resume fork-target")
+        .unwrap();
+    reopened
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .unwrap();
+    let context = reopened
+        .agent_context_for_pane_prompt("%1", "continue", 0)
+        .unwrap();
+    assert!(
+        !context
+            .blocks
+            .iter()
+            .any(|block| block.content.contains("OBSOLETE_FORK_MCP_MANIFEST"))
+    );
+    assert!(
+        reopened
+            .agent_token_usage_for_conversation("fork-target")
+            .is_empty()
+    );
+    assert!(reopened.pending_agent_provider_tasks().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A stale source binding, cancelled claim, changed store, deadline cancellation
+/// or detached primary can never adopt a worker's published target. The original
+/// worker compensates its own generation, leaving source and foreign store intact.
+#[test]
+fn runtime_saved_fork_stale_adoption_compensates_only_owned_target() {
+    for stale in ["rebind", "cancel", "store", "deadline", "detach"] {
+        let (mut service, primary, store, root) = fork_transaction_fixture("fork-stale-adoption");
+        let work = claim_saved_fork(&mut service, &primary);
+        let read = publish_saved_fork(&work);
+        match stale {
+            "rebind" => {
+                service
+                    .agent_shell_store_mut()
+                    .bind_conversation("%1", "different", 0)
+                    .unwrap();
+            }
+            "cancel" => {
+                service.agent.cancel_agent_command("%1");
+            }
+            "store" => service
+                .set_agent_transcript_store(AgentTranscriptStore::new(root.join("foreign-store"))),
+            "deadline" => {
+                let crate::runtime::RuntimeAgentCommandPrepared::SavedFork(fork) = &work.prepared
+                else {
+                    unreachable!()
+                };
+                fork.cancelled
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
+            _ => {
+                service.session.detach_primary(&primary).unwrap();
+            }
+        }
+        let reply = service.complete_agent_command_work(
+            &work,
+            crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read.clone()),
+        );
+        assert!(!reply.as_ref().unwrap(), "{stale}");
+        let outcome = RuntimeSessionService::finish_saved_fork_worker(&read, reply);
+        assert!(matches!(
+            outcome,
+            crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { .. }
+        ));
+        assert!(
+            store.saved_session("fork-target").unwrap().is_none(),
+            "{stale}"
+        );
+        assert_eq!(store.inspect("fork-source").unwrap().len(), 1);
+        service.terminate_all_pane_processes().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// A lost reply is not non-adoption proof. Retain complete history and fence any
+/// queued late request permanently; duplicate successful adoption is inert even
+/// after the worker consumes its result and the source command is cancelled.
+#[test]
+fn runtime_saved_fork_lost_and_duplicate_adoption_replies_retain_history() {
+    for lost in [true, false] {
+        let (mut service, primary, store, root) = fork_transaction_fixture("fork-lost-adoption");
+        let work = claim_saved_fork(&mut service, &primary);
+        let read = publish_saved_fork(&work);
+        if lost {
+            let outcome = RuntimeSessionService::finish_saved_fork_worker(
+                &read,
+                Err(crate::error::MezError::invalid_state(
+                    "owned fixture dropped actor reply",
+                )),
+            );
+            assert!(matches!(
+                outcome,
+                crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { .. }
+            ));
+        } else {
+            let reply = service.complete_agent_command_work(
+                &work,
+                crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read.clone()),
+            );
+            let outcome = RuntimeSessionService::finish_saved_fork_worker(&read, reply);
+            let outcome =
+                RuntimeSessionService::project_deferred_agent_command_outcome(&work, outcome)
+                    .unwrap();
+            service.agent.cancel_agent_command("%1");
+            assert!(!service.complete_agent_command_work(&work, outcome).unwrap());
+            assert!(
+                store
+                    .load_agent_session_metadata(service.session().id.as_str())
+                    .unwrap()
+                    .iter()
+                    .any(|metadata| metadata.conversation_id == "fork-target")
+            );
+        }
+        assert!(
+            service
+                .complete_agent_command_work(
+                    &work,
+                    crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read)
+                )
+                .is_err()
+        );
+        assert_eq!(store.inspect("fork-target").unwrap().len(), 1);
+        assert_eq!(
+            store
+                .compaction_epoch("fork-target")
+                .unwrap()
+                .unwrap()
+                .summary,
+            "FORK_SUMMARY"
+        );
+        service.terminate_all_pane_processes().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// Failure after binding covers normal rollback, a retained live pane, and a
+/// secondary close error after membership removal. Only proven complete teardown
+/// allows deletion; primary and secondary errors survive worker settlement.
+#[test]
+fn runtime_saved_fork_post_bind_cleanup_retains_uncertain_targets() {
+    for fault in [1, 2, 3] {
+        let (mut service, primary, store, root) =
+            fork_transaction_fixture("fork-post-bind-cleanup");
+        let work = claim_saved_fork(&mut service, &primary);
+        let read = publish_saved_fork(&work);
+        RuntimeSessionService::fail_saved_fork_adoption_for_tests(&read, fault);
+        let reply = service.complete_agent_command_work(
+            &work,
+            crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read.clone()),
+        );
+        let crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { message, .. } =
+            RuntimeSessionService::finish_saved_fork_worker(&read, reply)
+        else {
+            panic!("setup must fail")
+        };
+        assert!(message.contains("post-binding setup failure"), "{message}");
+        assert_eq!(
+            store.saved_session("fork-target").unwrap().is_some(),
+            fault != 1,
+            "{message}"
+        );
+        if fault != 1 {
+            assert!(message.contains("close failure"), "{message}");
+            assert!(message.contains("retained"), "{message}");
+        }
+        assert_eq!(store.inspect("fork-source").unwrap().len(), 1);
+        service.terminate_all_pane_processes().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// A secondary storage failure after safe post-bind pane teardown retains a
+/// durable recovery intent and both diagnostics. Restart removes only the owned
+/// provisional target, never the source or a replacement conversation.
+#[test]
+fn runtime_saved_fork_secondary_cleanup_error_remains_recoverable() {
+    let (mut service, primary, store, root) = fork_transaction_fixture("fork-secondary-error");
+    let work = claim_saved_fork(&mut service, &primary);
+    let read = publish_saved_fork(&work);
+    RuntimeSessionService::fail_saved_fork_adoption_for_tests(&read, 1);
+    store.fail_next_fork_cleanup();
+    let reply = service.complete_agent_command_work(
+        &work,
+        crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read.clone()),
+    );
+    let crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { message, .. } =
+        RuntimeSessionService::finish_saved_fork_worker(&read, reply)
+    else {
+        panic!("cleanup must fail")
+    };
+    assert!(message.contains("post-binding setup failure"), "{message}");
+    assert!(
+        message.contains("injected fork target cleanup failure"),
+        "{message}"
+    );
+    assert!(store.saved_session("fork-target").unwrap().is_none());
+    store.recover_archive_transactions().unwrap();
+    assert!(!root.join("fork-target").exists());
+    assert_eq!(store.inspect("fork-source").unwrap().len(), 1);
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Failure after successful epoch publication but before pane setup completes
 /// removes every new target artifact, including its epoch and required marker,
 /// while keeping the compacted parent's exact durable bytes and live binding.
@@ -57,6 +513,11 @@ fn runtime_saved_fork_epoch_setup_failure_removes_only_published_target() {
         r#"{"jsonrpc":"2.0","id":"epoch-setup-fault","method":"agent/shell/command","params":{"idempotency_key":"epoch-setup-fault","input":"/fork fork-target"}}"#,
         &primary,
     );
+    assert!(response.contains("deferred"), "{response}");
+    let response = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .unwrap();
     service.terminate_all_pane_processes().unwrap();
     assert!(
         response.contains("injected agent fork failure after persistence"),
@@ -210,6 +671,11 @@ fn runtime_saved_fork_selective_epoch_encoded_anchors_and_native_ownership() {
         let response = service
             .execute_agent_shell_command(&primary, "/fork fork-target")
             .unwrap();
+        assert!(response.contains("deferred"), "{response}");
+        let response = service
+            .run_pending_deferred_agent_command_for_tests()
+            .unwrap()
+            .unwrap();
         assert!(response.contains("forked=true"), "{response}");
         let pane = service
             .agent_shell_store()
@@ -245,6 +711,16 @@ fn runtime_saved_fork_selective_epoch_encoded_anchors_and_native_ownership() {
         assert!(
             body["input"].as_array().unwrap().contains(&native_item),
             "{body}"
+        );
+        let switched =
+            encoded_body_with_provider(&mut service, &pane, Some("different-native-owner"));
+        assert!(
+            !switched["input"].as_array().unwrap().contains(&native_item),
+            "{switched}"
+        );
+        assert!(
+            switched.to_string().contains("FORK_ROW_010"),
+            "neutral assistant twin survives model/provider switch"
         );
         assert!(
             context
@@ -353,6 +829,11 @@ fn runtime_saved_fork_rejected_target_preserves_existing_and_source_bytes() {
         let response = service.dispatch_runtime_control_body(&format!(
             r#"{{"jsonrpc":"2.0","id":"existing-fork","method":"agent/shell/command","params":{{"idempotency_key":"existing-fork","input":"/fork {target}"}}}}"#
         ), &primary);
+        assert!(response.contains("deferred"), "{response}");
+        let response = service
+            .run_pending_deferred_agent_command_for_tests()
+            .unwrap()
+            .unwrap();
         service.terminate_all_pane_processes().unwrap();
         assert!(
             response.contains("target conversation already exists"),
@@ -382,12 +863,26 @@ fn runtime_saved_fork_rejected_target_preserves_existing_and_source_bytes() {
 /// Encodes the first prompt through the real provider adapter without sending
 /// it. Native items and message roles remain inspectable in the returned JSON.
 fn encoded_body(service: &mut RuntimeSessionService, pane: &str) -> serde_json::Value {
+    encoded_body_with_provider(service, pane, None)
+}
+
+/// Encodes a synthetic model/provider switch against the same fork context.
+/// Foreign native ownership must be omitted while provider-neutral history stays.
+fn encoded_body_with_provider(
+    service: &mut RuntimeSessionService,
+    pane: &str,
+    provider: Option<&str>,
+) -> serde_json::Value {
     let context = service
         .agent_context_for_pane_prompt(pane, "continue", 0)
         .unwrap();
-    let (_, profile) = service
+    let (_, mut profile) = service
         .active_model_profile_for_pane(pane, "agent-%1", None)
         .unwrap();
+    if let Some(provider) = provider {
+        profile.provider = provider.to_owned();
+        profile.model = "switched-model".to_owned();
+    }
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "fork-first-request".into(),
         conversation_id: "fork-target".into(),
@@ -468,6 +963,9 @@ fn runtime_saved_fork_epoch_first_encoded_request_survives_reopen() {
             .unwrap();
     }
     store
+        .save_compaction_epoch("fork-source", 40, "FORK_SUMMARY_OLD")
+        .unwrap();
+    store
         .save_compaction_epoch("fork-source", 80, "FORK_SUMMARY")
         .unwrap();
     let source_path = store.transcript_path("fork-source").unwrap();
@@ -495,8 +993,14 @@ fn runtime_saved_fork_epoch_first_encoded_request_survives_reopen() {
         .unwrap()
         .unwrap();
     assert!(settled.contains("resumed=true"), "{settled}");
+    let parent_projection = encoded_history(&mut service, "%1");
     let forked = service
         .execute_agent_shell_command(&primary, "/fork fork-target")
+        .unwrap();
+    assert!(forked.contains("deferred"), "{forked}");
+    let forked = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
         .unwrap();
     assert!(forked.contains("forked=true"), "{forked}");
     let pane = service
@@ -507,6 +1011,7 @@ fn runtime_saved_fork_epoch_first_encoded_request_survives_reopen() {
         .pane_id
         .clone();
     let encoded = encoded_history(&mut service, &pane);
+    assert_eq!(encoded, parent_projection);
     service.terminate_all_pane_processes().unwrap();
     let expected = std::iter::once(("developer".to_string(), "FORK_SUMMARY".to_string()))
         .chain((81..=100).map(|sequence| {

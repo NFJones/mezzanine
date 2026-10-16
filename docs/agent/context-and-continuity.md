@@ -42,6 +42,12 @@ an existing target does not overwrite or delete it. Forks retain source occurren
 times while receiving their own conversation/catalog creation time, identity,
 name state and later appends. Historical usage and actions are not charged or
 executed again, and copied history grants no new execution authority.
+Cloning and storage rollback run on the command worker, so a large or locked
+archive does not block terminal/control handling. A cancelled or stale fork
+removes only its own unadopted target generation. If pane teardown or the adoption
+reply is uncertain, Mezzanine retains the complete target and reports the failure
+instead of risking live history; retained recovery intent owns any incomplete
+safe cleanup. A waiting resume rechecks the target under the same storage lease.
 Conversation continuity is not proof that a command completed or that the
 filesystem is unchanged: verify interrupted work before asking the agent to
 continue.

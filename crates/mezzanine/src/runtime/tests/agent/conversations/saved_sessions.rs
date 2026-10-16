@@ -3930,6 +3930,11 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         r#"{"jsonrpc":"2.0","id":"fork","method":"agent/shell/command","params":{"idempotency_key":"fork","input":"/fork saved-fork"}}"#,
         &primary,
     );
+    assert!(forked.contains("deferred"), "{forked}");
+    let forked = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .unwrap();
     assert!(forked.contains("source=saved"), "{forked}");
     assert!(forked.contains("conversation_id=saved-fork"), "{forked}");
     assert!(forked.contains("source_pane=%1"), "{forked}");

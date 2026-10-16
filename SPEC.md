@@ -16035,6 +16035,16 @@ both the newly created pane and every durable target-conversation artifact while
 leaving the source pane and conversation unchanged. Compensation MUST apply only
 to the newly created target, never an existing target or a source-equals-target
 request. Original failures and any secondary cleanup failures MUST remain visible.
+Archive capture, epoch publication, and storage compensation MUST run on the
+existing command worker, not the serialized actor. Target mutation ownership
+MUST span pane adoption and the worker's retain-or-compensate decision. A saved
+resume waiting for that ownership MUST read discovery and history only after
+acquisition. Compensation MUST validate the exact created generation, not merely
+prior target absence or creation success. If adoption, pane/process teardown, or
+an actor reply is uncertain, the complete target MUST be retained with a visible
+diagnostic rather than risking deletion of live or foreign history. Cancellation
+MUST NOT discard the sole publication/cleanup owner or silently lose secondary
+cleanup errors. These rules do not grant rights from retained historical data.
 
 ## 20. Hooks
 

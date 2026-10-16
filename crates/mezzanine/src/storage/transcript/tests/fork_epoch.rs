@@ -6,6 +6,35 @@
 use super::*;
 use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 
+/// A reusable target id is not ownership. A successful fork receipt must never
+/// compensate a later conversation after cooperating deletion and recreation,
+/// even if that replacement contains byte-identical archive and epoch payloads.
+#[test]
+fn fork_epoch_compensation_preserves_replacement_generation() {
+    let root = temp_root("fork-replaced-generation");
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("source", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .save_compaction_epoch("source", 1, "source summary")
+        .unwrap();
+    let publication = store.fork_owned("source", "target", 99).unwrap();
+    publication.release_adoption_lease().unwrap();
+    store.delete("target").unwrap();
+    let replacement = store.fork_owned("source", "target", 99).unwrap();
+    replacement.release_adoption_lease().unwrap();
+    assert!(!store.compensate_fork_publication(&publication).unwrap());
+    assert_eq!(store.inspect("target").unwrap().len(), 1);
+    assert_eq!(
+        store.compaction_epoch("target").unwrap().unwrap().summary,
+        "source summary"
+    );
+    assert!(store.compensate_fork_publication(&replacement).unwrap());
+    assert!(store.saved_session("target").unwrap().is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// A target with only a retained catalog record or user-assigned name still
 /// belongs to the previous conversation. Fork rejection must preserve that
 /// discovery/naming state and must not enter new-target compensation.

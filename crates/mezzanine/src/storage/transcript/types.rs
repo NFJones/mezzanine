@@ -350,6 +350,9 @@ pub struct AgentTranscriptStore {
     /// One-shot deterministic handshake after recovery reads a journal, before locking.
     #[cfg(test)]
     pub(super) archive_recovery_read_barrier: Arc<Mutex<Option<ArchiveRecoveryReadBarrier>>>,
+    /// One-shot fixture handshake immediately before presentation ownership acquisition.
+    #[cfg(test)]
+    pub(super) presentation_lock_barrier: Arc<Mutex<Option<ArchiveRecoveryReadBarrier>>>,
     /// Test-only one-shot failure immediately before replacing session metadata.
     #[cfg(test)]
     pub(super) fail_agent_session_metadata_write: Arc<AtomicBool>,

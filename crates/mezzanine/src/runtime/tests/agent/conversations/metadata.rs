@@ -488,6 +488,11 @@ fn runtime_agent_shell_fork_rolls_back_post_persistence_setup_failure() {
         r#"{"jsonrpc":"2.0","id":"fork-rollback","method":"agent/shell/command","params":{"idempotency_key":"fork-rollback","input":"/fork fork-target"}}"#,
         &primary,
     );
+    assert!(response.contains("deferred"), "{response}");
+    let response = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .unwrap();
 
     assert!(
         response.contains("injected agent fork failure after persistence"),

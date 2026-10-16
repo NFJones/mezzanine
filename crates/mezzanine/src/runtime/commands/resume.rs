@@ -1,8 +1,11 @@
-//! Agent-shell saved-session resume command helpers.
+//! Agent-shell saved-session resume and fork transaction helpers.
 //!
 //! This module keeps `/resume` transcript replay logic out of the broader
 //! command dispatcher. It owns saved-session browsing, directory restoration,
-//! transcript display fallback formatting, and durable session naming.
+//! transcript display fallback formatting, and durable session naming. Fork
+//! storage runs on the existing command worker, which retains exact target
+//! generation and mutation ownership through actor-only pane adoption. Unknown
+//! replies or teardown retain history; only proven safe non-adoption compensates.
 
 use super::{
     AgentShellCommandOutcome, MezError, PathBuf, Result, RuntimeSessionService, SplitDirection,
@@ -28,6 +31,83 @@ const AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES: usize = 64;
 /// Maximum transcript bytes to read for `/resume` fallback replay.
 const AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
 
+/// Bounded actor capture for saved-fork storage work. Historical contents never
+/// carry authority; the new pane captures its own current action permissions.
+#[derive(Debug, Clone)]
+pub(crate) struct SavedForkWork {
+    /// Store whose existing locks serialize source capture and target publication.
+    pub(crate) store: AgentTranscriptStore,
+    /// Attached primary that requested the new pane.
+    primary_client_id: mez_core::ids::ClientId,
+    /// Conversation whose exact active projection is inherited.
+    source: String,
+    /// Fresh conversation id requested or generated at claim time.
+    target: String,
+    /// Original command used to exclude itself from the prompt seed.
+    input: String,
+    /// Fork-local archival creation timestamp.
+    created_at: u64,
+    /// Deadline/shutdown cancellation observed only by the fork storage worker.
+    pub(crate) cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Worker-owned durable publication retained across both actor round trips.
+/// The actor records adoption or proven safe compensation; it never deletes
+/// storage. Missing replies and uncertain teardown deliberately retain history.
+#[derive(Debug)]
+pub(crate) struct SavedForkRead {
+    /// Immutable source/target ownership captured before storage work.
+    work: SavedForkWork,
+    /// Exact created directory generation, held open until settlement finishes.
+    publication: crate::storage::transcript::ForkPublication,
+    /// Last submitted non-command prompt read on the worker.
+    prompt_seed: Option<String>,
+    /// Shared prompt recall loaded before actor adoption, with paste provenance.
+    prompt_history: Vec<mez_mux::readline::ReadlineHistoryEntry>,
+    /// Actor-only adoption decision, read by the same worker after its reply.
+    adoption: std::sync::Mutex<SavedForkAdoption>,
+    /// Owned-fixture post-bind and close uncertainty faults, never production policy.
+    #[cfg(test)]
+    test_fault: std::sync::atomic::AtomicU8,
+}
+
+/// In-memory adoption decision; neither cancellation nor a missing reply is
+/// evidence that deleting a possibly bound target is safe.
+#[derive(Debug, Default)]
+struct SavedForkAdoption {
+    /// Permanent duplicate fence, retained even after the worker consumes its result.
+    attempted: bool,
+    /// True only when no adoption occurred or pane teardown completed successfully.
+    cleanup_safe: bool,
+    /// Final command body or setup failure, before worker compensation diagnostics.
+    result: Option<Result<String>>,
+}
+
+/// Captures prompt history and publishes a validated archive/projection entirely
+/// on the command worker. A failed publication compensates under storage locks.
+pub(super) fn read_saved_fork(work: &SavedForkWork) -> Result<SavedForkRead> {
+    let prompt_history = work.store.structured_prompt_history(&work.source)?;
+    let prompt_seed = RuntimeSessionService::runtime_agent_fork_prompt_seed(
+        &work.store.prompt_history(&work.source)?,
+        &work.input,
+    );
+    let publication = work.store.fork_owned_cancellable(
+        &work.source,
+        &work.target,
+        work.created_at,
+        Some(&work.cancelled),
+    )?;
+    Ok(SavedForkRead {
+        work: work.clone(),
+        publication,
+        prompt_seed,
+        prompt_history,
+        adoption: std::sync::Mutex::new(SavedForkAdoption::default()),
+        #[cfg(test)]
+        test_fault: std::sync::atomic::AtomicU8::new(0),
+    })
+}
+
 /// Reads one direct-resume target without accessing runtime-owned state.
 pub(crate) fn read_direct_resume(
     store: &AgentTranscriptStore,
@@ -46,6 +126,11 @@ pub(crate) fn read_direct_resume(
             })?,
         conversation_id => conversation_id.to_string(),
     };
+    // Discovery and transcript metadata must be read after acquiring the same
+    // lease as fork adoption. A reader queued behind compensation must not keep
+    // a pre-lock saved-session snapshot and later bind deleted/replaced history.
+    let (snapshot_lock, presentation_entries, _sequence) =
+        store.lock_presentation_snapshot(&conversation_id)?;
     let saved = store.saved_session(&conversation_id)?.ok_or_else(|| {
         MezError::new(
             crate::error::MezErrorKind::NotFound,
@@ -97,12 +182,11 @@ pub(crate) fn read_direct_resume(
         Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(error),
     };
-    let (presentation_lock, presentation_entries) = if projection_work.is_some() {
-        let (lock, entries, _sequence) = store.lock_presentation_snapshot(&conversation_id)?;
-        (Some(std::sync::Arc::new(lock)), entries)
+    let presentation_lock = if projection_work.is_some() {
+        Some(std::sync::Arc::new(snapshot_lock))
     } else {
-        let (entries, _sequence) = store.inspect_presentation_snapshot(&conversation_id)?;
-        (None, entries)
+        drop(snapshot_lock);
+        None
     };
     let resume_directory_available = runtime_resume_directory_from_summary(&saved.summary)
         .or_else(|| runtime_resume_directory_from_entries(&entries))
@@ -1471,30 +1555,223 @@ impl RuntimeSessionService {
         preview
     }
 
-    /// Runs the execute agent shell fork command operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Reports unavailable storage on the inline fallback. With storage enabled,
+    /// admission must use the deferred owner and must never clone on the actor.
     pub(super) fn execute_agent_shell_fork_command(
         &mut self,
+        _primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        _input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        if self.persistence.transcript_store().is_some() {
+            return Err(MezError::invalid_state(
+                "saved fork requires deferred storage execution",
+            ));
+        }
+        let source = self
+            .agent_shell_store()
+            .get(pane_id)
+            .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
+        Ok(AgentShellCommandOutcome::Display {
+            command: "fork".into(),
+            body: format!(
+                "current_conversation={} forked=false reason=transcript-store-unavailable source=runtime-fork",
+                json_escape(&source.session_id)
+            ),
+        })
+    }
+
+    /// Captures bounded ownership and command arguments without touching storage.
+    pub(crate) fn prepare_saved_fork_work(
+        &self,
         primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         input: &str,
-    ) -> Result<AgentShellCommandOutcome> {
+    ) -> Result<SavedForkWork> {
         let invocation = parse_slash_command(input)?
             .ok_or_else(|| MezError::invalid_args("fork command must be a slash command"))?;
         let source = self
             .agent_shell_store()
             .get(pane_id)
-            .ok_or_else(|| {
-                MezError::new(
-                    crate::error::MezErrorKind::NotFound,
-                    "agent shell session not found for pane",
-                )
-            })?
+            .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?
             .session_id
             .clone();
+        let target = invocation
+            .args
+            .split_whitespace()
+            .next()
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(Self::runtime_new_agent_conversation_id);
+        Ok(SavedForkWork {
+            store: self
+                .persistence
+                .cloned_transcript_store()
+                .ok_or_else(|| MezError::invalid_state("saved-session store unavailable"))?,
+            primary_client_id: primary_client_id.clone(),
+            source,
+            target,
+            input: input.to_owned(),
+            created_at: current_unix_seconds().max(1),
+            cancelled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        })
+    }
+
+    /// Applies the first actor round trip without settling the command claim.
+    /// A stale or cancelled claim proves no pane adoption happened; all other
+    /// failures are retained unless the setup transaction proves clean teardown.
+    pub(crate) fn adopt_saved_fork_command(
+        &mut self,
+        work: &crate::runtime::RuntimeAgentCommandAsyncWork,
+        read: &SavedForkRead,
+    ) -> Result<bool> {
+        let mut adoption = read.adoption.lock().map_err(|_| {
+            MezError::invalid_state("saved fork adoption state poisoned; target retained")
+        })?;
+        if adoption.attempted {
+            return Err(MezError::conflict(
+                "saved fork adoption already attempted; target retained",
+            ));
+        }
+        adoption.attempted = true;
+        let current = self
+            .agent_shell_store()
+            .get(&work.pane_id)
+            .is_some_and(|session| {
+                session.session_id == work.conversation_id
+                    && session.visibility == mez_agent::AgentShellVisibility::Visible
+            });
+        let store_current = self.persistence.transcript_store() == Some(&read.work.store);
+        if !current
+            || !store_current
+            || read
+                .work
+                .cancelled
+                .load(std::sync::atomic::Ordering::Acquire)
+            || !self
+                .session
+                .is_attached_primary(&read.work.primary_client_id)
+            || !self.agent.agent_command_is_claimed(
+                &work.pane_id,
+                &work.conversation_id,
+                work.claim_generation,
+            )
+        {
+            adoption.cleanup_safe = true;
+            adoption.result = Some(Err(MezError::conflict(
+                "saved fork claim is stale or cancelled",
+            )));
+            return Ok(false);
+        }
+        let outcome = self.install_saved_fork_command(&work.pane_id, read, &mut adoption);
+        adoption.result = Some(outcome.map(|outcome| {
+            super::runtime_agent_shell_command_response_json(
+                &work.pane_id,
+                &work.input,
+                Some(&outcome),
+            )
+        }));
+        Ok(true)
+    }
+
+    /// Finishes the transaction on its original blocking worker. The receipt
+    /// remains owned even when the actor reply is lost or a deadline expires.
+    /// Uncertain adoption retains the target; proven non-adoption compensates
+    /// only its exact generation and preserves primary plus cleanup failures.
+    pub(crate) fn finish_saved_fork_worker(
+        read: &SavedForkRead,
+        actor_reply: Result<bool>,
+    ) -> crate::runtime::RuntimeAgentCommandAsyncOutcome {
+        let result = (|| -> Result<String> {
+            if let Err(error) = actor_reply {
+                // A queued request may arrive after this reply was lost. Fence
+                // it before releasing the lease, even if no adoption ran yet.
+                if let Ok(mut adoption) = read.adoption.lock() {
+                    adoption.attempted = true;
+                }
+                return Err(MezError::new(
+                    error.kind(),
+                    format!(
+                        "saved fork actor adoption reply unavailable; target retained: {error}",
+                    ),
+                ));
+            }
+            let (cleanup_safe, result) = {
+                let mut adoption = read.adoption.lock().map_err(|_| {
+                    MezError::invalid_state("saved fork adoption state poisoned; target retained")
+                })?;
+                (
+                    adoption.cleanup_safe,
+                    adoption.result.take().ok_or_else(|| {
+                        MezError::invalid_state("saved fork adoption unproven; target retained")
+                    })?,
+                )
+            };
+            if cleanup_safe {
+                match read
+                    .work
+                    .store
+                    .compensate_fork_publication(&read.publication)
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Err(MezError::conflict(format!(
+                            "saved fork setup failed: {}; target generation changed or absent; replacement retained",
+                            result
+                                .as_ref()
+                                .err()
+                                .map(ToString::to_string)
+                                .unwrap_or_default(),
+                        )));
+                    }
+                    Err(cleanup) => {
+                        return Err(MezError::invalid_state(format!(
+                            "saved fork setup failed: {}; target cleanup failed: {cleanup}",
+                            result
+                                .as_ref()
+                                .err()
+                                .map(ToString::to_string)
+                                .unwrap_or_default(),
+                        )));
+                    }
+                }
+            }
+            result
+        })();
+        let result = match read.publication.release_adoption_lease() {
+            Ok(()) => result,
+            Err(error) => Err(MezError::invalid_state(format!(
+                "saved fork lease release failed: {error}; prior outcome={result:?}"
+            ))),
+        };
+        match result {
+            Ok(body) => crate::runtime::RuntimeAgentCommandAsyncOutcome::Response { body },
+            Err(error) => crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
+                message: error.message().to_owned(),
+                kind: error.kind(),
+            },
+        }
+    }
+
+    /// Selects a post-bind fixture failure: one cleans normally, two retains a
+    /// live pane, and three reports uncertainty after the real pane close.
+    #[cfg(test)]
+    pub(crate) fn fail_saved_fork_adoption_for_tests(read: &SavedForkRead, fault: u8) {
+        read.test_fault
+            .store(fault, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Installs only live pane state from a worker-owned durable publication.
+    /// Cleanup certainty is recorded before returning; storage compensation is
+    /// performed later by the worker while it still owns the generation receipt.
+    fn install_saved_fork_command(
+        &mut self,
+        pane_id: &str,
+        read: &SavedForkRead,
+        adoption: &mut SavedForkAdoption,
+    ) -> Result<AgentShellCommandOutcome> {
+        let primary_client_id = &read.work.primary_client_id;
+        let source = &read.work.source;
+        let summary = &read.publication.summary;
         let source_descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
@@ -1502,31 +1779,21 @@ impl RuntimeSessionService {
             )
         })?;
         let source_start_directory = self.pane_current_working_directory(pane_id);
-        let Some(store) = self.persistence.cloned_transcript_store() else {
-            return Ok(AgentShellCommandOutcome::Display {
-                command: "fork".to_string(),
-                body: format!(
-                    "current_conversation={} forked=false reason=transcript-store-unavailable source=runtime-fork",
-                    json_escape(&source)
-                ),
-            });
-        };
-        let prompt_seed =
-            Self::runtime_agent_fork_prompt_seed(&store.prompt_history(&source)?, input);
+        let prompt_seed = read.prompt_seed.clone();
         let source_lineage = self
             .agent_shell_store()
             .get(pane_id)
             .map(|session| session.prompt_cache_lineage_id.clone());
-        let target = invocation
-            .args
-            .split_whitespace()
-            .next()
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(Self::runtime_new_agent_conversation_id);
         let copied_shell_mode = self.agent_shell_mode_override(pane_id);
         let startup_mode = copied_shell_mode.unwrap_or_else(|| self.agent_default_shell_mode());
         let previous_primary_names = self.snapshot_primary_agent_names();
-        let started = self.split_pane_in_window_with_process(
+        let previous_processes = self.tracked_runtime_pane_process_ids();
+        let previous_panes = self
+            .tracked_pane_descriptors()
+            .into_iter()
+            .map(|pane| pane.pane_id)
+            .collect::<Vec<_>>();
+        let started = match self.split_pane_in_window_with_process(
             primary_client_id,
             &source_descriptor.window_id,
             SplitDirection::Vertical,
@@ -1535,15 +1802,24 @@ impl RuntimeSessionService {
             crate::runtime::processes::RuntimePaneProcessPurpose::AgentOwned {
                 shell_mode: startup_mode,
             },
-        )?;
-        // A failed store fork owns no target: it may have rejected an existing
-        // conversation (including the source itself), or already compensated
-        // its own incomplete publication. Only successful creation transfers
-        // responsibility for later pane/setup compensation to this command.
-        let mut target_created = false;
+        ) {
+            Ok(started) => started,
+            Err(error) => {
+                adoption.cleanup_safe = self
+                    .tracked_pane_descriptors()
+                    .into_iter()
+                    .map(|pane| pane.pane_id)
+                    .collect::<Vec<_>>()
+                    == previous_panes
+                    && self.tracked_runtime_pane_process_ids() == previous_processes
+                    && !self
+                        .agent_shell_store()
+                        .sessions()
+                        .any(|session| session.session_id == read.work.target);
+                return Err(error);
+            }
+        };
         let setup_result = (|| -> Result<_> {
-            let summary = store.fork(&source, &target, current_unix_seconds().max(1))?;
-            target_created = true;
             #[cfg(test)]
             if self.take_agent_fork_after_persistence_failure_for_tests() {
                 return Err(MezError::invalid_state(
@@ -1567,6 +1843,16 @@ impl RuntimeSessionService {
                     session.visibility,
                 )
             };
+            #[cfg(test)]
+            if read.test_fault.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+                return Err(MezError::invalid_state(
+                    "injected fork post-binding setup failure",
+                ));
+            }
+            // A new generation has no saved display identity. Allocate from the
+            // live reservation owner, never read inherited metadata on actor.
+            let name = self.resolve_subagent_display_name(&format!("agent-{}", started.pane_id));
+            self.install_primary_agent_name(&started.pane_id, Some(name))?;
             self.capture_agent_session_allowed_actions_for_pane(&started.pane_id)?;
             self.record_pane_transcript_ref(
                 &started.pane_id,
@@ -1575,7 +1861,30 @@ impl RuntimeSessionService {
             if let Some(shell_mode) = copied_shell_mode {
                 self.set_agent_shell_mode_override(&started.pane_id, Some(shell_mode));
             }
-            self.enter_runtime_owned_agent_mode_for_pane(&started.pane_id)?;
+            self.set_agent_prompt_history_for_pane(&started.pane_id, read.prompt_history.clone());
+            self.sync_tracked_pty_sizes()?;
+            let size = self
+                .find_pane_descriptor(&started.pane_id)
+                .ok_or_else(|| MezError::invalid_state("fork pane disappeared during setup"))?
+                .size;
+            self.ensure_agent_pane_screen(&started.pane_id, &session_id, size)?;
+            // A fresh pane has no prior MMP objective to clear or durable mirror
+            // to load. Register only its live identity; history grants no rights.
+            self.ensure_runtime_message_identity(
+                &format!("agent-{}", started.pane_id),
+                None,
+                "agent",
+                &["agent-harness"],
+                current_unix_seconds().saturating_mul(1000),
+            )?;
+            if startup_mode == crate::runtime::config::ShellMode::Native
+                && !self.validate_native_agent_surface_startup(&started.pane_id)?
+            {
+                return Err(MezError::invalid_state(
+                    "native fork startup owner is no longer current",
+                ));
+            }
+            self.request_agent_prompt_selector_extra_candidates_refresh(&started.pane_id);
             if let Some(seed) = prompt_seed
                 && let Some(prompt_input) = self.agent_prompt_input_mut(&started.pane_id)
             {
@@ -1584,47 +1893,57 @@ impl RuntimeSessionService {
                     .buffer
                     .apply(ReadlineEdit::InsertText(seed));
             }
-            self.sync_runtime_agent_objective_for_conversation(&started.pane_id, &session_id)?;
+            // Fork metadata deliberately inherits no objective or authority.
+            // The ordinary entry path has registered the fresh message identity.
+            if self.persistence.transcript_uses_adapter() {
+                // Persist adopted bindings independently of the source command's
+                // eventual display claim. This queues owned work, never store I/O.
+                self.checkpoint_agent_session_metadata()?;
+            }
             Ok((session_id, transcript_entries, visibility))
         })();
         let (session_id, transcript_entries, visibility) = match setup_result {
             Ok(result) => result,
             Err(error) => {
                 self.restore_primary_agent_names(previous_primary_names);
-                let pane_cleanup = self.dispatch_runtime_pane_close(
-                    primary_client_id,
-                    &format!(
-                        r#"{{"pane_id":"{}","force":true}}"#,
-                        json_escape(&started.pane_id)
-                    ),
-                );
-                let pane_cleanup_failed = self.find_pane_descriptor(&started.pane_id).is_some();
-                let storage_cleanup = if target_created {
-                    store.delete(&target)
+                #[cfg(test)]
+                let skip_close = read.test_fault.load(std::sync::atomic::Ordering::SeqCst) == 2;
+                #[cfg(not(test))]
+                let skip_close = false;
+                let pane_cleanup = if skip_close {
+                    Err(MezError::invalid_state(
+                        "injected close failure with live bound pane",
+                    ))
                 } else {
-                    Ok(false)
+                    self.dispatch_runtime_pane_close(
+                        primary_client_id,
+                        &format!(
+                            r#"{{"pane_id":"{}","force":true}}"#,
+                            json_escape(&started.pane_id)
+                        ),
+                    )
                 };
-                if pane_cleanup_failed || storage_cleanup.is_err() {
+                #[cfg(test)]
+                let pane_cleanup = if read.test_fault.load(std::sync::atomic::Ordering::SeqCst) == 3
+                {
+                    Err(MezError::invalid_state(
+                        "injected close failure after pane removal",
+                    ))
+                } else {
+                    pane_cleanup
+                };
+                adoption.cleanup_safe = pane_cleanup.is_ok()
+                    && self.find_pane_descriptor(&started.pane_id).is_none()
+                    && self.agent_shell_store().get(&started.pane_id).is_none()
+                    && !self.pane_processes().contains_pane(&started.pane_id)
+                    && !self.pane_process_is_adapter_owned(&started.pane_id);
+                if !adoption.cleanup_safe {
                     return Err(MezError::invalid_state(format!(
-                        "agent fork setup failed: {error}; rollback failed: pane={}; storage={}",
+                        "agent fork setup failed: {error}; rollback failed: pane={}; storage=retained because teardown is uncertain",
                         pane_cleanup
                             .err()
                             .map(|cleanup| cleanup.to_string())
-                            .unwrap_or_else(|| if pane_cleanup_failed {
-                                "pane still exists"
-                            } else {
-                                "removed"
-                            }
-                            .to_string()),
-                        storage_cleanup
-                            .err()
-                            .map(|cleanup| cleanup.to_string())
-                            .unwrap_or_else(|| if target_created {
-                                "removed"
-                            } else {
-                                "not created by this fork"
-                            }
-                            .to_string())
+                            .unwrap_or_else(|| "pane, process or binding remains".to_string()),
                     )));
                 }
                 return Err(error);
