@@ -107,6 +107,18 @@ impl PaneProcessCleanupAttempt {
         self.deadline
     }
 
+    /// Validates effect admission, not merely status observation. This never
+    /// changes the captured budget or any native bookkeeping.
+    pub fn validate_effects(&self, owner: &PaneProcessRetirementOwner) -> Result<()> {
+        self.validate(owner)?;
+        if Instant::now() >= self.deadline {
+            return Err(MezError::invalid_state(
+                "native cleanup effect deadline expired",
+            ));
+        }
+        Ok(())
+    }
+
     /// Verifies exact owner/source/attempt identity before a claim or quantum.
     /// A stale or foreign token never changes resources or progress.
     pub fn validate(&self, owner: &PaneProcessRetirementOwner) -> Result<()> {

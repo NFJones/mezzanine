@@ -41,15 +41,41 @@ pub(crate) struct PreparedCliNativeRetry {
 }
 
 impl NativeContinuationScope {
+    /// Clips effect admission independently of the longer observation budget.
+    pub(super) fn effect_deadline(
+        &self,
+        id: &str,
+        generation: u64,
+        outer: tokio::time::Instant,
+    ) -> tokio::time::Instant {
+        self.owners
+            .iter()
+            .find(|owner| owner.id == id && owner.generation == generation)
+            .and_then(|owner| owner.attempt.as_ref())
+            .map_or(outer, |attempt| {
+                outer.min(tokio::time::Instant::from_std(attempt.deadline()))
+            })
+    }
+
     /// Checks the exact captured source before any actor cancellation or stop
     /// admission. A rejected explicit owner receives no cancellation/effect
     /// permission; a replaced source/attempt cannot inherit admission.
-    pub(super) fn permits(&self, id: &str, entry: &SupervisorEntry) -> bool {
+    pub(super) fn permits(
+        &self,
+        id: &str,
+        entry: &SupervisorEntry,
+        deadline: tokio::time::Instant,
+    ) -> bool {
         self.owners
             .iter()
             .find(|owner| owner.id == id && owner.generation == entry.generation)
             .is_some_and(|owner| {
                 owner.may_cancel
+                    && tokio::time::Instant::now() < deadline
+                    && owner
+                        .attempt
+                        .as_ref()
+                        .is_some_and(|attempt| attempt.validate_effects(&entry.native).is_ok())
                     && owner
                         .identity
                         .as_ref()
@@ -209,7 +235,7 @@ impl SessionSupervisor {
                     false,
                 ));
             }
-            if scope.permits(id, entry) {
+            if scope.permits(id, entry, deadline) {
                 match &mut entry.state {
                     SupervisorEntryState::Starting { cancelled } => *cancelled = true,
                     SupervisorEntryState::Running { cancel, .. }

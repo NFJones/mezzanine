@@ -24,6 +24,7 @@ const NATIVE_RETIREMENT_BURST: usize = 16;
 /// returned obligations settle. Errors retain unreaped children in `owner`;
 /// even after one signal/wait failure, all other safely owned children are
 /// attempted. Signal errors remain errors even if the root is later reaped.
+#[cfg(test)]
 pub(crate) fn drain_native_pane_retirement<'a>(
     owner: &'a PaneProcessRetirementOwner,
     deadline: Instant,
@@ -408,7 +409,15 @@ mod tests {
                     let held_master = process.duplicate_master_fd().unwrap();
                     drop(process);
                     owner.seal();
-                    let mut claim = owner.begin_drain().unwrap();
+                    let authority = owner
+                        .capture_cleanup_attempt(
+                            (Instant::now() + Duration::from_secs(1)).into_std(),
+                        )
+                        .unwrap();
+                    let mut claim = owner
+                        .try_begin_drain_for_attempt(&authority)
+                        .unwrap()
+                        .unwrap();
                     let mut child = claim.take_returned().unwrap();
                     let published = AtomicBool::new(false);
                     let (entered, observed) = tokio::sync::oneshot::channel();

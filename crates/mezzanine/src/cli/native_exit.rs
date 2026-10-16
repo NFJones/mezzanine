@@ -120,7 +120,11 @@ impl CliExit {
                     "native cleanup retry requires a caller-owned Tokio runtime",
                 ));
             }
-            let prepared = prepared?.ok_or_else(|| {
+            let prepared = match prepared {
+                Ok(prepared) => prepared,
+                Err(error) => return self.native.record_cleanup_result(Err(error)),
+            }
+            .ok_or_else(|| {
                 MezError::invalid_state("native cleanup retry preparation is unavailable")
             })?;
             self.native.retry_prepared(prepared).await
@@ -671,25 +675,35 @@ mod tests {
         );
     }
 
-    /// A cancelled retry still owns every reservation. Another explicit retry
-    /// can settle after the gate is released; original command codes never clear.
+    /// Cancel a genuinely admitted graceful retry after its real HUP receipt.
+    /// The same returned root survives cancellation; a distinct explicit retry
+    /// after the old bound expires reaps it without clearing original code17.
     #[tokio::test]
     async fn cancelled_exit_retry_retains_owner_and_original_nonzero_code() {
-        let (mut exit, pid, gate) = live_native_outcome(17, true);
+        let (mut exit, owner, master, pid) = cleanup_attempts::cancellable_outcome().await;
         let cancelled = {
-            let retry = exit.retry_native_cleanup(Duration::from_secs(1));
+            let retry = exit.retry_native_cleanup(Duration::from_millis(200));
             tokio::pin!(retry);
             tokio::time::timeout(Duration::from_millis(30), &mut retry)
                 .await
                 .is_err()
         };
-        assert!(cancelled);
-        assert_eq!(exit.code(), 17);
-        assert!(exit.pending_native_children().unwrap() >= 1);
-        drop(gate);
-        exit.retry_native_cleanup(Duration::from_secs(1))
-            .await
-            .unwrap();
+        let hup_seen = cleanup_attempts::marker(&master, "cancel-hup").await;
+        let pending = owner.outstanding() == 1;
+        let replied = cleanup_attempts::input(&master, b"cancelled-live-probe\n").await
+            && cleanup_attempts::marker(&master, "cli-scope-child:cancelled-live-probe").await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let retry = exit.retry_native_cleanup(Duration::from_secs(1)).await;
+        let absent = rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH);
+        drop(master);
+        assert!(
+            retry.is_ok() && absent && owner.outstanding() == 0,
+            "independent explicit retry did not reap cancelled fixture: {retry:?}"
+        );
+        assert!(
+            cancelled && hup_seen && pending && replied,
+            "fixture did not prove admitted cancellation and original root liveness"
+        );
         assert_eq!(
             rustix::process::test_kill_process(pid),
             Err(rustix::io::Errno::SRCH)

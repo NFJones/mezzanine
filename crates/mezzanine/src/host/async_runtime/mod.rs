@@ -212,6 +212,8 @@ pub use events::{
 pub use pane_io::AsyncFakePaneProcessIo;
 pub use pane_io::build_async_pane_process_supervisor_service;
 #[cfg(test)]
+pub(crate) use pane_io::drain_native_pane_retirement;
+#[cfg(test)]
 pub use pane_io::{
     AsyncPaneForegroundProcess, AsyncPaneIoSideEffectServiceConfig, AsyncPaneProcessDriver,
     AsyncPaneProcessDriverConfig, AsyncPaneProcessDriverServiceConfig, AsyncPaneProcessIo,
@@ -223,7 +225,7 @@ pub use pane_io::{
 pub(crate) use pane_io::{AsyncPaneProcessWorkerOutcome, run_owned_pane_process_worker};
 pub(crate) use pane_io::{
     NATIVE_PANE_RETIREMENT_TIMEOUT, advance_native_pane_retirement_for_attempt,
-    drain_native_pane_retirement, drain_native_pane_retirement_for_attempt,
+    drain_native_pane_retirement_for_attempt,
 };
 pub use side_effects::{
     AsyncClientOutputFlushServiceReport, AsyncRuntimeSideEffectServiceConfig,

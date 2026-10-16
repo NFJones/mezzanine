@@ -8,7 +8,7 @@ use super::*;
 use std::os::fd::OwnedFd;
 
 /// Bounded fixture-only input, never a raw signal or process lookup.
-async fn input(master: &OwnedFd, mut bytes: &[u8]) -> bool {
+pub(super) async fn input(master: &OwnedFd, mut bytes: &[u8]) -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
     while !bytes.is_empty() && tokio::time::Instant::now() < deadline {
         match rustix::io::write(master, bytes) {
@@ -25,7 +25,7 @@ async fn input(master: &OwnedFd, mut bytes: &[u8]) -> bool {
 }
 
 /// Reads a child-generated fixture response with echo disabled by its shell.
-async fn marker(master: &OwnedFd, expected: &str) -> bool {
+pub(super) async fn marker(master: &OwnedFd, expected: &str) -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
     let mut output = Vec::new();
     while tokio::time::Instant::now() < deadline && output.len() < 64 * 1024 {
@@ -60,6 +60,30 @@ async fn outcome() -> (
         rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap()).unwrap();
     let master = process.duplicate_master_fd().unwrap();
     assert!(marker(&master, "cli-scope-ready").await);
+    drop(process);
+    owner.seal();
+    (CliExit::owned(17, native), owner, master, pid)
+}
+
+/// Supplies an admitted graceful root whose real HUP receipt remains visible
+/// through the held master. The outer loop survives interrupted read, so HUP
+/// does not accidentally make cancellation look like successful retirement.
+pub(super) async fn cancellable_outcome() -> (
+    CliExit,
+    PaneProcessRetirementOwner,
+    OwnedFd,
+    rustix::process::Pid,
+) {
+    let mut native = CliNativeOwnership::default();
+    let owner = native.foreground();
+    let mut process = mez_mux::process::spawn_retained_argv_pty_process(std::path::Path::new("/bin/sh"),
+        &["-c".into(), "trap 'printf cancel-hup\\\\n' HUP; trap '' TERM; stty -echo; printf 'cli-scope-ready\\n'; while :; do if IFS= read -r line; then printf 'cli-scope-child:%s\\n' \"$line\"; fi; done".into()],
+        &[], mez_mux::layout::Size::new(80, 24).unwrap(), None, owner.reserve().unwrap()).unwrap();
+    let pid =
+        rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap()).unwrap();
+    let master = process.duplicate_master_fd().unwrap();
+    assert!(marker(&master, "cli-scope-ready").await);
+    process.begin_native_termination(false).unwrap();
     drop(process);
     owner.seal();
     (CliExit::owned(17, native), owner, master, pid)

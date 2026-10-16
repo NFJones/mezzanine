@@ -111,6 +111,46 @@ async fn automatic_drain_cannot_adopt_retry_after_unpolled_or_suspended_scope() 
     }
 }
 
+/// A closure holding only the owner never receives a newer retry's effect
+/// authority from token-free observation. The root must reply before the
+/// independent authorized token supplies real native wait/SRCH.
+#[tokio::test(flavor = "current_thread")]
+async fn old_token_free_observer_cannot_force_new_retry_epoch() {
+    let owner = PaneProcessRetirementOwner::default();
+    let (mut process, master, pid) = reply_process(&owner).await;
+    let original = process.begin_native_termination(true).unwrap();
+    drop(process);
+    owner.seal();
+    let old = async {
+        let mut drain = owner.begin_drain()?;
+        let mut child = drain
+            .take_returned()
+            .ok_or_else(|| MezError::invalid_state("observer fixture lost returned child"))?;
+        child.force_retirement().map_err(MezError::from)
+    };
+    tokio::time::sleep_until(Instant::from_std(original) + Duration::from_millis(10)).await;
+    let token = owner
+        .prepare_explicit_cleanup_retry((Instant::now() + Duration::from_secs(1)).into_std())
+        .unwrap()
+        .admit()
+        .unwrap();
+    let result = old.await;
+    let live = rustix::process::test_kill_process(pid) == Ok(());
+    let replied = input(&master, b"observer-probe\n").await
+        && marker(&master, "scope-child:observer-probe").await;
+    let pending = owner.outstanding() == 1;
+    let cleanup = drain_native_pane_retirement_for_attempt(
+        &owner,
+        &token,
+        Instant::from_std(token.deadline()),
+    )
+    .await;
+    let absent = rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH);
+    drop(master);
+    assert!(cleanup.is_ok() && absent && owner.outstanding() == 0);
+    assert!(result.unwrap_err().message().contains("wait-only") && live && replied && pending);
+}
+
 /// A preallocated owner with no admission yet may bind its FIRST initial source
 /// without changing the creation budget. This is not permission to bind a
 /// completed/reused source or any explicit retry epoch.

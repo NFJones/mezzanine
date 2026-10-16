@@ -132,6 +132,73 @@ async fn unpolled_session_stop_does_not_adopt_new_retry_epoch() {
     assert!(result.unwrap_err().message().contains("stale") && pending && live && replied);
 }
 
+/// Expired unpolled host authority cannot cancel a real actor or create stop
+/// intent, even with a longer observation budget. Capture cancel/lifecycle and
+/// a fresh held-master root reply before independent force/wait cleanup.
+#[tokio::test(flavor = "current_thread")]
+async fn expired_host_scopes_do_not_cancel_or_stop_live_actors() {
+    for longer_outer in [false, true] {
+        let supervisor = SessionSupervisor::new(0);
+        let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
+        let handle = supervisor
+            .start(test_request("expired-effect-scope", id))
+            .await
+            .unwrap();
+        let native = handle.native_retirement_owner();
+        let process = mez_mux::process::spawn_retained_argv_pty_process(std::path::Path::new("/bin/sh"),
+            &["-c".into(), "trap '' HUP TERM; stty -echo; printf 'host-scope-ready\\n'; while IFS= read -r line; do printf 'host-scope-child:%s\\n' \"$line\"; done".into()],
+            &[], Size::new(80, 24).unwrap(), None, native.reserve().unwrap()).unwrap();
+        let pid =
+            rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap()).unwrap();
+        let master = process.duplicate_master_fd().unwrap();
+        assert!(marker(&master, "host-scope-ready").await);
+        drop(process);
+        let cancel = {
+            let entries = supervisor.inner.entries().unwrap();
+            let SupervisorEntryState::Running { cancel, .. } =
+                &entries.get(handle.session_id()).unwrap().state
+            else {
+                panic!("fixture runtime is not running")
+            };
+            cancel.clone()
+        };
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(10);
+        let result = if longer_outer {
+            let scope = supervisor.capture_native_continuation_scope(deadline);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            supervisor
+                .finish_native_retirement_captured(
+                    scope,
+                    tokio::time::Instant::now() + Duration::from_millis(30),
+                )
+                .await
+        } else {
+            let old = supervisor.finish_native_retirement(deadline);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            old.await
+        };
+        let cancellation_sent = *cancel.borrow();
+        let running = matches!(
+            handle.lifecycle_state().await,
+            Ok(RuntimeLifecycleState::Running)
+        );
+        let live = rustix::process::test_kill_process(pid) == Ok(());
+        let replied = input(&master, b"expired-effect-probe\n").await
+            && marker(&master, "host-scope-child:expired-effect-probe").await;
+        let cleanup = supervisor.shutdown_all(true, Duration::from_secs(1)).await;
+        let absent = rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH);
+        drop(master);
+        assert!(
+            cleanup.is_ok() && absent && native.outstanding() == 0,
+            "independent fixture shutdown failed: {cleanup:?}"
+        );
+        assert!(
+            result.is_err() && !cancellation_sent && running && live && replied,
+            "expired host scope issued effects before independent cleanup"
+        );
+    }
+}
+
 /// A host scope created before polling cannot adopt either a captured owner's
 /// new retry epoch or a late owner's retry epoch. Its original root must still
 /// respond before independent explicit-token cleanup supplies wait/SRCH proof.

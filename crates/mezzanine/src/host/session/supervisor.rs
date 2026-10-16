@@ -783,7 +783,7 @@ impl SessionSupervisor {
                 entries
                     .iter_mut()
                     .map(|(id, entry)| {
-                        let request = if scope.permits(id, entry) {
+                        let request = if scope.permits(id, entry, deadline) {
                             entry.native.request_shutdown(force);
                             match &mut entry.state {
                                 SupervisorEntryState::Starting { cancelled } => {
@@ -805,6 +805,7 @@ impl SessionSupervisor {
                                 cancel: cancel.clone(),
                             };
                         }
+                        let effect_deadline = scope.effect_deadline(id, entry.generation, deadline);
                         (
                             id.clone(),
                             ExactShutdownTarget {
@@ -813,6 +814,7 @@ impl SessionSupervisor {
                                 completion: entry.completion.subscribe(),
                                 request,
                             },
+                            effect_deadline,
                         )
                     })
                     .collect::<Vec<_>>()
@@ -823,10 +825,16 @@ impl SessionSupervisor {
             // actors; native work itself remains fixed-quanta and nonblocking.
             let mut stops: futures_util::stream::FuturesUnordered<_> = targets
                 .into_iter()
-                .map(|(session_id, target)| async move {
+                .map(|(session_id, target, effect_deadline)| async move {
                     tokio::time::timeout_at(
                         deadline,
-                        self.stop_exact_shutdown_target(&session_id, target, force, deadline),
+                        self.stop_exact_shutdown_target_until(
+                            &session_id,
+                            target,
+                            force,
+                            deadline,
+                            effect_deadline,
+                        ),
                     )
                     .await
                     .map_err(|_| {
@@ -904,12 +912,26 @@ impl SessionSupervisor {
     /// Uses only a sealed snapshot's exact handle, never a later ID lookup.
     /// Removal before admission skips repeated effects but still awaits the
     /// exact completion receipt. A replacement generation remains an error.
+    #[cfg(test)]
     async fn stop_exact_shutdown_target(
+        &self,
+        session_id: &str,
+        target: ExactShutdownTarget,
+        force: bool,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        self.stop_exact_shutdown_target_until(session_id, target, force, deadline, deadline)
+            .await
+    }
+
+    /// Separates captured effect admission from the outer publication wait.
+    async fn stop_exact_shutdown_target_until(
         &self,
         session_id: &str,
         mut target: ExactShutdownTarget,
         force: bool,
         deadline: tokio::time::Instant,
+        effect_deadline: tokio::time::Instant,
     ) -> Result<()> {
         let present = {
             let entries = self.inner.entries()?;
@@ -924,6 +946,11 @@ impl SessionSupervisor {
             }
         };
         if present && let Some((handle, cancel)) = target.request.take() {
+            if tokio::time::Instant::now() >= effect_deadline {
+                return Err(MezError::invalid_state(
+                    "exact shutdown admission deadline expired",
+                ));
+            }
             let admission = if force {
                 handle
                     .force_shutdown(format!("session supervisor stopped `{session_id}`"))
@@ -933,7 +960,9 @@ impl SessionSupervisor {
                     .graceful_shutdown(format!("session supervisor stopped `{session_id}`"))
                     .await
             };
-            let _ = cancel.send(true);
+            if tokio::time::Instant::now() < effect_deadline {
+                let _ = cancel.send(true);
+            }
             admission?;
         }
         self.await_exact_completion(session_id, target, deadline)
@@ -1045,6 +1074,7 @@ impl SessionSupervisor {
     /// Internal native-only progress remains separate to avoid waiting on a
     /// callback from inside its own resource drain. One outer deadline covers
     /// both barriers; failure is sampled again only after publication settles.
+    #[cfg(test)]
     pub(crate) fn finish_native_retirement(
         &self,
         deadline: tokio::time::Instant,
@@ -1132,6 +1162,7 @@ impl SessionSupervisor {
     /// Production reads only the retained owners. The private per-call reader
     /// permits deterministic diagnostic-publication tests without a global hook
     /// or any mutation of child handles, counters or native completion proof.
+    #[cfg(test)]
     fn drain_native_with_owner_receipts<'a>(
         &'a self,
         deadline: tokio::time::Instant,

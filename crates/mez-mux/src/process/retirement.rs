@@ -358,7 +358,8 @@ impl PaneProcessRetirementOwner {
             .count()
     }
 
-    /// Serializes bounded drains without holding a mutex across native I/O.
+    /// Claims wait-only observation without effect authority. Use a captured
+    /// attempt for any signaling; this never adopts a current retry budget.
     pub fn begin_drain(&self) -> Result<PaneProcessRetirementDrain> {
         self.try_begin_drain().ok_or_else(|| {
             MezError::invalid_state("native child retirement drain is already active")
@@ -382,6 +383,7 @@ impl PaneProcessRetirementOwner {
         Some(PaneProcessRetirementDrain {
             owner: self.clone(),
             cursor: state.drain_cursor,
+            observation_only: true,
             binding: CleanupBinding {
                 source: state.source_epoch,
                 epoch: state.attempt.map_or(0, |attempt| attempt.epoch),
@@ -422,6 +424,7 @@ impl PaneProcessRetirementOwner {
             owner: self.clone(),
             cursor: state.drain_cursor,
             binding: attempt.binding,
+            observation_only: false,
         }))
     }
 
@@ -490,6 +493,7 @@ impl PaneProcessChildReservation {
             }),
             reservation: index.map(|index| (self.owner.clone(), index)),
             status: None,
+            observation_only: false,
         }
     }
 }
@@ -509,6 +513,7 @@ pub struct PaneProcessRetirementDrain {
     owner: PaneProcessRetirementOwner,
     cursor: usize,
     binding: CleanupBinding,
+    observation_only: bool,
 }
 
 impl PaneProcessRetirementDrain {
@@ -529,21 +534,32 @@ impl PaneProcessRetirementDrain {
                 && let Some(ChildSlot::Returned(mut raw)) = slot.take()
             {
                 *slot = Some(ChildSlot::Draining);
-                raw.binding = self.binding;
-                if raw.progress.plan.is_none()
-                    && let Some(deadline) = self.binding.deadline
+                if !self.observation_only {
+                    let mut binding = self.binding;
+                    if raw.binding.source == binding.source && raw.binding.epoch == binding.epoch {
+                        binding.deadline = [raw.binding.deadline, binding.deadline]
+                            .into_iter()
+                            .flatten()
+                            .min();
+                        binding.started = raw.binding.started.or(binding.started);
+                        binding.force |= raw.binding.force;
+                    }
+                    raw.binding = binding;
+                }
+                let binding = raw.binding;
+                if !self.observation_only
+                    && raw.progress.plan.is_none()
+                    && let Some(deadline) = binding.deadline
                 {
-                    if self.binding.epoch == 0 {
-                        if let Some(started) =
-                            self.binding.started.or(shared.map(|plan| plan.started))
-                        {
+                    if binding.epoch == 0 {
+                        if let Some(started) = binding.started.or(shared.map(|plan| plan.started)) {
                             let mut plan = shared.unwrap_or(NativeShutdownPlan {
                                 started,
                                 deadline,
                                 force: true,
                             });
                             plan.deadline = plan.deadline.min(deadline);
-                            plan.force |= self.binding.force;
+                            plan.force |= binding.force;
                             raw.progress.plan = Some(plan);
                         }
                     } else if let Some(shared) = shared {
@@ -555,6 +571,7 @@ impl PaneProcessRetirementDrain {
                     raw: Some(raw),
                     reservation: Some((self.owner.clone(), index)),
                     status: None,
+                    observation_only: self.observation_only,
                 });
             }
         }
@@ -584,6 +601,7 @@ pub struct RetainedPaneChild {
     raw: Option<RawPaneChild>,
     reservation: Option<(PaneProcessRetirementOwner, usize)>,
     status: Option<ExitStatus>,
+    observation_only: bool,
 }
 
 impl RetainedPaneChild {
@@ -634,6 +652,7 @@ impl RetainedPaneChild {
             }),
             reservation: None,
             status: None,
+            observation_only: false,
         }
     }
 
@@ -742,6 +761,11 @@ impl RetainedPaneChild {
     /// failure state. Leased/Draining ownership excludes retry replacement
     /// between this check and syscall. Cached native status remains inert.
     fn validate_cleanup_binding(&self) -> Result<()> {
+        if self.observation_only {
+            return Err(MezError::invalid_state(
+                "wait-only native claim cannot issue cleanup effects",
+            ));
+        }
         let raw = self
             .raw
             .as_ref()
@@ -1389,7 +1413,11 @@ mod tests {
         drop(child);
         owner.request_shutdown(true);
         assert_eq!(owner.cleanup_deadline(), original);
-        let mut drain = owner.begin_drain().unwrap();
+        let authority = owner.capture_cleanup_attempt(original).unwrap();
+        let mut drain = owner
+            .try_begin_drain_for_attempt(&authority)
+            .unwrap()
+            .unwrap();
         let mut child = drain.take_returned().unwrap();
         assert!(
             child.poll_cleanup().is_err(),
