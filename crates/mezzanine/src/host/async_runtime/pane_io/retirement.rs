@@ -179,7 +179,10 @@ mod tests {
         for pending in [1, 17] {
             let error = native_pending_deadline_error(
                 pending,
-                Some(MezError::io("classified native fixture failure")),
+                Some(MezError::new(
+                    crate::MezErrorKind::Io,
+                    "classified native fixture failure",
+                )),
             );
             assert_eq!(error.kind(), crate::MezErrorKind::Io);
             assert!(
@@ -207,7 +210,10 @@ mod tests {
         let owner = PaneProcessRetirementOwner::default();
         let reservation = owner.reserve().unwrap();
         let error = drain_native_with_failure_reader(&owner, Instant::now(), true, || {
-            Some(MezError::io("classified deadline receipt"))
+            Some(MezError::new(
+                crate::MezErrorKind::Io,
+                "classified deadline receipt",
+            ))
         })
         .await
         .unwrap_err();
