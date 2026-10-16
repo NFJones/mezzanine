@@ -4,9 +4,9 @@ use super::*;
 use crate::runtime::RuntimeAgentCompactionTarget;
 
 /// Dense code-like output has one whitespace word but many estimated input
-/// tokens. The token-mode allowance, actual request target and enforceable cap
-/// tighten on each improving invalid completion; a short accepted summary then
-/// resumes once without an arbitrary count limit or local truncation.
+/// tokens. A corrected completion above the smaller guidance target but within
+/// the ORIGINAL token allowance must proceed to complete-request validation.
+/// Guidance must not change acceptance or the configured provider allocation.
 #[test]
 fn runtime_compaction_summary_correction_token_budget_requires_size_progress() {
     let (mut service, store, turn) = queue_observed_input_compaction_with_exact_history();
@@ -41,8 +41,7 @@ fn runtime_compaction_summary_correction_token_budget_requires_size_progress() {
     let first = service
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
-    let ceiling = first.request.max_output_tokens.unwrap();
-    assert!(ceiling < budget);
+    assert_eq!(first.request.max_output_tokens, Some(budget));
     assert!(
         first
             .request
@@ -50,18 +49,11 @@ fn runtime_compaction_summary_correction_token_budget_requires_size_progress() {
             .iter()
             .any(|message| message.content.contains("estimated input tokens"))
     );
-    complete_runtime_test_compaction(&mut service, "%1", &"abcd".repeat(ceiling + 1));
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .unwrap()
-            .request
-            .max_output_tokens
-            .unwrap()
-            < ceiling
-    );
     assert!(store.compaction_epoch(&conversation).unwrap().is_none());
-    complete_runtime_test_compaction(&mut service, "%1", "short accepted token summary");
+    let corrected = "abcd".repeat(budget / 2 + 1);
+    assert!(mez_agent::provider_text_input_token_estimate(&corrected) <= budget);
+    complete_runtime_test_compaction(&mut service, "%1", &corrected);
+    assert!(!service.agent_is_compacting("%1"));
     assert!(service.agent_provider_task_is_pending(&turn));
 }
 
