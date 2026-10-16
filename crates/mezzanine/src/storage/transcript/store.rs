@@ -3785,7 +3785,7 @@ impl AgentTranscriptStore {
             .collect::<Result<Vec<_>>>()?;
         if self.conversation_exists(target_conversation_id)?
             || self.fork_target_recovery_artifacts_exist(target_conversation_id)?
-            || (self.catalog_path().exists()
+            || (catalog::catalog_path(self).exists()
                 && catalog::record_for_mutation(self, target_conversation_id)?.is_some())
             || self
                 .read_named_sessions_index()?
