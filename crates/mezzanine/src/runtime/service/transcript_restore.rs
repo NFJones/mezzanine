@@ -529,6 +529,7 @@ impl RuntimeSessionService {
                             .map(|membership| membership.scope_id()),
                     )?;
                 } else {
+                    self.retire_subagent_cleanup_pane_binding(&pane_id);
                     self.agent_shell_store_mut().remove_session(&pane_id);
                     self.rebind_runtime_message_project_scope(&pane_id, None)?;
                 }

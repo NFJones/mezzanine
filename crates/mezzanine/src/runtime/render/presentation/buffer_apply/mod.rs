@@ -613,6 +613,7 @@ impl RuntimeSessionService {
         if self.agent_shell_store().get(pane_id).is_none() {
             self.agent_shell_store_mut().ensure_session(pane_id)?;
             if let Err(error) = self.capture_agent_session_allowed_actions_for_pane(pane_id) {
+                self.retire_subagent_cleanup_pane_binding(pane_id);
                 self.agent_shell_store_mut().remove_session(pane_id);
                 return Err(error);
             }

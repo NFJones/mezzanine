@@ -18,6 +18,16 @@ struct CleanupFixture {
 impl CleanupFixture {
     /// Creates a new root without deleting or adopting an existing fixture.
     fn new() -> Self {
+        Self::with_parent_process(true)
+    }
+
+    /// Exercises supported pane-mode entry before parent native startup.
+    fn without_parent_process() -> Self {
+        Self::with_parent_process(false)
+    }
+
+    /// Creates only owned generated state, optionally including a parent Child.
+    fn with_parent_process(start_parent: bool) -> Self {
         let root = std::env::temp_dir().join(format!(
             "mez-r311-{}-{}",
             std::process::id(),
@@ -31,17 +41,26 @@ impl CleanupFixture {
         let socket = root.join("c.sock");
         assert!(socket.as_os_str().len() < 108);
         let mut service = RuntimeServiceFixture::new().control_socket(socket).build();
-        service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+        service.set_agent_default_shell_mode(if start_parent {
+            crate::runtime::config::ShellMode::Native
+        } else {
+            crate::runtime::config::ShellMode::Pane
+        });
         let store = AgentTranscriptStore::new(root.join("transcripts"));
         service.set_agent_transcript_store(store.clone());
         let primary = service
             .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
             .unwrap();
-        service.start_initial_pane_process(Some("cat")).unwrap();
-        service
-            .agent_shell_store_mut()
-            .enter_or_resume("%1")
-            .unwrap();
+        if start_parent {
+            service.start_initial_pane_process(Some("cat")).unwrap();
+            service
+                .agent_shell_store_mut()
+                .enter_or_resume("%1")
+                .unwrap();
+        } else {
+            service.enter_agent_mode_for_pane("%1").unwrap();
+            assert!(service.primary_pid_for_live_pane_process("%1").is_none());
+        }
         service.configure_subagent_policy(8, 8, 8, 8, SubagentWaitPolicy::Detach);
         Self {
             service,
@@ -53,6 +72,11 @@ impl CleanupFixture {
 
     /// Creates an idle reusable child through the real delegation commit path.
     fn spawn(&mut self, parent: &str) -> String {
+        self.try_spawn(parent).unwrap()
+    }
+
+    /// Exposes actual spawn errors for pre-allocation and rollback regressions.
+    fn try_spawn(&mut self, parent: &str) -> std::result::Result<String, crate::error::MezError> {
         let pane = parent.strip_prefix("agent-").unwrap();
         let conversation = self
             .service
@@ -87,10 +111,36 @@ impl CleanupFixture {
                 },
                 &conversation,
                 "generated live cleanup fixture",
-            )
-            .unwrap();
+            )?;
         let result: serde_json::Value = serde_json::from_str(&result).unwrap();
-        result["agent"]["id"].as_str().unwrap().to_string()
+        Ok(result["agent"]["id"].as_str().unwrap().to_string())
+    }
+
+    /// Captures identity from the actual fixture-owned native process.
+    fn native_identity(&self, agent: &str) -> (u32, u64) {
+        let pane = agent.strip_prefix("agent-").unwrap();
+        let pid = self
+            .service
+            .primary_pid_for_live_pane_process(pane)
+            .unwrap();
+        (
+            pid,
+            mez_mux::process::process_start_token_for_pid(pid).unwrap(),
+        )
+    }
+
+    /// Requires both current ownership and the same kernel process incarnation.
+    fn assert_native_identity(&self, agent: &str, expected: (u32, u64)) {
+        let pane = agent.strip_prefix("agent-").unwrap();
+        assert_eq!(
+            self.service.primary_pid_for_live_pane_process(pane),
+            Some(expected.0)
+        );
+        assert_eq!(
+            mez_mux::process::process_start_token_for_pid(expected.0),
+            Some(expected.1)
+        );
+        assert!(self.present(agent));
     }
 
     /// Saves only generated conversation material, optionally with historical lineage.
@@ -1070,4 +1120,519 @@ fn runtime_cleanup_adapter_exit_retries_fenced_task_retirement() {
         .unwrap()
         .unwrap();
     assert!(!fixture.present(&child));
+}
+
+/// Successful pane-mode delegation before parent startup must retire its real
+/// child on explicit pane close with or without a primary. A structural-only
+/// neighbor keeps the same native instance, conversation, queued work and pane.
+#[test]
+fn runtime_cleanup_ownerless_manual_close_retires_only_fresh_children() {
+    for attached in [true, false] {
+        let mut fixture = CleanupFixture::without_parent_process();
+        let child = fixture.spawn("agent-%1");
+        let owned = fixture.native_identity(&child);
+        let child_pane = child.strip_prefix("agent-").unwrap();
+        assert!(
+            !fixture
+                .service
+                .runtime_agent_surface_startup(child_pane)
+                .unwrap()
+                .is_ready()
+        );
+        let independent = fixture.spawn("agent-%1");
+        fixture.save("ownerless-independent", Some("agent-%1"));
+        fixture.resume(&independent, "ownerless-independent");
+        let retained = fixture.native_identity(&independent);
+        let independent_pane = independent.strip_prefix("agent-").unwrap();
+        let work = fixture
+            .service
+            .start_agent_prompt_turn(independent_pane, "generated retained work")
+            .unwrap();
+        let state = fixture
+            .service
+            .agent_turn_ledger()
+            .turn(&work.turn_id)
+            .unwrap()
+            .state;
+        assert!(
+            fixture
+                .service
+                .local_cleanup_parent_state_for_tests("agent-%1")
+                .0
+                .is_some()
+        );
+        if attached {
+            fixture.close("agent-%1");
+        } else {
+            fixture
+                .service
+                .session
+                .detach_client_self(&fixture.primary)
+                .unwrap();
+            fixture
+                .service
+                .close_runtime_owned_subagent_pane("%1")
+                .unwrap();
+        }
+        assert!(!fixture.present(&child));
+        assert_ne!(
+            mez_mux::process::process_start_token_for_pid(owned.0),
+            Some(owned.1)
+        );
+        fixture.assert_native_identity(&independent, retained);
+        assert_eq!(
+            fixture
+                .service
+                .agent_shell_store()
+                .get(independent_pane)
+                .unwrap()
+                .session_id,
+            "ownerless-independent"
+        );
+        assert_eq!(
+            fixture
+                .service
+                .agent_turn_ledger()
+                .turn(&work.turn_id)
+                .unwrap()
+                .state,
+            state
+        );
+    }
+}
+
+/// Neither a raw zero-PID exit nor another owned process's PID proves that a
+/// processless parent exited. Both must preserve its genuine child's native
+/// instance and leave the explicit local close obligation usable afterward.
+#[test]
+fn runtime_cleanup_ownerless_raw_exits_preserve_native_child_and_obligation() {
+    let mut fixture = CleanupFixture::without_parent_process();
+    let child = fixture.spawn("agent-%1");
+    let native = fixture.native_identity(&child);
+    let capability = fixture
+        .service
+        .local_cleanup_parent_state_for_tests("agent-%1");
+    for pid in [0, native.0] {
+        assert!(
+            fixture
+                .service
+                .apply_pane_process_exit_event(
+                    "%1",
+                    pid,
+                    mez_mux::process::PaneExitStatus {
+                        code: Some(0),
+                        signal: None,
+                        success: true
+                    },
+                )
+                .unwrap()
+                .is_none()
+        );
+        fixture.assert_native_identity(&child, native);
+        assert!(fixture.present("agent-%1"));
+        assert_eq!(
+            fixture
+                .service
+                .local_cleanup_parent_state_for_tests("agent-%1"),
+            capability
+        );
+    }
+    fixture.close("agent-%1");
+    assert!(!fixture.present(&child));
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(native.0),
+        Some(native.1)
+    );
+}
+
+/// Conversation-only replacement retains a successful local incarnation's
+/// original cleanup obligation through A->B->C, without granting execution to
+/// fenced children. An old-conversation callback cannot consume that proof.
+#[test]
+fn runtime_cleanup_ownerless_replacements_retain_original_fenced_obligations() {
+    let mut fixture = CleanupFixture::without_parent_process();
+    let original = fixture
+        .service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let child = fixture.spawn("agent-%1");
+    let grandchild = fixture.spawn(&child);
+    let native = fixture.native_identity(&child);
+    let grandchild_native = fixture.native_identity(&grandchild);
+    let owner = fixture
+        .service
+        .local_cleanup_parent_state_for_tests("agent-%1");
+    for conversation in ["ownerless-parent-b", "ownerless-parent-c"] {
+        fixture.save(conversation, None);
+        fixture.resume("agent-%1", conversation);
+    }
+    assert_eq!(
+        fixture
+            .service
+            .local_cleanup_parent_state_for_tests("agent-%1"),
+        owner
+    );
+    assert!(fixture.service.subagent_descendant_is_fenced(&child));
+    assert!(
+        !fixture
+            .service
+            .subagent_lineage_has_live_parent_authority(&child)
+    );
+    assert_eq!(
+        fixture
+            .service
+            .persistent_subagent(&child)
+            .unwrap()
+            .parent_conversation_id,
+        original
+    );
+    assert_eq!(
+        fixture
+            .service
+            .close_subagent_descendants_for_parent_conversation(
+                "agent-%1",
+                &original,
+                "stale callback"
+            )
+            .unwrap(),
+        0
+    );
+    fixture.assert_native_identity(&child, native);
+    fixture.close("agent-%1");
+    assert!(!fixture.present(&child));
+    assert!(!fixture.present(&grandchild));
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(native.0),
+        Some(native.1)
+    );
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(grandchild_native.0),
+        Some(grandchild_native.1)
+    );
+}
+
+/// The first native installation and actual adapter handoff migrate only the
+/// captured local incarnation, retaining its original conversation and fence.
+/// Its still-manager-owned child must then actually retire on parent cleanup.
+#[test]
+fn runtime_cleanup_ownerless_first_native_install_and_handoff_preserve_obligation() {
+    let mut fixture = CleanupFixture::without_parent_process();
+    let original = fixture
+        .service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let child = fixture.spawn("agent-%1");
+    let native = fixture.native_identity(&child);
+    fixture.save("ownerless-first-native-parent", None);
+    fixture.resume("agent-%1", "ownerless-first-native-parent");
+    fixture
+        .service
+        .start_initial_pane_process(Some("cat"))
+        .unwrap();
+    let _parent = fixture.handoff("agent-%1");
+    assert!(
+        fixture
+            .service
+            .local_cleanup_parent_state_for_tests("agent-%1")
+            .0
+            .is_none()
+    );
+    assert_eq!(
+        fixture
+            .service
+            .persistent_subagent(&child)
+            .unwrap()
+            .parent_conversation_id,
+        original
+    );
+    assert_eq!(
+        fixture
+            .service
+            .close_subagent_descendants_for_parent_agent("agent-%1", "first native handoff close")
+            .unwrap(),
+        1
+    );
+    assert!(!fixture.present(&child));
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(native.0),
+        Some(native.1)
+    );
+}
+
+/// A second native installation or independent child rebind cannot inherit a
+/// former local incarnation's obligation. The exact surviving native child is
+/// preserved rather than merely retaining a lineage or layout entry.
+#[test]
+fn runtime_cleanup_ownerless_replacement_or_child_rebind_cannot_adopt_obligation() {
+    for replace_parent in [true, false] {
+        let mut fixture = CleanupFixture::without_parent_process();
+        let child = fixture.spawn("agent-%1");
+        let native = fixture.native_identity(&child);
+        if replace_parent {
+            fixture
+                .service
+                .start_initial_pane_process(Some("cat"))
+                .unwrap();
+            fixture
+                .service
+                .terminate_runtime_pane_process("%1", true)
+                .unwrap();
+            fixture
+                .service
+                .start_initial_pane_process(Some("cat"))
+                .unwrap();
+        } else {
+            fixture.save("ownerless-rebound-child", Some("agent-%1"));
+            fixture.resume(&child, "ownerless-rebound-child");
+        }
+        fixture.close("agent-%1");
+        fixture.assert_native_identity(&child, native);
+    }
+}
+
+/// Failed resume restores the same local capability and fences transactionally;
+/// neither rollback nor restoration may mint a replacement incarnation or erase
+/// the obligation to retire the actual child on the subsequent explicit close.
+#[test]
+fn runtime_cleanup_ownerless_failed_resume_retains_exact_obligation() {
+    let mut fixture = CleanupFixture::without_parent_process();
+    let child = fixture.spawn("agent-%1");
+    let native = fixture.native_identity(&child);
+    let owner = fixture
+        .service
+        .local_cleanup_parent_state_for_tests("agent-%1");
+    fixture.save("ownerless-failed-resume", None);
+    fixture
+        .service
+        .fail_next_agent_resume_after_authority_restore_for_tests();
+    assert!(
+        fixture
+            .service
+            .execute_agent_shell_resume_command("%1", "/resume ownerless-failed-resume")
+            .is_err()
+    );
+    assert_eq!(
+        fixture
+            .service
+            .local_cleanup_parent_state_for_tests("agent-%1"),
+        owner
+    );
+    assert!(!fixture.service.subagent_descendant_is_fenced(&child));
+    fixture.assert_native_identity(&child, native);
+    fixture.close("agent-%1");
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(native.0),
+        Some(native.1)
+    );
+}
+
+/// Enclosing action failure after actual spawn must roll back its child and
+/// unpublished/unused local grant while keeping the reservation high-water.
+/// The next real delegation receives a later capability and still retires.
+#[test]
+fn runtime_cleanup_ownerless_failed_spawn_publishes_no_stray_capability() {
+    let mut fixture = CleanupFixture::without_parent_process();
+    let parent = fixture
+        .service
+        .start_agent_prompt_turn("%1", "generated rollback parent")
+        .unwrap();
+    fixture
+        .service
+        .remove_pending_agent_provider_task(&parent.turn_id);
+    let parent = fixture
+        .service
+        .agent_turn_ledger()
+        .turn(&parent.turn_id)
+        .unwrap()
+        .clone();
+    fixture
+        .service
+        .fail_next_subagent_spawn_after_allocation_for_tests();
+    assert!(
+        fixture
+            .service
+            .execute_spawn_action_for_turn(
+                &parent,
+                &runtime_spawn_agent_action("ownerless-failed-spawn", "generated failed child"),
+            )
+            .is_err()
+    );
+    let (capability, consumed) = fixture
+        .service
+        .local_cleanup_parent_state_for_tests("agent-%1");
+    assert!(capability.is_none());
+    assert!(consumed > 0);
+    assert_eq!(
+        fixture
+            .service
+            .close_subagent_descendants_for_parent_agent("agent-%1", "failed spawn has no child")
+            .unwrap(),
+        0
+    );
+    let child = fixture.spawn("agent-%1");
+    let native = fixture.native_identity(&child);
+    assert!(
+        fixture
+            .service
+            .local_cleanup_parent_state_for_tests("agent-%1")
+            .0
+            .unwrap()
+            > consumed
+    );
+    fixture.close("agent-%1");
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(native.0),
+        Some(native.1)
+    );
+}
+
+/// Full restore cannot resurrect a prior logical capability from identical
+/// pane/conversation IDs; native-only restored qualification remains pending.
+/// Real pane retirement and layout-ID reuse likewise require a later fresh
+/// incarnation and may retire only that new delegation's actual child.
+#[test]
+fn runtime_cleanup_ownerless_restore_and_pane_reuse_do_not_resurrect_old_incarnations() {
+    let mut fixture = CleanupFixture::without_parent_process();
+    let old_child = fixture.spawn("agent-%1");
+    let old_native = fixture.native_identity(&old_child);
+    let first = fixture
+        .service
+        .local_cleanup_parent_state_for_tests("agent-%1")
+        .0
+        .unwrap();
+    fixture.service.checkpoint_agent_session_metadata().unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .restore_agent_sessions_from_transcript_store()
+            .unwrap(),
+        2
+    );
+    let (capability, high_water) = fixture
+        .service
+        .local_cleanup_parent_state_for_tests("agent-%1");
+    assert!(capability.is_none());
+    assert!(high_water >= first);
+    assert_eq!(
+        fixture
+            .service
+            .close_subagent_descendants_for_parent_agent(
+                "agent-%1",
+                "pending restore is not authority"
+            )
+            .unwrap(),
+        0
+    );
+    let current_child = fixture.spawn("agent-%1");
+    let current_native = fixture.native_identity(&current_child);
+    let second = fixture
+        .service
+        .local_cleanup_parent_state_for_tests("agent-%1")
+        .0
+        .unwrap();
+    assert!(second > first);
+    let prior_layout = fixture.service.session.clone();
+    let prior_binding = fixture
+        .service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .clone();
+    fixture.close("agent-%1");
+    fixture.assert_native_identity(&old_child, old_native);
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(current_native.0),
+        Some(current_native.1)
+    );
+    assert!(
+        fixture
+            .service
+            .local_cleanup_parent_state_for_tests("agent-%1")
+            .0
+            .is_none()
+    );
+    // Restore generated layout/binding data only: no capability is serialized.
+    fixture.service.session = prior_layout;
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .restore_session("%1", prior_binding)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .close_subagent_descendants_for_parent_agent("agent-%1", "reused IDs have no proof")
+            .unwrap(),
+        0
+    );
+    let latest_child = fixture.spawn("agent-%1");
+    let latest_native = fixture.native_identity(&latest_child);
+    assert!(
+        fixture
+            .service
+            .local_cleanup_parent_state_for_tests("agent-%1")
+            .0
+            .unwrap()
+            > second
+    );
+    assert_eq!(
+        fixture
+            .service
+            .close_subagent_descendants_for_parent_agent("agent-%1", "latest fresh delegation")
+            .unwrap(),
+        1
+    );
+    fixture.assert_native_identity(&old_child, old_native);
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(latest_native.0),
+        Some(latest_native.1)
+    );
+}
+
+/// Exhaustion is rejected before any child layout/process is allocated, and a
+/// full authority reset cannot rewind the high-water to make the nonce reusable.
+/// No unsafe fallback to IDs, conversation, or native absence is permitted.
+#[test]
+fn runtime_cleanup_ownerless_generation_exhaustion_fails_before_child_allocation() {
+    let mut fixture = CleanupFixture::without_parent_process();
+    fixture
+        .service
+        .exhaust_local_cleanup_generations_for_tests();
+    fixture.service.clear_all_subagent_authority_state();
+    let before = fixture
+        .service
+        .session
+        .windows()
+        .iter()
+        .map(|window| window.panes().len())
+        .sum::<usize>();
+    let error = fixture.try_spawn("agent-%1").unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("local cleanup parent generation exhausted"),
+        "{error}"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .session
+            .windows()
+            .iter()
+            .map(|window| window.panes().len())
+            .sum::<usize>(),
+        before
+    );
+    assert_eq!(
+        fixture
+            .service
+            .local_cleanup_parent_state_for_tests("agent-%1"),
+        (None, u64::MAX)
+    );
 }

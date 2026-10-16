@@ -782,8 +782,8 @@ fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
     let primary = service
         .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
         .unwrap();
-    // Real parent ownership is required to mint live child cleanup authority.
-    service.start_initial_pane_process(Some("cat")).unwrap();
+    // The accepted pane-mode parent has no native process yet; successful
+    // local delegation must still retain its genuine child cleanup obligation.
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -915,8 +915,8 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
     let primary = service
         .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
         .unwrap();
-    // Real parent ownership is required to mint live child cleanup authority.
-    service.start_initial_pane_process(Some("cat")).unwrap();
+    // The accepted pane-mode parent has no native process yet; successful
+    // local delegation must still retain its genuine child cleanup obligation.
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")

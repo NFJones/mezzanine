@@ -784,6 +784,9 @@ impl RuntimeSessionService {
             self.validate_subagent_spawn_capacity(&spawn.parent_agent_id, routed_root)?;
         let parent_allowed_actions =
             self.frozen_subagent_parent_allowed_actions(&spawn.parent_agent_id)?;
+        // Reserve the original binding before child side effects. Reservation
+        // is not authority; only the final successful return commits it.
+        let cleanup_parent = self.prepare_fresh_subagent_cleanup_parent(&spawn.parent_agent_id)?;
         let initial_selection = match (
             spawn.initial_model_size.as_deref(),
             spawn.initial_reasoning_effort.as_deref(),
@@ -1150,9 +1153,6 @@ impl RuntimeSessionService {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error);
         }
-        // Capture only the actual installed delegation, never durable lineage
-        // alone. Every later setup failure retires this proof with the child.
-        self.record_subagent_cleanup_ownership(&child_agent_id);
         let child_allowed_action_names =
             serde_json::to_string(&child_allowed_actions.action_type_names()).map_err(|error| {
                 MezError::invalid_state(format!(
@@ -1206,7 +1206,7 @@ impl RuntimeSessionService {
                     return Err(error);
                 }
             };
-            return Ok(format!(
+            let response = format!(
                 r#"{{"agent":{},"pane":{},"turn":null,"allowed_actions":{},"action_schema_digest":"{}"}}"#,
                 runtime_subagent_state_json(
                     &self.session,
@@ -1230,7 +1230,19 @@ impl RuntimeSessionService {
                 self.runtime_control_pane_state_json(window, pane),
                 child_allowed_action_names,
                 json_escape(&child_action_schema_digest),
-            ));
+            );
+            if let Err(error) =
+                self.commit_fresh_subagent_cleanup_ownership(cleanup_parent, &child_agent_id)
+            {
+                self.cleanup_failed_subagent_spawn(
+                    controller,
+                    &started.pane_id,
+                    &child_agent_id,
+                    None,
+                );
+                return Err(error);
+            }
+            return Ok(response);
         }
         if let Err(error) =
             self.append_agent_parent_prompt_to_terminal_buffer(&started.pane_id, &spawn.task_prompt)
@@ -1329,7 +1341,7 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
-        Ok(format!(
+        let response = format!(
             r#"{{"agent":{},"pane":{},"turn":{},"allowed_actions":{},"action_schema_digest":"{}"}}"#,
             runtime_subagent_state_json(
                 &self.session,
@@ -1352,7 +1364,19 @@ impl RuntimeSessionService {
             runtime_agent_turn_state_json(&turn),
             child_allowed_action_names,
             json_escape(&child_action_schema_digest),
-        ))
+        );
+        if let Err(error) =
+            self.commit_fresh_subagent_cleanup_ownership(cleanup_parent, &child_agent_id)
+        {
+            self.cleanup_failed_subagent_spawn(
+                controller,
+                &started.pane_id,
+                &child_agent_id,
+                Some(&turn.turn_id),
+            );
+            return Err(error);
+        }
+        Ok(response)
     }
 
     /// Creates or reuses an unfocused subagent window in the parent's group.
@@ -1845,6 +1869,7 @@ impl RuntimeSessionService {
                 .retire_agent_identity(&agent_id);
         }
         self.remove_subagent_authority_state(child_agent_id);
+        self.prune_unreferenced_local_cleanup_parents();
         self.deregister_macro_managed_subagent(child_agent_id);
         self.integration
             .model_profile_overrides_mut()

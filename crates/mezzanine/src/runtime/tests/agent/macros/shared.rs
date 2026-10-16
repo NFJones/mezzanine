@@ -220,12 +220,16 @@ fn runtime_macro_shared_listing_and_current_step_complete_existing_lifecycle() {
     assert!(text.contains("CURRENT_EXACT_PROMPT"));
     assert!(text.contains("current context"));
     assert!(!text.contains("OLD_PROMPT"));
-    service
-        .agent_turn_ledger_mut()
-        .finish_turn(&child.turn_id, AgentTurnState::Completed)
+    let child_pid = service
+        .primary_pid_for_live_pane_process(&child.pane_id)
         .unwrap();
+    let child_token = mez_mux::process::process_start_token_for_pid(child_pid).unwrap();
     service
-        .emit_subagent_task_result_for_state(&child, AgentTurnState::Completed)
+        .complete_running_agent_turn_and_start_ready(
+            &child,
+            AgentTurnState::Completed,
+            "generated shared macro child completed",
+        )
         .unwrap();
     let judge = RuntimeBatchProvider { response: mez_agent::ModelResponse {
         provider: "runtime-batch".into(), model: "test".into(),
@@ -248,6 +252,10 @@ fn runtime_macro_shared_listing_and_current_step_complete_existing_lifecycle() {
         AgentTurnState::Completed
     );
     assert!(service.macro_managed_subagent_ids().is_empty());
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(child_pid),
+        Some(child_token)
+    );
     assert!(!service.has_macro_run(&parent.turn_id));
     service.terminate_all_pane_processes().unwrap();
     fs::remove_dir_all(base).unwrap();

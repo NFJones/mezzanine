@@ -3532,15 +3532,17 @@ impl RuntimeSessionService {
             self.process.detached_pane_processes.remove(&pane_id);
             return Ok(None);
         }
-        let live_primary_pid = self.primary_pid_for_live_pane_process(&pane_id);
-        if primary_pid != 0
-            && let Some(live_primary_pid) = live_primary_pid
-            && live_primary_pid != primary_pid
-        {
+        // Retained manager/adapter metadata is native exit evidence even
+        // after wait/reap. A logical fresh-spawn capability is never evidence
+        // that a native process exited; unqualified raw events are inert.
+        let Some(live_primary_pid) = self.primary_pid_for_live_pane_process(&pane_id) else {
+            return Ok(None);
+        };
+        if primary_pid != 0 && live_primary_pid != primary_pid {
             return Ok(None);
         }
         let primary_pid = if primary_pid == 0 {
-            live_primary_pid.unwrap_or(0)
+            live_primary_pid
         } else {
             primary_pid
         };
@@ -4789,6 +4791,8 @@ impl RuntimeSessionService {
         self.reconcile_external_agent_registrations();
         let pane_present = self.find_pane_descriptor(pane_id).is_some();
         if !pane_present {
+            // Membership retirement is committed before fallible title repair.
+            self.retire_subagent_cleanup_pane_binding(pane_id);
             self.refresh_subagent_window_names_after_pane_removal()?;
         }
         let agent_id = format!("agent-{pane_id}");
@@ -4844,6 +4848,7 @@ impl RuntimeSessionService {
             self.cancel_agent_session_title_task(&conversation_id);
         }
         self.settle_dead_pane_managed_shell_ownership(pane_id);
+        self.retire_subagent_cleanup_pane_binding(pane_id);
         self.agent_shell_store_mut().remove_session(pane_id);
         self.prune_composer_titles();
         self.integration.remove_pane_permission_override(pane_id);

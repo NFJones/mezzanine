@@ -82,9 +82,12 @@ pane close the resumed conversation, interrupt its work, retire its messaging
 identity, or terminate its native process. Cleanup stops at each historical
 edge, including an intermediate pane with genuine children of its own.
 
-Live cleanup belongs to the exact parent and child conversations and their
-current process owners. Moving the same process to an async adapter preserves
-that obligation; replacing a process or rebinding a child cannot transfer it.
+Live cleanup belongs to the exact parent runtime incarnation/conversation
+and child conversation/process owner. A successful local delegation retains its
+cleanup obligation even if the parent's native process has not started yet;
+saved lineage and process absence alone cannot grant that authority. Moving the
+same process to an async adapter preserves the obligation; replacing a process
+or rebinding a child cannot transfer it.
 A genuine child fenced after its parent changes conversation retains its
 original cleanup obligation without regaining execution or permission authority.
 An owning parent's close or process exit still retires those genuine children,

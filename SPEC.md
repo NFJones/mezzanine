@@ -15825,9 +15825,18 @@ by a new runtime relationship. Historical structural ancestry MUST NOT authorize
 parent-exit, pane-close, failed-spawn, macro, or replacement-fencing teardown.
 Destructive descendant traversal MUST validate every current cleanup edge and
 STOP at any historical-only intermediate, not merely exclude restored leaves.
-Cleanup ownership MUST come from the actual live delegation's exact parent and
-child conversation bindings and current runtime process owners, never persisted
-root/depth/label fields or missing OS evidence. A stale callback MUST be inert
+Cleanup ownership MUST come from the actual live delegation's exact parent
+runtime incarnation/conversation and exact child native owner/binding, never
+persisted root/depth/label fields or missing OS evidence. A successful fresh
+local spawn MAY commit a runtime-only logical parent incarnation before parent
+native startup; merely having no process MUST NOT create such authority. The
+incarnation MUST be captured before child setup, published only after successful
+setup, preserved through conversation-only fencing, and retired with its pane or
+shell lifetime. Its first actual native installation MAY migrate that exact
+captured incarnation without recapturing a conversation; later replacement MUST
+NOT adopt its old obligations. Raw exit events without retained actual native
+ownership MUST be inert even when a logical cleanup incarnation exists.
+A stale callback MUST be inert
 before turn, signal, layout, scope, or identity mutation. Genuine children fenced
 by parent conversation replacement MUST retain their original same-owner cleanup
 obligation across further replacements; they MUST NOT be adopted by the new

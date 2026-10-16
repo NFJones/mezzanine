@@ -1604,6 +1604,7 @@ impl RuntimeSessionService {
         self.agent.subagent_lineage.clear();
         self.agent.subagent_cleanup.ownership.clear();
         self.agent.subagent_cleanup.pending_restore.clear();
+        self.agent.subagent_cleanup.local_parents.clear();
         self.agent.persistent_subagents.clear();
         self.agent.retired_persistent_subagents.clear();
         self.agent.restored_subagent_lineage.clear();

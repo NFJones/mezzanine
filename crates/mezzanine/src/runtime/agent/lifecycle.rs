@@ -345,6 +345,9 @@ impl RuntimeSessionService {
         state: AgentTurnState,
     ) -> Result<Option<AgentShellSession>> {
         let pane_present = self.find_pane_descriptor(&turn.pane_id).is_some();
+        if !pane_present {
+            self.retire_subagent_cleanup_pane_binding(&turn.pane_id);
+        }
         let current_conversation = self
             .agent_shell_store()
             .get(&turn.pane_id)
@@ -451,6 +454,7 @@ impl RuntimeSessionService {
                     .clone(),
             )
         } else {
+            self.retire_subagent_cleanup_pane_binding(&turn.pane_id);
             self.agent_shell_store_mut().remove_session(&turn.pane_id)
         };
         if pane_present
@@ -794,6 +798,9 @@ impl RuntimeSessionService {
             return Ok(0);
         }
         for pane_id in &pane_ids {
+            if self.find_pane_descriptor(pane_id).is_none() {
+                self.retire_subagent_cleanup_pane_binding(pane_id);
+            }
             let parent_agent_id = format!("agent-{pane_id}");
             self.close_subagent_descendants_for_parent_agent(&parent_agent_id, reason)?;
         }
@@ -843,6 +850,7 @@ impl RuntimeSessionService {
                 )?;
                 self.clear_terminal_agent_turn_runtime_state(&turn.turn_id);
                 if !pane_present {
+                    self.retire_subagent_cleanup_pane_binding(&turn.pane_id);
                     self.agent_shell_store_mut().remove_session(&turn.pane_id);
                 }
             }
