@@ -26,6 +26,24 @@ use super::{
     MezError, Result, SearchCredentialRef, SearchProvider, backend::Backend, validate_name,
 };
 
+/// Consumes one fake-only publication countdown, returning the prior value.
+/// Only Ok(1) triggers a fault; zero refuses the update and never wraps. Each
+/// CAS retry rechecks subtraction with SeqCst success and failure ordering.
+#[cfg(test)]
+fn consume_publication_countdown(
+    counter: &std::sync::atomic::AtomicUsize,
+) -> std::result::Result<usize, usize> {
+    use std::sync::atomic::Ordering;
+    let mut remaining = counter.load(Ordering::SeqCst);
+    while let Some(next) = remaining.checked_sub(1) {
+        match counter.compare_exchange_weak(remaining, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(previous) => return Ok(previous),
+            Err(current) => remaining = current,
+        }
+    }
+    Err(remaining)
+}
+
 /// Strict versioned metadata; unknown fields cannot hide inline credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -253,12 +271,7 @@ impl SearchAuthStore {
     fn write(&self, metadata: &Metadata) -> Result<Publication> {
         metadata.validate()?;
         #[cfg(test)]
-        if self.fail_write_at.fetch_update(
-            std::sync::atomic::Ordering::SeqCst,
-            std::sync::atomic::Ordering::SeqCst,
-            |remaining| remaining.checked_sub(1),
-        ) == Ok(1)
-        {
+        if consume_publication_countdown(&self.fail_write_at) == Ok(1) {
             return Err(MezError::config(
                 "synthetic search metadata publication failure",
             ));
@@ -326,12 +339,7 @@ impl SearchAuthStore {
         result
             .map_err(|_: std::io::Error| MezError::config("search auth metadata update failed"))?;
         #[cfg(test)]
-        if self.fail_directory_sync_at.fetch_update(
-            std::sync::atomic::Ordering::SeqCst,
-            std::sync::atomic::Ordering::SeqCst,
-            |remaining| remaining.checked_sub(1),
-        ) == Ok(1)
-        {
+        if consume_publication_countdown(&self.fail_directory_sync_at) == Ok(1) {
             return Ok(Publication::PublishedUnsynced);
         }
         Ok(match directory.sync_all() {

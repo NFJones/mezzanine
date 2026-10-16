@@ -134,12 +134,23 @@ impl OutboundFrontendAdmission {
             }
             // Root may have changed while this peer supplied its hello.
             self.endpoint.frontend_config_root()?;
-            let previous = self
-                .next_generation
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                    value.checked_add(1)
-                })
-                .map_err(|_| MezError::invalid_state("outbound frontend generation exhausted"))?;
+            // Identity allocation publishes no other state. Retry from the
+            // observed value; exhaustion must never wrap or reuse a generation.
+            let mut previous = self.next_generation.load(Ordering::Relaxed);
+            loop {
+                let next = previous.checked_add(1).ok_or_else(|| {
+                    MezError::invalid_state("outbound frontend generation exhausted")
+                })?;
+                match self.next_generation.compare_exchange_weak(
+                    previous,
+                    next,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(current) => previous = current,
+                }
+            }
             let handle = FrontendHandle {
                 owner: self.incarnation.clone(),
                 generation: previous + 1,
