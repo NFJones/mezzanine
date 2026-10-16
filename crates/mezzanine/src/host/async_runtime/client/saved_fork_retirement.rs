@@ -115,3 +115,53 @@ impl SavedForkServiceRetirement {
         MezError::invalid_state("saved fork retirement registry poisoned; ownership unproven")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A failed or panicking sibling must not drop another job's blocking owner.
+    /// Retirement observes the actual producer's destruction while cancellation
+    /// releases its held acquisition; the first failure remains an error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn saved_fork_retirement_observes_blocking_sibling_after_error_or_panic() {
+        for panic in [false, true] {
+            let owner = SavedForkServiceRetirement::default();
+            let started = Arc::new(tokio::sync::Notify::new());
+            let retired = Arc::new(AtomicBool::new(false));
+            let signal = owner.shutdown.clone();
+            let worker_started = started.clone();
+            let worker_retired = retired.clone();
+            owner
+                .spawn(async move {
+                    tokio::task::spawn_blocking(move || {
+                        worker_started.notify_one();
+                        while !signal.load(Ordering::Acquire) {
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
+                        worker_retired.store(true, Ordering::Release);
+                    })
+                    .await
+                    .map_err(|error| MezError::invalid_state(error.to_string()))?;
+                    Ok(())
+                })
+                .unwrap();
+            owner
+                .spawn(async move {
+                    assert!(!panic, "owned sibling panic");
+                    Err(MezError::invalid_state("owned sibling error"))
+                })
+                .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+                .await
+                .unwrap();
+            assert!(!retired.load(Ordering::Acquire));
+            let result = tokio::time::timeout(std::time::Duration::from_secs(2), owner.retire())
+                .await
+                .unwrap();
+            assert!(result.is_err());
+            assert!(retired.load(Ordering::Acquire));
+            assert_eq!(owner.retained_workers_for_tests(), 0);
+        }
+    }
+}
