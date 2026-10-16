@@ -27,7 +27,9 @@ fn auth_search_parse_errors_redact_only_grammar_selected_search() {
             }
             args.extend(tail);
             let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
-            let error = crate::cli::env::CliArgv::parse_or_display(&args).err().unwrap();
+            let error = crate::cli::env::CliArgv::parse_or_display(&args)
+                .err()
+                .unwrap();
             assert!(!format!("{error:?}").contains(CANARY));
             assert!(error.message().starts_with("invalid auth search arguments"));
         }
@@ -45,7 +47,9 @@ fn auth_search_parse_errors_redact_only_grammar_selected_search() {
         vec!["mez", "--iroh-profile", "auth", "config", "search"],
     ] {
         let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
-        let error = crate::cli::env::CliArgv::parse_or_display(&args).err().unwrap();
+        let error = crate::cli::env::CliArgv::parse_or_display(&args)
+            .err()
+            .unwrap();
         assert!(!error.message().starts_with("invalid auth search arguments"));
     }
     for args in [

@@ -18,12 +18,12 @@ pub(super) const OS_SERVICE: &str = "mez-search-auth";
 mod backend;
 /// Versioned non-secret metadata and forward-only credential transactions.
 mod storage;
-pub use storage::{SearchAuthStatus, SearchAuthStore};
 #[allow(
     unused_imports,
     reason = "future trusted search dispatch must name its retained opaque SearchBinding without exposing persistence internals"
 )]
 pub use storage::SearchBinding;
+pub use storage::{SearchAuthStatus, SearchAuthStore};
 
 /// Fixed search providers whose credentials cannot be used for arbitrary URLs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
