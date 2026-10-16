@@ -201,6 +201,126 @@ async fn async_peer_bookkeeping_deferral_preserves_timer_supervisor_and_panes() 
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Isolates the additive checked-completion wake from ordinary maintenance by
+/// explicitly cancelling the fixture's initial delivery timer. A current exact
+/// candidate may rearm it once; an old candidate accepted for its archived
+/// conversation after replacement/removal, or any duplicate, must not wake the
+/// replacement. No provider task or receive cursor is committed by callbacks.
+#[tokio::test]
+async fn async_peer_bookkeeping_callback_wakes_only_current_exact_owner() {
+    for mode in ["current", "replaced", "removed"] {
+        let store = AgentTranscriptStore::new(std::env::temp_dir().join(format!(
+            "mez-peer-callback-{mode}-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        )));
+        let mut service = test_service();
+        service.set_agent_transcript_store(store);
+        service.use_transcript_effect_adapter();
+        service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+            .unwrap();
+        service
+            .start_initial_pane_process(Some("cat >/dev/null"))
+            .unwrap();
+        let original = service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        service
+            .start_agent_prompt_turn("%1", "old exact chronology")
+            .unwrap();
+        service.stop_agent_turn_for_pane("%1").unwrap();
+        let work = service.claim_bookkeeping_candidates().pop().unwrap();
+        if mode != "current" {
+            service.agent_shell_store_mut().remove_session("%1");
+            if mode == "replaced" {
+                let replacement = service
+                    .agent_shell_store_mut()
+                    .enter_or_resume("%1")
+                    .unwrap()
+                    .session_id
+                    .clone();
+                assert_ne!(replacement, original);
+            }
+        }
+        accept_service_peer(&mut service, "%1", crate::runtime::current_unix_millis());
+        let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+            .build()
+            .unwrap();
+        let client = async {
+            let timer = handle
+                .drain_timer_side_effects(64)
+                .await
+                .unwrap()
+                .into_iter()
+                .find_map(|effect| match effect {
+                    RuntimeSideEffect::ScheduleTimer { key, .. }
+                        if key.kind == RuntimeTimerKind::PeerMessageDelivery =>
+                    {
+                        Some(key)
+                    }
+                    _ => None,
+                })
+                .expect("retained fixture mail must own its ordinary startup timer");
+            handle
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::CancelTimer { key: timer }])
+                .await
+                .unwrap();
+            handle.drain_timer_side_effects(64).await.unwrap();
+            let duplicate = work.clone();
+            let history = work.execute();
+            handle
+                .sender
+                .send(AsyncRuntimeRequestEnvelope::new(
+                    AsyncRuntimeRequest::CompleteBookkeepingCandidate { work, history },
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                handle.lifecycle_state().await.unwrap(),
+                RuntimeLifecycleState::Running
+            );
+            let timers = handle.drain_timer_side_effects(64).await.unwrap();
+            let wakes = timers.iter().filter(|effect| matches!(effect, RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::PeerMessageDelivery)).count();
+            assert_eq!(wakes, usize::from(mode == "current"), "{mode}: {timers:?}");
+            handle
+                .sender
+                .send(AsyncRuntimeRequestEnvelope::new(
+                    AsyncRuntimeRequest::CompleteBookkeepingCandidate {
+                        work: duplicate,
+                        history: Ok((Vec::new(), 1)),
+                    },
+                ))
+                .await
+                .unwrap();
+            handle.lifecycle_state().await.unwrap();
+            assert!(!handle.drain_timer_side_effects(64).await.unwrap().iter().any(|effect| matches!(effect, RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::PeerMessageDelivery)));
+            assert!(
+                handle
+                    .pending_agent_provider_tasks()
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            handle.shutdown().await.unwrap();
+        };
+        let ((), mut exit) = tokio::join!(client, actor.run());
+        assert_eq!(exit.service.agent_turn_ledger().turns().len(), 1);
+        assert_eq!(
+            exit.service
+                .message_service_mut()
+                .subscription(&AgentId::opaque("agent-%1").unwrap())
+                .unwrap()
+                .last_sequence,
+            0
+        );
+        exit.service.terminate_all_pane_processes().unwrap();
+    }
+}
+
 /// Waits on actor-owned side-effect revisions until the specific recipient's
 /// task exists. No explicit sweep, timer resubmission, provider execution or
 /// fixed sleep can substitute for the production timer's actual admission.
