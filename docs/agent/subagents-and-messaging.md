@@ -74,6 +74,28 @@ Replacing or removing that owner closes or fences its persistent children;
 they are not daemons that survive an unrelated `/new` task. Omit `lifetime`
 for ordinary one-task delegation.
 
+### Saved lineage and live cleanup ownership
+
+Resuming a saved child conversation independently preserves its historical
+parent alias and delegation limits. That history does not let a reused parent
+pane close the resumed conversation, interrupt its work, retire its messaging
+identity, or terminate its native process. Cleanup stops at each historical
+edge, including an intermediate pane with genuine children of its own.
+
+Live cleanup belongs to the exact parent and child conversations and their
+current process owners. Moving the same process to an async adapter preserves
+that obligation; replacing a process or rebinding a child cannot transfer it.
+A genuine child fenced after its parent changes conversation retains its
+original cleanup obligation without regaining execution or permission authority.
+An owning parent's close or process exit still retires those genuine children,
+even when no primary client is attached. Late callbacks for an older binding
+cannot close a replacement conversation.
+
+A successful full snapshot restore can re-establish persistent cleanup only
+when both exact conversations from that operation acquire their native process
+owners. Standalone conversation resume and partially completed restoration do
+not create that authority.
+
 ### Generated window names after closure
 
 Generated subagent window names reflect the panes currently hosted in the

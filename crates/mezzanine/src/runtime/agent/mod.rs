@@ -201,6 +201,7 @@ mod approvals;
 mod audit;
 mod bookkeeping;
 mod child_failures;
+mod cleanup_ownership;
 pub(crate) use bookkeeping::{
     RuntimeBookkeepingCandidate, RuntimeBookkeepingCandidateWork,
     RuntimeBookkeepingTranscriptReadWork,
@@ -780,6 +781,13 @@ pub(crate) struct RuntimeAgentComponent {
     subagent_scope_declarations: BTreeMap<String, SubagentScopeDeclaration>,
     /// Runtime delegation lineage keyed by child agent id.
     subagent_lineage: BTreeMap<String, RuntimeSubagentLineage>,
+    /// Runtime-only exact live edges permitted to participate in teardown.
+    subagent_cleanup_ownership:
+        BTreeMap<String, cleanup_ownership::RuntimeSubagentCleanupOwnership>,
+    /// Nonauthorizing same-operation restore qualification awaiting native owners.
+    pending_subagent_cleanup_restore: BTreeMap<String, cleanup_ownership::PendingCleanupRestore>,
+    /// Accepted exit bindings scoped to the current synchronous teardown only.
+    subagent_cleanup_exit_witnesses: BTreeMap<String, cleanup_ownership::CleanupBinding>,
     /// Reusable child ownership keyed by MMP agent id.
     persistent_subagents: BTreeMap<String, RuntimePersistentSubagent>,
     /// Bounded, non-authorizing ownership evidence for children fully retired this session.
@@ -1204,6 +1212,9 @@ impl RuntimeAgentComponent {
 pub(crate) struct RuntimeSubagentAuthoritySnapshot {
     lineage: Option<RuntimeSubagentLineage>,
     persistent: Option<RuntimePersistentSubagent>,
+    cleanup_ownership: Option<cleanup_ownership::RuntimeSubagentCleanupOwnership>,
+    pending_cleanup_restore: BTreeMap<String, cleanup_ownership::PendingCleanupRestore>,
+    descendant_fence: Option<String>,
     restored_lineage: bool,
     scope_declaration: Option<SubagentScopeDeclaration>,
     scope_registry: mez_agent::ScopeRegistry,
@@ -1319,6 +1330,9 @@ impl RuntimeSessionService {
         // that happened to use the same pane-derived runtime identity.
         self.agent.retired_persistent_subagents.remove(&agent_id);
         self.agent.restored_subagent_lineage.remove(&agent_id);
+        self.agent.subagent_cleanup_ownership.remove(&agent_id);
+        self.retire_pending_cleanup_restore_for_agent(&agent_id);
+        self.agent.fenced_subagent_descendants.remove(&agent_id);
         self.agent.subagent_lineage.insert(agent_id, lineage);
     }
 
@@ -1332,6 +1346,9 @@ impl RuntimeSessionService {
         // Restored lineage represents a current identity, not a completed
         // closure from an earlier generation that reused this agent id.
         self.agent.retired_persistent_subagents.remove(&agent_id);
+        self.agent.subagent_cleanup_ownership.remove(&agent_id);
+        self.retire_pending_cleanup_restore_for_agent(&agent_id);
+        self.agent.fenced_subagent_descendants.remove(&agent_id);
         self.agent.subagent_scope_declarations.remove(&agent_id);
         self.agent.subagent_scopes.unregister(&agent_id);
         self.agent
@@ -1360,23 +1377,20 @@ impl RuntimeSessionService {
         parent_conversation_id: &str,
     ) -> BTreeMap<String, Option<String>> {
         let descendants = self
-            .agent
-            .subagent_lineage
-            .iter()
-            .filter(|(_agent_id, lineage)| {
-                lineage.parent_agent_id == parent_agent_id
-                    || self.subagent_lineage_has_ancestor(lineage, parent_agent_id)
-            })
-            .map(|(agent_id, _lineage)| agent_id.clone())
-            .collect::<Vec<_>>();
+            .subagent_cleanup_descendant_agent_ids(parent_agent_id, Some(parent_conversation_id));
         let mut previous = BTreeMap::new();
         for agent_id in descendants {
             previous.insert(
                 agent_id.clone(),
                 self.agent
                     .fenced_subagent_descendants
-                    .insert(agent_id, parent_conversation_id.to_string()),
+                    .get(&agent_id)
+                    .cloned(),
             );
+            self.agent
+                .fenced_subagent_descendants
+                .entry(agent_id)
+                .or_insert_with(|| parent_conversation_id.to_string());
         }
         previous
     }
@@ -1493,6 +1507,8 @@ impl RuntimeSessionService {
             .remove(agent_id);
         self.agent.subagent_lineage.remove(agent_id);
         self.agent.persistent_subagents.remove(agent_id);
+        self.agent.subagent_cleanup_ownership.remove(agent_id);
+        self.retire_pending_cleanup_restore_for_agent(agent_id);
         self.agent.restored_subagent_lineage.remove(agent_id);
         self.agent.fenced_subagent_descendants.remove(agent_id);
         self.agent.subagent_scope_declarations.remove(agent_id);
@@ -1507,6 +1523,13 @@ impl RuntimeSessionService {
         RuntimeSubagentAuthoritySnapshot {
             lineage: self.subagent_lineage(agent_id).cloned(),
             persistent: self.persistent_subagent(agent_id).cloned(),
+            cleanup_ownership: self.agent.subagent_cleanup_ownership.get(agent_id).cloned(),
+            pending_cleanup_restore: self.agent.pending_subagent_cleanup_restore.clone(),
+            descendant_fence: self
+                .agent
+                .fenced_subagent_descendants
+                .get(agent_id)
+                .cloned(),
             restored_lineage: self.agent.restored_subagent_lineage.contains(agent_id),
             scope_declaration: self.subagent_scope_declaration(agent_id),
             scope_registry: self.agent.subagent_scopes.clone(),
@@ -1526,6 +1549,17 @@ impl RuntimeSessionService {
     ) {
         self.remove_subagent_authority_state(agent_id);
         self.agent.subagent_scopes = snapshot.scope_registry;
+        self.agent.pending_subagent_cleanup_restore = snapshot.pending_cleanup_restore;
+        if let Some(ownership) = snapshot.cleanup_ownership {
+            self.agent
+                .subagent_cleanup_ownership
+                .insert(agent_id.to_string(), ownership);
+        }
+        if let Some(fence) = snapshot.descendant_fence {
+            self.agent
+                .fenced_subagent_descendants
+                .insert(agent_id.to_string(), fence);
+        }
         if let Some(lineage) = snapshot.lineage {
             self.agent
                 .subagent_lineage
@@ -1570,9 +1604,13 @@ impl RuntimeSessionService {
     pub(crate) fn clear_all_subagent_authority_state(&mut self) {
         self.agent.pending_interrupted_subagent_redirections.clear();
         self.agent.subagent_lineage.clear();
+        self.agent.subagent_cleanup_ownership.clear();
+        self.agent.pending_subagent_cleanup_restore.clear();
+        self.agent.subagent_cleanup_exit_witnesses.clear();
         self.agent.persistent_subagents.clear();
         self.agent.retired_persistent_subagents.clear();
         self.agent.restored_subagent_lineage.clear();
+        self.agent.fenced_subagent_descendants.clear();
         self.agent.subagent_scope_declarations.clear();
         self.agent.subagent_scopes = mez_agent::ScopeRegistry::default();
     }

@@ -3544,16 +3544,19 @@ impl RuntimeSessionService {
         } else {
             primary_pid
         };
-        self.process.detached_pane_processes.remove(&pane_id);
-        self.apply_exited_pane_process(
-            ExitedPaneProcess {
-                pane_id: pane_id.clone(),
-                primary_pid,
-                status: exit_status,
-            },
-            false,
-        )
-        .map(Some)
+        self.with_subagent_cleanup_exit_witness(&pane_id, primary_pid, |service| {
+            service.process.detached_pane_processes.remove(&pane_id);
+            service
+                .apply_exited_pane_process(
+                    ExitedPaneProcess {
+                        pane_id: pane_id.clone(),
+                        primary_pid,
+                        status: exit_status,
+                    },
+                    false,
+                )
+                .map(Some)
+        })
     }
 
     /// Applies one process lifecycle failure delivered by an async watcher.
@@ -4632,6 +4635,8 @@ impl RuntimeSessionService {
                 descriptor.size,
                 start_directory,
             )?;
+        self.invalidate_subagent_cleanup_native_install(descriptor.pane_id.as_str());
+        self.finalize_pending_subagent_cleanup_restore();
         if let Some(managed) = managed_startup {
             if let Some(compatibility) = managed.fish {
                 self.process

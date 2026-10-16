@@ -15821,7 +15821,22 @@ lineage record for delegation limits: direct parent, root, depth, display name,
 and terminal status. Structural lineage alone MUST NOT re-establish live parent
 authority, child-pane placement, or transient parent/child orchestration state;
 a restored child therefore cannot delegate until live authority is established
-by a new runtime relationship. If a checkpoint records an active turn that cannot be
+by a new runtime relationship. Historical structural ancestry MUST NOT authorize
+parent-exit, pane-close, failed-spawn, macro, or replacement-fencing teardown.
+Destructive descendant traversal MUST validate every current cleanup edge and
+STOP at any historical-only intermediate, not merely exclude restored leaves.
+Cleanup ownership MUST come from the actual live delegation's exact parent and
+child conversation bindings and current runtime process owners, never persisted
+root/depth/label fields or missing OS evidence. A stale callback MUST be inert
+before turn, signal, layout, scope, or identity mutation. Genuine children fenced
+by parent conversation replacement MUST retain their original same-owner cleanup
+obligation across further replacements; they MUST NOT be adopted by the new
+conversation or leaked by treating all fenced edges as historical. Failed resume
+MUST restore cleanup proof and fences transactionally. Qualified persistent
+snapshot restoration MAY establish cleanup edges only after both exact bindings
+from that same successful restore operation have actual current runtime owners;
+pending qualification and standalone saved lineage MUST NOT authorize teardown.
+If a checkpoint records an active turn that cannot be
 reconnected after restart, Mezzanine MUST restore the conversation binding but
 MUST mark the turn as interrupted and require a fresh user action to retry.
 

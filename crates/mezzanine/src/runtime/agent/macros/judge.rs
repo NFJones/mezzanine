@@ -341,7 +341,9 @@ impl RuntimeSessionService {
                     })
                     .unwrap_or_else(|| (None, "unknown".to_string(), step_index.saturating_add(1)));
                 self.agent.macro_runs_by_parent_turn.remove(&turn.turn_id);
-                if let Some(child_agent_id) = child_agent_id.as_deref() {
+                if let Some(child_agent_id) = child_agent_id.as_deref()
+                    && self.subagent_cleanup_child_is_owned_by_turn(child_agent_id, turn)
+                {
                     let reason = "macro judge rejected subagent output";
                     self.close_subagent_descendants_for_parent_agent(child_agent_id, reason)?;
                     if let Some(child_pane_id) = runtime_agent_pane_id(child_agent_id) {
@@ -404,7 +406,9 @@ impl RuntimeSessionService {
                     })
                     .unwrap_or_else(|| (None, "unknown".to_string(), step_index.saturating_add(1)));
                 self.agent.macro_runs_by_parent_turn.remove(&turn.turn_id);
-                if let Some(child_agent_id) = child_agent_id.as_deref() {
+                if let Some(child_agent_id) = child_agent_id.as_deref()
+                    && self.subagent_cleanup_child_is_owned_by_turn(child_agent_id, turn)
+                {
                     let reason = "macro completed successfully";
                     self.close_subagent_descendants_for_parent_agent(child_agent_id, reason)?;
                     if let Some(child_pane_id) = runtime_agent_pane_id(child_agent_id) {

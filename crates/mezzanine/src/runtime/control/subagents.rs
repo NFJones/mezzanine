@@ -1150,6 +1150,9 @@ impl RuntimeSessionService {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error);
         }
+        // Capture only the actual installed delegation, never durable lineage
+        // alone. Every later setup failure retires this proof with the child.
+        self.record_subagent_cleanup_ownership(&child_agent_id);
         let child_allowed_action_names =
             serde_json::to_string(&child_allowed_actions.action_type_names()).map_err(|error| {
                 MezError::invalid_state(format!(
