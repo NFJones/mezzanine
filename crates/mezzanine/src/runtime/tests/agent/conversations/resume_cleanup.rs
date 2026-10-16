@@ -221,6 +221,8 @@ fn runtime_cleanup_keeps_same_conversation_live_subtree_obligation() {
     let mut fixture = CleanupFixture::new();
     let child = fixture.spawn("agent-%1");
     let grandchild = fixture.spawn(&child);
+    let child_native = fixture.native_identity(&child);
+    let grandchild_native = fixture.native_identity(&grandchild);
     let conversation = fixture
         .service
         .agent_shell_store()
@@ -234,6 +236,12 @@ fn runtime_cleanup_keeps_same_conversation_live_subtree_obligation() {
     fixture.close("agent-%1");
     assert!(!fixture.present(&child));
     assert!(!fixture.present(&grandchild));
+    for (pid, token) in [child_native, grandchild_native] {
+        assert_ne!(
+            mez_mux::process::process_start_token_for_pid(pid),
+            Some(token)
+        );
+    }
 }
 
 /// Verifies historical-only structure in the middle of an otherwise live
@@ -244,6 +252,8 @@ fn runtime_cleanup_stops_at_resumed_intermediate_live_edge_boundary() {
     let mut fixture = CleanupFixture::new();
     let intermediate = fixture.spawn("agent-%1");
     let leaf = fixture.spawn(&intermediate);
+    let intermediate_native = fixture.native_identity(&intermediate);
+    let leaf_native = fixture.native_identity(&leaf);
     fixture.save("historical-intermediate", Some("agent-%1"));
     fixture.resume(&intermediate, "historical-intermediate");
     assert!(
@@ -257,11 +267,19 @@ fn runtime_cleanup_stops_at_resumed_intermediate_live_edge_boundary() {
         fixture.present(&leaf),
         "a live leaf must not bridge its restored parent's historical edge"
     );
+    fixture.assert_native_identity(&intermediate, intermediate_native);
+    fixture.assert_native_identity(&leaf, leaf_native);
     fixture.close(&intermediate);
     assert!(
         !fixture.present(&leaf),
         "the original same-owner child obligation must not leak"
     );
+    for (pid, token) in [intermediate_native, leaf_native] {
+        assert_ne!(
+            mez_mux::process::process_start_token_for_pid(pid),
+            Some(token)
+        );
+    }
 }
 
 /// Verifies A's genuine children remain cleanup obligations after A -> B -> C,

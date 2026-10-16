@@ -15,6 +15,37 @@ fn assert_routed_process_retired(identity: (u32, u64)) {
     );
 }
 
+/// Creates an actual idle no-join grandchild under the routed worker. Keeping
+/// it alive through invoking-parent restoration proves every transitive edge
+/// remains valid, not merely the incoming routed-worker cleanup endpoint.
+fn spawn_routed_cleanup_grandchild(
+    service: &mut RuntimeSessionService,
+    worker: &mez_agent::AgentTurnRecord,
+) -> (String, (u32, u64)) {
+    service.configure_subagent_policy(8, 8, 8, 8, SubagentWaitPolicy::Detach);
+    let mut action = runtime_spawn_agent_action("cleanup-grandchild", "");
+    let mez_agent::AgentActionPayload::SpawnAgent {
+        lifetime,
+        objective,
+        ..
+    } = &mut action.payload
+    else {
+        unreachable!()
+    };
+    *lifetime = mez_agent::SubagentLifetime::Persistent;
+    *objective = Some("Idle native cleanup grandchild".to_string());
+    let result = service
+        .execute_spawn_action_for_turn(worker, &action)
+        .unwrap();
+    let value: serde_json::Value =
+        serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+    let agent = value["spawn"]["agent"]["id"].as_str().unwrap();
+    let pane = agent.strip_prefix("agent-").unwrap().to_string();
+    let pid = service.primary_pid_for_live_pane_process(&pane).unwrap();
+    let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+    (pane, (pid, token))
+}
+
 /// Routed setup's ephemeral conversation is part of the same successful fresh
 /// delegation. Closing either a native or not-yet-started parent must close
 /// the actual routed child, rather than lose its proof at that setup rebind.
@@ -165,6 +196,8 @@ fn runtime_routed_cleanup_failed_fresh_iteration_retains_recovery_obligation() {
     for mode in ["--fork", "--new"] {
         let (mut service, parent_turn_id, worker) =
             selected_routed_loop(&format!("/loop {mode} --limit 3 inspect cleanup recovery"));
+        let (grandchild, grandchild_native) =
+            spawn_routed_cleanup_grandchild(&mut service, &worker);
         let durable = service
             .agent_loop_state(&worker.pane_id)
             .unwrap()
@@ -203,11 +236,18 @@ fn runtime_routed_cleanup_failed_fresh_iteration_retains_recovery_obligation() {
                 .as_deref(),
             Some(worker.turn_id.as_str())
         );
+        assert!(service.find_pane_descriptor(&grandchild).is_some());
+        assert_eq!(
+            mez_mux::process::process_start_token_for_pid(grandchild_native.0),
+            Some(grandchild_native.1)
+        );
         let primary = service.session.layout_owner_client_id().unwrap().clone();
         let result =
             service.dispatch_runtime_pane_close(&primary, r#"{"pane_id":"%1","force":true}"#);
         let child_present = service.find_pane_descriptor(&worker.pane_id).is_some();
         let after = mez_mux::process::process_start_token_for_pid(pid);
+        assert!(service.find_pane_descriptor(&grandchild).is_none());
+        assert_routed_process_retired(grandchild_native);
         service.terminate_all_pane_processes().unwrap();
         result.unwrap();
         assert!(
@@ -226,6 +266,8 @@ fn runtime_routed_cleanup_restored_parent_handoff_retains_unfenced_obligation() 
     for mode in ["--fork", "--new"] {
         let (mut service, parent_turn_id, worker) =
             selected_routed_loop(&format!("/loop {mode} --limit 1 inspect cleanup handoff"));
+        let (grandchild, grandchild_native) =
+            spawn_routed_cleanup_grandchild(&mut service, &worker);
         let durable = service
             .agent_loop_state(&worker.pane_id)
             .unwrap()
@@ -259,11 +301,18 @@ fn runtime_routed_cleanup_restored_parent_handoff_retains_unfenced_obligation() 
         assert!(service.subagent_descendant_is_fenced(&worker.agent_id));
         service.restore_subagent_descendant_fences(previous);
         assert!(!service.subagent_descendant_is_fenced(&worker.agent_id));
+        assert!(service.find_pane_descriptor(&grandchild).is_some());
+        assert_eq!(
+            mez_mux::process::process_start_token_for_pid(grandchild_native.0),
+            Some(grandchild_native.1)
+        );
         let primary = service.session.layout_owner_client_id().unwrap().clone();
         let result =
             service.dispatch_runtime_pane_close(&primary, r#"{"pane_id":"%1","force":true}"#);
         let child_present = service.find_pane_descriptor(&worker.pane_id).is_some();
         let after = mez_mux::process::process_start_token_for_pid(pid);
+        assert!(service.find_pane_descriptor(&grandchild).is_none());
+        assert_routed_process_retired(grandchild_native);
         service.terminate_all_pane_processes().unwrap();
         result.unwrap();
         assert!(
@@ -309,9 +358,7 @@ fn runtime_routed_cleanup_owned_binding_seam_requires_original_native_edge() {
             )
             .unwrap();
         if replace_parent {
-            service
-                .terminate_runtime_pane_process("%1", true)
-                .unwrap();
+            service.terminate_runtime_pane_process("%1", true).unwrap();
             service.start_initial_pane_process(Some("cat")).unwrap();
         }
         let committed =

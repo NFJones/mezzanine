@@ -218,7 +218,13 @@ async fn async_actor_applies_foreground_process_metadata_to_pane_title() {
 /// this path before pane lifecycle polling can be removed from daemon ticks.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_applies_process_exit_events_to_session_state() {
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+    let mut service = test_service();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let mut process = service.take_running_pane_process_for_adapter("%1").unwrap();
+    let pid = process.primary_pid();
+    let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+    let status = process.terminate(Duration::from_millis(10)).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
 
@@ -227,8 +233,8 @@ async fn async_actor_applies_process_exit_events_to_session_state() {
         batch.push(RuntimeEvent::Process(ProcessEvent::Exited {
             pane_id: "%1".to_string(),
             primary_pid: None,
-            exit_code: Some(0),
-            signal: None,
+            exit_code: status.code,
+            signal: status.signal.map(|signal| signal.to_string()),
         }));
 
         let report = handle.submit_runtime_events(batch).await.unwrap();
@@ -244,6 +250,10 @@ async fn async_actor_applies_process_exit_events_to_session_state() {
     let ((), exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.commands_processed, 2);
     assert!(exit.service.session().windows().is_empty());
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(pid),
+        Some(token)
+    );
 }
 
 /// Verifies that typed process-spawn events initialize pane lifecycle state
