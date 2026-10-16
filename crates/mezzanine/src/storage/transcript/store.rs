@@ -3804,6 +3804,7 @@ impl AgentTranscriptStore {
     /// through capture, target publication and compensation. The source is never
     /// modified, including when committed terminal witnesses await publication.
     /// This does not claim atomicity against arbitrary external file writers.
+    #[cfg(test)]
     pub fn fork(
         &self,
         source_conversation_id: &str,
@@ -3821,6 +3822,7 @@ impl AgentTranscriptStore {
 
     /// Publishes a fork and captures its generation while mutation ownership is
     /// still held. Deferred pane adoption retains this receipt for compensation.
+    #[cfg(test)]
     pub(crate) fn fork_owned(
         &self,
         source_conversation_id: &str,

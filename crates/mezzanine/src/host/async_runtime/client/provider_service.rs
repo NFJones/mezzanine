@@ -363,6 +363,7 @@ where
 /// Commands are intentionally claimed separately from provider work. One command
 /// remains in flight at a time, preserving the pane-owned command lifecycle while
 /// ensuring a stalled provider request cannot delay a queued command claim.
+#[cfg(test)]
 pub async fn run_async_agent_command_service<F>(
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncAgentProviderServiceConfig,

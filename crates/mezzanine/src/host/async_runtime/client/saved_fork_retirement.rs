@@ -173,9 +173,8 @@ impl SavedForkServiceRetirement {
         self.draining.store(true, Ordering::Release);
         let mut completed = 0u64;
         while self.len()? != 0 {
-            match self.drain_completed() {
-                Ok(count) => completed = completed.saturating_add(count),
-                Err(_) => {}
+            if let Ok(count) = self.drain_completed() {
+                completed = completed.saturating_add(count);
             }
             if self.len()? != 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;

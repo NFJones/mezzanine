@@ -1968,7 +1968,9 @@ impl RuntimeSessionService {
                 adoption.cleanup_safe = pane_cleanup.is_ok()
                     && self.find_pane_descriptor(&started.pane_id).is_none()
                     && self.agent_shell_store().get(&started.pane_id).is_none()
-                    && !self.pane_processes().contains_pane(&started.pane_id)
+                    && !self
+                        .tracked_runtime_pane_process_ids()
+                        .contains(&started.pane_id)
                     && !self.pane_process_is_adapter_owned(&started.pane_id);
                 if !adoption.cleanup_safe {
                     return Err(MezError::invalid_state(format!(

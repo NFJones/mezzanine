@@ -264,17 +264,17 @@ impl AsyncRuntimeServiceSupervisor {
         self.tasks.abort_all();
         let mut cleanup_failure = None;
         while let Some(joined) = self.tasks.join_next_with_id().await {
-            if let Err(error) = self.report_joined_service(joined) {
-                if cleanup_failure.is_none() {
-                    cleanup_failure = Some(error);
-                }
+            if let Err(error) = self.report_joined_service(joined)
+                && cleanup_failure.is_none()
+            {
+                cleanup_failure = Some(error);
             }
         }
         for retirement in &self.saved_fork_retirements {
-            if let Err(error) = retirement.retire().await {
-                if cleanup_failure.is_none() {
-                    cleanup_failure = Some(error);
-                }
+            if let Err(error) = retirement.retire().await
+                && cleanup_failure.is_none()
+            {
+                cleanup_failure = Some(error);
             }
         }
         match (result, cleanup_failure) {
