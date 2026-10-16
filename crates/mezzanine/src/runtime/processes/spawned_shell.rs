@@ -587,21 +587,9 @@ impl SpawnedShellExecutor {
         };
         if let Some(status_reader) = status_reader {
             let backend = sandbox_backend.unwrap_or(crate::runtime::SandboxBackend::Bubblewrap);
-            let status_complete = status_reader.completed;
-            let status_capture = join_output_reader(status_reader).map_err(|_| {
-                spawned_lifecycle_error(
-                    backend,
-                    crate::security::sandbox::SandboxLifecycleFailureClass::Transport,
-                    None,
-                    &output,
-                    stderr_capture.dropped,
-                )
-            })?;
-            validate_spawned_child_status(
+            join_and_validate_spawned_child_status(
+                status_reader,
                 backend,
-                &status_capture.bytes,
-                status_capture.dropped,
-                status_complete,
                 &output,
                 stderr_capture.dropped,
             )?;
@@ -1048,6 +1036,34 @@ fn join_output_reader(reader: SpawnedChildPipeReader) -> Result<CapturedPipeOutp
 
 /// Validates trusted sandbox lifecycle evidence captured outside stdout and
 /// stderr for one completed typed child launch.
+fn join_and_validate_spawned_child_status(
+    status_reader: SpawnedChildPipeReader,
+    backend: crate::runtime::SandboxBackend,
+    output: &ShellExecutionOutput,
+    stderr_dropped: usize,
+) -> Result<()> {
+    let status_complete = status_reader.completed;
+    let status_capture = join_output_reader(status_reader).map_err(|_| {
+        spawned_lifecycle_error(
+            backend,
+            crate::security::sandbox::SandboxLifecycleFailureClass::Transport,
+            None,
+            output,
+            stderr_dropped,
+        )
+    })?;
+    validate_spawned_child_status(
+        backend,
+        &status_capture.bytes,
+        status_capture.dropped,
+        status_complete,
+        output,
+        stderr_dropped,
+    )
+}
+
+/// Validates trusted sandbox lifecycle evidence captured outside stdout and
+/// stderr for one completed typed child launch.
 fn validate_spawned_child_status(
     backend: crate::runtime::SandboxBackend,
     status_bytes: &[u8],
@@ -1156,6 +1172,9 @@ fn kill_process_group(pid: i32) {
         }
     }
 }
+
+#[cfg(test)]
+mod reader_completion_tests;
 
 #[cfg(test)]
 mod tests {
