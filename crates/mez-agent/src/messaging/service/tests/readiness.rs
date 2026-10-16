@@ -54,11 +54,11 @@ fn readiness_direct_lookup_preserves_cursors_and_expiry() {
     );
 }
 
-/// Selector metadata inspection uses the existing recipient work budget. A
-/// remaining page conservatively keeps maintenance alive rather than claiming
-/// global emptiness. Complete small scans may quiet all policy-fenced mail.
+/// More subscribers than a delivery page must neither strand a later eligible
+/// recipient nor keep an idle timer forever after every cursor acknowledges.
+/// The complete borrowed scan also quiets all-policy-fenced selector mail.
 #[test]
-fn readiness_selector_budget_is_conservative_without_payload_clones() {
+fn readiness_selector_scan_quiets_acknowledged_and_fenced_mail() {
     let mut service = MessageService::default();
     let sender = service.register_agent(None, None, "agent", Vec::new());
     for _ in 0..80 {
@@ -67,7 +67,7 @@ fn readiness_selector_budget_is_conservative_without_payload_clones() {
             .subscribe_from_retained_start(&recipient.agent_id)
             .unwrap();
     }
-    service
+    let delivery = service
         .accept_at_with_scope(
             &sender.agent_id,
             envelope(&sender, Recipient::Session, None),
@@ -76,25 +76,24 @@ fn readiness_selector_budget_is_conservative_without_payload_clones() {
         )
         .unwrap();
     let mut inspected = 0;
-    assert!(service.has_ready_delivery_matching(1, |_, _| {
+    assert!(!service.has_ready_delivery_matching(1, |_, _| {
         inspected += 1;
         false
     }));
-    assert_eq!(inspected, FanoutBudget::default().max_recipients);
-    let mut small = MessageService::default();
-    let sender = small.register_agent(None, None, "agent", Vec::new());
-    small
-        .subscribe_from_retained_start(&sender.agent_id)
-        .unwrap();
-    small
-        .accept_at_with_scope(
-            &sender.agent_id,
-            envelope(&sender, Recipient::Session, None),
-            MessageScope::Session,
-            1,
-        )
-        .unwrap();
-    assert!(!small.has_ready_delivery_matching(1, |_, _| false));
+    assert_eq!(inspected, 80);
+    let last = service.subscription_order.values().last().unwrap().clone();
+    assert!(service.has_ready_delivery_matching(1, |recipient, _| recipient == &last));
+    let recipients = service
+        .subscription_order
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    for recipient in recipients {
+        service
+            .advance_subscription(&recipient, delivery.sequence)
+            .unwrap();
+    }
+    assert!(!service.has_ready_delivery_matching(1, |_, _| panic!("all mail was acknowledged")));
 }
 
 /// Produces one canonical fixture envelope; queries only borrow this payload.

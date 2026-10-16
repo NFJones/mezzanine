@@ -6,12 +6,16 @@
 use super::*;
 
 impl MessageService {
-    /// Reports possibly actionable unread mail without materializing payloads
-    /// or moving the fair fanout cursor. Direct recipients use exact lookups;
-    /// selector mail checks at most the ordinary recipient budget per retained
-    /// envelope. Exhausting that budget conservatively retains a delivery wake,
-    /// never claims there is no work beyond an inspected page. The retained
-    /// envelope count/bytes remain bounded by this service's retention policy.
+    /// Reports actionable unread mail without materializing payloads or moving
+    /// the fair fanout cursor. Direct recipients use exact lookups; selector
+    /// mail borrows subscribed identities and stops at the first eligible match.
+    /// A complete negative result is exact, including beyond a fanout page, so
+    /// acknowledged or policy-fenced retained mail cannot sustain an idle tick.
+    ///
+    /// Retained envelopes obey configured count/byte bounds. Selector inspection
+    /// additionally scales with the current subscriber count, which is not fixed
+    /// by the fanout work budget; no payload bytes or recipient list are cloned.
+    /// Actual delivery retains its separate aggregate fanout budget unchanged.
     ///
     /// The predicate borrows authenticated recipient and envelope metadata only.
     /// Presence, accepted audience, expiry and the durable acknowledgement cursor
@@ -39,14 +43,7 @@ impl MessageService {
             if let Recipient::Agent(recipient) = &queued.envelope.recipient {
                 return matches(recipient);
             }
-            let limit = FanoutBudget::default().max_recipients;
-            let mut recipients = self.subscription_order.values();
-            for recipient in recipients.by_ref().take(limit) {
-                if matches(recipient) {
-                    return true;
-                }
-            }
-            recipients.next().is_some()
+            self.subscription_order.values().any(matches)
         })
     }
 
