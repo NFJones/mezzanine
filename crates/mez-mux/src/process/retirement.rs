@@ -607,7 +607,7 @@ impl RetainedPaneChild {
             return Ok(false);
         }
         if signal == Signal::HUP {
-            if progress.hup_sent {
+            if progress.hup_sent || progress.term_sent {
                 return Ok(false);
             }
             progress.hup_sent = true;
@@ -641,9 +641,10 @@ impl RetainedPaneChild {
     }
 
     /// Shares stage selection with synchronous callers. Custom grace is the
-    /// absolute HUP-to-TERM offset from the original start, with KILL at twice
-    /// that offset, always clipped by the existing deadline. It never creates
-    /// fresh per-call grace or replays a stage sent before handoff.
+    /// absolute HUP-to-TERM offset from the original start, capped at the
+    /// default 500ms to reserve the established force/wait tail. KILL occurs at
+    /// twice that offset, under the existing deadline. This never creates fresh
+    /// per-call grace or replays a stage sent before handoff.
     pub(super) fn poll_termination_with_grace(
         &mut self,
         force: bool,
@@ -653,6 +654,7 @@ impl RetainedPaneChild {
             return Ok(Some(status));
         }
         self.begin_termination(force)?;
+        let grace = grace.min(Duration::from_millis(500));
         let raw = self.raw_mut()?;
         // A live guard's begin_termination always installs this plan.
         let plan = raw
@@ -775,7 +777,8 @@ mod tests {
     }
 
     /// Synchronous advancement after handoff must not repeat already-issued
-    /// graceful stages or renew their grace. A real root reports any accidental
+    /// graceful stages or renew their grace. Flags are injected as retained
+    /// handoff state; a real root reports any accidental
     /// replay; native wait/SRCH, not output closure, proves final settlement.
     #[test]
     fn synchronous_termination_preserves_sent_stages_and_original_start() {
@@ -811,6 +814,70 @@ mod tests {
             assert_eq!(final_plan.started, original.started);
             assert_eq!(final_plan.deadline, original.deadline);
         }
+    }
+
+    /// Long custom grace must reserve force/wait within the original two-second
+    /// timeline. A real signal-resistant root stays under held-master ownership
+    /// until actual KILL/wait/SRCH, without renewing its established deadline.
+    #[test]
+    fn long_synchronous_grace_reserves_native_force_and_wait_tail() {
+        for grace in [Duration::from_secs(1), Duration::from_secs(30)] {
+            let owner = PaneProcessRetirementOwner::default();
+            let mut process = signal_observer(&owner);
+            let master = process.duplicate_master_fd().unwrap();
+            let original = process.child.begin_termination(false).unwrap();
+            let result = process.terminate(grace);
+            let pid = rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap())
+                .unwrap();
+            let absent = rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH);
+            let same_deadline = process
+                .child
+                .raw
+                .as_ref()
+                .unwrap()
+                .progress
+                .plan
+                .unwrap()
+                .deadline
+                == original;
+            // Independently settle an owned fixture if the desired operation
+            // failed; this direct exact handle is not product completion proof.
+            if !absent {
+                let native = process
+                    .child
+                    .raw
+                    .as_mut()
+                    .unwrap()
+                    .child
+                    .as_mut()
+                    .as_any_mut()
+                    .downcast_mut::<std::process::Child>()
+                    .unwrap();
+                let _ = std::process::Child::kill(native);
+                let _ = process.wait();
+            }
+            drop(master);
+            assert!(
+                result.is_ok() && absent && owner.outstanding() == 0,
+                "long grace skipped native force: {result:?}"
+            );
+            assert!(same_deadline, "long grace renewed the original deadline");
+        }
+    }
+
+    /// Explicit TERM must make subsequent HUP obsolete, just as shared stage
+    /// selection does. This synthetic state control exercises the private
+    /// recorder without authorizing any real group or opaque killer signal.
+    #[test]
+    fn explicit_term_suppresses_later_hup_stage() {
+        let state = Arc::new(ChildState::default());
+        let mut child =
+            RetainedPaneChild::standalone(Box::new(ControlledChild(state.clone())), None);
+        assert!(child.record_signal(Signal::TERM).unwrap());
+        assert!(!child.record_signal(Signal::HUP).unwrap());
+        state.exited.store(true, Ordering::SeqCst);
+        assert!(child.try_wait().unwrap().is_some());
+        assert_eq!(state.kills.load(Ordering::SeqCst), 0);
     }
 
     /// A force upgrade recorded by the owner survives synchronous handoff:
