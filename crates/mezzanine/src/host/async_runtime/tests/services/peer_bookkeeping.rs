@@ -286,6 +286,19 @@ async fn async_peer_bookkeeping_callback_wakes_only_current_exact_owner() {
             let timers = handle.drain_timer_side_effects(64).await.unwrap();
             let wakes = timers.iter().filter(|effect| matches!(effect, RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::PeerMessageDelivery)).count();
             assert_eq!(wakes, usize::from(mode == "current"), "{mode}: {timers:?}");
+            // Draining effects does not retire actor timer ownership. Cancel
+            // the first rearm so a duplicate cannot hide behind timer_active.
+            for effect in timers {
+                if let RuntimeSideEffect::ScheduleTimer { key, .. } = effect
+                    && key.kind == RuntimeTimerKind::PeerMessageDelivery
+                {
+                    handle
+                        .queue_runtime_side_effects(vec![RuntimeSideEffect::CancelTimer { key }])
+                        .await
+                        .unwrap();
+                }
+            }
+            handle.drain_timer_side_effects(64).await.unwrap();
             handle
                 .sender
                 .send(AsyncRuntimeRequestEnvelope::new(
