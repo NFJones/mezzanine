@@ -5,7 +5,8 @@ use crate::runtime::RuntimeAgentCompactionTarget;
 
 /// Canonical raw-text auxiliary responses may contain dense Unicode JSON or an
 /// optional final-say frame. Measure and publish the payload, never its wrapper;
-/// nested action/rationale data must remain ordinary summary text.
+/// top-level/nested action and rationale data must remain ordinary summary text
+/// on both automatic and manual paths, including after a private correction.
 #[test]
 fn runtime_compaction_raw_and_framed_payloads_preserve_summary_identity() {
     let dense = r#"{"decision":{"actions":["保留🦀"],"rationale":"retain evidence"}}"#;
@@ -16,6 +17,18 @@ fn runtime_compaction_raw_and_framed_payloads_preserve_summary_identity() {
     .to_string();
     for (raw, expected) in [
         (dense.to_string(), dense),
+        (
+            r#"{"actions":["retain file evidence"],"decision":"done"}"#.to_string(),
+            r#"{"actions":["retain file evidence"],"decision":"done"}"#,
+        ),
+        (
+            r#"{"rationale":"keep evidence","actions":["inspect files"]}"#.to_string(),
+            r#"{"rationale":"keep evidence","actions":["inspect files"]}"#,
+        ),
+        (
+            r#"{"rationale":"keep evidence","next":"inspect files"}"#.to_string(),
+            r#"{"rationale":"keep evidence","next":"inspect files"}"#,
+        ),
         (batch.clone(), "保留🦀 bounded summary"),
         (
             format!("```mezzanine-action-json\n{batch}\n```"),
@@ -28,7 +41,7 @@ fn runtime_compaction_raw_and_framed_payloads_preserve_summary_identity() {
         service.claim_agent_compaction_task_state("%1", task);
         let mut response = runtime_test_compaction_response("");
         response.action_batch = None;
-        response.raw_text = raw;
+        response.raw_text = raw.clone();
         service
             .apply_agent_compaction_completed_event("%1", response)
             .unwrap();
@@ -38,6 +51,7 @@ fn runtime_compaction_raw_and_framed_payloads_preserve_summary_identity() {
         assert!(
             epoch.summary == expected || epoch.ranges.iter().any(|range| range.summary == expected)
         );
+        qualify_manual_summary_correction(false, Some((&raw, expected)));
     }
 }
 
@@ -224,7 +238,7 @@ fn runtime_compaction_provider_failure_preserves_correction_provenance() {
 /// accepting a short model summary publishes once without an ordinary turn.
 #[test]
 fn runtime_manual_compaction_invalid_completed_summary_repairs_privately() {
-    qualify_manual_summary_correction(false);
+    qualify_manual_summary_correction(false, None);
 }
 
 /// A valid repaired manual summary cannot publish over selected durable rows
@@ -232,11 +246,12 @@ fn runtime_manual_compaction_invalid_completed_summary_repairs_privately() {
 /// are revalidated by the same candidate owner used for correction admission.
 #[test]
 fn runtime_manual_compaction_summary_correction_rejects_source_changed_during_retry() {
-    qualify_manual_summary_correction(true);
+    qualify_manual_summary_correction(true, None);
 }
 
-/// Seeds one manual frozen source and optionally replaces its row during repair.
-fn qualify_manual_summary_correction(mutate: bool) {
+/// Seeds one manual frozen source and optionally replaces its row during repair
+/// or delivers raw provider text to qualify optional-frame versus JSON identity.
+fn qualify_manual_summary_correction(mutate: bool, raw: Option<(&str, &str)>) {
     let mut service = test_runtime_service();
     service.replace_config_layers(vec![ConfigLayer {
         name: "manual-correction".into(), path: None, format: ConfigFormat::Toml,
@@ -302,7 +317,20 @@ fn qualify_manual_summary_correction(mutate: bool) {
     } else {
         None
     };
-    complete_runtime_test_compaction(&mut service, "%1", "short accepted manual summary");
+    let expected = if let Some((raw, expected)) = raw {
+        let task = service.take_pending_agent_compaction_task("%1").unwrap();
+        service.claim_agent_compaction_task_state("%1", task);
+        let mut response = runtime_test_compaction_response("");
+        response.action_batch = None;
+        response.raw_text = raw.to_string();
+        service
+            .apply_agent_compaction_completed_event("%1", response)
+            .unwrap();
+        expected
+    } else {
+        complete_runtime_test_compaction(&mut service, "%1", "short accepted manual summary");
+        "short accepted manual summary"
+    };
     assert!(!service.agent_is_compacting("%1"));
     if let Some(changed) = changed {
         assert!(
@@ -326,7 +354,7 @@ fn qualify_manual_summary_correction(mutate: bool) {
             .unwrap()
             .unwrap()
             .summary
-            .contains("short accepted manual summary")
+            .ends_with(expected)
     );
     assert!(service.pending_agent_provider_tasks().is_empty());
 }

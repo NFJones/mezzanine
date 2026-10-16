@@ -55,8 +55,10 @@ async fn async_openai_compaction_retry_wires_omit_max_output_tokens() {
             RetryPath::OutputLimit,
             RetryPath::ContextSplit,
         ] {
-            Box::pin(qualify(false, streaming, false, retry)).await;
-            Box::pin(qualify(true, streaming, false, retry)).await;
+            for allocation in [false, true] {
+                Box::pin(qualify(false, streaming, allocation, retry)).await;
+                Box::pin(qualify(true, streaming, allocation, retry)).await;
+            }
         }
     }
 }
