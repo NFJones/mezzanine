@@ -2,8 +2,11 @@
 //!
 //! `SessionSupervisor` sits above `SessionFactory`: it reserves stable session
 //! identities before asynchronous construction, runs each ready runtime in an
-//! independent Tokio task, and indexes only cloneable actor handles. Map locks
-//! are never held across factory, actor, or task awaits. Every entry carries a
+//! independent Tokio task, and retains actor handles, exact native ownership and
+//! non-evictable completion receipts. Entries remain discoverable through
+//! callback/terminal publication, and failures latch before final removal. Map
+//! locks are never held across callbacks, factory, actor, or task awaits. Every
+//! entry carries a
 //! monotonically increasing generation so completion from an older task cannot
 //! remove or overwrite a replacement session with the same identity.
 
@@ -84,7 +87,7 @@ struct SessionSupervisorInner {
     runtime_completion_handler: Option<RuntimeCompletionHandler>,
     /// Final CLI/host cleanup closes admission before collecting native owners.
     native_cleanup_sealed: AtomicBool,
-    /// One bounded private native receipt survives entry/history removal.
+    /// One bounded private native/completion-cleanup receipt survives removal.
     native_failure: Mutex<Option<String>>,
     #[cfg(test)]
     start_reservation_probe: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
@@ -1276,6 +1279,24 @@ impl SessionSupervisorInner {
         let healthy = state == SessionSupervisorState::Stopped
             && snapshot.failure.is_none()
             && callback.is_ok();
+        // Keep the claimed entry in the shutdown barrier throughout terminal
+        // publication. A snapshot starting now must see Pending, not absence.
+        let publication = self.push_terminal(snapshot);
+        if let Some(error) = callback
+            .as_ref()
+            .err()
+            .or_else(|| publication.as_ref().err())
+        {
+            let mut first = self.native_failure.lock().map_err(|_| {
+                MezError::invalid_state("native/completion cleanup failure receipt is unavailable")
+            })?;
+            first.get_or_insert_with(|| {
+                format!("runtime completion cleanup failed: {error}")
+                    .chars()
+                    .take(4096)
+                    .collect()
+            });
+        }
         let removed = {
             let mut entries = self.entries()?;
             if entries
@@ -1288,39 +1309,18 @@ impl SessionSupervisorInner {
             }
         };
         if let Some(entry) = removed {
-            return self.publish_removed_completion(entry, snapshot, healthy, callback);
+            let healthy = healthy
+                && publication.is_ok()
+                && entry.native.is_sealed()
+                && entry.native.outstanding() == 0
+                && !entry.native.has_cleanup_failure();
+            entry.completion.send_replace(if healthy {
+                ExactCompletionState::Stopped
+            } else {
+                ExactCompletionState::Failed
+            });
+            self.changed.notify_waiters();
         }
-        Ok(())
-    }
-
-    /// Publishes only the matching removal winner's terminal receipt. Separated
-    /// from removal so tests can observe its legitimate Pending window through
-    /// the same production publisher, never fabricate a healthy watch value.
-    fn publish_removed_completion(
-        &self,
-        entry: SupervisorEntry,
-        snapshot: SessionSupervisorSnapshot,
-        healthy: bool,
-        callback: Result<()>,
-    ) -> Result<()> {
-        let terminal_matches = entry.completion_claimed
-            && entry.generation == snapshot.generation
-            && snapshot.state == SessionSupervisorState::Stopped
-            && snapshot.failure.is_none();
-        let publication = self.push_terminal(snapshot);
-        let healthy = healthy
-            && terminal_matches
-            && callback.is_ok()
-            && publication.is_ok()
-            && entry.native.is_sealed()
-            && entry.native.outstanding() == 0
-            && !entry.native.has_cleanup_failure();
-        entry.completion.send_replace(if healthy {
-            ExactCompletionState::Stopped
-        } else {
-            ExactCompletionState::Failed
-        });
-        self.changed.notify_waiters();
         callback.and(publication)
     }
 

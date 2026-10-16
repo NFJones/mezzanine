@@ -240,6 +240,9 @@ actor/reducer failures still fail. Final host shutdown waits for the captured
 generation's non-evictable completion receipt, successful callback/publication,
 sealed native zero and fresh failure receipts. An absent entry, closed watch,
 or evicted status row is not a healthy completion receipt.
+The entry remains registered through callback and terminal publication; their
+cleanup failures latch privately before removal, even without an existing
+watch receiver or terminal history. A later shutdown cannot miss that failure.
 
 Rust embedders receive `CliExit` from `mezzanine::run_cli()`, not a bare `u8`.
 Borrow `code()` and `pending_native_children()` while retaining the outcome;

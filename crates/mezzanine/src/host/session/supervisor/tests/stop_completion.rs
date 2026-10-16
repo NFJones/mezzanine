@@ -99,10 +99,9 @@ async fn closed_actor_stop_waits_for_exact_completion_without_history() {
     drop(master);
 }
 
-/// Removal before stop admission, including Pending between removal and
-/// publication, must await the captured receipt rather than issue another stop
-/// or treat NotFound as success. This invokes the actual production publisher
-/// after real runtime/native completion and does not inject a Stopped value.
+/// If real completion publication wins before stop admission, the captured
+/// target uses that exact receipt without another actor request or ID lookup.
+/// Publication is the natural production path, not an injected watch state.
 #[tokio::test(flavor = "current_thread")]
 async fn removed_exact_target_waits_for_publication_then_skips_stop_effects() {
     let supervisor = SessionSupervisor::new(0);
@@ -116,41 +115,24 @@ async fn removed_exact_target_waits_for_publication_then_skips_stop_effects() {
     observed.await.unwrap();
     supervisor.fence_native_admission(false).unwrap();
     let captured = target(&supervisor, handle.session_id());
-    let mut entry = supervisor
-        .inner
-        .entries()
-        .unwrap()
-        .remove(handle.session_id())
-        .unwrap();
-    entry.completion_claimed = true;
-    let snapshot = SessionSupervisorSnapshot {
-        session_id: handle.session_id().into(),
-        generation: entry.generation,
-        state: SessionSupervisorState::Stopped,
-        runtime_state: Some(RuntimeLifecycleState::Killed),
-        power_inhibition: None,
-        failure: None,
-    };
+    let mut completion = captured.completion.clone();
+    release.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while *completion.borrow_and_update() == ExactCompletionState::Pending {
+            completion.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(*completion.borrow(), ExactCompletionState::Stopped);
+    assert!(!supervisor.contains(handle.session_id()).unwrap());
     let wait = supervisor.stop_exact_shutdown_target(
         handle.session_id(),
         captured,
         true,
         tokio::time::Instant::now() + Duration::from_secs(1),
     );
-    tokio::pin!(wait);
-    assert!(
-        tokio::time::timeout(Duration::from_millis(10), &mut wait)
-            .await
-            .is_err(),
-        "absent entry bypassed Pending publication"
-    );
-    supervisor
-        .inner
-        .publish_removed_completion(entry, snapshot, true, Ok(()))
-        .unwrap();
     wait.await.unwrap();
-    release.send(()).unwrap();
-    tokio::task::yield_now().await;
     assert_eq!(supervisor.native_pending_count().unwrap(), 0);
     assert!(supervisor.inner.terminal().unwrap().is_empty());
     assert_eq!(
@@ -197,6 +179,81 @@ async fn completion_callback_error_cannot_publish_healthy_stop() {
     assert!(error.message().contains("completion failed"));
     assert_eq!(supervisor.native_pending_count().unwrap(), 0);
     assert!(supervisor.inner.terminal().unwrap().is_empty());
+}
+
+/// With no preexisting receipt receiver and zero history, callback failure must
+/// survive complete entry removal and make a later shutdown/CLI cleanup fail.
+/// The real runtime and production callback/publication path supply evidence.
+#[tokio::test(flavor = "current_thread")]
+async fn callback_failure_survives_late_snapshot_without_receivers() {
+    let supervisor = SessionSupervisor::new_with_runtime_completion_handler(
+        0,
+        Some(RuntimeCompletionHandler(Arc::new(|_| {
+            Err(MezError::new(MezErrorKind::Io, "late callback failure"))
+        }))),
+    );
+    let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
+    let handle = supervisor
+        .start(test_request("late-callback-failure", id))
+        .await
+        .unwrap();
+    supervisor.stop(handle.session_id(), true).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while supervisor.contains(handle.session_id()).unwrap() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(supervisor.inner.terminal().unwrap().is_empty());
+    assert_eq!(supervisor.native_pending_count().unwrap(), 0);
+    assert!(
+        supervisor
+            .native_cleanup_failure()
+            .unwrap()
+            .unwrap()
+            .contains("late callback failure")
+    );
+    assert!(
+        supervisor
+            .shutdown_all(true, Duration::from_secs(1))
+            .await
+            .is_err()
+    );
+}
+
+/// Terminal-history publication failure must latch before entry removal even
+/// without receipt subscribers. Poison only the fixture's own history mutex;
+/// this is a labelled publication failure, not an OS fault or native proof.
+#[tokio::test(flavor = "current_thread")]
+async fn publication_failure_survives_late_snapshot_without_receivers() {
+    let supervisor = SessionSupervisor::new(1);
+    let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
+    let handle = supervisor
+        .start(test_request("late-publication-failure", id))
+        .await
+        .unwrap();
+    let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _history = supervisor.inner.terminal.lock().unwrap();
+        panic!("labelled fixture history publication failure");
+    }));
+    assert!(poisoned.is_err());
+    supervisor.stop(handle.session_id(), true).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while supervisor.contains(handle.session_id()).unwrap() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(supervisor.native_pending_count().unwrap(), 0);
+    assert!(supervisor.native_cleanup_failure().unwrap().is_some());
+    assert!(
+        supervisor
+            .shutdown_all(true, Duration::from_secs(1))
+            .await
+            .is_err()
+    );
 }
 
 /// A stale generation snapshot must fail before dispatch and cannot stop a

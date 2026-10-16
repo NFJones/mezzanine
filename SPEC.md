@@ -2302,6 +2302,9 @@ generation's native wait and completion callback/entry publication, independentl
 of evictable history. Missing entries, closed completion publishers and zero
 child counts alone MUST NOT prove healthy completion. Callback or publication
 failure MUST NOT publish a healthy exact completion receipt.
+In-flight completion publication MUST remain in the host shutdown barrier;
+cleanup failure MUST latch before the matching entry can disappear, including
+when no receipt receiver exists and terminal history is disabled.
 
 ### 5.3 Shared SQLite Session-State Storage
 
