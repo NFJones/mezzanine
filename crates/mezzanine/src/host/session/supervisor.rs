@@ -92,6 +92,15 @@ struct SessionSupervisorInner {
     native_startup_probe: Mutex<Option<(String, u64, super::NativePaneStartupProbe)>>,
     #[cfg(test)]
     fail_next_stop: AtomicU64,
+    /// Test-local observation gate after real runtime/native completion, before
+    /// callback/entry publication. It never replaces child or lifecycle I/O.
+    #[cfg(test)]
+    runtime_completion_probe: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
 }
 
 #[derive(Debug)]
@@ -99,7 +108,31 @@ struct SupervisorEntry {
     generation: u64,
     /// Exists before factory startup; never stored in evictable terminal history.
     native: PaneProcessRetirementOwner,
+    /// Exact non-evictable receipt retained by in-flight shutdown snapshots.
+    completion: watch::Sender<ExactCompletionState>,
+    /// Serializes matching finishers without holding the map during callbacks.
+    completion_claimed: bool,
     state: SupervisorEntryState,
+}
+
+/// Private monotonic completion evidence, never a public raw error/handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExactCompletionState {
+    /// Native/callback/entry publication is not yet proved complete.
+    Pending,
+    /// Matching runtime, callback and native settlement succeeded.
+    Stopped,
+    /// Completion failed; closure and zero cannot erase it.
+    Failed,
+}
+
+/// Generation/owner/receipt captured after host admission has been sealed.
+struct ExactShutdownTarget {
+    generation: u64,
+    native: PaneProcessRetirementOwner,
+    completion: watch::Receiver<ExactCompletionState>,
+    /// Captured exact handle; no later ID lookup can target a replacement.
+    request: Option<(SessionRuntimeHandle, watch::Sender<bool>)>,
 }
 
 #[derive(Debug)]
@@ -230,6 +263,8 @@ impl SessionSupervisor {
                 native_startup_probe: Mutex::new(None),
                 #[cfg(test)]
                 fail_next_stop: AtomicU64::new(0),
+                #[cfg(test)]
+                runtime_completion_probe: Mutex::new(None),
             }),
         }
     }
@@ -263,6 +298,8 @@ impl SessionSupervisor {
                 SupervisorEntry {
                     generation,
                     native: native.clone(),
+                    completion: watch::channel(ExactCompletionState::Pending).0,
+                    completion_claimed: false,
                     state: SupervisorEntryState::Starting { cancelled: false },
                 },
             );
@@ -386,6 +423,13 @@ impl SessionSupervisor {
                 }
             };
             let completion = runtime.run(Vec::new(), cancellation).await;
+            #[cfg(test)]
+            let publication_probe = { inner.runtime_completion_probe.lock().unwrap().take() };
+            #[cfg(test)]
+            if let Some((arrived, release)) = publication_probe {
+                let _ = arrived.send(());
+                let _ = release.await;
+            }
             let (state, runtime_state, failure) = match completion {
                 Ok(completion) => {
                     let runtime_state = completion.service.lifecycle_state();
@@ -587,6 +631,8 @@ impl SessionSupervisor {
             SupervisorEntry {
                 generation: 1,
                 native: PaneProcessRetirementOwner::default(),
+                completion: watch::channel(ExactCompletionState::Pending).0,
+                completion_claimed: false,
                 state: SupervisorEntryState::CleanupPending {
                     failure: "PRIVATE_NATIVE_HOST_ENTRY_CANARY /private/host-entry".to_string(),
                 },
@@ -648,29 +694,51 @@ impl SessionSupervisor {
                 MezError::invalid_args("session shutdown budget is not representable")
             })?;
         self.fence_native_admission(false)?;
-        let mut session_ids = {
-            let entries = self.inner.entries()?;
+        let mut targets = {
+            let mut entries = self.inner.entries()?;
             entries
-                .iter()
-                .filter_map(|(id, entry)| {
+                .iter_mut()
+                .map(|(id, entry)| {
                     entry.native.request_shutdown(force);
-                    // Pending native retries are progressed in fair quanta below,
-                    // not held as whole-lifetime futures ahead of owner seventeen.
-                    (!matches!(entry.state, SupervisorEntryState::CleanupPending { .. }))
-                        .then(|| id.clone())
+                    let request = match &mut entry.state {
+                        SupervisorEntryState::Starting { cancelled } => {
+                            *cancelled = true;
+                            None
+                        }
+                        SupervisorEntryState::CleanupPending { .. } => None,
+                        SupervisorEntryState::Running { handle, cancel }
+                        | SupervisorEntryState::Stopping { handle, cancel } => {
+                            Some((handle.clone(), cancel.clone()))
+                        }
+                    };
+                    if let Some((handle, cancel)) = &request {
+                        entry.state = SupervisorEntryState::Stopping {
+                            handle: handle.clone(),
+                            cancel: cancel.clone(),
+                        };
+                    }
+                    (
+                        id.clone(),
+                        ExactShutdownTarget {
+                            generation: entry.generation,
+                            native: entry.native.clone(),
+                            completion: entry.completion.subscribe(),
+                            request,
+                        },
+                    )
                 })
                 .collect::<Vec<_>>()
         };
-        session_ids.sort();
+        targets.sort_by(|left, right| left.0.cmp(&right.0));
         // One future per already-admitted session, not detached tasks. Poll all
         // stop admissions rather than blocking the seventeenth behind stalled
         // actors; native work itself remains fixed-quanta and nonblocking.
-        let mut stops: futures_util::stream::FuturesUnordered<_> = session_ids
+        let mut stops: futures_util::stream::FuturesUnordered<_> = targets
             .into_iter()
-            .map(|session_id| async move {
+            .map(|(session_id, target)| async move {
                 tokio::time::timeout_at(
                     deadline,
-                    self.stop_with_native_deadline(&session_id, force, deadline),
+                    self.stop_exact_shutdown_target(&session_id, target, force, deadline),
                 )
                 .await
                 .map_err(|_| MezError::invalid_state("session supervisor stop deadline expired"))?
@@ -733,6 +801,93 @@ impl SessionSupervisor {
                     primary.message()
                 ),
             )),
+        }
+    }
+
+    /// Uses only a sealed snapshot's exact handle, never a later ID lookup.
+    /// Removal before admission skips repeated effects but still awaits the
+    /// exact completion receipt. A replacement generation remains an error.
+    async fn stop_exact_shutdown_target(
+        &self,
+        session_id: &str,
+        mut target: ExactShutdownTarget,
+        force: bool,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        let present = {
+            let entries = self.inner.entries()?;
+            match entries.get(session_id) {
+                Some(entry) if entry.generation != target.generation => {
+                    return Err(MezError::conflict(
+                        "shutdown target generation was replaced",
+                    ));
+                }
+                Some(_) => true,
+                None => false,
+            }
+        };
+        if present && let Some((handle, cancel)) = target.request.take() {
+            let admission = if force {
+                handle
+                    .force_shutdown(format!("session supervisor stopped `{session_id}`"))
+                    .await
+            } else {
+                handle
+                    .graceful_shutdown(format!("session supervisor stopped `{session_id}`"))
+                    .await
+            };
+            let _ = cancel.send(true);
+            admission?;
+        }
+        self.await_exact_completion(session_id, target, deadline)
+            .await
+    }
+
+    /// Waits the matching generation's actual publication, including its
+    /// remove-to-publication window. Lost Pending publishers fail closed.
+    /// Stopped still requires sealed native zero and a fresh failure sample;
+    /// actor intent and evictable history are never native completion proof.
+    async fn await_exact_completion(
+        &self,
+        session_id: &str,
+        mut target: ExactShutdownTarget,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        loop {
+            let state = *target.completion.borrow_and_update();
+            match state {
+                ExactCompletionState::Pending => {
+                    tokio::time::timeout_at(deadline, target.completion.changed())
+                        .await
+                        .map_err(|_| {
+                            MezError::invalid_state("exact runtime completion deadline expired")
+                        })?
+                        .map_err(|_| {
+                            MezError::invalid_state("exact runtime completion publisher was lost")
+                        })?;
+                }
+                ExactCompletionState::Failed => {
+                    return Err(MezError::invalid_state("exact runtime completion failed"));
+                }
+                ExactCompletionState::Stopped => {
+                    if let Some(entry) = self.inner.entries()?.get(session_id) {
+                        return Err(if entry.generation != target.generation {
+                            MezError::conflict("shutdown target generation was replaced")
+                        } else {
+                            MezError::invalid_state("exact completion precedes entry settlement")
+                        });
+                    }
+                    if !target.native.is_sealed() || target.native.outstanding() != 0 {
+                        return Err(MezError::invalid_state(
+                            "exact runtime native completion remains unproven",
+                        ));
+                    }
+                    if let Some(failure) = target.native.cleanup_failure() {
+                        return Err(MezError::invalid_state(failure));
+                    }
+                    return Ok(());
+                }
+            }
         }
     }
 
@@ -1045,7 +1200,9 @@ impl SessionSupervisorInner {
                 .get(session_id)
                 .is_some_and(|entry| entry.generation == generation)
             {
-                entries.remove(session_id);
+                if let Some(entry) = entries.remove(session_id) {
+                    entry.completion.send_replace(ExactCompletionState::Failed);
+                }
                 true
             } else {
                 false
@@ -1082,14 +1239,20 @@ impl SessionSupervisorInner {
         )? {
             return Ok(());
         }
-        let accepted = self
-            .entries()?
-            .get(session_id)
-            .is_some_and(|entry| entry.generation == generation);
+        let accepted = {
+            let mut entries = self.entries()?;
+            match entries.get_mut(session_id) {
+                Some(entry) if entry.generation == generation && !entry.completion_claimed => {
+                    entry.completion_claimed = true;
+                    true
+                }
+                _ => false,
+            }
+        };
         if !accepted {
             return Ok(());
         }
-        let snapshot = SessionSupervisorSnapshot {
+        let mut snapshot = SessionSupervisorSnapshot {
             session_id: session_id.to_string(),
             generation,
             state,
@@ -1097,26 +1260,68 @@ impl SessionSupervisorInner {
             power_inhibition: None,
             failure,
         };
-        if let Some(handler) = &self.runtime_completion_handler {
-            let _ = (handler.0)(&snapshot);
+        let callback = self
+            .runtime_completion_handler
+            .as_ref()
+            .map_or(Ok(()), |handler| (handler.0)(&snapshot));
+        if let Err(error) = &callback {
+            snapshot.state = SessionSupervisorState::Failed;
+            snapshot.failure.get_or_insert_with(|| {
+                format!("runtime completion callback failed: {error}")
+                    .chars()
+                    .take(4096)
+                    .collect()
+            });
         }
+        let healthy = state == SessionSupervisorState::Stopped
+            && snapshot.failure.is_none()
+            && callback.is_ok();
         let removed = {
             let mut entries = self.entries()?;
             if entries
                 .get(session_id)
-                .is_some_and(|entry| entry.generation == generation)
+                .is_some_and(|entry| entry.generation == generation && entry.completion_claimed)
             {
-                entries.remove(session_id);
-                true
+                entries.remove(session_id)
             } else {
-                false
+                None
             }
         };
-        if removed {
-            self.push_terminal(snapshot)?;
-            self.changed.notify_waiters();
+        if let Some(entry) = removed {
+            return self.publish_removed_completion(entry, snapshot, healthy, callback);
         }
         Ok(())
+    }
+
+    /// Publishes only the matching removal winner's terminal receipt. Separated
+    /// from removal so tests can observe its legitimate Pending window through
+    /// the same production publisher, never fabricate a healthy watch value.
+    fn publish_removed_completion(
+        &self,
+        entry: SupervisorEntry,
+        snapshot: SessionSupervisorSnapshot,
+        healthy: bool,
+        callback: Result<()>,
+    ) -> Result<()> {
+        let terminal_matches = entry.completion_claimed
+            && entry.generation == snapshot.generation
+            && snapshot.state == SessionSupervisorState::Stopped
+            && snapshot.failure.is_none();
+        let publication = self.push_terminal(snapshot);
+        let healthy = healthy
+            && terminal_matches
+            && callback.is_ok()
+            && publication.is_ok()
+            && entry.native.is_sealed()
+            && entry.native.outstanding() == 0
+            && !entry.native.has_cleanup_failure();
+        entry.completion.send_replace(if healthy {
+            ExactCompletionState::Stopped
+        } else {
+            ExactCompletionState::Failed
+        });
+        self.changed.notify_waiters();
+        callback.and(publication)
     }
 
     fn push_terminal(&self, snapshot: SessionSupervisorSnapshot) -> Result<()> {
@@ -1151,6 +1356,7 @@ mod tests {
     use crate::host::shell::{ResolvedShell, ShellSource};
 
     mod receipt_ordering;
+    mod stop_completion;
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(10_000);
 
@@ -1440,6 +1646,8 @@ mod tests {
             SupervisorEntry {
                 generation: 1,
                 native,
+                completion: watch::channel(ExactCompletionState::Pending).0,
+                completion_claimed: false,
                 state: SupervisorEntryState::CleanupPending {
                     failure: "original native fixture failure".to_string(),
                 },
@@ -1537,6 +1745,8 @@ mod tests {
             SupervisorEntry {
                 generation: 7,
                 native: native.clone(),
+                completion: watch::channel(ExactCompletionState::Pending).0,
+                completion_claimed: false,
                 state: SupervisorEntryState::Starting { cancelled: false },
             },
         );

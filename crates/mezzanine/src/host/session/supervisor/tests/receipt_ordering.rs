@@ -44,6 +44,8 @@ fn returned_starting_owner(
                 SupervisorEntry {
                     generation: 1,
                     native: native.clone(),
+                    completion: watch::channel(ExactCompletionState::Pending).0,
+                    completion_claimed: false,
                     state: SupervisorEntryState::Starting { cancelled: false },
                 }
             )

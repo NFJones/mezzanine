@@ -188,6 +188,7 @@ pub use client::{
 pub(crate) use config::AsyncRuntimeRequestLane;
 pub(crate) use config::ClientClipboardRouteLease;
 pub(crate) use config::ControlConnectionCleanupLease;
+pub(crate) use config::ShutdownEventAdmission;
 pub use config::{
     AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig, AsyncControlInputResult,
     AsyncMessageFanout, AsyncMessageInputResult, AsyncRuntimeActorConfig, AsyncRuntimeActorExit,

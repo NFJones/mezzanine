@@ -2295,6 +2295,14 @@ best-effort signaling and kernel adoption, never a successful reap claim.
 Public opaque CLI Debug formatting MUST expose only coarse effective exit and
 pending/unknown status, never private retained diagnostics, owners or handles.
 
+Redundant shutdown transport closure MAY establish admission idempotence only
+with terminal intent from the same retained actor handle; actor/reducer errors
+MUST remain errors. Successful host shutdown MUST also observe that exact
+generation's native wait and completion callback/entry publication, independently
+of evictable history. Missing entries, closed completion publishers and zero
+child counts alone MUST NOT prove healthy completion. Callback or publication
+failure MUST NOT publish a healthy exact completion receipt.
+
 ### 5.3 Shared SQLite Session-State Storage
 
 Session-state stores that adopt SQLite MUST use one database per concern. A

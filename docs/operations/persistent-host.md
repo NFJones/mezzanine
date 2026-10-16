@@ -233,6 +233,14 @@ I/O is not capped or stopped merely to make room for a cleanup record. Review
 the diagnostic and retry the same session stop rather than searching for or
 killing numeric PIDs or repeating user commands.
 
+A repeated stop may arrive after the original actor channel has closed but
+before its native drain and completion callback settle. Only typed transport
+closure with terminal intent from that same handle is redundant admission;
+actor/reducer failures still fail. Final host shutdown waits for the captured
+generation's non-evictable completion receipt, successful callback/publication,
+sealed native zero and fresh failure receipts. An absent entry, closed watch,
+or evicted status row is not a healthy completion receipt.
+
 Rust embedders receive `CliExit` from `mezzanine::run_cli()`, not a bare `u8`.
 Borrow `code()` and `pending_native_children()` while retaining the outcome;
 use `retry_native_cleanup(budget)` inside a caller-owned Tokio runtime for an

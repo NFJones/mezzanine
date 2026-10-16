@@ -36,9 +36,8 @@ use crate::host::power_inhibition::{
 };
 use crate::runtime::x11::RuntimeX11Proxy;
 use crate::runtime::{
-    RuntimeEvent, RuntimeEventBatch, RuntimeIrohShutdownHandle, RuntimeLifecycleState,
-    RuntimePowerInhibitionStatus, RuntimeSessionService, ShutdownEvent, bind_control_socket,
-    build_runtime_iroh_control_service,
+    RuntimeIrohShutdownHandle, RuntimeLifecycleState, RuntimePowerInhibitionStatus,
+    RuntimeSessionService, ShutdownEvent, bind_control_socket, build_runtime_iroh_control_service,
 };
 use crate::security::auth::{AuthPaths, AuthStore};
 use crate::security::project::{ProjectTrustStore, default_trust_database_path};
@@ -424,14 +423,41 @@ impl SessionRuntimeHandle {
         force: bool,
     ) -> Result<()> {
         self.native_retirement_owner().request_shutdown(force);
-        let mut batch = RuntimeEventBatch::new();
-        batch.push(RuntimeEvent::Shutdown(ShutdownEvent {
-            reason: reason.into(),
-            force,
-            failed: false,
-        }));
-        self.actor.submit_runtime_events(batch).await?;
-        Ok(())
+        let lifecycle = self.actor.lifecycle_state_watcher();
+        let admission = self
+            .actor
+            .admit_owner_shutdown(ShutdownEvent {
+                reason: reason.into(),
+                force,
+                failed: false,
+            })
+            .await?;
+        let state = *lifecycle.borrow();
+        Self::resolve_owner_shutdown_admission(admission, state)
+    }
+
+    /// Classifies only the typed transport outcome against the same handle's
+    /// watched intent. Genuine actor errors never enter this predicate. This
+    /// proves redundant admission only, not runtime or native completion.
+    fn resolve_owner_shutdown_admission(
+        admission: crate::host::async_runtime::ShutdownEventAdmission,
+        state: RuntimeLifecycleState,
+    ) -> Result<()> {
+        match admission {
+            crate::host::async_runtime::ShutdownEventAdmission::Admitted => Ok(()),
+            crate::host::async_runtime::ShutdownEventAdmission::TransportUnavailable(error) => {
+                // Same-handle terminal intent proves only redundant admission.
+                // The supervisor still requires exact completion and native wait.
+                if matches!(
+                    state,
+                    RuntimeLifecycleState::Stopping | RuntimeLifecycleState::Killed
+                ) {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 }
 
@@ -500,11 +526,26 @@ impl SessionRuntime {
             };
             let result = supervise_async_runtime_services(services, cancellation).await;
             let shutdown = shutdown_handle.shutdown().await;
-            // Preserve the initiating supervision error while still reporting
-            // actor cleanup failures when supervision itself completed normally.
-            result.and_then(|report| shutdown.map(|_| report))
+            (result, shutdown)
         };
-        let (supervision, mut actor_exit) = tokio::join!(daemon, actor.run());
+        let ((supervision, shutdown), mut actor_exit) = tokio::join!(daemon, actor.run());
+        // Shutdown's reply is a plain lifecycle value: errors at this specific
+        // request boundary are send/reply transport errors, not reducer errors.
+        // Only the actual joined actor exit can classify redundant closure.
+        let shutdown = match shutdown {
+            Err(_)
+                if matches!(
+                    actor_exit.service.lifecycle_state(),
+                    RuntimeLifecycleState::Stopping | RuntimeLifecycleState::Killed
+                ) =>
+            {
+                Ok(())
+            }
+            result => result.map(|_| ()),
+        };
+        // Preserve the initiating supervision error while still reporting
+        // actor cleanup failures when supervision itself completed normally.
+        let supervision = supervision.and_then(|report| shutdown.map(|()| report));
         let native = self.handle.native_retirement_owner();
         native.request_shutdown(
             supervision.is_err()
@@ -895,6 +936,39 @@ mod tests {
         assert_eq!(report.services.len(), 1);
         assert_eq!(report.services[0].name, "host-power-inhibition");
         assert_eq!(report.services[0].exit.work_units, 0);
+    }
+
+    /// Classified transport closure cannot be blessed by Running, Detached or
+    /// Failed intent. Only Stopping/Killed admit a redundant shutdown, retaining
+    /// the original transport error kind/cause for every negative control.
+    #[test]
+    fn owner_shutdown_transport_requires_same_handle_terminal_intent() {
+        use crate::host::async_runtime::ShutdownEventAdmission;
+        for state in [
+            RuntimeLifecycleState::Running,
+            RuntimeLifecycleState::Detached,
+            RuntimeLifecycleState::Stopping,
+            RuntimeLifecycleState::Killed,
+            RuntimeLifecycleState::Failed,
+        ] {
+            let outcome = SessionRuntimeHandle::resolve_owner_shutdown_admission(
+                ShutdownEventAdmission::TransportUnavailable(MezError::new(
+                    crate::MezErrorKind::Io,
+                    "classified closed transport",
+                )),
+                state,
+            );
+            if matches!(
+                state,
+                RuntimeLifecycleState::Stopping | RuntimeLifecycleState::Killed
+            ) {
+                assert!(outcome.is_ok());
+            } else {
+                let error = outcome.unwrap_err();
+                assert_eq!(error.kind(), crate::MezErrorKind::Io);
+                assert!(error.message().contains("classified closed transport"));
+            }
+        }
     }
 
     /// Two reusable runtimes must retain independent actors and lifecycle state.

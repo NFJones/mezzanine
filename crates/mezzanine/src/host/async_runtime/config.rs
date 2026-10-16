@@ -937,6 +937,17 @@ pub struct AsyncRuntimeSessionActor {
     pub(super) metrics: AsyncRuntimeActorMetrics,
 }
 
+/// Admission evidence for the owner-specific shutdown event only. Transport
+/// closure is distinct from an actor-produced reducer error (the outer Result)
+/// and is never native completion or permission to replay arbitrary events.
+#[derive(Debug)]
+pub(crate) enum ShutdownEventAdmission {
+    /// The actor accepted and applied the shutdown event.
+    Admitted,
+    /// The send channel closed or its oneshot reply was lost.
+    TransportUnavailable(MezError),
+}
+
 /// Carries Async Runtime Session Handle state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
