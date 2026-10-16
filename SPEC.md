@@ -2305,6 +2305,8 @@ failure MUST NOT publish a healthy exact completion receipt.
 In-flight completion publication MUST remain in the host shutdown barrier;
 cleanup failure MUST latch before the matching entry can disappear, including
 when no receipt receiver exists and terminal history is disabled.
+Final CLI cleanup and borrowed exit status MUST include this publication
+barrier, without counting callback obligations as synthetic native children.
 
 ### 5.3 Shared SQLite Session-State Storage
 

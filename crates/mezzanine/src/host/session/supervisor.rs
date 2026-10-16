@@ -937,6 +937,52 @@ impl SessionSupervisor {
         self.drain_native_after_seal(deadline).await
     }
 
+    /// Final host/CLI cleanup includes runtime callback/publication settlement.
+    /// Internal native-only progress remains separate to avoid waiting on a
+    /// callback from inside its own resource drain. One outer deadline covers
+    /// both barriers; failure is sampled again only after publication settles.
+    pub(crate) async fn finish_native_retirement(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        self.seal_native_admission()?;
+        let mut first = self.drain_native_after_seal(deadline).await.err();
+        let publication = tokio::time::timeout_at(deadline, async {
+            loop {
+                let changed = self.inner.changed.notified();
+                if !self.has_pending_runtime_completion()? {
+                    return Ok(());
+                }
+                changed.await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            MezError::invalid_state("host runtime completion publication deadline expired")
+        })
+        .and_then(|result| result);
+        if let Err(error) = publication {
+            first.get_or_insert(error);
+        }
+        match self.native_cleanup_failure() {
+            Ok(Some(failure)) => {
+                first.get_or_insert_with(|| MezError::invalid_state(failure));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                first.get_or_insert(error);
+            }
+        }
+        first.map_or(Ok(()), Err)
+    }
+
+    /// Coarse final-publication status, distinct from actual native child count.
+    /// Entries stay registered through callback/publication; poisoned status
+    /// remains unknown rather than a fabricated settled result.
+    pub(crate) fn has_pending_runtime_completion(&self) -> Result<bool> {
+        Ok(!self.inner.entries()?.is_empty())
+    }
+
     /// Fair native quanta run independently of potentially stalled actor stops.
     async fn drain_native_after_seal(&self, deadline: tokio::time::Instant) -> Result<()> {
         self.drain_native_with_owner_receipts(deadline, PaneProcessRetirementOwner::cleanup_failure)
@@ -1043,7 +1089,7 @@ impl SessionSupervisor {
         Ok(())
     }
 
-    /// Returns private native failure evidence independently of terminal history.
+    /// Returns private native/completion cleanup evidence independently of history.
     pub(crate) fn native_cleanup_failure(&self) -> Result<Option<String>> {
         self.inner
             .native_failure

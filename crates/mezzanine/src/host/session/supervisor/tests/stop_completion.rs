@@ -38,6 +38,55 @@ fn pause_completion(
     (observed, release)
 }
 
+impl SessionSupervisor {
+    /// Test-only cross-owner fixture for final CLI completion. Native retirement
+    /// uses a real runtime and held-master root wait/SRCH; only the subsequent
+    /// callback/publication is gated. No synthetic healthy receipt is installed.
+    pub(crate) async fn paused_completion_fixture_for_test(
+        callback_failure: bool,
+    ) -> (Self, tokio::sync::oneshot::Sender<()>) {
+        let handler = callback_failure.then(|| {
+            RuntimeCompletionHandler(Arc::new(|_| {
+                Err(MezError::new(
+                    MezErrorKind::Io,
+                    "held callback fixture failure",
+                ))
+            }))
+        });
+        let supervisor = Self::new_with_runtime_completion_handler(0, handler);
+        let (observed, release) = pause_completion(&supervisor);
+        let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
+        let handle = supervisor
+            .start(test_request("cli-held-completion", id))
+            .await
+            .unwrap();
+        let native = handle.native_retirement_owner();
+        let process = mez_mux::process::spawn_retained_argv_pty_process(
+            std::path::Path::new("/bin/cat"),
+            &[],
+            &[],
+            Size::new(80, 24).unwrap(),
+            None,
+            native.reserve().unwrap(),
+        )
+        .unwrap();
+        let pid =
+            rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap()).unwrap();
+        let master = process.duplicate_master_fd().unwrap();
+        drop(process);
+        supervisor.stop(handle.session_id(), true).await.unwrap();
+        observed.await.unwrap();
+        assert_eq!(native.outstanding(), 0);
+        assert_eq!(
+            rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
+        );
+        supervisor.seal_native_admission().unwrap();
+        drop(master);
+        (supervisor, release)
+    }
+}
+
 /// An actor can already be closed while its exact entry awaits callback
 /// publication. Repeated stop admission is benign only for that terminal
 /// handle; shutdown must remain pending until real completion is published.

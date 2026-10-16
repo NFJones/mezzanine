@@ -69,6 +69,7 @@ impl CliExit {
         if self.native.cleanup_failed
             || !self.native.is_sealed()
             || !matches!(self.pending_native_children(), Ok(0))
+            || !matches!(self.native.host_completion_is_settled(), Ok(true))
             || !matches!(self.native.has_retained_failure(), Ok(false))
         {
             1
@@ -119,7 +120,9 @@ impl Termination for CliExit {
 impl Drop for CliExit {
     /// Publishes an unproven-abandonment diagnostic without waiting or panicking.
     fn drop(&mut self) {
-        if !matches!(self.pending_native_children(), Ok(0)) {
+        if !matches!(self.pending_native_children(), Ok(0))
+            || !matches!(self.native.host_completion_is_settled(), Ok(true))
+        {
             let _ = writeln!(
                 io::stderr().lock(),
                 "mez: abandoning unproven native cleanup ownership; process exit is not a reap receipt"
@@ -172,6 +175,15 @@ impl CliNativeOwnership {
                 .is_none_or(SessionSupervisor::native_admission_is_sealed)
     }
 
+    /// Final host publication is independent of native count: zero children
+    /// must not hide an actor callback/entry publication still in flight.
+    fn host_completion_is_settled(&self) -> Result<bool> {
+        self.host.as_ref().map_or(Ok(true), |host| {
+            host.has_pending_runtime_completion()
+                .map(|pending| !pending)
+        })
+    }
+
     /// Failure evidence is independent of cardinality and cannot become healthy
     /// merely because a cancelled future's last child was eventually reaped.
     fn has_retained_failure(&self) -> Result<bool> {
@@ -220,7 +232,7 @@ impl CliNativeOwnership {
             failure.get_or_insert(error);
         }
         if let Some(host) = &self.host
-            && let Err(error) = host.drain_native_retirement(deadline).await
+            && let Err(error) = host.finish_native_retirement(deadline).await
         {
             failure.get_or_insert(error);
         }
@@ -236,6 +248,44 @@ impl CliNativeOwnership {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real native wait/SRCH may complete before a host callback. With sealed
+    /// admission and zero actual children, borrowed status must still be nonzero
+    /// and final retry must remain pending until publication. Releasing success
+    /// and actual callback error separately proves both final verdicts.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_exit_waits_for_real_completion_publication_at_native_zero() {
+        for callback_failure in [false, true] {
+            let (host, release) =
+                SessionSupervisor::paused_completion_fixture_for_test(callback_failure).await;
+            let mut native = CliNativeOwnership::default();
+            native.retain_host(host).unwrap();
+            let mut exit = CliExit::owned(0, native);
+            assert!(exit.native.is_sealed());
+            assert!(!exit.native.has_retained_failure().unwrap());
+            assert_eq!(exit.pending_native_children().unwrap(), 0);
+            assert_eq!(
+                exit.code(),
+                1,
+                "pending publication looked healthy at native zero"
+            );
+            let result = {
+                let retry = exit.retry_native_cleanup(Duration::from_secs(1));
+                tokio::pin!(retry);
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(10), &mut retry)
+                        .await
+                        .is_err(),
+                    "final cleanup bypassed publication barrier"
+                );
+                release.send(()).unwrap();
+                retry.await
+            };
+            assert_eq!(result.is_err(), callback_failure);
+            assert_eq!(exit.pending_native_children().unwrap(), 0);
+            assert_eq!(exit.code(), u8::from(callback_failure));
+        }
+    }
 
     /// Creates only a test-owned PTY child with its mandatory pre-spawn slot.
     fn live_native_outcome(

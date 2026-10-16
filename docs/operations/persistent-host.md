@@ -243,6 +243,9 @@ or evicted status row is not a healthy completion receipt.
 The entry remains registered through callback and terminal publication; their
 cleanup failures latch privately before removal, even without an existing
 watch receiver or terminal history. A later shutdown cannot miss that failure.
+Final `CliExit` cleanup waits for the same publication barrier. Borrowed status
+remains nonzero while it is pending or unknown, even when the actual native
+child count is zero; callback obligations do not inflate that count.
 
 Rust embedders receive `CliExit` from `mezzanine::run_cli()`, not a bare `u8`.
 Borrow `code()` and `pending_native_children()` while retaining the outcome;
