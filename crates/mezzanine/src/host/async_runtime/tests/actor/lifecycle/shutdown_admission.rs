@@ -3,7 +3,7 @@
 //! not OS faults, native completion, or permission to replay consumed effects.
 
 use super::*;
-use crate::host::async_runtime::ShutdownEventAdmission;
+use crate::host::async_runtime::{AsyncRuntimeSessionActor, ShutdownEventAdmission};
 
 /// Takes only the one request admitted by this isolated fixture. It is removed
 /// from the real ingress, so oneshot response/drop exercises the actual boundary.
