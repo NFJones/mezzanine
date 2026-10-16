@@ -5,6 +5,8 @@
 
 use super::*;
 
+mod bookkeeping;
+
 /// Builds a genuine persistent child with an initial task and parks its parent
 /// in an explicit peer wait. Both actors use the runtime's normal spawn and
 /// provider execution boundaries, not a forged task-result envelope.

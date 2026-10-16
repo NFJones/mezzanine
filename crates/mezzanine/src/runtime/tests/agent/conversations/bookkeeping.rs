@@ -5,6 +5,8 @@
 
 use super::*;
 
+mod receive_admission;
+
 /// Real stopped-turn chronology candidates must fence manual compaction even
 /// when earlier eligible durable rows exist. Queued, worker-claimed and blocked
 /// candidates are all unchecked history; asynchronous admission must not mark

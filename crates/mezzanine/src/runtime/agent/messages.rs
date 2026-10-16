@@ -1207,7 +1207,14 @@ impl RuntimeSessionService {
         failure: Option<&super::child_failures::OwnedChildFailure>,
     ) -> Result<usize> {
         let agent_id = format!("agent-{pane_id}");
-        if self.agent_shell_store().get(pane_id).is_none() {
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
+            return Ok(0);
+        };
+        // Candidates and terminal handoff receipts belong to this exact
+        // conversation, not the pane's earlier or future binding. Defer before
+        // speculative history/context, loop accounting, or cursor mutation;
+        // accepted envelopes and owned-child receipts remain with their owners.
+        if self.persistence.bookkeeping_pending(&session.session_id) {
             return Ok(0);
         }
         if self.subagent_descendant_is_fenced(&agent_id) {
@@ -1405,7 +1412,9 @@ impl RuntimeSessionService {
     /// direct user input resets the counter, so it must not keep re-arming the
     /// delivery timer (and re-reporting the limit) once per tick. Runtime-owned
     /// bridge traffic never starts a turn, so it keeps the ordinary pending
-    /// behavior that also drives TTL expiry.
+    /// behavior that also drives TTL expiry. Pending bookkeeping uses this same
+    /// bounded one-second maintenance cadence; receive admission checks only
+    /// its exact conversation fence, never retries the failed archive read.
     pub(crate) fn has_pending_peer_messages(&mut self, now_ms: u64) -> bool {
         if self.has_pending_owned_child_failure_handoff() {
             return true;
