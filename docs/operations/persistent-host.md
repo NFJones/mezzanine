@@ -213,6 +213,10 @@ authority reports failure but still attempts safe exact-root force and bounded
 wait. Foreground/job-control observations remain metadata, not signal authority.
 This covers the root and its birth group, not every foreground job, detached
 descendant, session or cgroup; normal kernel/shell PTY hangup behavior remains.
+Synchronous custom grace uses TERM at one grace interval and KILL at two from
+the original termination start, clipped to that same finite deadline. Handoff
+does not replay completed stages or delay a force upgrade. Expired cleanup
+observes status without issuing new signals and remains unproven until wait.
 
 If native cleanup cannot be proved within its deadline, the live host retains
 the exact session generation in cleanup-pending state (reported as stopping).

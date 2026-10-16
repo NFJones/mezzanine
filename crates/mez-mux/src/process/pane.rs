@@ -773,35 +773,33 @@ impl PaneProcess {
         }
         let deadline = self.child.begin_termination(false)?;
         let mut first = None;
-        for signal in [Signal::HUP, Signal::TERM] {
-            if let Err(error) = self.send_signal_to_process_group(signal) {
-                first.get_or_insert(error);
+        loop {
+            match self.child.poll_termination_with_grace(false, grace) {
+                Ok(Some(status)) => {
+                    let status = PaneExitStatus::from_portable_exit_status(status);
+                    self.exit_status = Some(status);
+                    return first.map_or(Ok(status), Err);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    first.get_or_insert(error);
+                }
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
-            match self.wait_until_exit(grace.min(remaining)) {
+            if remaining.is_zero() {
+                let error = MezError::invalid_state(
+                    "owned native child did not reap before its cleanup deadline",
+                );
+                self.child.record_failure("native synchronous wait", &error);
+                return Err(first.unwrap_or(error));
+            }
+            match self.wait_until_exit(Duration::from_millis(5).min(remaining)) {
                 Ok(Some(status)) => return first.map_or(Ok(status), Err),
                 Ok(None) => {}
                 Err(error) => {
                     self.child.record_failure("native synchronous wait", &error);
                     first.get_or_insert(error);
                 }
-            }
-        }
-        // Evaluate both force and wait even when a prior group stage failed.
-        if let Err(error) = self.child.force_retirement() {
-            first.get_or_insert(error);
-        }
-        match self.wait_until_exit(deadline.saturating_duration_since(Instant::now())) {
-            Ok(Some(status)) => first.map_or(Ok(status), Err),
-            result => {
-                let error = match result {
-                    Err(error) => error,
-                    _ => MezError::invalid_state(
-                        "owned native child did not reap before its cleanup deadline",
-                    ),
-                };
-                self.child.record_failure("native synchronous wait", &error);
-                Err(first.unwrap_or(error))
             }
         }
     }
@@ -814,7 +812,9 @@ impl PaneProcess {
         if self.poll_exit()?.is_some() {
             return Ok(());
         }
-        self.child.record_signal(signal)?;
+        if !self.child.record_signal(signal)? {
+            return Ok(());
+        }
         if signal == Signal::KILL {
             self.child.force_retirement()
         } else {

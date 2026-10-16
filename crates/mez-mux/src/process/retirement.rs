@@ -85,11 +85,24 @@ struct RawPaneChild {
 }
 
 impl RawPaneChild {
+    /// Fences new effects after the retained deadline, including direct signal
+    /// methods and final-owner best effort. Status observation remains allowed.
+    fn signal_budget_remaining(&self) -> bool {
+        self.progress
+            .plan
+            .is_none_or(|plan| Instant::now() < plan.deadline)
+    }
+
     /// Checks birth authority against the still-owned native child, not a PID
     /// lookup. Callers must first poll the exact child and suppress every send
     /// after a successful wait. Missing/invalid/mismatched authority is typed
     /// failure and must not issue a numeric group signal.
     fn signal_group(&mut self, signal: Signal) -> Result<()> {
+        if !self.signal_budget_remaining() {
+            return Err(MezError::invalid_state(
+                "native termination deadline expired; exact ownership retained",
+            ));
+        }
         let native = self
             .child
             .as_ref()
@@ -119,6 +132,12 @@ impl RawPaneChild {
     /// type. Opaque implementations retain unproven ownership; invoking their
     /// portable killer could sleep, reap internally or have unknown semantics.
     fn kill_root(&mut self) -> io::Result<()> {
+        if !self.signal_budget_remaining() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "native root signal deadline expired",
+            ));
+        }
         let native = self
             .child
             .as_mut()
@@ -571,17 +590,35 @@ impl RetainedPaneChild {
         Ok(plan.deadline)
     }
 
-    /// Records signals issued by the synchronous process path without replay.
-    pub(super) fn record_signal(&mut self, signal: Signal) -> Result<()> {
+    /// Records an explicit signal stage once, honoring force upgrades and the
+    /// original deadline. False suppresses repeated/obsolete graceful stages.
+    pub(super) fn record_signal(&mut self, signal: Signal) -> Result<bool> {
         self.begin_termination(signal == Signal::KILL)?;
-        let progress = &mut self.raw_mut()?.progress;
+        let raw = self.raw_mut()?;
+        if !raw.signal_budget_remaining() {
+            return Err(MezError::invalid_state(
+                "native termination deadline expired; exact ownership retained",
+            ));
+        }
+        let progress = &mut raw.progress;
+        if matches!(signal, Signal::HUP | Signal::TERM)
+            && progress.plan.is_some_and(|plan| plan.force)
+        {
+            return Ok(false);
+        }
         if signal == Signal::HUP {
+            if progress.hup_sent {
+                return Ok(false);
+            }
             progress.hup_sent = true;
         }
         if signal == Signal::TERM {
+            if progress.term_sent {
+                return Ok(false);
+            }
             progress.term_sent = true;
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Sends only checked birth-group signals while the exact root is unreaped.
@@ -600,6 +637,18 @@ impl RetainedPaneChild {
     /// Advances HUP/TERM/KILL without sleeps, preserving prior sent stages.
     /// A successful native wait settles the slot; a signal never does.
     pub fn poll_termination(&mut self, force: bool) -> Result<Option<ExitStatus>> {
+        self.poll_termination_with_grace(force, Duration::from_millis(500))
+    }
+
+    /// Shares stage selection with synchronous callers. Custom grace is the
+    /// absolute HUP-to-TERM offset from the original start, with KILL at twice
+    /// that offset, always clipped by the existing deadline. It never creates
+    /// fresh per-call grace or replays a stage sent before handoff.
+    pub(super) fn poll_termination_with_grace(
+        &mut self,
+        force: bool,
+        grace: Duration,
+    ) -> Result<Option<ExitStatus>> {
         if let Some(status) = self.try_wait()? {
             return Ok(Some(status));
         }
@@ -610,14 +659,21 @@ impl RetainedPaneChild {
             .progress
             .plan
             .ok_or_else(|| MezError::invalid_state("native termination plan is missing"))?;
+        if Instant::now() >= plan.deadline {
+            let error = MezError::invalid_state(
+                "native termination deadline expired; exact ownership retained",
+            );
+            self.record_failure("native termination deadline", &error);
+            return Err(error);
+        }
         let elapsed = plan.started.elapsed();
-        let signal_result = if plan.force || elapsed >= Duration::from_secs(1) {
+        let signal_result = if plan.force || elapsed >= grace.saturating_mul(2) {
             self.force_retirement()
         } else {
-            let signal = if !raw.progress.hup_sent {
+            let signal = if !raw.progress.hup_sent && !raw.progress.term_sent {
                 raw.progress.hup_sent = true;
                 Some(Signal::HUP)
-            } else if elapsed >= Duration::from_millis(500) && !raw.progress.term_sent {
+            } else if elapsed >= grace && !raw.progress.term_sent {
                 raw.progress.term_sent = true;
                 Some(Signal::TERM)
             } else {
@@ -689,6 +745,151 @@ impl Drop for RetainedPaneChild {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    /// Spawns an exclusively owned root that reports received graceful signals
+    /// and child-generated probe replies, without relying on terminal echo.
+    fn signal_observer(owner: &PaneProcessRetirementOwner) -> super::super::PaneProcess {
+        let mut process = super::super::spawn_retained_argv_pty_process(
+            std::path::Path::new("/bin/sh"),
+            &["-c".into(), "trap 'printf observed-hup\\\\n' HUP; trap 'printf observed-term\\\\n' TERM; printf 'observer-ready\\n'; while :; do if IFS= read -r line; then printf 'observer-reply:%s\\n' \"$line\"; fi; done".into()],
+            &[], mez_terminal::TerminalSize::new(80, 24).unwrap(), None, owner.reserve().unwrap()).unwrap();
+        assert!(observer_output(&mut process, "observer-ready").contains("observer-ready"));
+        process
+    }
+
+    /// Reads bounded fixture output until a marker or a short probe deadline.
+    fn observer_output(process: &mut super::super::PaneProcess, marker: &str) -> String {
+        let mut output = Vec::new();
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline {
+            match process.read_available_output(4096) {
+                Ok(bytes) => output.extend(bytes),
+                Err(_) => break,
+            }
+            if String::from_utf8_lossy(&output).contains(marker) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        String::from_utf8_lossy(&output).into_owned()
+    }
+
+    /// Synchronous advancement after handoff must not repeat already-issued
+    /// graceful stages or renew their grace. A real root reports any accidental
+    /// replay; native wait/SRCH, not output closure, proves final settlement.
+    #[test]
+    fn synchronous_termination_preserves_sent_stages_and_original_start() {
+        for term_sent in [false, true] {
+            let owner = PaneProcessRetirementOwner::default();
+            let mut process = signal_observer(&owner);
+            let master = process.duplicate_master_fd().unwrap();
+            process.child.begin_termination(false).unwrap();
+            let raw = process.child.raw.as_mut().unwrap();
+            raw.progress.hup_sent = true;
+            raw.progress.term_sent = term_sent;
+            raw.progress.plan.as_mut().unwrap().started =
+                Instant::now() - Duration::from_millis(150);
+            let original = raw.progress.plan.unwrap();
+            let result = process.terminate(Duration::from_millis(100));
+            let output = observer_output(&mut process, "never-produced-marker");
+            let pid = rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap())
+                .unwrap();
+            let absent = rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH);
+            let final_plan = process.child.raw.as_ref().unwrap().progress.plan.unwrap();
+            drop(master);
+            assert!(result.is_ok() && absent && owner.outstanding() == 0);
+            assert!(
+                !output.contains("observed-hup"),
+                "HUP was replayed: {output}"
+            );
+            if term_sent {
+                assert!(
+                    !output.contains("observed-term"),
+                    "TERM was replayed: {output}"
+                );
+            }
+            assert_eq!(final_plan.started, original.started);
+            assert_eq!(final_plan.deadline, original.deadline);
+        }
+    }
+
+    /// A force upgrade recorded by the owner survives synchronous handoff:
+    /// no HUP/TERM is introduced and custom grace cannot defer exact force.
+    #[test]
+    fn synchronous_termination_honors_retained_force_upgrade() {
+        let owner = PaneProcessRetirementOwner::default();
+        let mut process = signal_observer(&owner);
+        let master = process.duplicate_master_fd().unwrap();
+        owner.request_shutdown(false);
+        let original = process.child.begin_termination(false).unwrap();
+        owner.request_shutdown(true);
+        let started = Instant::now();
+        let result = process.terminate(Duration::from_millis(500));
+        let elapsed = started.elapsed();
+        let output = observer_output(&mut process, "never-produced-marker");
+        let progress = &process.child.raw.as_ref().unwrap().progress;
+        let no_graceful = !progress.hup_sent && !progress.term_sent;
+        let same_deadline = progress.plan.unwrap().deadline == original;
+        drop(master);
+        assert!(result.is_ok() && owner.outstanding() == 0);
+        assert!(no_graceful && same_deadline && !output.contains("observed-"));
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "force upgrade restarted grace: {elapsed:?}"
+        );
+    }
+
+    /// Expired retained plans permit only native observation, not fresh group
+    /// or root signals through synchronous, async, or direct managed methods.
+    /// Require a live poll and fresh child response before independently using
+    /// this fixture's exact std handle for cleanup outside the expired operation.
+    #[test]
+    fn expired_retained_plan_cannot_signal_a_live_native_root() {
+        let owner = PaneProcessRetirementOwner::default();
+        let mut process = signal_observer(&owner);
+        let master = process.duplicate_master_fd().unwrap();
+        process.child.begin_termination(false).unwrap();
+        process
+            .child
+            .raw
+            .as_mut()
+            .unwrap()
+            .progress
+            .plan
+            .as_mut()
+            .unwrap()
+            .deadline = Instant::now() - Duration::from_millis(1);
+        let sync = process.terminate(Duration::from_millis(10));
+        let asynchronous = process.poll_native_termination(true);
+        let group = process.send_signal_to_process_group(Signal::KILL);
+        let root = process.kill_owned_root();
+        let live = matches!(process.poll_exit(), Ok(None));
+        let write = process.write_input(b"expired-plan-probe\n");
+        let output = observer_output(&mut process, "observer-reply:expired-plan-probe");
+        let native = process
+            .child
+            .raw
+            .as_mut()
+            .unwrap()
+            .child
+            .as_mut()
+            .as_any_mut()
+            .downcast_mut::<std::process::Child>()
+            .unwrap();
+        let cleanup = std::process::Child::kill(native);
+        let waited = process.wait();
+        let pid =
+            rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap()).unwrap();
+        let absent = rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH);
+        drop(master);
+        assert!(cleanup.is_ok() && waited.is_ok() && absent && owner.outstanding() == 0);
+        assert!(sync.is_err() && asynchronous.is_err() && group.is_err() && root.is_err());
+        assert!(live && write.is_ok() && output.contains("observer-reply:expired-plan-probe"));
+        assert!(
+            !output.contains("observed-"),
+            "expired cleanup signaled live root: {output}"
+        );
+    }
 
     /// Controllable exact child: no PID/group lookup or real process signaling.
     #[derive(Debug, Default)]

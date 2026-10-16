@@ -2268,6 +2268,11 @@ safe sibling cleanup even after one failure. Graceful HUP/TERM/KILL progress
 and its original deadline MUST survive cancellation without restarting grace;
 force escalation MUST also address the exact owned root. Native wait success
 MUST release cleanup capacity independently of final PTY output draining.
+Synchronous and asynchronous advancement MUST share retained sent-stage and
+force-upgrade decisions. Custom synchronous grace is an absolute stage offset
+from the original start, not a renewed per-call wait. Once that retained
+deadline expires, further cleanup calls MUST observe status only and retain
+failure/ownership rather than issue late signals.
 
 Unproven returned cleanup MUST fence new managed pane/editor/restore native
 admission until settled, without interrupting existing siblings or imposing a
