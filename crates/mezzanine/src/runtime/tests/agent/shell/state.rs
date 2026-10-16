@@ -5831,7 +5831,7 @@ fn runtime_hidden_agent_shell_protocol_parser_preserves_fragmented_markers() {
 #[test]
 fn runtime_parent_agent_shell_exit_closes_child_subagent_panes() {
     let mut service = test_runtime_service();
-    let primary = service
+    service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     service.start_initial_pane_process(Some("cat")).unwrap();
