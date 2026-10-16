@@ -63,6 +63,8 @@ fn runtime_saved_fork_epoch_first_encoded_request_survives_reopen() {
     service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
     let resumed = service.execute_agent_shell_command(&primary, "/resume fork-source").unwrap();
     assert!(!resumed.contains("\"error\""), "{resumed}");
+    let settled = service.run_pending_deferred_agent_command_for_tests().unwrap().unwrap();
+    assert!(settled.contains("resumed=true"), "{settled}");
     let forked = service.execute_agent_shell_command(&primary, "/fork fork-target").unwrap();
     assert!(forked.contains("forked=true"), "{forked}");
     let pane = service.agent_shell_store().sessions()
@@ -81,5 +83,7 @@ fn runtime_saved_fork_epoch_first_encoded_request_survives_reopen() {
     reopened.agent_shell_store_mut().enter_or_resume("%1").unwrap();
     let resumed = reopened.execute_agent_shell_command(&primary, "/resume fork-target").unwrap();
     assert!(!resumed.contains("\"error\""), "{resumed}");
+    let settled = reopened.run_pending_deferred_agent_command_for_tests().unwrap().unwrap();
+    assert!(settled.contains("resumed=true"), "{settled}");
     assert_eq!(encoded_history(&mut reopened, "%1"), encoded);
 }
