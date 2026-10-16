@@ -206,6 +206,13 @@ waited for and reaped. A sent signal, closed actor channel, cancelled worker or
 disappearing socket is not that acknowledgement. Graceful termination retains
 the original HUP/TERM/KILL budget across worker cancellation; force also targets
 the exact owned root rather than trusting cached foreground-group metadata.
+Cleanup signals use the native root's immutable birth group, established by
+the UNIX PTY spawn/session contract, and exact force uses nonblocking native
+KILL rather than portable HUP-and-sleep. Missing, invalid or mismatched group
+authority reports failure but still attempts safe exact-root force and bounded
+wait. Foreground/job-control observations remain metadata, not signal authority.
+This covers the root and its birth group, not every foreground job, detached
+descendant, session or cgroup; normal kernel/shell PTY hangup behavior remains.
 
 If native cleanup cannot be proved within its deadline, the live host retains
 the exact session generation in cleanup-pending state (reported as stopping).

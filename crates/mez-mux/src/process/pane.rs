@@ -24,7 +24,6 @@ use super::process_metadata::{
     process_executable_path_for_pid, process_name_for_pid,
 };
 use super::pty::{PTY_IO_CHUNK_BYTES, pty_size};
-use super::signals::send_signal_to_pane_process_group;
 #[cfg(target_os = "macos")]
 use super::types::ShellInputPacing;
 use super::types::{PaneExitStatus, ShellInputDelivery};
@@ -763,67 +762,63 @@ impl PaneProcess {
 
     /// Terminates the pane process group and returns the primary child status.
     ///
-    /// An already-exited child is polled and reaped before any signal is sent,
-    /// preventing a stale PTY foreground-group identifier from targeting a
-    /// reused process group. Live children receive HUP, TERM, and KILL with the
-    /// supplied grace period between stages. Final escalation also terminates
-    /// the owned root child before reaping: cached PTY group metadata may name
-    /// a different foreground job. Signal or wait failures are returned to the
-    /// caller without discarding child ownership.
+    /// Polls before signaling the immutable native birth group, never cached
+    /// foreground metadata. HUP/TERM grace is clipped to the child's original
+    /// absolute cleanup deadline. Group errors do not skip independent exact
+    /// root force and bounded wait; the first typed failure is returned even
+    /// when that wait succeeds. Unproven children remain owned for retry.
     pub fn terminate(&mut self, grace: Duration) -> Result<PaneExitStatus> {
         if let Some(status) = self.poll_exit()? {
             return Ok(status);
         }
-
-        self.send_signal_to_process_group(Signal::HUP)?;
-        if let Some(status) = self.wait_until_exit(grace)? {
-            return Ok(status);
-        }
-
-        self.send_signal_to_process_group(Signal::TERM)?;
-        if let Some(status) = self.wait_until_exit(grace)? {
-            return Ok(status);
-        }
-
-        self.send_signal_to_process_group(Signal::KILL)?;
-        // PTY group metadata can name a foreground job rather than the root.
-        // With no group, the fallback above already terminates the child.
-        // Otherwise recheck exit before using the owned root handle as well.
-        if self.process_group_leader.is_some() {
-            if let Some(status) = self.poll_exit()? {
-                return Ok(status);
+        let deadline = self.child.begin_termination(false)?;
+        let mut first = None;
+        for signal in [Signal::HUP, Signal::TERM] {
+            if let Err(error) = self.send_signal_to_process_group(signal) {
+                first.get_or_insert(error);
             }
-            if let Err(error) = self.child.kill() {
-                if let Some(status) = self.poll_exit()? {
-                    return Ok(status);
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.wait_until_exit(grace.min(remaining)) {
+                Ok(Some(status)) => return first.map_or(Ok(status), Err),
+                Ok(None) => {}
+                Err(error) => {
+                    self.child.record_failure("native synchronous wait", &error);
+                    first.get_or_insert(error);
                 }
-                return Err(error.into());
             }
         }
-        let status = self.child.wait()?;
-        let status = PaneExitStatus::from_portable_exit_status(status);
-        self.exit_status = Some(status);
-        Ok(status)
+        // Evaluate both force and wait even when a prior group stage failed.
+        if let Err(error) = self.child.force_retirement() {
+            first.get_or_insert(error);
+        }
+        match self.wait_until_exit(deadline.saturating_duration_since(Instant::now())) {
+            Ok(Some(status)) => first.map_or(Ok(status), Err),
+            result => {
+                let error = match result {
+                    Err(error) => error,
+                    _ => MezError::invalid_state(
+                        "owned native child did not reap before its cleanup deadline",
+                    ),
+                };
+                self.child.record_failure("native synchronous wait", &error);
+                Err(first.unwrap_or(error))
+            }
+        }
     }
 
-    /// Runs the send signal to process group operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Signals checked native birth authority, not public foreground metadata.
+    /// KILL independently addresses the exact root even if group signaling
+    /// fails; no signal is issued after an authoritative successful wait.
     #[doc(hidden)]
     pub fn send_signal_to_process_group(&mut self, signal: Signal) -> Result<()> {
         if self.poll_exit()?.is_some() {
             return Ok(());
         }
         self.child.record_signal(signal)?;
-        if let Some(process_group_leader) = self.process_group_leader {
-            send_signal_to_pane_process_group(process_group_leader, signal)
-        } else if signal == Signal::KILL {
-            self.child.kill()?;
-            Ok(())
+        if signal == Signal::KILL {
+            self.child.force_retirement()
         } else {
-            Ok(())
+            self.child.signal_group(signal)
         }
     }
 

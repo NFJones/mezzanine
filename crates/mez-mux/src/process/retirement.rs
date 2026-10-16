@@ -11,6 +11,12 @@
 //! cleanup settles; existing children keep their reserved slots and I/O. Sealing
 //! is monotonic and distinct from that recoverable admission fence. No completed
 //! child history is retained. Native wait success alone releases a slot.
+//!
+//! Numeric signal authority is the immutable birth group minted at proven
+//! native UNIX spawn boundaries, not cached/live PTY foreground metadata.
+//! An unreaped exact std Child pins that root PID/group identity; every send
+//! checks that binding again. Unknown child types fail closed. Root force uses
+//! inherent std Child::kill, never portable-pty's sleeping HUP implementation.
 
 use std::io;
 use std::io::Write;
@@ -70,11 +76,62 @@ enum ChildSlot {
 #[derive(Debug)]
 struct RawPaneChild {
     child: Box<dyn Child + Send + Sync>,
+    /// Boundary-minted birth-root PGID; immutable throughout production cleanup.
     group: Option<i32>,
     /// Successful root signal is not a wait receipt, but avoids repeat signals.
     force_requested: bool,
     progress: NativeTerminationProgress,
     failure_latched: bool,
+}
+
+impl RawPaneChild {
+    /// Checks birth authority against the still-owned native child, not a PID
+    /// lookup. Callers must first poll the exact child and suppress every send
+    /// after a successful wait. Missing/invalid/mismatched authority is typed
+    /// failure and must not issue a numeric group signal.
+    fn signal_group(&mut self, signal: Signal) -> Result<()> {
+        let native = self
+            .child
+            .as_ref()
+            .as_any()
+            .downcast_ref::<std::process::Child>()
+            .ok_or_else(|| {
+                MezError::invalid_state("native group authority has an unsupported child type")
+            })?;
+        let root = i32::try_from(native.id())
+            .ok()
+            .filter(|pid| *pid > 0)
+            .ok_or_else(|| {
+                MezError::invalid_state("native root pid is invalid for group authority")
+            })?;
+        let group = self.group.filter(|group| *group > 0).ok_or_else(|| {
+            MezError::invalid_state("native birth process group authority is missing or invalid")
+        })?;
+        if group != root {
+            return Err(MezError::invalid_state(
+                "native birth process group authority does not match its owned root",
+            ));
+        }
+        send_signal_to_pane_process_group(group, signal)
+    }
+
+    /// Issues only inherent nonblocking exact-root KILL for the known native
+    /// type. Opaque implementations retain unproven ownership; invoking their
+    /// portable killer could sleep, reap internally or have unknown semantics.
+    fn kill_root(&mut self) -> io::Result<()> {
+        let native = self
+            .child
+            .as_mut()
+            .as_any_mut()
+            .downcast_mut::<std::process::Child>()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "native root force requires the owned std::process::Child",
+                )
+            })?;
+        std::process::Child::kill(native)
+    }
 }
 
 impl Drop for RetirementState {
@@ -91,10 +148,8 @@ impl Drop for RetirementState {
                 // Poll before any numeric group signal; an already reaped PID
                 // must never authorize signaling a reused group.
                 if matches!(raw.child.try_wait(), Ok(None)) {
-                    if let Some(group) = raw.group {
-                        let _ = send_signal_to_pane_process_group(group, Signal::KILL);
-                    }
-                    let _ = raw.child.kill();
+                    let _ = raw.signal_group(Signal::KILL);
+                    let _ = raw.kill_root();
                 }
             }
         }
@@ -452,7 +507,7 @@ impl RetainedPaneChild {
     /// Signals the exact owned root, never a replacement found by PID lookup.
     pub fn kill(&mut self) -> io::Result<()> {
         if self.try_wait()?.is_none()
-            && let Err(error) = self.raw_mut()?.child.kill()
+            && let Err(error) = self.raw_mut()?.kill_root()
         {
             // An authoritative exact-child wait can win an already-exited
             // root race; never classify benignness by error text.
@@ -529,6 +584,19 @@ impl RetainedPaneChild {
         Ok(())
     }
 
+    /// Sends only checked birth-group signals while the exact root is unreaped.
+    /// A failed signal is latched before any later wait can release the slot.
+    pub(super) fn signal_group(&mut self, signal: Signal) -> Result<()> {
+        if self.try_wait()?.is_some() {
+            return Ok(());
+        }
+        let result = self.raw_mut()?.signal_group(signal);
+        if let Err(error) = &result {
+            self.record_failure("native group signal", error);
+        }
+        result
+    }
+
     /// Advances HUP/TERM/KILL without sleeps, preserving prior sent stages.
     /// A successful native wait settles the slot; a signal never does.
     pub fn poll_termination(&mut self, force: bool) -> Result<Option<ExitStatus>> {
@@ -543,8 +611,8 @@ impl RetainedPaneChild {
             .plan
             .ok_or_else(|| MezError::invalid_state("native termination plan is missing"))?;
         let elapsed = plan.started.elapsed();
-        if plan.force || elapsed >= Duration::from_secs(1) {
-            self.force_retirement()?;
+        let signal_result = if plan.force || elapsed >= Duration::from_secs(1) {
+            self.force_retirement()
         } else {
             let signal = if !raw.progress.hup_sent {
                 raw.progress.hup_sent = true;
@@ -555,14 +623,12 @@ impl RetainedPaneChild {
             } else {
                 None
             };
-            if let (Some(signal), Some(group)) = (signal, raw.group)
-                && let Err(error) = send_signal_to_pane_process_group(group, signal)
-            {
-                self.record_failure("native group signal", &error);
-                return Err(error);
-            }
-        }
-        self.try_wait().map_err(Into::into)
+            signal.map_or(Ok(()), |signal| self.signal_group(signal))
+        };
+        // A group failure cannot skip the independent exact native wait. Keep
+        // the first typed signal error, even if this wait releases the slot.
+        let wait_result = self.try_wait().map_err(MezError::from);
+        signal_result.and(wait_result)
     }
 
     /// Continues graceful intent after cancellation; abandoned local failures
@@ -587,10 +653,7 @@ impl RetainedPaneChild {
         if self.raw_mut()?.force_requested {
             return Ok(());
         }
-        let group = self.raw_mut()?.group;
-        let group_result = group.map_or(Ok(()), |group| {
-            send_signal_to_pane_process_group(group, Signal::KILL)
-        });
+        let group_result = self.raw_mut()?.signal_group(Signal::KILL);
         // Root polling may release this slot immediately. Preserve an actual
         // group failure before that winning wait, not only in the caller future.
         if let Err(error) = &group_result {
@@ -600,13 +663,10 @@ impl RetainedPaneChild {
         if root_result.is_ok() {
             self.raw_mut()?.force_requested = true;
         }
-        let result = match (group_result, root_result) {
-            (Err(group), Err(root)) => Err(MezError::invalid_state(format!(
-                "{group}; owned root cleanup also failed: {root}"
-            ))),
-            (Err(error), _) | (_, Err(error)) => Err(error),
-            _ => Ok(()),
-        };
+        // Both operations have run. Preserve the first error's concrete kind;
+        // root failure has independently been latched by kill, not formatted
+        // into a replacement InvalidState error that erases the first cause.
+        let result = group_result.and(root_result);
         if let Err(error) = &result {
             self.record_failure("native group/root escalation", error);
         }
@@ -682,9 +742,9 @@ mod tests {
         }
     }
 
-    /// Missing PID does not invalidate exact cleanup authority. A reservation
-    /// made before seal still attaches; native wait releases it immediately,
-    /// repeated polls use cached status, and terminal seal never reopens.
+    /// Missing PID does not discard exact wait ownership. A reservation made
+    /// before seal still attaches; a manually released native wait gate frees
+    /// it immediately, repeated polls cache status, and seal never reopens.
     #[test]
     fn reserved_child_survives_seal_missing_pid_and_cached_native_wait() {
         let owner = PaneProcessRetirementOwner::default();
@@ -699,11 +759,15 @@ mod tests {
         assert!(owner.reserve().is_err());
         let mut drain = owner.begin_drain().unwrap();
         let mut child = drain.take_returned().unwrap();
-        child.force_retirement().unwrap();
+        state.exited.store(true, Ordering::SeqCst);
         assert!(child.try_wait().unwrap().is_some());
         let polls = state.polls.load(Ordering::SeqCst);
         assert!(child.try_wait().unwrap().is_some());
+        assert!(child.signal_group(Signal::HUP).is_ok());
+        assert!(child.force_retirement().is_ok());
+        assert!(child.kill().is_ok());
         assert_eq!(state.polls.load(Ordering::SeqCst), polls);
+        assert_eq!(state.kills.load(Ordering::SeqCst), 0);
         assert_eq!(owner.outstanding(), 0);
         drop(child);
         assert!(owner.reserve().is_err());
@@ -721,7 +785,7 @@ mod tests {
             owner
                 .reserve()
                 .unwrap()
-                .attach(Box::new(ControlledChild(state)), None),
+                .attach(Box::new(ControlledChild(state.clone())), None),
         );
         let mut first = owner.begin_drain().unwrap();
         let child = first.take_returned().unwrap();
@@ -731,13 +795,15 @@ mod tests {
         drop(child);
         let mut retry = owner.begin_drain().unwrap();
         let mut child = retry.take_returned().unwrap();
-        child.force_retirement().unwrap();
+        state.exited.store(true, Ordering::SeqCst);
         assert!(child.try_wait().unwrap().is_some());
         assert_eq!(owner.outstanding(), 0);
     }
 
-    /// Group failure cannot short-circuit exact-root kill and wait. The failed
-    /// group is an invalid synthetic identifier, so no host process is targeted.
+    /// Opaque child types must reject group and root force without calling the
+    /// unknown portable killer. Both typed failure receipts are attempted, the
+    /// first group cause survives cancellation, and only its actual wait gate
+    /// can settle the slot. No host process or numeric fallback is targeted.
     #[test]
     fn group_failure_still_attempts_owned_root_and_releases_only_after_wait() {
         let owner = PaneProcessRetirementOwner::default();
@@ -746,8 +812,11 @@ mod tests {
             .reserve()
             .unwrap()
             .attach(Box::new(ControlledChild(state.clone())), Some(-1));
-        assert!(child.force_retirement().is_err());
-        assert_eq!(state.kills.load(Ordering::SeqCst), 1);
+        let error = child.force_retirement().unwrap_err();
+        assert_eq!(error.kind(), crate::MuxErrorKind::InvalidState);
+        assert!(error.message().contains("unsupported child type"));
+        assert_eq!(child.kill().unwrap_err().kind(), io::ErrorKind::Unsupported);
+        assert_eq!(state.kills.load(Ordering::SeqCst), 0);
         assert_eq!(owner.outstanding(), 1);
         let failure = owner.cleanup_failure().unwrap();
         assert!(
@@ -759,6 +828,7 @@ mod tests {
         drop(child);
         let mut retry = owner.begin_drain().unwrap();
         let mut child = retry.take_returned().unwrap();
+        state.exited.store(true, Ordering::SeqCst);
         assert!(child.try_wait().unwrap().is_some());
         assert_eq!(owner.outstanding(), 0);
         assert_eq!(owner.cleanup_failure().as_deref(), Some(failure.as_str()));
@@ -780,7 +850,10 @@ mod tests {
             .attach(Box::new(ControlledChild(state.clone())), None);
         owner.request_shutdown(false);
         let original = owner.cleanup_deadline();
-        assert!(child.poll_cleanup().unwrap().is_none());
+        assert!(
+            child.poll_cleanup().is_err(),
+            "opaque group authority fails closed"
+        );
         assert_eq!(state.kills.load(Ordering::SeqCst), 0);
         assert!(child.raw.as_ref().unwrap().progress.hup_sent);
         drop(child);
@@ -788,15 +861,24 @@ mod tests {
         assert_eq!(owner.cleanup_deadline(), original);
         let mut drain = owner.begin_drain().unwrap();
         let mut child = drain.take_returned().unwrap();
-        assert!(child.poll_cleanup().unwrap().is_some());
-        assert_eq!(state.kills.load(Ordering::SeqCst), 1);
+        assert!(
+            child.poll_cleanup().is_err(),
+            "opaque root force fails closed"
+        );
+        assert!(child.raw.as_ref().unwrap().progress.plan.unwrap().force);
+        assert_eq!(
+            child.raw.as_ref().unwrap().progress.plan.unwrap().deadline,
+            original
+        );
+        assert_eq!(state.kills.load(Ordering::SeqCst), 0);
+        state.exited.store(true, Ordering::SeqCst);
+        assert!(child.try_wait().unwrap().is_some());
         assert_eq!(owner.outstanding(), 0);
     }
 
-    /// Final-owner abandonment with a known live child and invalid group must
-    /// return a typed group error internally, still attempt the exact root and
-    /// destroy resources without panicking or forming a cycle. This tests only
-    /// best-effort disposal, deliberately not a successful native wait receipt.
+    /// Final-owner abandonment cannot invoke an opaque portable killer even
+    /// with a live wait result. It destroys the synthetic resources without
+    /// panicking/cycling, not with a fabricated native completion receipt.
     #[test]
     fn last_owner_live_child_invalid_group_does_not_panic_and_attempts_root() {
         let owner = PaneProcessRetirementOwner::default();
@@ -810,7 +892,7 @@ mod tests {
         );
         drop(owner);
         assert!(weak.upgrade().is_none());
-        assert_eq!(state.kills.load(Ordering::SeqCst), 1);
+        assert_eq!(state.kills.load(Ordering::SeqCst), 0);
         assert_eq!(state.drops.load(Ordering::SeqCst), 1);
     }
 
@@ -844,14 +926,26 @@ mod tests {
         let owner = PaneProcessRetirementOwner::default();
         let size = mez_terminal::TerminalSize::new(80, 24).unwrap();
         let mut root = super::super::spawn_retained_argv_pty_process(
-            std::path::Path::new("/bin/cat"), &[], &[], size, None,
+            std::path::Path::new("/bin/cat"),
+            &[],
+            &[],
+            size,
+            None,
             owner.reserve().unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
         let mut other = super::super::spawn_retained_argv_pty_process(
             std::path::Path::new("/bin/sh"),
-            &["-c".into(), "while IFS= read -r line; do printf 'child-reply:%s\\n' \"$line\"; done".into()],
-            &[], size, None, owner.reserve().unwrap(),
-        ).unwrap();
+            &[
+                "-c".into(),
+                "while IFS= read -r line; do printf 'child-reply:%s\\n' \"$line\"; done".into(),
+            ],
+            &[],
+            size,
+            None,
+            owner.reserve().unwrap(),
+        )
+        .unwrap();
         let root_pid = root.primary_pid();
         let other_pid = other.primary_pid();
         let held_root = root.duplicate_master_fd().unwrap();
@@ -876,21 +970,36 @@ mod tests {
         let mut output = Vec::new();
         let deadline = Instant::now() + Duration::from_millis(500);
         while input_ok && Instant::now() < deadline {
-            let Ok(bytes) = other.read_available_output(4096) else { break };
+            let Ok(bytes) = other.read_available_output(4096) else {
+                break;
+            };
             output.extend(bytes);
             if String::from_utf8_lossy(&output).contains("child-reply:fresh-authority-probe") {
                 break;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        let responded = String::from_utf8_lossy(&output).contains("child-reply:fresh-authority-probe");
+        let responded =
+            String::from_utf8_lossy(&output).contains("child-reply:fresh-authority-probe");
         let root_cleanup = root.terminate(Duration::from_millis(10));
         let other_cleanup = other.terminate(Duration::from_millis(10));
         drop((held_root, held_other));
-        assert!(root_cleanup.is_ok() && other_cleanup.is_ok(), "fixture cleanup failed");
-        assert!(root_reaped && root_absent, "exact root was not waited/reaped before sibling probe");
-        assert!(other_live && responded, "cleanup signaled the other owned group; live={other_live}, response={responded}");
-        assert_eq!(signal_result.unwrap_err().kind(), crate::MuxErrorKind::InvalidState);
+        assert!(
+            root_cleanup.is_ok() && other_cleanup.is_ok(),
+            "fixture cleanup failed"
+        );
+        assert!(
+            root_reaped && root_absent,
+            "exact root was not waited/reaped before sibling probe"
+        );
+        assert!(
+            other_live && responded,
+            "cleanup signaled the other owned group; live={other_live}, response={responded}"
+        );
+        assert_eq!(
+            signal_result.unwrap_err().kind(),
+            crate::MuxErrorKind::InvalidState
+        );
         assert_eq!(
             owner.outstanding(),
             0,
@@ -898,56 +1007,177 @@ mod tests {
         );
     }
 
-    /// This real child encounters an injected invalid cached group at the
+    /// This real child encounters an injected invalid birth group at the
     /// production signal selector. The group stage fails, but owned-root KILL
     /// still runs. Drop that caller before wait and keep a duplicate master so
     /// kernel PTY hangup cannot supply the retirement proof. The same retained
     /// child must be waited/reaped, without erasing the earlier error receipt.
     #[test]
     fn real_native_group_failure_survives_caller_drop_and_zero_pending_reap() {
-        let owner = PaneProcessRetirementOwner::default();
-        let mut process = super::super::spawn_retained_argv_pty_process(
-            std::path::Path::new("/bin/cat"),
-            &[],
-            &[],
-            mez_terminal::TerminalSize::new(80, 24).unwrap(),
-            None,
-            owner.reserve().unwrap(),
-        )
-        .unwrap();
-        let pid =
-            rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap()).unwrap();
-        let held_master = process.duplicate_master_fd().unwrap();
-        process.child.raw.as_mut().unwrap().group = Some(-1);
-        let original = process.poll_native_termination(true);
-        assert!(
-            original.is_err(),
-            "original group failure must remain a failed operation: {original:?}"
-        );
-        let failure = owner.cleanup_failure().unwrap();
-        drop(process);
-        assert_eq!(owner.outstanding(), 1);
-        let mut drain = owner.begin_drain().unwrap();
-        let mut child = drain.take_returned().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(1);
-        loop {
-            if child.try_wait().unwrap().is_some() {
-                break;
-            }
+        for group in [None, Some(-1), Some(0)] {
+            let owner = PaneProcessRetirementOwner::default();
+            let mut process = super::super::spawn_retained_argv_pty_process(
+                std::path::Path::new("/bin/cat"),
+                &[],
+                &[],
+                mez_terminal::TerminalSize::new(80, 24).unwrap(),
+                None,
+                owner.reserve().unwrap(),
+            )
+            .unwrap();
+            let pid = rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap())
+                .unwrap();
+            let held_master = process.duplicate_master_fd().unwrap();
+            process.child.raw.as_mut().unwrap().group = group;
+            let original = process.child.force_retirement();
             assert!(
-                Instant::now() < deadline,
-                "exact root signal did not settle"
+                original.is_err(),
+                "original group failure must remain a failed operation: {original:?}"
             );
-            std::thread::sleep(Duration::from_millis(5));
+            let failure = owner.cleanup_failure().unwrap();
+            drop(process);
+            assert_eq!(owner.outstanding(), 1);
+            let mut drain = owner.begin_drain().unwrap();
+            let mut child = drain.take_returned().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                if child.try_wait().unwrap().is_some() {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "exact root signal did not settle"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(
+                rustix::process::test_kill_process(pid),
+                Err(rustix::io::Errno::SRCH)
+            );
+            assert_eq!(owner.outstanding(), 0);
+            assert_eq!(owner.cleanup_failure().as_deref(), Some(failure.as_str()));
+            assert!(owner.has_cleanup_failure());
+            drop(held_master);
         }
+    }
+
+    /// Manager failure keeps the original process record even if independent
+    /// root force/wait settles it. A second manager termination consumes only
+    /// cached native status, not a renewed numeric group signal. This resides
+    /// beside private authority so tests need no production mutation API.
+    #[test]
+    fn pane_process_manager_retains_process_when_termination_fails() {
+        let mut manager = super::super::PaneProcessManager::new();
+        let environment = super::super::PaneProcessEnvironment {
+            mez: "native-test".into(),
+            session: "native-test".into(),
+            window: "@native".into(),
+            pane: "%native".into(),
+            term: "xterm".into(),
+        };
+        let pid = manager
+            .spawn_for_pane(
+                "%root",
+                &super::super::PaneProcessLaunch::new("/bin/sh".into()),
+                Some("cat"),
+                &environment,
+                mez_terminal::TerminalSize::new(80, 24).unwrap(),
+            )
+            .unwrap();
+        let mut process = manager.take_running_pane_process("%root").unwrap();
+        let held_master = process.duplicate_master_fd().unwrap();
+        process.child.raw.as_mut().unwrap().group = None;
+        manager
+            .insert_running_pane_process("%root", process)
+            .unwrap();
+        let error = manager
+            .terminate_pane_with_grace("%root", Duration::from_millis(10))
+            .unwrap_err();
+        let retained = manager.contains_pane("%root") && manager.primary_pid("%root") == Some(pid);
+        let retry = manager.terminate_pane_with_grace("%root", Duration::from_millis(10));
+        drop(held_master);
+        assert_eq!(error.kind(), crate::MuxErrorKind::InvalidState);
+        assert!(error.message().contains("authority is missing or invalid"));
+        assert!(retained, "failed termination discarded its manager record");
+        assert_eq!(retry.unwrap().unwrap().primary_pid, pid);
+        assert!(manager.is_empty());
+        assert_eq!(manager.retirement_owner().outstanding(), 0);
+        let pid = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
         assert_eq!(
             rustix::process::test_kill_process(pid),
             Err(rustix::io::Errno::SRCH)
         );
-        assert_eq!(owner.outstanding(), 0);
-        assert_eq!(owner.cleanup_failure().as_deref(), Some(failure.as_str()));
-        assert!(owner.has_cleanup_failure());
-        drop(held_master);
+    }
+
+    /// Four real native roots install a visible HUP trap before exact-root
+    /// force. Inherent KILL emits no trap and does not incur portable-pty's
+    /// four 50ms sleeps per child. Held masters and strict waits/SRCH exclude
+    /// PTY closure and mere signal delivery as successful cleanup evidence.
+    #[test]
+    fn native_root_force_does_not_run_portable_hup_grace() {
+        let owner = PaneProcessRetirementOwner::default();
+        let mut processes = Vec::new();
+        let mut masters = Vec::new();
+        for _ in 0..4 {
+            let mut process = super::super::spawn_retained_argv_pty_process(
+                std::path::Path::new("/bin/sh"),
+                &["-c".into(), "trap 'printf unexpected-hup\\\\n' HUP; trap '' TERM; printf 'force-ready\\n'; while IFS= read -r line; do :; done".into()],
+                &[], mez_terminal::TerminalSize::new(80, 24).unwrap(), None, owner.reserve().unwrap()).unwrap();
+            masters.push(process.duplicate_master_fd().unwrap());
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut output = Vec::new();
+            while Instant::now() < deadline
+                && !String::from_utf8_lossy(&output).contains("force-ready")
+            {
+                output.extend(process.read_available_output(4096).unwrap());
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(
+                String::from_utf8_lossy(&output).contains("force-ready"),
+                "HUP trap was not installed"
+            );
+            processes.push(process);
+        }
+        let started = Instant::now();
+        let force_results = processes
+            .iter_mut()
+            .map(|process| process.kill_owned_root())
+            .collect::<Vec<_>>();
+        let force_elapsed = started.elapsed();
+        let mut reaped = true;
+        let mut hup_seen = false;
+        for process in &mut processes {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut waited = false;
+            while Instant::now() < deadline {
+                if matches!(process.poll_exit(), Ok(Some(_))) {
+                    waited = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let pid = rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap())
+                .unwrap();
+            reaped &=
+                waited && rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH);
+            hup_seen |= String::from_utf8_lossy(&process.read_available_output(4096).unwrap())
+                .contains("unexpected-hup");
+            let _ = process.terminate(Duration::from_millis(10));
+        }
+        drop(masters);
+        assert!(force_results.iter().all(Result::is_ok));
+        assert!(
+            reaped && owner.outstanding() == 0,
+            "native waits did not settle every root"
+        );
+        assert!(
+            !hup_seen,
+            "exact force invoked portable HUP rather than inherent KILL"
+        );
+        assert!(
+            force_elapsed < Duration::from_millis(500),
+            "exact force blocked for portable grace: {force_elapsed:?}"
+        );
     }
 
     /// Failed pre-spawn work and settled historical peaks leave no completed

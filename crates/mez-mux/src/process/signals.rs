@@ -1,43 +1,12 @@
 //! Signal translation and process-group signaling for pane teardown.
 //!
-//! The process module prefers sending signals to the pane process group when the
-//! PTY backend exposes a leader, falling back to child termination otherwise.
+//! Callers establish immutable birth-root authority and poll the exact owned
+//! child before group sends. Foreground PTY observations are not authority.
 
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal, kill_process_group};
 
 use crate::{MuxError as MezError, Result};
-
-/// Runs the send signal to pane process group operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn send_signal_to_pane_process_group(
-    process_group_leader: i32,
-    signal: Signal,
-) -> Result<()> {
-    if process_group_leader <= 0 {
-        return Err(MezError::invalid_state("pane process group id is invalid"));
-    }
-    let pid = Pid::from_raw(process_group_leader)
-        .ok_or_else(|| MezError::invalid_state("pane process group id is invalid"))?;
-    match kill_process_group(pid, signal) {
-        Ok(()) => Ok(()),
-        Err(Errno::SRCH) => Ok(()),
-        // Darwin can report EPERM for a PTY foreground process group whose
-        // session leader has exited but has not yet become observable through
-        // wait. Treat that teardown race like ESRCH; the subsequent bounded
-        // child wait still fails if an owned process actually remains alive.
-        #[cfg(target_os = "macos")]
-        Err(Errno::PERM) => Ok(()),
-        Err(error) => Err(MezError::io(format!(
-            "failed to send signal {} to pane process group {}: {error}",
-            signal.as_raw(),
-            process_group_leader
-        ))),
-    }
-}
 
 /// Signals a retained exact-child group without the legacy Darwin EPERM
 /// exception. Only typed ESRCH, or EPERM followed by authoritative group
@@ -115,7 +84,10 @@ pub(super) fn signal_number_from_portable_name(name: &str) -> Option<i32> {
 /// declaration makes the boundary available to the crate.
 #[cfg(test)]
 mod tests {
-    use super::{send_signal_to_pane_process_group, signal_number_from_portable_name};
+    use super::{
+        send_signal_to_retained_pane_group as send_signal_to_pane_process_group,
+        signal_number_from_portable_name,
+    };
     use rustix::process::Signal;
 
     /// Verifies resolves standard signal names.

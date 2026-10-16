@@ -160,6 +160,73 @@ fn retained_native_failure(owner: &PaneProcessRetirementOwner) -> Option<MezErro
 mod tests {
     use super::*;
 
+    /// Exact native root force must not block a current-thread executor on
+    /// portable-pty's HUP grace. Four roots prove trap installation before the
+    /// timed operation; an already-polled timer measures executor responsiveness.
+    /// Held masters prevent closure from killing fixtures, and production drain
+    /// plus strict native waits/SRCH settles every root before assertions.
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_root_force_preserves_current_thread_heartbeat() {
+        let owner = PaneProcessRetirementOwner::default();
+        let mut processes = Vec::new();
+        let mut masters = Vec::new();
+        let mut pids = Vec::new();
+        for _ in 0..4 {
+            let mut process = mez_mux::process::spawn_retained_argv_pty_process(
+                std::path::Path::new("/bin/sh"),
+                &["-c".into(), "trap '' HUP TERM; printf 'heartbeat-ready\\n'; while IFS= read -r line; do :; done".into()],
+                &[], super::super::Size::new(80, 24).unwrap(), None, owner.reserve().unwrap()).unwrap();
+            masters.push(process.duplicate_master_fd().unwrap());
+            pids.push(
+                rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap())
+                    .unwrap(),
+            );
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut output = Vec::new();
+            while Instant::now() < deadline
+                && !String::from_utf8_lossy(&output).contains("heartbeat-ready")
+            {
+                output.extend(process.read_available_output(4096).unwrap());
+                sleep(Duration::from_millis(5)).await;
+            }
+            assert!(
+                String::from_utf8_lossy(&output).contains("heartbeat-ready"),
+                "HUP resistance was not installed"
+            );
+            processes.push(process);
+        }
+        let started = Instant::now();
+        let heartbeat = async {
+            sleep(Duration::from_millis(10)).await;
+            started.elapsed()
+        };
+        let force = async {
+            // The heartbeat branch is polled before any synchronous native I/O.
+            tokio::task::yield_now().await;
+            processes
+                .iter_mut()
+                .map(|process| process.kill_owned_root())
+                .collect::<Vec<_>>()
+        };
+        let (heartbeat_elapsed, force_results) = tokio::join!(biased; heartbeat, force);
+        drop(processes);
+        let settlement =
+            drain_native_pane_retirement(&owner, Instant::now() + Duration::from_secs(1)).await;
+        let all_absent = pids
+            .into_iter()
+            .all(|pid| rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH));
+        drop(masters);
+        assert!(
+            settlement.is_ok() && owner.outstanding() == 0 && all_absent,
+            "exact fixture reaping failed: {settlement:?}"
+        );
+        assert!(force_results.iter().all(std::result::Result::is_ok));
+        assert!(
+            heartbeat_elapsed < Duration::from_millis(500),
+            "native force blocked executor heartbeat: {heartbeat_elapsed:?}"
+        );
+    }
+
     /// Supplies only a labelled receipt-classification fault. Native ownership,
     /// signaling and wait/reap below remain the actual production operations.
     fn competing_receipt_reader(

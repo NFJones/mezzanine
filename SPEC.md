@@ -2246,6 +2246,16 @@ before reaping it. Cached PTY process-group metadata alone MUST NOT leave the
 root alive while teardown waits for its exit. Signal and reap failures MUST
 retain process ownership for diagnosis and retry.
 
+Native cleanup group authority MUST be immutable birth-root authority minted
+from the actual owned native child at the UNIX PTY spawn boundary. Cached or
+live foreground-job observations MUST NOT authorize cleanup signals. Missing,
+invalid, mismatched or opaque authority MUST fail closed for numeric group
+signals without skipping safe independent exact-root force/wait. Exact force
+MUST NOT invoke a blocking portable HUP/grace implementation. Cleanup scope is
+the root and its birth group, not disposal of all foreground jobs, detached
+descendants, sessions or cgroups; normal kernel/shell PTY hangup behavior still
+applies. Successful native wait MUST suppress every subsequent cleanup signal.
+
 Daemon-managed pane, restored-pane and external-editor children MUST reserve
 an exact native cleanup return slot before spawn. Manager-to-worker handoff,
 cancelled replies, backend construction failure, unpolled workers and service

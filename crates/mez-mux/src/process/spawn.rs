@@ -99,7 +99,7 @@ fn spawn_argv_pty_process_inner(
         .spawn_command(command)
         .map_err(|error| MezError::io(format!("failed to spawn PTY process: {error}")))?;
     let process_group_leader = pair.master.process_group_leader();
-    let child = guard_spawned_child(child, process_group_leader, reservation);
+    let child = guard_spawned_child(child, reservation);
     drop(pair.slave);
 
     let primary_pid = child
@@ -263,7 +263,7 @@ pub(super) fn spawn_pane_process_retained(
         .spawn_command(command)
         .map_err(|error| MezError::io(format!("failed to spawn pane process: {error}")))?;
     let process_group_leader = pair.master.process_group_leader();
-    let child = guard_spawned_child(child, process_group_leader, reservation);
+    let child = guard_spawned_child(child, reservation);
     drop(pair.slave);
 
     let primary_pid = child
@@ -293,11 +293,22 @@ pub(super) fn spawn_pane_process_retained(
 }
 
 /// Installs exact cleanup ownership before PID or PTY setup can fail.
+///
+/// These two native UNIX spawn paths use portable-pty 0.9's UnixSlavePty,
+/// which boxes std Child only after an unconditional successful setsid. That
+/// establishes birth PGID == owned root PID on Linux and macOS. Mint this
+/// private authority here, never from tcgetpgrp (mutable foreground jobs) or
+/// from a generic attached child whose spawn/session contract is unknown.
 fn guard_spawned_child(
     child: Box<dyn portable_pty::Child + Send + Sync>,
-    group: Option<i32>,
     reservation: Option<PaneProcessChildReservation>,
 ) -> RetainedPaneChild {
+    let group = child
+        .as_ref()
+        .as_any()
+        .downcast_ref::<std::process::Child>()
+        .and_then(|child| i32::try_from(child.id()).ok())
+        .filter(|pid| *pid > 0);
     match reservation {
         Some(reservation) => reservation.attach(child, group),
         None => RetainedPaneChild::standalone(child, group),
