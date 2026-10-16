@@ -85,9 +85,9 @@ fn runtime_saved_fork_rejected_target_preserves_existing_and_source_bytes() {
     }
 }
 
-/// Encodes the first prompt and extracts ordered provider text items, rather
-/// than relying on substring matches in metadata or on archive preservation.
-fn encoded_history(service: &mut RuntimeSessionService, pane: &str) -> Vec<(String, String)> {
+/// Encodes the first prompt through the real provider adapter without sending
+/// it. Native items and message roles remain inspectable in the returned JSON.
+fn encoded_body(service: &mut RuntimeSessionService, pane: &str) -> serde_json::Value {
     let context = service
         .agent_context_for_pane_prompt(pane, "continue", 0)
         .unwrap();
@@ -117,7 +117,14 @@ fn encoded_history(service: &mut RuntimeSessionService, pane: &str) -> Vec<(Stri
     )
     .unwrap();
     let bytes = mez_agent::openai_responses_request_body_with_stream(&request, false).unwrap();
-    let body: serde_json::Value = serde_json::from_str(&bytes).unwrap();
+    serde_json::from_str(&bytes).unwrap()
+}
+
+/// Extracts exact single-line synthetic payloads and roles from encoded provider
+/// messages. Only the pane-local replay label is excluded, so reopening in a new
+/// pane does not create a false difference in otherwise identical history.
+fn encoded_history(service: &mut RuntimeSessionService, pane: &str) -> Vec<(String, String)> {
+    let body = encoded_body(service, pane);
     body["input"]
         .as_array()
         .unwrap()
@@ -129,8 +136,12 @@ fn encoded_history(service: &mut RuntimeSessionService, pane: &str) -> Vec<(Stri
                 .flatten()
                 .filter_map(|part| {
                     let text = part["text"].as_str()?;
-                    (text.contains("FORK_ROW_") || text.contains("FORK_SUMMARY"))
-                        .then(|| (item["role"].as_str().unwrap().to_owned(), text.to_owned()))
+                    (text.contains("FORK_ROW_") || text.contains("FORK_SUMMARY")).then(|| {
+                        (
+                            item["role"].as_str().unwrap().to_owned(),
+                            text.lines().last().unwrap().to_owned(),
+                        )
+                    })
                 })
         })
         .collect()
@@ -203,20 +214,20 @@ fn runtime_saved_fork_epoch_first_encoded_request_survives_reopen() {
         .clone();
     let encoded = encoded_history(&mut service, &pane);
     service.terminate_all_pane_processes().unwrap();
-    assert_eq!(encoded.len(), 21, "{encoded:#?}");
-    assert_eq!(encoded[0].0, "developer");
-    assert!(encoded[0].1.ends_with("FORK_SUMMARY"), "{encoded:#?}");
-    for ((role, text), sequence) in encoded[1..].iter().zip(81..=100) {
-        assert_eq!(
-            role,
-            if sequence % 2 == 0 {
-                "assistant"
-            } else {
-                "user"
-            }
-        );
-        assert!(text.ends_with(&format!("FORK_ROW_{sequence:03}")), "{text}");
-    }
+    let expected = std::iter::once(("developer".to_string(), "FORK_SUMMARY".to_string()))
+        .chain((81..=100).map(|sequence| {
+            (
+                if sequence % 2 == 0 {
+                    "assistant"
+                } else {
+                    "user"
+                }
+                .to_string(),
+                format!("FORK_ROW_{sequence:03}"),
+            )
+        }))
+        .collect::<Vec<_>>();
+    assert_eq!(encoded, expected);
     assert_eq!(fs::read(&source_path).unwrap(), source_bytes);
     assert_eq!(fs::read(&epoch_path).unwrap(), epoch_bytes);
     assert_eq!(store.inspect("fork-target").unwrap().len(), 100);

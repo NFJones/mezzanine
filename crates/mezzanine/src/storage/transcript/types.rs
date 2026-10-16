@@ -344,6 +344,12 @@ pub struct AgentTranscriptStore {
     /// Test-only one-shot failure for recovery-journal cleanup after commit.
     #[cfg(test)]
     pub(super) fail_archive_recovery_journal_removal: Arc<AtomicBool>,
+    /// Test-only one-shot failure before compensating a newly created fork.
+    #[cfg(test)]
+    pub(super) fail_fork_cleanup: Arc<AtomicBool>,
+    /// One-shot deterministic handshake after recovery reads a journal, before locking.
+    #[cfg(test)]
+    pub(super) archive_recovery_read_barrier: Arc<Mutex<Option<ArchiveRecoveryReadBarrier>>>,
     /// Test-only one-shot failure immediately before replacing session metadata.
     #[cfg(test)]
     pub(super) fail_agent_session_metadata_write: Arc<AtomicBool>,
@@ -393,6 +399,16 @@ impl PartialEq for AgentTranscriptStore {
 }
 
 impl Eq for AgentTranscriptStore {}
+
+/// Focused test handshake for recovery waiting behind live fork publication.
+#[cfg(test)]
+#[derive(Debug)]
+pub(super) struct ArchiveRecoveryReadBarrier {
+    /// Announces that recovery captured a pre-lock journal snapshot.
+    pub(super) observed: std::sync::mpsc::Sender<()>,
+    /// Allows recovery to continue after the test completes live publication.
+    pub(super) resume: std::sync::mpsc::Receiver<()>,
+}
 
 /// Transient mirror throttle and bounded diagnostics for one store handle.
 ///

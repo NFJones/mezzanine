@@ -6,6 +6,126 @@
 use super::*;
 use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 
+/// Recovery may capture the provisional cleanup journal before a live fork
+/// retires it, then wait for that fork's conversation lock. A one-shot channel
+/// handshake makes that ordering deterministic; recovery must reread under the
+/// lock and preserve the now-complete target, not replay its stale snapshot.
+#[test]
+fn fork_epoch_live_completion_survives_waiting_recovery_snapshot() {
+    let root = temp_root("fork-live-recovery");
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("target", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .save_compaction_epoch("target", 1, "completed model summary")
+        .unwrap();
+    let lock = store.acquire_conversation_lock("target").unwrap();
+    store.begin_fork_publication("target").unwrap();
+    let (observed_tx, observed_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    *store.archive_recovery_read_barrier.lock().unwrap() =
+        Some(super::super::types::ArchiveRecoveryReadBarrier {
+            observed: observed_tx,
+            resume: resume_rx,
+        });
+    let recovery = {
+        let store = store.clone();
+        thread::spawn(move || store.recover_archive_transactions())
+    };
+    observed_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    store.complete_fork_publication("target").unwrap();
+    resume_tx.send(()).unwrap();
+    drop(lock);
+    recovery.join().unwrap().unwrap();
+    assert_eq!(store.inspect("target").unwrap().len(), 1);
+    assert_eq!(
+        store.compaction_epoch("target").unwrap().unwrap().summary,
+        "completed model summary"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Retained lifecycle journals, staging payloads and even incomplete/corrupt
+/// archive files reserve the target identity. A new fork must not overwrite
+/// that recovery owner or compensate its old payload, regardless of whether a
+/// healthy archived-session lookup could currently restore the target.
+#[test]
+fn fork_epoch_rejects_retained_target_lifecycle_ownership() {
+    fn bytes(
+        root: &std::path::Path,
+        directory: &std::path::Path,
+        out: &mut BTreeMap<PathBuf, Vec<u8>>,
+    ) {
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().unwrap() == ".conversation-locks" {
+                continue;
+            }
+            if path.is_dir() {
+                bytes(root, &path, out);
+            } else {
+                out.insert(
+                    path.strip_prefix(root).unwrap().to_path_buf(),
+                    fs::read(path).unwrap(),
+                );
+            }
+        }
+    }
+    for state in [
+        "archive",
+        "restore",
+        "delete",
+        "promote-legacy",
+        "partial-archive",
+        "partial-sidecar",
+        "corrupt-pair",
+        "staging-only",
+    ] {
+        let root = temp_root("fork-retained-target");
+        let store = AgentTranscriptStore::new(root.clone());
+        store
+            .append(&entry("source", 1, TranscriptRole::User))
+            .unwrap();
+        fs::create_dir_all(root.join(".archive-stage-target")).unwrap();
+        fs::write(
+            root.join(".archive-stage-target/history.tsv"),
+            "retained target payload",
+        )
+        .unwrap();
+        if matches!(state, "archive" | "restore" | "delete" | "promote-legacy") {
+            fs::create_dir_all(root.join(".archive-recovery")).unwrap();
+            fs::write(root.join(".archive-recovery/target.json"), format!(
+                r#"{{"version":1,"conversation_id":"target","operation":"{state}","payload_layout":"directory"}}"#
+            )).unwrap();
+        } else if state != "staging-only" {
+            fs::remove_dir_all(root.join(".archive-stage-target")).unwrap();
+            fs::create_dir_all(root.join("archived")).unwrap();
+            if state != "partial-sidecar" {
+                fs::write(root.join("archived/target.tar.zst"), "incomplete archive").unwrap();
+            }
+            if state != "partial-archive" {
+                fs::write(root.join("archived/target.json"), "invalid sidecar").unwrap();
+            }
+        }
+        let mut before = BTreeMap::new();
+        bytes(&root, &root, &mut before);
+        let error = store.fork("source", "target", 99).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            crate::error::MezErrorKind::Conflict,
+            "{state}: {error}"
+        );
+        let mut after = BTreeMap::new();
+        bytes(&root, &root, &mut after);
+        assert_eq!(after, before, "{state}");
+        assert!(!root.join("target").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// The existing active-delete recovery intent hides a provisional fork from
 /// exact lookup, catalog rebuild and model replay even after a crash. Restart
 /// cleans only that provisional target and leaves parent bytes untouched.
@@ -61,9 +181,9 @@ fn fork_epoch_pending_publication_is_hidden_and_recovered() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// Failed provisional-journal publication and its blocked compensation must
-/// report both failures. A file at the recovery-directory name produces a
-/// portable filesystem error without privilege changes or injected authority.
+/// A target append failure followed by failed compensation must report both
+/// errors and retain the existing durable cleanup intent. Restart then removes
+/// only the provisional target without exposing a raw-history saved session.
 #[test]
 fn fork_epoch_cleanup_failure_retains_original_and_secondary_diagnostics() {
     let root = temp_root("fork-secondary-cleanup");
@@ -75,7 +195,8 @@ fn fork_epoch_cleanup_failure_retains_original_and_secondary_diagnostics() {
         .save_compaction_epoch("source", 1, "source summary")
         .unwrap();
     let before = source_bytes(&root);
-    fs::write(root.join(".archive-recovery"), "blocked journal directory").unwrap();
+    store.fail_transcript_append_before_sync();
+    store.fail_next_fork_cleanup();
     let error = store.fork("source", "target", 99).unwrap_err();
     assert!(
         error.to_string().contains("conversation fork failed"),
@@ -85,6 +206,22 @@ fn fork_epoch_cleanup_failure_retains_original_and_secondary_diagnostics() {
         error.to_string().contains("target cleanup failed"),
         "{error}"
     );
+    assert!(
+        error
+            .to_string()
+            .contains("injected transcript append failure before sync"),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("injected fork target cleanup failure"),
+        "{error}"
+    );
+    assert!(root.join("target").exists());
+    assert!(store.saved_session("target").unwrap().is_none());
+    store.recover_archive_transactions().unwrap();
+    assert!(!root.join("target").exists());
     assert_eq!(source_bytes(&root), before);
     fs::remove_dir_all(root).unwrap();
 }

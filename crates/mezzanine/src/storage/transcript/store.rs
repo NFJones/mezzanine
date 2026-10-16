@@ -543,6 +543,10 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
+            fail_fork_cleanup: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            archive_recovery_read_barrier: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             active_metadata_fault: Arc::new(AtomicU8::new(0)),
@@ -586,6 +590,8 @@ impl AgentTranscriptStore {
             fail_metadata_write_after_promotion: Arc::new(AtomicBool::new(false)),
             fail_legacy_promotion_permissions_after_rename: Arc::new(AtomicBool::new(false)),
             fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
+            fail_fork_cleanup: Arc::new(AtomicBool::new(false)),
+            archive_recovery_read_barrier: Arc::new(Mutex::new(None)),
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
             fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
             active_metadata_fault: Arc::new(AtomicU8::new(0)),
@@ -648,6 +654,12 @@ impl AgentTranscriptStore {
     pub fn fail_next_archive_recovery_journal_removal(&self) {
         self.fail_archive_recovery_journal_removal
             .store(true, Ordering::SeqCst);
+    }
+
+    /// Leaves a failed provisional fork for restart recovery in focused tests.
+    #[cfg(test)]
+    pub fn fail_next_fork_cleanup(&self) {
+        self.fail_fork_cleanup.store(true, Ordering::SeqCst);
     }
 
     /// Causes the next agent-session metadata replacement to fail in focused tests.
@@ -3772,8 +3784,7 @@ impl AgentTranscriptStore {
             .map(|id| self.acquire_conversation_lock(id))
             .collect::<Result<Vec<_>>>()?;
         if self.conversation_exists(target_conversation_id)?
-            || archived_payloads_exist(self, target_conversation_id)?
-            || self.active_delete_pending(target_conversation_id)?
+            || self.fork_target_recovery_artifacts_exist(target_conversation_id)?
         {
             return Err(MezError::conflict("target conversation already exists"));
         }
@@ -3888,7 +3899,7 @@ impl AgentTranscriptStore {
                 .ok_or_else(|| MezError::invalid_state("forked conversation summary missing"))
         })();
         if let Err(error) = fork_result {
-            return match self.delete_locked(target_conversation_id) {
+            return match self.compensate_failed_fork_locked(target_conversation_id) {
                 Ok(_) => Err(error),
                 Err(cleanup_error) => Err(MezError::new(
                     error.kind(),
@@ -3899,6 +3910,18 @@ impl AgentTranscriptStore {
             };
         }
         fork_result
+    }
+
+    /// Removes only the freshly owned target under its existing mutation lock.
+    /// A failed compensation leaves the durable intent for restart recovery.
+    fn compensate_failed_fork_locked(&self, conversation_id: &str) -> Result<bool> {
+        #[cfg(test)]
+        if self.fail_fork_cleanup.swap(false, Ordering::SeqCst) {
+            return Err(MezError::invalid_state(
+                "injected fork target cleanup failure",
+            ));
+        }
+        self.delete_locked(conversation_id)
     }
 
     /// Appends one submitted agent prompt to the bounded shared history file.
