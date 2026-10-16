@@ -29,17 +29,20 @@ async fn async_peer_bookkeeping_deferral_preserves_timer_supervisor_and_panes() 
     let command = "/bin/sh -c 'stty -echo && printf \"peer-ready\\n\" && exec cat'";
     service.start_initial_pane_process(Some(command)).unwrap();
     service
-        .split_pane_with_process(&primary, SplitDirection::Vertical, Some(command))
-        .unwrap();
-    service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let stopped = service
-        .start_agent_prompt_turn("%1", "retain interrupted chronology")
+    service
+        .execute_agent_shell_command(&primary, "retain interrupted chronology")
         .unwrap();
-    service.stop_agent_turn_for_pane("%1").unwrap();
+    let stopped = service.pending_agent_provider_tasks().pop().unwrap();
+    service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
     let work = service.claim_bookkeeping_candidates().pop().unwrap();
+    service
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some(command))
+        .unwrap();
     let now = crate::runtime::current_unix_millis();
     accept_service_peer(&mut service, "%1", now);
     service
@@ -217,7 +220,7 @@ async fn async_peer_bookkeeping_callback_wakes_only_current_exact_owner() {
         let mut service = test_service();
         service.set_agent_transcript_store(store);
         service.use_transcript_effect_adapter();
-        service
+        let primary = service
             .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
             .unwrap();
         service
@@ -230,9 +233,11 @@ async fn async_peer_bookkeeping_callback_wakes_only_current_exact_owner() {
             .session_id
             .clone();
         service
-            .start_agent_prompt_turn("%1", "old exact chronology")
+            .execute_agent_shell_command(&primary, "old exact chronology")
             .unwrap();
-        service.stop_agent_turn_for_pane("%1").unwrap();
+        service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
         let work = service.claim_bookkeeping_candidates().pop().unwrap();
         if mode != "current" {
             service.agent_shell_store_mut().remove_session("%1");
