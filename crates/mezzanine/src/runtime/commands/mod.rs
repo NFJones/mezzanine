@@ -1069,6 +1069,16 @@ impl RuntimeSessionService {
             .agent_loop_state(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("agent loop state is unavailable"))?;
+        #[cfg(test)]
+        if state.routed_parent_turn_id.is_some()
+            && self.take_routed_loop_continuation_queue_failure_for_tests()
+        {
+            return Err(MezError::invalid_state(
+                "injected routed loop continuation queue failure",
+            ));
+        }
+        let (session_id, transcript_entries) =
+            self.prepare_agent_loop_work_conversation(pane_id, &state)?;
         let prompt = runtime_agent_loop_work_prompt(&state);
         let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None, None, None)?;
         self.insert_agent_loop_turn(
