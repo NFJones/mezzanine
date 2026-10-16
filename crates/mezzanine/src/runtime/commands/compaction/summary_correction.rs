@@ -71,7 +71,39 @@ impl RuntimeSessionService {
         if validation.is_ok() {
             // Reset only after bounded output is accepted for this source. Final
             // request progress accounting is separate and is never reset here.
+            let mut receipt = compaction_failure_evidence(
+                task,
+                None,
+                CompactionFailurePhase::Summary,
+                CompactionFailureDisposition::CandidateRejected,
+            );
+            receipt.phase = CompactionFailurePhase::CompleteCandidate;
+            receipt.source_generation = receipt.source_generation.or(Some(task.task_generation));
+            receipt.measured_cost = Some(if tokens {
+                mez_agent::provider_text_input_token_estimate(&summary)
+            } else {
+                model_context_text_word_count(&summary)
+            });
+            receipt.measured_bytes = Some(summary.len());
+            receipt.size_progress = task.summary_correction.last_rejection.map(|previous| {
+                (receipt.measured_cost.unwrap_or(0) <= budget
+                    || receipt.measured_cost.unwrap_or(0) < previous.cost)
+                    && (summary.len() <= SUMMARY_BYTES || summary.len() < previous.bytes)
+            });
             task.summary_correction.reset_progress();
+            task.summary_correction.accepted_summary = Some(Box::new(receipt));
+            let mut messages = task.request.messages.iter().cloned().collect::<Vec<_>>();
+            messages.retain(|message| {
+                !(message.role == ModelMessageRole::Developer
+                    && message.source == ContextSourceKind::Configuration
+                    && message.content.starts_with("[private summary correction]"))
+            });
+            task.request.messages = messages.into();
+            let (target, target_tokens) = task
+                .summary_correction
+                .effective_input_tokens
+                .map_or((budget, tokens), |target| (target, true));
+            communicate_summary_target(&mut task.request, target, target_tokens);
             return runtime_model_compaction_summary_from_response(response).map(Some);
         }
         let rejected = validation
@@ -210,7 +242,12 @@ fn prepare_summary_correction(
     let state = &mut task.summary_correction;
     state.source_generation.get_or_insert(task.task_generation);
     state.corrections_admitted = state.corrections_admitted.saturating_add(1);
-    state.last_rejection = Some(rejected);
+    if matches!(
+        rejected.defect,
+        ModelCompactionSummaryDefect::Bytes | ModelCompactionSummaryDefect::Budget
+    ) {
+        state.last_rejection = Some(rejected);
+    }
     state.guidance_target = Some(next);
     state.guidance_is_input_tokens = rejected.estimated_tokens;
     // Reuse the frozen current request: it already owns the exact redacted
@@ -279,6 +316,19 @@ pub(super) fn compaction_failure_evidence(
     phase: CompactionFailurePhase,
     disposition: CompactionFailureDisposition,
 ) -> CompactionFailureEvidence {
+    if phase == CompactionFailurePhase::CompleteCandidate
+        && let Some(receipt) = task.summary_correction.accepted_summary.as_deref()
+    {
+        let mut facts = receipt.clone();
+        facts.phase = phase;
+        facts.disposition = disposition;
+        return facts;
+    }
+    let rejected = if phase == CompactionFailurePhase::ProviderInference {
+        rejected.or(task.summary_correction.last_rejection)
+    } else {
+        rejected
+    };
     let (frozen_allowance, tokens, synthesis) = match &task.target {
         RuntimeAgentCompactionTarget::ActiveTurn {
             plan,
@@ -310,7 +360,12 @@ pub(super) fn compaction_failure_evidence(
         } else {
             phase
         },
-        source_generation: task.summary_correction.source_generation,
+        source_generation: task.summary_correction.source_generation.or_else(|| {
+            task.summary_correction
+                .accepted_summary
+                .as_ref()
+                .and_then(|receipt| receipt.source_generation)
+        }),
         task_generation: task.task_generation,
         defect: rejected.map(|value| value.defect),
         frozen_allowance,
@@ -334,7 +389,12 @@ pub(super) fn compaction_failure_evidence(
                     )
                 }
             }),
-        corrections_admitted: task.summary_correction.corrections_admitted,
+        corrections_admitted: task.summary_correction.corrections_admitted.saturating_add(
+            task.summary_correction
+                .accepted_summary
+                .as_ref()
+                .map_or(0, |receipt| receipt.corrections_admitted),
+        ),
         disposition,
         openai_max_output_tokens_transmitted: task.compaction_request_shape.as_ref().and_then(
             |(api, _, _)| {

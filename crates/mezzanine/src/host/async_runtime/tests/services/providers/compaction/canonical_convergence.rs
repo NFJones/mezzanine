@@ -56,6 +56,7 @@ async fn async_openai_compaction_retry_wires_omit_max_output_tokens() {
             RetryPath::ContextSplit,
         ] {
             Box::pin(qualify(false, streaming, false, retry)).await;
+            Box::pin(qualify(true, streaming, false, retry)).await;
         }
     }
 }
@@ -186,6 +187,7 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
     };
     let started = StdArc::new(tokio::sync::Notify::new());
     let release = StdArc::new(tokio::sync::Notify::new());
+    let published = StdArc::new(tokio::sync::Notify::new());
     let phase = std::sync::atomic::AtomicUsize::new(0);
     let server = async {
         let mut requests = Vec::new();
@@ -270,9 +272,16 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
         respond(&mut socket, &corrected, streaming).await;
         let mut final_summary = corrected.clone();
         let mut extra_summaries = 0;
-        if !manual {
+        if !manual || retry == RetryPath::ContextSplit {
             loop {
-                let (mut socket, _) = listener.accept().await.unwrap();
+                let (mut socket, _) = if manual {
+                    tokio::select! {
+                        _ = published.notified() => break,
+                        connection = listener.accept() => connection.unwrap(),
+                    }
+                } else {
+                    listener.accept().await.unwrap()
+                };
                 let body = read_body(&mut socket, streaming).await;
                 let next = body.to_string();
                 if retry == RetryPath::ContextSplit && next.contains("conversation compactor") {
@@ -396,6 +405,7 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
             }
             tokio::task::yield_now().await;
         }
+        published.notify_one();
         stop.store(true, Ordering::SeqCst);
         stopped.notified().await;
         run_async_persistence_side_effect_service(
@@ -431,6 +441,14 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
     assert!(!exit.service.agent_is_compacting("%1"));
     assert!(exit.service.pending_agent_provider_tasks().is_empty());
     assert!(exit.service.pending_agent_compaction_tasks().is_empty());
+    let usage = exit
+        .service
+        .agent_token_usage_for_conversation(&conversation);
+    let input: u64 = usage.values().map(|value| value.input_tokens).sum();
+    let output: u64 = usage.values().map(|value| value.output_tokens).sum();
+    let cutoff = u64::from(retry == RetryPath::OutputLimit);
+    assert_eq!(input, report.executions as u64 * 100 + cutoff * 10);
+    assert_eq!(output, report.executions as u64 * 10 + cutoff);
     let epoch = store.compaction_epoch(&conversation).unwrap().unwrap();
     if manual {
         assert!(epoch.summary.contains(&corrected));

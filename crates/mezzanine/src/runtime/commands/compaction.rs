@@ -1443,6 +1443,7 @@ impl RuntimeSessionService {
                 })?;
                 chunks.summaries.push(summary.clone());
                 if let Some(next) = chunks.pending.pop() {
+                    task.summary_correction.accepted_summary = None;
                     runtime_rebuild_conversation_compaction_request(&mut task, next)?;
                     self.queue_agent_compaction_task(task.clone());
                     return Ok(());
@@ -1463,6 +1464,7 @@ impl RuntimeSessionService {
                     )?;
                     chunks.synthesis_source_bytes = Some(synthesis.len());
                     chunks.summaries.clear();
+                    task.summary_correction.accepted_summary = None;
                     runtime_rebuild_conversation_compaction_request(&mut task, synthesis)?;
                     self.queue_agent_compaction_task(task.clone());
                     return Ok(());
@@ -1503,6 +1505,7 @@ impl RuntimeSessionService {
                     }
                 };
                 if let Some(blocks) = next_blocks {
+                    task.summary_correction.accepted_summary = None;
                     runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
                     self.append_agent_trace_turn_event(
                         pane_id,
@@ -1860,6 +1863,7 @@ impl RuntimeSessionService {
                         final_request_retry.last_input_tokens = Some(retry_estimate.input_tokens);
                         final_request_retry.attempts = 0;
                         final_request_retry.summary_ceiling = None;
+                        task.summary_correction.accepted_summary = None;
                         completed_summaries.clear();
                         pending_blocks.clear();
                         *synthesis_source_bytes = None;
@@ -2118,6 +2122,7 @@ impl RuntimeSessionService {
                                 final_request_retry.last_input_tokens = Some(candidate_tokens);
                                 final_request_retry.attempts = 0;
                                 final_request_retry.summary_ceiling = None;
+                                task.summary_correction.accepted_summary = None;
                                 completed_summaries.clear();
                                 pending_blocks.clear();
                                 *synthesis_source_bytes = None;
@@ -3160,15 +3165,34 @@ impl RuntimeSessionService {
                     return Ok(true);
                 }
             }
+            let disposition = match retry_class {
+                ProviderErrorRetryClass::RetryableTransport => {
+                    crate::error::CompactionFailureDisposition::TransportExhausted
+                }
+                ProviderErrorRetryClass::OutputLimit => {
+                    crate::error::CompactionFailureDisposition::OutputLimit
+                }
+                ProviderErrorRetryClass::ContextLimit => {
+                    crate::error::CompactionFailureDisposition::ContextFloor
+                }
+                _ => crate::error::CompactionFailureDisposition::ProviderRejected,
+            };
+            let facts = summary_correction::compaction_failure_evidence(
+                &task,
+                None,
+                crate::error::CompactionFailurePhase::ProviderInference,
+                disposition,
+            );
+            self.append_agent_status_text_to_terminal_buffer(pane_id, &facts.diagnostic_line())?;
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
                 &format!("agent: compact failed during provider request: {message}"),
             )?;
             if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
-                self.fail_running_turn_after_compaction_failure(
+                self.fail_running_turn_after_compaction_error(
                     resume_turn_id,
                     &task.source,
-                    message,
+                    &MezError::invalid_state(message).with_compaction_failure(facts),
                 )?;
             }
             return Ok(true);

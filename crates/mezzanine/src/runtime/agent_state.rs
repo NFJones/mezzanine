@@ -692,8 +692,8 @@ pub struct RuntimeSummaryCorrection {
     pub effective_input_tokens: Option<usize>,
     /// Empty/malformed corrections consumed for this source; always finite.
     pub empty_attempts: u8,
-    /// Last rejection with its own fixed unit; unlike a guidance target this
-    /// measurement is never reinterpreted as provider generation tokens.
+    /// Last size-bearing rejection with its fixed unit. Empty/malformed output
+    /// cannot replace this predecessor with an unmeasured zero semantic cost.
     pub last_rejection: Option<mez_agent::context_compaction::ModelCompactionSummaryRejection>,
     /// First correction generation for this exact source, not provider calls.
     pub source_generation: Option<u64>,
@@ -703,6 +703,9 @@ pub struct RuntimeSummaryCorrection {
     pub guidance_target: Option<usize>,
     /// Unit attached to guidance_target, not inferred from another target.
     pub guidance_is_input_tokens: bool,
+    /// Content-free receipt of the last accepted source, retained through its
+    /// complete-fit validation. Never used as another source's progress state.
+    pub(crate) accepted_summary: Option<Box<crate::error::CompactionFailureEvidence>>,
 }
 
 impl RuntimeSummaryCorrection {
@@ -715,8 +718,8 @@ impl RuntimeSummaryCorrection {
         }
     }
 
-    /// Advances a valid chunk/source without forgetting frozen/effective
-    /// semantic authority. Final-fit state is not correction progress.
+    /// Advances valid source without forgetting frozen authority, final-fit
+    /// advisory state or its content-free accepted-output receipt.
     pub fn reset_progress(&mut self) {
         self.empty_attempts = 0;
         self.last_rejection = None;

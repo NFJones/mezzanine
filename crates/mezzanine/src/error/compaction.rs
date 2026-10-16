@@ -22,6 +22,8 @@ pub(crate) enum CompactionFailurePhase {
     Synthesis,
     /// Checking the complete ordinary candidate before publication.
     CompleteCandidate,
+    /// Auxiliary provider inference failed rather than completing a summary.
+    ProviderInference,
 }
 
 /// Typed local outcome; none of these dispositions authorize a retry.
@@ -37,6 +39,14 @@ pub(crate) enum CompactionFailureDisposition {
     SourceIntegrity,
     /// Complete candidate application or fit failed without publication.
     CandidateRejected,
+    /// Existing bounded transport policy cannot admit another exact retry.
+    TransportExhausted,
+    /// Provider generation cutoff remains after the bounded auxiliary helper.
+    OutputLimit,
+    /// Context splitting cannot form a smaller eligible private request.
+    ContextFloor,
+    /// Other nonretryable provider failure, not a semantic rejection.
+    ProviderRejected,
 }
 
 impl CompactionFailureDisposition {
@@ -52,6 +62,10 @@ impl CompactionFailureDisposition {
             }
             Self::SourceIntegrity => "compaction frozen source validation failed",
             Self::CandidateRejected => "compaction complete candidate rejected before publication",
+            Self::TransportExhausted => "compaction auxiliary transport retry exhausted",
+            Self::OutputLimit => "compaction auxiliary provider generation limit",
+            Self::ContextFloor => "compaction auxiliary context split floor",
+            Self::ProviderRejected => "compaction auxiliary provider request rejected",
         }
     }
 }

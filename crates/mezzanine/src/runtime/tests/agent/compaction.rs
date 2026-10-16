@@ -2778,6 +2778,12 @@ fn runtime_observed_compaction_rejects_non_reducing_final_retry() {
         .provider_options
         .insert("max_input_tokens".to_string(), "17000".to_string());
     service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    complete_runtime_test_compaction(&mut service, "%1", "");
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
+    );
     let oversized = "large-summary ".repeat(900);
     complete_runtime_test_compaction(&mut service, "%1", &oversized);
     assert!(
@@ -2799,6 +2805,31 @@ fn runtime_observed_compaction_rejects_non_reducing_final_retry() {
             .iter()
             .any(|turn| { turn.turn_id == turn_id && turn.state == AgentTurnState::Failed })
     );
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert!(execution.recovery_facts().is_none());
+    assert!(
+        execution
+            .response
+            .raw_text
+            .contains("phase=CompleteCandidate")
+    );
+    assert!(
+        execution
+            .response
+            .raw_text
+            .contains("corrections_admitted=1")
+    );
+    assert!(
+        execution
+            .response
+            .raw_text
+            .contains("source_generation=Some(")
+    );
+    assert!(
+        execution.response.raw_text.contains("measured_bytes=Some(")
+            || execution.response.raw_text.contains("bytes=Some(")
+    );
+    assert!(!execution.response.raw_text.contains(&oversized));
 }
 
 /// Verifies transcript rows appended after compaction planning stay in raw
@@ -6800,12 +6831,24 @@ fn runtime_manual_compaction_rejects_oversized_post_summary_request() {
     }));
 }
 
-/// A configured input cap splits the frozen manual source before dispatch,
-/// without publishing a partial conversation summary.
 /// A manual candidate over its final-request cap retries the frozen source
-/// with a smaller output ceiling and publishes only the accepted summary.
+/// with shorter advisory guidance and publishes only a complete-fit summary.
 #[test]
 fn runtime_manual_compaction_retries_oversized_final_request() {
+    qualify_manual_final_fit_retry(false);
+}
+
+/// Repeating a frozen-valid but complete-request-oversized manual candidate
+/// fails at the original fit/no-progress owner, without a new correction loop,
+/// partial publication or a change to frozen word authority.
+#[test]
+fn runtime_manual_compaction_rejects_non_reducing_final_retry() {
+    qualify_manual_final_fit_retry(true);
+}
+
+/// Seeds a real manual candidate and chooses final complete-fit progress versus
+/// a repeated candidate; both cases preserve the original archive until fit.
+fn qualify_manual_final_fit_retry(repeat: bool) {
     let mut service = test_runtime_service();
     service.replace_config_layers(vec![ConfigLayer {
         name: "manual-final-retry".to_string(), path: None,
@@ -6862,13 +6905,26 @@ fn runtime_manual_compaction_retries_oversized_final_request() {
             )
         });
     assert!(retry.manual_final_retry.is_some());
-    complete_runtime_test_compaction(&mut service, "%1", "short manual summary");
+    let frozen_words = retry.summary_correction.manual_words;
+    assert!(frozen_words.is_some());
+    complete_runtime_test_compaction(
+        &mut service,
+        "%1",
+        if repeat {
+            &"long summary ".repeat(700)
+        } else {
+            "short manual summary"
+        },
+    );
     assert!(
         store
             .compaction_epoch("manual-final-retry")
             .unwrap()
             .is_some()
+            == !repeat
     );
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.pending_agent_provider_tasks().is_empty());
 }
 
 /// A configured input cap splits the frozen manual source before dispatch,
