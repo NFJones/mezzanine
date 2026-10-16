@@ -9,6 +9,7 @@ mod pane_driver;
 mod pane_io;
 mod pane_service;
 mod pane_supervision;
+mod peer_bookkeeping;
 mod persistence;
 mod providers;
 mod release_load;

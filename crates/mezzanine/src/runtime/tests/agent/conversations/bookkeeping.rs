@@ -5,6 +5,8 @@
 
 use super::*;
 
+mod receive_admission;
+
 /// A genuine retained stopped-turn candidate is not a durable archive suffix.
 /// Saved fork must settle its failed command without consuming or bypassing
 /// queued, claimed, or failed/blocked bookkeeping work. The source archive stays
