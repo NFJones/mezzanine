@@ -6,6 +6,41 @@
 use super::*;
 use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 
+/// A target with only a retained catalog record or user-assigned name still
+/// belongs to the previous conversation. Fork rejection must preserve that
+/// discovery/naming state and must not enter new-target compensation.
+#[test]
+fn fork_epoch_rejects_catalog_only_and_named_only_targets() {
+    for named in [false, true] {
+        let root = temp_root("fork-reserved-catalog-target");
+        let store = AgentTranscriptStore::new(root.clone());
+        store
+            .append(&entry("source", 1, TranscriptRole::User))
+            .unwrap();
+        if named {
+            store
+                .name_session("target", "Reserved target", 2, None, false)
+                .unwrap();
+        } else {
+            store
+                .append(&entry("target", 1, TranscriptRole::User))
+                .unwrap();
+            fs::remove_dir_all(root.join("target")).unwrap();
+        }
+        let before = super::super::catalog::record_for_mutation(&store, "target").unwrap();
+        let names = store.named_sessions().unwrap();
+        assert!(before.is_some());
+        assert!(store.fork("source", "target", 99).is_err());
+        assert_eq!(
+            super::super::catalog::record_for_mutation(&store, "target").unwrap(),
+            before
+        );
+        assert_eq!(store.named_sessions().unwrap(), names);
+        assert!(!root.join("target").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// Recovery may capture the provisional cleanup journal before a live fork
 /// retires it, then wait for that fork's conversation lock. A one-shot channel
 /// handshake makes that ordering deterministic; recovery must reread under the
