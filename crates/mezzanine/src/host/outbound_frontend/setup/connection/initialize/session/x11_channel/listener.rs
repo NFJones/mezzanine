@@ -10,6 +10,7 @@
 //! This staged owner does not activate ordinary supervisor or CLI forwarding.
 
 use super::*;
+use crate::security::filesystem::stat_device;
 use rustix::fs::{AtFlags, FileType, statat, unlinkat};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -71,7 +72,7 @@ impl X11FrontendListener {
             directory,
             name,
             path,
-            device: socket.st_dev,
+            device: stat_device(&socket),
             inode: socket.st_ino,
         };
         use std::os::unix::fs::PermissionsExt;
@@ -190,7 +191,7 @@ impl Drop for Publication {
             self.name.as_str(),
             AtFlags::SYMLINK_NOFOLLOW,
         ) && FileType::from_raw_mode(socket.st_mode) == FileType::Socket
-            && socket.st_dev == self.device
+            && stat_device(&socket) == self.device
             && socket.st_ino == self.inode
         {
             // Same-user check/unlink remains cooperative, not atomic CAS.

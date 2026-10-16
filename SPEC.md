@@ -5901,6 +5901,13 @@ use owner-private socket permissions, and preserve live or unsafe existing entri
 Cleanup MUST inspect socket identity through the retained parent directory and
 withhold removal of replacements. Pathname bind and check/unlink cleanup are
 cooperative same-user boundaries, not atomic protection against hostile renames.
+Native stat device numbers MUST normalize to the held-descriptor std metadata
+u64 representation before identity comparison or retention: Linux preserves all
+unsigned bits; Darwin sign-extends its signed 32-bit device, including high-bit
+values, matching `MetadataExt::dev`. Device AND inode equality and no-follow
+observation MUST remain mandatory for startup election, frontend discovery and
+listener cleanup. This representation conversion MUST NOT weaken replacement
+rejection or permit truncation through a 32-bit unsigned intermediate.
 Each admitted frontend setup MUST be consumed once and bind its exact handle,
 protected profile alias and credential-free initialization parameters. The owner
 MUST reuse control initialization validation and enforce profile role/scope;
