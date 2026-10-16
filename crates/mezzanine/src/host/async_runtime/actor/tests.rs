@@ -17,6 +17,32 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, Semaphore, oneshot};
 
+/// Cohesive raw connection state must retain the exact notifier already shared
+/// with handles, not allocate a private wake source or wake only one waiter.
+/// Both idle listeners are registered before actor notification; one metric
+/// increment and two ready futures protect the existing broadcast semantics.
+#[tokio::test(flavor = "current_thread")]
+async fn raw_message_state_preserves_shared_delivery_broadcast() {
+    let service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    let (handle, mut actor) =
+        super::AsyncRuntimeSessionActor::new(service, super::AsyncRuntimeActorConfig::default())
+            .unwrap();
+    assert!(Arc::ptr_eq(
+        &handle.message_delivery_notify,
+        &actor.message_state.delivery_notify,
+    ));
+    let first = handle.wait_for_message_delivery();
+    let second = handle.wait_for_message_delivery();
+    tokio::pin!(first, second);
+    assert!(futures_util::poll!(first.as_mut()).is_pending());
+    assert!(futures_util::poll!(second.as_mut()).is_pending());
+    actor.notify_message_delivery();
+    assert!(futures_util::poll!(first.as_mut()).is_ready());
+    assert!(futures_util::poll!(second.as_mut()).is_ready());
+    assert_eq!(actor.metrics.message_delivery_notifications, 1);
+    assert!(actor.message_state.raw_identities.is_empty());
+}
+
 /// Saturated actor ingress must not lose a disconnect when event completion
 /// cancels control already awaiting cleanup, or an outer timeout cancels it.
 /// Retirement is exact-client and duplicate teardown leaves a sibling intact.
@@ -129,6 +155,240 @@ async fn routed_initialization_lost_actor_reply_retains_cleanup() {
     actor.apply_transport_cancellation_cleanup(cleanup).await;
     assert!(!actor.service.session().is_attached_primary(&client_id));
     assert!(actor.client_clipboard_route_cleanup_rx.try_recv().is_err());
+}
+
+/// Dropping a real hello reply after actor admission must clean the committed
+/// raw identity, not every independent registration with the same pane-less
+/// shape. A forged retirement request for that independent owner is inert.
+#[tokio::test(flavor = "current_thread")]
+async fn raw_message_lost_reply_preserves_independent_identity() {
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    let independent =
+        service
+            .message_service_mut()
+            .register_agent(None, None, "independent", Vec::new());
+    service
+        .message_service_mut()
+        .subscribe(&independent.agent_id)
+        .unwrap();
+    let (_handle, mut actor) =
+        super::AsyncRuntimeSessionActor::new(service, super::AsyncRuntimeActorConfig::default())
+            .unwrap();
+    let (owner, identity) = tokio::sync::watch::channel(None);
+    let (reply, response) = oneshot::channel();
+    drop(response);
+    let _ = actor
+        .dispatch_message_request(AsyncRuntimeRequest::HandleMessageInput {
+            input: crate::protocol::message::encode_mmp_body(
+                r#"{"protocol":"mmp/1","type":"hello","role":"lost-reply"}"#,
+            ),
+            max_content_length: 4096,
+            connection: mez_agent::messaging::MessageConnection::default(),
+            now_ms: 10,
+            owner: Some(owner),
+            reply,
+        })
+        .1;
+    assert!(
+        identity.borrow().is_some(),
+        "registration must have actually committed"
+    );
+    assert!(actor.message_state.raw_identities.is_empty());
+    let (reply, response) = oneshot::channel();
+    let _ = actor
+        .dispatch_message_request(AsyncRuntimeRequest::RetireMessageConnection {
+            agent_id: independent.agent_id.clone(),
+            reply,
+        })
+        .1;
+    response.await.unwrap().unwrap();
+    assert_eq!(
+        actor.service.message_service().discover_agents(),
+        vec![independent.clone()]
+    );
+    assert!(
+        actor
+            .service
+            .message_service()
+            .subscription(&independent.agent_id)
+            .is_some()
+    );
+}
+
+/// Required audit rejection occurs AFTER hello allocates its identity. The
+/// critical audit error must remain visible while exact raw ownership cleans
+/// that committed registration and leaves an independent owner untouched.
+#[tokio::test(flavor = "current_thread")]
+async fn raw_message_failed_audit_cleans_committed_hello() {
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    let independent =
+        service
+            .message_service_mut()
+            .register_agent(None, None, "independent", Vec::new());
+    service
+        .message_service_mut()
+        .subscribe(&independent.agent_id)
+        .unwrap();
+    service.set_audit_log(crate::security::audit::AuditLog::new(
+        crate::security::audit::AuditConfig {
+            enabled: false,
+            path: PathBuf::from("/tmp/unused-mmp-audit"),
+            hash_chain: false,
+            required: true,
+        },
+    ));
+    let (_handle, mut actor) =
+        super::AsyncRuntimeSessionActor::new(service, super::AsyncRuntimeActorConfig::default())
+            .unwrap();
+    let (owner, identity) = tokio::sync::watch::channel(None);
+    let (reply, response) = oneshot::channel();
+    let _ = actor
+        .dispatch_message_request(AsyncRuntimeRequest::HandleMessageInput {
+            input: crate::protocol::message::encode_mmp_body(
+                r#"{"protocol":"mmp/1","type":"hello","role":"audit-rejected"}"#,
+            ),
+            max_content_length: 4096,
+            connection: mez_agent::messaging::MessageConnection::default(),
+            now_ms: 10,
+            owner: Some(owner),
+            reply,
+        })
+        .1;
+    let error = response.await.unwrap().unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(
+        identity.borrow().is_some(),
+        "audit control must follow committed hello"
+    );
+    assert!(actor.message_state.raw_identities.is_empty());
+    assert_eq!(
+        actor.service.message_service().discover_agents(),
+        vec![independent.clone()]
+    );
+    assert!(
+        actor
+            .service
+            .message_service()
+            .subscription(&independent.agent_id)
+            .is_some()
+    );
+}
+
+/// A tracked raw identity that acquires pane ownership is an integrity failure,
+/// not a peer error. Exact cleanup preserves that foreign state and shutdown
+/// still retires every healthy later lease before returning the critical error.
+#[tokio::test(flavor = "current_thread")]
+async fn raw_message_shutdown_reports_integrity_and_cleans_other_leases() {
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    let independent =
+        service
+            .message_service_mut()
+            .register_agent(None, None, "independent", Vec::new());
+    service
+        .message_service_mut()
+        .subscribe(&independent.agent_id)
+        .unwrap();
+    let (_handle, mut actor) =
+        super::AsyncRuntimeSessionActor::new(service, super::AsyncRuntimeActorConfig::default())
+            .unwrap();
+    let mut owners = Vec::new();
+    let mut ids = Vec::new();
+    for role in ["corrupted", "healthy"] {
+        let (owner, identity) = tokio::sync::watch::channel(None);
+        let (reply, response) = oneshot::channel();
+        let _ = actor
+            .dispatch_message_request(AsyncRuntimeRequest::HandleMessageInput {
+                input: crate::protocol::message::encode_mmp_body(&format!(
+                    r#"{{"protocol":"mmp/1","type":"hello","role":"{role}"}}"#
+                )),
+                max_content_length: 4096,
+                connection: mez_agent::messaging::MessageConnection::default(),
+                now_ms: 10,
+                owner: Some(owner),
+                reply,
+            })
+            .1;
+        ids.push(
+            response
+                .await
+                .unwrap()
+                .unwrap()
+                .connection
+                .agent_id
+                .unwrap(),
+        );
+        owners.push(identity);
+    }
+    let mut foreign = actor
+        .service
+        .message_service()
+        .registered_identity(&ids[0])
+        .unwrap()
+        .clone();
+    foreign.pane_id = Some(mez_core::ids::PaneId::new('%', 1));
+    actor
+        .service
+        .message_service_mut()
+        .ensure_agent_identity(foreign.clone(), 11)
+        .unwrap();
+    let before = actor.service.message_service().snapshot_state();
+    let (reply, response) = oneshot::channel();
+    let _ = actor
+        .dispatch_message_request(AsyncRuntimeRequest::RetireMessageConnection {
+            agent_id: ids[0].clone(),
+            reply,
+        })
+        .1;
+    assert!(
+        response
+            .await
+            .unwrap()
+            .unwrap_err()
+            .message()
+            .contains("ownership changed")
+    );
+    assert_eq!(actor.service.message_service().snapshot_state(), before);
+    let (reply, response) = oneshot::channel();
+    assert!(
+        actor
+            .dispatch_message_request(AsyncRuntimeRequest::Shutdown { reply })
+            .1
+    );
+    assert!(
+        response
+            .await
+            .unwrap()
+            .unwrap_err()
+            .message()
+            .contains("ownership changed")
+    );
+    assert_eq!(
+        actor.service.message_service().registered_identity(&ids[0]),
+        Some(&foreign)
+    );
+    assert!(
+        actor
+            .service
+            .message_service()
+            .subscription(&ids[0])
+            .is_some()
+    );
+    assert!(
+        actor
+            .service
+            .message_service()
+            .registered_identity(&ids[1])
+            .is_none()
+    );
+    assert!(
+        actor
+            .service
+            .message_service()
+            .subscription(&independent.agent_id)
+            .is_some()
+    );
+    assert_eq!(actor.message_state.raw_identities.len(), 1);
+    drop(owners);
 }
 
 /// Verifies that the provider worker watchdog cannot fire before the
@@ -406,4 +666,27 @@ fn actor_request_scheduler_reports_oldest_queued_age() {
     let request = AsyncRuntimeRequestEnvelope::new(AsyncRuntimeRequest::LifecycleState { reply });
     std::thread::sleep(Duration::from_millis(2));
     assert!(oldest_queued_request_wait_ms(None, None, Some(&request), None) >= 1);
+}
+
+/// Passing a non-MMP envelope through the synchronous message boundary must
+/// neither execute it nor lose its reply. The unchanged request is then served
+/// exactly once by the ordinary dispatcher, preserving serialization while raw
+/// MMP and lease cleanup stay out of unrelated async polling frames.
+#[tokio::test(flavor = "current_thread")]
+async fn message_predispatch_preserves_non_message_request_without_effects() {
+    let service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    let (_handle, mut actor) =
+        super::AsyncRuntimeSessionActor::new(service, super::AsyncRuntimeActorConfig::default())
+            .unwrap();
+    let (reply, mut response) = oneshot::channel();
+    let (request, should_shutdown) =
+        actor.dispatch_message_request(AsyncRuntimeRequest::LifecycleState { reply });
+    assert!(!should_shutdown);
+    assert!(matches!(
+        response.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    let request = request.expect("non-MMP request must retain its exact reply owner");
+    assert!(!actor.handle_request(request).await);
+    assert_eq!(response.await.unwrap(), actor.service.lifecycle_state());
 }

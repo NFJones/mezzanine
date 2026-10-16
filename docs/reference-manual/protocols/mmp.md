@@ -228,6 +228,42 @@ Current dispatch can emit `unsupported_protocol`, `payload_too_large`,
 malformed or oversized frames can terminate the framed request before an MMP
 error body exists.
 
+Malformed framing (including invalid UTF-8 or content type), oversized input,
+EOF/reset and response or fanout socket failures close only the offending
+connection. The same listener and runtime actor continue serving replacements;
+other panes and agents are unaffected. Framing is not resynchronized and no
+request or delivery write is replayed. Body-level protocol rejection still uses
+the error response above when a valid frame can be decoded.
+
+Raw `hello` allocates a fresh observational identity, not a binding to an
+existing pane identity. Repeating `hello` retires the previous raw identity;
+connection exit/cancellation retires its latest identity and subscription.
+Stale cleanup cannot retire another socket's fresh identity. Shared retained
+envelopes and acceptance receipts remain intact, and a failed fanout write does
+not advance its cursor. Continuous reaping releases active slots after cleanup;
+final drain uses the same containment rules. Diagnostics log fixed reason
+categories and aggregate counts at power-of-two failures, not peer data.
+
+Actor ingress, audit/shared-state and listener accept failures still escalate;
+task JoinErrors retain the existing critical policy. This isolation is based on
+typed operation provenance, not blanket suppression of I/O or state errors.
+Socket ownership is published before the hello reply, including when an audit
+error follows registration. Final actor cleanup owns any raw lease still live
+at shutdown; independently registered pane-less identities remain untouched.
+Cleanup ownership corruption is critical and reaches completion after pane
+termination, rather than being reported as a successful peer closure.
+
+Private MMP snapshot schema4 distinguishes fresh raw sender provenance from
+reusable delivery floors. It preserves the exact objective versions in retained
+authored mail, including when the current objective changed again without a
+send. Every version must be referenced by canonical mail and agree on immutable
+agent/project/pane/window/role/capabilities; mail, receipts and audience are not
+rewritten. FIFO eviction removes only unreferenced versions, then the empty raw
+floor. This bounds version count by retained authored occurrences, not by the
+payload-only byte budget. Schemas1–3 reject the fresh-version field even when
+empty. Active/reusable-owner exact validation is unchanged; this is not general
+live-owner objective-history repair or a raw reconnect/rebind operation.
+
 ## Payloads and MAAP bridge
 
 Text payloads use `text/plain; charset=utf-8`; JSON uses

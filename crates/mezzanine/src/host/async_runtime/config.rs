@@ -20,6 +20,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 // Async runtime, daemon, connection, and client configuration.
 
+/// Actor-owned MMP connection lifetime and delivery wake state.
+/// Exact raw owners remain actor-local and never derive from registration
+/// shape. The notifier is the same allocation shared with session handles;
+/// boxing this cohesive state keeps connection bookkeeping out of the actor's
+/// inline footprint without adding a second heap owner or synchronization.
+#[derive(Debug)]
+pub(super) struct AsyncRuntimeMessageState {
+    /// Socket-admitted identities not yet proven retired, including failures
+    /// retained for critical final shutdown reporting.
+    pub(super) raw_identities: HashSet<AgentId>,
+    /// Shared signal for all message-delivery waiters; never replaced on hello.
+    pub(super) delivery_notify: Arc<Notify>,
+}
+
 /// Actor-owned cancellation cleanup emitted synchronously by transport leases.
 #[derive(Debug)]
 pub(super) enum ClientClipboardRouteCleanup {
@@ -853,11 +867,9 @@ pub struct AsyncRuntimeSessionActor {
     /// Producer retained for actor-created attachment handoff leases.
     pub(super) client_clipboard_route_cleanup_tx:
         mpsc::UnboundedSender<ClientClipboardRouteCleanup>,
-    /// Stores the message delivery notify value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) message_delivery_notify: Arc<Notify>,
+    /// Exact raw MMP ownership and its shared delivery signal, owned together
+    /// for the actor lifetime independently of restored messaging service state.
+    pub(super) message_state: Box<AsyncRuntimeMessageState>,
     /// Stores the event delivery notify value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

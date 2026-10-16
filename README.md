@@ -62,7 +62,8 @@ does not activate paid search or change the default backend.
 - **Actions you can inspect and control:** commands, patches, approvals, MCP
   calls, and subagent work are explicit rather than hidden behind a chat UI.
 - **Agents that can coordinate, not just delegate:** discover peers, exchange
-  scoped messages, and keep persistent collaborators in dedicated panes with
+  scoped messages, contain malformed messaging peers to their connections, and
+  keep persistent collaborators in dedicated panes with
   clear ownership and authority boundaries.
 - **Remote access without giving up recovery:** optional Iroh connectivity uses
   explicit device pairing while the local Unix socket remains the administration

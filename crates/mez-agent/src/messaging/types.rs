@@ -2,6 +2,9 @@
 //!
 //! These types define agent identity, recipients, delivery batches, presence,
 //! task payloads, and queue state without owning dispatch or serialization code.
+//! Retired floors explicitly separate reusable delivery intervals from fresh raw
+//! sender provenance. Fresh historical versions grant no registration, project
+//! membership, reconnect or subscription authority.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
@@ -658,6 +661,21 @@ pub(super) struct QueuedEnvelope {
     pub(super) accepted_at_ms: u64,
 }
 
+/// Retired identity evidence, distinct from any live subscription authority.
+/// Generic floors fence reusable owner delivery intervals. Fresh raw floors
+/// instead retain exact authored sender versions until those envelopes evict;
+/// only their mutable observational objective may differ from the anchor.
+#[derive(Debug)]
+pub(super) struct RetiredDeliveryFloor {
+    /// Authenticated reusable identity, or first retained raw sender version.
+    pub(super) identity: SenderIdentity,
+    /// Reusable retirement high-water, or maximum retained authored sequence.
+    pub(super) last_sequence: MessageSequence,
+    /// Exact unique raw sender versions in first authored-occurrence order.
+    /// None preserves the existing reusable-owner floor semantics unchanged.
+    pub(super) fresh_sender_versions: Option<Vec<SenderIdentity>>,
+}
+
 /// Carries Message Service state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -686,7 +704,7 @@ pub struct MessageService {
     pub(super) subscriptions: HashMap<AgentId, DeliveryCursor>,
     /// Authenticated identity and high-water marks that prevent a retired
     /// runtime identity from replaying retained mail to a later owner.
-    pub(super) retired_delivery_floors: HashMap<AgentId, (SenderIdentity, MessageSequence)>,
+    pub(super) retired_delivery_floors: HashMap<AgentId, RetiredDeliveryFloor>,
     /// Stores the accepted messages value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -885,8 +903,14 @@ pub struct MessageDeliveryCursorSnapshot {
 pub struct MessageRetiredDeliveryFloorSnapshot {
     /// Exact trusted identity captured while the runtime owner was live.
     pub identity: MessageIdentitySnapshot,
-    /// Highest sequence accepted before the owner retired.
+    /// Reusable owner retirement high-water, or maximum retained authored
+    /// sequence for a fresh-only raw provenance record.
     pub last_sequence: MessageSequence,
+    /// Schema4-only exact retained raw sender versions, in canonical authored
+    /// order. Presence marks fresh-only provenance, never reconnect authority.
+    /// Older schemas reject this field when present, including an empty list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_sender_versions: Option<Vec<MessageIdentitySnapshot>>,
 }
 
 /// Serializable retained MMP message.

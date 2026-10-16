@@ -10,6 +10,8 @@
 //! Socket files, live registry publication, endpoint shutdown, actor shutdown,
 //! and pane-process cleanup stay owned by this boundary so partial startup and
 //! normal completion cannot leave session artifacts behind.
+//! Actor cleanup errors reach completion only after owned panes are terminated;
+//! an initiating supervision error retains precedence over later shutdown errors.
 
 use std::fs;
 use std::future::Future;
@@ -443,8 +445,10 @@ impl SessionRuntime {
                 }
             };
             let result = supervise_async_runtime_services(services, cancellation).await;
-            let _ = shutdown_handle.shutdown().await;
-            result
+            let shutdown = shutdown_handle.shutdown().await;
+            // Preserve the initiating supervision error while still reporting
+            // actor cleanup failures when supervision itself completed normally.
+            result.and_then(|report| shutdown.map(|_| report))
         };
         let (supervision, mut actor_exit) = tokio::join!(daemon, actor.run());
         actor_exit.service.terminate_all_pane_processes()?;
@@ -860,6 +864,104 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
+    }
+
+    /// Actor shutdown errors must reach actual SessionRuntime completion rather
+    /// than being discarded. A prior service failure retains precedence. Both
+    /// cases must terminate the original native pane, whose shell-authored PID
+    /// is captured before supervision; no fabricated process witness is used.
+    #[tokio::test(flavor = "current_thread")]
+    async fn session_runtime_reports_shutdown_error_after_native_pane_cleanup() {
+        for initiating_failure in [false, true] {
+            let root = test_root(if initiating_failure {
+                "shutdown-cause"
+            } else {
+                "shutdown-error"
+            });
+            let pid_path = root.join("pane.pid");
+            let mut request =
+                test_request("shutdown-error", root.clone(), root.join("control.sock"));
+            request.startup = SessionRuntimeStartup::Initial {
+                explicit_command: Some(format!(
+                    "printf '%s' \"$$\" > {}; exec cat >/dev/null",
+                    pid_path.to_string_lossy()
+                )),
+                start_directory: None,
+                environment: None,
+            };
+            let mut runtime = SessionFactory::create(request).await.unwrap();
+            let pid: i32 = tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if let Ok(text) = fs::read_to_string(&pid_path)
+                        && let Ok(pid) = text.parse::<i32>()
+                    {
+                        break pid;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(pid > 0);
+            // SAFETY: signal zero only checks the captured owned process; it
+            // sends no signal and operates on no pointer or shared memory.
+            assert_eq!(
+                unsafe { libc::kill(pid, 0) },
+                0,
+                "owned native pane must initially be live"
+            );
+            let handle = runtime.handle().actor().clone();
+            runtime.services = Some(vec![AsyncRuntimeService::new(
+                "early-actor-stop",
+                async move {
+                    handle.shutdown().await?;
+                    if initiating_failure {
+                        Err(MezError::invalid_state("initiating service control"))
+                    } else {
+                        Ok(AsyncRuntimeServiceExit::completed(1))
+                    }
+                },
+            )]);
+            // SAFETY: prove replacing unpolled adapters did not already stop
+            // the exact owned pane before the completion path under test.
+            assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                runtime.run(Vec::new(), std::future::pending()),
+            )
+            .await
+            .unwrap();
+            let Err(error) = result else {
+                panic!("shutdown failure must reach runtime completion");
+            };
+            if initiating_failure {
+                assert!(
+                    error.message().contains("initiating service control"),
+                    "{error}"
+                );
+            } else {
+                assert!(
+                    error.message().contains("unavailable") || error.message().contains("closed"),
+                    "{error}"
+                );
+            }
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    // SAFETY: the same captured process is checked non-mutatingly.
+                    if unsafe { libc::kill(pid, 0) } != 0 {
+                        assert_eq!(
+                            std::io::Error::last_os_error().raw_os_error(),
+                            Some(libc::ESRCH)
+                        );
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("completion must terminate and reap the original owned pane");
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     /// A listener bind failure after control publication must remove the

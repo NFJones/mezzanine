@@ -32,7 +32,7 @@ impl MessageService {
             last_sequence: self
                 .retired_delivery_floors
                 .remove(recipient)
-                .map(|(_, last_sequence)| last_sequence)
+                .map(|floor| floor.last_sequence)
                 .unwrap_or(0),
         };
         self.subscription_order

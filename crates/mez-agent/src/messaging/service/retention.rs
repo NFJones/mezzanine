@@ -87,14 +87,79 @@ impl MessageService {
             .retain(|message_id, _| retained_ids.contains(message_id));
     }
 
-    /// Retains retired-owner floors only while their sequence interval exists.
+    /// Retains reusable floors for their original delivery interval. Fresh
+    /// floors lose only recorded versions no longer referenced by canonical
+    /// authored mail. One queue projection plus per-owner objective hash sets
+    /// avoids all-floors-by-all-mail scans or cloning large objectives per enqueue.
+    /// A projection can never synthesize a new sender version or rewrite mail.
     pub(super) fn prune_retired_delivery_floors(&mut self) {
         let Some(oldest_retained_sequence) = self.queue.front().map(|queued| queued.sequence)
         else {
             self.retired_delivery_floors.clear();
             return;
         };
-        self.retired_delivery_floors
-            .retain(|_, (_, floor)| *floor >= oldest_retained_sequence);
+        let referenced = {
+            let known = self
+                .retired_delivery_floors
+                .iter()
+                .filter_map(|(id, floor)| {
+                    floor.fresh_sender_versions.as_ref().map(|versions| {
+                        (
+                            id,
+                            versions
+                                .iter()
+                                .map(|version| &version.objective)
+                                .collect::<HashSet<_>>(),
+                        )
+                    })
+                })
+                .collect::<HashMap<_, _>>();
+            let mut referenced: HashMap<
+                AgentId,
+                (HashMap<&Option<String>, MessageSequence>, MessageSequence),
+            > = HashMap::new();
+            if !known.is_empty() {
+                for queued in &self.queue {
+                    let sender = &queued.envelope.sender;
+                    let Some(objectives) = known.get(&sender.agent_id) else {
+                        continue;
+                    };
+                    let floor = &self.retired_delivery_floors[&sender.agent_id];
+                    if same_immutable_sender(&floor.identity, sender)
+                        && objectives.contains(&sender.objective)
+                    {
+                        let entry = referenced.entry(sender.agent_id.clone()).or_default();
+                        entry
+                            .0
+                            .entry(&sender.objective)
+                            .and_modify(|first| *first = (*first).min(queued.sequence))
+                            .or_insert(queued.sequence);
+                        entry.1 = entry.1.max(queued.sequence);
+                    }
+                }
+            }
+            referenced
+        };
+        self.retired_delivery_floors.retain(|id, floor| {
+            let Some(versions) = floor.fresh_sender_versions.as_mut() else {
+                return floor.last_sequence >= oldest_retained_sequence;
+            };
+            let Some((first_sequences, last_sequence)) = referenced.get(id) else {
+                return false;
+            };
+            versions.retain(|version| first_sequences.contains_key(&version.objective));
+            // A->B->A recurrence can leave B as the first surviving occurrence
+            // after the initial A evicts. Sort only recorded, retained variants;
+            // filtering above proves every sort key exists without a fallback.
+            versions.sort_by_key(|version| first_sequences[&version.objective]);
+            let Some(first) = versions.first() else {
+                return false;
+            };
+            if floor.identity != *first {
+                floor.identity = first.clone();
+            }
+            floor.last_sequence = *last_sequence;
+            true
+        });
     }
 }

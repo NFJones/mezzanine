@@ -2,11 +2,16 @@
 //!
 //! Audience provenance, sequence bounds, registered identities and accepted
 //! receipts are checked together before a candidate becomes live service state.
+//! Schema4 fresh raw floors additionally require complete, unique, exact sender
+//! versions referenced by canonical retained authored mail. This does not change
+//! active/reusable identity comparisons or infer sender authority from objectives.
 
 use super::*;
 
+/// Rejects cross-record contradictions before constructing any live state.
+/// Fresh provenance is explicit schema4 data; legacy schemas never adopt it.
 pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Result<()> {
-    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1..=3) {
+    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1..=4) {
         return Err(MessageError::invalid_args(
             "snapshot MMP state has unsupported protocol or schema version",
         ));
@@ -70,8 +75,19 @@ pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapsho
             ));
         }
     }
+    if snapshot.schema_version < 4
+        && snapshot
+            .retired_delivery_floors
+            .iter()
+            .any(|floor| floor.fresh_sender_versions.is_some())
+    {
+        return Err(MessageError::invalid_args(
+            "fresh MMP sender versions require schema version 4",
+        ));
+    }
     let mut retired_identities = HashMap::new();
-    if snapshot.schema_version == 3 {
+    let mut fresh_sender_versions = HashMap::new();
+    if snapshot.schema_version >= 3 {
         for floor in &snapshot.retired_delivery_floors {
             let identity = sender_identity_from_snapshot(&floor.identity, snapshot.schema_version)?;
             if floor.last_sequence >= snapshot.next_sequence {
@@ -85,6 +101,45 @@ pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapsho
                 return Err(MessageError::invalid_args(
                     "snapshot MMP retired delivery floor identity must not be active",
                 ));
+            }
+            if let Some(snapshots) = floor.fresh_sender_versions.as_ref() {
+                if snapshots.is_empty()
+                    || snapshots.len() > snapshot.retained_messages.len()
+                    || identity.pane_id.is_some()
+                    || identity.window_id.is_some()
+                {
+                    return Err(MessageError::invalid_args(
+                        "fresh MMP sender evidence must be nonempty, retained and pane-less",
+                    ));
+                }
+                let versions = snapshots
+                    .iter()
+                    .map(|version| sender_identity_from_snapshot(version, snapshot.schema_version))
+                    .collect::<Result<Vec<_>>>()?;
+                let mut objectives = HashSet::new();
+                for version in &versions {
+                    if let Some(objective) = version.objective.as_ref()
+                        && normalize_objective(objective)? != *objective
+                    {
+                        return Err(MessageError::invalid_args(
+                            "fresh MMP sender objectives must be normalized",
+                        ));
+                    }
+                    if !same_immutable_sender(&identity, version)
+                        || !objectives.insert(&version.objective)
+                    {
+                        return Err(MessageError::invalid_args(
+                            "fresh MMP sender versions must be unique with exact immutable provenance",
+                        ));
+                    }
+                }
+                if versions.first() != Some(&identity) {
+                    return Err(MessageError::invalid_args(
+                        "fresh MMP sender anchor must be its first exact version",
+                    ));
+                }
+                drop(objectives);
+                fresh_sender_versions.insert(identity.agent_id.clone(), versions);
             }
             if retired_identities
                 .insert(identity.agent_id.clone(), identity)
@@ -103,9 +158,18 @@ pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapsho
     let mut max_sequence = 0;
     let mut queued_bytes = 0usize;
     let mut retained_by_id = HashMap::new();
+    let mut fresh_retained: HashMap<AgentId, Vec<(MessageSequence, SenderIdentity)>> =
+        HashMap::new();
     if snapshot.schema_version >= 2 {
         let mut retained_sequences = HashSet::new();
+        let mut previous_sequence = 0;
         for retained in &snapshot.retained_messages {
+            if !fresh_sender_versions.is_empty() && retained.sequence <= previous_sequence {
+                return Err(MessageError::invalid_args(
+                    "fresh MMP sender evidence requires canonical retained FIFO order",
+                ));
+            }
+            previous_sequence = retained.sequence;
             if retained.sequence == 0 {
                 return Err(MessageError::invalid_args(
                     "snapshot MMP retained message sequence must be non-zero",
@@ -122,6 +186,9 @@ pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapsho
             if registered_by_id.get(envelope.sender.agent_id.as_str())
                 != Some(&&retained.envelope.sender)
                 && retired_identities.get(&envelope.sender.agent_id) != Some(&envelope.sender)
+                && !fresh_sender_versions
+                    .get(&envelope.sender.agent_id)
+                    .is_some_and(|versions| versions.contains(&envelope.sender))
             {
                 return Err(MessageError::invalid_args(
                     "snapshot MMP envelope sender must match a registered agent",
@@ -129,6 +196,12 @@ pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapsho
             }
             let audience = audience_from_snapshot(retained.audience.as_ref())?;
             validate_snapshot_audience_provenance(&audience, &envelope.sender)?;
+            if fresh_sender_versions.contains_key(&envelope.sender.agent_id) {
+                fresh_retained
+                    .entry(envelope.sender.agent_id.clone())
+                    .or_default()
+                    .push((retained.sequence, envelope.sender.clone()));
+            }
             if retained_by_id
                 .insert(
                     envelope.id.clone(),
@@ -146,12 +219,49 @@ pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapsho
                 ));
             }
         }
+        // Fresh evidence is a complete exact projection of canonical authored
+        // mail, not authority inferred from an agent id or mutable objective.
+        for floor in &snapshot.retired_delivery_floors {
+            let id = parse_opaque_id(&floor.identity.agent_id, "MMP retired identity")?;
+            let Some(versions) = fresh_sender_versions.get(&id) else {
+                continue;
+            };
+            let Some(mut authored) = fresh_retained.remove(&id) else {
+                return Err(MessageError::invalid_args(
+                    "fresh MMP sender evidence must reference retained authored mail",
+                ));
+            };
+            authored.sort_by_key(|(sequence, _)| *sequence);
+            if authored.last().map(|(sequence, _)| *sequence) != Some(floor.last_sequence) {
+                return Err(MessageError::invalid_args(
+                    "fresh MMP sender floor must equal its maximum authored sequence",
+                ));
+            }
+            let mut objectives = HashSet::new();
+            let expected = authored
+                .iter()
+                .filter_map(|(_, sender)| objectives.insert(&sender.objective).then_some(sender))
+                .collect::<Vec<_>>();
+            if expected.len() != versions.len()
+                || expected
+                    .iter()
+                    .zip(versions)
+                    .any(|(actual, declared)| *actual != declared)
+            {
+                return Err(MessageError::invalid_args(
+                    "fresh MMP sender versions must exactly match canonical retained evidence",
+                ));
+            }
+        }
         let mut accepted_by_id = HashMap::new();
         for accepted in &snapshot.accepted_messages {
             let envelope = envelope_from_snapshot(&accepted.envelope, snapshot.schema_version)?;
             if registered_by_id.get(envelope.sender.agent_id.as_str())
                 != Some(&&accepted.envelope.sender)
                 && retired_identities.get(&envelope.sender.agent_id) != Some(&envelope.sender)
+                && !fresh_sender_versions
+                    .get(&envelope.sender.agent_id)
+                    .is_some_and(|versions| versions.contains(&envelope.sender))
             {
                 return Err(MessageError::invalid_args(
                     "snapshot MMP envelope sender must match a registered agent",

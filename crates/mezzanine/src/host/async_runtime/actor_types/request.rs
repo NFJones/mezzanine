@@ -596,6 +596,17 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<AsyncMessageInputResult>>,
+        /// Socket-local identity handoff before replying; absent for fixtures.
+        owner: Option<tokio::sync::watch::Sender<Option<AgentId>>>,
+    },
+    /// Retires the unique observational identity allocated by a raw hello.
+    /// Raw transports cannot bind an existing identity; pane registrations
+    /// remain independently owned and are never retired by this command.
+    RetireMessageConnection {
+        /// Fresh hello identity belonging to the closing connection.
+        agent_id: AgentId,
+        /// Cleanup completion; actor ingress failures remain critical.
+        reply: oneshot::Sender<Result<()>>,
     },
     /// Represents the Message Fanout Ready For case for this enumeration.
     ///
@@ -1437,7 +1448,7 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         ///
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
-        reply: oneshot::Sender<RuntimeLifecycleState>,
+        reply: oneshot::Sender<Result<RuntimeLifecycleState>>,
     },
 }
 
@@ -1506,6 +1517,7 @@ impl AsyncRuntimeRequest {
             #[cfg(test)]
             Self::EventWakeups { .. } => Family::Message,
             Self::HandleMessageInput { .. }
+            | Self::RetireMessageConnection { .. }
             | Self::MessageFanoutReadyFor { .. }
             | Self::AcknowledgeMessageFanout { .. }
             | Self::EventWakeupsForClient { .. }

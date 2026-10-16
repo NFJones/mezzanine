@@ -24,8 +24,8 @@ use super::types::{
     MessageFanoutDiagnostics, MessageIdentitySnapshot, MessagePresenceSnapshot,
     MessageQueuedEnvelopeSnapshot, MessageRecipientSnapshot, MessageRetiredDeliveryFloorSnapshot,
     MessageScope, MessageSequence, MessageService, MessageServiceSnapshot, PresenceRecord,
-    ProjectScopeId, QueuedEnvelope, Recipient, ResolvedMessageAudience, SenderIdentity,
-    SequencedEnvelope,
+    ProjectScopeId, QueuedEnvelope, Recipient, ResolvedMessageAudience, RetiredDeliveryFloor,
+    SenderIdentity, SequencedEnvelope,
 };
 use super::validation::{
     normalize_objective, normalize_optional_objective, validate_message_type, validate_protocol,
@@ -42,6 +42,19 @@ mod fanout;
 mod receive;
 mod retention;
 mod subscriptions;
+
+/// Compares immutable sender provenance without conflating mutable objective
+/// telemetry with project membership, native association or capability identity.
+/// This is used only for explicit fresh provenance construction/validation;
+/// ordinary registered and reusable snapshot comparisons remain exact.
+fn same_immutable_sender(left: &SenderIdentity, right: &SenderIdentity) -> bool {
+    left.agent_id == right.agent_id
+        && left.project_scope == right.project_scope
+        && left.pane_id == right.pane_id
+        && left.window_id == right.window_id
+        && left.role == right.role
+        && left.capabilities == right.capabilities
+}
 
 impl Default for MessageService {
     /// Runs the default operation for this subsystem.
@@ -182,6 +195,57 @@ impl MessageService {
             .count()
     }
 
+    /// Retires a caller-owned fresh identity that cannot reconnect or rebind.
+    /// Shared envelopes, acceptance receipts and other recipients are unchanged.
+    /// Only retained authored mail needs sender provenance: its final authored
+    /// sequence bounds that floor's FIFO lifetime. Non-senders leave no floor.
+    /// Absence is idempotent; pane/window binding or immutable sender changes
+    /// fail before mutation. Exact sent objective versions are retained; an
+    /// unsent current objective is not reconstructed as historical evidence.
+    /// Reusable identities must use the ordinary
+    /// retirement methods instead, preserving their delivery-interval fences.
+    pub fn retire_fresh_observational_identity(&mut self, agent_id: &AgentId) -> Result<bool> {
+        let Some(identity) = self.registered.get(agent_id) else {
+            return Ok(false);
+        };
+        if identity.pane_id.is_some() || identity.window_id.is_some() {
+            return Err(MessageError::invalid_state(
+                "fresh MMP identity ownership changed",
+            ));
+        }
+        let mut last_authored: Option<MessageSequence> = None;
+        let mut versions = Vec::new();
+        let mut objectives = HashSet::new();
+        for queued in &self.queue {
+            if queued.envelope.sender.agent_id == *agent_id {
+                if !same_immutable_sender(&queued.envelope.sender, identity) {
+                    return Err(MessageError::invalid_state(
+                        "fresh MMP retained sender provenance changed",
+                    ));
+                }
+                last_authored = Some(last_authored.unwrap_or(0).max(queued.sequence));
+                if objectives.insert(&queued.envelope.sender.objective) {
+                    versions.push(queued.envelope.sender.clone());
+                }
+            }
+        }
+        drop(objectives);
+        self.retire_observational_identity(agent_id);
+        if let Some(sequence) = last_authored {
+            self.retired_delivery_floors.insert(
+                agent_id.clone(),
+                RetiredDeliveryFloor {
+                    identity: versions[0].clone(),
+                    last_sequence: sequence,
+                    fresh_sender_versions: Some(versions),
+                },
+            );
+        } else {
+            self.retired_delivery_floors.remove(agent_id);
+        }
+        Ok(true)
+    }
+
     /// Retires an observational identity without deleting shared envelopes or
     /// acceptance receipts. The delivery floor prevents a reused identity from
     /// consuming its former interval; unrelated recipients retain their mail.
@@ -194,8 +258,14 @@ impl MessageService {
             self.fanout_after_recipient = None;
         }
         if let Some(identity) = identity {
-            self.retired_delivery_floors
-                .insert(agent_id.clone(), (identity, self.last_sequence()));
+            self.retired_delivery_floors.insert(
+                agent_id.clone(),
+                RetiredDeliveryFloor {
+                    identity,
+                    last_sequence: self.last_sequence(),
+                    fresh_sender_versions: None,
+                },
+            );
             self.prune_retired_delivery_floors();
             true
         } else {
@@ -219,8 +289,14 @@ impl MessageService {
             self.fanout_after_recipient = None;
         }
         if let Some(identity) = identity.filter(|_| removed) {
-            self.retired_delivery_floors
-                .insert(agent_id.clone(), (identity.clone(), self.last_sequence()));
+            self.retired_delivery_floors.insert(
+                agent_id.clone(),
+                RetiredDeliveryFloor {
+                    identity: identity.clone(),
+                    last_sequence: self.last_sequence(),
+                    fresh_sender_versions: None,
+                },
+            );
             self.queue
                 .retain(|queued| !recipient_matches(&identity, &queued.envelope.recipient));
             self.queued_bytes = self
@@ -476,6 +552,7 @@ fn expires_before_delivery(envelope: &Envelope) -> bool {
 mod tests {
     use super::*;
 
+    mod fresh_retirement;
     mod objectives;
 
     mod retirement {
@@ -796,7 +873,7 @@ mod tests {
                 .unwrap();
 
             let snapshot = service.snapshot_state();
-            assert_eq!(snapshot.schema_version, 3);
+            assert_eq!(snapshot.schema_version, 4);
             assert!(
                 snapshot
                     .registered_agents

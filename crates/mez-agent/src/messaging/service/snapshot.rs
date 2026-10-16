@@ -2,6 +2,8 @@
 //!
 //! Reconstruction retains resolved audiences, accepted-message identity and
 //! sparse delivery floors; queue indexes remain projections of retained mail.
+//! Schema4 records exact fresh raw sender objective versions without rewriting
+//! envelopes or receipts. Legacy reusable floor semantics remain independent.
 
 use super::snapshot_validation::validate_message_service_snapshot;
 use super::*;
@@ -28,13 +30,15 @@ impl MessageService {
         subscriptions.sort_by(|left, right| left.recipient.cmp(&right.recipient));
         let mut retired_delivery_floors = self
             .retired_delivery_floors
-            .iter()
-            .map(
-                |(_, (identity, last_sequence))| MessageRetiredDeliveryFloorSnapshot {
-                    identity: identity_snapshot(identity),
-                    last_sequence: *last_sequence,
-                },
-            )
+            .values()
+            .map(|floor| MessageRetiredDeliveryFloorSnapshot {
+                identity: identity_snapshot(&floor.identity),
+                last_sequence: floor.last_sequence,
+                fresh_sender_versions: floor
+                    .fresh_sender_versions
+                    .as_ref()
+                    .map(|versions| versions.iter().map(identity_snapshot).collect()),
+            })
             .collect::<Vec<_>>();
         retired_delivery_floors
             .sort_by(|left, right| left.identity.agent_id.cmp(&right.identity.agent_id));
@@ -52,7 +56,7 @@ impl MessageService {
 
         MessageServiceSnapshot {
             protocol: MMP_PROTOCOL.to_string(),
-            schema_version: 3,
+            schema_version: 4,
             next_sequence: self.next_sequence,
             retention_messages: self.retention_messages,
             retention_bytes: self.retention_bytes,
@@ -69,13 +73,10 @@ impl MessageService {
     pub fn from_snapshot_state(snapshot: &MessageServiceSnapshot) -> Result<Self> {
         validate_message_service_snapshot(snapshot)?;
         let mut registered = HashMap::new();
-        let mut agent_ids = Vec::new();
         for identity in &snapshot.registered_agents {
             let identity = sender_identity_from_snapshot(identity, snapshot.schema_version)?;
-            agent_ids.push(identity.agent_id.clone());
             registered.insert(identity.agent_id.clone(), identity);
         }
-        let ids = IdFactory::after_existing_ids(agent_ids.iter());
         let mut presence = HashMap::new();
         for record in &snapshot.presence {
             let identity =
@@ -106,8 +107,26 @@ impl MessageService {
         let mut retired_delivery_floors = HashMap::new();
         for floor in &snapshot.retired_delivery_floors {
             let identity = sender_identity_from_snapshot(&floor.identity, snapshot.schema_version)?;
-            retired_delivery_floors
-                .insert(identity.agent_id.clone(), (identity, floor.last_sequence));
+            let fresh_sender_versions = floor
+                .fresh_sender_versions
+                .as_ref()
+                .map(|versions| {
+                    versions
+                        .iter()
+                        .map(|version| {
+                            sender_identity_from_snapshot(version, snapshot.schema_version)
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?;
+            retired_delivery_floors.insert(
+                identity.agent_id.clone(),
+                RetiredDeliveryFloor {
+                    identity,
+                    last_sequence: floor.last_sequence,
+                    fresh_sender_versions,
+                },
+            );
         }
         let mut queue = VecDeque::new();
         let mut retained_envelopes = HashMap::new();
@@ -157,6 +176,10 @@ impl MessageService {
             );
         }
 
+        // Retired senders still own retained provenance. A generated hello
+        // must not alias those ids after restore, even without live presence.
+        let ids =
+            IdFactory::after_existing_ids(registered.keys().chain(retired_delivery_floors.keys()));
         let mut service = Self {
             ids,
             registered,

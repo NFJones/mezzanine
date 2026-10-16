@@ -642,7 +642,57 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     message_service
         .advance_subscription(&target.agent_id, 1)
         .unwrap();
+    // The actual outer payload codec must retain fresh-only schema4 provenance,
+    // not just serde/domain roundtrips. Both sent objectives remain exact while
+    // a third unsent current objective must not replace their historical data.
+    let raw = message_service
+        .register_agent_with_objective(None, None, "raw", Vec::new(), Some("A"))
+        .unwrap();
+    for (index, objective) in ["A", "B"].into_iter().enumerate() {
+        message_service
+            .update_agent_objective(&raw.agent_id, Some(objective), 11 + index as u64)
+            .unwrap();
+        let sender = message_service
+            .registered_identity(&raw.agent_id)
+            .unwrap()
+            .clone();
+        message_service
+            .accept_at_with_scope(
+                &raw.agent_id,
+                Envelope {
+                    protocol: "mmp/1",
+                    id: format!("raw-objective-{index}"),
+                    message_type: "send".to_string(),
+                    time: "message:test".to_string(),
+                    sender,
+                    recipient: Recipient::Agent(target.agent_id.clone()),
+                    correlation_id: None,
+                    ttl_ms: None,
+                    content_type: "text/plain; charset=utf-8".to_string(),
+                    payload: "fixed historical mail".to_string(),
+                    extension_fields: Vec::new(),
+                },
+                MessageScope::Session,
+                11 + index as u64,
+            )
+            .unwrap();
+    }
+    message_service
+        .update_agent_objective(&raw.agent_id, Some("C unsent"), 13)
+        .unwrap();
+    message_service
+        .retire_fresh_observational_identity(&raw.agent_id)
+        .unwrap();
     let message_state = message_service.snapshot_state();
+    assert_eq!(message_state.schema_version, 4);
+    assert_eq!(
+        message_state.retired_delivery_floors[0]
+            .fresh_sender_versions
+            .as_ref()
+            .unwrap()
+            .len(),
+        2
+    );
     let unsettled_peer_presentations = vec![SnapshotUnsettledPeerPresentation {
         occurrence: mez_core::presentation::PresentationOccurrence::new(
             Some(1234),

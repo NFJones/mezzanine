@@ -36,6 +36,24 @@ retains stderr and panic diagnostics beside its control socket in a private
 `<control-socket>.diagnostics.log`; a foreground `mez serve` reports directly
 to its invoking terminal.
 
+Malformed or oversized local MMP frames and ordinary message-socket transport
+failures close only that peer. They do not stop the session, actor, listener or
+existing pane processes; a new explicit connection can use the released slot.
+Raw hello identities/subscriptions are cleaned up on disconnect or cancellation,
+without deleting shared mail or independent pane registrations. No messaging
+effect is replayed. Bounded diagnostics contain only failure category/count.
+Actor/audit/shared-state failures, listener accept errors and connection task
+JoinErrors remain critical; inspect those failures rather than treating all
+message-service errors as safely isolated.
+Final actor shutdown cleans all remaining exact raw socket leases, not every
+pane-less identity. An integrity error remains a failed runtime completion even
+though owned panes are still terminated; the initiating supervisor failure, if
+any, retains precedence over later shutdown errors.
+Fresh raw sender evidence is retained only while its authored mail remains.
+Snapshot schema4 preserves exact sent objective versions and rejects forged or
+unreferenced versions; schemas1–3 cannot adopt that data. This does not relax
+active/reusable-owner validation or change shared mail and acceptance receipts.
+
 For an explicitly paired remote session, use `mez --iroh-profile PROFILE
 attach`, pair without attaching with `mez remote pair --invite-file PATH --name
 NAME`, or first pair and attach with `mez --iroh-invite-file PATH --save-as NAME

@@ -77,7 +77,7 @@ impl AsyncRuntimeSessionActor {
             .metrics
             .message_delivery_notifications
             .saturating_add(1);
-        self.message_delivery_notify.notify_waiters();
+        self.message_state.delivery_notify.notify_waiters();
     }
 
     /// Runs the notify event delivery operation for this subsystem.

@@ -1,4 +1,9 @@
 //! Serialized request dispatch for the runtime actor.
+//!
+//! Raw MMP registrations enter exact socket ownership before reply publication,
+//! including post-dispatch audit failures. Independent registrations are never
+//! inferred from shape. Shutdown retires all owned leases and reports integrity
+//! errors without abandoning the remaining healthy owners or replaying effects.
 
 use super::TranscriptReceiptReply;
 use super::claim_admission::WorkerClaimLease;
@@ -15,6 +20,111 @@ use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
 use crate::host::terminal::AttachedTerminalClientStepPlan;
 
 impl AsyncRuntimeSessionActor {
+    /// Releases only exact socket-owned membership, never independent pane-less
+    /// identities. Fresh ids cannot rebind in this actor; restore happens before
+    /// construction. Integrity failures preserve membership for critical final
+    /// reporting, and no shared mail, receipt or foreign cursor is removed.
+    fn retire_raw_message_identity(
+        &mut self,
+        agent_id: &mez_core::ids::AgentId,
+    ) -> crate::Result<()> {
+        if self.message_state.raw_identities.contains(agent_id) {
+            self.service
+                .message_service_mut()
+                .retire_fresh_observational_identity(agent_id)?;
+            self.message_state.raw_identities.remove(agent_id);
+        }
+        Ok(())
+    }
+
+    /// Attempts every remaining raw lease before actor exit. The first integrity
+    /// error is returned without preventing healthy later leases from retiring.
+    /// Failed entries remain owned; shutdown's reply reports them as critical.
+    fn retire_all_raw_message_identities(&mut self) -> crate::Result<()> {
+        let identities = self
+            .message_state
+            .raw_identities
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut first_error = None;
+        for identity in identities {
+            if let Err(error) = self.retire_raw_message_identity(&identity) {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// Dispatches one MMP input and settles exact raw socket ownership before
+    /// replying. This synchronous boundary keeps MMP parsing, cleanup and reply
+    /// temporaries out of the unrelated async request poll frame. Dispatch is
+    /// never replayed; earlier errors retain precedence over cleanup failure.
+    fn handle_raw_message_input(
+        &mut self,
+        input: Vec<u8>,
+        max_content_length: usize,
+        mut connection: mez_agent::messaging::MessageConnection,
+        now_ms: u64,
+        owner: Option<tokio::sync::watch::Sender<Option<mez_core::ids::AgentId>>>,
+        reply: tokio::sync::oneshot::Sender<crate::Result<AsyncMessageInputResult>>,
+    ) {
+        let previous_lifecycle_state = self.service.lifecycle_state();
+        let previous_agent_id = connection.agent_id.clone();
+        let mut result = self
+            .service
+            .handle_message_input(&input, max_content_length, &mut connection, now_ms)
+            .and_then(|(output, consumed)| {
+                self.queue_deferred_pane_io_side_effects_from_service()?;
+                self.queue_peer_message_delivery_timer_if_needed(now_ms)?;
+                Ok(AsyncMessageInputResult {
+                    output,
+                    consumed,
+                    connection: connection.clone(),
+                })
+            });
+        // Dispatch may have committed hello before audit/effect admission
+        // failed. Own that identity before publishing or sending a reply.
+        if owner.is_some()
+            && previous_agent_id != connection.agent_id
+            && let Some(agent_id) = connection.agent_id.as_ref()
+        {
+            self.message_state.raw_identities.insert(agent_id.clone());
+        }
+        if previous_agent_id != connection.agent_id
+            && let Some(previous) = previous_agent_id
+            && let Err(error) = self.retire_raw_message_identity(&previous)
+            && result.is_ok()
+        {
+            result = Err(error);
+        }
+        // Lease publication precedes the reply. If cancellation has
+        // already dropped the lease receiver, retire here instead.
+        let owner_closed =
+            owner.is_some_and(|owner| owner.send(connection.agent_id.clone()).is_err());
+        // A failed post-dispatch audit/effect admission or a cancelled
+        // ingress caller must not leak a newly allocated subscription.
+        if (reply.is_closed() || result.is_err() || owner_closed)
+            && let Some(agent_id) = connection.agent_id.as_ref()
+            && let Err(error) = self.retire_raw_message_identity(agent_id)
+            && result.is_ok()
+        {
+            result = Err(error);
+        }
+        let should_notify = result.as_ref().is_ok_and(|result| result.consumed > 0);
+        if reply.send(result).is_err()
+            && let Some(agent_id) = connection.agent_id.as_ref()
+        {
+            // A late receiver drop cannot receive an error. Failed cleanup
+            // stays in the exact tracker and is reported by final shutdown.
+            let _ = self.retire_raw_message_identity(agent_id);
+        }
+        if should_notify {
+            self.notify_message_delivery();
+        }
+        self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+    }
+
     /// Drains immediate sequence effects through the ordinary terminal host lane.
     fn admit_terminal_status_sequence_effects(&mut self) -> crate::Result<()> {
         self.queue_deferred_pane_io_side_effects_from_service()?;
@@ -725,11 +835,96 @@ impl AsyncRuntimeSessionActor {
         }
     }
 
-    /// Runs the handle request operation for this subsystem.
+    /// Dispatches MMP and shutdown without constructing the unrelated async
+    /// request future. Every accepted envelope still receives the run loop's
+    /// common accounting, reconciliation and receipt-admission suffix. The
+    /// returned request is unchanged and has produced no effects here.
     ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Keeping these synchronous arms outside `handle_request` also prevents
+    /// raw lease and fanout temporaries from contributing to its native poll
+    /// stack while an unrelated stop command cancels an external worker.
+    pub(super) fn dispatch_message_request(
+        &mut self,
+        request: AsyncRuntimeRequest,
+    ) -> (Option<AsyncRuntimeRequest>, bool) {
+        let shutdown = match request {
+            AsyncRuntimeRequest::HandleMessageInput {
+                input,
+                max_content_length,
+                connection,
+                now_ms,
+                owner,
+                reply,
+            } => {
+                self.handle_raw_message_input(
+                    input,
+                    max_content_length,
+                    connection,
+                    now_ms,
+                    owner,
+                    reply,
+                );
+                false
+            }
+            AsyncRuntimeRequest::RetireMessageConnection { agent_id, reply } => {
+                let result = self.retire_raw_message_identity(&agent_id);
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::MessageFanoutReadyFor {
+                recipient,
+                now_ms,
+                limit,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .message_service()
+                    .fanout_ready_for(&recipient, now_ms, limit)
+                    .map(|fanout| {
+                        fanout.map(|batch| {
+                            let body = delivery_batch_json(&batch.batch);
+                            let frame = encode_mmp_body(&body);
+                            let messages = batch.batch.messages.len();
+                            AsyncMessageFanout {
+                                recipient,
+                                frame,
+                                messages,
+                                batch,
+                            }
+                        })
+                    })
+                    .map_err(Into::into);
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::AcknowledgeMessageFanout { batch, reply } => {
+                let result = self
+                    .service
+                    .message_service_mut()
+                    .acknowledge_fanout_batch(&batch)
+                    .map_err(Into::into);
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::Shutdown { reply } => {
+                let result = self
+                    .retire_all_raw_message_identities()
+                    .map(|()| self.service.lifecycle_state());
+                let _ = self.service.clear_runtime_mcp_transports();
+                let _ = reply.send(result);
+                true
+            }
+            other => return (Some(other), false),
+        };
+        (None, shutdown)
+    }
+
+    /// Handles the asynchronous remainder of serialized actor requests.
+    /// Callers must first use `dispatch_message_request`: MMP and shutdown are
+    /// synchronous owners and cannot enter this poll frame. Violating that
+    /// internal routing invariant panics rather than silently losing a reply.
+    /// Ordinary request failures are returned through their owned reply channel.
     pub(super) async fn handle_request(&mut self, request: AsyncRuntimeRequest) -> bool {
         match request {
             AsyncRuntimeRequest::SetHostRoutedIrohDiagnostics { diagnostics, reply } => {
@@ -1954,69 +2149,11 @@ impl AsyncRuntimeSessionActor {
                 }
                 false
             }
-            AsyncRuntimeRequest::HandleMessageInput {
-                input,
-                max_content_length,
-                mut connection,
-                now_ms,
-                reply,
-            } => {
-                let previous_lifecycle_state = self.service.lifecycle_state();
-                let result = self
-                    .service
-                    .handle_message_input(&input, max_content_length, &mut connection, now_ms)
-                    .and_then(|(output, consumed)| {
-                        self.queue_deferred_pane_io_side_effects_from_service()?;
-                        self.queue_peer_message_delivery_timer_if_needed(now_ms)?;
-                        Ok(AsyncMessageInputResult {
-                            output,
-                            consumed,
-                            connection,
-                        })
-                    });
-                let should_notify = result.as_ref().is_ok_and(|result| result.consumed > 0);
-                let _ = reply.send(result);
-                if should_notify {
-                    self.notify_message_delivery();
-                }
-                self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
-                false
-            }
-            AsyncRuntimeRequest::MessageFanoutReadyFor {
-                recipient,
-                now_ms,
-                limit,
-                reply,
-            } => {
-                let result = self
-                    .service
-                    .message_service()
-                    .fanout_ready_for(&recipient, now_ms, limit)
-                    .map(|fanout| {
-                        fanout.map(|batch| {
-                            let body = delivery_batch_json(&batch.batch);
-                            let frame = encode_mmp_body(&body);
-                            let messages = batch.batch.messages.len();
-                            AsyncMessageFanout {
-                                recipient,
-                                frame,
-                                messages,
-                                batch,
-                            }
-                        })
-                    })
-                    .map_err(Into::into);
-                let _ = reply.send(result);
-                false
-            }
-            AsyncRuntimeRequest::AcknowledgeMessageFanout { batch, reply } => {
-                let result = self
-                    .service
-                    .message_service_mut()
-                    .acknowledge_fanout_batch(&batch)
-                    .map_err(Into::into);
-                let _ = reply.send(result);
-                false
+            AsyncRuntimeRequest::HandleMessageInput { .. }
+            | AsyncRuntimeRequest::RetireMessageConnection { .. }
+            | AsyncRuntimeRequest::MessageFanoutReadyFor { .. }
+            | AsyncRuntimeRequest::AcknowledgeMessageFanout { .. } => {
+                unreachable!("MMP is handled before async request dispatch")
             }
             #[cfg(test)]
             AsyncRuntimeRequest::EventWakeups {
@@ -3294,10 +3431,8 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
-            AsyncRuntimeRequest::Shutdown { reply } => {
-                let _ = self.service.clear_runtime_mcp_transports();
-                let _ = reply.send(self.service.lifecycle_state());
-                true
+            AsyncRuntimeRequest::Shutdown { .. } => {
+                unreachable!("shutdown is handled before async request dispatch")
             }
         }
     }

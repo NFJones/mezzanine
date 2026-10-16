@@ -12923,6 +12923,37 @@ default for remote access.
 
 Transport endpoints MUST be accessible only to the current user by default.
 
+Ordinary MMP peer framing rejection, EOF/reset, or response/delivery socket
+failure MUST close only that connection, not the listener, actor, session or
+pane processes. Invalid framing MUST NOT be scanned past or replayed. Completed
+connections MUST be continuously reaped to release active capacity, and final
+shutdown drain MUST apply the same failure scope. Socket-created observational
+hello identities and subscriptions MUST be retired on exit or cancellation
+without retiring independently owned pane registrations, deleting shared mail,
+or advancing cursors for a failed delivery write. Diagnostics MUST be bounded
+and payload-free. Genuine actor ingress, audit/shared-state, listener accept,
+and connection task JoinErrors remain critical under their existing policies;
+error kinds alone MUST NOT determine containment.
+
+Raw cleanup ownership MUST be recorded before hello reply publication, including
+when post-dispatch audit admission fails. Final actor shutdown MUST clean every
+remaining exact raw owner without sweeping independently owned pane-less agents.
+Ownership-integrity failures MUST reach runtime completion after owned pane
+termination, preserving any earlier initiating supervision failure.
+
+Retirement of fresh raw identities MUST retain only provenance referenced by
+their actual retained authored envelopes, not every disconnected hello. MMP
+snapshot schema4 MUST record those exact unique sender versions explicitly:
+only observational objective values may differ; agent, project, pane, window,
+role and capabilities MUST match the immutable anchor. Envelopes, acceptance
+receipts and frozen audiences MUST remain unchanged. Versions MUST be pruned
+only as their authored envelopes evict, with total version count bounded by
+retained authored occurrences (not the payload-only byte budget). Schemas1–3
+MUST reject fresh-version data, even an empty list. Active and reusable-owner
+snapshot identity comparisons MUST retain their existing exact semantics;
+this fresh-retirement boundary does not provide general live-owner objective
+history restoration or reconnect authority.
+
 ### 12.3 Framing
 
 Messages MUST be UTF-8 JSON values framed with an ASCII header block followed
@@ -15545,13 +15576,16 @@ prompts, overlays, copy mode, mouse state, viewport, drafts, observer authority,
 event credentials or cursors, pane process state, bounded terminal history,
 agent sessions, active configuration layer metadata, MCP server state, or
 approval history as resumable live state. The payload MAY persist local MMP
-state only as schema-version-2 private routing metadata: registered and
-presence identity memberships use opaque trusted project-scope identifiers, and
+state as schema-version-4 private routing metadata under the exact fresh-sender
+provenance requirements in section 12.2. Registered and presence identity
+memberships use opaque trusted project-scope identifiers, and
 each retained or accepted message records its resolved `project` audience with
 that identifier or its `session` audience. Snapshot transport and model-visible
 projections MUST NOT disclose canonical roots or scope identifiers. Readers
-MUST reject malformed version-2 memberships or audience metadata before state
-publication. Version-1 MMP records have no resolved audience, so readers MUST
+MUST reject malformed schema-version-2-through-4 memberships or audience metadata
+before state publication. Schema versions 2 and 3 remain readable under their
+existing exact identity and audience contracts, but MUST NOT adopt schema4 fresh
+sender-version data. Version-1 MMP records have no resolved audience, so readers MUST
 restore their safe identities as unscoped and discard retained and accepted
 traffic rather than interpreting it as project or session delivery.
 

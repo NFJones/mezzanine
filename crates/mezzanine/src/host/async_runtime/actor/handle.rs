@@ -601,6 +601,7 @@ impl AsyncRuntimeSessionHandle {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn handle_message_input(
         &self,
         input: Vec<u8>,
@@ -608,14 +609,42 @@ impl AsyncRuntimeSessionHandle {
         connection: MessageConnection,
         now_ms: u64,
     ) -> Result<AsyncMessageInputResult> {
+        self.handle_message_input_with_owner(input, max_content_length, connection, now_ms, None)
+            .await
+    }
+
+    /// Dispatches once while publishing the raw hello identity to the socket's
+    /// private lease before replying. This closes cancellation between actor
+    /// registration and reply consumption without replaying protocol effects.
+    pub(in crate::host::async_runtime) async fn handle_message_input_with_owner(
+        &self,
+        input: Vec<u8>,
+        max_content_length: usize,
+        connection: MessageConnection,
+        now_ms: u64,
+        owner: Option<watch::Sender<Option<AgentId>>>,
+    ) -> Result<AsyncMessageInputResult> {
         self.request(|reply| AsyncRuntimeRequest::HandleMessageInput {
             input,
             max_content_length,
             connection,
             now_ms,
+            owner,
             reply,
         })
         .await?
+    }
+
+    /// Releases one raw hello identity and its subscription after socket exit.
+    /// Fresh hello ids are unique and cannot be rebound by another raw socket;
+    /// cleanup never retires pane-backed registrations or shared mail. Ingress
+    /// or reply failure is returned to the listener as a critical actor error.
+    pub(in crate::host::async_runtime) async fn retire_message_connection(
+        &self,
+        agent_id: AgentId,
+    ) -> Result<()> {
+        self.request(|reply| AsyncRuntimeRequest::RetireMessageConnection { agent_id, reply })
+            .await?
     }
 
     /// Runs the message fanout ready for operation for this subsystem.
@@ -1548,14 +1577,13 @@ impl AsyncRuntimeSessionHandle {
             })
     }
 
-    /// Runs the shutdown operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Stops actor ingress after final exact raw message lease cleanup.
+    /// Returns the prior lifecycle state, or a critical cleanup/ingress error.
+    /// Shutdown still exits the actor on cleanup failure; callers must finish
+    /// owned pane termination and preserve any initiating supervision error.
     pub async fn shutdown(&self) -> Result<RuntimeLifecycleState> {
         self.request(|reply| AsyncRuntimeRequest::Shutdown { reply })
-            .await
+            .await?
     }
 
     /// Runs the request operation for this subsystem.

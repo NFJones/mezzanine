@@ -1,4 +1,8 @@
 //! Actor construction, run-loop ownership, and actor metrics.
+//!
+//! The actor starts with no raw socket leases: snapshot restore precedes this
+//! owner. Serialized shutdown performs final exact lease cleanup before the
+//! actor returns its service, independently of later cancelled socket requests.
 
 use super::{
     Arc, AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeRequestEnvelope,
@@ -305,7 +309,12 @@ impl AsyncRuntimeSessionActor {
                     requests_since_clipboard_cleanup: 0,
                 },
             ),
-            message_delivery_notify,
+            message_state: Box::new(
+                crate::host::async_runtime::config::AsyncRuntimeMessageState {
+                    raw_identities: Default::default(),
+                    delivery_notify: message_delivery_notify,
+                },
+            ),
             event_delivery_notify,
             event_delivery_revision_tx,
             client_clipboard_routes: Default::default(),
@@ -512,7 +521,10 @@ impl AsyncRuntimeSessionActor {
             }
             // Keep the large request dispatcher future off the enclosing actor
             // run-loop stack as new independently owned request families grow.
-            let should_shutdown = Box::pin(self.handle_request(envelope.request)).await;
+            let should_shutdown = match self.dispatch_message_request(envelope.request) {
+                (None, should_shutdown) => should_shutdown,
+                (Some(request), _) => Box::pin(self.handle_request(request)).await,
+            };
             let _ = self.service.reconcile_human_pauses();
             // Internal command paths may queue transcript effects without a
             // dedicated producer callback. Schedule their held claims before
