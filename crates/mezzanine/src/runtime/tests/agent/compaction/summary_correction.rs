@@ -29,6 +29,15 @@ fn runtime_compaction_raw_and_framed_payloads_preserve_summary_identity() {
             r#"{"rationale":"keep evidence","next":"inspect files"}"#.to_string(),
             r#"{"rationale":"keep evidence","next":"inspect files"}"#,
         ),
+        // Unframed incomplete JSON is raw text, not positive MAAP identity.
+        (
+            r#"{"rationale":"unfinished","actions":["#.to_string(),
+            r#"{"rationale":"unfinished","actions":["#,
+        ),
+        (
+            "```json\n{\"actions\":[\"retain files\"]}\n```".to_string(),
+            "```json\n{\"actions\":[\"retain files\"]}\n```",
+        ),
         (batch.clone(), "保留🦀 bounded summary"),
         (
             format!("```mezzanine-action-json\n{batch}\n```"),
@@ -61,8 +70,12 @@ fn runtime_compaction_raw_and_framed_payloads_preserve_summary_identity() {
 #[test]
 fn runtime_compaction_raw_malformed_frames_exhaust_finitely() {
     for raw in [
-        r#"{"rationale":"unfinished","actions":["#,
+        r#"{"rationale":"fixture","actions":[]}"#,
+        r#"{"rationale":"","actions":[{"type":"say","status":"final","text":"invalid rationale"}]}"#,
+        r#"{"rationale":"fixture","actions":[{"type":"unknown_fixture_action"}]}"#,
+        r#"{"rationale":"fixture","actions":[{"type":"say","status":"progress","text":"not final"}]}"#,
         "```mezzanine-action-json\n{}",
+        "```mezzanine-action-json\n{}\n```\n```mezzanine-action-json\n{}\n```",
     ] {
         let (mut service, store, turn) = queue_observed_input_compaction_with_exact_history();
         let conversation = service

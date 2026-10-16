@@ -157,6 +157,11 @@ Compaction keeps its raw-text provider contract. If the model instead returns
 the requested final-say JSON or `mezzanine-action-json` frame, local validation
 extracts that one final payload before measuring or publishing it; malformed
 frames consume the same finite correction budget, never execution authority.
+Unframed JSON is recognized only by a top-level rationale plus an actions array
+with type-tagged objects (or empty actions), not an isolated field name. Unknown
+or non-final typed actions still fail validation. Ordinary JSON/data/code fences
+and incomplete unframed JSON remain raw summary text under the same local bounds;
+an explicit `mezzanine-action-json` fence also identifies incomplete frames.
 Shorter correction guidance never becomes a stricter semantic acceptance limit:
 a summary fitting the original allowance proceeds to complete-request fit even
 above guidance. OpenAI never receives `max_output_tokens` in ordinary, compaction,

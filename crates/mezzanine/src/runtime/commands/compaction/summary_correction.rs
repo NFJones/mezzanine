@@ -277,15 +277,28 @@ pub(super) fn completed_summary(
 ) -> std::result::Result<String, ()> {
     let raw = response.raw_text.trim();
     let decoded = if response.action_batch.is_none() {
-        let envelope = match serde_json::from_str::<serde_json::Value>(raw) {
-            Ok(value) => value
-                .as_object()
-                .is_some_and(|object| object.contains_key("actions")),
-            Err(_) => {
-                raw.starts_with('{')
-                    && (raw.contains("\"actions\"") || raw.contains("\"rationale\""))
-            }
-        };
+        // Recognition is not validation: empty/unknown/nonfinal typed actions
+        // still enter the canonical parser and finite malformed-output policy.
+        // Isolated field names in raw summary data confer no framing authority.
+        // Invalid unframed JSON remains text; an explicit MAAP fence is the
+        // unambiguous way to identify a syntactically incomplete frame.
+        let envelope = serde_json::from_str::<serde_json::Value>(raw)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .is_some_and(|object| {
+                object.contains_key("rationale")
+                    && object
+                        .get("actions")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|actions| {
+                            actions.is_empty()
+                                || actions.iter().any(|action| {
+                                    action
+                                        .as_object()
+                                        .is_some_and(|action| action.contains_key("type"))
+                                })
+                        })
+            });
         if envelope {
             Some(
                 mez_agent::parse_maap_action_batch_json_for_turn(raw, turn_id, agent_id)

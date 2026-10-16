@@ -9701,7 +9701,13 @@ block-byte bound, or over its frozen summary cost allowance MUST be rejected
 privately before chunk/synthesis staging or publication. Raw-text compaction
 MUST also decode a recognizable optional final-say JSON or
 `mezzanine-action-json` frame locally, validate only its one final payload, and
-never publish its envelope or execute enclosed actions. With independently
+never publish its envelope or execute enclosed actions. Unframed JSON is an
+envelope only with top-level rationale and an actions array containing type-tagged
+objects (or empty actions); recognition MUST NOT require those actions to be valid.
+Isolated/nested action or rationale data, generic code fences and syntactically
+incomplete unframed JSON remain raw summary text subject to semantic bounds;
+explicit MAAP fences identify malformed/incomplete frames unambiguously.
+With independently
 validated frozen source, Mezzanine MUST admit bounded auxiliary correction under
 a fresh exact task generation while preserving the waiting turn, logical epoch,
 current source and earlier accepted staging. The model MUST receive the actual
