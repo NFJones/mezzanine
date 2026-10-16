@@ -3,6 +3,79 @@
 use super::*;
 use crate::runtime::RuntimeAgentCompactionTarget;
 
+/// Canonical raw-text auxiliary responses may contain dense Unicode JSON or an
+/// optional final-say frame. Measure and publish the payload, never its wrapper;
+/// nested action/rationale data must remain ordinary summary text.
+#[test]
+fn runtime_compaction_raw_and_framed_payloads_preserve_summary_identity() {
+    let dense = r#"{"decision":{"actions":["保留🦀"],"rationale":"retain evidence"}}"#;
+    let batch = serde_json::json!({"rationale":"fixture", "actions":[{
+        "type":"say", "status":"final", "text":"保留🦀 bounded summary",
+        "content_type":"text/plain; charset=utf-8",
+    }]})
+    .to_string();
+    for (raw, expected) in [
+        (dense.to_string(), dense),
+        (batch.clone(), "保留🦀 bounded summary"),
+        (
+            format!("```mezzanine-action-json\n{batch}\n```"),
+            "保留🦀 bounded summary",
+        ),
+    ] {
+        let (mut service, store, turn) = queue_observed_input_compaction_with_exact_history();
+        let task = service.take_pending_agent_compaction_task("%1").unwrap();
+        let conversation = task.conversation_id.clone();
+        service.claim_agent_compaction_task_state("%1", task);
+        let mut response = runtime_test_compaction_response("");
+        response.action_batch = None;
+        response.raw_text = raw;
+        service
+            .apply_agent_compaction_completed_event("%1", response)
+            .unwrap();
+        assert!(!service.agent_is_compacting("%1"));
+        assert!(service.agent_provider_task_is_pending(&turn));
+        let epoch = store.compaction_epoch(&conversation).unwrap().unwrap();
+        assert!(
+            epoch.summary == expected || epoch.ranges.iter().any(|range| range.summary == expected)
+        );
+    }
+}
+
+/// Recognizable malformed JSON/fenced frames get exactly two auxiliary repairs,
+/// even without adapter MAAP parsing. No frame or partial payload is published,
+/// and terminal auxiliary evidence survives normal execution-state retirement.
+#[test]
+fn runtime_compaction_raw_malformed_frames_exhaust_finitely() {
+    for raw in [
+        r#"{"rationale":"unfinished","actions":["#,
+        "```mezzanine-action-json\n{}",
+    ] {
+        let (mut service, store, turn) = queue_observed_input_compaction_with_exact_history();
+        let conversation = service
+            .pending_agent_compaction_task_for_tests("%1")
+            .unwrap()
+            .conversation_id
+            .clone();
+        for attempt in 0..3 {
+            let task = service.take_pending_agent_compaction_task("%1").unwrap();
+            assert_eq!(task.summary_correction.corrections_admitted, attempt);
+            service.claim_agent_compaction_task_state("%1", task);
+            let mut response = runtime_test_compaction_response("");
+            response.action_batch = None;
+            response.raw_text = raw.to_string();
+            service
+                .apply_agent_compaction_completed_event("%1", response)
+                .unwrap();
+            assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+        }
+        assert!(!service.agent_is_compacting("%1"));
+        let failure = persisted_compaction_failure(&service, &store, &conversation, &turn);
+        assert!(failure.contains("disposition=EmptyOrMalformedExhausted"));
+        assert!(failure.contains("corrections_admitted=2"));
+        assert!(!failure.contains(raw));
+    }
+}
+
 /// Dense code-like output has one whitespace word but many estimated input
 /// tokens. A corrected completion above the smaller guidance target but within
 /// the ORIGINAL token allowance must proceed to complete-request validation.
@@ -139,32 +212,11 @@ fn runtime_compaction_provider_failure_preserves_correction_provenance() {
     );
     assert!(!service.agent_is_compacting("%1"));
     assert!(store.compaction_epoch(&conversation).unwrap().is_none());
-    let execution = service.agent_turn_executions().get(&turn).unwrap();
-    assert!(execution.recovery_facts().is_none());
-    assert!(
-        execution
-            .response
-            .raw_text
-            .contains("phase=ProviderInference")
-    );
-    assert!(
-        execution
-            .response
-            .raw_text
-            .contains("corrections_admitted=1")
-    );
-    assert!(
-        execution
-            .response
-            .raw_text
-            .contains("disposition=ProviderRejected")
-    );
-    assert!(
-        execution
-            .response
-            .raw_text
-            .contains("openai_max_output_tokens_transmitted=Some(false)")
-    );
+    let failure = persisted_compaction_failure(&service, &store, &conversation, &turn);
+    assert!(failure.contains("phase=ProviderInference"));
+    assert!(failure.contains("corrections_admitted=1"));
+    assert!(failure.contains("disposition=ProviderRejected"));
+    assert!(failure.contains("openai_max_output_tokens_transmitted=Some(false)"));
 }
 
 /// Manual compaction uses the same bounded completed-output repair and frozen
@@ -575,27 +627,11 @@ fn runtime_compaction_summary_correction_floor_validates_before_exhaustion() {
         } else {
             assert!(!service.agent_provider_task_is_pending(&turn));
             assert!(store.compaction_epoch(&conversation).unwrap().is_none());
-            let execution = service.agent_turn_executions().get(&turn).unwrap();
-            assert!(execution.recovery_facts().is_none());
-            assert!(
-                execution
-                    .response
-                    .raw_text
-                    .contains("disposition=GuidanceFloor")
-            );
-            assert!(
-                execution
-                    .response
-                    .raw_text
-                    .contains("corrections_admitted=3")
-            );
-            assert!(
-                execution
-                    .response
-                    .raw_text
-                    .contains("openai_max_output_tokens_transmitted=Some(false)")
-            );
-            assert!(!execution.response.raw_text.contains(&response));
+            let failure = persisted_compaction_failure(&service, &store, &conversation, &turn);
+            assert!(failure.contains("disposition=GuidanceFloor"));
+            assert!(failure.contains("corrections_admitted=3"));
+            assert!(failure.contains("openai_max_output_tokens_transmitted=Some(false)"));
+            assert!(!failure.contains(&response));
         }
     }
 }

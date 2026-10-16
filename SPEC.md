@@ -9698,7 +9698,10 @@ arrivals after the captured history boundary without restoring summarized
 prefixes or admitting those arrivals to the frozen compaction selection.
 Completed compactor output that is empty, malformed, over the canonical UTF-8
 block-byte bound, or over its frozen summary cost allowance MUST be rejected
-privately before chunk/synthesis staging or publication. With independently
+privately before chunk/synthesis staging or publication. Raw-text compaction
+MUST also decode a recognizable optional final-say JSON or
+`mezzanine-action-json` frame locally, validate only its one final payload, and
+never publish its envelope or execute enclosed actions. With independently
 validated frozen source, Mezzanine MUST admit bounded auxiliary correction under
 a fresh exact task generation while preserving the waiting turn, logical epoch,
 current source and earlier accepted staging. The model MUST receive the actual

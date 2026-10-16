@@ -153,6 +153,10 @@ Empty or malformed output, oversized UTF-8 text, and text above the frozen word
 or estimated-input-token allowance retry only auxiliary summarization of the
 same validated source. The rejected text is not published or quoted back. The
 model receives the actual word/input-token unit and independent UTF-8 byte bound.
+Compaction keeps its raw-text provider contract. If the model instead returns
+the requested final-say JSON or `mezzanine-action-json` frame, local validation
+extracts that one final payload before measuring or publishing it; malformed
+frames consume the same finite correction budget, never execution authority.
 Shorter correction guidance never becomes a stricter semantic acceptance limit:
 a summary fitting the original allowance proceeds to complete-request fit even
 above guidance. OpenAI never receives `max_output_tokens` in ordinary, compaction,

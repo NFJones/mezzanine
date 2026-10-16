@@ -129,8 +129,14 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
         .session_id
         .clone();
     for sequence in 1..=3 {
-        let group = mez_agent::ContextExecutionGroupId::new(format!("canonical-source-{sequence}"))
-            .unwrap();
+        // One immutable execution group disables whole-group walkback for the
+        // split fixture, so a real rejection must traverse chunks/synthesis.
+        let group = mez_agent::ContextExecutionGroupId::new(if retry == RetryPath::ContextSplit {
+            "canonical-source-single-group".to_string()
+        } else {
+            format!("canonical-source-{sequence}")
+        })
+        .unwrap();
         store
             .append(&mez_agent::transcript::TranscriptEntry {
                 conversation_id: conversation.clone(),
@@ -158,7 +164,7 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
                             "evidence ".repeat(8000)
                         ),
                         group,
-                        1,
+                        sequence,
                         None,
                     )
                     .unwrap()
@@ -430,12 +436,12 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
     );
     assert_eq!(
         report.executions,
-        (if manual { 2 } else { 3 }) + extra_summaries
+        (if manual { 2 } else { 3 }) + extra_summaries as u64
     );
     if retry == RetryPath::ContextSplit {
         assert!(
             extra_summaries >= 2,
-            "later chunk and synthesis must execute"
+            "later chunk and synthesis must execute: manual={manual} streaming={streaming} extra={extra_summaries}"
         );
     }
     assert!(!exit.service.agent_is_compacting("%1"));

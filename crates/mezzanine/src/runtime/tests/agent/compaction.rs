@@ -2805,31 +2805,39 @@ fn runtime_observed_compaction_rejects_non_reducing_final_retry() {
             .iter()
             .any(|turn| { turn.turn_id == turn_id && turn.state == AgentTurnState::Failed })
     );
-    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
-    assert!(execution.recovery_facts().is_none());
+    let failure = persisted_compaction_failure(&service, &store, &conversation_id, &turn_id);
+    assert!(failure.contains("phase=CompleteCandidate"));
+    assert!(failure.contains("corrections_admitted=1"));
+    assert!(failure.contains("source_generation=Some("));
+    assert!(failure.contains("bytes=Some("));
+    assert!(!failure.contains(&oversized));
+}
+
+/// Reads the terminal durable projection after ordinary execution state has
+/// retired. Auxiliary provenance must survive there without a fabricated
+/// canonical MAAP recovery-facts record.
+fn persisted_compaction_failure(
+    service: &crate::runtime::RuntimeSessionService,
+    store: &AgentTranscriptStore,
+    conversation: &str,
+    turn: &str,
+) -> String {
+    assert!(!service.agent_turn_executions().contains_key(turn));
+    let rows = store.inspect(conversation).unwrap();
     assert!(
-        execution
-            .response
-            .raw_text
-            .contains("phase=CompleteCandidate")
+        !rows
+            .iter()
+            .any(|row| row.turn_id == turn && row.content.contains("canonical recovery facts"))
     );
-    assert!(
-        execution
-            .response
-            .raw_text
-            .contains("corrections_admitted=1")
-    );
-    assert!(
-        execution
-            .response
-            .raw_text
-            .contains("source_generation=Some(")
-    );
-    assert!(
-        execution.response.raw_text.contains("measured_bytes=Some(")
-            || execution.response.raw_text.contains("bytes=Some(")
-    );
-    assert!(!execution.response.raw_text.contains(&oversized));
+    rows.iter()
+        .find(|row| {
+            row.turn_id == turn
+                && row.role == mez_agent::transcript::TranscriptRole::Assistant
+                && row.content.contains("Auxiliary compaction:")
+        })
+        .expect("terminal assistant record must retain auxiliary provenance")
+        .content
+        .clone()
 }
 
 /// Verifies transcript rows appended after compaction planning stay in raw
@@ -6907,15 +6915,12 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
     assert!(retry.manual_final_retry.is_some());
     let frozen_words = retry.summary_correction.manual_words;
     assert!(frozen_words.is_some());
-    complete_runtime_test_compaction(
-        &mut service,
-        "%1",
-        if repeat {
-            &"long summary ".repeat(700)
-        } else {
-            "short manual summary"
-        },
-    );
+    let next_summary = if repeat {
+        "long summary ".repeat(700)
+    } else {
+        "short manual summary".to_string()
+    };
+    complete_runtime_test_compaction(&mut service, "%1", &next_summary);
     assert!(
         store
             .compaction_epoch("manual-final-retry")

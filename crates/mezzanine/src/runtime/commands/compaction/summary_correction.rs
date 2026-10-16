@@ -39,20 +39,8 @@ impl RuntimeSessionService {
                 false,
             ),
         };
-        let (summary, malformed) = match response.action_batch.as_ref() {
-            Some(batch) => match batch.actions.as_slice() {
-                [action] => match &action.payload {
-                    AgentActionPayload::Say {
-                        status: mez_agent::SayStatus::Final,
-                        text,
-                        ..
-                    } => (text.trim().to_string(), false),
-                    _ => (String::new(), true),
-                },
-                _ => (String::new(), true),
-            },
-            None => (response.raw_text.trim().to_string(), false),
-        };
+        let (summary, malformed) = completed_summary(response, &task.request)
+            .map_or_else(|()| (String::new(), true), |summary| (summary, false));
         let validation = if malformed {
             Err(ModelCompactionSummaryRejection {
                 defect: ModelCompactionSummaryDefect::Malformed,
@@ -104,7 +92,7 @@ impl RuntimeSessionService {
                 .effective_input_tokens
                 .map_or((budget, tokens), |target| (target, true));
             communicate_summary_target(&mut task.request, target, target_tokens);
-            return runtime_model_compaction_summary_from_response(response).map(Some);
+            return Ok(Some(summary));
         }
         let rejected = validation
             .err()
@@ -270,6 +258,63 @@ fn prepare_summary_correction(
     });
     task.request.messages = messages.into();
     Ok(())
+}
+
+/// Extracts only the completed summary payload. Compaction adapters intentionally
+/// allow raw text without a MAAP wire schema; when the model follows the local
+/// final-say instructions, decode that optional frame here without changing the
+/// provider API or wire controls. Ordinary JSON/code summaries remain text unless
+/// they identify themselves as a MAAP envelope. Malformed frames consume the
+/// same finite correction budget as already-parsed malformed batches.
+fn completed_summary(
+    response: &ModelResponse,
+    request: &ModelRequest,
+) -> std::result::Result<String, ()> {
+    let raw = response.raw_text.trim();
+    let decoded = if response.action_batch.is_none() {
+        let envelope = match serde_json::from_str::<serde_json::Value>(raw) {
+            Ok(value) => value
+                .as_object()
+                .is_some_and(|object| object.contains_key("actions")),
+            Err(_) => {
+                raw.starts_with('{')
+                    && (raw.contains("\"actions\"") || raw.contains("\"rationale\""))
+            }
+        };
+        if envelope {
+            Some(
+                mez_agent::parse_maap_action_batch_json_for_turn(
+                    raw,
+                    &request.turn_id,
+                    &request.agent_id,
+                )
+                .map_err(|_| ())?,
+            )
+        } else {
+            mez_agent::parse_fenced_maap_action_batch_for_turn(
+                raw,
+                &request.turn_id,
+                &request.agent_id,
+            )
+            .map_err(|_| ())?
+        }
+    } else {
+        None
+    };
+    match response.action_batch.as_ref().or(decoded.as_ref()) {
+        Some(batch) => match batch.actions.as_slice() {
+            [action] => match &action.payload {
+                AgentActionPayload::Say {
+                    status: mez_agent::SayStatus::Final,
+                    text,
+                    ..
+                } => Ok(text.trim().to_string()),
+                _ => Err(()),
+            },
+            _ => Err(()),
+        },
+        None => Ok(raw.to_string()),
+    }
 }
 
 /// Computes finite advisory progress using measured invalid dimensions, never
