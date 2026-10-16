@@ -46,6 +46,9 @@ impl CleanupFixture {
         } else {
             crate::runtime::config::ShellMode::Pane
         });
+        // Public agent entry reads shared prompt history before any transcript
+        // append. Its private store root must exist even for a fresh session.
+        fs::create_dir(root.join("transcripts")).unwrap();
         let store = AgentTranscriptStore::new(root.join("transcripts"));
         service.set_agent_transcript_store(store.clone());
         let primary = service
