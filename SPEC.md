@@ -15836,6 +15836,13 @@ shell lifetime. Its first actual native installation MAY migrate that exact
 captured incarnation without recapturing a conversation; later replacement MUST
 NOT adopt its old obligations. Raw exit events without retained actual native
 ownership MUST be inert even when a logical cleanup incarnation exists.
+An exact runtime-owned routed setup/loop binding transition MAY preserve an
+already validated cleanup edge across its own ephemeral conversation changes.
+The original delegator conversation MUST remain immutable. A runtime-only
+current-parent cleanup qualifier MAY observe the same owned parent restoration;
+ordinary resume, saved lineage, or matching pane IDs MUST NOT mint it. Binding
+and proof updates MUST be atomic, including rollback after partial binding
+errors, and MUST NOT grant execution or permission authority.
 A stale callback MUST be inert
 before turn, signal, layout, scope, or identity mutation. Genuine children fenced
 by parent conversation replacement MUST retain their original same-owner cleanup

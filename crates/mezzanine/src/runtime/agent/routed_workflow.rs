@@ -370,6 +370,8 @@ impl RuntimeSessionService {
                     "routed worker idle spawn unexpectedly created a turn",
                 ));
             }
+            let cleanup_rebind =
+                self.prepare_fresh_routed_cleanup_rebind(turn_id, &child_agent_id)?;
             let child_allowed_actions = self
                 .agent_shell_store()
                 .get(&child_pane_id)
@@ -445,7 +447,7 @@ impl RuntimeSessionService {
                     main_model_profile: turn.model_profile.clone(),
                     worker_model_profile: Some(selection.selected_profile.model.clone()),
                     child_agent_id: Some(child_agent_id.clone()),
-                    child_conversation_id: Some(child_conversation_id),
+                    child_conversation_id: Some(child_conversation_id.clone()),
                     child_turn_id: Some(child_turn.turn_id.clone()),
                     worker_final_result: None,
                     handoff: None,
@@ -499,6 +501,7 @@ impl RuntimeSessionService {
                 "scheduler running -> waiting reason=waiting_for_routed_worker capacity=released",
             )?;
             self.start_ready_agent_turns()?;
+            self.commit_routed_cleanup_rebind(cleanup_rebind, &child_conversation_id)?;
             Ok(self.runtime_pane_transition_with_render(
                 &turn.pane_id,
                 true,
@@ -596,6 +599,7 @@ impl RuntimeSessionService {
             .get_mut(parent_turn_id)
             .ok_or_else(|| MezError::invalid_state("routed loop workflow is unavailable"))?;
         workflow.child_turn_id = Some(turn.turn_id.clone());
+        workflow.child_conversation_id = Some(turn.conversation_id.clone());
         Ok(())
     }
 
@@ -1315,6 +1319,12 @@ impl RuntimeSessionService {
             &parent_turn.pane_id,
             "agent: routed workflow failed; explaining with main model",
         )?;
+        #[cfg(test)]
+        if self.take_routed_cleanup_recovery_failure_for_tests() {
+            return Err(MezError::invalid_state(
+                "injected routed recovery failure before child release",
+            ));
+        }
         self.release_routed_child_for_close(parent_turn)?;
         Ok(())
     }

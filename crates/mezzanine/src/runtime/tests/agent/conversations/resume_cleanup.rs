@@ -1515,7 +1515,17 @@ fn runtime_cleanup_ownerless_inner_spawn_failure_publishes_no_capability() {
             .unwrap(),
         0
     );
-    assert_eq!(fixture.service.tracked_pane_descriptors().len(), 1);
+    assert!(fixture.service.find_pane_descriptor("%1").is_some());
+    assert_eq!(
+        fixture
+            .service
+            .session
+            .windows()
+            .iter()
+            .map(|window| window.panes().len())
+            .sum::<usize>(),
+        1
+    );
     let child = fixture.spawn("agent-%1");
     let native = fixture.native_identity(&child);
     assert!(

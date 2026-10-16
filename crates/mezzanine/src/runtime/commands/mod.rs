@@ -1069,16 +1069,6 @@ impl RuntimeSessionService {
             .agent_loop_state(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("agent loop state is unavailable"))?;
-        #[cfg(test)]
-        if state.routed_parent_turn_id.is_some()
-            && self.take_routed_loop_continuation_queue_failure_for_tests()
-        {
-            return Err(MezError::invalid_state(
-                "injected routed loop continuation queue failure",
-            ));
-        }
-        let (session_id, transcript_entries) =
-            self.prepare_agent_loop_work_conversation(pane_id, &state)?;
         let prompt = runtime_agent_loop_work_prompt(&state);
         let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None, None, None)?;
         self.insert_agent_loop_turn(
@@ -1120,53 +1110,65 @@ impl RuntimeSessionService {
         pane_id: &str,
         state: &RuntimeAgentLoopState,
     ) -> Result<(String, u64)> {
-        match state.mode {
-            RuntimeAgentLoopMode::ReuseCurrentConversation => {
-                let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
-                    MezError::new(
-                        crate::error::MezErrorKind::NotFound,
-                        "agent shell session not found for pane",
-                    )
-                })?;
-                Ok((session.session_id.clone(), session.transcript_entries))
-            }
-            RuntimeAgentLoopMode::ForkEachIteration => {
-                let target_conversation_id = Self::runtime_new_agent_conversation_id();
-                let session = self
-                    .agent_shell_store_mut()
-                    .bind_ephemeral_conversation_with_lineage_and_transcript_source(
-                        pane_id,
-                        &target_conversation_id,
-                        0,
-                        state.parent_prompt_cache_lineage_id.clone(),
-                        Some(state.parent_conversation_id.clone()),
-                        state.parent_transcript_entries,
-                    )?;
-                let session_id = session.session_id.clone();
-                let transcript_entries = session.transcript_entries;
-                self.agent_shell_store_mut()
-                    .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
-                Ok((session_id, transcript_entries))
-            }
-            RuntimeAgentLoopMode::NewEachIteration => {
-                let target_conversation_id = Self::runtime_new_agent_conversation_id();
-                let session = self
-                    .agent_shell_store_mut()
-                    .bind_ephemeral_conversation_with_lineage_and_transcript_source(
-                        pane_id,
-                        &target_conversation_id,
-                        0,
-                        None,
-                        None,
-                        0,
-                    )?;
-                let session_id = session.session_id.clone();
-                let transcript_entries = session.transcript_entries;
-                self.agent_shell_store_mut()
-                    .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
-                Ok((session_id, transcript_entries))
-            }
+        if state.mode == RuntimeAgentLoopMode::ReuseCurrentConversation {
+            let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "agent shell session not found for pane",
+                )
+            })?;
+            return Ok((session.session_id.clone(), session.transcript_entries));
         }
+        // Only a current routed operation can carry cleanup continuity across
+        // this code-owned ephemeral binding. Ordinary loops and independent
+        // resume have no token. Keep binding and proof atomic before later
+        // fallible queue/trace work, whose recovery can itself fail.
+        let cleanup = self.prepare_routed_loop_cleanup_rebind(state);
+        let previous = self
+            .agent_shell_store()
+            .get(pane_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("loop work shell is unavailable"))?;
+        let target = Self::runtime_new_agent_conversation_id();
+        let fork = state.mode == RuntimeAgentLoopMode::ForkEachIteration;
+        let bound = self
+            .agent_shell_store_mut()
+            .bind_ephemeral_conversation_with_lineage_and_transcript_source(
+                pane_id,
+                &target,
+                0,
+                if fork {
+                    state.parent_prompt_cache_lineage_id.clone()
+                } else {
+                    None
+                },
+                fork.then(|| state.parent_conversation_id.clone()),
+                if fork {
+                    state.parent_transcript_entries
+                } else {
+                    0
+                },
+            )
+            .map(|session| (session.session_id.clone(), session.transcript_entries));
+        let binding = match bound {
+            Ok(binding) => binding,
+            Err(error) => {
+                // Lower binding validation can fail after partial mutation.
+                self.agent_shell_store_mut()
+                    .restore_session(pane_id, previous)?;
+                return Err(error.into());
+            }
+        };
+        if let Some(cleanup) = cleanup
+            && let Err(error) = self.commit_routed_cleanup_rebind(cleanup, &target)
+        {
+            self.agent_shell_store_mut()
+                .restore_session(pane_id, previous)?;
+            return Err(error);
+        }
+        self.agent_shell_store_mut()
+            .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
+        Ok(binding)
     }
 
     /// Restores the pane's durable parent conversation after a loop-owned
@@ -1184,14 +1186,38 @@ impl RuntimeSessionService {
             if self.agent_shell_store().get(pane_id).is_none() {
                 return Ok(());
             }
-            self.agent_shell_store_mut()
+            // This is the workflow's own same-incarnation restoration, not
+            // independent resume. Preserve immutable delegation attribution
+            // while observing only its current cleanup binding. No execution
+            // fence is introduced: normal handoff may still run in the child.
+            let cleanup = self.prepare_routed_cleanup_parent_restore(state);
+            let previous = self
+                .agent_shell_store()
+                .get(pane_id)
+                .cloned()
+                .ok_or_else(|| MezError::invalid_state("routed parent shell is unavailable"))?;
+            if let Err(error) = self
+                .agent_shell_store_mut()
                 .restore_conversation_for_running_turn_with_lineage(
                     pane_id,
                     parent_turn_id,
                     &state.parent_conversation_id,
                     state.parent_transcript_entries,
                     state.parent_prompt_cache_lineage_id.clone(),
-                )?;
+                )
+            {
+                self.agent_shell_store_mut()
+                    .restore_session(pane_id, previous)?;
+                return Err(error.into());
+            }
+            if let Some(cleanup) = cleanup
+                && let Err(error) = self
+                    .commit_routed_cleanup_parent_restore(cleanup, &state.parent_conversation_id)
+            {
+                self.agent_shell_store_mut()
+                    .restore_session(pane_id, previous)?;
+                return Err(error);
+            }
             self.restore_agent_loop_parent_projection(&state.loop_id, pane_id);
             self.sync_prepared_runtime_agent_objective_for_conversation(
                 pane_id,

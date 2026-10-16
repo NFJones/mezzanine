@@ -39,7 +39,7 @@ fn runtime_routed_cleanup_parent_close_retires_final_bound_worker() {
         result.unwrap();
         assert!(
             !child_present,
-            "genuine routed worker pane survived parent close"
+            "genuine routed worker pane survived parent close: native_after={after:?} expected={token}"
         );
         assert_ne!(
             after,
@@ -74,7 +74,7 @@ fn runtime_routed_cleanup_actual_parent_exit_retires_final_bound_worker() {
     assert!(result.unwrap().is_some());
     assert!(
         !child_present,
-        "genuine routed worker pane survived parent exit"
+        "genuine routed worker pane survived parent exit: native_after={after:?} expected={token}"
     );
     assert_ne!(
         after,
@@ -106,6 +106,20 @@ fn runtime_routed_cleanup_independent_child_rebind_preserves_native_worker() {
             0,
         )
         .unwrap();
+    let independent = service
+        .start_agent_prompt_turn(&worker.pane_id, "independent routed binding work")
+        .unwrap();
+    let independent_state = service
+        .agent_turn_ledger()
+        .turn(&independent.turn_id)
+        .unwrap()
+        .state;
+    let identity_id = AgentId::opaque(worker.agent_id.clone()).unwrap();
+    let identity = service
+        .message_service()
+        .registered_identity(&identity_id)
+        .unwrap()
+        .clone();
     let primary = service.session.layout_owner_client_id().unwrap().clone();
     service
         .dispatch_runtime_pane_close(&primary, r#"{"pane_id":"%1","force":true}"#)
@@ -127,43 +141,67 @@ fn runtime_routed_cleanup_independent_child_rebind_preserves_native_worker() {
             .session_id,
         "independent-routed-binding"
     );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&independent.turn_id)
+            .unwrap()
+            .state,
+        independent_state
+    );
+    assert_eq!(
+        service.message_service().registered_identity(&identity_id),
+        Some(&identity)
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Fork/new continuation is an owned iteration of the same routed delegation,
-/// including its newly bound conversation. After a real first result queues
-/// iteration two, parent close must retire that same worker process.
+/// The existing fork/new continuation order still rejects rebinding while the
+/// old work turn runs. Its real recovery nevertheless restores the invoking
+/// parent before failure explanation. If that explanation fails before child
+/// release, explicit parent close must retain the original native obligation.
 #[test]
-fn runtime_routed_cleanup_fresh_iteration_parent_close_retires_worker() {
+fn runtime_routed_cleanup_failed_fresh_iteration_retains_recovery_obligation() {
     for mode in ["--fork", "--new"] {
         let (mut service, parent_turn_id, worker) =
-            selected_routed_loop(&format!("/loop {mode} --limit 3 inspect cleanup iteration"));
+            selected_routed_loop(&format!("/loop {mode} --limit 3 inspect cleanup recovery"));
+        let durable = service
+            .agent_loop_state(&worker.pane_id)
+            .unwrap()
+            .parent_conversation_id
+            .clone();
         let pid = service
             .primary_pid_for_live_pane_process(&worker.pane_id)
             .unwrap();
         let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
-        service
+        service.fail_routed_cleanup_recovery_before_release_for_tests();
+        let error = service
             .emit_subagent_task_result_for_execution(&worker, &routed_patch_execution(&worker))
-            .unwrap();
-        service
-            .complete_running_agent_turn_and_start_ready(
-                &worker,
-                AgentTurnState::Completed,
-                "actual routed cleanup iteration completed",
-            )
-            .unwrap();
-        let next = service
-            .routed_workflow_for_tests(&parent_turn_id)
-            .unwrap()
-            .child_turn_id
-            .clone()
-            .unwrap();
-        assert_ne!(next, worker.turn_id);
-        let next_turn = service.agent_turn_ledger().turn(&next).unwrap();
-        assert_ne!(next_turn.conversation_id, worker.conversation_id);
+            .unwrap_err();
+        assert!(
+            error.message().contains("injected routed recovery failure"),
+            "{error}"
+        );
+        assert_eq!(
+            service.agent_shell_store().get("%1").unwrap().session_id,
+            durable
+        );
+        assert!(service.find_pane_descriptor(&worker.pane_id).is_some());
         assert_eq!(
             service.primary_pid_for_live_pane_process(&worker.pane_id),
             Some(pid)
+        );
+        assert_eq!(
+            mez_mux::process::process_start_token_for_pid(pid),
+            Some(token)
+        );
+        assert_eq!(
+            service
+                .routed_workflow_for_tests(&parent_turn_id)
+                .unwrap()
+                .child_turn_id
+                .as_deref(),
+            Some(worker.turn_id.as_str())
         );
         let primary = service.session.layout_owner_client_id().unwrap().clone();
         let result =
@@ -173,13 +211,149 @@ fn runtime_routed_cleanup_fresh_iteration_parent_close_retires_worker() {
         service.terminate_all_pane_processes().unwrap();
         result.unwrap();
         assert!(
-            !child_present,
-            "{mode} worker survived parent close after iteration two"
+            !child_present && after != Some(token),
+            "{mode} recovery child_present={child_present} native_after={after:?} expected={token}"
         );
-        assert_ne!(
-            after,
-            Some(token),
-            "{mode} native worker survived parent close"
+    }
+}
+
+/// Successful limit-one restoration keeps the routed child unfenced for its
+/// handoff. A close while that handoff is outstanding still retires its actual
+/// native process. Current-binding fencing must also select the same original
+/// obligation after that owned restoration, without rewriting its attribution.
+#[test]
+fn runtime_routed_cleanup_restored_parent_handoff_retains_unfenced_obligation() {
+    for mode in ["--fork", "--new"] {
+        let (mut service, parent_turn_id, worker) =
+            selected_routed_loop(&format!("/loop {mode} --limit 1 inspect cleanup handoff"));
+        let durable = service
+            .agent_loop_state(&worker.pane_id)
+            .unwrap()
+            .parent_conversation_id
+            .clone();
+        let pid = service
+            .primary_pid_for_live_pane_process(&worker.pane_id)
+            .unwrap();
+        let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+        service
+            .emit_subagent_task_result_for_execution(&worker, &routed_patch_execution(&worker))
+            .unwrap();
+        assert_eq!(
+            service.agent_shell_store().get("%1").unwrap().session_id,
+            durable
         );
+        assert_eq!(
+            service
+                .routed_workflow_for_tests(&parent_turn_id)
+                .unwrap()
+                .phase,
+            mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForHandoff
+        );
+        assert!(!service.subagent_descendant_is_fenced(&worker.agent_id));
+        let previous =
+            service.fence_subagent_descendants_for_parent_conversation("agent-%1", &durable);
+        assert!(
+            previous.contains_key(&worker.agent_id),
+            "current qualified parent binding must select its original obligation"
+        );
+        assert!(service.subagent_descendant_is_fenced(&worker.agent_id));
+        service.restore_subagent_descendant_fences(previous);
+        assert!(!service.subagent_descendant_is_fenced(&worker.agent_id));
+        let primary = service.session.layout_owner_client_id().unwrap().clone();
+        let result =
+            service.dispatch_runtime_pane_close(&primary, r#"{"pane_id":"%1","force":true}"#);
+        let child_present = service.find_pane_descriptor(&worker.pane_id).is_some();
+        let after = mez_mux::process::process_start_token_for_pid(pid);
+        service.terminate_all_pane_processes().unwrap();
+        result.unwrap();
+        assert!(
+            !child_present && after != Some(token),
+            "{mode} handoff child_present={child_present} native_after={after:?} expected={token}"
+        );
+    }
+}
+
+/// This component seam starts with an actual selected workflow/native child
+/// and tests only its exact owned binding-proof transaction. It does not claim
+/// a successful second fork/new iteration (separate issue 5ecc7f25). The lower
+/// restore requires the exact running turn rather than clearing turn ownership.
+/// A replaced native parent rejects the stale token, restores the prior shell,
+/// and preserves the now-independent child through later parent close.
+#[test]
+fn runtime_routed_cleanup_owned_binding_seam_requires_original_native_edge() {
+    for replace_parent in [false, true] {
+        let (mut service, _, worker) = selected_routed_loop_with_parent(
+            "/loop --fork --limit 3 inspect owned binding seam",
+            crate::runtime::config::ShellMode::Native,
+            true,
+        );
+        let state = service.agent_loop_state(&worker.pane_id).unwrap().clone();
+        let prepared = service.prepare_routed_loop_cleanup_rebind(&state).unwrap();
+        let previous = service
+            .agent_shell_store()
+            .get(&worker.pane_id)
+            .unwrap()
+            .clone();
+        let pid = service
+            .primary_pid_for_live_pane_process(&worker.pane_id)
+            .unwrap();
+        let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+        service
+            .agent_shell_store_mut()
+            .restore_conversation_for_running_turn_with_lineage(
+                &worker.pane_id,
+                &worker.turn_id,
+                "owned-routed-component-binding",
+                0,
+                None,
+            )
+            .unwrap();
+        if replace_parent {
+            service.start_initial_pane_process(Some("cat")).unwrap();
+        }
+        let committed =
+            service.commit_routed_cleanup_rebind(prepared, "owned-routed-component-binding");
+        if replace_parent {
+            assert!(committed.is_err());
+            service
+                .agent_shell_store_mut()
+                .restore_session(&worker.pane_id, previous.clone())
+                .unwrap();
+            assert_eq!(
+                service.agent_shell_store().get(&worker.pane_id).unwrap(),
+                &previous
+            );
+        } else {
+            committed.unwrap();
+        }
+        let primary = service.session.layout_owner_client_id().unwrap().clone();
+        let result =
+            service.dispatch_runtime_pane_close(&primary, r#"{"pane_id":"%1","force":true}"#);
+        let present = service.find_pane_descriptor(&worker.pane_id).is_some();
+        let after = mez_mux::process::process_start_token_for_pid(pid);
+        if replace_parent {
+            assert!(present);
+            assert_eq!(after, Some(token));
+            assert_eq!(
+                service.primary_pid_for_live_pane_process(&worker.pane_id),
+                Some(pid)
+            );
+            assert_eq!(
+                service
+                    .agent_shell_store()
+                    .get(&worker.pane_id)
+                    .unwrap()
+                    .session_id,
+                previous.session_id
+            );
+        }
+        service.terminate_all_pane_processes().unwrap();
+        result.unwrap();
+        if !replace_parent {
+            assert!(
+                !present && after != Some(token),
+                "owned migration child_present={present} native_after={after:?} expected={token}"
+            );
+        }
     }
 }

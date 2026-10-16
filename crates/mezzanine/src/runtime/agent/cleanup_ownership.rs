@@ -29,6 +29,9 @@ pub(super) struct RuntimeSubagentCleanupState {
     pub(super) local_parents: BTreeMap<String, u64>,
     /// Never rewound by clear, failed spawn, authority snapshots, or restore.
     next_local_parent_generation: u64,
+    /// Exercises failure after owned parent restoration but before child release.
+    #[cfg(test)]
+    fail_routed_recovery_before_release: bool,
 }
 
 /// Current exclusive runtime owner of one captured conversation binding.
@@ -63,6 +66,9 @@ pub(super) struct RuntimeSubagentCleanupOwnership {
     parent: CleanupBinding,
     /// Exact child binding established by that delegation.
     child: CleanupBinding,
+    /// Current parent binding observed only through an exact owned routed restore.
+    /// The immutable original delegator above still owns attribution and fences.
+    current_parent_conversation_id: String,
 }
 
 /// Opaque original-parent witness reserved inside one exclusive local spawn.
@@ -91,6 +97,39 @@ pub(super) struct PendingCleanupRestore {
     parent_process: Option<CleanupProcessOwner>,
     /// First actual child owner; an intervening native install cancels the edge.
     child_process: Option<CleanupProcessOwner>,
+}
+
+/// One-shot context of an already owned routed loop operation.
+#[derive(Debug)]
+struct RoutedCleanupOperation {
+    /// Original workflow key and parent turn whose ledger identity is immutable.
+    parent_turn_id: String,
+    /// Exact child agent and current turn, never a pane label lookup.
+    child_agent_id: String,
+    /// Existing workflow turn; initial fresh setup has not installed one yet.
+    child_turn_id: Option<String>,
+    /// Existing loop incarnation/iteration; initial setup is separately sealed.
+    loop_identity: Option<(String, usize)>,
+}
+
+/// Opaque non-Clone witness for one synchronous owned routed child rebind.
+#[derive(Debug)]
+pub(crate) struct RuntimePreparedRoutedCleanupRebind {
+    /// Entire old edge, including its old current-parent cleanup qualifier.
+    edge: RuntimeSubagentCleanupOwnership,
+    /// Workflow/turn/loop provenance captured before any binding mutation.
+    operation: RoutedCleanupOperation,
+}
+
+/// Opaque witness for a code-owned routed invoking-parent restoration.
+#[derive(Debug)]
+pub(crate) struct RuntimePreparedRoutedCleanupParentRestore {
+    /// Exact current owner and conversation before the owned restoration.
+    parent: CleanupBinding,
+    /// Only already-valid outgoing edges can observe the owned new binding.
+    edges: Vec<(String, RuntimeSubagentCleanupOwnership)>,
+    /// Existing routed workflow and loop must remain the same operation.
+    operation: RoutedCleanupOperation,
 }
 
 impl RuntimeSessionService {
@@ -215,7 +254,11 @@ impl RuntimeSessionService {
         }
         self.agent.subagent_cleanup.ownership.insert(
             child_agent_id.to_string(),
-            RuntimeSubagentCleanupOwnership { parent, child },
+            RuntimeSubagentCleanupOwnership {
+                current_parent_conversation_id: parent.conversation_id.clone(),
+                parent,
+                child,
+            },
         );
         Ok(())
     }
@@ -231,6 +274,254 @@ impl RuntimeSessionService {
             .ownership
             .retain(|_, edge| edge.parent.agent_id != agent_id && edge.child.agent_id != agent_id);
         self.retire_pending_cleanup_restore_for_agent(&agent_id);
+    }
+
+    /// Captures the genuine inner-spawn edge before initial routed setup binds
+    /// its ephemeral child. No ordinary resume path can prepare this token.
+    pub(crate) fn prepare_fresh_routed_cleanup_rebind(
+        &self,
+        parent_turn_id: &str,
+        child_agent_id: &str,
+    ) -> Result<RuntimePreparedRoutedCleanupRebind> {
+        let turn = self
+            .agent_turn_ledger()
+            .turn(parent_turn_id)
+            .ok_or_else(|| MezError::invalid_state("routed cleanup parent turn is unavailable"))?;
+        let edge = self
+            .validated_subagent_cleanup_edge(child_agent_id, None)
+            .filter(|edge| {
+                edge.parent.agent_id == turn.agent_id
+                    && self
+                        .capture_cleanup_binding(&turn.agent_id)
+                        .is_some_and(|parent| parent.conversation_id == turn.conversation_id)
+            })
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("fresh routed cleanup edge is unavailable"))?;
+        Ok(RuntimePreparedRoutedCleanupRebind {
+            edge,
+            operation: RoutedCleanupOperation {
+                parent_turn_id: parent_turn_id.to_string(),
+                child_agent_id: child_agent_id.to_string(),
+                child_turn_id: None,
+                loop_identity: None,
+            },
+        })
+    }
+
+    /// Captures the current routed workflow and loop incarnation without using
+    /// saved lineage or a bare pane identity as authority. The old child turn
+    /// may be settling; its immutable ledger identity must still match workflow.
+    fn routed_cleanup_operation(
+        &self,
+        state: &RuntimeAgentLoopState,
+    ) -> Option<RoutedCleanupOperation> {
+        let parent_turn_id = state.routed_parent_turn_id.as_ref()?;
+        let workflow = self
+            .agent
+            .routed_workflows_by_parent_turn
+            .get(parent_turn_id)?;
+        let child_agent_id = workflow.child_agent_id.as_ref()?;
+        let child_turn_id = workflow.child_turn_id.as_ref()?;
+        let parent = self.agent_turn_ledger().turn(parent_turn_id)?;
+        let child = self.agent_turn_ledger().turn(child_turn_id)?;
+        if workflow.run_id != *parent_turn_id
+            || workflow.parent_agent_id != parent.agent_id
+            || workflow.parent_conversation_id != parent.conversation_id
+            || workflow.parent_pane_id != state.invoking_pane_id
+            || parent.pane_id != state.invoking_pane_id
+            || child.agent_id != *child_agent_id
+            || child.pane_id != state.execution_pane_id
+            || self.agent_loop_state_by_id(&state.loop_id) != Some(state)
+            || self
+                .agent_loop_turn(child_turn_id)
+                .is_none_or(|turn| turn.loop_id != state.loop_id)
+        {
+            return None;
+        }
+        Some(RoutedCleanupOperation {
+            parent_turn_id: parent_turn_id.clone(),
+            child_agent_id: child_agent_id.clone(),
+            child_turn_id: Some(child_turn_id.clone()),
+            loop_identity: Some((state.loop_id.clone(), state.iteration)),
+        })
+    }
+
+    /// Revalidates the sealed workflow identity before publishing a cleanup
+    /// transition. Initial setup has no prior child turn; continued operations
+    /// additionally require the exact previously captured child turn and loop.
+    fn routed_cleanup_operation_is_current(&self, operation: &RoutedCleanupOperation) -> bool {
+        let Some(workflow) = self
+            .agent
+            .routed_workflows_by_parent_turn
+            .get(&operation.parent_turn_id)
+        else {
+            return false;
+        };
+        let Some(parent) = self.agent_turn_ledger().turn(&operation.parent_turn_id) else {
+            return false;
+        };
+        workflow.run_id == operation.parent_turn_id
+            && workflow.parent_agent_id == parent.agent_id
+            && workflow.parent_conversation_id == parent.conversation_id
+            && workflow.child_agent_id.as_deref() == Some(operation.child_agent_id.as_str())
+            && operation
+                .child_turn_id
+                .as_ref()
+                .is_none_or(|turn| workflow.child_turn_id.as_ref() == Some(turn))
+            && operation
+                .loop_identity
+                .as_ref()
+                .is_none_or(|(id, iteration)| {
+                    self.agent_loop_state_by_id(id).is_some_and(|state| {
+                        state.iteration == *iteration
+                            && state.routed_parent_turn_id.as_deref()
+                                == Some(operation.parent_turn_id.as_str())
+                            && state.execution_pane_id
+                                == operation
+                                    .child_agent_id
+                                    .strip_prefix("agent-")
+                                    .unwrap_or("")
+                            && state.invoking_pane_id == parent.pane_id
+                    })
+                })
+    }
+
+    /// Prepares only a current routed fork/new continuation's existing edge.
+    /// An independently rebound child has no valid old edge and receives no
+    /// token; continuing work can never reconstruct its former cleanup grant.
+    pub(crate) fn prepare_routed_loop_cleanup_rebind(
+        &self,
+        state: &RuntimeAgentLoopState,
+    ) -> Option<RuntimePreparedRoutedCleanupRebind> {
+        let operation = self.routed_cleanup_operation(state)?;
+        let edge = self
+            .validated_subagent_cleanup_edge(&operation.child_agent_id, None)?
+            .clone();
+        let child = self
+            .agent_turn_ledger()
+            .turn(operation.child_turn_id.as_deref()?)?;
+        let parent = self.agent_turn_ledger().turn(&operation.parent_turn_id)?;
+        if edge.child.conversation_id != child.conversation_id
+            || edge.parent.agent_id != parent.agent_id
+            || edge.parent.conversation_id != parent.conversation_id
+        {
+            return None;
+        }
+        Some(RuntimePreparedRoutedCleanupRebind { edge, operation })
+    }
+
+    /// Commits only the intended child conversation on an unchanged native
+    /// owner and original parent edge. Failure leaves the entire old edge
+    /// untouched, allowing the caller to restore its complete old shell.
+    pub(crate) fn commit_routed_cleanup_rebind(
+        &mut self,
+        prepared: RuntimePreparedRoutedCleanupRebind,
+        target: &str,
+    ) -> Result<()> {
+        let edge = prepared.edge;
+        let child = self.capture_native_cleanup_binding(&edge.child.agent_id);
+        let parent = self.capture_cleanup_binding(&edge.parent.agent_id);
+        if !self.routed_cleanup_operation_is_current(&prepared.operation)
+            || self
+                .agent
+                .subagent_cleanup
+                .ownership
+                .get(&edge.child.agent_id)
+                != Some(&edge)
+            || parent.is_none_or(|parent| {
+                parent.process != edge.parent.process
+                    || parent.conversation_id != edge.current_parent_conversation_id
+            })
+            || child.as_ref().is_none_or(|child| {
+                child.process != edge.child.process || child.conversation_id != target
+            })
+        {
+            return Err(MezError::invalid_state(
+                "owned routed cleanup binding changed during setup",
+            ));
+        }
+        let mut replacement = edge;
+        replacement.child.conversation_id = target.to_string();
+        self.agent
+            .subagent_cleanup
+            .ownership
+            .insert(replacement.child.agent_id.clone(), replacement);
+        Ok(())
+    }
+
+    /// Observes an owned routed parent restoration only for already-valid
+    /// outgoing obligations. Immutable original delegation conversations are
+    /// retained; this token grants neither execution nor new descendant edges.
+    pub(crate) fn prepare_routed_cleanup_parent_restore(
+        &self,
+        state: &RuntimeAgentLoopState,
+    ) -> Option<RuntimePreparedRoutedCleanupParentRestore> {
+        let operation = self.routed_cleanup_operation(state)?;
+        let parent = self.capture_cleanup_binding(&format!("agent-{}", state.invoking_pane_id))?;
+        let edges = self
+            .agent
+            .subagent_cleanup
+            .ownership
+            .iter()
+            .filter(|(_, edge)| edge.parent.agent_id == parent.agent_id)
+            .filter_map(|(child, _)| {
+                self.validated_subagent_cleanup_edge(child, None)
+                    .map(|edge| (child.clone(), edge.clone()))
+            })
+            .collect();
+        Some(RuntimePreparedRoutedCleanupParentRestore {
+            parent,
+            edges,
+            operation,
+        })
+    }
+
+    /// Atomically advances only exact current-parent cleanup qualifiers after
+    /// the runtime's own parent restoration. Validate every edge before any
+    /// mutation so complete-shell rollback never needs partial proof rollback.
+    pub(crate) fn commit_routed_cleanup_parent_restore(
+        &mut self,
+        prepared: RuntimePreparedRoutedCleanupParentRestore,
+        target: &str,
+    ) -> Result<()> {
+        let parent = self.capture_cleanup_binding(&prepared.parent.agent_id);
+        if !self.routed_cleanup_operation_is_current(&prepared.operation)
+            || parent.is_none_or(|parent| {
+                parent.process != prepared.parent.process || parent.conversation_id != target
+            })
+            || prepared.edges.iter().any(|(child, edge)| {
+                self.agent.subagent_cleanup.ownership.get(child) != Some(edge)
+                    || self.capture_native_cleanup_binding(child).as_ref() != Some(&edge.child)
+            })
+        {
+            return Err(MezError::invalid_state(
+                "owned routed parent restoration changed cleanup bindings",
+            ));
+        }
+        for (child, mut edge) in prepared.edges {
+            edge.current_parent_conversation_id = target.to_string();
+            self.agent.subagent_cleanup.ownership.insert(child, edge);
+        }
+        Ok(())
+    }
+
+    /// Injects a recovery error after owned restoration but before release.
+    #[cfg(test)]
+    pub(crate) fn fail_routed_cleanup_recovery_before_release_for_tests(&mut self) {
+        self.agent
+            .subagent_cleanup
+            .fail_routed_recovery_before_release = true;
+    }
+
+    /// Consumes a test-only recovery fault after invoking-parent restoration.
+    #[cfg(test)]
+    pub(crate) fn take_routed_cleanup_recovery_failure_for_tests(&mut self) -> bool {
+        std::mem::take(
+            &mut self
+                .agent
+                .subagent_cleanup
+                .fail_routed_recovery_before_release,
+        )
     }
 
     /// Removes capabilities left unreferenced by a failed enclosing spawn
@@ -559,7 +850,11 @@ impl RuntimeSessionService {
         }
         self.agent.subagent_cleanup.ownership.insert(
             child_agent_id.to_string(),
-            RuntimeSubagentCleanupOwnership { parent, child },
+            RuntimeSubagentCleanupOwnership {
+                current_parent_conversation_id: parent.conversation_id.clone(),
+                parent,
+                child,
+            },
         );
     }
 
@@ -588,10 +883,13 @@ impl RuntimeSessionService {
         }
         let parent = self.capture_cleanup_binding(&edge.parent.agent_id)?;
         let replacing_original = replacing.is_some_and(|(agent, conversation)| {
-            agent == edge.parent.agent_id && conversation == edge.parent.conversation_id
+            agent == edge.parent.agent_id
+                && (conversation == edge.parent.conversation_id
+                    || conversation == edge.current_parent_conversation_id)
         });
         if parent.process != edge.parent.process
             || (parent.conversation_id != edge.parent.conversation_id
+                && parent.conversation_id != edge.current_parent_conversation_id
                 && !self.subagent_descendant_is_fenced(child_agent_id)
                 && !replacing_original)
         {
@@ -625,9 +923,10 @@ impl RuntimeSessionService {
             };
             distance = distance.checked_add(1)?;
             if edge.parent.agent_id == parent_agent_id {
-                if original_parent_conversation
-                    .is_some_and(|conversation| conversation != edge.parent.conversation_id)
-                {
+                if original_parent_conversation.is_some_and(|conversation| {
+                    conversation != edge.parent.conversation_id
+                        && conversation != edge.current_parent_conversation_id
+                }) {
                     return None;
                 }
                 found = Some(distance);
