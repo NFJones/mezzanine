@@ -751,10 +751,19 @@ mod tests {
     /// Spawns an exclusively owned root that reports received graceful signals
     /// and child-generated probe replies, without relying on terminal echo.
     fn signal_observer(owner: &PaneProcessRetirementOwner) -> super::super::PaneProcess {
+        signal_observer_with_environment(owner, &[])
+    }
+
+    /// Adds only fake fixture environment, including an optional private trap
+    /// receipt independent of PTY output consumed by synchronous termination.
+    fn signal_observer_with_environment(
+        owner: &PaneProcessRetirementOwner,
+        environment: &[(String, String)],
+    ) -> super::super::PaneProcess {
         let mut process = super::super::spawn_retained_argv_pty_process(
             std::path::Path::new("/bin/sh"),
-            &["-c".into(), "trap 'printf observed-hup\\\\n' HUP; trap 'printf observed-term\\\\n' TERM; printf 'observer-ready\\n'; while :; do if IFS= read -r line; then printf 'observer-reply:%s\\n' \"$line\"; fi; done".into()],
-            &[], mez_terminal::TerminalSize::new(80, 24).unwrap(), None, owner.reserve().unwrap()).unwrap();
+            &["-c".into(), "trap 'printf observed-hup; if test -n \"$MEZ_TEST_SIGNAL_RECEIPT\"; then printf hup >> \"$MEZ_TEST_SIGNAL_RECEIPT\"; fi' HUP; trap 'printf observed-term; if test -n \"$MEZ_TEST_SIGNAL_RECEIPT\"; then printf term >> \"$MEZ_TEST_SIGNAL_RECEIPT\"; fi' TERM; printf 'observer-ready\\n'; while :; do if IFS= read -r line; then printf 'observer-reply:%s\\n' \"$line\"; fi; done".into()],
+            environment, mez_terminal::TerminalSize::new(80, 24).unwrap(), None, owner.reserve().unwrap()).unwrap();
         assert!(observer_output(&mut process, "observer-ready").contains("observer-ready"));
         process
     }
@@ -784,7 +793,29 @@ mod tests {
     fn synchronous_termination_preserves_sent_stages_and_original_start() {
         for term_sent in [false, true] {
             let owner = PaneProcessRetirementOwner::default();
-            let mut process = signal_observer(&owner);
+            use std::os::unix::fs::OpenOptionsExt;
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let receipt = std::env::temp_dir().join(format!(
+                "mez-native-stage-{}-{nonce}-{term_sent}",
+                std::process::id()
+            ));
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&receipt)
+                .unwrap();
+            drop(file);
+            let mut process = signal_observer_with_environment(
+                &owner,
+                &[(
+                    "MEZ_TEST_SIGNAL_RECEIPT".into(),
+                    receipt.to_string_lossy().into_owned(),
+                )],
+            );
             let master = process.duplicate_master_fd().unwrap();
             process.child.begin_termination(false).unwrap();
             let raw = process.child.raw.as_mut().unwrap();
@@ -794,22 +825,19 @@ mod tests {
                 Instant::now() - Duration::from_millis(150);
             let original = raw.progress.plan.unwrap();
             let result = process.terminate(Duration::from_millis(100));
-            let output = observer_output(&mut process, "never-produced-marker");
+            let output = std::fs::read_to_string(&receipt);
             let pid = rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap())
                 .unwrap();
             let absent = rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH);
             let final_plan = process.child.raw.as_ref().unwrap().progress.plan.unwrap();
             drop(master);
+            let removed = std::fs::remove_file(&receipt);
+            assert!(removed.is_ok(), "could not remove owned trap receipt");
+            let output = output.unwrap();
             assert!(result.is_ok() && absent && owner.outstanding() == 0);
-            assert!(
-                !output.contains("observed-hup"),
-                "HUP was replayed: {output}"
-            );
+            assert!(!output.contains("hup"), "HUP was replayed: {output}");
             if term_sent {
-                assert!(
-                    !output.contains("observed-term"),
-                    "TERM was replayed: {output}"
-                );
+                assert!(!output.contains("term"), "TERM was replayed: {output}");
             }
             assert_eq!(final_plan.started, original.started);
             assert_eq!(final_plan.deadline, original.deadline);
