@@ -5,6 +5,37 @@
 
 use super::*;
 
+/// Fork-only asynchronous control admission must not defer unrelated inline
+/// status reads or bypass the existing visible-shell and attached-primary gates.
+/// Rejected requests leave no worker claim, target archive, or source mutation.
+#[test]
+fn runtime_saved_fork_control_keeps_inline_status_and_admission_guards() {
+    for denied in ["hidden", "detached"] {
+        let (mut service, primary, store, root) = fork_transaction_fixture("fork-control-guards");
+        let status = service.dispatch_runtime_control_body(
+            r#"{"jsonrpc":"2.0","id":"inline-status","method":"agent/shell/command","params":{"idempotency_key":"inline-status","input":"/status"}}"#, &primary);
+        let status: serde_json::Value = serde_json::from_str(&status).unwrap();
+        assert_eq!(status["result"]["kind"], "display");
+        assert!(status["result"]["body"].is_string());
+        assert!(service.take_pending_deferred_agent_commands().is_empty());
+        let before = store.inspect("fork-source").unwrap();
+        if denied == "hidden" {
+            service.agent_shell_store_mut().request_exit("%1").unwrap();
+        } else {
+            service.session.detach_primary(&primary).unwrap();
+        }
+        let response = service.dispatch_runtime_control_body(
+            r#"{"jsonrpc":"2.0","id":"denied-fork","method":"agent/shell/command","params":{"idempotency_key":"denied-fork","input":"/fork denied-target"}}"#, &primary);
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert!(response["error"].is_object(), "{denied}: {response}");
+        assert!(service.take_pending_deferred_agent_commands().is_empty());
+        assert!(!root.join("denied-target").exists());
+        assert_eq!(store.inspect("fork-source").unwrap(), before);
+        service.terminate_all_pane_processes().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// Paused source persistence must fail closed, whether the row remains queued,
 /// was claimed by a worker, exists only as an accepted receipt, or is known by
 /// the actor highwater without a materialized archive row. After the original
@@ -634,11 +665,12 @@ fn runtime_saved_fork_epoch_setup_failure_removes_only_published_target() {
         .collect::<std::collections::BTreeMap<_, _>>();
     let panes = service.session().windows()[0].panes().len();
     service.fail_next_agent_fork_after_persistence_for_tests();
-    let response = service
-        .execute_agent_shell_command(&primary, "/fork fork-target")
-        .unwrap();
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"epoch-setup-fault","method":"agent/shell/command","params":{"idempotency_key":"epoch-setup-fault","input":"/fork fork-target"}}"#,
+        &primary,
+    );
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&response).unwrap()["body"],
+        serde_json::from_str::<serde_json::Value>(&response).unwrap()["result"]["body"],
         serde_json::Value::Null
     );
     assert!(service.agent_command_is_active("%1"));
@@ -958,11 +990,11 @@ fn runtime_saved_fork_rejected_target_preserves_existing_and_source_bytes() {
                 })
                 .collect::<std::collections::BTreeMap<_, _>>()
         });
-        let response = service
-            .execute_agent_shell_command(&primary, &format!("/fork {target}"))
-            .unwrap();
+        let response = service.dispatch_runtime_control_body(&format!(
+            r#"{{"jsonrpc":"2.0","id":"existing-fork","method":"agent/shell/command","params":{{"idempotency_key":"existing-fork","input":"/fork {target}"}}}}"#
+        ), &primary);
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&response).unwrap()["body"],
+            serde_json::from_str::<serde_json::Value>(&response).unwrap()["result"]["body"],
             serde_json::Value::Null
         );
         assert!(service.agent_command_is_active("%1"));

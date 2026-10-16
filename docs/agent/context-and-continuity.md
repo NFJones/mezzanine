@@ -54,6 +54,11 @@ safe cleanup. A waiting resume rechecks the target under the same storage lease.
 Command-service cancellation and supervisor shutdown retain and observe fork
 workers until they retire; a service error does not turn cleanup into detached
 background work or erase the original failure.
+For authenticated `agent/shell/command` control requests, a stored `/fork`
+acknowledges acceptance with a mutation result and null body/turn. Observe the
+visible source shell for eventual success or failure; that initial response is
+not completion. Reusing its idempotency key returns the original acknowledgment
+without creating another fork. Other control commands keep their inline results.
 Conversation continuity is not proof that a command completed or that the
 filesystem is unchanged: verify interrupted work before asking the agent to
 continue.

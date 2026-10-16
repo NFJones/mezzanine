@@ -5,6 +5,7 @@
 //! No provider requests, credentials or historical actions are executed.
 
 use super::super::*;
+use crate::control_client::{decode_control_frame, encode_control_body};
 use crate::host::async_runtime::run_async_agent_command_service;
 
 /// The real supervisor aborts auxiliary services on explicit cancellation,
@@ -421,22 +422,30 @@ async fn async_actor_saved_fork_store_lock_keeps_control_responsive_and_checkpoi
             )
             .await
         });
-        handle
-            .apply_attached_terminal_step_plan(
-                primary.clone(),
-                AttachedTerminalClientStepPlan {
-                    actions: vec![TerminalClientLoopAction::ForwardToPane(
-                        b"/fork actor-target\r".to_vec(),
-                    )],
-                    output_lines: Vec::new(),
-                    output_line_style_spans: Vec::new(),
-                    input_hangup: false,
-                    output_hangup: false,
-                    error_roles: Vec::new(),
-                },
+        let input = encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"actor-fork","method":"agent/shell/command","params":{"idempotency_key":"actor-fork-once","input":"/fork actor-target"}}"#,
+        );
+        let first = handle
+            .handle_control_input_for_connection(
+                input.clone(),
+                4096,
+                ControlConnectionState::trusted_existing_client(primary.clone()),
             )
             .await
             .unwrap();
+        let (acknowledgment, _) = decode_control_frame(&first.output, 4096).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&acknowledgment).unwrap()["result"],
+            serde_json::json!({"pane_id":"%1", "input":"/fork actor-target", "kind":"mutated", "command":"fork", "body":null, "turn":null})
+        );
+        let duplicate = handle
+            .handle_control_input_for_connection(input.clone(), 4096, first.connection)
+            .await
+            .unwrap();
+        assert_eq!(
+            decode_control_frame(&duplicate.output, 4096).unwrap().0,
+            acknowledgment
+        );
         tokio::time::timeout(Duration::from_secs(2), started.notified())
             .await
             .unwrap();
@@ -517,6 +526,42 @@ async fn async_actor_saved_fork_store_lock_keeps_control_responsive_and_checkpoi
             80
         );
         assert_eq!(reopened.inspect("actor-target").unwrap().len(), 100);
+        let mut last_view = String::new();
+        let completion = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let view = handle
+                    .render_client_view(
+                        ClientViewRole::Primary,
+                        Size::new(80, 24).unwrap(),
+                        TerminalClientLoopConfig::default(),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                last_view = view.lines.join("\n");
+                if last_view.contains(
+                    "forked 100 transcript entries from %1 into %2; conversation actor-target.",
+                ) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            completion.is_ok(),
+            "control completion missing from source view: {last_view}"
+        );
+        let completed_retry = handle
+            .handle_control_input_for_connection(input, 4096, duplicate.connection)
+            .await
+            .unwrap();
+        assert_eq!(
+            decode_control_frame(&completed_retry.output, 4096)
+                .unwrap()
+                .0,
+            acknowledgment
+        );
         stop.store(true, std::sync::atomic::Ordering::Release);
         assert!(
             tokio::time::timeout(Duration::from_secs(2), worker)

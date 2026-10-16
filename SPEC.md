@@ -16036,6 +16036,14 @@ source pane's active conversation. The new pane's agent prompt MUST be seeded
 with the last submitted prompt before the `/fork` command when such a prompt is
 available, so users can edit and rerun the fork point. The new pane MUST load
 the shared prompt history; no conversation-local prompt history is copied.
+Authenticated primary `agent/shell/command` control requests for `/fork` MUST
+use the same deferred worker and claim as terminal input. With storage enabled,
+their immediate mutation result has `command: "fork"`, `body: null`, and
+`turn: null`: it acknowledges acceptance, not successful cloning. Completion or
+failure MUST remain observable in the visible source shell. Repeating the same
+control idempotency key MUST return its original acknowledgment without starting
+another fork, including after completion. Other control commands retain their
+existing inline-result behavior and admission/origin restrictions.
 Fork persistence and pane setup MUST be atomic from the user's perspective. If
 durable transcript or presentation cloning fails, the incomplete target MUST be
 removed. If any later pane or agent-mode setup step fails, Mezzanine MUST remove

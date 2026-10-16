@@ -3930,7 +3930,11 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         r#"{"jsonrpc":"2.0","id":"fork","method":"agent/shell/command","params":{"idempotency_key":"fork","input":"/fork saved-fork"}}"#,
         &primary,
     );
-    assert!(forked.contains("deferred"), "{forked}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&forked).unwrap()["result"],
+        serde_json::json!({"pane_id":"%1", "input":"/fork saved-fork", "kind":"mutated", "command":"fork", "body":null, "turn":null})
+    );
+    assert!(service.agent_command_is_active("%1"));
     let forked = service
         .run_pending_deferred_agent_command_for_tests()
         .unwrap()
