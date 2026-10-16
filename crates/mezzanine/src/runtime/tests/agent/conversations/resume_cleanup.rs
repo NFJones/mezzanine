@@ -1435,9 +1435,9 @@ fn runtime_cleanup_ownerless_failed_resume_retains_exact_obligation() {
     );
 }
 
-/// Enclosing action failure after actual spawn must roll back its child and
-/// unpublished/unused local grant while keeping the reservation high-water.
-/// The next real delegation receives a later capability and still retires.
+/// An outer action failure after a successful inner spawn reports an allocated
+/// child for reconciliation. Its Local capability is backed by that genuine
+/// child, not a stray grant, and parent close must still retire the native PID.
 #[test]
 fn runtime_cleanup_ownerless_failed_spawn_publishes_no_stray_capability() {
     let mut fixture = CleanupFixture::without_parent_process();
@@ -1469,15 +1469,53 @@ fn runtime_cleanup_ownerless_failed_spawn_publishes_no_stray_capability() {
     let (capability, consumed) = fixture
         .service
         .local_cleanup_parent_state_for_tests("agent-%1");
-    assert!(capability.is_none());
+    assert_eq!(capability, Some(consumed));
     assert!(consumed > 0);
+    let children = fixture
+        .service
+        .tracked_pane_descriptors()
+        .into_iter()
+        .filter(|pane| pane.pane_id.as_str() != "%1")
+        .map(|pane| format!("agent-{}", pane.pane_id))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        children.len(),
+        1,
+        "allocated child is retained for reconciliation"
+    );
+    let native = fixture.native_identity(&children[0]);
+    fixture.close("agent-%1");
+    assert!(!fixture.present(&children[0]));
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(native.0),
+        Some(native.1)
+    );
+}
+
+/// A genuine inner spawn failure after child allocation but before successful
+/// commit must roll back the child and publish no parent capability. The
+/// checked reservation remains consumed, and a later real spawn uses a new one.
+#[test]
+fn runtime_cleanup_ownerless_inner_spawn_failure_publishes_no_capability() {
+    let mut fixture = CleanupFixture::without_parent_process();
+    fixture.store.fail_next_agent_session_metadata_write();
+    assert!(fixture.try_spawn("agent-%1").is_err());
+    let (capability, consumed) = fixture
+        .service
+        .local_cleanup_parent_state_for_tests("agent-%1");
+    assert!(capability.is_none());
+    assert!(
+        consumed > 0,
+        "failure occurs after original parent preparation"
+    );
     assert_eq!(
         fixture
             .service
-            .close_subagent_descendants_for_parent_agent("agent-%1", "failed spawn has no child")
+            .close_subagent_descendants_for_parent_agent("agent-%1", "failed inner spawn")
             .unwrap(),
         0
     );
+    assert_eq!(fixture.service.tracked_pane_descriptors().len(), 1);
     let child = fixture.spawn("agent-%1");
     let native = fixture.native_identity(&child);
     assert!(

@@ -94,6 +94,7 @@ fn runtime_routed_cleanup_independent_child_rebind_preserves_native_worker() {
         .primary_pid_for_live_pane_process(&worker.pane_id)
         .unwrap();
     let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+    service.stop_agent_turn_for_pane(&worker.pane_id).unwrap();
     service
         .agent_shell_store_mut()
         .bind_ephemeral_conversation_with_lineage_and_transcript_source(
@@ -127,4 +128,58 @@ fn runtime_routed_cleanup_independent_child_rebind_preserves_native_worker() {
         "independent-routed-binding"
     );
     service.terminate_all_pane_processes().unwrap();
+}
+
+/// Fork/new continuation is an owned iteration of the same routed delegation,
+/// including its newly bound conversation. After a real first result queues
+/// iteration two, parent close must retire that same worker process.
+#[test]
+fn runtime_routed_cleanup_fresh_iteration_parent_close_retires_worker() {
+    for mode in ["--fork", "--new"] {
+        let (mut service, parent_turn_id, worker) =
+            selected_routed_loop(&format!("/loop {mode} --limit 3 inspect cleanup iteration"));
+        let pid = service
+            .primary_pid_for_live_pane_process(&worker.pane_id)
+            .unwrap();
+        let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+        service
+            .emit_subagent_task_result_for_execution(&worker, &routed_patch_execution(&worker))
+            .unwrap();
+        service
+            .complete_running_agent_turn_and_start_ready(
+                &worker,
+                AgentTurnState::Completed,
+                "actual routed cleanup iteration completed",
+            )
+            .unwrap();
+        let next = service
+            .routed_workflow_for_tests(&parent_turn_id)
+            .unwrap()
+            .child_turn_id
+            .clone()
+            .unwrap();
+        assert_ne!(next, worker.turn_id);
+        let next_turn = service.agent_turn_ledger().turn(&next).unwrap();
+        assert_ne!(next_turn.conversation_id, worker.conversation_id);
+        assert_eq!(
+            service.primary_pid_for_live_pane_process(&worker.pane_id),
+            Some(pid)
+        );
+        let primary = service.session.layout_owner_client_id().unwrap().clone();
+        let result =
+            service.dispatch_runtime_pane_close(&primary, r#"{"pane_id":"%1","force":true}"#);
+        let child_present = service.find_pane_descriptor(&worker.pane_id).is_some();
+        let after = mez_mux::process::process_start_token_for_pid(pid);
+        service.terminate_all_pane_processes().unwrap();
+        result.unwrap();
+        assert!(
+            !child_present,
+            "{mode} worker survived parent close after iteration two"
+        );
+        assert_ne!(
+            after,
+            Some(token),
+            "{mode} native worker survived parent close"
+        );
+    }
 }
