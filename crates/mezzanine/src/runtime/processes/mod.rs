@@ -3544,19 +3544,18 @@ impl RuntimeSessionService {
         } else {
             primary_pid
         };
-        self.with_subagent_cleanup_exit_witness(&pane_id, primary_pid, |service| {
-            service.process.detached_pane_processes.remove(&pane_id);
-            service
-                .apply_exited_pane_process(
-                    ExitedPaneProcess {
-                        pane_id: pane_id.clone(),
-                        primary_pid,
-                        status: exit_status,
-                    },
-                    false,
-                )
-                .map(Some)
-        })
+        // Keep the exact adapter generation until fallible descendant/turn
+        // settlement succeeds. Failed cleanup can retry the same accepted exit;
+        // it must neither strand obligations nor manufacture replacement proof.
+        self.apply_exited_pane_process(
+            ExitedPaneProcess {
+                pane_id: pane_id.clone(),
+                primary_pid,
+                status: exit_status,
+            },
+            false,
+        )
+        .map(Some)
     }
 
     /// Applies one process lifecycle failure delivered by an async watcher.
@@ -4352,6 +4351,13 @@ impl RuntimeSessionService {
             .pane_terminal_progress
             .remove(process.pane_id.as_str());
         self.fail_agent_turns_for_unexpected_pane_exit(std::slice::from_ref(&process.pane_id))?;
+        // Descendant cleanup has committed using the still-owned actual
+        // manager/adapter endpoint. Retire adapter metadata before ordinary
+        // removed-pane cleanup so an already-exited process is not terminated
+        // again. An earlier Result error leaves the exact generation retryable.
+        self.process
+            .detached_pane_processes
+            .remove(&process.pane_id);
         self.settle_dead_pane_managed_shell_ownership(&process.pane_id);
         self.process.pane_exit_records.insert(
             process.pane_id.clone(),

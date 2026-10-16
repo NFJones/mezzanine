@@ -249,48 +249,6 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Retains accepted current exit evidence only during synchronous teardown.
-    /// The witness validates existing parent obligations after adapter metadata
-    /// is removed; it never creates delegation or qualifies restored endpoints.
-    /// Nested exits and every Result error restore the preceding scoped state.
-    pub(crate) fn with_subagent_cleanup_exit_witness<T>(
-        &mut self,
-        pane_id: &str,
-        primary_pid: u32,
-        action: impl FnOnce(&mut Self) -> Result<T>,
-    ) -> Result<T> {
-        let witness = (self.primary_pid_for_live_pane_process(pane_id) == Some(primary_pid))
-            .then(|| self.capture_cleanup_binding(&format!("agent-{pane_id}")))
-            .flatten();
-        let Some(witness) = witness else {
-            return action(self);
-        };
-        let previous = self
-            .agent
-            .subagent_cleanup_exit_witnesses
-            .insert(pane_id.to_string(), witness);
-        let result = action(self);
-        self.agent.subagent_cleanup_exit_witnesses.remove(pane_id);
-        if let Some(previous) = previous {
-            self.agent
-                .subagent_cleanup_exit_witnesses
-                .insert(pane_id.to_string(), previous);
-        }
-        result
-    }
-
-    /// Returns current parent ownership or its strictly scoped accepted exit.
-    /// Record creation and restore qualification deliberately never use this.
-    fn cleanup_parent_binding(&self, agent_id: &str) -> Option<CleanupBinding> {
-        self.capture_cleanup_binding(agent_id).or_else(|| {
-            let pane = agent_id.strip_prefix("agent-")?;
-            let witness = self.agent.subagent_cleanup_exit_witnesses.get(pane)?;
-            (self.agent_shell_store().get(pane)?.session_id == witness.conversation_id
-                && self.find_pane_descriptor(pane).is_some())
-            .then(|| witness.clone())
-        })
-    }
-
     /// Observes only existing manager/adapter ownership, without OS fallback.
     fn cleanup_process_owner(&self, pane_id: &str) -> Option<CleanupProcessOwner> {
         if let Some(pid) = self.manager_owned_pane_process_pid(pane_id) {
@@ -368,7 +326,7 @@ impl RuntimeSessionService {
         {
             return None;
         }
-        let parent = self.cleanup_parent_binding(&edge.parent.agent_id)?;
+        let parent = self.capture_cleanup_binding(&edge.parent.agent_id)?;
         let replacing_original = replacing.is_some_and(|(agent, conversation)| {
             agent == edge.parent.agent_id && conversation == edge.parent.conversation_id
         });
@@ -483,7 +441,7 @@ impl RuntimeSessionService {
         parent_agent_id: &str,
         original_parent_conversation: Option<&str>,
     ) -> Vec<String> {
-        if self.cleanup_parent_binding(parent_agent_id).is_none() {
+        if self.capture_cleanup_binding(parent_agent_id).is_none() {
             return Vec::new();
         }
         let mut descendants = self

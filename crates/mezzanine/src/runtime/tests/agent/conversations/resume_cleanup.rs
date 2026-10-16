@@ -175,6 +175,7 @@ fn runtime_cleanup_keeps_same_conversation_live_subtree_obligation() {
         .unwrap()
         .session_id
         .clone();
+    fixture.save(&conversation, None);
     fixture.service.checkpoint_agent_session_metadata().unwrap();
     fixture.resume("agent-%1", &conversation);
     fixture.close("agent-%1");
@@ -487,12 +488,11 @@ fn runtime_cleanup_macro_decisions_do_not_close_resumed_child_binding() {
             .clone();
         fixture
             .service
-            .agent_turn_ledger_mut()
-            .finish_turn(&child.turn_id, AgentTurnState::Completed)
-            .unwrap();
-        fixture
-            .service
-            .emit_subagent_task_result_for_state(&child, AgentTurnState::Completed)
+            .complete_running_agent_turn_and_start_ready(
+                &child,
+                AgentTurnState::Completed,
+                "generated macro child completed",
+            )
             .unwrap();
         fixture.save("independent-macro-child", Some("agent-%1"));
         fixture.resume(&child.agent_id, "independent-macro-child");
@@ -505,7 +505,7 @@ fn runtime_cleanup_macro_decisions_do_not_close_resumed_child_binding() {
             response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(), model: "test".to_string(),
                 raw_text: serde_json::json!({"outcome":outcome,"step_success": outcome == "finish_success",
-                    "rationale":"generated terminal decision","adapted_prompt":null,"user_message":null}).to_string(),
+                    "rationale":"generated terminal decision","adapted_prompt":null,"user_message":"Generated terminal result"}).to_string(),
                 usage: Default::default(), latest_request_usage: None, quota_usage: Default::default(),
                 action_batch: None, provider_transcript_events: Vec::new(),
             },
@@ -791,11 +791,11 @@ fn runtime_cleanup_adapter_parent_exit_without_layout_closes_only_live_children(
     );
 }
 
-/// Failed synchronous teardown must remove its temporary exit witness. Calling
-/// cleanup afterward with no actual parent owner cannot consume the former
-/// witness or publish a new delegation from a process that is already gone.
+/// A real metadata failure during accepted adapter exit must retain the exact
+/// old owner until genuine child settlement can retry. No temporary/general
+/// authority is introduced, and retry must actually close the owned child.
 #[test]
-fn runtime_cleanup_exit_witness_is_removed_after_error() {
+fn runtime_cleanup_adapter_exit_retries_after_child_metadata_failure() {
     let mut fixture = CleanupFixture::new();
     let child = fixture.spawn("agent-%1");
     fixture
@@ -808,7 +808,7 @@ fn runtime_cleanup_exit_witness_is_removed_after_error() {
     let mut parent = fixture.handoff("agent-%1");
     let pid = parent.process.primary_pid();
     let status = parent.process.terminate(Duration::from_millis(10)).unwrap();
-    fixture.store.fail_next_transcript_append();
+    fixture.store.fail_next_agent_session_metadata_write();
     let error = fixture
         .service
         .apply_pane_process_exit_event("%1", pid, status)
@@ -816,17 +816,26 @@ fn runtime_cleanup_exit_witness_is_removed_after_error() {
     assert!(
         error
             .message()
-            .contains("injected transcript append failure"),
+            .contains("injected agent session metadata write failure"),
         "{error}"
     );
+    assert!(fixture.present(&child));
     assert_eq!(
+        fixture.service.adapter_owned_pane_process_instance("%1"),
+        Some(parent.instance.clone())
+    );
+    fixture
+        .service
+        .apply_pane_process_exit_event("%1", pid, status)
+        .unwrap()
+        .unwrap();
+    assert!(!fixture.present(&child));
+    assert!(
         fixture
             .service
-            .close_subagent_descendants_for_parent_agent("agent-%1", "after failed exit")
-            .unwrap(),
-        0
+            .adapter_owned_pane_process_instance("%1")
+            .is_none()
     );
-    assert!(fixture.present(&child));
 }
 
 /// Successful binding restoration precedes process startup in real snapshots.
@@ -941,4 +950,77 @@ fn runtime_cleanup_pending_restore_rejects_replaced_first_owner() {
         .unwrap();
     fixture.close("agent-%1");
     assert!(fixture.present(&child));
+}
+
+/// Fenced ordinary tasks revoke execution/permission authority before late
+/// fallible metadata settlement. Their original cleanup-only proof must remain
+/// retryable across an accepted adapter parent exit and actually retire the
+/// same child after the injected error clears, without replaying work.
+#[test]
+fn runtime_cleanup_adapter_exit_retries_fenced_task_retirement() {
+    let mut fixture = CleanupFixture::new();
+    let parent = fixture
+        .service
+        .start_agent_prompt_turn("%1", "generated recovery task")
+        .unwrap();
+    fixture
+        .service
+        .remove_pending_agent_provider_task(&parent.turn_id);
+    let turn = fixture
+        .service
+        .agent_turn_ledger()
+        .turn(&parent.turn_id)
+        .unwrap()
+        .clone();
+    let spawned = fixture
+        .service
+        .execute_spawn_action_for_turn(
+            &turn,
+            &runtime_spawn_agent_action("recovery-task", "generated native cleanup task"),
+        )
+        .unwrap();
+    let spawned: serde_json::Value =
+        serde_json::from_str(spawned.structured_content_json.as_deref().unwrap()).unwrap();
+    let child = spawned["spawn"]["agent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    fixture
+        .service
+        .complete_running_agent_turn_and_start_ready(
+            &turn,
+            AgentTurnState::Completed,
+            "parent completed",
+        )
+        .unwrap();
+    fixture
+        .service
+        .fence_subagent_descendants_for_parent_conversation("agent-%1", &turn.conversation_id);
+    let mut adapter = fixture.handoff("agent-%1");
+    let pid = adapter.process.primary_pid();
+    let status = adapter
+        .process
+        .terminate(Duration::from_millis(10))
+        .unwrap();
+    fixture.store.fail_next_agent_session_metadata_write();
+    let error = fixture
+        .service
+        .apply_pane_process_exit_event("%1", pid, status)
+        .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("injected agent session metadata write failure"),
+        "{error}"
+    );
+    assert!(fixture.present(&child));
+    assert!(fixture.service.subagent_descendant_is_fenced(&child));
+    assert!(!fixture.service.has_subagent_scope_declaration(&child));
+    assert!(fixture.service.subagent_lineage(&child).is_none());
+    fixture
+        .service
+        .apply_pane_process_exit_event("%1", pid, status)
+        .unwrap()
+        .unwrap();
+    assert!(!fixture.present(&child));
 }

@@ -786,8 +786,6 @@ pub(crate) struct RuntimeAgentComponent {
         BTreeMap<String, cleanup_ownership::RuntimeSubagentCleanupOwnership>,
     /// Nonauthorizing same-operation restore qualification awaiting native owners.
     pending_subagent_cleanup_restore: BTreeMap<String, cleanup_ownership::PendingCleanupRestore>,
-    /// Accepted exit bindings scoped to the current synchronous teardown only.
-    subagent_cleanup_exit_witnesses: BTreeMap<String, cleanup_ownership::CleanupBinding>,
     /// Reusable child ownership keyed by MMP agent id.
     persistent_subagents: BTreeMap<String, RuntimePersistentSubagent>,
     /// Bounded, non-authorizing ownership evidence for children fully retired this session.
@@ -1606,7 +1604,6 @@ impl RuntimeSessionService {
         self.agent.subagent_lineage.clear();
         self.agent.subagent_cleanup_ownership.clear();
         self.agent.pending_subagent_cleanup_restore.clear();
-        self.agent.subagent_cleanup_exit_witnesses.clear();
         self.agent.persistent_subagents.clear();
         self.agent.retired_persistent_subagents.clear();
         self.agent.restored_subagent_lineage.clear();

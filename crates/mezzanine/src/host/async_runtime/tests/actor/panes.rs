@@ -1762,7 +1762,18 @@ async fn async_actor_attached_step_drains_record_browser_refresh_dispatch() {
 /// explicit close may retire its genuine child and queue native termination.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_stale_parent_exit_keeps_current_delegated_child() {
-    let mut service = test_service_with_event_log();
+    let root = std::env::temp_dir().join(format!(
+        "mez-cleanup-actor-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new()
+        .control_socket(root.join("c.sock"))
+        .build();
+    service.set_agent_transcript_store(crate::storage::transcript::AgentTranscriptStore::new(
+        root.join("transcripts"),
+    ));
     service
         .replace_config_layers(vec![ConfigLayer {
             name: "native-cleanup-owner".to_string(),
