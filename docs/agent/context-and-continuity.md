@@ -49,6 +49,21 @@ ephemeral/no-store panes retain this metadata in memory. Restart retention still
 depends on the existing durable presentation log, steering checkpoint and peer
 outbox; process-only snapshots do not introduce an ephemeral agent-history store.
 This metadata foundation adds no visible timestamp column or configuration toggle.
+
+Idle peer-triggered turns wait while their exact bound conversation's terminal
+bookkeeping is unchecked, including worker-claimed history and terminal summary
+append receipts. Accepted mail remains unread; an exact-owned idle child failure
+keeps its original local receipt. Neither consumes a receive-turn budget or
+creates speculative context before the history fence settles. Checked acceptance
+and append settlement wake retained delivery through the existing timer. They
+do not retry providers, actions or child work. A blocked archive check remains a
+visible, fail-closed history error, not permission to invent empty history, and
+does not fail healthy session services or independent recipients. Mail retains
+its original TTL; expiry maintenance does not restart that deadline. Retained
+work keeps the existing bounded one-second delivery timer. A deferred sweep
+checks only the exact pending fence; it does not retry a failed archive read or
+construct speculative history/context. Delivery fanout budgets are unchanged.
+
 Filtered executor progress keeps its captured metadata only for the existing
 component/promotion receipt's bounded lifetime; this does not make suppressed
 content appear later or persist it after that owner retires.

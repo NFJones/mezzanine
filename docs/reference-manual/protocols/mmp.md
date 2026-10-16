@@ -271,6 +271,19 @@ than restoring idle registrations or keeping extra identity tombstones.
 
 ## Payloads and MAAP bridge
 
+Idle model-mail receive admission waits for checked bookkeeping of the exact
+currently bound conversation, including terminal compaction append receipts.
+Accepted envelopes remain behind their durable cursor until history is safe;
+deferral does not create a turn or spend the peer-turn loop budget. Existing
+checked-settlement and append-completion wakes resume delivery without resending
+the envelope. Blocked required history stays observable and fail-closed without
+failing healthy timer services or other recipients. Original TTL filtering,
+bridge nonwake rules, human inhibition and exact-owned child-failure authority
+remain unchanged; neither mail nor settlement authorizes effect replay.
+Pending work retains the existing one-second maintenance timer and fair fanout
+budgets. A deferred sweep checks the exact history fence without retrying the
+archive read or constructing a receive context.
+
 Text payloads use `text/plain; charset=utf-8`; JSON uses
 `application/json`. Binary data is base64 text with `payload_encoding` set to
 `base64`. Receivers enforce configured payload limits.

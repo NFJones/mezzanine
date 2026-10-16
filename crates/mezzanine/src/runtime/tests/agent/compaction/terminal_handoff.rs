@@ -6,6 +6,8 @@
 
 use super::*;
 
+mod receive_admission;
+
 /// Mixed staging must abandon its original selective projection even when the
 /// archive already owns the first group. After all summaries fit and terminal
 /// bookkeeping commits the remaining live group, a separate terminal witness

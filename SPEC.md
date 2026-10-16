@@ -3835,6 +3835,21 @@ serialized runtime actor. Unchecked chronology candidates MUST NOT be exposed as
 accepted transcript rows or used to authorize durable history publication. Later
 history admission MUST wait for checked append acceptance; a failed archive check
 MUST report an error and fail closed rather than admit incomplete chronology.
+Idle peer-message and exact-owned child-failure receive admission MUST defer
+while the currently bound conversation has queued, claimed or blocked chronology
+bookkeeping, or an unsettled terminal-compaction handoff append receipt. Deferral
+MUST precede speculative context/turn creation, loop-budget charging and inbox
+cursor advancement. It MUST retain accepted mail and the original local failure
+receipt without replaying provider requests or settled effects. Checked acceptance
+and exact append settlement MUST reconcile the existing delivery wake against
+current ownership; stale/duplicate outcomes MUST NOT wake replacement work.
+One fenced recipient MUST NOT fail a healthy delivery service or prevent other
+recipients from progressing. Blocked history MUST remain observable and
+fail-closed, without repeatedly checking an unchanged failed archive. Ordinary
+finite-TTL expiry and bounded delivery maintenance MUST remain effective.
+Retained receive work MAY keep the existing one-second delivery maintenance
+timer; checking the exact pending fence MUST NOT retry an archive read, construct
+speculative history/context, or expand the existing fair-fanout work budgets.
 Context continuation MUST NOT restart cancelled actions or processes.
 Interruption admission MUST be distinguished from worker settlement. Native
 shell attempts MUST share a monotonic exact-owned cancellation fence with the
