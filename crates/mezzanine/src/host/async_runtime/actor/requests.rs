@@ -838,16 +838,14 @@ impl AsyncRuntimeSessionActor {
     /// Dispatches MMP and shutdown without constructing the unrelated async
     /// request future. Every accepted envelope still receives the run loop's
     /// common accounting, reconciliation and receipt-admission suffix. The
-    /// returned request is unchanged and has produced no effects here.
+    /// run loop partitions ownership by discriminant without copying or
+    /// returning a large non-MMP request through this synchronous frame.
     ///
     /// Keeping these synchronous arms outside `handle_request` also prevents
     /// raw lease and fanout temporaries from contributing to its native poll
     /// stack while an unrelated stop command cancels an external worker.
-    pub(super) fn dispatch_message_request(
-        &mut self,
-        request: AsyncRuntimeRequest,
-    ) -> (Option<AsyncRuntimeRequest>, bool) {
-        let shutdown = match request {
+    pub(super) fn dispatch_message_request(&mut self, request: AsyncRuntimeRequest) -> bool {
+        match request {
             AsyncRuntimeRequest::HandleMessageInput {
                 input,
                 max_content_length,
@@ -915,9 +913,8 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 true
             }
-            other => return (Some(other), false),
-        };
-        (None, shutdown)
+            _ => unreachable!("only MMP and shutdown enter synchronous message dispatch"),
+        }
     }
 
     /// Handles the asynchronous remainder of serialized actor requests.

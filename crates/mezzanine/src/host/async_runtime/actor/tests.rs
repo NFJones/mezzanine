@@ -177,30 +177,26 @@ async fn raw_message_lost_reply_preserves_independent_identity() {
     let (owner, identity) = tokio::sync::watch::channel(None);
     let (reply, response) = oneshot::channel();
     drop(response);
-    let _ = actor
-        .dispatch_message_request(AsyncRuntimeRequest::HandleMessageInput {
-            input: crate::protocol::message::encode_mmp_body(
-                r#"{"protocol":"mmp/1","type":"hello","role":"lost-reply"}"#,
-            ),
-            max_content_length: 4096,
-            connection: mez_agent::messaging::MessageConnection::default(),
-            now_ms: 10,
-            owner: Some(owner),
-            reply,
-        })
-        .1;
+    let _ = actor.dispatch_message_request(AsyncRuntimeRequest::HandleMessageInput {
+        input: crate::protocol::message::encode_mmp_body(
+            r#"{"protocol":"mmp/1","type":"hello","role":"lost-reply"}"#,
+        ),
+        max_content_length: 4096,
+        connection: mez_agent::messaging::MessageConnection::default(),
+        now_ms: 10,
+        owner: Some(owner),
+        reply,
+    });
     assert!(
         identity.borrow().is_some(),
         "registration must have actually committed"
     );
     assert!(actor.message_state.raw_identities.is_empty());
     let (reply, response) = oneshot::channel();
-    let _ = actor
-        .dispatch_message_request(AsyncRuntimeRequest::RetireMessageConnection {
-            agent_id: independent.agent_id.clone(),
-            reply,
-        })
-        .1;
+    let _ = actor.dispatch_message_request(AsyncRuntimeRequest::RetireMessageConnection {
+        agent_id: independent.agent_id.clone(),
+        reply,
+    });
     response.await.unwrap().unwrap();
     assert_eq!(
         actor.service.message_service().discover_agents(),
@@ -242,18 +238,16 @@ async fn raw_message_failed_audit_cleans_committed_hello() {
             .unwrap();
     let (owner, identity) = tokio::sync::watch::channel(None);
     let (reply, response) = oneshot::channel();
-    let _ = actor
-        .dispatch_message_request(AsyncRuntimeRequest::HandleMessageInput {
-            input: crate::protocol::message::encode_mmp_body(
-                r#"{"protocol":"mmp/1","type":"hello","role":"audit-rejected"}"#,
-            ),
-            max_content_length: 4096,
-            connection: mez_agent::messaging::MessageConnection::default(),
-            now_ms: 10,
-            owner: Some(owner),
-            reply,
-        })
-        .1;
+    let _ = actor.dispatch_message_request(AsyncRuntimeRequest::HandleMessageInput {
+        input: crate::protocol::message::encode_mmp_body(
+            r#"{"protocol":"mmp/1","type":"hello","role":"audit-rejected"}"#,
+        ),
+        max_content_length: 4096,
+        connection: mez_agent::messaging::MessageConnection::default(),
+        now_ms: 10,
+        owner: Some(owner),
+        reply,
+    });
     let error = response.await.unwrap().unwrap_err();
     assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
     assert!(
@@ -296,18 +290,16 @@ async fn raw_message_shutdown_reports_integrity_and_cleans_other_leases() {
     for role in ["corrupted", "healthy"] {
         let (owner, identity) = tokio::sync::watch::channel(None);
         let (reply, response) = oneshot::channel();
-        let _ = actor
-            .dispatch_message_request(AsyncRuntimeRequest::HandleMessageInput {
-                input: crate::protocol::message::encode_mmp_body(&format!(
-                    r#"{{"protocol":"mmp/1","type":"hello","role":"{role}"}}"#
-                )),
-                max_content_length: 4096,
-                connection: mez_agent::messaging::MessageConnection::default(),
-                now_ms: 10,
-                owner: Some(owner),
-                reply,
-            })
-            .1;
+        let _ = actor.dispatch_message_request(AsyncRuntimeRequest::HandleMessageInput {
+            input: crate::protocol::message::encode_mmp_body(&format!(
+                r#"{{"protocol":"mmp/1","type":"hello","role":"{role}"}}"#
+            )),
+            max_content_length: 4096,
+            connection: mez_agent::messaging::MessageConnection::default(),
+            now_ms: 10,
+            owner: Some(owner),
+            reply,
+        });
         ids.push(
             response
                 .await
@@ -333,12 +325,10 @@ async fn raw_message_shutdown_reports_integrity_and_cleans_other_leases() {
         .unwrap();
     let before = actor.service.message_service().snapshot_state();
     let (reply, response) = oneshot::channel();
-    let _ = actor
-        .dispatch_message_request(AsyncRuntimeRequest::RetireMessageConnection {
-            agent_id: ids[0].clone(),
-            reply,
-        })
-        .1;
+    let _ = actor.dispatch_message_request(AsyncRuntimeRequest::RetireMessageConnection {
+        agent_id: ids[0].clone(),
+        reply,
+    });
     assert!(
         response
             .await
@@ -349,11 +339,7 @@ async fn raw_message_shutdown_reports_integrity_and_cleans_other_leases() {
     );
     assert_eq!(actor.service.message_service().snapshot_state(), before);
     let (reply, response) = oneshot::channel();
-    assert!(
-        actor
-            .dispatch_message_request(AsyncRuntimeRequest::Shutdown { reply })
-            .1
-    );
+    assert!(actor.dispatch_message_request(AsyncRuntimeRequest::Shutdown { reply }));
     assert!(
         response
             .await
@@ -668,25 +654,22 @@ fn actor_request_scheduler_reports_oldest_queued_age() {
     assert!(oldest_queued_request_wait_ms(None, None, Some(&request), None) >= 1);
 }
 
-/// Passing a non-MMP envelope through the synchronous message boundary must
-/// neither execute it nor lose its reply. The unchanged request is then served
-/// exactly once by the ordinary dispatcher, preserving serialization while raw
-/// MMP and lease cleanup stay out of unrelated async polling frames.
+/// The real actor loop must route ordinary requests exactly once and retain
+/// the common metrics suffix while MMP and shutdown use synchronous ownership.
+/// A lifecycle reply and metrics observation precede shutdown; the final count
+/// proves no accepted envelope was dropped or replayed by discriminant routing.
 #[tokio::test(flavor = "current_thread")]
 async fn message_predispatch_preserves_non_message_request_without_effects() {
     let service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
-    let (_handle, mut actor) =
+    let (handle, actor) =
         super::AsyncRuntimeSessionActor::new(service, super::AsyncRuntimeActorConfig::default())
             .unwrap();
-    let (reply, mut response) = oneshot::channel();
-    let (request, should_shutdown) =
-        actor.dispatch_message_request(AsyncRuntimeRequest::LifecycleState { reply });
-    assert!(!should_shutdown);
-    assert!(matches!(
-        response.try_recv(),
-        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-    ));
-    let request = request.expect("non-MMP request must retain its exact reply owner");
-    assert!(!actor.handle_request(request).await);
-    assert_eq!(response.await.unwrap(), actor.service.lifecycle_state());
+    let client = async {
+        let lifecycle = handle.lifecycle_state().await.unwrap();
+        assert_eq!(handle.metrics().await.unwrap().commands_processed, 2);
+        assert_eq!(handle.shutdown().await.unwrap(), lifecycle);
+    };
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.commands_processed, 3);
+    assert_eq!(exit.metrics.commands_processed, 3);
 }

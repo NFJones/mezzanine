@@ -5,10 +5,11 @@
 //! actor returns its service, independently of later cancelled socket requests.
 
 use super::{
-    Arc, AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeRequestEnvelope,
-    AsyncRuntimeSessionActor, AsyncRuntimeSessionHandle, MezError, Notify, Result,
-    RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
-    RuntimeSnapshotControlAsyncWorkKind, decode_control_frame, mpsc, watch,
+    Arc, AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeRequest,
+    AsyncRuntimeRequestEnvelope, AsyncRuntimeSessionActor, AsyncRuntimeSessionHandle, MezError,
+    Notify, Result, RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome,
+    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind, decode_control_frame,
+    mpsc, watch,
 };
 use crate::host::async_runtime::{HashMap, Mutex};
 /// Maximum interactive requests served before pending normal work must advance.
@@ -521,9 +522,17 @@ impl AsyncRuntimeSessionActor {
             }
             // Keep the large request dispatcher future off the enclosing actor
             // run-loop stack as new independently owned request families grow.
-            let should_shutdown = match self.dispatch_message_request(envelope.request) {
-                (None, should_shutdown) => should_shutdown,
-                (Some(request), _) => Box::pin(self.handle_request(request)).await,
+            let should_shutdown = if matches!(
+                envelope.request,
+                AsyncRuntimeRequest::HandleMessageInput { .. }
+                    | AsyncRuntimeRequest::RetireMessageConnection { .. }
+                    | AsyncRuntimeRequest::MessageFanoutReadyFor { .. }
+                    | AsyncRuntimeRequest::AcknowledgeMessageFanout { .. }
+                    | AsyncRuntimeRequest::Shutdown { .. }
+            ) {
+                self.dispatch_message_request(envelope.request)
+            } else {
+                Box::pin(self.handle_request(envelope.request)).await
             };
             let _ = self.service.reconcile_human_pauses();
             // Internal command paths may queue transcript effects without a
