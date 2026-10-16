@@ -5824,14 +5824,10 @@ fn runtime_hidden_agent_shell_protocol_parser_preserves_fragmented_markers() {
     );
 }
 
-///
-/// Shell-mode inheritance must land on the child pane before the subagent turn
-/// begins so model-authored local actions use the same executor path as the
-/// Verifies exiting a parent agent shell closes active child subagent panes.
-///
-/// Subagent panes are owned by the parent delegation tree. Leaving the parent
-/// session should not leave child agents, write scopes, or panes behind as
-/// orphaned runtime state.
+/// Leaving a genuinely delegating parent shell must retire its actual native
+/// child, scope and shell state. The fixture uses the real spawn commit rather
+/// than manufacturing lifecycle authority from structural lineage metadata;
+/// kernel process identity proves retirement beyond in-memory map cleanup.
 #[test]
 fn runtime_parent_agent_shell_exit_closes_child_subagent_panes() {
     let mut service = test_runtime_service();
@@ -5840,49 +5836,53 @@ fn runtime_parent_agent_shell_exit_closes_child_subagent_panes() {
         .unwrap();
     service.start_initial_pane_process(Some("cat")).unwrap();
     service
-        .execute_terminal_command(&primary, "split-window")
-        .unwrap();
-    let child_pane_id = service
-        .session()
-        .active_window()
-        .unwrap()
-        .panes()
-        .iter()
-        .find(|pane| pane.id.as_str() != "%1")
-        .map(|pane| pane.id.to_string())
-        .expect("split-window should create a child pane");
-    let child_agent_id = format!("agent-{child_pane_id}");
-    service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume(&child_pane_id)
+    service.configure_subagent_policy(8, 8, 8, 8, SubagentWaitPolicy::Detach);
+    let parent = service
+        .start_agent_prompt_turn("%1", "delegate generated child")
         .unwrap();
-    service.set_subagent_lineage(
-        child_agent_id.clone(),
-        RuntimeSubagentLineage {
-            parent_agent_id: "agent-%1".to_string(),
-            root_agent_id: "agent-%1".to_string(),
-            depth: 1,
-            display_name: "helper".to_string(),
-            terminal: false,
-        },
-    );
+    service.remove_pending_agent_provider_task(&parent.turn_id);
+    let parent = service
+        .agent_turn_ledger()
+        .turn(&parent.turn_id)
+        .unwrap()
+        .clone();
+    let spawned = service
+        .execute_spawn_action_for_turn(
+            &parent,
+            &runtime_spawn_agent_action("shell-exit-child", "generated owned child"),
+        )
+        .unwrap();
+    let spawned: serde_json::Value =
+        serde_json::from_str(spawned.structured_content_json.as_deref().unwrap()).unwrap();
+    let child_agent_id = spawned["spawn"]["agent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let child_pane_id = child_agent_id.strip_prefix("agent-").unwrap();
+    let child_pid = service
+        .primary_pid_for_live_pane_process(child_pane_id)
+        .unwrap();
+    let child_token = mez_mux::process::process_start_token_for_pid(child_pid).unwrap();
 
     service.request_agent_shell_exit_for_pane("%1").unwrap();
     assert!(
         service
             .session()
-            .active_window()
-            .unwrap()
-            .panes()
+            .windows()
             .iter()
+            .flat_map(|window| window.panes())
             .all(|pane| pane.id.as_str() != child_pane_id)
     );
     assert!(!service.has_subagent_lineage(&child_agent_id));
-    assert!(service.agent_shell_store().get(&child_pane_id).is_none());
+    assert!(!service.has_subagent_scope_declaration(&child_agent_id));
+    assert!(service.agent_shell_store().get(child_pane_id).is_none());
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(child_pid),
+        Some(child_token)
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 
