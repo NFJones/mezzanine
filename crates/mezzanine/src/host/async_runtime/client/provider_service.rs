@@ -2292,7 +2292,7 @@ async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelPr
                 source: ContextSourceKind::Configuration,
                 placement: mez_agent::ContextPlacement::StablePrefix,
                 content: "[ephemeral compaction output-limit retry]\n\
-                    The previous compaction response was incomplete because generation hit max_output_tokens. \
+                    The previous compaction response was incomplete at the provider's generation limit. \
                     Return exactly one final say action containing a compact durable summary. \
                     Keep the summary brief: preserve only active goals, decisions, changed files, validations, blockers, and next steps. \
                     Do not include full logs, transcript excerpts, plans, or explanations. \
@@ -2333,7 +2333,9 @@ async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelPr
     }
 }
 
-/// Returns a compaction request with an escalated output cap for any retry.
+/// Preserves compaction allocation, or selects the configured auxiliary retry
+/// allocation. Only the canonical adapter decides whether a wire control is
+/// supported; internal max_output_tokens does not establish OpenAI wire support.
 fn runtime_agent_compaction_request_with_output_limit_retry(
     mut request: ModelRequest,
     model_profile: &ModelProfile,

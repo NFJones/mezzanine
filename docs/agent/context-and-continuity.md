@@ -152,10 +152,20 @@ Completed summaries are also checked before private chunk/synthesis staging.
 Empty or malformed output, oversized UTF-8 text, and text above the frozen word
 or estimated-input-token allowance retry only auxiliary summarization of the
 same validated source. The rejected text is not published or quoted back. The
-model receives the local unit/byte target separately from the provider's output
-token ceiling and response-framing overhead. Oversize corrections tighten that
-ceiling and must shrink every still-invalid size dimension; ignored guidance
-fails visibly. Empty/malformed output gets at most two corrections per current
+model receives the actual word/input-token unit and independent UTF-8 byte bound.
+Shorter correction guidance never becomes a stricter semantic acceptance limit:
+a summary fitting the original allowance proceeds to complete-request fit even
+above guidance. OpenAI never receives `max_output_tokens` in ordinary, compaction,
+auxiliary or retry requests, streaming or not. Existing omission/cache behavior
+is intentional; other providers retain genuinely supported generation controls
+and configured framing/reasoning headroom. Still-invalid output must shrink each
+fixed invalid dimension. Guidance stays nonzero and invalid output at the issued
+floor fails with typed, content-free provenance rather than halving to zero.
+Full-request fit and nonreducing-candidate checks still decide publication; no
+summary is truncated and no ordinary action is replayed. Auxiliary diagnostics
+separate phase/generation, frozen units, measured sizes, advisory targets and
+actual admitted corrections from ordinary MAAP recovery counts.
+Empty/malformed output gets at most two corrections per current
 source, even with unlimited transport retries. Advancing legitimate chunks or
 ranges has no arbitrary total-response cap. Earlier accepted summaries stay
 private until the complete replay fits. Known auxiliary expense counts once,

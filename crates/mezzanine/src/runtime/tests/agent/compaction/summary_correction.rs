@@ -4,9 +4,9 @@ use super::*;
 use crate::runtime::RuntimeAgentCompactionTarget;
 
 /// Dense code-like output has one whitespace word but many estimated input
-/// tokens. The token-mode allowance, actual request target and enforceable cap
-/// tighten on each improving invalid completion; a short accepted summary then
-/// resumes once without an arbitrary count limit or local truncation.
+/// tokens. A corrected completion above the smaller guidance target but within
+/// the ORIGINAL token allowance must proceed to complete-request validation.
+/// Guidance must not change acceptance or the configured provider allocation.
 #[test]
 fn runtime_compaction_summary_correction_token_budget_requires_size_progress() {
     let (mut service, store, turn) = queue_observed_input_compaction_with_exact_history();
@@ -41,8 +41,7 @@ fn runtime_compaction_summary_correction_token_budget_requires_size_progress() {
     let first = service
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
-    let ceiling = first.request.max_output_tokens.unwrap();
-    assert!(ceiling < budget);
+    let allocation = first.request.max_output_tokens;
     assert!(
         first
             .request
@@ -50,19 +49,122 @@ fn runtime_compaction_summary_correction_token_budget_requires_size_progress() {
             .iter()
             .any(|message| message.content.contains("estimated input tokens"))
     );
-    complete_runtime_test_compaction(&mut service, "%1", &"abcd".repeat(ceiling + 1));
-    assert!(
-        service
+    assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+    let corrected = "abcd".repeat(budget / 2 + 1);
+    assert!(mez_agent::provider_text_input_token_estimate(&corrected) <= budget);
+    complete_runtime_test_compaction(&mut service, "%1", &corrected);
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.agent_provider_task_is_pending(&turn));
+    assert_eq!(allocation, Some(budget));
+}
+
+/// Empty/malformed output consumes its separate finite budget but cannot erase
+/// the last size-bearing predecessor. Initial blank -> oversize and oversize ->
+/// blank -> improving oversize both remain eligible on the same frozen source.
+#[test]
+fn runtime_compaction_mixed_summary_defects_preserve_measured_progress() {
+    for malformed in [false, true] {
+        let (mut service, store, turn) = queue_observed_input_compaction_with_exact_history();
+        let task = service
             .pending_agent_compaction_task_for_tests("%1")
             .unwrap()
-            .request
-            .max_output_tokens
+            .clone();
+        let RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } = &task.target else {
+            panic!("active turn");
+        };
+        let budget = plan.summary_budget_words();
+        for step in 0..4 {
+            if step % 2 == 0 && malformed {
+                let pending = service.take_pending_agent_compaction_task("%1").unwrap();
+                service.claim_agent_compaction_task_state("%1", pending);
+                let mut response = runtime_test_compaction_response("not semantic size evidence");
+                response.action_batch = Some(mez_agent::MaapBatch {
+                    rationale: "malformed fixture".into(),
+                    actions: vec![],
+                });
+                service
+                    .apply_agent_compaction_completed_event("%1", response)
+                    .unwrap();
+            } else {
+                let output = if step % 2 == 0 {
+                    String::new()
+                } else {
+                    "x ".repeat(budget + 4 - step)
+                };
+                complete_runtime_test_compaction(&mut service, "%1", &output);
+            }
+            assert!(
+                service
+                    .pending_agent_compaction_task_for_tests("%1")
+                    .is_some(),
+                "step={step} malformed={malformed}"
+            );
+            assert!(
+                store
+                    .compaction_epoch(&task.conversation_id)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        complete_runtime_test_compaction(&mut service, "%1", "short accepted mixed-defect summary");
+        assert!(!service.agent_is_compacting("%1"));
+        assert!(service.agent_provider_task_is_pending(&turn));
+    }
+}
+
+/// Correction history survives a subsequent nonretryable provider failure and
+/// automatic terminal wrapping. It is auxiliary evidence, not synthetic MAAP
+/// attribution, and no rejected summary or partial epoch becomes authoritative.
+#[test]
+fn runtime_compaction_provider_failure_preserves_correction_provenance() {
+    let (mut service, store, turn) = queue_observed_input_compaction_with_exact_history();
+    complete_runtime_test_compaction(&mut service, "%1", "");
+    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
+    task.compaction_request_shape = Some((
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        Default::default(),
+        false,
+    ));
+    let conversation = task.conversation_id.clone();
+    service.claim_agent_compaction_task_state("%1", task);
+    assert!(
+        service
+            .apply_agent_compaction_failed_event(
+                "%1",
+                "forbidden",
+                "synthetic provider refusal",
+                None
+            )
             .unwrap()
-            < ceiling
     );
+    assert!(!service.agent_is_compacting("%1"));
     assert!(store.compaction_epoch(&conversation).unwrap().is_none());
-    complete_runtime_test_compaction(&mut service, "%1", "short accepted token summary");
-    assert!(service.agent_provider_task_is_pending(&turn));
+    let execution = service.agent_turn_executions().get(&turn).unwrap();
+    assert!(execution.recovery_facts().is_none());
+    assert!(
+        execution
+            .response
+            .raw_text
+            .contains("phase=ProviderInference")
+    );
+    assert!(
+        execution
+            .response
+            .raw_text
+            .contains("corrections_admitted=1")
+    );
+    assert!(
+        execution
+            .response
+            .raw_text
+            .contains("disposition=ProviderRejected")
+    );
+    assert!(
+        execution
+            .response
+            .raw_text
+            .contains("openai_max_output_tokens_transmitted=Some(false)")
+    );
 }
 
 /// Manual compaction uses the same bounded completed-output repair and frozen
@@ -226,14 +328,15 @@ fn runtime_compaction_summary_correction_respects_human_pause_and_stop() {
 }
 
 /// Context rejection during a correction splits only temporary input. The
-/// fresh request must retain the stricter output ceiling/unit and correction
+/// fresh request must retain the advisory target/unit and correction
 /// guidance, then complete frozen chunks and synthesis without ordinary replay.
 #[test]
 fn runtime_compaction_summary_correction_preserves_ceiling_after_context_split() {
     let (mut service, store, turn) = queue_observed_input_compaction_with_exact_history();
     complete_runtime_test_compaction(&mut service, "%1", &"too big ".repeat(50_000));
     let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    let ceiling = task.request.max_output_tokens.unwrap();
+    let allocation = task.request.max_output_tokens;
+    let guidance = task.summary_correction.guidance_target;
     let epoch = task.compaction_epoch;
     let conversation = task.conversation_id.clone();
     task.compaction_request_shape = Some((
@@ -255,7 +358,8 @@ fn runtime_compaction_summary_correction_preserves_ceiling_after_context_split()
     let split = service
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
-    assert_eq!(split.request.max_output_tokens, Some(ceiling));
+    assert_eq!(split.request.max_output_tokens, allocation);
+    assert_eq!(split.summary_correction.guidance_target, guidance);
     assert_eq!(split.compaction_epoch, epoch);
     assert!(
         split
@@ -314,6 +418,17 @@ fn runtime_compaction_invalid_chunk_preserves_accepted_staging_and_synthesis() {
     assert_eq!(pending_blocks.len(), 1);
     assert_eq!(*completed_responses, 32);
     complete_runtime_test_compaction(&mut service, "%1", "accepted later chunk");
+    let next = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
+    assert_eq!(next.summary_correction.corrections_admitted, 0);
+    assert!(
+        !next
+            .request
+            .messages
+            .iter()
+            .any(|message| message.content.starts_with("[private summary correction]"))
+    );
     complete_runtime_test_compaction(&mut service, "%1", "accepted last chunk");
     let synthesis = service
         .pending_agent_compaction_task_for_tests("%1")
@@ -413,6 +528,75 @@ fn runtime_compaction_summary_correction_exhausts_without_publication() {
             AgentTurnState::Failed
         );
         assert!(!service.agent_provider_task_is_pending(&turn));
+    }
+}
+
+/// A frozen-valid summary is accepted even after guidance reached one. A later
+/// still-invalid but improving completion at that issued floor fails finitely
+/// and reports real auxiliary counts without manufacturing MAAP attribution.
+#[test]
+fn runtime_compaction_summary_correction_floor_validates_before_exhaustion() {
+    for valid in [true, false] {
+        let (mut service, store, turn) = queue_observed_input_compaction_with_exact_history();
+        let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
+        let RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } = &task.target else {
+            panic!("active turn");
+        };
+        let budget = plan.summary_budget_words();
+        let conversation = task.conversation_id.clone();
+        task.summary_correction.guidance_target = Some(1);
+        task.summary_correction.source_generation = Some(task.task_generation);
+        task.summary_correction.corrections_admitted = 3;
+        task.compaction_request_shape = Some((
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            Default::default(),
+            false,
+        ));
+        task.summary_correction.last_rejection = Some(
+            mez_agent::context_compaction::ModelCompactionSummaryRejection {
+                defect: mez_agent::context_compaction::ModelCompactionSummaryDefect::Budget,
+                cost: budget + 2,
+                bytes: 2 * (budget + 2),
+                budget,
+                estimated_tokens: false,
+            },
+        );
+        service.queue_agent_compaction_task(task);
+        let response = if valid {
+            "valid bounded summary".to_string()
+        } else {
+            "x ".repeat(budget + 1)
+        };
+        complete_runtime_test_compaction(&mut service, "%1", &response);
+        assert!(!service.agent_is_compacting("%1"));
+        if valid {
+            assert!(service.agent_provider_task_is_pending(&turn));
+            assert!(store.compaction_epoch(&conversation).unwrap().is_some());
+        } else {
+            assert!(!service.agent_provider_task_is_pending(&turn));
+            assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+            let execution = service.agent_turn_executions().get(&turn).unwrap();
+            assert!(execution.recovery_facts().is_none());
+            assert!(
+                execution
+                    .response
+                    .raw_text
+                    .contains("disposition=GuidanceFloor")
+            );
+            assert!(
+                execution
+                    .response
+                    .raw_text
+                    .contains("corrections_admitted=3")
+            );
+            assert!(
+                execution
+                    .response
+                    .raw_text
+                    .contains("openai_max_output_tokens_transmitted=Some(false)")
+            );
+            assert!(!execution.response.raw_text.contains(&response));
+        }
     }
 }
 

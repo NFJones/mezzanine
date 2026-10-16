@@ -6,6 +6,10 @@
 //! retry and exact claim/expense settlement remain owned by the parent subsystem.
 
 use super::*;
+use crate::error::{
+    CompactionCostUnit, CompactionFailureDisposition, CompactionFailureEvidence,
+    CompactionFailurePhase,
+};
 use mez_agent::context_compaction::{
     ModelCompactionSummaryDefect, ModelCompactionSummaryRejection,
     validate_model_compaction_summary,
@@ -28,14 +32,13 @@ impl RuntimeSessionService {
             RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } => {
                 (plan.summary_budget_words(), plan.planning_budget().1)
             }
-            RuntimeAgentCompactionTarget::Conversation => {
-                (task.request.max_output_tokens.unwrap_or(usize::MAX), false)
-            }
+            RuntimeAgentCompactionTarget::Conversation => (
+                task.summary_correction.manual_words.ok_or_else(|| {
+                    MezError::invalid_state("manual compaction frozen word allowance is missing")
+                })?,
+                false,
+            ),
         };
-        let budget = task
-            .summary_correction
-            .output_ceiling
-            .map_or(budget, |ceiling| ceiling.min(budget));
         let (summary, malformed) = match response.action_batch.as_ref() {
             Some(batch) => match batch.actions.as_slice() {
                 [action] => match &action.payload {
@@ -61,10 +64,46 @@ impl RuntimeSessionService {
         } else {
             validate_model_compaction_summary(&summary, budget, tokens)
         };
+        // A frozen-valid summary MUST reach the existing complete-candidate
+        // owner, even above its advisory replan target. Only that owner measures
+        // full fit and enforces candidate decrease; diverting here would grant
+        // a fresh correction budget to an already non-reducing final candidate.
         if validation.is_ok() {
             // Reset only after bounded output is accepted for this source. Final
             // request progress accounting is separate and is never reset here.
-            task.summary_correction = Default::default();
+            let mut receipt = compaction_failure_evidence(
+                task,
+                None,
+                CompactionFailurePhase::Summary,
+                CompactionFailureDisposition::CandidateRejected,
+            );
+            receipt.phase = CompactionFailurePhase::CompleteCandidate;
+            receipt.source_generation = receipt.source_generation.or(Some(task.task_generation));
+            receipt.measured_cost = Some(if tokens {
+                mez_agent::provider_text_input_token_estimate(&summary)
+            } else {
+                model_context_text_word_count(&summary)
+            });
+            receipt.measured_bytes = Some(summary.len());
+            receipt.size_progress = task.summary_correction.last_rejection.map(|previous| {
+                (receipt.measured_cost.unwrap_or(0) <= budget
+                    || receipt.measured_cost.unwrap_or(0) < previous.cost)
+                    && (summary.len() <= SUMMARY_BYTES || summary.len() < previous.bytes)
+            });
+            task.summary_correction.reset_progress();
+            task.summary_correction.accepted_summary = Some(Box::new(receipt));
+            let mut messages = task.request.messages.iter().cloned().collect::<Vec<_>>();
+            messages.retain(|message| {
+                !(message.role == ModelMessageRole::Developer
+                    && message.source == ContextSourceKind::Configuration
+                    && message.content.starts_with("[private summary correction]"))
+            });
+            task.request.messages = messages.into();
+            let (target, target_tokens) = task
+                .summary_correction
+                .effective_input_tokens
+                .map_or((budget, tokens), |target| (target, true));
+            communicate_summary_target(&mut task.request, target, target_tokens);
             return runtime_model_compaction_summary_from_response(response).map(Some);
         }
         let rejected = validation
@@ -85,9 +124,12 @@ impl RuntimeSessionService {
             RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } => {
                 (plan.summary_budget_words(), plan.planning_budget().1)
             }
-            RuntimeAgentCompactionTarget::Conversation => {
-                (task.request.max_output_tokens.unwrap_or(usize::MAX), false)
-            }
+            RuntimeAgentCompactionTarget::Conversation => (
+                task.summary_correction.manual_words.ok_or_else(|| {
+                    MezError::invalid_state("manual compaction frozen word allowance is missing")
+                })?,
+                false,
+            ),
         };
         self.correct_rejected_compaction_summary(
             task,
@@ -95,11 +137,7 @@ impl RuntimeSessionService {
                 defect: ModelCompactionSummaryDefect::Malformed,
                 bytes: 0,
                 cost: 0,
-                budget: task
-                    .summary_correction
-                    .output_ceiling
-                    .unwrap_or(budget)
-                    .min(budget),
+                budget,
                 estimated_tokens: tokens,
             },
         )
@@ -112,15 +150,23 @@ impl RuntimeSessionService {
         task: &mut RuntimeAgentCompactionTask,
         rejected: ModelCompactionSummaryRejection,
     ) -> Result<()> {
-        self.validate_compaction_correction_source(task)?;
+        self.validate_compaction_correction_source(task)
+            .map_err(|error| {
+                error.with_compaction_failure(compaction_failure_evidence(
+                    task,
+                    Some(rejected),
+                    CompactionFailurePhase::Summary,
+                    CompactionFailureDisposition::SourceIntegrity,
+                ))
+            })?;
         prepare_summary_correction(task, rejected)?;
         self.append_agent_trace_turn_event(
             &task.pane_id,
             task.resume_turn_id.as_deref().unwrap_or("manual"),
-            &format!("context_compaction summary_correction reason={:?} summary_bytes={} summary_cost={} budget={} unit={} output_ceiling={}",
+            &format!("context_compaction summary_correction reason={:?} summary_bytes={} summary_cost={} budget={} unit={} guidance_target={}",
                 rejected.defect, rejected.bytes, rejected.cost, rejected.budget,
                 if rejected.estimated_tokens { "estimated_input_tokens" } else { "words" },
-                task.request.max_output_tokens.unwrap_or(0)),
+                task.summary_correction.guidance_target.unwrap_or(0)),
         )?;
         self.queue_agent_compaction_task(task.clone());
         Ok(())
@@ -174,54 +220,40 @@ impl RuntimeSessionService {
     }
 }
 
-/// Tightens targets without changing current source, accepted staging, ordinary
-/// retry state, provider profile or authoritative context. Repeated oversize
-/// output and an exhausted measurable ceiling fail; improving work has no total
-/// response-count cap. Empty output consumes its own finite correction budget.
+/// Tightens advisory targets without changing semantic acceptance or provider
+/// allocation. Repeated invalid dimensions and invalid output after the issued
+/// nonzero guidance floor fail finitely. Valid output is admitted before this
+/// policy runs, even when it exceeds guidance. Empty output has its own budget.
 fn prepare_summary_correction(
     task: &mut RuntimeAgentCompactionTask,
     rejected: ModelCompactionSummaryRejection,
 ) -> Result<()> {
+    let next =
+        next_summary_target(&mut task.summary_correction, rejected).map_err(|disposition| {
+            MezError::invalid_state(disposition.message()).with_compaction_failure(
+                compaction_failure_evidence(
+                    task,
+                    Some(rejected),
+                    CompactionFailurePhase::Summary,
+                    disposition,
+                ),
+            )
+        })?;
     let state = &mut task.summary_correction;
-    let ceiling = task
-        .request
-        .max_output_tokens
-        .unwrap_or(rejected.budget)
-        .min(rejected.budget);
-    let next = if matches!(
+    state.source_generation.get_or_insert(task.task_generation);
+    state.corrections_admitted = state.corrections_admitted.saturating_add(1);
+    if matches!(
         rejected.defect,
-        ModelCompactionSummaryDefect::Empty | ModelCompactionSummaryDefect::Malformed
+        ModelCompactionSummaryDefect::Bytes | ModelCompactionSummaryDefect::Budget
     ) {
-        if state.empty_attempts >= EMPTY_CORRECTIONS {
-            return Err(MezError::invalid_state(
-                "compaction empty/malformed-summary correction budget exhausted",
-            ));
-        }
-        state.empty_attempts += 1;
-        ceiling.max(1)
-    } else {
-        if state.last_size.is_some_and(|(cost, bytes)| {
-            (rejected.cost > rejected.budget && rejected.cost >= cost)
-                || (rejected.bytes > SUMMARY_BYTES && rejected.bytes >= bytes)
-        }) {
-            return Err(MezError::invalid_state(
-                "compaction invalid-summary correction made no size progress",
-            ));
-        }
-        let next = ceiling / 2;
-        if next == 0 {
-            return Err(MezError::invalid_state(
-                "compaction invalid-summary correction output ceiling exhausted",
-            ));
-        }
-        state.last_size = Some((rejected.cost, rejected.bytes));
-        next
-    };
-    state.output_ceiling = Some(next);
+        state.last_rejection = Some(rejected);
+    }
+    state.guidance_target = Some(next);
+    state.guidance_is_input_tokens = rejected.estimated_tokens;
     // Reuse the frozen current request: it already owns the exact redacted
-    // chunk/synthesis source. Only bounded developer guidance and output control
-    // change. Fresh generation admission remains the existing queue owner.
-    task.request.max_output_tokens = Some(next);
+    // chunk/synthesis source. Only bounded developer guidance changes. Keep
+    // configured generation allocation for framing/reasoning on providers that
+    // actually support it; OpenAI's canonical adapter omits the wire field.
     task.preserve_summary_output_budget = true;
     communicate_summary_target(&mut task.request, next, rejected.estimated_tokens);
     let mut messages = task.request.messages.iter().cloned().collect::<Vec<_>>();
@@ -233,15 +265,147 @@ fn prepare_summary_correction(
     messages.insert(2.min(messages.len()), ModelMessage {
         role: ModelMessageRole::Developer, source: ContextSourceKind::Configuration,
         placement: mez_agent::ContextPlacement::StablePrefix,
-        content: format!("[private summary correction]\nThe previous completed output was rejected ({:?}). Generate a fresh nonempty concise summary of the same frozen source, not a repair of quoted rejected text. Return exactly one final say. Local summary target is at most {next} {}; UTF-8 summary bytes must not exceed {SUMMARY_BYTES}. The provider output-token ceiling is also {next}; leave room for action framing. No logs, repeated history or unsupported claims.", rejected.defect,
-            if rejected.estimated_tokens { "estimated input tokens (conservative UTF-8 byte estimate, about four bytes per token)" } else { "whitespace-delimited words" }),
+        content: format!("[private summary correction]\nThe previous completed output was rejected ({:?}). Generate a fresh nonempty concise summary of the same frozen source, not a repair of quoted rejected text. Return exactly one final say. Aim for at most {next} {}; this is advisory guidance, not a provider-enforced output cap. UTF-8 summary bytes must not exceed {SUMMARY_BYTES}. The authoritative semantic allowance remains {} in that unit. No logs, repeated history or unsupported claims.", rejected.defect,
+            if rejected.estimated_tokens { "estimated input tokens (conservative UTF-8 byte estimate, about four bytes per token)" } else { "whitespace-delimited words" }, rejected.budget),
     });
     task.request.messages = messages.into();
     Ok(())
 }
 
-/// Publishes the actual local target unit to the compactor, separately from its
-/// output-token control. Replaces bounded guidance rather than accumulating it.
+/// Computes finite advisory progress using measured invalid dimensions, never
+/// the previous guidance as a new semantic threshold. Unit changes do not make
+/// incomparable costs evidence of size progress; the positive floor still
+/// bounds mixed-defect sequences independently of transport retry policy.
+fn next_summary_target(
+    state: &mut crate::runtime::agent_state::RuntimeSummaryCorrection,
+    rejected: ModelCompactionSummaryRejection,
+) -> std::result::Result<usize, CompactionFailureDisposition> {
+    let ceiling = state.guidance_target.unwrap_or(rejected.budget).max(1);
+    let next = if matches!(
+        rejected.defect,
+        ModelCompactionSummaryDefect::Empty | ModelCompactionSummaryDefect::Malformed
+    ) {
+        if state.empty_attempts >= EMPTY_CORRECTIONS {
+            return Err(CompactionFailureDisposition::EmptyOrMalformedExhausted);
+        }
+        state.empty_attempts += 1;
+        ceiling.max(1)
+    } else {
+        if state.last_rejection.is_some_and(|previous| {
+            (rejected.cost > rejected.budget
+                && rejected.estimated_tokens == previous.estimated_tokens
+                && rejected.budget == previous.budget
+                && rejected.cost >= previous.cost)
+                || (rejected.bytes > SUMMARY_BYTES && rejected.bytes >= previous.bytes)
+        }) {
+            return Err(CompactionFailureDisposition::NoProgress);
+        }
+        if state.guidance_target == Some(1) {
+            return Err(CompactionFailureDisposition::GuidanceFloor);
+        }
+        (ceiling / 2).max(1)
+    };
+    Ok(next)
+}
+
+/// Captures only locally authoritative measurements. A resolved Responses
+/// shape establishes canonical omission, not an internal request allocation.
+pub(super) fn compaction_failure_evidence(
+    task: &RuntimeAgentCompactionTask,
+    rejected: Option<ModelCompactionSummaryRejection>,
+    phase: CompactionFailurePhase,
+    disposition: CompactionFailureDisposition,
+) -> CompactionFailureEvidence {
+    if phase == CompactionFailurePhase::CompleteCandidate
+        && let Some(receipt) = task.summary_correction.accepted_summary.as_deref()
+    {
+        let mut facts = receipt.clone();
+        facts.phase = phase;
+        facts.disposition = disposition;
+        return facts;
+    }
+    let rejected = if phase == CompactionFailurePhase::ProviderInference {
+        rejected.or(task.summary_correction.last_rejection)
+    } else {
+        rejected
+    };
+    let (frozen_allowance, tokens, synthesis) = match &task.target {
+        RuntimeAgentCompactionTarget::ActiveTurn {
+            plan,
+            synthesis_source_bytes,
+            ..
+        } => (
+            Some(plan.summary_budget_words()),
+            plan.planning_budget().1,
+            synthesis_source_bytes.is_some(),
+        ),
+        RuntimeAgentCompactionTarget::Conversation => (
+            task.summary_correction.manual_words,
+            false,
+            task.conversation_chunks
+                .as_ref()
+                .is_some_and(|chunks| chunks.synthesis_source_bytes.is_some()),
+        ),
+    };
+    let unit = |tokens| {
+        if tokens {
+            CompactionCostUnit::EstimatedInputTokens
+        } else {
+            CompactionCostUnit::Words
+        }
+    };
+    CompactionFailureEvidence {
+        phase: if phase == CompactionFailurePhase::Summary && synthesis {
+            CompactionFailurePhase::Synthesis
+        } else {
+            phase
+        },
+        source_generation: task.summary_correction.source_generation.or_else(|| {
+            task.summary_correction
+                .accepted_summary
+                .as_ref()
+                .and_then(|receipt| receipt.source_generation)
+        }),
+        task_generation: task.task_generation,
+        defect: rejected.map(|value| value.defect),
+        frozen_allowance,
+        frozen_unit: unit(tokens),
+        effective_input_tokens: task.summary_correction.effective_input_tokens,
+        measured_cost: rejected.map(|value| value.cost),
+        measured_unit: unit(rejected.map_or(tokens, |value| value.estimated_tokens)),
+        measured_bytes: rejected.map(|value| value.bytes),
+        byte_bound: SUMMARY_BYTES,
+        guidance_target: task.summary_correction.guidance_target,
+        guidance_unit: unit(task.summary_correction.guidance_is_input_tokens),
+        size_progress: rejected
+            .zip(task.summary_correction.last_rejection)
+            .and_then(|(now, prior)| {
+                if now.estimated_tokens != prior.estimated_tokens || now.budget != prior.budget {
+                    None
+                } else {
+                    Some(
+                        (now.cost <= now.budget || now.cost < prior.cost)
+                            && (now.bytes <= SUMMARY_BYTES || now.bytes < prior.bytes),
+                    )
+                }
+            }),
+        corrections_admitted: task.summary_correction.corrections_admitted.saturating_add(
+            task.summary_correction
+                .accepted_summary
+                .as_ref()
+                .map_or(0, |receipt| receipt.corrections_admitted),
+        ),
+        disposition,
+        openai_max_output_tokens_transmitted: task.compaction_request_shape.as_ref().and_then(
+            |(api, _, _)| {
+                (*api == mez_agent::ProviderApiCompatibility::OpenAiResponses).then_some(false)
+            },
+        ),
+    }
+}
+
+/// Publishes an advisory target in its actual local unit, independently of
+/// provider generation controls. Replaces guidance rather than accumulating it.
 pub(super) fn communicate_summary_target(request: &mut ModelRequest, budget: usize, tokens: bool) {
     let mut messages = request.messages.iter().cloned().collect::<Vec<_>>();
     messages.retain(|message| {
@@ -252,7 +416,97 @@ pub(super) fn communicate_summary_target(request: &mut ModelRequest, budget: usi
     messages.insert(2.min(messages.len()), ModelMessage {
         role: ModelMessageRole::Developer, source: ContextSourceKind::Configuration,
         placement: mez_agent::ContextPlacement::StablePrefix,
-        content: format!("[compaction summary target]\nKeep the nonempty summary within {budget} {} and {SUMMARY_BYTES} UTF-8 bytes. Provider max_output_tokens is a separate token ceiling including response framing; reserve room for the final say wrapper.", if tokens { "estimated input tokens (approximately four UTF-8 bytes per token)" } else { "whitespace-delimited words" }),
+        content: format!("[compaction summary target]\nAim for a nonempty summary within {budget} {} and {SUMMARY_BYTES} UTF-8 bytes. This is local semantic guidance, not evidence of a transmitted provider output control. Return a complete final say wrapper.", if tokens { "estimated input tokens (approximately four UTF-8 bytes per token)" } else { "whitespace-delimited words" }),
     });
     request.messages = messages.into();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::agent_state::RuntimeSummaryCorrection;
+
+    /// Local targets never become zero for zero/one/two-token allowances. A
+    /// still-invalid completion after the issued floor terminates, whereas
+    /// semantic validity is independently decided against the frozen allowance.
+    #[test]
+    fn summary_correction_tiny_targets_have_finite_nonzero_floor() {
+        for budget in [0, 1, 2, 128] {
+            let mut state = RuntimeSummaryCorrection::default();
+            let mut cost = budget + 100;
+            for attempt in 0..usize::BITS {
+                let rejected = ModelCompactionSummaryRejection {
+                    defect: ModelCompactionSummaryDefect::Budget,
+                    bytes: cost * 4,
+                    cost,
+                    budget,
+                    estimated_tokens: true,
+                };
+                let target = next_summary_target(&mut state, rejected);
+                if state.guidance_target == Some(1) {
+                    assert_eq!(target, Err(CompactionFailureDisposition::GuidanceFloor));
+                    break;
+                }
+                let target = target.unwrap();
+                assert!(target > 0);
+                state.guidance_target = Some(target);
+                state.last_rejection = Some(rejected);
+                cost -= 1;
+                assert!(
+                    attempt < usize::BITS - 1,
+                    "floor must bound this exact source"
+                );
+            }
+            assert_eq!(state.guidance_target, Some(1));
+        }
+        assert!(validate_model_compaction_summary("x", 1, true).is_ok());
+        assert!(validate_model_compaction_summary("x", 0, true).is_err());
+    }
+
+    /// Fixed byte and semantic dimensions must improve independently. A smaller
+    /// byte count does not excuse a repeated invalid semantic cost and vice
+    /// versa; the advisory target is not substituted for either fixed bound.
+    #[test]
+    fn summary_correction_progress_uses_fixed_invalid_dimensions() {
+        let prior = ModelCompactionSummaryRejection {
+            defect: ModelCompactionSummaryDefect::Bytes,
+            bytes: SUMMARY_BYTES + 10,
+            cost: 130,
+            budget: 128,
+            estimated_tokens: true,
+        };
+        for (cost, bytes) in [(130, SUMMARY_BYTES + 1), (129, SUMMARY_BYTES + 10)] {
+            let mut state = RuntimeSummaryCorrection {
+                last_rejection: Some(prior),
+                guidance_target: Some(64),
+                ..Default::default()
+            };
+            assert_eq!(
+                next_summary_target(
+                    &mut state,
+                    ModelCompactionSummaryRejection {
+                        cost,
+                        bytes,
+                        ..prior
+                    }
+                ),
+                Err(CompactionFailureDisposition::NoProgress)
+            );
+        }
+        let mut state = RuntimeSummaryCorrection {
+            last_rejection: Some(prior),
+            ..Default::default()
+        };
+        assert_eq!(
+            next_summary_target(
+                &mut state,
+                ModelCompactionSummaryRejection {
+                    cost: 129,
+                    bytes: SUMMARY_BYTES + 1,
+                    ..prior
+                }
+            ),
+            Ok(64)
+        );
+    }
 }
