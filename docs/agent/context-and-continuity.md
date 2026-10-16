@@ -59,7 +59,10 @@ and append settlement wake retained delivery through the existing timer. They
 do not retry providers, actions or child work. A blocked archive check remains a
 visible, fail-closed history error, not permission to invent empty history, and
 does not fail healthy session services or independent recipients. Mail retains
-its original TTL; expiry maintenance does not restart that deadline.
+its original TTL; expiry maintenance does not restart that deadline. Retained
+work keeps the existing bounded one-second delivery timer. A deferred sweep
+checks only the exact pending fence; it does not retry a failed archive read or
+construct speculative history/context. Delivery fanout budgets are unchanged.
 
 Filtered executor progress keeps its captured metadata only for the existing
 component/promotion receipt's bounded lifetime; this does not make suppressed

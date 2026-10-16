@@ -554,7 +554,6 @@ mod tests {
 
     mod fresh_retirement;
     mod objectives;
-    mod readiness;
 
     mod retirement {
         use super::*;

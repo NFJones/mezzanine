@@ -285,21 +285,6 @@ impl RuntimeSessionService {
             if receipt.wake_admitted {
                 return false;
             }
-            // Quiet only an uncommitted idle receipt whose exact original
-            // conversation is still bound. Settlement re-arms delivery; gone
-            // or replaced owners must remain eligible for ordinary retirement.
-            if receipt.parent_was_idle
-                && receipt.committed_turn_id.is_none()
-                && self
-                    .agent_shell_store()
-                    .get(receipt.parent_agent_id.trim_start_matches("agent-"))
-                    .is_some_and(|session| {
-                        session.session_id == receipt.parent_conversation_id
-                            && self.persistence.bookkeeping_pending(&session.session_id)
-                    })
-            {
-                return false;
-            }
             let turn_id = receipt
                 .committed_turn_id
                 .as_deref()

@@ -28,8 +28,14 @@ fn runtime_peer_receive_defers_pending_bookkeeping_until_checked_acceptance() {
                     .unwrap();
                 assert!(!deferred.applied);
                 assert!(
-                    deferred.side_effects.is_empty(),
-                    "history has its own settlement wake"
+                    matches!(
+                        deferred.side_effects.as_slice(),
+                        [RuntimeSideEffect::ScheduleTimer {
+                            delay_ms: 1_000,
+                            ..
+                        }]
+                    ),
+                    "retained mail keeps the existing bounded maintenance wake"
                 );
                 assert_eq!(service.agent_turn_ledger().turns().len(), turns);
                 assert_eq!(service.agent_peer_message_turn_count("agent-%1"), budget);
@@ -73,10 +79,11 @@ fn runtime_peer_receive_defers_pending_bookkeeping_until_checked_acceptance() {
 
 /// A real failed archive check remains observable and fail-closed, rather than
 /// being swallowed as successful chronology. Repeated global sweeps defer its
-/// recipient quietly without keeping an unchanged failure on a polling timer.
+/// recipient without another archive attempt. The existing one-second delivery
+/// timer is maintenance, not permission to retry the blocked chronology read.
 /// A duplicate stale success cannot remove the fence or advance the inbox.
 #[test]
-fn runtime_peer_receive_blocked_bookkeeping_remains_fenced_without_polling() {
+fn runtime_peer_receive_blocked_bookkeeping_remains_fenced_without_archive_retry() {
     let (mut service, store, conversation) = stopped_candidate_fixture("receive-blocked");
     seed_compaction_prefix(&mut service, &store, &conversation);
     let work = service.claim_bookkeeping_candidates().pop().unwrap();
@@ -107,7 +114,13 @@ fn runtime_peer_receive_blocked_bookkeeping_remains_fenced_without_polling() {
             .apply_peer_message_delivery_timer(now, generation)
             .unwrap();
         assert!(!transition.applied);
-        assert!(transition.side_effects.is_empty());
+        assert!(matches!(
+            transition.side_effects.as_slice(),
+            [RuntimeSideEffect::ScheduleTimer {
+                delay_ms: 1_000,
+                ..
+            }]
+        ));
         assert_eq!(cursor(&service, &recipient), 0);
         assert_eq!(service.agent_turn_ledger().turns().len(), 1);
     }
@@ -146,29 +159,23 @@ fn runtime_peer_receive_pending_history_preserves_expiry_and_other_recipients() 
             .applied
     );
     assert_eq!(cursor(&service, &recipient), 0);
-    assert!(!service.has_pending_peer_messages(now + 12));
+    let batch = service
+        .message_service_mut()
+        .receive_subscribed(&recipient, now + 12, 100)
+        .unwrap();
+    assert_eq!(
+        batch.messages.len(),
+        1,
+        "only the original non-TTL envelope remains"
+    );
+    assert!(batch.messages[0].envelope.ttl_ms.is_none());
     // A pane-less recipient has independent transport delivery and must still
     // make the shared timer actionable after the first fenced model recipient.
-    for index in 0..80 {
-        let identity = service
-            .ensure_runtime_message_identity(
-                &format!("a-empty-{index:03}"),
-                None,
-                "agent",
-                &[],
-                now,
-            )
-            .unwrap();
-        service
-            .message_service_mut()
-            .subscribe_from_retained_start(&identity.agent_id)
-            .unwrap();
-    }
     accept_peer(&mut service, "independent", now + 13, None);
     for _ in 0..3 {
         assert!(
             service.has_pending_peer_messages(now + 13),
-            "a quiet first fanout page cannot strand later recipients"
+            "fenced mail does not disable ordinary delivery maintenance"
         );
     }
     service.terminate_all_pane_processes().unwrap();

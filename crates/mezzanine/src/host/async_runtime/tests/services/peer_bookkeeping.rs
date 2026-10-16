@@ -11,7 +11,7 @@ use mez_agent::messaging::{Envelope, MessageScope, Recipient};
 /// The actual timer worker submits a peer-delivery event while one idle pane
 /// retains a genuine claimed interruption candidate. Its unrelated recipient,
 /// control ingress, actor and live PTYs remain usable under the real service
-/// supervisor. Checked completion wakes the quiet deferred recipient through
+/// supervisor. Checked completion admits the retained deferred recipient through
 /// the existing timer, without another envelope or action/provider replay.
 #[tokio::test]
 async fn async_peer_bookkeeping_deferral_preserves_timer_supervisor_and_panes() {

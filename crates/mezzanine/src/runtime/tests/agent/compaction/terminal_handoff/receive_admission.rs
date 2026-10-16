@@ -67,7 +67,13 @@ fn runtime_peer_receive_defers_terminal_compaction_handoff_receipt() {
         .unwrap();
     let transition = service.apply_peer_message_delivery_timer(now, 1).unwrap();
     assert!(!transition.applied);
-    assert!(transition.side_effects.is_empty());
+    assert!(matches!(
+        transition.side_effects.as_slice(),
+        [RuntimeSideEffect::ScheduleTimer {
+            delay_ms: 1_000,
+            ..
+        }]
+    ));
     assert_eq!(
         service
             .message_service_mut()

@@ -3847,6 +3847,9 @@ One fenced recipient MUST NOT fail a healthy delivery service or prevent other
 recipients from progressing. Blocked history MUST remain observable and
 fail-closed, without repeatedly checking an unchanged failed archive. Ordinary
 finite-TTL expiry and bounded delivery maintenance MUST remain effective.
+Retained receive work MAY keep the existing one-second delivery maintenance
+timer; checking the exact pending fence MUST NOT retry an archive read, construct
+speculative history/context, or expand the existing fair-fanout work budgets.
 Context continuation MUST NOT restart cancelled actions or processes.
 Interruption admission MUST be distinguished from worker settlement. Native
 shell attempts MUST share a monotonic exact-owned cancellation fence with the

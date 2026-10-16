@@ -71,7 +71,13 @@ fn runtime_owned_child_idle_failure_defers_parent_bookkeeping() {
                 .apply_peer_message_delivery_timer(current_unix_millis(), generation)
                 .unwrap();
             assert!(!transition.applied);
-            assert!(transition.side_effects.is_empty());
+            assert!(matches!(
+                transition.side_effects.as_slice(),
+                [RuntimeSideEffect::ScheduleTimer {
+                    delay_ms: 1_000,
+                    ..
+                }]
+            ));
             assert_eq!(service.agent_turn_ledger().turns().len(), before);
             assert_eq!(service.agent_peer_message_turn_count(&parent.agent_id), 0);
         }
