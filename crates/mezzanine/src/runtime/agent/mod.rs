@@ -1605,6 +1605,7 @@ impl RuntimeSessionService {
         self.agent.subagent_cleanup.ownership.clear();
         self.agent.subagent_cleanup.pending_restore.clear();
         self.agent.subagent_cleanup.local_parents.clear();
+        self.agent.subagent_cleanup.owned_loops.clear();
         self.agent.persistent_subagents.clear();
         self.agent.retired_persistent_subagents.clear();
         self.agent.restored_subagent_lineage.clear();
@@ -4308,6 +4309,7 @@ impl RuntimeSessionService {
         &mut self,
         loop_id: &str,
     ) -> Option<RuntimeAgentLoopState> {
+        self.agent.subagent_cleanup.owned_loops.remove(loop_id);
         let state = self.agent.agent_loops_by_id.remove(loop_id)?;
         self.agent
             .agent_loop_by_pane

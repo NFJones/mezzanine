@@ -88,8 +88,11 @@ cleanup obligation even if the parent's native process has not started yet;
 saved lineage and process absence alone cannot grant that authority. Moving the
 same process to an async adapter preserves the obligation; replacing a process
 or independently rebinding a child cannot transfer it. Runtime-owned routed
-setup and loop restoration retain an already proven obligation through their
-own ephemeral binding changes. That cleanup-only observation preserves the
+setup and an exact initial loop binding/restoration retain already proven
+incoming and outgoing obligations through their own ephemeral binding changes.
+The loop incarnation and unchanged native owner are checked before every
+cleanup-only migration; a later independent binding cannot be adopted.
+That cleanup-only observation preserves the
 original delegator and does not grant permission or execution authority.
 A genuine child fenced after its parent changes conversation retains its
 original cleanup obligation without regaining execution or permission authority.

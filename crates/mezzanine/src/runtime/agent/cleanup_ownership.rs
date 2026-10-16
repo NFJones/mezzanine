@@ -27,6 +27,8 @@ pub(super) struct RuntimeSubagentCleanupState {
     pub(super) pending_restore: BTreeMap<String, PendingCleanupRestore>,
     /// Successful local-spawn capabilities for parent panes without native owners.
     pub(super) local_parents: BTreeMap<String, u64>,
+    /// Nonauthorizing continuity of exact locally installed loop bindings.
+    pub(super) owned_loops: BTreeMap<String, RuntimeOwnedLoopCleanupBinding>,
     /// Never rewound by clear, failed spawn, authority snapshots, or restore.
     next_local_parent_generation: u64,
     /// Exercises failure after owned parent restoration but before child release.
@@ -132,7 +134,231 @@ pub(crate) struct RuntimePreparedRoutedCleanupParentRestore {
     operation: RoutedCleanupOperation,
 }
 
+/// Runtime-only provenance of an initial code-owned loop binding. This does
+/// not create any edge: a transaction may migrate only independently validated
+/// existing cleanup obligations. An initially processless loop can later have
+/// genuine fresh children, but cannot recover any prior native owner's edges.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct RuntimeOwnedLoopCleanupBinding {
+    /// Exact invoking pane for this loop incarnation.
+    pane_id: String,
+    /// Durable target captured before the first temporary binding.
+    original_conversation_id: String,
+    /// Last conversation installed by this exact owned operation.
+    current_conversation_id: String,
+    /// Original native/Local owner when one existed; never a structural grant.
+    owner: Option<CleanupProcessOwner>,
+}
+
+/// One-shot atomic cleanup transaction for initial ordinary loop binding or
+/// its owned restoration. All old proofs are captured before shell mutation.
+#[derive(Debug)]
+pub(crate) struct RuntimePreparedOwnedLoopCleanupRebind {
+    /// Full installed operation and exact turn witnesses at preparation.
+    state: Box<RuntimeAgentLoopState>,
+    /// Loop turns cannot be replaced between preparation and commit.
+    turns: Vec<(String, RuntimeAgentLoopTurn)>,
+    /// Current endpoint owner; native absence alone grants no authority.
+    binding: Option<CleanupBinding>,
+    /// Only an already-valid incoming edge can follow this binding.
+    incoming: Option<RuntimeSubagentCleanupOwnership>,
+    /// Exact current original-parent endpoint of the incoming obligation.
+    incoming_parent: Option<CleanupBinding>,
+    /// Only already-valid outgoing obligations can observe a new qualifier.
+    outgoing: Vec<(String, RuntimeSubagentCleanupOwnership)>,
+    /// Exact earlier operation required for restoration; None for initial bind.
+    previous: Option<RuntimeOwnedLoopCleanupBinding>,
+    /// Intended target sealed before the bind, never inferred after mutation.
+    target: String,
+}
+
 impl RuntimeSessionService {
+    /// Captures only the first installed non-routed loop's own durable binding.
+    /// Later iterations retain their existing ordering/guard behavior.
+    pub(crate) fn prepare_initial_loop_cleanup_rebind(
+        &self,
+        state: &RuntimeAgentLoopState,
+        target: &str,
+    ) -> Result<Option<RuntimePreparedOwnedLoopCleanupRebind>> {
+        if state.routed_parent_turn_id.is_some() || state.iteration != 1 {
+            return Ok(None);
+        }
+        if self
+            .agent
+            .subagent_cleanup
+            .owned_loops
+            .contains_key(&state.loop_id)
+            || self
+                .agent
+                .agent_loop_turns
+                .values()
+                .any(|turn| turn.loop_id == state.loop_id)
+            || self
+                .agent_shell_store()
+                .get(&state.invoking_pane_id)
+                .is_none_or(|shell| shell.session_id != state.parent_conversation_id)
+        {
+            return Err(MezError::invalid_state(
+                "initial loop cleanup operation changed",
+            ));
+        }
+        self.prepare_owned_loop_cleanup_rebind(state, target, None)
+            .map(Some)
+    }
+
+    /// Restores only the exact binding installed by this loop incarnation.
+    /// Independent rebinding or native replacement cannot recapture continuity.
+    pub(crate) fn prepare_owned_loop_cleanup_restore(
+        &self,
+        state: &RuntimeAgentLoopState,
+    ) -> Result<Option<RuntimePreparedOwnedLoopCleanupRebind>> {
+        let Some(previous) = self.agent.subagent_cleanup.owned_loops.get(&state.loop_id) else {
+            return Ok(None);
+        };
+        let binding = self.capture_cleanup_binding(&format!("agent-{}", state.invoking_pane_id));
+        if previous.pane_id != state.invoking_pane_id
+            || previous.original_conversation_id != state.parent_conversation_id
+            || self
+                .agent_shell_store()
+                .get(&state.invoking_pane_id)
+                .is_none_or(|shell| shell.session_id != previous.current_conversation_id)
+            || previous
+                .owner
+                .as_ref()
+                .is_some_and(|owner| binding.as_ref().map(|b| &b.process) != Some(owner))
+        {
+            return Err(MezError::invalid_state(
+                "owned loop cleanup binding changed before restoration",
+            ));
+        }
+        self.prepare_owned_loop_cleanup_rebind(
+            state,
+            &state.parent_conversation_id,
+            Some(previous.clone()),
+        )
+        .map(Some)
+    }
+
+    /// Seals an installed ordinary loop and every currently valid affected edge.
+    /// Neither saved lineage nor a matching durable target can mint a proof.
+    fn prepare_owned_loop_cleanup_rebind(
+        &self,
+        state: &RuntimeAgentLoopState,
+        target: &str,
+        previous: Option<RuntimeOwnedLoopCleanupBinding>,
+    ) -> Result<RuntimePreparedOwnedLoopCleanupRebind> {
+        if state.routed_parent_turn_id.is_some()
+            || state.invoking_pane_id != state.execution_pane_id
+            || self.agent_loop_state_by_id(&state.loop_id) != Some(state)
+            || self.agent_loop_state(&state.invoking_pane_id) != Some(state)
+        {
+            return Err(MezError::invalid_state(
+                "owned loop cleanup operation is unavailable",
+            ));
+        }
+        let agent = format!("agent-{}", state.invoking_pane_id);
+        let incoming = self.validated_subagent_cleanup_edge(&agent, None).cloned();
+        let incoming_parent = incoming
+            .as_ref()
+            .and_then(|edge| self.capture_cleanup_binding(&edge.parent.agent_id));
+        let outgoing = self
+            .agent
+            .subagent_cleanup
+            .ownership
+            .iter()
+            .filter(|(_, edge)| edge.parent.agent_id == agent)
+            .filter_map(|(child, _)| {
+                self.validated_subagent_cleanup_edge(child, None)
+                    .map(|edge| (child.clone(), edge.clone()))
+            })
+            .collect();
+        Ok(RuntimePreparedOwnedLoopCleanupRebind {
+            state: Box::new(state.clone()),
+            turns: self
+                .agent
+                .agent_loop_turns
+                .iter()
+                .filter(|(_, turn)| turn.loop_id == state.loop_id)
+                .map(|(id, turn)| (id.clone(), turn.clone()))
+                .collect(),
+            binding: self.capture_cleanup_binding(&agent),
+            incoming,
+            incoming_parent,
+            outgoing,
+            previous,
+            target: target.to_string(),
+        })
+    }
+
+    /// Validates the entire old transaction before moving any cleanup endpoint.
+    /// Failure leaves every proof intact so the caller can restore the old shell.
+    pub(crate) fn commit_owned_loop_cleanup_rebind(
+        &mut self,
+        prepared: RuntimePreparedOwnedLoopCleanupRebind,
+    ) -> Result<()> {
+        let state = &prepared.state;
+        let agent = format!("agent-{}", state.invoking_pane_id);
+        let current = self.capture_cleanup_binding(&agent);
+        let turns = self
+            .agent
+            .agent_loop_turns
+            .iter()
+            .filter(|(_, turn)| turn.loop_id == state.loop_id)
+            .map(|(id, turn)| (id.clone(), turn.clone()))
+            .collect::<Vec<_>>();
+        let same_owner =
+            current.as_ref().map(|b| &b.process) == prepared.binding.as_ref().map(|b| &b.process);
+        if self.agent_loop_state_by_id(&state.loop_id) != Some(state.as_ref())
+            || self.agent_loop_state(&state.invoking_pane_id) != Some(state.as_ref())
+            || turns != prepared.turns
+            || self.agent.subagent_cleanup.owned_loops.get(&state.loop_id)
+                != prepared.previous.as_ref()
+            || !same_owner
+            || self
+                .agent_shell_store()
+                .get(&state.invoking_pane_id)
+                .is_none_or(|shell| shell.session_id != prepared.target)
+            || prepared.incoming.as_ref().is_some_and(|edge| {
+                self.agent.subagent_cleanup.ownership.get(&agent) != Some(edge)
+                    || self.capture_cleanup_binding(&edge.parent.agent_id)
+                        != prepared.incoming_parent
+            })
+            || prepared.outgoing.iter().any(|(child, edge)| {
+                self.agent.subagent_cleanup.ownership.get(child) != Some(edge)
+                    || self.capture_native_cleanup_binding(child).as_ref() != Some(&edge.child)
+            })
+        {
+            return Err(MezError::invalid_state(
+                "owned loop cleanup transaction changed during binding",
+            ));
+        }
+        if let Some(mut edge) = prepared.incoming {
+            edge.child.conversation_id = prepared.target.clone();
+            self.agent.subagent_cleanup.ownership.insert(agent, edge);
+        }
+        for (child, mut edge) in prepared.outgoing {
+            edge.current_parent_conversation_id = prepared.target.clone();
+            self.agent.subagent_cleanup.ownership.insert(child, edge);
+        }
+        if prepared.previous.is_some() {
+            self.agent
+                .subagent_cleanup
+                .owned_loops
+                .remove(&state.loop_id);
+        } else {
+            self.agent.subagent_cleanup.owned_loops.insert(
+                state.loop_id.clone(),
+                RuntimeOwnedLoopCleanupBinding {
+                    pane_id: state.invoking_pane_id.clone(),
+                    original_conversation_id: state.parent_conversation_id.clone(),
+                    current_conversation_id: prepared.target,
+                    owner: prepared.binding.map(|binding| binding.process),
+                },
+            );
+        }
+        Ok(())
+    }
+
     /// Captures the original parent before a fresh spawn allocates child state.
     /// Reserving a logical incarnation advances a checked high-water mark but
     /// publishes no capability. Only the actual local-spawn path reserves it.
@@ -268,6 +494,10 @@ impl RuntimeSessionService {
     /// replacement uses fencing instead and must not call this operation.
     pub(crate) fn retire_subagent_cleanup_pane_binding(&mut self, pane_id: &str) {
         let agent_id = format!("agent-{pane_id}");
+        self.agent
+            .subagent_cleanup
+            .owned_loops
+            .retain(|_, binding| binding.pane_id != pane_id);
         self.agent.subagent_cleanup.local_parents.remove(&agent_id);
         self.agent
             .subagent_cleanup
@@ -569,6 +799,7 @@ impl RuntimeSessionService {
     /// Starts a binding restore without allowing a prior partial operation's
     /// pending qualifications to attach to later native process installations.
     pub(crate) fn begin_subagent_cleanup_restore(&mut self) {
+        self.agent.subagent_cleanup.owned_loops.clear();
         self.agent.subagent_cleanup.pending_restore.clear();
         self.agent.subagent_cleanup.local_parents.clear();
         self.agent.subagent_cleanup.ownership.retain(|_, edge| {
@@ -762,6 +993,11 @@ impl RuntimeSessionService {
         next: CleanupProcessOwner,
     ) {
         let agent_id = format!("agent-{pane_id}");
+        for binding in self.agent.subagent_cleanup.owned_loops.values_mut() {
+            if binding.pane_id == pane_id && binding.owner.as_ref() == Some(&previous) {
+                binding.owner = Some(next.clone());
+            }
+        }
         for edge in self.agent.subagent_cleanup.ownership.values_mut() {
             for endpoint in [&mut edge.parent, &mut edge.child] {
                 if endpoint.agent_id == agent_id && endpoint.process == previous {
@@ -934,7 +1170,9 @@ impl RuntimeSessionService {
             // Fenced cleanup may terminate at its original parent's pane, but
             // cannot bridge that pane's replacement conversation to an ancestor.
             let parent_pane = edge.parent.agent_id.strip_prefix("agent-")?;
-            if self.agent_shell_store().get(parent_pane)?.session_id != edge.parent.conversation_id
+            let current_parent = &self.agent_shell_store().get(parent_pane)?.session_id;
+            if current_parent != &edge.parent.conversation_id
+                && current_parent != &edge.current_parent_conversation_id
             {
                 return found;
             }

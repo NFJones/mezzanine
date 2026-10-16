@@ -1129,9 +1129,9 @@ impl RuntimeSessionService {
             })?;
             return Ok((session.session_id.clone(), session.transcript_entries));
         }
-        // Only a current routed operation can carry cleanup continuity across
-        // this code-owned ephemeral binding. Ordinary loops and independent
-        // resume have no token. Keep binding and proof atomic before later
+        // Only an exact routed continuation or the installed first loop can
+        // carry existing cleanup proofs across this code-owned binding.
+        // Independent resume has no token. Keep binding and proof atomic before later
         // fallible queue/trace work, whose recovery can itself fail.
         let cleanup = self.prepare_routed_loop_cleanup_rebind(state);
         let previous = self
@@ -1140,6 +1140,7 @@ impl RuntimeSessionService {
             .cloned()
             .ok_or_else(|| MezError::invalid_state("loop work shell is unavailable"))?;
         let target = Self::runtime_new_agent_conversation_id();
+        let initial_cleanup = self.prepare_initial_loop_cleanup_rebind(state, &target)?;
         let fork = state.mode == RuntimeAgentLoopMode::ForkEachIteration;
         let bound = self
             .agent_shell_store_mut()
@@ -1171,6 +1172,13 @@ impl RuntimeSessionService {
         };
         if let Some(cleanup) = cleanup
             && let Err(error) = self.commit_routed_cleanup_rebind(cleanup, &target)
+        {
+            self.agent_shell_store_mut()
+                .restore_session(pane_id, previous)?;
+            return Err(error);
+        }
+        if let Some(cleanup) = initial_cleanup
+            && let Err(error) = self.commit_owned_loop_cleanup_rebind(cleanup)
         {
             self.agent_shell_store_mut()
                 .restore_session(pane_id, previous)?;
@@ -1239,13 +1247,29 @@ impl RuntimeSessionService {
             self.install_primary_agent_name(pane_id, state.parent_display_name.clone())?;
             return Ok(());
         }
-        self.agent_shell_store_mut()
-            .bind_conversation_with_lineage(
-                pane_id,
-                &state.parent_conversation_id,
-                state.parent_transcript_entries,
-                state.parent_prompt_cache_lineage_id.clone(),
-            )?;
+        let cleanup = self.prepare_owned_loop_cleanup_restore(state)?;
+        let previous = self
+            .agent_shell_store()
+            .get(pane_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("loop restoration shell is unavailable"))?;
+        if let Err(error) = self.agent_shell_store_mut().bind_conversation_with_lineage(
+            pane_id,
+            &state.parent_conversation_id,
+            state.parent_transcript_entries,
+            state.parent_prompt_cache_lineage_id.clone(),
+        ) {
+            self.agent_shell_store_mut()
+                .restore_session(pane_id, previous)?;
+            return Err(error.into());
+        }
+        if let Some(cleanup) = cleanup
+            && let Err(error) = self.commit_owned_loop_cleanup_rebind(cleanup)
+        {
+            self.agent_shell_store_mut()
+                .restore_session(pane_id, previous)?;
+            return Err(error);
+        }
         self.agent_shell_store_mut()
             .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
         self.install_primary_agent_name(pane_id, state.parent_display_name.clone())?;

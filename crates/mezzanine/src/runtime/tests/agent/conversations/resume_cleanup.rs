@@ -283,6 +283,22 @@ fn runtime_cleanup_first_owned_loop_iteration_retains_native_subtree() {
         );
         fixture.assert_native_identity(&child, child_native);
         fixture.assert_native_identity(&grandchild, grandchild_native);
+        let root_conversation = fixture
+            .service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        let fences = fixture
+            .service
+            .fence_subagent_descendants_for_parent_conversation("agent-%1", &root_conversation);
+        assert!(fences.contains_key(&child));
+        assert!(
+            fences.contains_key(&grandchild),
+            "owned temporary binding must not break transitive fencing"
+        );
+        fixture.service.restore_subagent_descendant_fences(fences);
         fixture.close("agent-%1");
         assert!(
             !fixture.present(&child),
@@ -295,6 +311,201 @@ fn runtime_cleanup_first_owned_loop_iteration_retains_native_subtree() {
                 Some(token)
             );
         }
+    }
+}
+
+/// Actual stop restores the loop's original durable binding and keeps every
+/// preexisting native cleanup edge usable. A genuine adapter handoff during
+/// the first iteration must preserve that same restoration witness as well.
+#[test]
+fn runtime_cleanup_first_loop_stop_restores_native_subtree_ownership() {
+    for mode in ["--fork", "--new"] {
+        for handoff in [false, true] {
+            let mut fixture = CleanupFixture::new();
+            let child = fixture.spawn("agent-%1");
+            let grandchild = fixture.spawn(&child);
+            let pane = child.strip_prefix("agent-").unwrap();
+            let durable = fixture
+                .service
+                .agent_shell_store()
+                .get(pane)
+                .unwrap()
+                .session_id
+                .clone();
+            let grandchild_native = fixture.native_identity(&grandchild);
+            fixture
+                .service
+                .execute_agent_shell_loop_command(
+                    pane,
+                    &format!("/loop {mode} --limit 1 owned stop"),
+                )
+                .unwrap();
+            let adapter = handoff.then(|| fixture.handoff(&child));
+            fixture.service.stop_agent_turn_for_pane(pane).unwrap();
+            assert_eq!(
+                fixture
+                    .service
+                    .agent_shell_store()
+                    .get(pane)
+                    .unwrap()
+                    .session_id,
+                durable
+            );
+            assert!(!fixture.service.subagent_descendant_is_fenced(&child));
+            fixture.assert_native_identity(&grandchild, grandchild_native);
+            fixture.close("agent-%1");
+            assert!(!fixture.present(&child));
+            assert!(!fixture.present(&grandchild));
+            assert_ne!(
+                mez_mux::process::process_start_token_for_pid(grandchild_native.0),
+                Some(grandchild_native.1)
+            );
+            if let Some(adapter) = adapter {
+                let effects = fixture.service.drain_pane_io_transition().side_effects;
+                assert!(effects.iter().any(|effect| matches!(effect, RuntimeSideEffect::PaneProcessIo { instance, effect: crate::runtime::PaneProcessIoEffect::Terminate { .. } } if instance == &adapter.instance)));
+            }
+        }
+    }
+}
+
+/// Ordinary loop provenance cannot adopt an independently resumed intermediate.
+/// Its own already-genuine outgoing child remains an obligation of that pane,
+/// while historical root close must leave both native processes untouched.
+#[test]
+fn runtime_cleanup_first_loop_does_not_bridge_independent_resume() {
+    for mode in ["--fork", "--new"] {
+        let mut fixture = CleanupFixture::new();
+        let child = fixture.spawn("agent-%1");
+        let grandchild = fixture.spawn(&child);
+        fixture.save("independent-loop-child", Some("agent-%1"));
+        fixture.resume(&child, "independent-loop-child");
+        let child_native = fixture.native_identity(&child);
+        let grandchild_native = fixture.native_identity(&grandchild);
+        fixture
+            .service
+            .execute_agent_shell_loop_command(
+                child.strip_prefix("agent-").unwrap(),
+                &format!("/loop {mode} --limit 1 independent loop"),
+            )
+            .unwrap();
+        fixture.close("agent-%1");
+        fixture.assert_native_identity(&child, child_native);
+        fixture.assert_native_identity(&grandchild, grandchild_native);
+        fixture.close(&child);
+        assert!(!fixture.present(&grandchild));
+        assert_ne!(
+            mez_mux::process::process_start_token_for_pid(grandchild_native.0),
+            Some(grandchild_native.1)
+        );
+    }
+}
+
+/// A replaced actual native owner cannot use a prior loop's original binding
+/// to restore cleanup provenance. Rejection occurs before any shell mutation,
+/// and closing that replacement must not adopt its predecessor's native child.
+#[test]
+fn runtime_cleanup_first_loop_restore_rejects_native_replacement() {
+    let mut fixture = CleanupFixture::new();
+    let child = fixture.spawn("agent-%1");
+    let native = fixture.native_identity(&child);
+    fixture
+        .service
+        .execute_agent_shell_loop_command("%1", "/loop --fork --limit 1 replaced loop owner")
+        .unwrap();
+    let state = fixture.service.agent_loop_state("%1").unwrap().clone();
+    let previous = fixture
+        .service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .clone();
+    fixture
+        .service
+        .terminate_runtime_pane_process("%1", true)
+        .unwrap();
+    fixture
+        .service
+        .start_initial_pane_process(Some("cat"))
+        .unwrap();
+    let error = fixture
+        .service
+        .restore_agent_loop_parent_conversation("%1", &state, None)
+        .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("owned loop cleanup binding changed before restoration"),
+        "{error}"
+    );
+    assert_eq!(
+        fixture.service.agent_shell_store().get("%1"),
+        Some(&previous)
+    );
+    fixture.close("agent-%1");
+    fixture.assert_native_identity(&child, native);
+}
+
+/// A lower durable restore can change session_id before rejecting invalid
+/// lineage. At this component seam the exact shell turn is finished as during
+/// ordinary settlement; the runtime must restore the entire old shell and keep
+/// both native cleanup obligations usable, without committing partial proofs.
+#[test]
+fn runtime_cleanup_first_loop_partial_restore_rolls_back_shell_and_proofs() {
+    let mut fixture = CleanupFixture::new();
+    let child = fixture.spawn("agent-%1");
+    let grandchild = fixture.spawn(&child);
+    let child_native = fixture.native_identity(&child);
+    let grandchild_native = fixture.native_identity(&grandchild);
+    let pane = child.strip_prefix("agent-").unwrap();
+    fixture
+        .service
+        .execute_agent_shell_loop_command(pane, "/loop --fork --limit 1 partial restore")
+        .unwrap();
+    let mut state = fixture.service.agent_loop_state(pane).unwrap().clone();
+    let turn = fixture
+        .service
+        .agent_shell_store()
+        .get(pane)
+        .unwrap()
+        .running_turn_id
+        .clone()
+        .unwrap();
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .finish_turn(pane, &turn)
+        .unwrap();
+    state.parent_prompt_cache_lineage_id = Some(" ".to_string());
+    *fixture
+        .service
+        .agent_loop_state_mut_by_id(&state.loop_id)
+        .unwrap() = state.clone();
+    let previous = fixture
+        .service
+        .agent_shell_store()
+        .get(pane)
+        .unwrap()
+        .clone();
+    let error = fixture
+        .service
+        .restore_agent_loop_parent_conversation(pane, &state, None)
+        .unwrap_err();
+    assert!(
+        error.message().contains("prompt cache lineage id"),
+        "{error}"
+    );
+    assert_eq!(
+        fixture.service.agent_shell_store().get(pane),
+        Some(&previous)
+    );
+    fixture.close("agent-%1");
+    assert!(!fixture.present(&child));
+    assert!(!fixture.present(&grandchild));
+    for (pid, token) in [child_native, grandchild_native] {
+        assert_ne!(
+            mez_mux::process::process_start_token_for_pid(pid),
+            Some(token)
+        );
     }
 }
 
