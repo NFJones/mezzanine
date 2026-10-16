@@ -16008,7 +16008,21 @@ required for in-memory same-conversation reentry but not after restart.
 
 The `/fork` command MUST clone the current conversation into a new thread with
 a fresh identity while preserving the original transcript and any presentation
-log associated with that transcript. It MUST bind the forked conversation to a
+log associated with that transcript. The fork MUST capture a validated complete
+archive, its authoritative compaction epoch, and presentation under the source
+conversation's existing mutation ownership. A committed prefix or selective
+epoch MUST retain its exact model-authored summaries, inclusive coverage,
+execution ownership, uncovered rows, and order in the target's first provider
+request and after reopen. Missing or corrupt required source epochs MUST fail
+closed, not turn into raw-history forks. Target publication MUST validate the
+translated conversation identity against the copied archive and durably publish
+the epoch and required marker before reporting success. Eligible committed
+terminal handoffs MUST reconcile through the existing validated publication
+owner on the target, without changing source bytes or replaying actions.
+These guarantees serialize cooperating store writers, not arbitrary external
+file changes. Forking MUST NOT recharge inherited usage or grant filesystem,
+MCP, approval, or message authority from historical evidence.
+It MUST bind the forked conversation to a
 new agent-mode pane in the same window instead of rebinding or mutating the
 source pane's active conversation. The new pane's agent prompt MUST be seeded
 with the last submitted prompt before the `/fork` command when such a prompt is
@@ -16018,7 +16032,9 @@ Fork persistence and pane setup MUST be atomic from the user's perspective. If
 durable transcript or presentation cloning fails, the incomplete target MUST be
 removed. If any later pane or agent-mode setup step fails, Mezzanine MUST remove
 both the newly created pane and every durable target-conversation artifact while
-leaving the source pane and conversation unchanged.
+leaving the source pane and conversation unchanged. Compensation MUST apply only
+to the newly created target, never an existing target or a source-equals-target
+request. Original failures and any secondary cleanup failures MUST remain visible.
 
 ## 20. Hooks
 

@@ -4,6 +4,8 @@
 mod active_metadata;
 /// Regression coverage for shared, saturating failure-injection countdowns.
 mod failure_countdowns;
+/// Forked active projections preserve source-owned compaction authority.
+mod fork_epoch;
 /// Immutable presentation occurrence encoding and fork provenance.
 mod occurrence;
 /// Content edits cannot invalidate an authoritative selective compaction summary.

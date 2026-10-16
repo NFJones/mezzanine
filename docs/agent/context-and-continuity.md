@@ -30,6 +30,18 @@ need the same care as the files being worked on.
 Hiding the agent shell or detaching the client does not start a new
 conversation. Saved history can also be resumed after restart. A fork receives
 a snapshot of its source conversation and does not absorb later parent work.
+That snapshot includes the saved compaction projection: the first request and
+later resumes retain the same model-written summary and exact uncovered history,
+including selective summaries at their original positions. The full source
+archive remains inspectable; covered raw rows do not reappear as active context.
+Missing or corrupt required compaction state fails visibly rather than creating
+a raw-history fork. Fork publication and any eligible saved terminal-handoff
+reconciliation affect only the new target, never the parent's stored bytes.
+Failed cloning or pane setup removes only the newly created target; requesting
+an existing target does not overwrite or delete it. Forks retain source occurrence
+times while receiving their own conversation/catalog creation time, identity,
+name state and later appends. Historical usage and actions are not charged or
+executed again, and copied history grants no new execution authority.
 Conversation continuity is not proof that a command completed or that the
 filesystem is unchanged: verify interrupted work before asking the agent to
 continue.
