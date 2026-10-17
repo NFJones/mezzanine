@@ -8,6 +8,12 @@ use std::io;
 
 use thiserror::Error;
 
+mod compaction;
+pub(crate) use compaction::{
+    CompactionCostUnit, CompactionFailureDisposition, CompactionFailureEvidence,
+    CompactionFailurePhase,
+};
+
 /// Defines the Result type used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -569,6 +575,8 @@ struct ProviderErrorEvidence {
     incurred_usage: Option<mez_agent::ModelTokenUsage>,
     /// Canonical request/budget observations, never inferred from provider text.
     recovery_facts: Option<mez_agent::recovery_attribution::RecoveryFacts>,
+    /// Auxiliary local validation facts, independent of ordinary MAAP recovery.
+    compaction: Option<Box<CompactionFailureEvidence>>,
 }
 
 impl MezError {
@@ -790,6 +798,21 @@ impl MezError {
         self.provider_evidence
             .as_ref()
             .and_then(|evidence| evidence.recovery_facts.as_ref())
+    }
+
+    /// Retains content-free auxiliary facts through automatic failure wrapping.
+    pub(crate) fn with_compaction_failure(mut self, facts: CompactionFailureEvidence) -> Self {
+        self.provider_evidence
+            .get_or_insert_with(Default::default)
+            .compaction = Some(Box::new(facts));
+        self
+    }
+
+    /// Returns local auxiliary provenance without manufacturing MAAP facts.
+    pub(crate) fn compaction_failure(&self) -> Option<&CompactionFailureEvidence> {
+        self.provider_evidence
+            .as_ref()
+            .and_then(|evidence| evidence.compaction.as_deref())
     }
 
     /// Retains total observed expense without changing failure recovery semantics.
