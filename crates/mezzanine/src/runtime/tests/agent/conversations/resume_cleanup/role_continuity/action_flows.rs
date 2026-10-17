@@ -275,7 +275,7 @@ async fn run_actions(
             .iter()
             .map(|result| (
                 result.action_id.as_str(),
-                result.action_type.as_str(),
+                result.action_type,
                 result.status,
                 result.error.as_ref().map(|error| error.code.as_str())
             ))
