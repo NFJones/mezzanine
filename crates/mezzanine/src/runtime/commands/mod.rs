@@ -684,6 +684,22 @@ impl RuntimeSessionService {
                     .map(|work| work.turn_id.clone())
             })
             .ok_or_else(|| MezError::invalid_state("agent shell session has no running turn"))?;
+        let turn = self
+            .agent_turn_ledger()
+            .turn(&turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
+        if turn.pane_id != pane_id
+            || self
+                .agent_shell_store()
+                .get(pane_id)
+                .is_none_or(|session| session.session_id != turn.conversation_id)
+        {
+            return Err(MezError::invalid_state(
+                "stopped turn no longer owns the pane binding",
+            ));
+        }
+        self.request_agent_worker_cancellation_for_turn(&turn_id);
         let prepared_loop_parent_objective = if let Some(loop_turn) = self.agent_loop_turn(&turn_id)
             && let Some(state) = self.agent_loop_state_by_id(&loop_turn.loop_id)
         {
@@ -694,13 +710,6 @@ impl RuntimeSessionService {
         let scheduler_cancelled = self.cancel_agent_work(&turn_id);
         let interrupted_shell_transactions =
             self.cancel_live_shell_transactions_for_turn(&turn_id)?;
-        let turn = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
         let turn_was_already_terminal = matches!(
             turn.state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
@@ -808,6 +817,7 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Result<usize> {
+        self.request_agent_worker_cancellation_for_turn(turn_id);
         let cancelled = self.running_shell_transaction_targets_for_turn(turn_id);
         self.retire_agent_shell_output_previews_for_turn(turn_id)?;
         self.retire_action_presentation_progress_for_turn(turn_id)?;

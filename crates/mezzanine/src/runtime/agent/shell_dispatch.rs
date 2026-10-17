@@ -192,6 +192,24 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Requests cancellation for every exact actor-owned token of one turn.
+    /// Callers validate their target authority before entering this safety
+    /// prefix. No pane-label expansion, claim removal, result classification,
+    /// I/O, rendering or fallible handoff occurs here. Cancellation is not
+    /// settlement/rollback; original attempt evidence remains available.
+    pub(crate) fn request_agent_worker_cancellation_for_turn(&self, turn_id: &str) {
+        for ((owner, _), cancellation) in &self.agent.approved_external_cancellations {
+            if owner == turn_id {
+                cancellation.cancel();
+            }
+        }
+        for ((owner, _), dispatch) in &self.agent.pending_native_shell_dispatches {
+            if owner == turn_id {
+                dispatch.cancellation.cancel();
+            }
+        }
+    }
+
     /// Claims one authorized native shell action for worker execution.
     pub(crate) fn claim_native_shell_action(
         &mut self,

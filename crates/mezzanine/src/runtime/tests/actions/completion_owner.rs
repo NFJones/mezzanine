@@ -149,6 +149,7 @@ struct CompletionFixture {
     turn: AgentTurnRecord,
     action: AgentAction,
     attempt: String,
+    cancellation: crate::runtime::processes::native_cancellation::NativeActionCancellation,
     group: String,
     expected: ActionResult,
 }
@@ -311,6 +312,7 @@ impl CompletionFixture {
             turn,
             action,
             attempt: dispatch.attempt,
+            cancellation: dispatch.cancellation,
             group,
             expected,
         }
@@ -343,6 +345,80 @@ impl Drop for CompletionFixture {
     fn drop(&mut self) {
         let _ = self.service.terminate_all_pane_processes();
     }
+}
+
+/// Exact cancellation tokens belong to admitted dispatches, not terminal paint.
+/// Retain the actually claimed external token, install a compositor-owned transient
+/// preview solely as a presentation failure cut, then fail its actual retirement
+/// before any shell transaction can be cleared. The issued token must already
+/// be cancelled while claims/results remain available for truthful classification.
+/// The pending sibling stays unclaimed under normal per-turn serialization.
+/// The preview is synthetic UI state, not native worker or invocation evidence;
+/// this fixture never executes HTTP, MCP, a provider, or a native command.
+#[tokio::test]
+async fn runtime_completion_owner_cancels_issued_token_before_preview_retirement_error() {
+    use std::sync::atomic::Ordering;
+    let mut fixture = CompletionFixture::fetch().await;
+    assert!(
+        fixture
+            .service
+            .claim_approved_external_action(&fixture.turn.turn_id, "pending-sibling",)
+            .unwrap()
+            .is_none(),
+        "same-turn external claims remain serialized"
+    );
+    let first_flag = fixture.cancellation.flag();
+    assert!(!first_flag.load(Ordering::SeqCst));
+    let before = fixture.retained().action_results;
+    let context_before = canonical_event_oracle(&runtime_prepared_context_for_turn(
+        &fixture.service,
+        &fixture.turn.turn_id,
+    ));
+    fixture
+        .service
+        .update_agent_shell_output_preview(
+            "%1",
+            crate::runtime::render::RuntimeAgentShellPreviewOwner {
+                turn_id: fixture.turn.turn_id.clone(),
+                action_id: fixture.action.id.clone(),
+                marker: fixture.attempt.clone(),
+            },
+            1,
+            &["presentation-only cancellation fault cut".to_string()],
+        )
+        .unwrap();
+    let previews = fixture.service.agent_shell_output_previews_for_tests("%1");
+    assert_eq!(previews.len(), 1);
+    assert_eq!(previews[0].0.turn_id, fixture.turn.turn_id);
+    assert_eq!(previews[0].0.action_id, fixture.action.id);
+    assert_eq!(previews[0].0.marker, fixture.attempt);
+    assert!(!first_flag.load(Ordering::SeqCst));
+    fixture.service.fail_agent_presentation_install_for_tests(0);
+    let error = fixture
+        .service
+        .cancel_live_shell_transactions_for_turn(&fixture.turn.turn_id)
+        .unwrap_err();
+    assert_eq!(error.message(), "injected pre-install presentation failure");
+    assert!(first_flag.load(Ordering::SeqCst));
+    assert!(fixture.service.approved_external_action_attempt_is_current(
+        &fixture.turn.turn_id,
+        &fixture.action.id,
+        &fixture.attempt,
+    ));
+    assert!(
+        fixture
+            .service
+            .pending_approved_external_actions()
+            .contains(&(fixture.turn.turn_id.clone(), "pending-sibling".to_string()),)
+    );
+    assert_eq!(fixture.retained().action_results, before);
+    assert_eq!(
+        canonical_event_oracle(&runtime_prepared_context_for_turn(
+            &fixture.service,
+            &fixture.turn.turn_id,
+        )),
+        context_before
+    );
 }
 
 /// A terminal external payload must become exact retained execution/context
