@@ -580,6 +580,25 @@ impl RuntimeSessionService {
                 "operation requires an attached primary client",
             ));
         }
+        self.close_runtime_pane_with_owner(Some(primary_client_id), params)
+    }
+
+    /// Closes an exact pane for internally proven session-owned cleanup.
+    /// External dispatch retains its attached-primary authorization; callers
+    /// here must validate the exact live delegation before invoking this path.
+    pub(crate) fn close_runtime_owned_subagent_pane(&mut self, pane_id: &str) -> Result<String> {
+        self.require_live()?;
+        let params = format!(r#"{{"pane_id":"{}","force":true}}"#, json_escape(pane_id));
+        self.close_runtime_pane_with_owner(None, &params)
+    }
+
+    /// Commits common pane shutdown, process retirement, and presentation
+    /// effects using either the authorized client or the internal session owner.
+    fn close_runtime_pane_with_owner(
+        &mut self,
+        primary_client_id: Option<&mez_core::ids::ClientId>,
+        params: &str,
+    ) -> Result<String> {
         let focus_before = self.capture_zen_focus_snapshots();
         let force = runtime_json_bool_field(params, "force").unwrap_or(false);
         let target = pane_target_checked_resolved(&self.session, params)?;
@@ -600,9 +619,13 @@ impl RuntimeSessionService {
                 "pane closed",
             )?;
         }
-        let transition =
+        let transition = if let Some(primary_client_id) = primary_client_id {
             self.session
-                .kill_pane_with_effects(primary_client_id, target.as_deref(), force)?;
+                .kill_pane_with_effects(primary_client_id, target.as_deref(), force)?
+        } else {
+            self.session
+                .kill_pane_session_owned(target.as_deref(), force)?
+        };
         let terminated = if let Some(pane) = transition.pane {
             let pane_id = pane.id.to_string();
             // Membership is already committed, even if later process teardown

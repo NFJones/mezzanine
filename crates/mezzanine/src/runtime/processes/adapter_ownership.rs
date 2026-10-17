@@ -46,6 +46,14 @@ impl RuntimeSessionService {
                 generation: self.process.next_detached_pane_generation,
             },
         );
+        self.transfer_subagent_cleanup_to_adapter(
+            pane_id,
+            primary_pid,
+            &PaneProcessInstance {
+                pane_id: pane_id.to_string(),
+                generation: self.process.next_detached_pane_generation,
+            },
+        );
         Ok(process)
     }
 
@@ -115,11 +123,20 @@ impl RuntimeSessionService {
     ) -> Result<u32> {
         self.require_live()?;
         let pane_id = pane_id.into();
+        let previous = self.adapter_owned_pane_process_instance(&pane_id);
+        let previous_pid = self.primary_pid_for_live_pane_process(&pane_id);
         self.process.detached_pane_processes.remove(&pane_id);
-        Ok(self
+        let pid = self
             .process
             .pane_processes
-            .insert_running_pane_process(pane_id, process)?)
+            .insert_running_pane_process(pane_id.clone(), process)?;
+        if let Some(previous) = previous.filter(|_| previous_pid == Some(pid)) {
+            self.return_subagent_cleanup_to_manager(&pane_id, &previous, pid);
+        } else {
+            self.invalidate_subagent_cleanup_native_install(&pane_id);
+        }
+        self.finalize_pending_subagent_cleanup_restore();
+        Ok(pid)
     }
 
     /// Drains pane-worker I/O through the transport-neutral transition contract.
@@ -159,6 +176,13 @@ impl RuntimeSessionService {
                 pane_id: pane_id.to_string(),
                 generation: process.generation,
             })
+    }
+
+    /// Returns a PID only while the synchronous manager actually owns its
+    /// occupied Child slot. This is ownership evidence, never an OS lookup or
+    /// permission to adopt a process after its runtime owner disappeared.
+    pub(crate) fn manager_owned_pane_process_pid(&self, pane_id: &str) -> Option<u32> {
+        self.process.pane_processes.primary_pid(pane_id)
     }
 
     /// Returns the root PID from either current process owner, when present.

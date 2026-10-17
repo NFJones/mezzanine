@@ -226,8 +226,9 @@ impl RuntimeSessionService {
         }
         if turn.cooperation_mode.as_deref() == Some("macro-orchestration") {
             let parent_agent_id = format!("agent-{}", turn.pane_id);
-            let _ = self.close_subagent_descendants_for_parent_agent(
+            let _ = self.close_subagent_descendants_for_parent_conversation(
                 &parent_agent_id,
+                &turn.conversation_id,
                 "macro orchestration turn failed",
             );
         }

@@ -3532,19 +3532,23 @@ impl RuntimeSessionService {
             self.process.detached_pane_processes.remove(&pane_id);
             return Ok(None);
         }
-        let live_primary_pid = self.primary_pid_for_live_pane_process(&pane_id);
-        if primary_pid != 0
-            && let Some(live_primary_pid) = live_primary_pid
-            && live_primary_pid != primary_pid
-        {
+        // Retained manager/adapter metadata is native exit evidence even
+        // after wait/reap. A logical fresh-spawn capability is never evidence
+        // that a native process exited; unqualified raw events are inert.
+        let Some(live_primary_pid) = self.primary_pid_for_live_pane_process(&pane_id) else {
+            return Ok(None);
+        };
+        if primary_pid != 0 && live_primary_pid != primary_pid {
             return Ok(None);
         }
         let primary_pid = if primary_pid == 0 {
-            live_primary_pid.unwrap_or(0)
+            live_primary_pid
         } else {
             primary_pid
         };
-        self.process.detached_pane_processes.remove(&pane_id);
+        // Keep the exact adapter generation until fallible descendant/turn
+        // settlement succeeds. Failed cleanup can retry the same accepted exit;
+        // it must neither strand obligations nor manufacture replacement proof.
         self.apply_exited_pane_process(
             ExitedPaneProcess {
                 pane_id: pane_id.clone(),
@@ -4349,6 +4353,13 @@ impl RuntimeSessionService {
             .pane_terminal_progress
             .remove(process.pane_id.as_str());
         self.fail_agent_turns_for_unexpected_pane_exit(std::slice::from_ref(&process.pane_id))?;
+        // Descendant cleanup has committed using the still-owned actual
+        // manager/adapter endpoint. Retire adapter metadata before ordinary
+        // removed-pane cleanup so an already-exited process is not terminated
+        // again. An earlier Result error leaves the exact generation retryable.
+        self.process
+            .detached_pane_processes
+            .remove(&process.pane_id);
         self.settle_dead_pane_managed_shell_ownership(&process.pane_id);
         self.process.pane_exit_records.insert(
             process.pane_id.clone(),
@@ -4632,6 +4643,8 @@ impl RuntimeSessionService {
                 descriptor.size,
                 start_directory,
             )?;
+        self.invalidate_subagent_cleanup_native_install(descriptor.pane_id.as_str());
+        self.finalize_pending_subagent_cleanup_restore();
         if let Some(managed) = managed_startup {
             if let Some(compatibility) = managed.fish {
                 self.process
@@ -4778,6 +4791,8 @@ impl RuntimeSessionService {
         self.reconcile_external_agent_registrations();
         let pane_present = self.find_pane_descriptor(pane_id).is_some();
         if !pane_present {
+            // Membership retirement is committed before fallible title repair.
+            self.retire_subagent_cleanup_pane_binding(pane_id);
             self.refresh_subagent_window_names_after_pane_removal()?;
         }
         let agent_id = format!("agent-{pane_id}");
@@ -4833,6 +4848,7 @@ impl RuntimeSessionService {
             self.cancel_agent_session_title_task(&conversation_id);
         }
         self.settle_dead_pane_managed_shell_ownership(pane_id);
+        self.retire_subagent_cleanup_pane_binding(pane_id);
         self.agent_shell_store_mut().remove_session(pane_id);
         self.prune_composer_titles();
         self.integration.remove_pane_permission_override(pane_id);

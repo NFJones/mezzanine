@@ -1030,8 +1030,10 @@ mod tests {
         );
     }
 
-    /// Verifies explicit close and natural process-exit repair label the new
+    /// Verifies explicit close and an actual native process exit label the new
     /// active pane for every affected primary, while stale exits do nothing.
+    /// The exit path retains the real adapter witness through wait/reap rather
+    /// than treating a processless pane and an unqualified event as an exit.
     #[test]
     fn zen_focus_lifecycle_tracks_close_and_process_exit_structural_repair() {
         for path in ["close", "exit"] {
@@ -1065,17 +1067,21 @@ mod tests {
                         .unwrap()
                         .is_none()
                 );
-                service
-                    .apply_pane_process_exit_event(
-                        "%1",
-                        0,
-                        PaneExitStatus {
-                            code: Some(0),
-                            signal: None,
-                            success: true,
-                        },
-                    )
+                service.start_initial_pane_process(Some("cat")).unwrap();
+                let mut process = service.take_running_pane_process_for_adapter("%1").unwrap();
+                let pid = process.primary_pid();
+                let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+                let status = process
+                    .terminate(std::time::Duration::from_millis(10))
                     .unwrap();
+                service
+                    .apply_pane_process_exit_event("%1", pid, status)
+                    .unwrap()
+                    .expect("actual retained native exit should be accepted");
+                assert_ne!(
+                    mez_mux::process::process_start_token_for_pid(pid),
+                    Some(token)
+                );
             }
 
             assert_pane_label(&service, &primary, &survivor);

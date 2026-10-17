@@ -298,11 +298,18 @@ fn runtime_bucket_title_async_process_exit_and_failure_follow_membership() {
         .unwrap();
     assert_eq!(title_for_child(&service, &children[1]), original);
     assert!(service.persistent_subagent(&children[0].0).is_some());
-    service.terminate_runtime_pane_process(pane, true).unwrap();
+    let mut process = service.take_running_pane_process_for_adapter(pane).unwrap();
+    assert_eq!(process.primary_pid(), pid);
+    let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+    let status = process.terminate(Duration::from_millis(10)).unwrap();
     let update = service
         .apply_pane_process_exit_event(pane, pid, status)
         .unwrap()
         .unwrap();
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(pid),
+        Some(token)
+    );
     assert!(!update.closed_window);
     assert!(service.find_pane_descriptor(pane).is_none());
     assert!(service.persistent_subagent(&children[0].0).is_none());

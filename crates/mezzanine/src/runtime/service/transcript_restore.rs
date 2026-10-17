@@ -151,6 +151,7 @@ impl RuntimeSessionService {
     /// session id so a fresh daemon or different pane cannot inherit another
     /// session's context automatically.
     pub fn restore_agent_sessions_from_transcript_store(&mut self) -> Result<usize> {
+        self.begin_subagent_cleanup_restore();
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(0);
         };
@@ -196,6 +197,7 @@ impl RuntimeSessionService {
         let restored_at = current_unix_seconds();
         let mut restored = 0usize;
         let mut interrupted = 0usize;
+        let mut installed_cleanup_bindings = std::collections::BTreeSet::new();
         for metadata in records {
             if runtime_pane_by_id(&self.session, &metadata.pane_id).is_err() {
                 continue;
@@ -527,6 +529,7 @@ impl RuntimeSessionService {
                             .map(|membership| membership.scope_id()),
                     )?;
                 } else {
+                    self.retire_subagent_cleanup_pane_binding(&pane_id);
                     self.agent_shell_store_mut().remove_session(&pane_id);
                     self.rebind_runtime_message_project_scope(&pane_id, None)?;
                 }
@@ -616,6 +619,7 @@ impl RuntimeSessionService {
                     }
                 }
             }
+            installed_cleanup_bindings.insert((format!("agent-{pane_id}"), conversation_id));
             restored = restored.saturating_add(1);
         }
         if restored > 0 || interrupted > 0 {
@@ -652,6 +656,7 @@ impl RuntimeSessionService {
                 self.request_steering_presentation(&pane);
             }
         }
+        self.qualify_subagent_cleanup_restore(&installed_cleanup_bindings);
         Ok(restored)
     }
 

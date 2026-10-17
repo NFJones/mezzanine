@@ -782,6 +782,8 @@ fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
     let primary = service
         .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
         .unwrap();
+    // The accepted pane-mode parent has no native process yet; successful
+    // local delegation must still retain its genuine child cleanup obligation.
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -809,12 +811,16 @@ fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
     let child_agent_id = first_child_turn.agent_id.clone();
     let child_pane_id = first_child_turn.pane_id.clone();
 
-    service
-        .agent_turn_ledger_mut()
-        .finish_turn(&first_child_turn.turn_id, AgentTurnState::Completed)
+    let child_pid = service
+        .primary_pid_for_live_pane_process(&child_pane_id)
         .unwrap();
+    let child_token = mez_mux::process::process_start_token_for_pid(child_pid).unwrap();
     service
-        .emit_subagent_task_result_for_state(&first_child_turn, AgentTurnState::Completed)
+        .complete_running_agent_turn_and_start_ready(
+            &first_child_turn,
+            AgentTurnState::Completed,
+            "generated macro child completed",
+        )
         .unwrap();
     assert_eq!(
         service.macro_judge_step_index_for_turn(&parent_turn.turn_id),
@@ -861,6 +867,10 @@ fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
     );
     assert!(!service.has_macro_run(parent_turn.turn_id.as_str()));
     assert!(!service.has_macro_managed_subagent(&child_agent_id));
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(child_pid),
+        Some(child_token)
+    );
     assert!(!service.has_subagent_lineage(&child_agent_id));
     assert!(!service.has_subagent_scope_declaration(&child_agent_id));
     assert!(service.agent_shell_store().get(&child_pane_id).is_none());
@@ -905,6 +915,8 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
     let primary = service
         .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
         .unwrap();
+    // The accepted pane-mode parent has no native process yet; successful
+    // local delegation must still retain its genuine child cleanup obligation.
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -932,12 +944,16 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
     let child_agent_id = child_turn.agent_id.clone();
     let child_pane_id = child_turn.pane_id.clone();
 
-    service
-        .agent_turn_ledger_mut()
-        .finish_turn(&child_turn.turn_id, AgentTurnState::Completed)
+    let child_pid = service
+        .primary_pid_for_live_pane_process(&child_pane_id)
         .unwrap();
+    let child_token = mez_mux::process::process_start_token_for_pid(child_pid).unwrap();
     service
-        .emit_subagent_task_result_for_state(&child_turn, AgentTurnState::Completed)
+        .complete_running_agent_turn_and_start_ready(
+            &child_turn,
+            AgentTurnState::Completed,
+            "generated macro child completed",
+        )
         .unwrap();
     assert_eq!(
         service.macro_judge_step_index_for_turn(&parent_turn.turn_id),
@@ -984,6 +1000,10 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
     );
     assert!(!service.has_macro_run(parent_turn.turn_id.as_str()));
     assert!(!service.has_macro_managed_subagent(&child_agent_id));
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(child_pid),
+        Some(child_token)
+    );
     assert!(!service.has_subagent_lineage(&child_agent_id));
     assert!(!service.has_subagent_scope_declaration(&child_agent_id));
     assert!(service.agent_shell_store().get(&child_pane_id).is_none());
