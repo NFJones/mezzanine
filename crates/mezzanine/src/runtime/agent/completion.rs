@@ -461,6 +461,22 @@ impl RuntimeSessionService {
     }
 
     /// A settled sibling cannot schedule another provider across an earlier
+    /// required completion gate, including when the sibling is native work.
+    pub(crate) fn ensure_completion_required_gates_ready(&self, turn_id: &str) -> Result<()> {
+        if let Some(error) = self
+            .agent
+            .completion_settlements
+            .external
+            .values()
+            .filter(|receipt| receipt.owner.turn_id == turn_id)
+            .find_map(|receipt| receipt.failure.as_deref())
+        {
+            return Err(error.clone());
+        }
+        Ok(())
+    }
+
+    /// A settled sibling cannot schedule another provider across an earlier
     /// required failure whose already-observed outcome still owns an obligation.
     pub(super) fn external_group_required_failure(
         &self,

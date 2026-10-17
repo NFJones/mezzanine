@@ -701,6 +701,13 @@ impl RuntimeSessionService {
         mut execution: AgentTurnExecution,
         settled_results: Vec<ActionResult>,
     ) -> Result<()> {
+        // The native worker already performed this action. Preserve its exact
+        // result/context before an external sibling's failed required gate can
+        // stop group continuation; never discard or rerun this native effect.
+        self.agent_turn_executions_mut()
+            .insert(turn.turn_id.clone(), execution.clone());
+        self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
+        self.ensure_completion_required_gates_ready(&turn.turn_id)?;
         self.record_runtime_agent_patch_results_for_turn(turn, &execution);
         if self.agent_turn_is_human_paused(&turn.turn_id) {
             self.retain_human_paused_execution(turn, execution, &settled_results)?;

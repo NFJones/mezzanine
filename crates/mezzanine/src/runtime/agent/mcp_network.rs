@@ -1066,7 +1066,6 @@ impl RuntimeSessionService {
         if let Some(error) = self.external_group_required_failure(key) {
             return Err(error);
         }
-        self.transfer_external_completion(key)?;
         let siblings_pending = execution.action_results.iter().any(|result| {
             matches!(result.status, ActionStatus::Running | ActionStatus::Blocked)
                 && !self.action_result_is_inactive_pending_shell_sibling(&turn.turn_id, result)
@@ -1089,6 +1088,7 @@ impl RuntimeSessionService {
         };
         if failure_feedback_queued {
             self.agent_turn_executions_mut().remove(&turn.turn_id);
+            self.transfer_external_completion(key)?;
             return Ok(true);
         }
         // Canonical execution/context already owns this result. Group lifecycle
@@ -1096,11 +1096,13 @@ impl RuntimeSessionService {
         let observed_result = execution.action_results[result_index].clone();
         if self.agent_turn_is_human_paused(&turn.turn_id) {
             self.retain_human_paused_execution(&turn, execution, &[observed_result])?;
+            self.transfer_external_completion(key)?;
             return Ok(true);
         }
         if siblings_pending && execution.terminal_state == AgentTurnState::Failed {
             self.agent_turn_executions_mut()
                 .insert(turn.turn_id.clone(), execution);
+            self.transfer_external_completion(key)?;
             return Ok(true);
         }
         let ready_for_provider_continuation =
@@ -1122,6 +1124,7 @@ impl RuntimeSessionService {
                 execution.terminal_state,
                 "approved_external_action_settled",
             )?;
+            self.transfer_external_completion(key)?;
             return Ok(true);
         }
         self.agent_turn_executions_mut()
@@ -1132,6 +1135,7 @@ impl RuntimeSessionService {
                 "approved_external_action_result_ready",
             )?;
         }
+        self.transfer_external_completion(key)?;
         Ok(true)
     }
 

@@ -670,6 +670,7 @@ impl RuntimeSessionService {
         parent_turn_id: &str,
         reason: &str,
     ) -> Result<bool> {
+        self.ensure_completion_required_gates_ready(parent_turn_id)?;
         let Some(parent_turn) = self
             .agent_turn_ledger()
             .turns()
