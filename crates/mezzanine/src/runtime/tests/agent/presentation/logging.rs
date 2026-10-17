@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod command_acknowledgments;
+
 /// Accepted queued sources must survive a failure before installation of the
 /// header, either of two distinct commands at one action ordinal, or the result.
 /// Retrying presentation alone publishes every component exactly once in order;
