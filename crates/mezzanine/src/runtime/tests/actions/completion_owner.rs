@@ -18,6 +18,7 @@ struct CompletionFixture {
     turn: AgentTurnRecord,
     action: AgentAction,
     attempt: String,
+    group: String,
     expected: ActionResult,
 }
 
@@ -27,7 +28,6 @@ impl CompletionFixture {
     /// permission, sandbox or admission bypass is enabled and no network runs.
     async fn fetch() -> Self {
         let root = temp_root("completed-result-owner");
-        fs::create_dir(&root).unwrap();
         fs::create_dir(root.join("transcripts")).unwrap();
         let mut service = RuntimeServiceFixture::new()
             .control_socket(root.join("control.sock"))
@@ -125,10 +125,41 @@ impl CompletionFixture {
                 .agent_queued_provider_results
                 .is_empty()
         );
+        assert!(!rows.contains("F668_EXACT_COMPLETED_BODY"));
+        let header = service
+            .presentation
+            .agent_published_provider_headers
+            .iter()
+            .find(|key| {
+                key.0 == "%1"
+                    && key.1 == turn.turn_id
+                    && key.2 == turn.conversation_id
+                    && key.4 == 0
+            })
+            .expect("exact current pane/conversation/group/ordinal header is published");
+        let group = header.3.as_str().to_string();
+        let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
+        assert!(
+            canonical_event_oracle(&context)
+                .iter()
+                .any(|event| event.execution_group_id.as_deref() == Some(group.as_str()))
+        );
+        assert_eq!(execution.action_results[1].action_id, sibling.id);
+        assert_eq!(execution.action_results[1].status, ActionStatus::Running);
+        assert!(
+            service
+                .pending_approved_external_actions()
+                .contains(&(turn.turn_id.clone(), sibling.id.clone()))
+        );
         let dispatch = service
             .claim_approved_external_action(&turn.turn_id, &action.id)
             .unwrap()
             .expect("accepted worker attempt");
+        assert!(service.approved_external_action_attempt_is_current(
+            &turn.turn_id,
+            &action.id,
+            &dispatch.attempt,
+        ));
         let expected = ActionResult::succeeded(
             &turn,
             &action,
@@ -141,6 +172,7 @@ impl CompletionFixture {
             turn,
             action,
             attempt: dispatch.attempt,
+            group,
             expected,
         }
     }
@@ -186,6 +218,11 @@ async fn runtime_completion_owner_retains_fetch_before_immediate_install_failure
     let outcome = fixture.outcome();
     let applied = fixture.service.complete_approved_external_action(outcome);
     let retained = fixture.retained();
+    let claim_current = fixture.service.approved_external_action_attempt_is_current(
+        &fixture.turn.turn_id,
+        &fixture.action.id,
+        &fixture.attempt,
+    );
     let result = retained
         .action_results
         .iter()
@@ -194,8 +231,9 @@ async fn runtime_completion_owner_retains_fetch_before_immediate_install_failure
     assert_eq!(
         result.status,
         ActionStatus::Succeeded,
-        "terminal payload lost after accepted completion: {applied:?}"
+        "terminal payload lost after accepted completion: {applied:?}; claim_current={claim_current}"
     );
+    assert_eq!(retained.action_results[1].status, ActionStatus::Running);
     assert_eq!(result.content_text(), fixture.expected.content_text());
     assert_eq!(
         result.structured_content_json,
@@ -211,6 +249,20 @@ async fn runtime_completion_owner_retains_fetch_before_immediate_install_failure
             .count(),
         1
     );
+    let oracle = canonical_event_oracle(&context);
+    let owned = oracle
+        .iter()
+        .filter(|event| {
+            event.source == ContextSourceKind::ActionResult
+                && event.label == format!("action result {}", fixture.action.id)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(owned.len(), 1);
+    assert_eq!(
+        owned[0].execution_group_id.as_deref(),
+        Some(fixture.group.as_str())
+    );
+    let canonical_before_duplicate = oracle;
     assert!(
         applied.unwrap(),
         "first canonical retention changes actor state"
@@ -265,6 +317,7 @@ async fn runtime_completion_owner_retains_fetch_before_immediate_install_failure
     );
     assert_eq!(fixture.retained().action_results, retained.action_results);
     let context = runtime_prepared_context_for_turn(&fixture.service, &fixture.turn.turn_id);
+    assert_eq!(canonical_event_oracle(&context), canonical_before_duplicate);
     assert_eq!(
         context
             .blocks()
