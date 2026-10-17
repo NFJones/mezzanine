@@ -81,6 +81,7 @@ fn scan(body: &str, max_results: usize) -> Scan {
                 "xmp",
                 "iframe",
                 "noembed",
+                "noframes",
                 "plaintext",
             ]
             .iter()
@@ -242,9 +243,15 @@ fn is_html_space(ch: char) -> bool {
 }
 
 /// Finds a real raw-text closing tag rather than parsing embedded fake anchors.
+/// HTML script comment/double-escape states are unsupported: reject them instead
+/// of treating their first apparent closing delimiter as the element's end.
 fn raw_text_end(body: &str, mut cursor: usize, name: &str) -> Option<usize> {
+    let content_start = cursor;
     while let Some(offset) = body[cursor..].find("</") {
         cursor += offset;
+        if name.eq_ignore_ascii_case("script") && body[content_start..cursor].contains("<!--") {
+            return None;
+        }
         if body[cursor + 2..]
             .get(..name.len())
             .is_some_and(|value| value.eq_ignore_ascii_case(name))

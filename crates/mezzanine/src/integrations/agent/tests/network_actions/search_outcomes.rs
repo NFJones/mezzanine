@@ -102,6 +102,8 @@ async fn network_search_nonanchors_and_unqualified_empty_shapes_are_not_results(
         "<template><template></template><a class=\"result__a\" href=\"https://example.test/\">Fake</a></template>",
         "<xmp><a class=\"result__a\" href=\"https://example.test/\">Fake</a></xmp>",
         "<iframe><a class=\"result__a\" href=\"https://example.test/\">Fake</a></iframe>",
+        "<noframes><a class=\"result__a\" href=\"https://example.test/\">Fake</a></noframes>",
+        "<script><!--<script></script><a class=\"result__a\" href=\"https://example.test/\">Fake</a></script>",
         "< a class=\"result__a\" href=\"https://example.test/\">Fake</a>",
         "<a class=\"result__a\" href=\"https://example.test/\">Fake</ a>",
         "<a class=\"result__a\" href=\"https://example.test/\">Fake</a/>",
