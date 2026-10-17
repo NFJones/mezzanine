@@ -219,6 +219,19 @@ async fn run_actions(
     turn_id: &str,
     actions: Vec<mez_agent::AgentAction>,
 ) -> Vec<mez_agent::ActionResult> {
+    let configured_profile = fixture
+        .service
+        .agent_turn_model_profile(turn_id)
+        .cloned()
+        .expect("real admitted turn must retain its configured model profile");
+    assert!(
+        fixture
+            .service
+            .provider_registry()
+            .provider(&configured_profile.provider)
+            .is_some(),
+        "phase=before-real-preparation turn={turn_id} configured_provider=false"
+    );
     prepare_without_io(fixture, turn_id).await;
     let turn = fixture
         .service
@@ -253,11 +266,7 @@ async fn run_actions(
     };
     let mut execution = fixture
         .service
-        .execute_agent_turn_with_provider(
-            turn_id,
-            &provider,
-            runtime_model_profile("runtime-batch", "test"),
-        )
+        .execute_agent_turn_with_provider(turn_id, &provider, configured_profile)
         .unwrap();
     let discovery = execution
         .action_results
@@ -385,6 +394,28 @@ async fn run_actions(
                 .filter(|message| message.envelope.id == message_id)
                 .count(),
             1
+        );
+    }
+    if matches!(
+        fixture
+            .service
+            .agent_turn_ledger()
+            .turn(turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+    ) {
+        let retained = fixture
+            .service
+            .agent_turn_model_profile(turn_id)
+            .expect("active real turn must retain model metadata");
+        assert!(
+            fixture
+                .service
+                .provider_registry()
+                .provider(&retained.provider)
+                .is_some(),
+            "phase=after-local-batch turn={turn_id} configured_provider=false"
         );
     }
     fixture.service.remove_pending_agent_provider_task(turn_id);
