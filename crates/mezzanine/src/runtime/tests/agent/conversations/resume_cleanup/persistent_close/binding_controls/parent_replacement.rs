@@ -28,6 +28,7 @@ fn runtime_persistent_close_parent_return_cannot_recreate_retired_evidence() {
                     parent_agent_id: parent.agent_id.clone(),
                     parent_conversation_id: parent.conversation_id.clone(),
                     objective: "original absent-child obligation".to_string(),
+                    close_authority_revoked: false,
                 },
             );
         }
@@ -62,7 +63,13 @@ fn runtime_persistent_close_parent_return_cannot_recreate_retired_evidence() {
             );
         }
         fixture.resume("agent-%1", "parent-second-binding");
-        assert!(fixture.service.persistent_subagent(&child).is_none());
+        let retained = fixture.service.persistent_subagent(&child).unwrap();
+        assert_eq!(
+            retained.parent_conversation_id,
+            original.parent_conversation_id
+        );
+        assert_eq!(retained.conversation_id, original.conversation_id);
+        assert!(retained.close_authority_revoked);
         fixture.resume("agent-%1", &parent.conversation_id);
         assert_eq!(
             close_action(&mut fixture.service, &parent, &child).status,
@@ -89,4 +96,97 @@ fn runtime_persistent_close_parent_return_cannot_recreate_retired_evidence() {
             ActionStatus::Rejected
         );
     }
+}
+
+/// Revocation is negative-only and survives the original Local capability's
+/// first native installation plus exact adapter handoff. Existing original
+/// metadata and genuine descendant cleanup remain usable, never explicit close.
+#[test]
+fn runtime_persistent_close_revocation_survives_local_native_handoff() {
+    let mut fixture = CleanupFixture::without_parent_process();
+    let child = fixture.spawn("agent-%1");
+    let native = fixture.native_identity(&child);
+    let parent = idle_parent_turn(&mut fixture);
+    fixture.save("local-revocation-parent", None);
+    fixture.resume("agent-%1", "local-revocation-parent");
+    fixture
+        .service
+        .start_initial_pane_process(Some("cat"))
+        .unwrap();
+    let _adapter = fixture.handoff("agent-%1");
+    let retained = fixture.service.persistent_subagent(&child).unwrap();
+    assert_eq!(retained.parent_conversation_id, parent.conversation_id);
+    assert!(retained.close_authority_revoked);
+    assert_eq!(
+        close_action(&mut fixture.service, &parent, &child).status,
+        ActionStatus::Rejected
+    );
+    fixture.assert_native_identity(&child, native);
+    assert_eq!(
+        fixture
+            .service
+            .close_subagent_descendants_for_parent_conversation(
+                "agent-%1",
+                &parent.conversation_id,
+                "original fenced cleanup remains mandatory"
+            )
+            .unwrap(),
+        1
+    );
+    assert!(!fixture.present(&child));
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(native.0),
+        Some(native.1)
+    );
+    assert!(
+        fixture
+            .service
+            .retired_persistent_subagent(&child)
+            .is_none()
+    );
+}
+
+/// Revoked runtime records cannot be encoded as an active restore-owned pair.
+/// The durable child history remains explicitly resumable, while a matching
+/// parent UUID after checkpoint restore cannot manufacture fresh close proof.
+#[test]
+fn runtime_persistent_close_revoked_pair_cannot_rehydrate_from_checkpoint() {
+    let mut fixture = CleanupFixture::new();
+    let child = fixture.spawn("agent-%1");
+    let pane = child.strip_prefix("agent-").unwrap();
+    let original_child = fixture
+        .service
+        .persistent_subagent(&child)
+        .unwrap()
+        .conversation_id
+        .clone();
+    fixture.save(&original_child, None);
+    let parent = idle_parent_turn(&mut fixture);
+    fixture.save(&parent.conversation_id, None);
+    fixture.save("checkpoint-revocation-parent", None);
+    fixture.resume("agent-%1", "checkpoint-revocation-parent");
+    fixture.resume("agent-%1", &parent.conversation_id);
+    assert!(
+        fixture
+            .service
+            .persistent_subagent(&child)
+            .unwrap()
+            .close_authority_revoked
+    );
+    fixture.service.checkpoint_agent_session_metadata().unwrap();
+    let checkpoint = fixture
+        .store
+        .load_agent_session_metadata(fixture.service.session().id.as_str())
+        .unwrap();
+    assert!(!checkpoint.iter().any(|record| record.pane_id == pane));
+    assert!(!fixture.store.inspect(&original_child).unwrap().is_empty());
+    fixture
+        .service
+        .restore_agent_sessions_from_transcript_store()
+        .unwrap();
+    assert!(fixture.service.persistent_subagent(&child).is_none());
+    assert_eq!(
+        close_action(&mut fixture.service, &parent, &child).status,
+        ActionStatus::Rejected
+    );
 }

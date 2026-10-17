@@ -281,6 +281,7 @@ fn runtime_persistent_close_absent_child_cannot_outlive_logical_parent() {
             parent_agent_id: parent.agent_id.clone(),
             parent_conversation_id: parent.conversation_id.clone(),
             objective: "authoritative absent fixture".to_string(),
+            close_authority_revoked: false,
         };
         fixture
             .service

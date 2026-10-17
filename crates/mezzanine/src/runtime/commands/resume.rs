@@ -723,7 +723,7 @@ impl RuntimeSessionService {
                     .map(|membership| membership.scope_id()),
             )?;
             if conversation_replaced {
-                self.retire_persistent_subagent_records_for_parent(&agent_id);
+                self.revoke_persistent_close_for_parent(&agent_id);
                 self.discard_agent_compaction_steering(pane_id);
                 self.clear_received_peer_message_presentations_for_conversation(
                     pane_id,

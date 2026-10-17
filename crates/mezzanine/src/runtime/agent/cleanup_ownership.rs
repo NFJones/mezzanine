@@ -835,7 +835,8 @@ impl RuntimeSessionService {
     ) {
         self.agent.subagent_cleanup.pending_restore.clear();
         for (child, persistent) in &self.agent.persistent_subagents {
-            if installed.contains(&(child.clone(), persistent.conversation_id.clone()))
+            if !persistent.close_authority_revoked
+                && installed.contains(&(child.clone(), persistent.conversation_id.clone()))
                 && installed.contains(&(
                     persistent.parent_agent_id.clone(),
                     persistent.parent_conversation_id.clone(),

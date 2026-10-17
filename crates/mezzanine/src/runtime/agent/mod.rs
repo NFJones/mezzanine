@@ -1321,14 +1321,17 @@ impl RuntimeSessionService {
             .retain(|_, retired| retired.parent_agent_id != agent_id);
     }
 
-    /// Revokes both active and completed persistent metadata attributed to an
-    /// independently replaced parent. Original fenced descendant cleanup edges
-    /// remain separately owned: they cannot mint new completed-close evidence.
-    pub(crate) fn retire_persistent_subagent_records_for_parent(&mut self, agent_id: &str) {
+    /// Revokes explicit close authority, not original cleanup metadata, after
+    /// independent parent replacement. The negative-only marker survives owned
+    /// native/loop migrations and is rolled back with the existing record. It
+    /// cannot mint a capability or erase the original fenced cleanup obligation.
+    pub(crate) fn revoke_persistent_close_for_parent(&mut self, agent_id: &str) {
         self.retire_persistent_close_evidence_for_parent(agent_id);
-        self.agent
-            .persistent_subagents
-            .retain(|_, persistent| persistent.parent_agent_id != agent_id);
+        for persistent in self.agent.persistent_subagents.values_mut() {
+            if persistent.parent_agent_id == agent_id {
+                persistent.close_authority_revoked = true;
+            }
+        }
     }
 
     /// Retains bounded ownership evidence after a persistent child's teardown completes.
@@ -1337,6 +1340,12 @@ impl RuntimeSessionService {
         agent_id: &str,
         persistent: RuntimePersistentSubagent,
     ) {
+        // Teardown clears runtime fences before publication. Retain this
+        // negative witness in the cloned original metadata so cleanup cannot
+        // launder revoked ownership into a completed-close no-op.
+        if persistent.close_authority_revoked {
+            return;
+        }
         self.agent
             .retired_persistent_subagents
             .insert(agent_id.to_string(), persistent);

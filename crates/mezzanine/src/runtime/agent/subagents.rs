@@ -931,7 +931,8 @@ impl RuntimeSessionService {
             let already_closed =
                 self.retired_persistent_subagent(agent_id)
                     .is_some_and(|retired| {
-                        retired.parent_agent_id == turn.agent_id
+                        !retired.close_authority_revoked
+                            && retired.parent_agent_id == turn.agent_id
                             && retired.parent_conversation_id == turn.conversation_id
                             && self.persistent_close_target_is_absent(agent_id)
                     });
@@ -945,7 +946,8 @@ impl RuntimeSessionService {
             }
             return Ok(unavailable()?);
         };
-        if persistent.parent_agent_id != turn.agent_id
+        if persistent.close_authority_revoked
+            || persistent.parent_agent_id != turn.agent_id
             || persistent.parent_conversation_id != turn.conversation_id
         {
             return Ok(unavailable()?);

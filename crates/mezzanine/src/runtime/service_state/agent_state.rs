@@ -64,6 +64,11 @@ pub(crate) struct RuntimePersistentSubagent {
     pub parent_conversation_id: String,
     /// Parent-assigned responsibility published through MMP discovery.
     pub objective: String,
+    /// Negative-only revocation of explicit close/reuse lifecycle authority.
+    /// False is never a proof: live close still requires the existing exact
+    /// native cleanup capability. Original metadata remains available for
+    /// genuine fenced cleanup, including Local-to-first-native continuity.
+    pub close_authority_revoked: bool,
 }
 
 /// Product-specialized mux overlay carrying record-browser and live sources.

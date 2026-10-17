@@ -84,6 +84,11 @@ transitions retain their existing ownership. Failed resume rolls the old
 authority back exactly. Completed-close no-ops are bounded to the original
 parent binding and cannot retire a partially bound replacement whose layout
 entry is absent but shell or native ownership remains.
+Original metadata can remain for mandatory fenced cleanup after parent
+replacement, with explicit-close authority irreversibly revoked for that
+relationship. It is not advertised as caller-owned, converted to a completed
+close, or checkpointed as an active owned pair. Saved child history remains
+available for independent resume; a matching UUID cannot recreate the grant.
 
 ### Saved lineage and live cleanup ownership
 

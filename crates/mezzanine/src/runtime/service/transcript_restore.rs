@@ -596,6 +596,7 @@ impl RuntimeSessionService {
                             parent_agent_id: lineage.parent_agent_id,
                             parent_conversation_id,
                             objective,
+                            close_authority_revoked: false,
                         },
                     );
                     self.restore_persistent_subagent_scope(
@@ -737,6 +738,15 @@ impl RuntimeSessionService {
         let records = self
             .agent_shell_store()
             .sessions()
+            // A revoked persistent relationship remains runtime cleanup
+            // metadata, not a restorable ownership pair. Keep its history
+            // available for independent resume but omit its active binding so
+            // a later matching parent CID cannot recreate authority from the
+            // immutable saved contract or a default false runtime marker.
+            .filter(|session| {
+                self.persistent_subagent(&format!("agent-{}", session.pane_id))
+                    .is_none_or(|persistent| !persistent.close_authority_revoked)
+            })
             .filter(|session| runtime_pane_by_id(&self.session, &session.pane_id).is_ok())
             .filter(|session| {
                 session

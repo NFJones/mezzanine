@@ -10295,6 +10295,11 @@ The baseline action types are:
   capabilities; saved lineage alone MUST NOT mint one. Independently replacing
   the parent MUST revoke its completed-close evidence and fence live explicit
   close authority, even if a later resume returns to the old conversation ID.
+  Original persistent metadata MAY remain for mandatory fenced descendant
+  cleanup, carrying negative-only explicit-close revocation. That marker MUST
+  survive owned native handoff and MUST NOT be a capability when false.
+  Revoked relationships MUST NOT be checkpointed as active restore-owned pairs;
+  their saved history remains independently resumable without parent authority.
   Failed replacement MUST restore the exact prior active/retired records and
   cleanup proofs transactionally without rewinding incarnation high-water marks.
   An authoritative same-owner persistent-child record whose pane is already
