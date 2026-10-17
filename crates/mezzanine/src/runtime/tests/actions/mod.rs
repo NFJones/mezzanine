@@ -3,6 +3,7 @@
 use super::*;
 use mez_agent::outcome::runtime_unrecovered_failure_output_lines;
 
+mod completion_owner;
 mod config;
 mod deferred_logs;
 mod failure_recovery;
