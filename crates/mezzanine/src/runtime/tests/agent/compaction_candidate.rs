@@ -147,7 +147,7 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
     );
     candidate.validate_durable().unwrap();
     let mut invalid_task = task.clone();
-    invalid_task.request.max_output_tokens = Some(1);
+    invalid_task.summary_correction.manual_words = Some(1);
     assert!(
         service
             .manual_compaction_candidate_context(&invalid_task, "oversized summary")

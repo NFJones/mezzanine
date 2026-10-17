@@ -174,6 +174,12 @@ impl RuntimeSessionService {
             Some(raw_text) => format!("{raw_text}\nprovider_error: {error}"),
             None => format!("provider_error: {error}"),
         };
+        if let Some(facts) = error.compaction_failure() {
+            // A typed auxiliary record is rendered independently of ordinary
+            // MAAP attribution. Only enums/counters/units enter the transcript.
+            raw_text.push('\n');
+            raw_text.push_str(&facts.diagnostic_line());
+        }
         let safe_fallbacks = match self
             .agent
             .agent_turn_configured_model_profiles
@@ -226,8 +232,9 @@ impl RuntimeSessionService {
         }
         if turn.cooperation_mode.as_deref() == Some("macro-orchestration") {
             let parent_agent_id = format!("agent-{}", turn.pane_id);
-            let _ = self.close_subagent_descendants_for_parent_agent(
+            let _ = self.close_subagent_descendants_for_parent_conversation(
                 &parent_agent_id,
+                &turn.conversation_id,
                 "macro orchestration turn failed",
             );
         }

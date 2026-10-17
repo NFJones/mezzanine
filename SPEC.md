@@ -5916,6 +5916,13 @@ use owner-private socket permissions, and preserve live or unsafe existing entri
 Cleanup MUST inspect socket identity through the retained parent directory and
 withhold removal of replacements. Pathname bind and check/unlink cleanup are
 cooperative same-user boundaries, not atomic protection against hostile renames.
+Native stat device numbers MUST normalize to the held-descriptor std metadata
+u64 representation before identity comparison or retention: Linux preserves all
+unsigned bits; Darwin sign-extends its signed 32-bit device, including high-bit
+values, matching `MetadataExt::dev`. Device AND inode equality and no-follow
+observation MUST remain mandatory for startup election, frontend discovery and
+listener cleanup. This representation conversion MUST NOT weaken replacement
+rejection or permit truncation through a 32-bit unsigned intermediate.
 Each admitted frontend setup MUST be consumed once and bind its exact handle,
 protected profile alias and credential-free initialization parameters. The owner
 MUST reuse control initialization validation and enforce profile role/scope;
@@ -9713,14 +9720,34 @@ arrivals after the captured history boundary without restoring summarized
 prefixes or admitting those arrivals to the frozen compaction selection.
 Completed compactor output that is empty, malformed, over the canonical UTF-8
 block-byte bound, or over its frozen summary cost allowance MUST be rejected
-privately before chunk/synthesis staging or publication. With independently
+privately before chunk/synthesis staging or publication. Raw-text compaction
+MUST also decode a recognizable optional final-say JSON or
+`mezzanine-action-json` frame locally, validate only its one final payload, and
+never publish its envelope or execute enclosed actions. Unframed JSON is an
+envelope only with top-level rationale and an actions array containing type-tagged
+objects (or empty actions); recognition MUST NOT require those actions to be valid.
+Isolated/nested action or rationale data, generic code fences and syntactically
+incomplete unframed JSON remain raw summary text subject to semantic bounds;
+explicit MAAP fences identify malformed/incomplete frames unambiguously.
+With independently
 validated frozen source, Mezzanine MUST admit bounded auxiliary correction under
 a fresh exact task generation while preserving the waiting turn, logical epoch,
 current source and earlier accepted staging. The model MUST receive the actual
-local target unit (words or estimated input tokens), byte bound and separate
-provider output-token ceiling, including framing headroom. Oversize corrections
-MUST tighten the enforceable ceiling and strictly improve each still-invalid
-size dimension; repeated output MUST fail without publication. Empty/malformed
+local target unit (words or estimated input tokens) and independent byte bound.
+Frozen semantic acceptance MUST NOT shrink merely because advisory correction
+guidance becomes shorter. OpenAI MUST NEVER receive `max_output_tokens`, for
+ordinary execution, manual/automatic compaction, corrections, auxiliary work,
+transport/output-limit/context-split retries, or either streaming mode. Canonical
+omission and cache controls MUST remain unchanged; no compactor exception,
+provider/API switch or guessed alternate field may substitute for this contract.
+Other providers' genuinely supported generation controls remain separate from
+semantic units and retain configured response-framing/reasoning allocation.
+Oversize corrections MUST request a shorter nonzero advisory target and strictly
+improve each still-invalid fixed size dimension; repeated output MUST fail
+without publication. Frozen-valid output MUST be considered before guidance-floor
+exhaustion and proceed to the existing complete-request fit/no-progress owner.
+Still-invalid output after the issued floor MUST terminate with typed evidence,
+not halve to zero, accept invalid output or inflate budgets. Empty/malformed
 output MUST have a finite per-source correction budget, independent of unlimited
 transport retry policy. Legitimately advancing chunks/ranges MUST NOT be capped
 by an arbitrary total response count. Known incurred auxiliary usage MUST count
@@ -9731,8 +9758,11 @@ before accepted compaction and complete-request fit; cancellation, pause, stale
 delivery and failed admission retain existing exact-ownership semantics.
 If the complete candidate after a model-authored summary exceeds the safe input
 allowance, compaction MAY request a shorter model-authored summary of the same
-frozen source while the complete candidate estimate and enforceable output
-ceiling strictly decrease. A repeated or non-improving candidate MUST fail
+frozen source while the complete candidate estimate and independently labeled
+advisory input-token target strictly decrease. Only that complete-fit/replan
+owner may derive a tighter target from measured context; word and estimated
+input-token allowances MUST NOT be numerically conflated with provider output
+tokens. A repeated or non-improving candidate MUST fail
 without publication. If that summary cannot cover the excess,
 provider-context recovery MUST attempt another eligible closed range beyond an
 exact barrier before declaring exhaustion, even when the initial planner's
@@ -9744,6 +9774,15 @@ the complete request check and publishes one atomic epoch. Each attempted
 complete candidate MUST make bounded progress; no failed candidate may publish
 an epoch or resume the provider turn. Exhaustion MUST fail visibly with
 content-free component-size estimates without dropping the original context.
+Auxiliary failure provenance MUST distinguish summary/synthesis/complete-fit
+phase, exact source/task generations, observed defect, frozen allowance/unit,
+measured cost/bytes, advisory target/unit and admitted correction count from
+ordinary MAAP recovery counts. Typed disposition MUST identify no-progress,
+finite blank/malformed exhaustion, guidance floor or complete-fit failure.
+Canonical OpenAI omission MUST be explicit when its wire shape is resolved;
+an internal ModelRequest allocation is not evidence of a transmitted field.
+Diagnostics MUST NOT include summary/prompt/HTTP/secret content or manufacture
+ordinary correction counts from missing auxiliary provenance.
 Late append-only arrivals, including peer sends and runtime task-result mail,
 MUST survive staged compaction in their original order, occurrence identity,
 source, trust, retention, and execution ownership. Rebase MUST validate that
@@ -15836,7 +15875,42 @@ lineage record for delegation limits: direct parent, root, depth, display name,
 and terminal status. Structural lineage alone MUST NOT re-establish live parent
 authority, child-pane placement, or transient parent/child orchestration state;
 a restored child therefore cannot delegate until live authority is established
-by a new runtime relationship. If a checkpoint records an active turn that cannot be
+by a new runtime relationship. Historical structural ancestry MUST NOT authorize
+parent-exit, pane-close, failed-spawn, macro, or replacement-fencing teardown.
+Destructive descendant traversal MUST validate every current cleanup edge and
+STOP at any historical-only intermediate, not merely exclude restored leaves.
+Cleanup ownership MUST come from the actual live delegation's exact parent
+runtime incarnation/conversation and exact child native owner/binding, never
+persisted root/depth/label fields or missing OS evidence. A successful fresh
+local spawn MAY commit a runtime-only logical parent incarnation before parent
+native startup; merely having no process MUST NOT create such authority. The
+incarnation MUST be captured before child setup, published only after successful
+setup, preserved through conversation-only fencing, and retired with its pane or
+shell lifetime. Its first actual native installation MAY migrate that exact
+captured incarnation without recapturing a conversation; later replacement MUST
+NOT adopt its old obligations. Raw exit events without retained actual native
+ownership MUST be inert even when a logical cleanup incarnation exists.
+An exact runtime-owned routed setup/loop binding transition or initial ordinary
+loop binding/restoration MAY preserve already validated incoming and outgoing
+cleanup edges across its own ephemeral conversation changes. Ordinary loop
+continuity MUST be sealed to the installed loop incarnation and current owned
+binding, retired at loop/pane/session retirement, and MUST NOT be reconstructed
+after independent resume or native replacement.
+The original delegator conversation MUST remain immutable. A runtime-only
+current-parent cleanup qualifier MAY observe the same owned parent restoration;
+ordinary resume, saved lineage, or matching pane IDs MUST NOT mint it. Binding
+and proof updates MUST be atomic, including rollback after partial binding
+errors, and MUST NOT grant execution or permission authority.
+A stale callback MUST be inert
+before turn, signal, layout, scope, or identity mutation. Genuine children fenced
+by parent conversation replacement MUST retain their original same-owner cleanup
+obligation across further replacements; they MUST NOT be adopted by the new
+conversation or leaked by treating all fenced edges as historical. Failed resume
+MUST restore cleanup proof and fences transactionally. Qualified persistent
+snapshot restoration MAY establish cleanup edges only after both exact bindings
+from that same successful restore operation have actual current runtime owners;
+pending qualification and standalone saved lineage MUST NOT authorize teardown.
+If a checkpoint records an active turn that cannot be
 reconnected after restart, Mezzanine MUST restore the conversation binding but
 MUST mark the turn as interrupted and require a fresh user action to retry.
 

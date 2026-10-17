@@ -1922,11 +1922,44 @@ fn runtime_resume_hides_subagents_but_allows_toggle_and_direct_resume() {
 
 /// Verifies direct resume retains durable delegation ceilings while refusing
 /// to treat a reused historical parent pane as current permission or scope
-/// authority.
+/// authority. Requested shutdown and unexpected process-exit cleanup must also
+/// leave the independently resumed native process, conversation, pending work,
+/// message identity and pane alive, with fresh input still reaching that process.
 #[test]
 fn runtime_direct_resume_keeps_structural_lineage_without_stale_parent_authority() {
-    let mut service = test_runtime_service();
-    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-stale-parent"));
+    assert_direct_resume_survives_historical_parent_shutdown(false);
+}
+
+/// Verifies an actual fixture-owned parent process exit cannot tear down a
+/// separately resumed historical child, while genuine live children still close.
+/// This separate test reaches its own exit assertion even when requested-close
+/// coverage fails before the production fix.
+#[test]
+fn runtime_direct_resume_survives_historical_parent_process_exit() {
+    assert_direct_resume_survives_historical_parent_shutdown(true);
+}
+
+/// Exercises durable direct resume and one shutdown cause using only generated
+/// transcript data and exact runtime-owned native processes; no PID is supplied
+/// to a signal API and no provider execution is performed.
+fn assert_direct_resume_survives_historical_parent_shutdown(unexpected_exit: bool) {
+    let root = std::env::temp_dir().join(format!(
+        "mez-r311-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let control_socket = root.join("c.sock");
+    assert!(control_socket.as_os_str().len() < 108);
+    let mut service = RuntimeServiceFixture::new()
+        .control_socket(control_socket)
+        .build();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let transcript_store = AgentTranscriptStore::new(root.join("transcripts"));
     transcript_store
         .append(&TranscriptEntry {
             conversation_id: "resumed-child".to_string(),
@@ -1957,10 +1990,60 @@ fn runtime_direct_resume_keeps_structural_lineage_without_stale_parent_authority
         .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
         .unwrap();
     service
-        .start_initial_pane_process(Some("cat >/dev/null"))
+        .start_initial_pane_process(Some("/bin/sh -c 'read -r line'"))
         .unwrap();
+    let parent_conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let live_child = service
+        .spawn_runtime_persistent_subagent_session_owned(
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: String::new(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: false,
+            },
+            &parent_conversation,
+            "fixture-owned live cleanup obligation",
+        )
+        .unwrap();
+    let live_child: serde_json::Value = serde_json::from_str(&live_child).unwrap();
+    let live_child_pane = live_child["pane"]["pane_id"].as_str().unwrap();
+    let receipt = root.join("native-input-receipts");
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&receipt)
+        .unwrap();
+    let survivor_command = mez_mux::process::shell_command_from_argv(&[
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "while IFS= read -r line; do printf \"%s:%s\\n\" \"$$\" \"$line\" >> \"$1\"; done"
+            .to_string(),
+        "resume-cleanup-fixture".to_string(),
+        receipt.to_string_lossy().into_owned(),
+    ])
+    .unwrap();
     let resumed_pane = service
-        .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat >/dev/null"))
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some(&survivor_command))
         .unwrap()
         .pane_id;
     service
@@ -2016,7 +2099,7 @@ fn runtime_direct_resume_keeps_structural_lineage_without_stale_parent_authority
         .spawn_runtime_subagent(
             &primary,
             SubagentSpawnRequest {
-                parent_agent_id: resumed_agent_id,
+                parent_agent_id: resumed_agent_id.clone(),
                 requested_role: "explorer".to_string(),
                 placement: "new-pane".to_string(),
                 cooperation_mode: CooperationMode::ExploreOnly,
@@ -2054,7 +2137,151 @@ fn runtime_direct_resume_keeps_structural_lineage_without_stale_parent_authority
         pane_count_before,
         "a restored structural-only parent must reject descendants before pane allocation"
     );
+    let process_before = service
+        .primary_pid_for_live_pane_process(resumed_pane.as_str())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let start_token_before = loop {
+        assert_eq!(
+            service.primary_pid_for_live_pane_process(resumed_pane.as_str()),
+            Some(process_before)
+        );
+        if let Some(token) = mez_mux::process::process_start_token_for_pid(process_before) {
+            assert_eq!(
+                service.primary_pid_for_live_pane_process(resumed_pane.as_str()),
+                Some(process_before)
+            );
+            break token;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "owned root kernel start token unavailable before shutdown"
+        );
+        wait_for_pane_process_activity(&service, resumed_pane.as_str(), Duration::from_millis(10));
+    };
+    let turn = service
+        .start_agent_prompt_turn(resumed_pane.as_str(), "independent resumed work")
+        .unwrap();
+    let turn_before = service
+        .agent_turn_ledger()
+        .turn(&turn.turn_id)
+        .unwrap()
+        .clone();
+    let identity = service
+        .ensure_runtime_message_identity(
+            &resumed_agent_id,
+            None,
+            "agent",
+            &[],
+            crate::runtime::current_unix_millis(),
+        )
+        .unwrap();
+    let lineage_before = service.subagent_lineage(&resumed_agent_id).cloned();
+    assert_resume_cleanup_fixture_response(
+        &mut service,
+        resumed_pane.as_str(),
+        &receipt,
+        process_before,
+        "ready-before-shutdown",
+    );
+    if unexpected_exit {
+        service
+            .write_runtime_pane_input("%1", b"exit-owned-parent\n")
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if service
+                .poll_pane_processes()
+                .unwrap()
+                .iter()
+                .any(|exit| exit.pane_id == "%1")
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "owned parent did not exit");
+            wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+        }
+    } else {
+        service
+            .dispatch_runtime_pane_close(&primary, r#"{"pane_id":"%1","force":true}"#)
+            .unwrap();
+    }
+    assert!(
+        service
+            .find_pane_descriptor(resumed_pane.as_str())
+            .is_some(),
+        "historical parent shutdown must not remove the independently resumed pane (unexpected_exit={unexpected_exit})"
+    );
+    assert!(
+        service.find_pane_descriptor(live_child_pane).is_none(),
+        "a genuine current child must still be closed by its owning parent's shutdown"
+    );
+    assert_eq!(
+        service.primary_pid_for_live_pane_process(resumed_pane.as_str()),
+        Some(process_before)
+    );
+    assert_eq!(
+        mez_mux::process::process_start_token_for_pid(process_before),
+        Some(start_token_before)
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get(resumed_pane.as_str())
+            .unwrap()
+            .session_id,
+        "resumed-child"
+    );
+    assert_eq!(
+        service.agent_turn_ledger().turn(&turn.turn_id),
+        Some(&turn_before)
+    );
+    assert_eq!(
+        service.subagent_lineage(&resumed_agent_id),
+        lineage_before.as_ref()
+    );
+    assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&identity.agent_id),
+        Some(&identity)
+    );
+    assert_resume_cleanup_fixture_response(
+        &mut service,
+        resumed_pane.as_str(),
+        &receipt,
+        process_before,
+        "survived-parent-shutdown",
+    );
     service.terminate_all_pane_processes().unwrap();
+}
+
+/// Requires a fresh script-generated acknowledgment, not merely PTY input echo,
+/// from the same fixture-owned process before and after historical-parent teardown.
+/// Native agent presentation intentionally hides process text; the exclusively
+/// created receipt records the original shell's PID and distinct input marker.
+fn assert_resume_cleanup_fixture_response(
+    service: &mut RuntimeSessionService,
+    pane_id: &str,
+    receipt: &std::path::Path,
+    process_id: u32,
+    marker: &str,
+) {
+    service
+        .write_runtime_pane_input(pane_id, format!("{marker}\n").as_bytes())
+        .unwrap();
+    let expected = format!("{process_id}:{marker}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut received = String::new();
+    while Instant::now() < deadline {
+        service.poll_pane_outputs(4096).unwrap();
+        received = fs::read_to_string(receipt).unwrap();
+        if received.lines().any(|line| line == expected) {
+            break;
+        }
+        wait_for_pane_process_activity(service, pane_id, Duration::from_millis(10));
+    }
+    assert!(received.lines().any(|line| line == expected), "{received}");
 }
 
 /// Verifies direct resume fails closed when a durable conversation is marked

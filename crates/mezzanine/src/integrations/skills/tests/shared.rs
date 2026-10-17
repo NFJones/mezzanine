@@ -133,12 +133,13 @@ fn shared_project_skill_reads_reject_unsafe_nodes_and_preserve_user_alias() {
     fs::write(&path, [0xff]).unwrap();
     assert!(read_shared(&root, "review").is_err());
     fs::remove_file(&path).unwrap();
-    rustix::fs::mkfifoat(
-        rustix::fs::CWD,
-        &path,
-        rustix::fs::Mode::from_raw_mode(0o600),
-    )
-    .unwrap();
+    use std::os::unix::ffi::OsStrExt;
+    let fifo = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: fifo is a live NUL-terminated path in our unique temporary root.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    assert!(std::os::unix::fs::FileTypeExt::is_fifo(
+        &fs::symlink_metadata(&path).unwrap().file_type()
+    ));
     assert!(read_shared(&root, "review").is_err());
     fs::remove_file(&path).unwrap();
     fs::write(&path, "safe").unwrap();

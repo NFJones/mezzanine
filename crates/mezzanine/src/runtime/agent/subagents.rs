@@ -1749,7 +1749,7 @@ impl RuntimeSessionService {
                 return Err(error);
             }
             self.agent.subagent_task_routes.remove(&turn.turn_id);
-            self.remove_subagent_authority_state(&turn.agent_id);
+            self.retire_subagent_execution_authority(&turn.agent_id);
             if is_persistent_macro_step {
                 self.agent.macro_run_by_child_turn.remove(&turn.turn_id);
                 if let Some(dependency) = dependency.as_ref() {
@@ -1781,7 +1781,7 @@ impl RuntimeSessionService {
         }
         self.agent.subagent_task_routes.remove(&turn.turn_id);
         if !is_persistent_macro_step && !is_persistent_agent {
-            self.remove_subagent_authority_state(&turn.agent_id);
+            self.retire_subagent_execution_authority(&turn.agent_id);
         }
         if success && !is_persistent_macro_step && !is_persistent_agent {
             self.agent
