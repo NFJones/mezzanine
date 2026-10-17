@@ -11,8 +11,9 @@ use mez_core::ids::AgentId;
 
 /// A genuine persistent worker C1 can independently resume saved ROOT C2 in its
 /// existing pane and start real work without changing the native registration.
-/// The base fails specifically at real prompt admission after all resume/native
-/// preconditions pass. Candidate acceptance also exercises the full capability
+/// The intended base oracle is a role conflict at real prompt admission after
+/// resume/native preconditions pass; execution must establish that first failure.
+/// Candidate acceptance also exercises the full capability
 /// vector through objective fanout, plus ordinary real-turn sender/preparation
 /// owners; neither forged sender fields nor synthetic ledger work can qualify it.
 #[tokio::test(flavor = "current_thread")]
@@ -30,12 +31,14 @@ async fn runtime_saved_root_resume_keeps_native_role_for_real_prompt() {
         .registered_identity(&child_id)
         .unwrap()
         .clone();
+    // skip_initial_turn does not promise a parent MMP registration/subscription.
+    // Preserve optional observations without manufacturing an unrelated setup;
+    // None equality is NOT a positive receipt/cursor preservation control.
     let parent_identity = fixture
         .service
         .message_service()
         .registered_identity(&parent_id)
-        .unwrap()
-        .clone();
+        .cloned();
     let parent_cursor = fixture
         .service
         .message_service()
@@ -137,8 +140,9 @@ async fn runtime_saved_root_resume_keeps_native_role_for_real_prompt() {
         fixture
             .service
             .message_service()
-            .registered_identity(&parent_id),
-        Some(&parent_identity)
+            .registered_identity(&parent_id)
+            .cloned(),
+        parent_identity
     );
     assert_eq!(
         fixture
