@@ -8,6 +8,7 @@ use mez_core::ids::PaneId;
 use mez_terminal::TerminalScreen;
 
 mod manual_compaction_preparation;
+mod shutdown_admission;
 
 /// Verifies that typed runtime events can cross the async actor boundary through
 /// the same serialized request channel used by legacy compatibility requests.

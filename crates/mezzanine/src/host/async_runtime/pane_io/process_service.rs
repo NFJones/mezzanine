@@ -1,4 +1,10 @@
 //! Combined per-pane output and side-effect worker loop.
+//!
+//! One task owns read/write/resize/termination order for one exact generation.
+//! Cooperative supervisor stop is checked only at loop/idle boundaries, never
+//! selected around termination: an already-started graceful wait keeps its
+//! original future and deadline. Consuming worker adapters settle ownership on
+//! return; this borrowing service itself leaves the driver with its caller.
 
 use super::delivery::{
     PendingShellInputDelivery, filter_shell_input_acknowledgements,
@@ -22,11 +28,27 @@ use super::{
 /// ownership path from racing write, resize, terminate, and output handling
 /// across independent tasks while avoiding one actor round trip per output
 /// chunk during bursty pane redraws.
+#[cfg(test)]
 pub async fn run_async_pane_process_service<B, F>(
     handle: &AsyncRuntimeSessionHandle,
     driver: &mut AsyncPaneProcessDriver<B>,
     config: AsyncPaneProcessServiceConfig,
+    should_stop: F,
+) -> Result<AsyncPaneProcessServiceReport>
+where
+    B: AsyncPaneProcessIo,
+    F: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    run_async_pane_process_service_until(handle, driver, config, should_stop, None).await
+}
+
+/// Adds supervisor stop wakeups at loop boundaries, never around termination.
+pub(super) async fn run_async_pane_process_service_until<B, F>(
+    handle: &AsyncRuntimeSessionHandle,
+    driver: &mut AsyncPaneProcessDriver<B>,
+    config: AsyncPaneProcessServiceConfig,
     mut should_stop: F,
+    mut stop: Option<super::watch::Receiver<bool>>,
 ) -> Result<AsyncPaneProcessServiceReport>
 where
     B: AsyncPaneProcessIo,
@@ -63,7 +85,7 @@ where
                 .await?;
             return Ok(report);
         }
-        if should_stop(report.polls, state) {
+        if should_stop(report.polls, state) || stop.as_ref().is_some_and(|stop| *stop.borrow()) {
             if let Some(delivery) = pending_shell_input.as_mut() {
                 submit_shell_input_progress_checkpoint(handle, driver, delivery, true, &mut report)
                     .await?;
@@ -445,6 +467,7 @@ where
             if let Some(output_activity) = driver.output_activity() {
                 tokio::select! {
                     result = output_activity => result.map_err(super::MezError::mark_pane_backend_failure)?,
+                    () = wait_for_worker_stop_change(&mut stop) => {}
                     _ = handle.wait_for_event_delivery() => {}
                     result = side_effect_watcher.changed() => {
                         let _ = result;
@@ -457,6 +480,7 @@ where
             } else {
                 tokio::select! {
                     _ = handle.wait_for_event_delivery() => {}
+                    () = wait_for_worker_stop_change(&mut stop) => {}
                     result = side_effect_watcher.changed() => {
                         let _ = result;
                     }
@@ -474,6 +498,16 @@ where
     }
     report.terminal_state = *lifecycle_watcher.borrow();
     Ok(report)
+}
+
+/// Wakes only the idle loop; cancellation cannot interrupt an owned wait/reap.
+async fn wait_for_worker_stop_change(stop: &mut Option<super::watch::Receiver<bool>>) {
+    if let Some(stop) = stop
+        && stop.changed().await.is_ok()
+    {
+        return;
+    }
+    std::future::pending().await
 }
 
 /// Retires the exact-process wakeup route on every worker return path.
@@ -647,6 +681,7 @@ where
         }
     }
     let event = driver.terminate_event(force).await;
+    super::helpers::require_pane_retirement_event(&event)?;
     if is_process_exit_event(&event) {
         report.exit_events = report.exit_events.saturating_add(1);
     }

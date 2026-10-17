@@ -24,6 +24,8 @@ mod process_metadata;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod pty;
+/// Exact-child return slots shared with the session cleanup owner.
+mod retirement;
 /// Exposes the signals module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -62,9 +64,13 @@ pub use process_metadata::{
     process_environment_for_pid, process_executable_identity_for_pid,
     process_executable_path_for_pid, process_start_token_for_pid,
 };
+pub use retirement::{
+    PaneProcessChildReservation, PaneProcessCleanupAttempt, PaneProcessCleanupIdentity,
+    PaneProcessRetirementOwner, PreparedPaneProcessCleanupRetry, RetainedPaneChild,
+};
 pub use spawn::{
     pane_command_plan, shell_command_from_argv, spawn_argv_pty_process, spawn_pane_process,
-    spawn_pane_process_with_start_directory,
+    spawn_pane_process_with_start_directory, spawn_retained_argv_pty_process,
 };
 pub use types::{
     ExitedPaneProcess, PaneCommandPlan, PaneExitStatus, PaneProcessEnvironment, PaneProcessLaunch,
