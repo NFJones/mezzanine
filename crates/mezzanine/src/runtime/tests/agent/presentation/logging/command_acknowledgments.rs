@@ -136,7 +136,8 @@ fn command_fixture(label: &str, commands: &[&str], transaction_queue: bool) -> C
     let response_id = key.3.as_str().to_string();
     let mut entries = Vec::new();
     for (index, command) in commands.iter().enumerate() {
-        service.presentation.occurrence_clock_millis = Some(Some(1_000 + index as u64 * 1_000));
+        service.presentation.occurrence_clock_millis =
+            Some(Some(1_000 + i64::try_from(index).unwrap() * 1_000));
         if transaction_queue {
             service
                 .queue_ordered_provider_transaction_command(
