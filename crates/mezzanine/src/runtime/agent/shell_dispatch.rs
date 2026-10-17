@@ -701,6 +701,13 @@ impl RuntimeSessionService {
         mut execution: AgentTurnExecution,
         settled_results: Vec<ActionResult>,
     ) -> Result<()> {
+        // Normalize only group liveness; the native action's actual Failed
+        // result remains unchanged while an admitted external sibling runs.
+        if execution.terminal_state == AgentTurnState::Failed
+            && self.execution_has_running_external_sibling(&turn.turn_id, &execution)
+        {
+            execution.terminal_state = AgentTurnState::Running;
+        }
         // The native worker already performed this action. Preserve its exact
         // result/context before an external sibling's failed required gate can
         // stop group continuation; never discard or rerun this native effect.
@@ -712,14 +719,6 @@ impl RuntimeSessionService {
         if self.agent_turn_is_human_paused(&turn.turn_id) {
             self.retain_human_paused_execution(turn, execution, &settled_results)?;
             return Ok(());
-        }
-        // A failed network sibling may have settled before this shell result.
-        // Keep the batch and its external worker alive until all owned results
-        // are available for one bounded correction decision.
-        if execution.terminal_state == AgentTurnState::Failed
-            && self.execution_has_running_external_sibling(&turn.turn_id, &execution)
-        {
-            execution.terminal_state = AgentTurnState::Running;
         }
         let failed_native_apply_patch_ids = settled_results
             .iter()
