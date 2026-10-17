@@ -76,7 +76,21 @@ fn runtime_persistent_close_fresh_checkpoint_failure_rolls_back_before_proof() {
         .local_cleanup_parent_state_for_tests("agent-%1");
     assert!(after.0.is_none());
     assert!(after.1 > before.1, "reservation remains consumed");
-    assert_eq!(fixture.service.tracked_pane_descriptors().len(), 1);
+    // This fixture deliberately has no parent native process. The descriptor
+    // API counts native/adapter owners, not layout membership: neither failed
+    // child nor any process may remain, while the original root pane survives.
+    assert!(fixture.service.tracked_pane_descriptors().is_empty());
+    assert_eq!(
+        fixture
+            .service
+            .session()
+            .windows()
+            .iter()
+            .map(|window| window.panes().len())
+            .sum::<usize>(),
+        1
+    );
+    assert!(fixture.service.find_pane_descriptor("%1").is_some());
     // The first child identity belongs only to this isolated fresh fixture.
     assert!(
         fixture
