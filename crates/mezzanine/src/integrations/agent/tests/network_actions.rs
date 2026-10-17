@@ -7,6 +7,7 @@ use super::*;
 use crate::integrations::agent::network::execute_network_action_with_transport_async_with_progress;
 use crate::integrations::http::{HttpCompletion, HttpExchangeResponse};
 
+mod search_outcomes;
 mod search_transport_contracts;
 
 #[tokio::test]
