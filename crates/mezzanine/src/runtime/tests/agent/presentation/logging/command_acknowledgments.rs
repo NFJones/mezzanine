@@ -19,6 +19,7 @@ struct CommandFixture {
     entries: Vec<PresentationEntry>,
     commands: Vec<String>,
     ordinal: usize,
+    response_id: String,
 }
 
 /// Builds a local publication owner. The direct-vector variant isolates the
@@ -132,6 +133,7 @@ fn command_fixture(label: &str, commands: &[&str], transaction_queue: bool) -> C
         .find(|key| key.4 == ordinal)
         .unwrap()
         .clone();
+    let response_id = key.3.as_str().to_string();
     let mut entries = Vec::new();
     for (index, command) in commands.iter().enumerate() {
         service.presentation.occurrence_clock_millis = Some(Some(1_000 + index as u64 * 1_000));
@@ -175,6 +177,7 @@ fn command_fixture(label: &str, commands: &[&str], transaction_queue: bool) -> C
         entries,
         commands: commands.iter().map(|command| command.to_string()).collect(),
         ordinal,
+        response_id,
     }
 }
 
@@ -210,6 +213,7 @@ fn assert_command_publications(fixture: &CommandFixture) {
         assert_eq!(source.status, "accepted");
         assert_eq!(source.turn_id, fixture.execution.request.turn_id);
         assert_eq!(source.conversation_id, *conversation);
+        assert_eq!(source.response_id, fixture.response_id);
         assert_eq!(source.action_id.as_deref(), Some("command-owner"));
         assert_eq!(source.action_ordinal, Some(fixture.ordinal));
         assert!(
@@ -219,6 +223,19 @@ fn assert_command_publications(fixture: &CommandFixture) {
                     |entry| entry.id == expected.id && entry.occurrence == expected.occurrence
                 ))
         );
+        let copy_sources = styled
+            .iter()
+            .filter(|row| {
+                row.presentation
+                    .as_ref()
+                    .is_some_and(|entry| entry.id == expected.id)
+            })
+            .filter_map(|row| row.copy_source.as_ref())
+            .collect::<Vec<_>>();
+        assert!(!copy_sources.is_empty());
+        assert!(copy_sources.iter().all(|source| {
+            source.id.owner() == expected.id && source.text.as_ref() == fixture.commands[index]
+        }));
         let count = fixture
             .commands
             .iter()
