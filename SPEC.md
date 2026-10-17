@@ -10303,8 +10303,11 @@ The baseline action types are:
   Active checkpoint metadata version 7 MUST capture a nonauthorizing persistent
   ownership qualifier only from the exact current nonrevoked runtime relationship
   or the same sealed fresh setup/qualified restore operation. Successful fresh
-  spawn MUST publish that qualification before its final infallible proof commit;
-  checkpoint failure MUST leave no newly published Local capability or edge.
+  spawn MUST capture or enqueue qualification before its final infallible proof
+  commit; synchronous precommit capture/write failure MUST leave no new Local
+  capability or edge. Adapter durability completes only after worker settlement;
+  later failure MUST use the existing generation-fenced persistence retry rather
+  than replaying spawn, rolling back a different occupant or minting ownership.
   Historical bindings remain readable
   and resumable with false qualification. Earlier metadata versions MUST decode
   qualification as false; current missing/malformed flags and extra columns MUST

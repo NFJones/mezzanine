@@ -5,6 +5,8 @@
 
 use super::*;
 
+mod adapter;
+
 /// Immediately after the actual idle spawn returns, the durable checkpoint
 /// already qualifies its exact relationship. A genuinely fresh runtime then
 /// restores both native owners and can completely close that same owned child.
@@ -56,7 +58,7 @@ fn runtime_persistent_close_fresh_spawn_is_qualified_without_later_checkpoint() 
     );
 }
 
-/// Failure of the final checkpoint occurs before proof publication. The real
+/// Synchronous failure of the final checkpoint occurs before proof publication. The real
 /// spawn owner removes its allocated child and authority, without a completed
 /// close tombstone or Local grant; the consumed nonce is never rewound/reused.
 #[test]

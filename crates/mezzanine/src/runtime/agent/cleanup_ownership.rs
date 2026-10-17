@@ -479,10 +479,11 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Publishes the exact successful fresh spawn's durable qualification before
-    /// its final infallible runtime proof commit. All fallible setup and response
-    /// preparation already succeeded; a checkpoint failure publishes no Local
-    /// capability/edge and the original spawn owner rolls back its actual child.
+    /// Captures/enqueues qualified metadata before the final infallible proof
+    /// commit. Synchronous capture/write failure publishes no Local capability
+    /// or edge and the spawn owner rolls back its actual child. With the adapter,
+    /// durability completes later: existing generation-fenced retries preserve
+    /// this actual relationship and must never replay spawn or transfer ownership.
     pub(crate) fn commit_fresh_subagent_cleanup_ownership(
         &mut self,
         prepared: RuntimePreparedCleanupParent,
