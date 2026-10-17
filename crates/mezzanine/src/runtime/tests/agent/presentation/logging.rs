@@ -3,11 +3,20 @@
 use super::*;
 
 /// Accepted queued sources must survive a failure before installation of the
-/// header, command or result. Retrying presentation alone publishes every
-/// component exactly once in order; it must not rerun the underlying action.
+/// header, either of two distinct commands at one action ordinal, or the result.
+/// Retrying presentation alone publishes every component exactly once in order;
+/// a later command failure must not replay its already installed prefix, and
+/// no underlying action is rerun.
 #[test]
 fn runtime_ordered_logs_retain_components_after_install_failure() {
-    for (after, shell) in [(0, false), (1, false), (2, false), (1, true)] {
+    for (after, shell) in [
+        (0, false),
+        (1, false),
+        (2, false),
+        (3, false),
+        (1, true),
+        (2, true),
+    ] {
         let mut service = test_runtime_service();
         service
             .agent_shell_store_mut()
@@ -109,10 +118,18 @@ fn runtime_ordered_logs_retain_components_after_install_failure() {
             "%1",
             mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
         );
-        service
-            .presentation
-            .agent_queued_provider_commands
-            .insert(key, vec![("COMMAND_SENTINEL".to_string(), entry)]);
+        let second_entry = service.presentation_entry(
+            "%1",
+            mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+        );
+        assert_ne!(entry.id, second_entry.id);
+        service.presentation.agent_queued_provider_commands.insert(
+            key,
+            vec![
+                ("COMMAND_SENTINEL".to_string(), entry),
+                ("SECOND_COMMAND_SENTINEL".to_string(), second_entry),
+            ],
+        );
         service.fail_agent_presentation_install_for_tests(after);
         assert!(
             service
@@ -137,6 +154,7 @@ fn runtime_ordered_logs_retain_components_after_install_failure() {
         for marker in [
             "HEADER_SENTINEL",
             "COMMAND_SENTINEL",
+            "SECOND_COMMAND_SENTINEL",
             "RESULT_SENTINEL",
             "SAY_SENTINEL",
         ]
