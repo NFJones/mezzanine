@@ -162,6 +162,20 @@ impl AgentTranscriptStore {
             .collect()
     }
 
+    /// Refuses a saved fork while either locked identity has retained receipt
+    /// ownership. This is only an admission fence: the existing persistence
+    /// owner must settle accepted rows, and no receipt is replayed or retired.
+    pub(super) fn ensure_fork_receipts_settled(&self, source: &str, target: &str) -> Result<()> {
+        for (_, receipt, _) in self.read_append_receipts()? {
+            if receipt.conversation_id == source || receipt.conversation_id == target {
+                return Err(MezError::conflict(
+                    "saved fork requires source and target append receipts to settle",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Durably accepts one immutable, validated batch before caller acknowledgment.
     /// Conflicting overlapping receipts are rejected under conversation ownership.
     pub(crate) fn accept_append_receipt(

@@ -42,13 +42,19 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 mod provider_service;
+mod saved_fork_retirement;
 mod terminal_service;
+
+pub(super) use provider_service::run_async_agent_command_service_owned;
+pub(super) use saved_fork_retirement::SavedForkServiceRetirement;
 
 #[cfg(test)]
 pub(in crate::host::async_runtime) use provider_service::classify_provider_monitor_liveness;
 #[cfg(test)]
 pub(crate) use provider_service::execute_approved_external_action;
-pub use provider_service::{run_async_agent_command_service, run_async_agent_provider_service};
+#[cfg(test)]
+pub use provider_service::run_async_agent_command_service;
+pub use provider_service::run_async_agent_provider_service;
 pub(crate) use terminal_service::attached_terminal_client_service_exit;
 #[cfg(test)]
 pub use terminal_service::build_async_attached_terminal_client_service;

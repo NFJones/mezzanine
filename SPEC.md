@@ -16195,17 +16195,63 @@ required for in-memory same-conversation reentry but not after restart.
 
 The `/fork` command MUST clone the current conversation into a new thread with
 a fresh identity while preserving the original transcript and any presentation
-log associated with that transcript. It MUST bind the forked conversation to a
+log associated with that transcript. The fork MUST capture a validated complete
+archive, its authoritative compaction epoch, and presentation under the source
+conversation's existing mutation ownership. A fork MUST NOT capture a shorter
+materialized archive while accepted
+source chronology or terminal bookkeeping remains unsettled. Fork admission
+MUST fail closed until the existing persistence owner settles that work; retained
+append receipts also reserve a target identity before its archive exists. No
+fork path may replay or retire those receipts on the persistence owner's behalf.
+A committed prefix or selective epoch MUST retain its exact model-authored
+summaries, inclusive coverage,
+execution ownership, uncovered rows, and order in the target's first provider
+request and after reopen. Missing or corrupt required source epochs MUST fail
+closed, not turn into raw-history forks. Target publication MUST validate the
+translated conversation identity against the copied archive and durably publish
+the epoch and required marker before reporting success. Eligible committed
+terminal handoffs MUST reconcile through the existing validated publication
+owner on the target, without changing source bytes or replaying actions.
+These guarantees serialize cooperating store writers, not arbitrary external
+file changes. Forking MUST NOT recharge inherited usage or grant filesystem,
+MCP, approval, or message authority from historical evidence.
+Saved root forks MUST receive their own prompt-cache lineage as well as a new
+conversation id; archival execution occurrence ownership remains historical.
+It MUST bind the forked conversation to a
 new agent-mode pane in the same window instead of rebinding or mutating the
 source pane's active conversation. The new pane's agent prompt MUST be seeded
 with the last submitted prompt before the `/fork` command when such a prompt is
 available, so users can edit and rerun the fork point. The new pane MUST load
 the shared prompt history; no conversation-local prompt history is copied.
+Authenticated primary `agent/shell/command` control requests for `/fork` MUST
+use the same deferred worker and claim as terminal input. With storage enabled,
+their immediate mutation result has `command: "fork"`, `body: null`, and
+`turn: null`: it acknowledges acceptance, not successful cloning. Completion or
+failure MUST remain observable in the visible source shell. Repeating the same
+control idempotency key MUST return its original acknowledgment without starting
+another fork, including after completion. Other control commands retain their
+existing inline-result behavior and admission/origin restrictions.
 Fork persistence and pane setup MUST be atomic from the user's perspective. If
 durable transcript or presentation cloning fails, the incomplete target MUST be
 removed. If any later pane or agent-mode setup step fails, Mezzanine MUST remove
 both the newly created pane and every durable target-conversation artifact while
-leaving the source pane and conversation unchanged.
+leaving the source pane and conversation unchanged. Compensation MUST apply only
+to the newly created target, never an existing target or a source-equals-target
+request. Original failures and any secondary cleanup failures MUST remain visible.
+Archive capture, epoch publication, and storage compensation MUST run on the
+existing command worker, not the serialized actor. Target mutation ownership
+MUST span pane adoption and the worker's retain-or-compensate decision. A saved
+resume waiting for that ownership MUST read discovery and history only after
+acquisition. Compensation MUST validate the exact created generation, not merely
+prior target absence or creation success. If adoption, pane/process teardown, or
+an actor reply is uncertain, the complete target MUST be retained with a visible
+diagnostic rather than risking deletion of live or foreign history. Cancellation
+MUST NOT discard the sole publication/cleanup owner or silently lose secondary
+cleanup errors. Actual auxiliary-service cancellation, last-primary completion,
+and service errors MUST observe retained fork workers through retirement before
+reporting successful supervision. Retirement uncertainty MUST remain a failure
+separate from the original service cause, not an unreported detached task.
+These rules do not grant rights from retained historical data.
 
 ## 20. Hooks
 

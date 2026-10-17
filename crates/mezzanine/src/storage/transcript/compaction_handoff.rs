@@ -86,6 +86,40 @@ pub(crate) struct TerminalCompactionHandoff {
 }
 
 impl TerminalCompactionHandoff {
+    /// Rebinds only a validated conversation-dependent baseline for a fork.
+    /// Typed occurrence payloads and model summaries remain byte-for-byte
+    /// identical. Foreign baselines are errors, not evidence to launder into
+    /// target ownership; publication still independently validates copied rows.
+    pub(super) fn fork_content(
+        content: &str,
+        source_conversation_id: &str,
+        target_conversation_id: &str,
+    ) -> Result<Option<String>> {
+        let Some(json) = content.strip_prefix(MARKER) else {
+            return Ok(None);
+        };
+        if json.len() > MAX_BYTES {
+            return Err(MezError::invalid_state(
+                "terminal compaction handoff exceeds its bounded size",
+            ));
+        }
+        let mut handoff: Self = serde_json::from_str(json).map_err(|error| {
+            MezError::invalid_state(format!(
+                "terminal compaction handoff decode failed: {error}"
+            ))
+        })?;
+        handoff.validate()?;
+        if let Some(baseline) = &mut handoff.baseline {
+            if baseline.conversation_id != source_conversation_id {
+                return Err(MezError::conflict(
+                    "terminal compaction handoff has foreign baseline identity",
+                ));
+            }
+            baseline.conversation_id = target_conversation_id.to_string();
+        }
+        handoff.to_content().map(Some)
+    }
+
     /// Encodes bounded audit evidence; unsupported source cannot be serialized.
     pub(crate) fn to_content(&self) -> Result<String> {
         self.validate()?;
@@ -135,6 +169,21 @@ impl AgentTranscriptStore {
     /// Pending rows are not publication proof. Stale or conflicting evidence
     /// leaves the old epoch authoritative and returns an explicit error.
     pub(crate) fn publish_terminal_compaction_handoffs(&self, conversation_id: &str) -> Result<()> {
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        if self.active_delete_pending(conversation_id)? {
+            return Err(MezError::invalid_state(
+                "conversation publication or deletion is incomplete",
+            ));
+        }
+        self.publish_terminal_compaction_handoffs_locked(conversation_id)
+    }
+
+    /// Reconciles through the ordinary owner under an already-held mutation
+    /// lock. Fork uses this only on its new target, never on the source archive.
+    pub(super) fn publish_terminal_compaction_handoffs_locked(
+        &self,
+        conversation_id: &str,
+    ) -> Result<()> {
         let entries = match self.inspect(conversation_id) {
             Ok(entries) => entries,
             Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => return Ok(()),
@@ -244,6 +293,6 @@ impl AgentTranscriptStore {
         epoch.ranges.extend(additions);
         epoch.ranges.sort_by_key(|range| range.first_sequence);
         frozen.sort_by_key(|row| row.sequence);
-        self.save_terminal_compaction_ranges_with_proof(epoch, &frozen, &previous)
+        self.save_terminal_compaction_ranges_with_proof_locked(epoch, &frozen, &previous)
     }
 }

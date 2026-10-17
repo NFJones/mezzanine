@@ -112,6 +112,8 @@ pub struct AsyncRuntimeService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) future: AsyncRuntimeServiceFuture,
+    /// Exact deferred-fork retirement retained outside the abortable future.
+    pub(super) saved_fork_retirement: Option<super::client::SavedForkServiceRetirement>,
 }
 
 impl AsyncRuntimeService {
@@ -127,6 +129,7 @@ impl AsyncRuntimeService {
             name: name.into(),
             auxiliary: false,
             future: Box::pin(future),
+            saved_fork_retirement: None,
         }
     }
 
@@ -143,6 +146,7 @@ impl AsyncRuntimeService {
             name: name.into(),
             auxiliary: true,
             future: Box::pin(future),
+            saved_fork_retirement: None,
         }
     }
 
@@ -205,6 +209,8 @@ pub struct AsyncRuntimeServiceSupervisor {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) task_names: HashMap<TokioTaskId, (String, bool)>,
+    /// Only deferred command services install these bounded publication owners.
+    saved_fork_retirements: Vec<super::client::SavedForkServiceRetirement>,
 }
 
 impl AsyncRuntimeServiceSupervisor {
@@ -217,14 +223,22 @@ impl AsyncRuntimeServiceSupervisor {
 
         let mut tasks = JoinSet::new();
         let mut task_names = HashMap::new();
+        let mut saved_fork_retirements = Vec::new();
         for service in services {
+            if let Some(retirement) = service.saved_fork_retirement {
+                saved_fork_retirements.push(retirement);
+            }
             let name = service.name;
             let auxiliary = service.auxiliary;
             let abort_handle = tasks.spawn(service.future);
             task_names.insert(abort_handle.id(), (name, auxiliary));
         }
 
-        Ok(Self { tasks, task_names })
+        Ok(Self {
+            tasks,
+            task_names,
+            saved_fork_retirements,
+        })
     }
 
     /// Runs supervised services until all finish, one requests shutdown, or
@@ -236,6 +250,47 @@ impl AsyncRuntimeServiceSupervisor {
     /// keep supervision alive after primary listener work has drained.
     pub async fn run_until_shutdown<C>(
         mut self,
+        cancellation: C,
+    ) -> Result<AsyncRuntimeSupervisionReport>
+    where
+        C: Future<Output = ()>,
+    {
+        let result = self.run_services_until_shutdown(cancellation).await;
+        // Errors and auxiliary aborts cannot bypass a fork's blocking owner.
+        // Signal before abort, join all wrappers, then take exact retained jobs.
+        for retirement in &self.saved_fork_retirements {
+            retirement.request_stop();
+        }
+        self.tasks.abort_all();
+        let mut cleanup_failure = None;
+        while let Some(joined) = self.tasks.join_next_with_id().await {
+            if let Err(error) = self.report_joined_service(joined)
+                && cleanup_failure.is_none()
+            {
+                cleanup_failure = Some(error);
+            }
+        }
+        for retirement in &self.saved_fork_retirements {
+            if let Err(error) = retirement.retire().await
+                && cleanup_failure.is_none()
+            {
+                cleanup_failure = Some(error);
+            }
+        }
+        match (result, cleanup_failure) {
+            (Ok(report), None) => Ok(report),
+            (Err(primary), Some(retirement)) => Err(MezError::new(
+                primary.kind(),
+                format!("{primary}; saved fork retirement also failed: {retirement}"),
+            )),
+            (Err(error), None) | (Ok(_), Some(error)) => Err(error),
+        }
+    }
+
+    /// Runs the existing service reporting policy; the outer owner always retires
+    /// exact saved-fork workers after this policy stops or returns an error.
+    async fn run_services_until_shutdown<C>(
+        &mut self,
         cancellation: C,
     ) -> Result<AsyncRuntimeSupervisionReport>
     where
@@ -335,6 +390,9 @@ impl AsyncRuntimeServiceSupervisor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     async fn abort_remaining_as_shutdown(&mut self) -> Result<Vec<AsyncRuntimeServiceReport>> {
+        for retirement in &self.saved_fork_retirements {
+            retirement.request_stop();
+        }
         self.tasks.abort_all();
         let mut reports = Vec::new();
         while let Some(joined) = self.tasks.join_next_with_id().await {
@@ -364,6 +422,9 @@ impl AsyncRuntimeServiceSupervisor {
     async fn abort_remaining_auxiliary_as_completed(
         &mut self,
     ) -> Result<Vec<AsyncRuntimeServiceReport>> {
+        for retirement in &self.saved_fork_retirements {
+            retirement.request_stop();
+        }
         self.tasks.abort_all();
         let mut reports = Vec::new();
         while let Some(joined) = self.tasks.join_next_with_id().await {

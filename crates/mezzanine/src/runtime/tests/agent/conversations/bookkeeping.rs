@@ -7,6 +7,63 @@ use super::*;
 
 mod receive_admission;
 
+/// A genuine retained stopped-turn candidate is not a durable archive suffix.
+/// Saved fork must settle its failed command without consuming or bypassing
+/// queued, claimed, or failed/blocked bookkeeping work. The source archive stays
+/// byte-identical and no target appears from the shorter materialized prefix.
+#[test]
+fn runtime_saved_fork_preserves_bookkeeping_candidate_admission_fence() {
+    for state in ["queued", "claimed", "blocked"] {
+        let (mut service, store, conversation) = stopped_candidate_fixture(state);
+        seed_compaction_prefix(&mut service, &store, &conversation);
+        if state != "queued" {
+            let work = service.claim_bookkeeping_candidates().pop().unwrap();
+            if state == "blocked" {
+                assert!(
+                    service
+                        .complete_bookkeeping_candidate(
+                            work,
+                            Err(MezError::invalid_state("owned source check failure"))
+                        )
+                        .is_err()
+                );
+            }
+        }
+        let path = store.transcript_path(&conversation).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let primary = service
+            .attach_primary("saved-fork-fence", true, Size::new(80, 24).unwrap(), 121)
+            .unwrap();
+        let response = service
+            .execute_agent_shell_command(&primary, "/fork bookkeeping-fork-target")
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response).unwrap()["body"],
+            serde_json::Value::Null
+        );
+        assert!(service.agent_command_is_active("%1"), "{state}");
+        assert!(
+            service
+                .run_pending_deferred_agent_command_for_tests()
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            service.agent_command_lifecycle_phase_for_tests("%1"),
+            Some(crate::runtime::RuntimeAgentCommandLifecyclePhase::Failed)
+        );
+        assert!(service.persistence.bookkeeping_pending(&conversation));
+        assert!(
+            store
+                .saved_session("bookkeeping-fork-target")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before, "{state}");
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
 /// Real stopped-turn chronology candidates must fence manual compaction even
 /// when earlier eligible durable rows exist. Queued, worker-claimed and blocked
 /// candidates are all unchecked history; asynchronous admission must not mark
