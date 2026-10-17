@@ -329,11 +329,7 @@ async fn run_actions(
                 AgentTurnState::Completed,
                 "missing live execution requires successful terminal settlement"
             );
-            let durable = fixture
-                .store
-                .inspect_complete(&turn.conversation_id)
-                .unwrap()
-                .entries;
+            let durable = fixture.store.inspect(&turn.conversation_id).unwrap();
             for action in &sends {
                 let header = format!("[action_result {} send_message succeeded]", action.id);
                 assert!(
