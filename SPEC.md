@@ -4854,6 +4854,12 @@ attempted. A later pre-install failure MUST retain the failed entry and remainin
 suffix, not replay the installed prefix. Entries with equal command text but
 distinct accepted identities MUST remain distinct, preserving their original
 occurrence, source, copy attribution and persistence identity.
+A settled RESULT accepted after its header is visible MUST retain its immutable
+full source and original presentation entry BEFORE immediate installation. A
+pre-install error MUST leave that same tuple/occurrence owned; retry MUST NOT
+replace it with a newly captured clock or source. Acknowledgment and removal
+MUST refer only to the successfully installed original component. Presentation
+source acceptance alone is not canonical execution commit or required-gate success.
 If projection is unavailable, validation fails, or source mismatches cannot be
 reconciled independently, Mezzanine MUST remove only the still-provisional
 owned suffix and present validated source through normal renderers. Provider

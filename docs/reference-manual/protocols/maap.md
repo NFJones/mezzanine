@@ -55,6 +55,12 @@ after installation. If a later entry fails before installation, retry retains
 that entry and its remaining suffix without reappending an installed prefix.
 Equal command text with different accepted entry identities remains distinct;
 retries preserve each entry's original occurrence and source/copy attribution.
+A settled result whose header is already visible still retains its original
+immutable source and entry before immediate append. A failed installation keeps
+that tuple for publication-only retry, without a new occurrence or changed body;
+only successful installation acknowledges and removes the original source.
+This log-source acknowledgment is not execution, canonical-result, or required
+audit/hook gate acceptance and never authorizes action replay.
 
 ## Action catalog
 
