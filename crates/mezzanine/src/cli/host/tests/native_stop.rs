@@ -209,13 +209,14 @@ async fn public_host_stop_requires_native_completion_not_socket_removal() {
             &mut command_native,
         )
         .await;
-        let server_result = serving.await.unwrap();
-        let socket_removed = !socket.exists();
+        // No await may supply later completion before the public Stop oracle.
         let original_after_stop = rustix::process::test_kill_process(exact);
         let original_start_after_stop = mez_mux::process::process_start_token_for_pid(pid);
         let pending_after_stop = native.outstanding();
         let other_after_stop = rustix::process::test_kill_process(other_exact);
         let other_start_after_stop = mez_mux::process::process_start_token_for_pid(other_pid);
+        let server_result = serving.await.unwrap();
+        let socket_removed = !socket.exists();
 
         // Independent exact-owner cleanup runs only after product observations.
         // A retained failure receipt may keep this result Err after actual reap.

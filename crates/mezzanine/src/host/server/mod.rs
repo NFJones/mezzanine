@@ -133,6 +133,13 @@ impl HostShutdownCompletion {
     /// Publishes only the actual host cleanup/publication result on the exact
     /// original connection. Transport failure is unproven, never healthy Stop.
     async fn publish(mut self, force: bool, result: &Result<()>) -> Result<()> {
+        // timeout_at polls ready I/O before its timer, so it is not an effect
+        // fence for a budget already consumed by native/runtime settlement.
+        if tokio::time::Instant::now() >= self.deadline {
+            return Err(MezError::invalid_state(
+                "host shutdown completion reply deadline expired",
+            ));
+        }
         let body = match result {
             Ok(()) => json!({"jsonrpc":"2.0","id":self.id,"result":{
                 "shutting_down":true,"force":force,"shutdown_completed":true
@@ -1678,6 +1685,8 @@ mod tests {
     use crate::storage::snapshot::SnapshotRepository;
 
     use super::*;
+
+    mod shutdown_completion;
 
     fn test_root(_name: &str) -> PathBuf {
         let root = PathBuf::from("/tmp").join(format!(
