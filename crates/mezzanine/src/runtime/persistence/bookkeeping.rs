@@ -60,6 +60,7 @@ impl RuntimePersistenceComponent {
         &mut self,
         mut candidate: RuntimeBookkeepingCandidate,
     ) -> Result<RuntimeCompletionCandidateAcceptance> {
+        candidate.read = candidate.read.freeze_completion();
         let bytes = candidate.completion_snapshot_bytes()?;
         let snapshot_id = format!("{:x}", Sha256::digest(&bytes));
         for existing in self

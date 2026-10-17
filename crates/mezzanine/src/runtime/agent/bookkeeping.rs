@@ -34,9 +34,20 @@ pub(crate) struct RuntimeBookkeepingTranscriptReadWork {
     pending: Vec<TranscriptEntry>,
     /// Terminal coverage needs the complete archive, not only this turn's delta.
     terminal_handoff: bool,
+    /// Completion handoff reads keep their original store/frontier/epoch even
+    /// after the live pane moves. They confer no authority on a later binding.
+    frozen_completion: bool,
 }
 
 impl RuntimeBookkeepingTranscriptReadWork {
+    /// Freezes the original actor-captured owner for a completion handoff.
+    /// Archive validation and sequence allocation still happen on the worker;
+    /// this flag forbids substituting a new live conversation snapshot.
+    pub(crate) fn freeze_completion(mut self) -> Self {
+        self.frozen_completion = true;
+        self
+    }
+
     /// Rejects history after its captured pane changes conversations.
     pub(crate) fn check_owner(&self, service: &RuntimeSessionService) -> Result<()> {
         if service
@@ -165,6 +176,7 @@ impl RuntimeBookkeepingCandidate {
             epoch: u64,
             committed_prefix_required: bool,
             terminal_handoff: bool,
+            frozen_completion: bool,
             pending: Vec<Entry<'a>>,
             persistence_key: &'a (String, String),
             entries: Vec<Entry<'a>>,
@@ -185,6 +197,7 @@ impl RuntimeBookkeepingCandidate {
             epoch: self.read.compaction_epoch,
             committed_prefix_required: self.read.committed_prefix_required,
             terminal_handoff: self.read.terminal_handoff,
+            frozen_completion: self.read.frozen_completion,
             pending: self
                 .read
                 .pending
@@ -220,10 +233,11 @@ impl RuntimeSessionService {
             .claim_bookkeeping_candidates()
             .into_iter()
             .map(|candidate| {
-                let mut read = if self
-                    .agent_shell_store()
-                    .get(&candidate.turn.pane_id)
-                    .is_some_and(|session| session.session_id == candidate.turn.conversation_id)
+                let mut read = if !candidate.read.frozen_completion
+                    && self
+                        .agent_shell_store()
+                        .get(&candidate.turn.pane_id)
+                        .is_some_and(|session| session.session_id == candidate.turn.conversation_id)
                 {
                     self.capture_bookkeeping_transcript_read(
                         candidate.read.store.clone(),
@@ -232,10 +246,12 @@ impl RuntimeSessionService {
                 } else {
                     candidate.read.clone()
                 };
-                read.pending.extend(
-                    self.persistence
-                        .pending_transcript_entries(&candidate.turn.conversation_id),
-                );
+                if !candidate.read.frozen_completion {
+                    read.pending.extend(
+                        self.persistence
+                            .pending_transcript_entries(&candidate.turn.conversation_id),
+                    );
+                }
                 read.terminal_handoff |= candidate.read.terminal_handoff;
                 RuntimeBookkeepingCandidateWork { candidate, read }
             })
@@ -260,6 +276,11 @@ impl RuntimeSessionService {
             .get(&turn.pane_id)
             .is_some_and(|session| session.session_id == turn.conversation_id);
         let (history, sequence) = match history.and_then(|history| {
+            if candidate.read.frozen_completion && work.read != candidate.read {
+                return Err(MezError::invalid_state(
+                    "completion worker read differs from frozen candidate owner",
+                ));
+            }
             if still_bound {
                 work.read.check_owner(self)?;
             }
@@ -267,11 +288,14 @@ impl RuntimeSessionService {
         }) {
             Ok(history) => history,
             Err(error) => {
+                let detached_completion = candidate.read.frozen_completion;
                 self.persistence.block_bookkeeping_candidate(candidate);
-                self.append_agent_error_text_to_terminal_buffer(
-                    &turn.pane_id,
-                    &format!("agent: transcript bookkeeping blocked: {}", error.message()),
-                )?;
+                if !detached_completion {
+                    self.append_agent_error_text_to_terminal_buffer(
+                        &turn.pane_id,
+                        &format!("agent: transcript bookkeeping blocked: {}", error.message()),
+                    )?;
+                }
                 return Err(error);
             }
         };
@@ -290,9 +314,12 @@ impl RuntimeSessionService {
             &history,
             first_sequence,
         );
-        if let Err(error) =
+        let admission = if candidate.read.frozen_completion {
+            Self::check_detached_terminal_compaction_handoff_admission(&history, &mut entries)
+        } else {
             self.check_terminal_compaction_handoff_admission(&turn, &history, &mut entries)
-        {
+        };
+        if let Err(error) = admission {
             self.persistence.block_bookkeeping_candidate(candidate);
             return Err(error);
         }
@@ -309,7 +336,7 @@ impl RuntimeSessionService {
         self.agent
             .agent_persisted_execution_transcripts
             .insert(candidate.persistence_key);
-        if still_bound {
+        if still_bound && !work.read.frozen_completion {
             self.agent_shell_store_mut()
                 .record_transcript_entries(&turn.pane_id, entries.len())?;
             self.record_pane_transcript_ref(
@@ -359,6 +386,7 @@ impl RuntimeSessionService {
                 .agent
                 .agent_turn_compaction_handoffs
                 .contains_key(&turn.turn_id),
+            frozen_completion: false,
         }
     }
 
