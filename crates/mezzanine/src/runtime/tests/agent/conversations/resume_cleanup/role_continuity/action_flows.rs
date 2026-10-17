@@ -268,7 +268,18 @@ async fn run_actions(
     assert!(
         discovery
             .iter()
-            .all(|result| result.status == ActionStatus::Succeeded)
+            .all(|result| result.status == ActionStatus::Succeeded),
+        "phase=post-provider-discovery terminal={:?} action_states={:?}",
+        execution.terminal_state,
+        discovery
+            .iter()
+            .map(|result| (
+                result.action_id.as_str(),
+                result.action_type.as_str(),
+                result.status,
+                result.error.as_ref().map(|error| error.code.as_str())
+            ))
+            .collect::<Vec<_>>()
     );
     let mut terminal_settled = false;
     if execution
@@ -501,20 +512,16 @@ async fn runtime_saved_root_role_runs_real_maap_message_and_discovery() {
                 .count(),
             1
         );
-        let payload = format!("C433_DIRECT_{role}");
         let discoveries = run_actions(
             &mut fixture,
             &started.turn_id,
-            vec![
-                mez_agent::AgentAction {
-                    id: "discover-native-root".into(),
-                    payload: mez_agent::AgentActionPayload::ListAgents {
-                        agent_type: Some("all".into()),
-                        scope: Some("project".into()),
-                    },
+            vec![mez_agent::AgentAction {
+                id: "discover-native-root".into(),
+                payload: mez_agent::AgentActionPayload::ListAgents {
+                    agent_type: Some("all".into()),
+                    scope: Some("project".into()),
                 },
-                send("direct-native-root", &parent, &payload),
-            ],
+            }],
         )
         .await;
         assert_eq!(discoveries.len(), 1);
@@ -536,6 +543,41 @@ async fn runtime_saved_root_role_runs_real_maap_message_and_discovery() {
         assert_eq!(row["persistent"], false);
         assert_eq!(row["owned_by_self"], false);
         assert!(row["parent_agent_id"].is_null());
+        // A prompting send may block the whole mixed batch before discovery.
+        // Discover first; continue this real turn only while actually Running,
+        // otherwise start another genuine C2 prompt after normal completion.
+        let send_turn = match fixture
+            .service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .state
+        {
+            AgentTurnState::Running => started.turn_id.clone(),
+            AgentTurnState::Completed => {
+                fixture
+                    .service
+                    .start_agent_prompt_turn(&pane, "generated direct send after native discovery")
+                    .unwrap()
+                    .turn_id
+            }
+            state => panic!("discovery did not admit a legitimate send continuation: {state:?}"),
+        };
+        let admitted = fixture
+            .service
+            .agent_turn_ledger()
+            .turn(&send_turn)
+            .unwrap();
+        assert_eq!(admitted.agent_id, child);
+        assert_eq!(admitted.conversation_id, target);
+        let payload = format!("C433_DIRECT_{role}");
+        let no_discovery = run_actions(
+            &mut fixture,
+            &send_turn,
+            vec![send("direct-native-root", &parent, &payload)],
+        )
+        .await;
+        assert!(no_discovery.is_empty()); // Actual send success is proven by the helper's canonical evidence.
         let received = fixture
             .service
             .message_service()
@@ -550,7 +592,7 @@ async fn runtime_saved_root_role_runs_real_maap_message_and_discovery() {
         fixture.assert_native_identity(&child, native);
         input_receipt(&mut fixture, &child, native.0, "after-message");
         assert!(!fixture.service.has_subagent_authority_state(&child));
-        stop_if_active(&mut fixture, &pane, &started.turn_id);
+        stop_if_active(&mut fixture, &pane, &send_turn);
     }
 }
 
