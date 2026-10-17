@@ -2397,18 +2397,7 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
         }
         // Preserve the acceptance oracles BEFORE terminal lifecycle/native
         // cleanup can erase transactions or invalidate environment authority.
-        let before_stop = client_handle
-            .pane_certification_snapshot("%1")
-            .await
-            .unwrap();
-        assert_eq!(
-            before_stop.running_shell_transactions, 0,
-            "identity and bootstrap transactions must settle before acceptance"
-        );
-        assert!(
-            !before_stop.environment_signature_present,
-            "hiding agent mode must invalidate child environment before teardown"
-        );
+        let before_stop = client_handle.pane_certification_snapshot("%1").await;
         client_phase.store(1, Ordering::SeqCst);
         pane_worker_done.store(true, Ordering::SeqCst);
         let mut batch = RuntimeEventBatch::new();
@@ -2441,6 +2430,7 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
         let actor_close = client_handle.shutdown().await;
         client_phase.store(4, Ordering::SeqCst);
         (
+            before_stop,
             stop_admission,
             settled,
             actor_before_close,
@@ -2500,6 +2490,7 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
         std::fs::remove_file(sentinel).unwrap();
     }
     let (
+        before_stop,
         stop_admission,
         settled,
         actor_before_close,
@@ -2508,6 +2499,15 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
         original_birth_observed,
         actor_close,
     ) = observed;
+    let before_stop = before_stop.expect("capture acceptance before lifecycle cleanup");
+    assert_eq!(
+        before_stop.running_shell_transactions, 0,
+        "identity and bootstrap transactions must settle before acceptance"
+    );
+    assert!(
+        !before_stop.environment_signature_present,
+        "hiding agent mode must invalidate child environment before teardown"
+    );
     stop_admission.expect("owned lifecycle stop must be admitted while actor ingress remains open");
     let (result, diagnostics) =
         settled.expect("same pane supervisor must report its actual result");
