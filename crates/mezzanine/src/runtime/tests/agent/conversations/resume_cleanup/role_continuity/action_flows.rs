@@ -87,8 +87,8 @@ pub(super) fn spawn_role(fixture: &mut CleanupFixture, role: &str) -> String {
 }
 
 /// Saves an independent conversation with a real root-shaped checkpoint and
-/// generated canonical scope. The saved-session name/cache are fixture archive
-/// metadata, NOT a replacement native MMP identity. All native IDs stay fixed.
+/// generated canonical scope in the current session namespace actually read by
+/// resume. Target/cache preferences are NOT a replacement native MMP identity.
 pub(super) fn saved_root(
     fixture: &mut CleanupFixture,
     target: &str,
@@ -117,17 +117,19 @@ pub(super) fn saved_root(
         .unwrap()
         .session_id
         .clone();
-    let mut record = fixture
+    let session_id = fixture.service.session().id.to_string();
+    let mut records = fixture
         .store
-        .load_agent_session_metadata(fixture.service.session().id.as_str())
-        .unwrap()
-        .into_iter()
-        .find(|record| record.conversation_id == parent_conversation)
+        .load_agent_session_metadata(&session_id)
         .unwrap();
+    let mut record = records
+        .iter()
+        .find(|record| record.conversation_id == parent_conversation)
+        .unwrap()
+        .clone();
     assert!(!record.persistent_subagent_owned);
     assert!(record.steering_recovery.is_empty());
-    let archive = format!("c433-saved-{target}");
-    record.mezzanine_session_id = archive.clone();
+    record.mezzanine_session_id = session_id.clone();
     record.conversation_id = target.into();
     record.primary_display_name = None;
     record.prompt_cache_lineage_id = format!("c433-cache-{target}");
@@ -142,10 +144,21 @@ pub(super) fn saved_root(
     record.pane_permission_preset_override = None;
     record.pane_approval_policy_override = None;
     record.approval_policy = None;
+    records.retain(|existing| existing.conversation_id != target);
+    records.push(record);
     fixture
         .store
-        .save_agent_session_metadata(&archive, &[record])
+        .save_agent_session_metadata(&session_id, &records)
         .unwrap();
+    let selected = fixture
+        .store
+        .load_agent_session_metadata(&session_id)
+        .unwrap()
+        .into_iter()
+        .find(|record| record.conversation_id == target)
+        .unwrap();
+    assert_eq!(selected.project_root.as_deref(), project.to_str());
+    assert!(!selected.persistent_subagent_owned);
 }
 
 /// Requires fresh shell-written evidence from the original owned PID, not echo.
@@ -198,12 +211,14 @@ pub(super) async fn prepare_without_io(fixture: &mut CleanupFixture, turn: &str)
 
 /// Runs ordinary MAAP from the actual admitted turn with a fixed fake provider.
 /// If normal policy prompts, approve only its real pending record as the actual
-/// attached primary; do not replace policy or bypass action planning.
+/// attached primary. Return only genuine discovery results; a settled send is
+/// proven by terminal ledger, durable tool status and canonical acceptance,
+/// never by relabeling the old Blocked result or requiring a retired cache.
 async fn run_actions(
     fixture: &mut CleanupFixture,
     turn_id: &str,
     actions: Vec<mez_agent::AgentAction>,
-) -> mez_agent::AgentTurnExecution {
+) -> Vec<mez_agent::ActionResult> {
     prepare_without_io(fixture, turn_id).await;
     let turn = fixture
         .service
@@ -211,6 +226,16 @@ async fn run_actions(
         .turn(turn_id)
         .unwrap()
         .clone();
+    let sends = actions
+        .iter()
+        .filter(|action| {
+            matches!(
+                action.payload,
+                mez_agent::AgentActionPayload::SendMessage { .. }
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".into(),
@@ -234,6 +259,18 @@ async fn run_actions(
             runtime_model_profile("runtime-batch", "test"),
         )
         .unwrap();
+    let discovery = execution
+        .action_results
+        .iter()
+        .filter(|result| result.action_type == "list_agents")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        discovery
+            .iter()
+            .all(|result| result.status == ActionStatus::Succeeded)
+    );
+    let mut terminal_settled = false;
     if execution
         .action_results
         .iter()
@@ -275,15 +312,101 @@ async fn run_actions(
                 .unwrap(),
             Some(1)
         );
-        execution = fixture
-            .service
-            .agent_turn_executions()
-            .get(turn_id)
-            .unwrap()
-            .clone();
+        assert_eq!(
+            fixture.service.blocked_approvals().get(id).unwrap().state,
+            mez_agent::permissions::BlockedApprovalState::Approved
+        );
+        if let Some(retained) = fixture.service.agent_turn_executions().get(turn_id) {
+            execution = retained.clone();
+        } else {
+            assert_eq!(
+                fixture
+                    .service
+                    .agent_turn_ledger()
+                    .turn(turn_id)
+                    .unwrap()
+                    .state,
+                AgentTurnState::Completed,
+                "missing live execution requires successful terminal settlement"
+            );
+            let durable = fixture
+                .store
+                .inspect_complete(&turn.conversation_id)
+                .unwrap()
+                .entries;
+            for action in &sends {
+                let header = format!("[action_result {} send_message succeeded]", action.id);
+                assert!(
+                    durable.iter().any(|entry| entry.turn_id == turn_id
+                        && entry.role == TranscriptRole::Tool
+                        && entry.content.lines().next() == Some(header.as_str())),
+                    "terminal completion must retain the actual durable successful send result"
+                );
+            }
+            terminal_settled = true;
+        }
+    }
+    if !terminal_settled {
+        assert!(
+            execution
+                .action_results
+                .iter()
+                .all(|result| result.status == ActionStatus::Succeeded),
+            "{execution:#?}"
+        );
+    }
+    let snapshot = fixture.service.message_service().snapshot_state();
+    for action in &sends {
+        let mez_agent::AgentActionPayload::SendMessage { payload, .. } = &action.payload else {
+            unreachable!()
+        };
+        let message_id = format!("{turn_id}:{}", action.id);
+        let accepted = snapshot
+            .accepted_messages
+            .iter()
+            .filter(|message| message.envelope.id == message_id)
+            .collect::<Vec<_>>();
+        assert_eq!(accepted.len(), 1);
+        assert!(accepted[0].delivery.accepted);
+        assert_eq!(accepted[0].delivery.queued_recipients, 1);
+        assert_eq!(accepted[0].envelope.sender.agent_id, turn.agent_id);
+        assert_eq!(accepted[0].envelope.payload, *payload);
+        assert_eq!(
+            snapshot
+                .retained_messages
+                .iter()
+                .filter(|message| message.envelope.id == message_id)
+                .count(),
+            1
+        );
     }
     fixture.service.remove_pending_agent_provider_task(turn_id);
-    execution
+    discovery
+}
+
+/// Cleanup never assumes a normally completed turn still owns the pane. A
+/// failed/interrupted result is not accepted as success or hidden by Stop.
+fn stop_if_active(fixture: &mut CleanupFixture, pane: &str, turn: &str) {
+    match fixture
+        .service
+        .agent_turn_ledger()
+        .turn(turn)
+        .unwrap()
+        .state
+    {
+        AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked => {
+            fixture.service.stop_agent_turn_for_pane(pane).unwrap();
+        }
+        AgentTurnState::Completed => assert_ne!(
+            fixture
+                .service
+                .agent_shell_store()
+                .get(pane)
+                .and_then(|session| session.running_turn_id.as_deref()),
+            Some(turn)
+        ),
+        state => panic!("local message turn did not succeed: {state:?}"),
+    }
 }
 
 /// Constructs only ordinary action payloads; the real turn supplies the sender.
@@ -329,6 +452,21 @@ async fn runtime_saved_root_role_runs_real_maap_message_and_discovery() {
         input_receipt(&mut fixture, &child, native.0, "after-root");
         assert!(!fixture.service.has_subagent_authority_state(&child));
         assert!(fixture.service.persistent_subagent(&child).is_none());
+        let window = fixture
+            .service
+            .find_pane_descriptor(&pane)
+            .unwrap()
+            .window_id
+            .to_string();
+        let select_window = serde_json::json!({"jsonrpc":"2.0","id":"c433-select-window",
+            "method":"window/select","params":{"target":{"window_id":window},
+            "idempotency_key":"c433-select-window"}})
+        .to_string();
+        let selected = fixture
+            .service
+            .dispatch_runtime_control_body(&select_window, &fixture.primary);
+        let selected: serde_json::Value = serde_json::from_str(&selected).unwrap();
+        assert!(selected.get("error").is_none(), "{selected}");
         let select = serde_json::json!({"jsonrpc":"2.0","id":"c433-select-root",
             "method":"pane/select","params":{"target":{"pane_id":pane},
             "idempotency_key":"c433-select-root"}})
@@ -358,8 +496,17 @@ async fn runtime_saved_root_role_runs_real_maap_message_and_discovery() {
             .service
             .start_agent_prompt_turn(&pane, "generated independent root action task")
             .unwrap();
+        let prepared = runtime_prepared_context_for_turn(&fixture.service, &started.turn_id);
+        assert_eq!(
+            prepared
+                .blocks()
+                .iter()
+                .filter(|block| block.content.contains(&marker))
+                .count(),
+            1
+        );
         let payload = format!("C433_DIRECT_{role}");
-        let execution = run_actions(
+        let discoveries = run_actions(
             &mut fixture,
             &started.turn_id,
             vec![
@@ -374,21 +521,10 @@ async fn runtime_saved_root_role_runs_real_maap_message_and_discovery() {
             ],
         )
         .await;
-        assert_eq!(execution.action_results.len(), 2);
-        assert!(
-            execution
-                .action_results
-                .iter()
-                .all(|result| result.status == ActionStatus::Succeeded),
-            "{execution:#?}"
-        );
-        let rows: serde_json::Value = serde_json::from_str(
-            execution.action_results[0]
-                .structured_content_json
-                .as_deref()
-                .unwrap(),
-        )
-        .unwrap();
+        assert_eq!(discoveries.len(), 1);
+        let rows: serde_json::Value =
+            serde_json::from_str(discoveries[0].structured_content_json.as_deref().unwrap())
+                .unwrap();
         let row = rows["agents"]
             .as_array()
             .unwrap()
@@ -415,19 +551,10 @@ async fn runtime_saved_root_role_runs_real_maap_message_and_discovery() {
         assert_eq!(received[0].sender.agent_id, child_id);
         assert_eq!(received[0].sender.role, original.role);
         assert_eq!(received[0].sender.capabilities, original.capabilities);
-        let prepared = runtime_prepared_context_for_turn(&fixture.service, &started.turn_id);
-        assert_eq!(
-            prepared
-                .blocks()
-                .iter()
-                .filter(|block| block.content.contains(&marker))
-                .count(),
-            1
-        );
         fixture.assert_native_identity(&child, native);
         input_receipt(&mut fixture, &child, native.0, "after-message");
         assert!(!fixture.service.has_subagent_authority_state(&child));
-        fixture.service.stop_agent_turn_for_pane(&pane).unwrap();
+        stop_if_active(&mut fixture, &pane, &started.turn_id);
     }
 }
 
@@ -449,13 +576,13 @@ async fn runtime_saved_root_role_admits_actual_peer_message_turn_once() {
         .service
         .start_agent_prompt_turn("%1", "generated local peer delivery")
         .unwrap();
-    let execution = run_actions(
+    let discoveries = run_actions(
         &mut fixture,
         &parent.turn_id,
         vec![send("peer-root-once", &child_id, "C433_PEER_PAYLOAD")],
     )
     .await;
-    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    assert!(discoveries.is_empty()); // The helper proved the actual send separately.
     let now = current_unix_seconds().saturating_mul(1000);
     fixture
         .service
@@ -523,8 +650,8 @@ async fn runtime_saved_root_role_admits_actual_peer_message_turn_once() {
     prepare_without_io(&mut fixture, &peer.turn_id).await;
     fixture.assert_native_identity(&child, native);
     assert!(!fixture.service.has_subagent_authority_state(&child));
-    fixture.service.stop_agent_turn_for_pane(&pane).unwrap();
-    fixture.service.stop_agent_turn_for_pane("%1").unwrap();
+    stop_if_active(&mut fixture, &pane, &peer.turn_id);
+    stop_if_active(&mut fixture, "%1", &parent.turn_id);
 }
 
 /// Populated accepted mail keeps its exact original envelope, frozen project
@@ -541,16 +668,18 @@ fn runtime_saved_root_role_keeps_frozen_mail_and_cursor_across_project_resume() 
     let b = fixture.root.join("project-b");
     fs::create_dir(&b).unwrap();
     let b = b.canonicalize().unwrap();
+    let parent_turn = fixture
+        .service
+        .start_agent_prompt_turn("%1", "generated frozen audience author")
+        .unwrap();
+    // Prompt admission checkpoints active bindings. Stage the target preference
+    // only afterward, in the exact namespace the upcoming resume will select.
     saved_root(
         &mut fixture,
         "c433-project-root",
         &b,
         "C433_PROJECT_B_HISTORY",
     );
-    let parent_turn = fixture
-        .service
-        .start_agent_prompt_turn("%1", "generated frozen audience author")
-        .unwrap();
     let parent_turn = fixture
         .service
         .agent_turn_ledger()
@@ -634,6 +763,6 @@ fn runtime_saved_root_role_keeps_frozen_mail_and_cursor_across_project_resume() 
         Some(&cursor)
     );
     assert!(!fixture.service.has_subagent_authority_state(&child));
-    fixture.service.stop_agent_turn_for_pane(&pane).unwrap();
-    fixture.service.stop_agent_turn_for_pane("%1").unwrap();
+    stop_if_active(&mut fixture, &pane, &started.turn_id);
+    stop_if_active(&mut fixture, "%1", &parent_turn.turn_id);
 }
