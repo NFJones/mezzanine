@@ -816,7 +816,18 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        if !self.approved_external_action_turn_is_current(&outcome.turn_id, &outcome.action_id) {
+        if !self.approved_external_action_turn_is_current(&outcome.turn_id, &outcome.action_id)
+            || !self.issued_external_completion_is_current(
+                &outcome.turn_id,
+                &outcome.action_id,
+                &outcome.attempt,
+            )
+        {
+            let same_pending_group = self.external_completion_pending_group_is_current(
+                &outcome.turn_id,
+                &outcome.action_id,
+                &outcome.attempt,
+            );
             self.return_completed_mcp_transport(&identity, outcome.mcp_transport.take());
             self.agent.approved_external_cancellations.remove(&identity);
             self.agent.approved_mcp_transport_leases.remove(&identity);
@@ -825,9 +836,11 @@ impl RuntimeSessionService {
                 &outcome.action_id,
                 &outcome.attempt,
             );
-            self.agent
-                .pending_approved_external_actions
-                .remove(&identity);
+            if same_pending_group {
+                self.agent
+                    .pending_approved_external_actions
+                    .remove(&identity);
+            }
             self.agent
                 .claimed_approved_external_actions
                 .remove(&identity);
@@ -950,6 +963,7 @@ impl RuntimeSessionService {
         };
         self.append_network_action_progress_guidance(&turn.turn_id, &action, &mut result);
         if result.turn_id != turn.turn_id
+            || result.agent_id != turn.agent_id
             || result.action_id != action.id
             || result.action_type != action.action_type()
             || !result.is_terminal()

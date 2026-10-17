@@ -207,6 +207,56 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Validates the full frozen issued owner before outcome acceptance.
+    pub(super) fn issued_external_completion_is_current(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+        attempt: &str,
+    ) -> bool {
+        let key = (
+            turn_id.to_string(),
+            action_id.to_string(),
+            attempt.to_string(),
+        );
+        self.agent
+            .completion_settlements
+            .external
+            .get(&key)
+            .is_some_and(|receipt| {
+                receipt.phase == ExternalCompletionPhase::Issued
+                    && self
+                        .external_completion_owner(turn_id, action_id, attempt)
+                        .is_ok_and(|current| current == receipt.owner)
+            })
+    }
+
+    /// Identifies whether a pending slot still belongs to this original group,
+    /// so stale completion cleanup cannot remove a replacement group's work.
+    pub(super) fn external_completion_pending_group_is_current(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+        attempt: &str,
+    ) -> bool {
+        let key = (
+            turn_id.to_string(),
+            action_id.to_string(),
+            attempt.to_string(),
+        );
+        self.agent
+            .completion_settlements
+            .external
+            .get(&key)
+            .is_some_and(|receipt| {
+                self.agent
+                    .agent_execution_groups_by_turn
+                    .get(turn_id)
+                    .and_then(|groups| groups.get(action_id))
+                    == Some(&receipt.owner.group)
+            })
+    }
+
     /// Distinguishes an exact retained duplicate from a new delivery. Original
     /// mandatory failure remains an Err; no phase/effect is retried here.
     pub(super) fn external_completion_duplicate(
@@ -275,6 +325,27 @@ impl RuntimeSessionService {
             return Err(error);
         }
         Ok(key)
+    }
+
+    /// Returns raw result by borrow; failed projection cannot consume its owner.
+    #[cfg(test)]
+    pub(crate) fn retained_external_result_for_tests(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+        attempt: &str,
+    ) -> Option<ActionResult> {
+        self.agent
+            .completion_settlements
+            .external
+            .get(&(
+                turn_id.to_string(),
+                action_id.to_string(),
+                attempt.to_string(),
+            ))
+            .and_then(|receipt| receipt.raw.as_ref())
+            .and_then(|outcome| outcome.result.as_ref().ok())
+            .cloned()
     }
 
     /// Returns raw result by borrow; failed projection cannot consume its owner.

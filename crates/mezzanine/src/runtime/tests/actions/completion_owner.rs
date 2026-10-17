@@ -9,6 +9,127 @@
 use super::*;
 use mez_agent::{ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution};
 
+/// A terminal payload naming a different agent is not an authorized result for
+/// this exact claimed action. Preserve it only in the original failed receipt,
+/// keep canonical context untouched, and report the same typed failure on an
+/// exact duplicate rather than adopting or resubmitting it.
+#[tokio::test]
+async fn runtime_completion_owner_rejects_foreign_result_agent_without_losing_raw() {
+    let mut fixture = CompletionFixture::fetch().await;
+    let mut foreign = fixture.expected.clone();
+    foreign.agent_id = "agent-foreign-fixture".to_string();
+    let mut outcome = fixture.outcome();
+    outcome.result = Ok(foreign.clone());
+    let first = fixture
+        .service
+        .complete_approved_external_action(outcome)
+        .unwrap_err();
+    assert_eq!(first.kind(), crate::error::MezErrorKind::InvalidState);
+    assert_eq!(
+        fixture.retained().action_results[0].status,
+        ActionStatus::Running
+    );
+    assert_eq!(
+        fixture.service.retained_external_result_for_tests(
+            &fixture.turn.turn_id,
+            &fixture.action.id,
+            &fixture.attempt,
+        ),
+        Some(foreign.clone())
+    );
+    let context = runtime_prepared_context_for_turn(&fixture.service, &fixture.turn.turn_id);
+    assert!(
+        !context
+            .blocks()
+            .iter()
+            .any(|block| block.source == ContextSourceKind::ActionResult
+                && block.content.contains("F668_EXACT_COMPLETED_BODY"))
+    );
+    let mut duplicate = fixture.outcome();
+    duplicate.result = Ok(foreign);
+    let repeated = fixture
+        .service
+        .complete_approved_external_action(duplicate)
+        .unwrap_err();
+    assert_eq!(repeated.kind(), first.kind());
+    assert_eq!(repeated.message(), first.message());
+}
+
+/// A real shell-store rebind can precede higher-level ledger reconciliation.
+/// The legacy Running-result predicate is not enough: old exact attempt output
+/// must be rejected before capture, its matching claim retired, and replacement
+/// conversation/presentation left untouched. This boundary test intentionally
+/// keeps the original ledger Running; it does not simulate a native process.
+#[tokio::test]
+async fn runtime_completion_owner_rebind_rejects_old_attempt_and_duplicate() {
+    let mut fixture = CompletionFixture::fetch().await;
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "replacement-completion-fixture", 0)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .agent_turn_ledger()
+            .turn(&fixture.turn.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    let outcome = fixture.outcome();
+    assert!(
+        !fixture
+            .service
+            .complete_approved_external_action(outcome)
+            .unwrap()
+    );
+    assert!(
+        !fixture.service.approved_external_action_attempt_is_current(
+            &fixture.turn.turn_id,
+            &fixture.action.id,
+            &fixture.attempt,
+        )
+    );
+    let duplicate = fixture.outcome();
+    assert!(
+        !fixture
+            .service
+            .complete_approved_external_action(duplicate)
+            .unwrap()
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .session_id,
+        "replacement-completion-fixture"
+    );
+    assert_eq!(
+        fixture.retained().action_results[0].status,
+        ActionStatus::Running
+    );
+    assert!(
+        fixture
+            .service
+            .retained_external_result_for_tests(
+                &fixture.turn.turn_id,
+                &fixture.action.id,
+                &fixture.attempt,
+            )
+            .is_none()
+    );
+    let rows = fixture
+        .service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(!rows.contains("F668_EXACT_COMPLETED_BODY"), "{rows}");
+}
+
 /// Owns the generated directory even if fixture construction fails or panics.
 struct CompletionRoot(PathBuf);
 
