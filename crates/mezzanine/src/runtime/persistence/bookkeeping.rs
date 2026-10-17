@@ -62,14 +62,20 @@ impl RuntimePersistenceComponent {
     ) -> Result<RuntimeCompletionCandidateAcceptance> {
         candidate.read = candidate.read.freeze_completion();
         let bytes = candidate.completion_snapshot_bytes()?;
-        let snapshot_id = format!("{:x}", Sha256::digest(&bytes));
+        let snapshot_id: String = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         for existing in self
             .bookkeeping_candidates
             .iter()
             .filter(|existing| existing.persistence_key == candidate.persistence_key)
         {
             let existing_bytes = existing.completion_snapshot_bytes()?;
-            let existing_id = format!("{:x}", Sha256::digest(&existing_bytes));
+            let existing_id: String = Sha256::digest(&existing_bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
             if existing_id != snapshot_id {
                 continue;
             }

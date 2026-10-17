@@ -20,9 +20,7 @@ use super::RuntimeSideEffect;
 
 mod adapters;
 mod bookkeeping;
-pub(crate) use bookkeeping::{
-    RuntimeCompletionCandidateAcceptance, RuntimeCompletionCandidateWitness,
-};
+pub(crate) use bookkeeping::RuntimeCompletionCandidateAcceptance;
 mod effects;
 mod objective_mirrors;
 pub use objective_mirrors::RuntimeObjectiveMirrorStatus;

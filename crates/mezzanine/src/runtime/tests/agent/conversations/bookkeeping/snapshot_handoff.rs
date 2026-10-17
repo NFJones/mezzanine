@@ -77,6 +77,14 @@ fn runtime_completion_handoff_witness_is_exact_and_snapshot_bound() {
         first,
         RuntimeCompletionCandidateAcceptance::Accepted(_)
     ));
+    assert_eq!(first.witness().snapshot_id().len(), 64);
+    assert!(
+        first
+            .witness()
+            .snapshot_id()
+            .bytes()
+            .all(|byte| { byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) })
+    );
     let duplicate = service
         .persistence
         .retain_completion_bookkeeping_candidate(candidate.clone())
