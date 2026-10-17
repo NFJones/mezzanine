@@ -78,6 +78,8 @@ pub(crate) struct AsyncPaneCertificationSnapshot {
     pub certification_pending: bool,
     /// Whether certified environment context has been published.
     pub environment_signature_present: bool,
+    /// Whole-map transaction count observed before fixture lifecycle cleanup.
+    pub running_shell_transactions: usize,
     /// Current semantic readiness state for the pane.
     pub readiness: mez_agent::PaneReadinessState,
     /// Latest stable certification rejection, when certification failed.
