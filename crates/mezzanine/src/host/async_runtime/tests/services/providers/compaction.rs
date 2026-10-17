@@ -7,6 +7,7 @@
 
 use super::*;
 
+mod canonical_convergence;
 mod summary_correction;
 mod transport_retries;
 

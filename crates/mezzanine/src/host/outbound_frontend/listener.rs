@@ -15,6 +15,7 @@ use rustix::fs::{AtFlags, FileType, statat, unlinkat};
 
 use super::{OutboundEndpointOwner, OutboundFrontendAdmission};
 use crate::error::{MezError, Result};
+use crate::security::filesystem::stat_device;
 
 const SOCKET_NAME: &str = "outbound.sock";
 
@@ -62,7 +63,7 @@ impl OutboundFrontendListener {
         let publication = SocketPublication {
             directory,
             path,
-            device: socket.st_dev,
+            device: stat_device(&socket),
             inode: socket.st_ino,
         };
         admission.endpoint.frontend_config_root()?;
@@ -197,7 +198,7 @@ impl Drop for SocketPublication {
             return;
         };
         if FileType::from_raw_mode(socket.st_mode) == FileType::Socket
-            && socket.st_dev == self.device
+            && stat_device(&socket) == self.device
             && socket.st_ino == self.inode
         {
             // Same-user entry replacement between check and unlink remains a

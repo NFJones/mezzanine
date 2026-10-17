@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, open, statat};
 
 use super::*;
+use crate::security::filesystem::stat_device;
 
 const SOCKET_NAME: &str = "outbound.sock";
 
@@ -74,7 +75,7 @@ impl Discovery {
         let discovery = Self {
             path,
             root,
-            device: socket.st_dev,
+            device: stat_device(&socket),
             inode: socket.st_ino,
             uid,
         };
@@ -108,7 +109,7 @@ impl Discovery {
                 "outbound discovery socket must remain private",
             ));
         }
-        if socket.st_dev != self.device || socket.st_ino != self.inode {
+        if stat_device(&socket) != self.device || socket.st_ino != self.inode {
             return Err(MezError::conflict("outbound discovery socket changed"));
         }
         Ok(())

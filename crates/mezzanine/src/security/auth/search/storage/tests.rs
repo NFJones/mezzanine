@@ -742,7 +742,10 @@ fn search_metadata_fifo_is_rejected_without_blocking_or_store_access() {
     let binding = f.capture();
     let original = fs::read(f.store.path()).unwrap();
     fs::remove_file(f.store.path()).unwrap();
-    rustix::fs::mkfifoat(rustix::fs::CWD, f.store.path(), Mode::RUSR | Mode::WUSR).unwrap();
+    use std::os::unix::ffi::OsStrExt;
+    let fifo = std::ffi::CString::new(f.store.path().as_os_str().as_bytes()).unwrap();
+    // SAFETY: fifo is a live NUL-terminated path in our unique temporary root.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
     let owned = f.store.clone();
     let (sender, receiver) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || sender.send(owned.status("work")).unwrap());

@@ -7,6 +7,38 @@ use super::*;
 use crate::runtime::RuntimeIrohTransportPolicy;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
+/// Either half of the retained identity must independently reject discovery.
+/// A real private socket remains untouched while synthetic stale evidence tests
+/// device-only and inode-only mismatches without needing another filesystem.
+#[test]
+fn outbound_discovery_rejects_device_or_inode_mismatch_read_only() {
+    let root = std::env::temp_dir().join(format!("mez-disc-id-{:032x}", rand::random::<u128>()));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = root.join(SOCKET_NAME);
+    let socket = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut discovery = Discovery::capture(&root).unwrap();
+    let original = std::fs::symlink_metadata(&path).unwrap();
+    assert_eq!(discovery.device, original.dev());
+    assert_eq!(discovery.inode, original.ino());
+    discovery.device ^= 1;
+    assert!(discovery.validate().is_err());
+    discovery.device ^= 1;
+    discovery.inode ^= 1;
+    assert!(discovery.validate().is_err());
+    discovery.inode ^= 1;
+    discovery.validate().unwrap();
+    let current = std::fs::symlink_metadata(&path).unwrap();
+    assert_eq!(
+        (current.dev(), current.ino()),
+        (original.dev(), original.ino())
+    );
+    drop(discovery);
+    drop(socket);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Real readiness returns distinct exact handles, not merely socket existence.
 /// Root relocation invalidates the retained client without recreating its path.
 #[tokio::test]
