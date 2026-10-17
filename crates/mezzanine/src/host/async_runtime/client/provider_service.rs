@@ -363,10 +363,25 @@ where
 /// Commands are intentionally claimed separately from provider work. One command
 /// remains in flight at a time, preserving the pane-owned command lifecycle while
 /// ensuring a stalled provider request cannot delay a queued command claim.
+#[cfg(test)]
 pub async fn run_async_agent_command_service<F>(
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncAgentProviderServiceConfig,
+    should_stop: F,
+) -> Result<u64>
+where
+    F: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    run_async_agent_command_service_owned(handle, config, should_stop, Default::default()).await
+}
+
+/// Runs command work with a fork owner retained separately by the supervisor.
+/// Every normal/error exit cancels and drains fork jobs before returning.
+pub(in crate::host::async_runtime) async fn run_async_agent_command_service_owned<F>(
+    handle: &AsyncRuntimeSessionHandle,
+    config: AsyncAgentProviderServiceConfig,
     mut should_stop: F,
+    retirement: super::SavedForkServiceRetirement,
 ) -> Result<u64>
 where
     F: FnMut(u64, RuntimeLifecycleState) -> bool,
@@ -375,9 +390,12 @@ where
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut workers = JoinSet::new();
+    // Unlike read-only commands, forks can own durable state before adoption.
+    // Keep their wrappers observed on stop until the blocking owner retires.
     let mut polls = 0u64;
     let mut executions = 0u64;
 
+    let result = async {
     loop {
         let state = *lifecycle.borrow();
         while let Some(joined) = workers.try_join_next() {
@@ -386,16 +404,29 @@ where
             })??;
             executions = executions.saturating_add(1);
         }
-        if should_stop(polls, state) {
-            workers.abort_all();
-            while workers.join_next().await.is_some() {}
+        executions = executions.saturating_add(retirement.drain_completed()?);
+        if retirement.shutdown.load(std::sync::atomic::Ordering::Acquire)
+            || should_stop(polls, state) {
             return Ok(executions);
         }
 
-        while workers.len() < config.max_tasks_per_poll {
+        while workers.len() + retirement.len()? < config.max_tasks_per_poll {
             let dispatches = handle.drain_agent_command_dispatch_side_effects(1).await?;
             if let Some(dispatch) = dispatches.into_iter().next() {
-                workers.spawn(execute_deferred_agent_command(handle.clone(), dispatch));
+                if matches!(&dispatch, RuntimeSideEffect::DispatchAgentCommand { command, .. } if command == "fork")
+                {
+                    retirement.spawn(execute_deferred_agent_command(
+                        handle.clone(),
+                        dispatch,
+                            Some(retirement.clone()),
+                    ))?;
+                } else {
+                    workers.spawn(execute_deferred_agent_command(
+                        handle.clone(),
+                        dispatch,
+                        None,
+                    ));
+                }
                 polls = polls.saturating_add(1);
             } else {
                 break;
@@ -421,12 +452,29 @@ where
             _ = sleep(config.idle_interval) => {}
         }
     }
+    }.await;
+    if let Err(error) = &result {
+        retirement.remember_service_failure(error)?;
+    }
+    retirement.request_stop();
+    workers.abort_all();
+    while workers.join_next().await.is_some() {}
+    let retired = retirement.retire_in_service().await;
+    match (result, retired) {
+        (Ok(completed), Ok(retired)) => Ok(completed.saturating_add(retired)),
+        (Err(primary), Err(retirement)) => Err(MezError::new(
+            primary.kind(),
+            format!("{primary}; saved fork retirement also failed: {retirement}"),
+        )),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+    }
 }
 
 /// Claims and executes one deferred interactive command outside actor ownership.
 async fn execute_deferred_agent_command(
     handle: AsyncRuntimeSessionHandle,
     dispatch: RuntimeSideEffect,
+    fork_owner: Option<super::SavedForkServiceRetirement>,
 ) -> Result<()> {
     let RuntimeSideEffect::DispatchAgentCommand {
         primary_client_id,
@@ -441,19 +489,34 @@ async fn execute_deferred_agent_command(
             "command worker received a non-command side effect",
         ));
     };
-    let Some(work) = handle
-        .claim_agent_command_work(
-            primary_client_id,
-            pane_id,
-            command,
-            input,
-            claim_generation,
-            conversation_id,
-        )
-        .await?
-    else {
+    let is_fork = command == "fork";
+    let claim = handle.claim_agent_command_work(
+        primary_client_id,
+        pane_id,
+        command,
+        input,
+        claim_generation,
+        conversation_id,
+    );
+    let claimed = if is_fork {
+        tokio::time::timeout(DEFERRED_AGENT_COMMAND_DEADLINE, claim)
+            .await
+            .map_err(|_| MezError::invalid_state("saved fork command claim deadline exceeded"))??
+    } else {
+        claim.await?
+    };
+    let Some(mut work) = claimed else {
         return Ok(());
     };
+    #[cfg(test)]
+    let publication_gate = fork_owner
+        .as_ref()
+        .and_then(|owner| owner.take_publication_gate_for_tests());
+    if let (Some(owner), crate::runtime::RuntimeAgentCommandPrepared::SavedFork(fork)) =
+        (fork_owner, &mut work.prepared)
+    {
+        fork.supervisor_cancelled = Some(owner.shutdown.clone());
+    }
     #[cfg(test)]
     if let (Some(started), Some(release)) = (
         work.deferred_agent_command_started.as_ref(),
@@ -464,27 +527,142 @@ async fn execute_deferred_agent_command(
     }
     let execution_work = work.clone();
     let command = work.command.clone();
-    let outcome = bounded_deferred_agent_command_outcome(
-        DEFERRED_AGENT_COMMAND_DEADLINE,
-        &command,
-        tokio::task::spawn_blocking(move || {
-            let outcome = crate::runtime::RuntimeSessionService::execute_deferred_agent_command(
-                &execution_work,
-            );
-            crate::runtime::RuntimeSessionService::project_deferred_agent_command_outcome(
-                &execution_work,
-                outcome,
-            )
-            .unwrap_or_else(|error| {
-                crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
-                    message: error.message().to_string(),
-                    kind: error.kind(),
-                }
-            })
-        }),
-    )
-    .await;
-    handle.complete_agent_command_work(work, outcome).await?;
+    /// Cancels only fork storage acquisition if its async supervisor is dropped.
+    /// This performs no I/O and never launches an unobserved cleanup task.
+    struct ForkCancellation(Option<std::sync::Arc<std::sync::atomic::AtomicBool>>);
+    impl Drop for ForkCancellation {
+        /// Requests retirement; the blocking owner keeps any publication receipt.
+        fn drop(&mut self) {
+            if let Some(flag) = &self.0 {
+                flag.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+    }
+    let mut cancellation = ForkCancellation(match &work.prepared {
+        crate::runtime::RuntimeAgentCommandPrepared::SavedFork(fork) => {
+            Some(fork.cancelled.clone())
+        }
+        _ => None,
+    });
+    // A fork has a durable result before actor adoption. Keep its sole cleanup
+    // owner inside this blocking task across the actor round trip, including
+    // deadline/cancellation paths. No Drop
+    // task or actor filesystem deletion may guess whether adoption succeeded.
+    let adoption_handle = handle.clone();
+    let adoption_runtime = tokio::runtime::Handle::current();
+    let mut execution = tokio::task::spawn_blocking(move || {
+        // The second fork-only probe proves the blocking owner actually started,
+        // not merely that its async wrapper passed command claim.
+        #[cfg(test)]
+        if execution_work.command == "fork"
+            && let Some(started) = &execution_work.deferred_agent_command_started
+        {
+            started.notify_one();
+        }
+        let outcome =
+            crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&execution_work);
+        let outcome = if let crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read) =
+            outcome
+        {
+            #[cfg(test)]
+            if let Some((published, release)) = publication_gate {
+                published.notify_one();
+                adoption_runtime.block_on(release.notified());
+            }
+            let reply = adoption_runtime.block_on(async {
+                tokio::time::timeout(
+                    DEFERRED_AGENT_COMMAND_DEADLINE,
+                    adoption_handle.complete_agent_command_work(
+                        execution_work.clone(),
+                        crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read.clone()),
+                    ),
+                )
+                .await
+                .unwrap_or_else(|_| {
+                    Err(MezError::invalid_state(
+                        "saved fork actor adoption reply deadline exceeded",
+                    ))
+                })
+            });
+            crate::runtime::RuntimeSessionService::finish_saved_fork_worker(&read, reply)
+        } else {
+            outcome
+        };
+        if execution_work.command == "fork"
+            && let crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { message, .. } =
+                &outcome
+        {
+            // A stale display claim may discard the final response. Keep
+            // setup/secondary-cleanup evidence observable independently.
+            eprintln!("mezzanine saved fork worker: {message}");
+        }
+        crate::runtime::RuntimeSessionService::project_deferred_agent_command_outcome(
+            &execution_work,
+            outcome,
+        )
+        .unwrap_or_else(
+            |error| crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
+                message: error.message().to_string(),
+                kind: error.kind(),
+            },
+        )
+    });
+    let outcome = if let Some(cancelled) = &cancellation.0 {
+        match tokio::time::timeout(DEFERRED_AGENT_COMMAND_DEADLINE, &mut execution).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(error)) => RuntimeAgentCommandAsyncOutcome::Failed {
+                message: format!(
+                    "saved fork worker join failed; any uncertain target retained: {error}"
+                ),
+                kind: MezErrorKind::InvalidState,
+            },
+            Err(_) => {
+                cancelled.store(true, std::sync::atomic::Ordering::Release);
+                let settlement = tokio::time::timeout(
+                    DEFERRED_AGENT_COMMAND_DEADLINE,
+                    handle.complete_agent_command_work(
+                        work.clone(),
+                        RuntimeAgentCommandAsyncOutcome::Failed {
+                            message: format!(
+                                "deferred command `{command}` exceeded its {} ms deadline",
+                                DEFERRED_AGENT_COMMAND_DEADLINE.as_millis()
+                            ),
+                            kind: MezErrorKind::InvalidState,
+                        },
+                    ),
+                )
+                .await
+                .map_err(|_| {
+                    MezError::invalid_state("saved fork timeout settlement reply unavailable")
+                });
+                // Keep the command concurrency slot until its real owner has
+                // retired. Cancellation interrupts flock acquisition; an actor
+                // reply has the same finite bound, never an indefinite block_on.
+                execution.await.map_err(|error| {
+                    MezError::invalid_state(format!("saved fork retirement join failed: {error}",))
+                })?;
+                settlement??;
+                cancellation.0.take();
+                return Ok(());
+            }
+        }
+    } else {
+        bounded_deferred_agent_command_outcome(DEFERRED_AGENT_COMMAND_DEADLINE, &command, execution)
+            .await
+    };
+    let settlement = handle.complete_agent_command_work(work, outcome);
+    if is_fork {
+        tokio::time::timeout(DEFERRED_AGENT_COMMAND_DEADLINE, settlement)
+            .await
+            .map_err(|_| {
+                MezError::invalid_state(
+                    "saved fork final settlement reply unavailable; target retained",
+                )
+            })??;
+    } else {
+        settlement.await?;
+    }
+    cancellation.0.take();
     Ok(())
 }
 

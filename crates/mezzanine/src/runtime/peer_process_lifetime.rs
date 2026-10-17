@@ -45,22 +45,38 @@ impl UnixOriginProcess {
     /// only the adapter that acquired this count may release it on Drop.
     pub(super) fn enter_observer(&self) -> bool {
         use std::sync::atomic::Ordering;
-        self.observers
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
-                (count < 256).then_some(count + 1)
-            })
-            .is_ok()
+        let mut count = self.observers.load(Ordering::SeqCst);
+        while count < 256 {
+            match self.observers.compare_exchange_weak(
+                count,
+                count + 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return true,
+                Err(current) => count = current,
+            }
+        }
+        false
     }
 
     /// Releases one successful adapter acquisition; guards call this exactly
     /// once, so no disconnected clone can keep the observer count elevated.
+    /// Zero refuses the update rather than wrapping; retries recheck the count.
     pub(super) fn leave_observer(&self) {
         use std::sync::atomic::Ordering;
-        let _ = self
-            .observers
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
-                count.checked_sub(1)
-            });
+        let mut count = self.observers.load(Ordering::SeqCst);
+        while let Some(next) = count.checked_sub(1) {
+            match self.observers.compare_exchange_weak(
+                count,
+                next,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return,
+                Err(current) => count = current,
+            }
+        }
     }
 
     /// Observer transport health does not follow from a live producer PID alone.
@@ -276,6 +292,72 @@ pub(crate) fn capture_unix_origin(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Accounting alone needs no kernel lifetime lookup. This inert descriptor
+    /// fixture must never be used as native process or writer identity evidence.
+    fn observer_accounting_fixture() -> UnixOriginProcess {
+        UnixOriginProcess {
+            peer: UnixPeerProcess { uid: 0, pid: 1 },
+            identity: ProcessParentIdentity {
+                process_id: 1,
+                parent_process_id: 0,
+                start_token: 1,
+            },
+            lifetime: std::fs::File::open("/dev/null").unwrap().into(),
+            writer: std::sync::atomic::AtomicU8::new(0),
+            observers: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Empty release and full admission refuse updates without wraparound.
+    /// Contending acquisitions retain their charges until every worker finishes;
+    /// balanced concurrent entry/release returns the count to exactly zero.
+    #[test]
+    fn unix_origin_observer_accounting_is_bounded_under_contention() {
+        use std::sync::atomic::Ordering;
+        let origin = observer_accounting_fixture();
+        origin.leave_observer();
+        assert_eq!(origin.observers.load(Ordering::SeqCst), 0);
+        for count in [256, usize::MAX] {
+            origin.observers.store(count, Ordering::SeqCst);
+            assert!(!origin.enter_observer());
+            assert_eq!(origin.observers.load(Ordering::SeqCst), count);
+        }
+        origin.observers.store(248, Ordering::SeqCst);
+        let barrier = std::sync::Barrier::new(16);
+        let acquired = std::thread::scope(|scope| {
+            let workers = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        origin.enter_observer()
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| usize::from(worker.join().unwrap()))
+                .sum::<usize>()
+        });
+        assert_eq!(acquired, 8);
+        assert_eq!(origin.observers.load(Ordering::SeqCst), 256);
+        for _ in 0..256 {
+            origin.leave_observer();
+        }
+        std::thread::scope(|scope| {
+            for _ in 0..16 {
+                scope.spawn(|| {
+                    for _ in 0..100 {
+                        assert!(origin.enter_observer());
+                        origin.leave_observer();
+                    }
+                });
+            }
+        });
+        assert_eq!(origin.observers.load(Ordering::SeqCst), 0);
+        origin.leave_observer();
+        assert_eq!(origin.observers.load(Ordering::SeqCst), 0);
+    }
 
     /// A process may exit while its numeric record is being read. Both lifetime
     /// fences are required: dead-before-read performs no lookup, and death

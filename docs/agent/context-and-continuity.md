@@ -30,6 +30,35 @@ need the same care as the files being worked on.
 Hiding the agent shell or detaching the client does not start a new
 conversation. Saved history can also be resumed after restart. A fork receives
 a snapshot of its source conversation and does not absorb later parent work.
+That snapshot includes the saved compaction projection: the first request and
+later resumes retain the same model-written summary and exact uncovered history,
+including selective summaries at their original positions. The full source
+archive remains inspectable; covered raw rows do not reappear as active context.
+Missing or corrupt required compaction state fails visibly rather than creating
+a raw-history fork. Fork publication and any eligible saved terminal-handoff
+reconciliation affect only the new target, never the parent's stored bytes.
+If source persistence or terminal bookkeeping has not settled, the fork fails
+visibly instead of cloning a shorter archive. Retry after the original storage
+owner settles; retained append receipts reserve target identities as well.
+Failed cloning or pane setup removes only the newly created target; requesting
+an existing target does not overwrite or delete it. Forks retain source occurrence
+times while receiving their own conversation/catalog creation time, identity,
+name state and later appends. Historical usage and actions are not charged or
+executed again, and copied history grants no new execution authority.
+Cloning and storage rollback run on the command worker, so a large or locked
+archive does not block terminal/control handling. A cancelled or stale fork
+removes only its own unadopted target generation. If pane teardown or the adoption
+reply is uncertain, Mezzanine retains the complete target and reports the failure
+instead of risking live history; retained recovery intent owns any incomplete
+safe cleanup. A waiting resume rechecks the target under the same storage lease.
+Command-service cancellation and supervisor shutdown retain and observe fork
+workers until they retire; a service error does not turn cleanup into detached
+background work or erase the original failure.
+For authenticated `agent/shell/command` control requests, a stored `/fork`
+acknowledges acceptance with a mutation result and null body/turn. Observe the
+visible source shell for eventual success or failure; that initial response is
+not completion. Reusing its idempotency key returns the original acknowledgment
+without creating another fork. Other control commands keep their inline results.
 Conversation continuity is not proof that a command completed or that the
 filesystem is unchanged: verify interrupted work before asking the agent to
 continue.

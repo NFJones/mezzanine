@@ -8,6 +8,73 @@ use crate::security::auth::{AuthPaths, AuthStore, CredentialStoreKind};
 
 const CANARY: &str = "synthetic-search-S3cr3t+/=canary";
 
+/// Publication fault injection returns distinct prior countdown values under
+/// contention. Only the caller consuming one triggers a fault; exhausted zero
+/// refuses every subsequent update rather than wrapping and rearming failures.
+#[test]
+fn search_publication_countdown_returns_previous_once_and_never_wraps() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let counter = AtomicUsize::new(0);
+    assert_eq!(consume_publication_countdown(&counter), Err(0));
+    counter.store(8, Ordering::SeqCst);
+    let barrier = std::sync::Barrier::new(16);
+    let results = std::thread::scope(|scope| {
+        let workers = (0..16)
+            .map(|_| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    consume_publication_countdown(&counter)
+                })
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let mut previous = results
+        .iter()
+        .filter_map(|result| result.ok())
+        .collect::<Vec<_>>();
+    previous.sort_unstable();
+    assert_eq!(previous, (1..=8).collect::<Vec<_>>());
+    assert_eq!(
+        results.iter().filter(|result| **result == Err(0)).count(),
+        8
+    );
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+    assert_eq!(consume_publication_countdown(&counter), Err(0));
+}
+
+/// Both publication seams fail at the Nth applicable write, not at every write
+/// before N. A precommit failure does not consume the post-publication countdown;
+/// cloned owners share each one-shot fault and neither counter rearms at zero.
+#[test]
+fn search_publication_fault_countdowns_keep_precommit_and_postcommit_meaning() {
+    use std::sync::atomic::Ordering;
+    let f = Fixture::new();
+    let cloned = f.store.clone();
+    f.store.fail_write_at.store(2, Ordering::SeqCst);
+    f.store.fail_directory_sync_at.store(2, Ordering::SeqCst);
+    assert_eq!(
+        f.store.write(&Metadata::default()).unwrap(),
+        Publication::DirectorySynced
+    );
+    assert!(cloned.write(&Metadata::default()).is_err());
+    assert_eq!(f.store.fail_write_at.load(Ordering::SeqCst), 0);
+    assert_eq!(f.store.fail_directory_sync_at.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        cloned.write(&Metadata::default()).unwrap(),
+        Publication::PublishedUnsynced
+    );
+    assert_eq!(
+        f.store.write(&Metadata::default()).unwrap(),
+        Publication::DirectorySynced
+    );
+    assert_eq!(f.store.fail_write_at.load(Ordering::SeqCst), 0);
+    assert_eq!(f.store.fail_directory_sync_at.load(Ordering::SeqCst), 0);
+}
+
 /// Shared fake store with exact operation journaling and uncertain-failure modes.
 #[derive(Clone)]
 struct FakeStore {

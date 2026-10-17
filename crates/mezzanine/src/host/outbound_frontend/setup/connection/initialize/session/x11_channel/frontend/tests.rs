@@ -71,7 +71,12 @@ async fn outbound_x11_source_concurrent_reservations_share_identity_and_capacity
     assert_eq!(occurrence.load(Ordering::Relaxed), 8);
     drop(reservations);
     assert_eq!(slots.available_permits(), 8);
-    occurrence.store(u64::MAX, Ordering::Relaxed);
+    occurrence.store(u64::MAX - 1, Ordering::Relaxed);
+    let last = source.reserve().unwrap();
+    assert_eq!(last.occurrence, u64::MAX);
+    assert_eq!(slots.available_permits(), 7);
+    drop(last);
+    assert_eq!(slots.available_permits(), 8);
     assert_eq!(
         source.reserve().err().unwrap().kind(),
         MezErrorKind::Conflict

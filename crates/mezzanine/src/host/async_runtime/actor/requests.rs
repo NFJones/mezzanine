@@ -1008,6 +1008,10 @@ impl AsyncRuntimeSessionActor {
                         .service
                         .pane_environment_signature(&pane_id)
                         .is_some(),
+                    running_shell_transactions: self
+                        .service
+                        .running_shell_transactions_for_tests()
+                        .len(),
                     readiness: self.service.pane_readiness_state(&pane_id),
                     certification_rejection: self
                         .service

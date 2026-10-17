@@ -5,6 +5,10 @@
 //! catalog projection so healthy discovery and rebuilds never decompress every
 //! archive. Extraction validates every entry before installing an active
 //! payload and never delegates path creation to the tar implementation.
+//! New forks reuse the existing uncommitted active-delete recovery intent as a
+//! provisional-target fence. Only a proven absent target may acquire that intent;
+//! retained journals, staging payloads, or partial archives belong to their prior
+//! lifecycle owner and must never be overwritten by fork compensation.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -119,6 +123,42 @@ enum StagedActivePayload {
 impl AgentTranscriptStore {
     /// Acquires the exclusive advisory lock shared by one conversation's mutations.
     pub(super) fn acquire_conversation_lock(&self, conversation_id: &str) -> Result<File> {
+        let file = self.open_conversation_lock(conversation_id)?;
+        flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        Ok(file)
+    }
+
+    /// Acquires ordinary mutation ownership for a cancellable fork worker. The
+    /// deadline owner sets cancellation; no store-specific deadline is extended.
+    pub(super) fn acquire_fork_conversation_lock(
+        &self,
+        conversation_id: &str,
+        cancelled: &[&std::sync::atomic::AtomicBool],
+    ) -> Result<File> {
+        let file = self.open_conversation_lock(conversation_id)?;
+        loop {
+            if cancelled
+                .iter()
+                .any(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+            {
+                return Err(MezError::invalid_state(
+                    "saved fork worker cancelled before publication",
+                ));
+            }
+            match flock(&file, FlockOperation::NonBlockingLockExclusive)
+                .map_err(std::io::Error::from)
+            {
+                Ok(()) => return Ok(file),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    /// Opens the existing private lock identity without claiming ownership yet.
+    fn open_conversation_lock(&self, conversation_id: &str) -> Result<File> {
         validate_conversation_id(conversation_id)?;
         fs::create_dir_all(&self.root)?;
         set_private_dir_permissions(&self.root)?;
@@ -133,7 +173,6 @@ impl AgentTranscriptStore {
             .truncate(false)
             .open(&path)?;
         set_private_file_permissions(&path)?;
-        flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
         Ok(file)
     }
 
@@ -246,7 +285,7 @@ impl AgentTranscriptStore {
     }
 
     /// Returns the active directory path without exposing store internals publicly.
-    fn session_dir_path(&self, conversation_id: &str) -> Result<PathBuf> {
+    pub(super) fn session_dir_path(&self, conversation_id: &str) -> Result<PathBuf> {
         validate_conversation_id(conversation_id)?;
         Ok(self.root.join(conversation_id))
     }
@@ -526,7 +565,32 @@ impl AgentTranscriptStore {
                 continue;
             }
             let journal = read_archive_recovery_journal(self, &path)?;
+            #[cfg(test)]
+            if let Some(barrier) = self
+                .archive_recovery_read_barrier
+                .lock()
+                .map_err(|_| MezError::invalid_state("archive recovery test barrier poisoned"))?
+                .take()
+            {
+                barrier.observed.send(()).map_err(|_| {
+                    MezError::invalid_state("archive recovery test observer disconnected")
+                })?;
+                barrier
+                    .resume
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .map_err(|error| {
+                        MezError::invalid_state(format!(
+                            "archive recovery test barrier failed: {error}"
+                        ))
+                    })?;
+            }
             let _lock = self.acquire_conversation_lock(&journal.conversation_id)?;
+            // A live fork may have completed while recovery waited for this
+            // conversation. Never replay the pre-lock compensation snapshot.
+            if !path.exists() {
+                continue;
+            }
+            let journal = read_archive_recovery_journal(self, &path)?;
             self.recover_archive_transaction(&journal)?;
             remove_if_exists(&path)?;
         }
@@ -670,6 +734,78 @@ impl AgentTranscriptStore {
             ));
         }
         remove_if_exists(&archive_recovery_journal_path(self, conversation_id))
+    }
+
+    /// Rejects any retained lifecycle ownership before creating a fresh fork.
+    /// Unlike healthy archived-session lookup, even a single corrupt archive,
+    /// staging payload, or unresolved journal reserves this identity. This read
+    /// runs under target ownership and precedes the fork compensation boundary.
+    pub(super) fn fork_target_recovery_artifacts_exist(
+        &self,
+        conversation_id: &str,
+    ) -> Result<bool> {
+        validate_conversation_id(conversation_id)?;
+        for path in [
+            archive_recovery_journal_path(self, conversation_id),
+            archive_recovery_journal_path(self, conversation_id).with_extension("json.tmp"),
+            archive_path(self, conversation_id),
+            archive_sidecar_path(self, conversation_id),
+            temporary_archive_path(self, conversation_id),
+            temporary_sidecar_path(self, conversation_id),
+            restore_temporary_path(self, conversation_id),
+            self.root.join(format!(".archive-stage-{conversation_id}")),
+            self.root
+                .join(format!(".archive-stage-{conversation_id}.tsv")),
+            self.root.join(format!(".archive-source-{conversation_id}")),
+        ] {
+            match fs::symlink_metadata(path) {
+                Ok(_) => return Ok(true),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(false)
+    }
+
+    /// Reports an unfinished active deletion or provisional new-fork target.
+    /// A fork writes this existing rollback intent only after proving target
+    /// absence under its mutation lock. Until durable completion retires it,
+    /// discovery and active replay must not expose the provisional payload.
+    pub(super) fn active_delete_pending(&self, conversation_id: &str) -> Result<bool> {
+        let path = archive_recovery_journal_path(self, conversation_id);
+        if !path.exists() {
+            return Ok(false);
+        }
+        let journal = read_archive_recovery_journal(self, &path)?;
+        Ok(
+            journal.operation == ArchiveRecoveryOperation::DeleteActive
+                && !journal.delete_committed,
+        )
+    }
+
+    /// Durably records compensation intent for an exclusively owned new target.
+    /// The existing recovery owner deletes an interrupted fork; no new journal
+    /// representation, source mutation, or historical effect replay is needed.
+    pub(super) fn begin_fork_publication(&self, conversation_id: &str) -> Result<()> {
+        self.write_archive_recovery_journal(
+            conversation_id,
+            ArchiveRecoveryOperation::DeleteActive,
+            CatalogPayloadLayout::Directory,
+        )?;
+        File::open(archive_recovery_directory(self))?.sync_all()?;
+        File::open(&self.root)?.sync_all()?;
+        Ok(())
+    }
+
+    /// Makes a fully validated target durable before retiring its rollback fence.
+    /// Callers still own the conversation lock and publish discovery metadata
+    /// afterwards. A failure is compensated as a failed, newly owned fork.
+    pub(super) fn complete_fork_publication(&self, conversation_id: &str) -> Result<()> {
+        File::open(self.session_dir_path(conversation_id)?)?.sync_all()?;
+        File::open(&self.root)?.sync_all()?;
+        self.remove_archive_recovery_journal(conversation_id)?;
+        File::open(archive_recovery_directory(self))?.sync_all()?;
+        Ok(())
     }
 
     /// Retires a committed active-delete tombstone before a new payload reuses its id.

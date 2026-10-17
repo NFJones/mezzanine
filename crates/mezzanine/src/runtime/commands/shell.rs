@@ -662,11 +662,13 @@ impl RuntimeSessionService {
             }
         };
         if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) = outcome.as_ref()
-            // Only a primary-input ingress may defer: its display is delivered
-            // later through the prompt/step channel this lane settles into. A
-            // control call answers with the body it asked for, so it keeps the
-            // inline read rather than acknowledging work it cannot deliver.
-            && origin.is_authenticated_primary_input()
+            // Ordinary control reads retain their inline result. Saved fork is
+            // the sole control mutation accepted asynchronously: its result is
+            // delivered through the same visible shell and exact command claim.
+            // Never conflate trusted status actions with authenticated control.
+            && (origin.is_authenticated_primary_input()
+                || (command == "fork"
+                    && origin == AgentShellCommandOrigin::AuthenticatedControlRequest))
             // The deferred decision is service-state aware: a command whose read
             // cannot complete off the actor keeps its synchronous body.
             && self.should_defer_agent_shell_command(command, input)

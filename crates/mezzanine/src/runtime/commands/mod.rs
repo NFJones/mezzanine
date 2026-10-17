@@ -80,6 +80,9 @@ pub(crate) use overlay_refresh::SAVED_SESSION_OVERLAY_REFRESH_KEY;
 mod preferences;
 mod remember;
 mod resume;
+#[cfg(test)]
+pub(crate) use resume::read_direct_resume;
+pub(crate) use resume::{SavedForkRead, SavedForkWork};
 mod sandbox;
 mod shell;
 mod shell_mode;

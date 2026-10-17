@@ -2240,7 +2240,11 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    service.start_initial_pane_process(None).unwrap();
+    let started = service.start_initial_pane_process(None).unwrap();
+    let native = service.native_pane_retirement_owner();
+    let original_root = mez_mux::process::process_parent_identity_for_pid(started.primary_pid);
+    let original_pid =
+        rustix::process::Pid::from_raw(i32::try_from(started.primary_pid).unwrap()).unwrap();
 
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -2248,11 +2252,19 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
     let pane_worker_handle = handle.clone();
     let client_handle = handle.clone();
     let pane_worker_done = StdArc::new(AtomicBool::new(false));
-    let pane_worker_stop = StdArc::clone(&pane_worker_done);
+    // Coarse test-only phases: acceptance, stop admitted, worker settled, actor
+    // closing, actor closed. They diagnose ordering, never native authority.
+    let phase = StdArc::new(std::sync::atomic::AtomicU8::new(0));
+    let worker_phase = phase.clone();
+    let client_phase = phase.clone();
+    let worker_stop_observed = pane_worker_done.clone();
+    let worker_native = native.clone();
+    let client_native = native.clone();
+    let (worker_finished, worker_completion) = tokio::sync::oneshot::channel();
     let client_sentinel = sentinel.clone();
     let pane_worker = async move {
         let result = run_async_pane_process_supervisor_service(
-            pane_worker_handle,
+            pane_worker_handle.clone(),
             AsyncPaneProcessSupervisorServiceConfig {
                 max_polls: u64::MAX,
                 take_limit: 8,
@@ -2265,22 +2277,27 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
                     foreground_metadata_interval: Duration::from_millis(10),
                 },
             },
-            move |_, state| {
-                pane_worker_stop.load(Ordering::SeqCst)
-                    || matches!(state, RuntimeLifecycleState::Stopping)
-            },
+            // Intent is diagnostic only; watched lifecycle is the durable
+            // stopping condition, not a shared-notification/atomic-flag race.
+            |_, state| matches!(state, RuntimeLifecycleState::Stopping),
         )
         .await;
-        if let Err(error) = result {
-            assert!(
-                matches!(
-                    error.message(),
-                    "async runtime session actor is closed"
-                        | "async runtime session actor reply was dropped"
-                ),
-                "pane supervisor failed before actor shutdown: {error}"
-            );
-        }
+        let diagnostics = (
+            worker_phase.load(Ordering::SeqCst),
+            worker_stop_observed.load(Ordering::SeqCst),
+            *pane_worker_handle.lifecycle_state_watcher().borrow(),
+            pane_worker_handle.sender.closed.load(Ordering::Acquire),
+            worker_native.outstanding(),
+            worker_native.returned_count(),
+            worker_native.has_cleanup_failure(),
+        );
+        eprintln!(
+            "owned unmanaged-Zsh supervisor settled: ok={} (phase,stop_intent,lifecycle,ingress_closed,native_outstanding,returned,failed)={diagnostics:?}",
+            result.is_ok()
+        );
+        // Deliver the actual outcome before assertions can panic. Normal
+        // fixture teardown no longer permits even bare actor-closure errors.
+        let _ = worker_finished.send((result, diagnostics));
     };
 
     let client = async move {
@@ -2378,32 +2395,151 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        // Preserve the acceptance oracles BEFORE terminal lifecycle/native
+        // cleanup can erase transactions or invalidate environment authority.
+        let before_stop = client_handle.pane_certification_snapshot("%1").await;
+        client_phase.store(1, Ordering::SeqCst);
         pane_worker_done.store(true, Ordering::SeqCst);
-        assert_eq!(
-            client_handle.shutdown().await.unwrap(),
-            RuntimeLifecycleState::Running
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Shutdown(ShutdownEvent {
+            reason: "owned unmanaged-Zsh fixture ordered teardown".to_string(),
+            force: false,
+            failed: false,
+        }));
+        // Existing watched lifecycle admission wakes BOTH supervisor and worker
+        // reliably. It does not execute the separate actor Shutdown request.
+        let stop_admission = client_handle.submit_runtime_events(batch).await;
+        let settled = worker_completion.await;
+        client_phase.store(2, Ordering::SeqCst);
+        let actor_before_close = client_handle.lifecycle_state().await;
+        let native_before_close = (
+            client_native.outstanding(),
+            client_native.returned_count(),
+            client_native.has_cleanup_failure(),
         );
+        let original_absent =
+            rustix::process::test_kill_process(original_pid) == Err(rustix::io::Errno::SRCH);
+        let original_birth_observed = original_root
+            .as_ref()
+            .is_some_and(|identity| identity.process_id == started.primary_pid);
+        eprintln!(
+            "owned unmanaged-Zsh before actor close: native={native_before_close:?} original_root_absent={original_absent} original_birth_observed={original_birth_observed} actor_live={}",
+            actor_before_close.is_ok()
+        );
+        client_phase.store(3, Ordering::SeqCst);
+        let actor_close = client_handle.shutdown().await;
+        client_phase.store(4, Ordering::SeqCst);
+        (
+            before_stop,
+            stop_admission,
+            settled,
+            actor_before_close,
+            native_before_close,
+            original_absent,
+            original_birth_observed,
+            actor_close,
+        )
     };
 
-    let ((), (), mut actor_exit) = tokio::time::timeout(Duration::from_secs(30), async {
+    let joined = tokio::time::timeout(Duration::from_secs(30), async {
         tokio::join!(client, pane_worker, actor.run())
     })
-    .await
-    .expect("unmanaged primary Zsh bootstrap should not time out");
-    assert!(sentinel.is_file());
-    assert!(
-        actor_exit
-            .service
-            .running_shell_transactions_for_tests()
-            .is_empty(),
+    .await;
+    let (observed, mut actor_exit) = match joined {
+        Ok((observed, (), actor_exit)) => (observed, actor_exit),
+        Err(error) => {
+            let actor_close = handle.shutdown().await;
+            native.seal();
+            let cleanup = crate::host::async_runtime::drain_native_pane_retirement(
+                &native,
+                tokio::time::Instant::now()
+                    + crate::host::async_runtime::NATIVE_PANE_RETIREMENT_TIMEOUT,
+            )
+            .await;
+            panic!(
+                "unmanaged primary Zsh original30s fixture deadline: {error}; phase={} ingress_closed={} native_outstanding={} returned={} failed={} actor_close_ok={} fallback_cleanup_ok={}",
+                phase.load(Ordering::SeqCst),
+                handle.sender.closed.load(Ordering::Acquire),
+                native.outstanding(),
+                native.returned_count(),
+                native.has_cleanup_failure(),
+                actor_close.is_ok(),
+                cleanup.is_ok()
+            );
+        }
+    };
+    let sentinel_present = sentinel.is_file();
+    let final_transactions_empty = actor_exit
+        .service
+        .running_shell_transactions_for_tests()
+        .is_empty();
+    let final_authority_invalidated = !actor_exit
+        .service
+        .pane_environment_authority_is_certified_for_tests("%1");
+    // Fallback cleanup is always attempted before new teardown assertions, but
+    // its later success can never replace the captured worker/native verdicts.
+    let manager_cleanup = actor_exit.service.terminate_all_pane_processes();
+    actor_exit.service.release_native_panes_for_retirement();
+    native.seal();
+    let native_cleanup = crate::host::async_runtime::drain_native_pane_retirement(
+        &native,
+        tokio::time::Instant::now() + crate::host::async_runtime::NATIVE_PANE_RETIREMENT_TIMEOUT,
+    )
+    .await;
+    if sentinel_present {
+        std::fs::remove_file(sentinel).unwrap();
+    }
+    let (
+        before_stop,
+        stop_admission,
+        settled,
+        actor_before_close,
+        native_before_close,
+        original_absent,
+        original_birth_observed,
+        actor_close,
+    ) = observed;
+    let before_stop = before_stop.expect("capture acceptance before lifecycle cleanup");
+    assert_eq!(
+        before_stop.running_shell_transactions, 0,
         "identity and bootstrap transactions must settle before acceptance"
     );
     assert!(
-        !actor_exit
-            .service
-            .pane_environment_authority_is_certified_for_tests("%1"),
+        !before_stop.environment_signature_present,
+        "hiding agent mode must invalidate child environment before teardown"
+    );
+    stop_admission.expect("owned lifecycle stop must be admitted while actor ingress remains open");
+    let (result, diagnostics) =
+        settled.expect("same pane supervisor must report its actual result");
+    let report = result.unwrap_or_else(|error| panic!("owned pane supervisor failed; (phase,stop_intent,lifecycle,ingress_closed,native_outstanding,returned,failed)={diagnostics:?}: {error}"));
+    assert_eq!(
+        diagnostics,
+        (1, true, RuntimeLifecycleState::Stopping, false, 0, 0, false)
+    );
+    assert_eq!(report.terminal_state, RuntimeLifecycleState::Stopping);
+    assert_eq!(actor_before_close.unwrap(), RuntimeLifecycleState::Stopping);
+    assert_eq!(
+        native_before_close,
+        (0, 0, false),
+        "task completion is not a native completion oracle"
+    );
+    assert!(original_birth_observed);
+    assert!(
+        original_absent,
+        "original owned root must be absent BEFORE fallback cleanup"
+    );
+    assert_eq!(actor_close.unwrap(), RuntimeLifecycleState::Stopping);
+    assert_eq!(phase.load(Ordering::SeqCst), 4);
+    assert!(sentinel_present);
+    assert!(
+        final_transactions_empty,
+        "identity and bootstrap transactions must settle before acceptance"
+    );
+    assert!(
+        final_authority_invalidated,
         "hiding agent mode must invalidate the exited child environment authority"
     );
-    actor_exit.service.terminate_all_pane_processes().unwrap();
-    std::fs::remove_file(sentinel).unwrap();
+    manager_cleanup.unwrap();
+    native_cleanup.unwrap();
+    assert_eq!(native.outstanding(), 0);
 }

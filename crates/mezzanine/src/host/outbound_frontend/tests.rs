@@ -85,6 +85,40 @@ async fn outbound_frontend_handles_are_bounded_and_exact() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// The last representable generation is usable exactly once. Repeated valid
+/// hellos after exhaustion neither wrap identity nor retain handshake permits.
+#[tokio::test]
+async fn outbound_frontend_generation_exhaustion_never_wraps_or_leaks_capacity() {
+    let (root, endpoint) = fixture().await;
+    let admission =
+        OutboundFrontendAdmission::new(endpoint.clone(), 1, Duration::from_secs(2)).unwrap();
+    admission
+        .next_generation
+        .store(u64::MAX - 1, Ordering::Relaxed);
+    let (last, client) = admitted(&admission).await;
+    assert_eq!(last.handle().generation, u64::MAX);
+    assert_eq!(admission.slots.available_permits(), 0);
+    drop((last, client));
+    for _ in 0..2 {
+        let (server, client) = tokio::net::UnixStream::pair().unwrap();
+        let mut client = Framed::new(client, ProtocolFrameCodec::new(HELLO_LIMIT).unwrap());
+        client
+            .send(ProtocolFrame::new(
+                CONTENT_TYPE,
+                serde_json::json!({"protocol":PROTOCOL}).to_string(),
+            ))
+            .await
+            .unwrap();
+        let error = admission.admit(server).await.err().unwrap();
+        assert!(error.message().contains("generation exhausted"));
+        assert_eq!(admission.next_generation.load(Ordering::Relaxed), u64::MAX);
+        assert_eq!(admission.slots.available_permits(), 1);
+    }
+    drop(admission);
+    endpoint.begin_shutdown().unwrap().finish().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Unsupported versions, unknown fields and oversized input fail without
 /// consuming lasting capacity. A cancelled silent handshake releases its slot;
 /// authentication rejects the wrong owner UID before waiting for peer bytes.

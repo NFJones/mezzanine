@@ -7,7 +7,7 @@
 use super::{
     AsyncAgentProviderServiceConfig, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AsyncRuntimeSessionHandle, AttachedTerminalClientLoopReport, Result, RuntimeLifecycleState,
-    run_async_agent_command_service, run_async_agent_provider_service,
+    run_async_agent_provider_service,
 };
 
 // Async agent provider polling service.
@@ -39,13 +39,20 @@ pub fn build_async_agent_command_service(
     config: AsyncAgentProviderServiceConfig,
 ) -> Result<AsyncRuntimeService> {
     config.validate()?;
-    Ok(AsyncRuntimeService::new_auxiliary(name, async move {
-        let executions = run_async_agent_command_service(&handle, config, |_, state| {
-            is_terminal_runtime_lifecycle_state(state)
-        })
+    let retirement = super::client::SavedForkServiceRetirement::default();
+    let worker_retirement = retirement.clone();
+    let mut service = AsyncRuntimeService::new_auxiliary(name, async move {
+        let executions = super::client::run_async_agent_command_service_owned(
+            &handle,
+            config,
+            |_, state| is_terminal_runtime_lifecycle_state(state),
+            worker_retirement,
+        )
         .await?;
         Ok(AsyncRuntimeServiceExit::completed(executions))
-    }))
+    });
+    service.saved_fork_retirement = Some(retirement);
+    Ok(service)
 }
 
 /// Runs the empty attached terminal loop report operation for this subsystem.
