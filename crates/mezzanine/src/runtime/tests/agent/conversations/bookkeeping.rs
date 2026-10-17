@@ -6,6 +6,7 @@
 use super::*;
 
 mod receive_admission;
+mod snapshot_handoff;
 
 /// A genuine retained stopped-turn candidate is not a durable archive suffix.
 /// Saved fork must settle its failed command without consuming or bypassing

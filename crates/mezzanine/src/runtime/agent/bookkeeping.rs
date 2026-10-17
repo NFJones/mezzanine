@@ -91,6 +91,100 @@ pub(crate) struct RuntimeBookkeepingCandidate {
     pub(crate) blocked: bool,
 }
 
+impl RuntimeBookkeepingCandidate {
+    /// Canonically encodes exact immutable evidence and original checked-read
+    /// ownership. Runtime generation/blocked state are not evidence identity.
+    /// This is an in-process handoff identity, not a new transcript wire format.
+    pub(crate) fn completion_snapshot_bytes(&self) -> Result<Vec<u8>> {
+        use std::os::unix::ffi::OsStrExt;
+        if self.read.conversation_id != self.turn.conversation_id
+            || self.read.pane_id != self.turn.pane_id
+            || self.read.turn_id != self.turn.turn_id
+            || self.persistence_key
+                != (self.turn.conversation_id.clone(), self.turn.turn_id.clone())
+        {
+            return Err(MezError::invalid_state(
+                "completion candidate differs from original transcript owner",
+            ));
+        }
+        #[derive(serde::Serialize)]
+        struct Entry<'a> {
+            conversation: &'a str,
+            sequence: u64,
+            created_at: u64,
+            role: &'static str,
+            turn: &'a str,
+            agent: &'a str,
+            pane: &'a str,
+            content: &'a str,
+        }
+        /// Captures all existing entry fields without adding a persistence format.
+        fn entry(value: &TranscriptEntry) -> Result<Entry<'_>> {
+            value
+                .validate()
+                .map_err(|error| MezError::invalid_state(error.to_string()))?;
+            Ok(Entry {
+                conversation: &value.conversation_id,
+                sequence: value.sequence,
+                created_at: value.created_at_unix_seconds,
+                role: match value.role {
+                    TranscriptRole::User => "user",
+                    TranscriptRole::Assistant => "assistant",
+                    TranscriptRole::Tool => "tool",
+                    TranscriptRole::System => "system",
+                },
+                turn: &value.turn_id,
+                agent: &value.agent_id,
+                pane: &value.pane_id,
+                content: &value.content,
+            })
+        }
+        #[derive(serde::Serialize)]
+        struct Snapshot<'a> {
+            version: u8,
+            path: &'a [u8],
+            conversation: &'a str,
+            pane: &'a str,
+            turn: &'a str,
+            agent: &'a str,
+            frontier: u64,
+            epoch: u64,
+            committed_prefix_required: bool,
+            terminal_handoff: bool,
+            pending: Vec<Entry<'a>>,
+            persistence_key: &'a (String, String),
+            entries: Vec<Entry<'a>>,
+            directory: Option<Entry<'a>>,
+        }
+        let path = self
+            .read
+            .store
+            .transcript_path(&self.read.conversation_id)?;
+        serde_json::to_vec(&Snapshot {
+            version: 1,
+            path: path.as_os_str().as_bytes(),
+            conversation: &self.turn.conversation_id,
+            pane: &self.turn.pane_id,
+            turn: &self.turn.turn_id,
+            agent: &self.turn.agent_id,
+            frontier: self.read.transcript_entries,
+            epoch: self.read.compaction_epoch,
+            committed_prefix_required: self.read.committed_prefix_required,
+            terminal_handoff: self.read.terminal_handoff,
+            pending: self
+                .read
+                .pending
+                .iter()
+                .map(entry)
+                .collect::<Result<Vec<_>>>()?,
+            persistence_key: &self.persistence_key,
+            entries: self.entries.iter().map(entry).collect::<Result<Vec<_>>>()?,
+            directory: self.directory.as_ref().map(entry).transpose()?,
+        })
+        .map_err(|_| MezError::invalid_state("completion evidence snapshot encoding failed"))
+    }
+}
+
 /// Exact candidate and actor-captured history checked by a blocking worker.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBookkeepingCandidateWork {

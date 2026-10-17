@@ -66,6 +66,10 @@ execution group before consuming worker delivery ownership. Terminal context is
 retained before optional result installation; completed-hook/audit failures stay
 typed errors, not a reason to resubmit the performed action. Exact duplicate
 delivery does not invoke those gates again or count another applied execution.
+Retirement handoff witnesses identify exact immutable original-conversation
+evidence, not merely a turn or persistence key. Repeating the same owned snapshot
+does not enqueue another candidate; changed evidence requires distinct acceptance.
+Queued candidate ownership does not certify checked history or durable disk append.
 
 ## Action catalog
 

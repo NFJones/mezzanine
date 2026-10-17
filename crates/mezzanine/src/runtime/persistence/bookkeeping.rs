@@ -5,9 +5,113 @@
 //! retains its candidate and fences subsequent history admission fail-closed.
 
 use super::RuntimePersistenceComponent;
+use crate::error::{MezError, Result};
 use crate::runtime::RuntimeBookkeepingCandidate;
+use sha2::{Digest, Sha256};
+
+/// Producer-created proof of ownership of one exact immutable candidate.
+/// It is neither checked archive acceptance, disk durability nor gate success.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeCompletionCandidateWitness {
+    generation: u64,
+    snapshot_id: String,
+    persistence_key: (String, String),
+}
+
+impl RuntimeCompletionCandidateWitness {
+    /// Returns the generation actually owned by the existing candidate queue.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+    /// Returns the exact canonical evidence digest, not merely a turn identity.
+    pub(crate) fn snapshot_id(&self) -> &str {
+        &self.snapshot_id
+    }
+}
+
+/// Actual producer acceptance; changed evidence never reuses an earlier witness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RuntimeCompletionCandidateAcceptance {
+    Accepted(RuntimeCompletionCandidateWitness),
+    AlreadyAccepted(RuntimeCompletionCandidateWitness),
+}
+
+impl RuntimeCompletionCandidateAcceptance {
+    /// Extracts the same opaque witness from new or identical existing ownership.
+    pub(crate) fn witness(&self) -> &RuntimeCompletionCandidateWitness {
+        match self {
+            Self::Accepted(witness) | Self::AlreadyAccepted(witness) => witness,
+        }
+    }
+}
 
 impl RuntimePersistenceComponent {
+    /// Injects generation exhaustion only in isolated ownership tests.
+    #[cfg(test)]
+    pub(crate) fn set_bookkeeping_generation_for_tests(&mut self, generation: u64) {
+        self.next_bookkeeping_generation = generation;
+    }
+
+    /// Retains a completion snapshot in the EXISTING candidate owner. The caller
+    /// must cache the returned witness before any fallible/async boundary. No
+    /// legacy void/zero result is interpreted as acceptance. Required validation,
+    /// collision or exhaustion failure occurs before queue mutation.
+    pub(crate) fn retain_completion_bookkeeping_candidate(
+        &mut self,
+        mut candidate: RuntimeBookkeepingCandidate,
+    ) -> Result<RuntimeCompletionCandidateAcceptance> {
+        let bytes = candidate.completion_snapshot_bytes()?;
+        let snapshot_id = format!("{:x}", Sha256::digest(&bytes));
+        for existing in self
+            .bookkeeping_candidates
+            .iter()
+            .filter(|existing| existing.persistence_key == candidate.persistence_key)
+        {
+            let existing_bytes = existing.completion_snapshot_bytes()?;
+            let existing_id = format!("{:x}", Sha256::digest(&existing_bytes));
+            if existing_id != snapshot_id {
+                continue;
+            }
+            if existing_bytes != bytes {
+                return Err(MezError::invalid_state(
+                    "completion snapshot identity collision",
+                ));
+            }
+            return Ok(RuntimeCompletionCandidateAcceptance::AlreadyAccepted(
+                RuntimeCompletionCandidateWitness {
+                    generation: existing.generation,
+                    snapshot_id,
+                    persistence_key: existing.persistence_key.clone(),
+                },
+            ));
+        }
+        let generation = self
+            .next_bookkeeping_generation
+            .checked_add(1)
+            .ok_or_else(|| {
+                MezError::invalid_state("completion bookkeeping generation exhausted")
+            })?;
+        if self.bookkeeping_claims.contains(&generation)
+            || self
+                .bookkeeping_candidates
+                .iter()
+                .any(|entry| entry.generation == generation)
+        {
+            return Err(MezError::invalid_state(
+                "completion bookkeeping generation is already owned",
+            ));
+        }
+        candidate.generation = generation;
+        let witness = RuntimeCompletionCandidateWitness {
+            generation,
+            snapshot_id,
+            persistence_key: candidate.persistence_key.clone(),
+        };
+        self.bookkeeping_candidates.push(candidate);
+        self.next_bookkeeping_generation = generation;
+        Ok(RuntimeCompletionCandidateAcceptance::Accepted(witness))
+    }
+
     /// Retains chronology before its live turn state is removed.
     pub(crate) fn queue_bookkeeping_candidate(
         &mut self,

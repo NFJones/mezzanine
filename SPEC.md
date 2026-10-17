@@ -4866,6 +4866,12 @@ result/context ownership precedes optional result installation. Required audit
 and completed-hook stages distinguish entry from acceptance; a failed stage
 retains the original typed error and MUST NOT be replayed on duplicate delivery.
 An unchanged duplicate is not another applied execution or transport dispatch.
+Completion retirement evidence MUST identify the exact immutable original
+conversation/read owner and ordered terminal-result/required-failure snapshot;
+matching only a turn, group or persistence key is insufficient. Identical owned
+snapshots may reuse the same producer-issued candidate witness, but changed
+evidence MUST NOT acknowledge an older snapshot. Candidate ownership is not
+checked archive acceptance or disk durability; generation exhaustion fails closed.
 If projection is unavailable, validation fails, or source mismatches cannot be
 reconciled independently, Mezzanine MUST remove only the still-provisional
 owned suffix and present validated source through normal renderers. Provider
