@@ -127,7 +127,7 @@ fn runtime_ordered_logs_retain_components_after_install_failure() {
             key,
             vec![
                 ("COMMAND_SENTINEL".to_string(), entry),
-                ("SECOND_COMMAND_SENTINEL".to_string(), second_entry),
+                ("FOLLOWUP_SENTINEL".to_string(), second_entry),
             ],
         );
         service.fail_agent_presentation_install_for_tests(after);
@@ -154,7 +154,7 @@ fn runtime_ordered_logs_retain_components_after_install_failure() {
         for marker in [
             "HEADER_SENTINEL",
             "COMMAND_SENTINEL",
-            "SECOND_COMMAND_SENTINEL",
+            "FOLLOWUP_SENTINEL",
             "RESULT_SENTINEL",
             "SAY_SENTINEL",
         ]
