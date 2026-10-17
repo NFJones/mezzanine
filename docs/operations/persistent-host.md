@@ -250,6 +250,16 @@ Final `CliExit` cleanup waits for the same publication barrier. Borrowed status
 remains nonzero while it is pending or unknown, even when the actual native
 child count is zero; callback obligations do not inflate that count.
 
+`mez host stop` requests the final shutdown verdict on the same protected local
+connection and succeeds only after the host confirms native retirement and
+runtime completion publication. Its `--timeout` covers the whole operation,
+including connection and response. A removed socket, an admission-only
+`shutting_down` reply, or a lost/failed completion reply is not success; the CLI
+reports shutdown as unproven rather than polling a replacement host or retrying
+effects. Programmatic `host/shutdown` callers can request the same contract with
+`wait_for_completion: true` and must require `shutdown_completed: true`.
+Without that request, the existing response still proves admission only.
+
 Rust embedders receive `CliExit` from `mezzanine::run_cli()`, not a bare `u8`.
 Borrow `code()` and `pending_native_children()` while retaining the outcome;
 use `retry_native_cleanup(budget)` inside a caller-owned Tokio runtime for an

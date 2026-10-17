@@ -2330,6 +2330,20 @@ when no receipt receiver exists and terminal history is disabled.
 Final CLI cleanup and borrowed exit status MUST include this publication
 barrier, without counting callback obligations as synthetic native children.
 
+Public `mez host stop` success MUST require an explicit healthy completion
+verdict from its original authenticated host connection, after checkpoint,
+native retirement and exact runtime publication have succeeded. A host shutdown
+request with `wait_for_completion: true` MUST defer its response until that
+verdict, returning `shutdown_completed: true` only for successful completion.
+Ordinary `shutting_down` responses establish admission only. Missing or false
+completion fields, transport closure, socket removal, host replacement and
+deadline expiry MUST remain unproven/error; the client MUST NOT reconnect or
+fall back to filesystem disappearance. One client deadline MUST cover connect,
+request and completion. The server MUST retain its original connection deadline
+clipped by the existing shutdown budget, preserve primary cleanup failure when
+reply publication also fails, and retain native ownership independently of the
+client's cancellation or failed reply delivery.
+
 ### 5.3 Shared SQLite Session-State Storage
 
 Session-state stores that adopt SQLite MUST use one database per concern. A

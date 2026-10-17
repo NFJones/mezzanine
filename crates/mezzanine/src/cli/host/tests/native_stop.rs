@@ -7,6 +7,103 @@
 
 use super::*;
 
+/// Admission-only/missing/false replies, EOF and a stalled original connection
+/// must all remain unproven even when the private socket is actually removed.
+/// This protocol-only fixture owns no child and cannot manufacture a native
+/// receipt. The real native counterpart below supplies the kernel oracle.
+#[tokio::test(flavor = "current_thread")]
+async fn public_host_stop_rejects_incomplete_or_lost_receipt() {
+    for mode in ["admission", "false", "missing", "eof", "stall"] {
+        let root = test_root("stop-receipt");
+        let env = test_env(&root);
+        let runtime_root = default_socket_directory(&env.runtime).unwrap().path;
+        fs::create_dir_all(&runtime_root).unwrap();
+        fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o700)).unwrap();
+        let socket = host_socket_path(&runtime_root).unwrap();
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let server = async {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut buffer = [0; 4096];
+                let read = stream.read(&mut buffer).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buffer[..read]);
+                if crate::control::decode_control_frame(&bytes, HOST_RESPONSE_LIMIT).is_ok() {
+                    break;
+                }
+            }
+            let result = match mode {
+                "admission" => Some(serde_json::json!({"shutting_down":true})),
+                "false" => Some(serde_json::json!({"shutdown_completed":false})),
+                "missing" => Some(serde_json::json!({})),
+                "stall" => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    None
+                }
+                _ => None,
+            };
+            if let Some(result) = result {
+                let body = serde_json::json!({"jsonrpc":"2.0","id":"host-cli","result":result});
+                stream
+                    .write_all(&crate::control::encode_control_body(&body.to_string()))
+                    .await
+                    .unwrap();
+            }
+            drop(stream);
+            drop(listener);
+            fs::remove_file(&socket).unwrap();
+        };
+        let stop = stop_host_with_completion(&env, Duration::from_millis(50));
+        let (result, ()) = tokio::join!(stop, server);
+        assert!(
+            result.is_err(),
+            "{mode} was mistaken for completion: {result:?}"
+        );
+        assert!(!socket.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// A sticky actual-owner failure is independent of native cardinality. The
+/// authenticated public completion response must reject a failed host at zero,
+/// and unlinking its management socket must not turn that verdict into success.
+#[tokio::test(flavor = "current_thread")]
+async fn public_host_stop_rejects_retained_failure_at_native_zero() {
+    let root = test_root("stop-failed-zero");
+    let env = test_env(&root);
+    let server = native_stop_host(&env);
+    let socket = server.socket_path().to_path_buf();
+    let owner = server.router().native_cleanup_owner();
+    owner.retain_native_failure_for_test();
+    assert_eq!(owner.native_pending_count().unwrap(), 0);
+    let serving = tokio::spawn(async move {
+        let result = server.serve(std::future::pending()).await;
+        drop(server);
+        result
+    });
+    let mut output = Vec::new();
+    let mut command_native = super::super::super::native_exit::CliNativeOwnership::default();
+    let stopped = run_host(
+        HostCliArgs {
+            command: HostCliCommand::Stop { timeout: 5 },
+        },
+        env,
+        CliOutputFormat::Json,
+        &mut output,
+        &mut command_native,
+    )
+    .await;
+    let server_result = serving.await.unwrap();
+    assert!(stopped.is_err(), "zero masked failure: {stopped:?}");
+    assert!(server_result.is_err());
+    assert!(!socket.exists());
+    assert_eq!(owner.native_pending_count().unwrap(), 0);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Creates one private local host with the ordinary finite shutdown budget.
 fn native_stop_host(env: &CliEnv) -> HostServer {
     HostServer::bind(HostServerConfig {
