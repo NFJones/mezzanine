@@ -5,6 +5,7 @@
 //! and provider-continuation context handling from the main runtime agent
 //! facade.
 
+use super::completion::{ExternalCompletionKey, ExternalCompletionPhase};
 #[cfg(test)]
 use super::execute_mcp_action_through_runtime;
 use super::{
@@ -517,6 +518,12 @@ impl RuntimeSessionService {
         {
             return Ok(None);
         }
+        if !self.approved_external_action_turn_is_current(turn_id, action_id) {
+            self.agent
+                .pending_approved_external_actions
+                .remove(&identity);
+            return Ok(None);
+        }
         let attempt = format!(
             "external-{}",
             self.agent.next_approved_external_action_attempt
@@ -525,17 +532,20 @@ impl RuntimeSessionService {
             .agent
             .next_approved_external_action_attempt
             .saturating_add(1);
+        self.reserve_external_completion(turn_id, action_id, &attempt)?;
         if self
             .agent
             .claimed_approved_external_actions
             .insert(identity.clone(), attempt.clone())
             .is_some()
         {
+            self.discard_issued_external_completion(turn_id, action_id, &attempt);
             return Ok(None);
         }
         match self.prepare_approved_external_action_dispatch(turn_id, action_id, &attempt) {
             Ok(Some(dispatch)) => Ok(Some(dispatch)),
             Ok(None) => {
+                self.discard_issued_external_completion(turn_id, action_id, &attempt);
                 self.agent
                     .claimed_approved_external_actions
                     .remove(&identity);
@@ -787,8 +797,15 @@ impl RuntimeSessionService {
     /// Applies one approved external worker result through actor-owned state.
     pub(crate) fn complete_approved_external_action(
         &mut self,
-        outcome: RuntimeApprovedExternalActionOutcome,
+        mut outcome: RuntimeApprovedExternalActionOutcome,
     ) -> Result<bool> {
+        if let Some(applied) = self.external_completion_duplicate(
+            &outcome.turn_id,
+            &outcome.action_id,
+            &outcome.attempt,
+        )? {
+            return Ok(applied);
+        }
         let identity = (outcome.turn_id.clone(), outcome.action_id.clone());
         if self
             .agent
@@ -799,14 +816,15 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        if let Some((server_id, transport)) = outcome.mcp_transport {
-            self.integration
-                .mcp_transports_mut()
-                .insert(server_id, transport);
-        }
-        self.agent.approved_external_cancellations.remove(&identity);
-        self.agent.approved_mcp_transport_leases.remove(&identity);
         if !self.approved_external_action_turn_is_current(&outcome.turn_id, &outcome.action_id) {
+            self.return_completed_mcp_transport(&identity, outcome.mcp_transport.take());
+            self.agent.approved_external_cancellations.remove(&identity);
+            self.agent.approved_mcp_transport_leases.remove(&identity);
+            self.discard_issued_external_completion(
+                &outcome.turn_id,
+                &outcome.action_id,
+                &outcome.attempt,
+            );
             self.agent
                 .pending_approved_external_actions
                 .remove(&identity);
@@ -815,51 +833,109 @@ impl RuntimeSessionService {
                 .remove(&identity);
             return Ok(false);
         }
+        let key = self.retain_external_completion(outcome)?;
+        // Raw outcome ownership is installed before either delivery record is
+        // removed. No fallible operation or await occurs in this transfer.
         self.agent
             .pending_approved_external_actions
             .remove(&identity);
         self.agent
             .claimed_approved_external_actions
             .remove(&identity);
+        self.agent.approved_external_cancellations.remove(&identity);
+        let transport = self.take_retained_mcp_transport(&key);
+        self.return_completed_mcp_transport(&identity, transport);
+        self.agent.approved_mcp_transport_leases.remove(&identity);
+        let applied = self.apply_retained_external_completion(&key);
+        if let Err(error) = &applied {
+            self.fail_external_completion(&key, error);
+        }
+        applied
+    }
+
+    /// Returns only the still-owned leased configuration, not a newer connection.
+    fn return_completed_mcp_transport(
+        &mut self,
+        identity: &(String, String),
+        returned: Option<(String, crate::runtime::RuntimeMcpTransport)>,
+    ) {
+        let Some((server_id, transport)) = returned else {
+            return;
+        };
+        let still_owned = self
+            .agent
+            .approved_mcp_transport_leases
+            .get(identity)
+            .is_some_and(|configured| {
+                configured.id == server_id
+                    && self
+                        .mcp_registry()
+                        .list_servers()
+                        .into_iter()
+                        .any(|server| {
+                            server.configured == *configured
+                                && server.configured.enabled
+                                && server.status == mez_agent::mcp::McpServerStatus::Available
+                        })
+            });
+        if still_owned
+            && !self
+                .integration
+                .mcp_transports_mut()
+                .transports
+                .contains_key(&server_id)
+        {
+            self.integration
+                .mcp_transports_mut()
+                .insert(server_id, transport);
+        }
+    }
+
+    /// Advances one newly retained outcome; required failures retain entered
+    /// phase and payload without rerunning worker, audit or completed hooks.
+    fn apply_retained_external_completion(&mut self, key: &ExternalCompletionKey) -> Result<bool> {
+        self.external_completion_phase(key, ExternalCompletionPhase::Projection)?;
         let Some(turn) = self
             .agent_turn_ledger()
             .turns()
             .iter()
-            .find(|turn| turn.turn_id == outcome.turn_id)
+            .find(|turn| turn.turn_id == key.0)
             .cloned()
         else {
-            return Ok(false);
+            return Err(MezError::invalid_state(
+                "retained completion lost its turn owner",
+            ));
         };
-        let Some(mut execution) = self.agent_turn_executions().get(&outcome.turn_id).cloned()
-        else {
-            return Ok(false);
+        let Some(mut execution) = self.agent_turn_executions().get(&key.0).cloned() else {
+            return Err(MezError::invalid_state(
+                "retained completion lost its execution owner",
+            ));
         };
         let action = execution
             .response
             .action_batch
             .as_ref()
-            .and_then(|batch| {
-                batch
-                    .actions
-                    .iter()
-                    .find(|action| action.id == outcome.action_id)
-            })
+            .and_then(|batch| batch.actions.iter().find(|action| action.id == key.1))
             .cloned();
         let Some(action) = action else {
-            return Ok(false);
+            return Err(MezError::invalid_state(
+                "retained completion lost its action owner",
+            ));
         };
         let result_index = execution
             .action_results
             .iter()
-            .position(|result| result.action_id == outcome.action_id);
+            .position(|result| result.action_id == key.1);
         let Some(result_index) = result_index else {
-            return Ok(false);
+            return Err(MezError::invalid_state(
+                "retained completion lost its result slot",
+            ));
         };
-        let mut result = match outcome.result {
-            Ok(result) => result,
+        let mut result = match self.retained_external_result(key)? {
+            Ok(result) => result.clone(),
             Err(error) => {
                 let error_code = if matches!(&action.payload, AgentActionPayload::McpCall { .. }) {
-                    runtime_mcp_error_code(&error)
+                    runtime_mcp_error_code(error)
                 } else {
                     runtime_mezzanine_error_code(error.kind())
                 };
@@ -873,50 +949,16 @@ impl RuntimeSessionService {
             }
         };
         self.append_network_action_progress_guidance(&turn.turn_id, &action, &mut result);
-        if matches!(&action.payload, AgentActionPayload::McpCall { .. }) {
-            self.append_approved_mcp_action_audit(
-                &turn,
-                &action,
-                if result.is_error {
-                    "failed"
-                } else {
-                    "succeeded"
-                },
-            )?;
-            self.run_configured_completed_hooks(
-                HookEvent::PostMcpToolUse,
-                &runtime_post_mcp_hook_payload(&turn, &action, &result),
-            )?;
-        } else {
-            let replay_suppressed = self.reconcile_action_presentation_progress_for_execution(
-                &turn.turn_id,
-                &action.id,
-                &mez_agent::ActionPresentationExecutionIdentity::Attempt(outcome.attempt.clone()),
-                &result,
-            )?;
-            if !result.is_error && !replay_suppressed && self.agent_verbose_enabled(&turn.pane_id) {
-                self.queue_ordered_provider_result(&turn.pane_id, &execution, &action, &result)?;
-            }
-            self.append_agent_network_action_audit(
-                &turn,
-                &action,
-                if result.is_error {
-                    "failed"
-                } else {
-                    "succeeded"
-                },
-            )?;
+        if result.turn_id != turn.turn_id
+            || result.action_id != action.id
+            || result.action_type != action.action_type()
+            || !result.is_terminal()
+        {
+            return Err(MezError::invalid_state(
+                "external terminal result differs from admitted action owner",
+            ));
         }
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            &turn.turn_id,
-            &format!(
-                "action {} {} reason=approved_external_action",
-                action.id,
-                runtime_action_status_name(result.status)
-            ),
-        )?;
-        execution.action_results[result_index] = result;
+        execution.action_results[result_index] = result.clone();
         let mcp_tool_error = execution.action_results.iter().any(|result| {
             result.action_type == "mcp_call"
                 && result
@@ -935,7 +977,82 @@ impl RuntimeSessionService {
             &execution.action_results,
             execution.final_turn,
         );
-        self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
+        self.agent_turn_executions_mut()
+            .insert(turn.turn_id.clone(), execution.clone());
+        self.external_completion_phase(key, ExternalCompletionPhase::CanonicalRetained)?;
+        self.external_completion_phase(key, ExternalCompletionPhase::ContextEntered)?;
+        self.append_settled_external_action_context(&turn.turn_id, &result)?;
+        self.external_completion_phase(key, ExternalCompletionPhase::ContextCommitted)?;
+        self.external_completion_phase(key, ExternalCompletionPhase::AuditEntered)?;
+        if matches!(&action.payload, AgentActionPayload::McpCall { .. }) {
+            self.append_approved_mcp_action_audit(
+                &turn,
+                &action,
+                if result.is_error {
+                    "failed"
+                } else {
+                    "succeeded"
+                },
+            )?;
+            self.external_completion_phase(key, ExternalCompletionPhase::AuditAccepted)?;
+            self.external_completion_phase(key, ExternalCompletionPhase::HooksEntered)?;
+            self.run_configured_completed_hooks(
+                HookEvent::PostMcpToolUse,
+                &runtime_post_mcp_hook_payload(&turn, &action, &result),
+            )?;
+            self.external_completion_phase(key, ExternalCompletionPhase::HooksAccepted)?;
+        } else {
+            self.append_agent_network_action_audit(
+                &turn,
+                &action,
+                if result.is_error {
+                    "failed"
+                } else {
+                    "succeeded"
+                },
+            )?;
+            self.external_completion_phase(key, ExternalCompletionPhase::AuditAccepted)?;
+            self.external_completion_phase(key, ExternalCompletionPhase::ProgressPublication)?;
+            let replay_suppressed = self.reconcile_action_presentation_progress_for_execution(
+                &turn.turn_id,
+                &action.id,
+                &mez_agent::ActionPresentationExecutionIdentity::Attempt(key.2.clone()),
+                &result,
+            )?;
+            if !result.is_error && !replay_suppressed && self.agent_verbose_enabled(&turn.pane_id) {
+                self.external_completion_phase(key, ExternalCompletionPhase::ResultPublication)?;
+                if let Err(error) =
+                    self.queue_ordered_provider_result(&turn.pane_id, &execution, &action, &result)
+                {
+                    if !self.external_result_publication_is_retained(key, &result) {
+                        return Err(error);
+                    }
+                    self.hold_external_publication(key, &error)?;
+                }
+            }
+        }
+        self.external_completion_phase(key, ExternalCompletionPhase::TracePublication)?;
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "action {} {} reason=approved_external_action",
+                action.id,
+                runtime_action_status_name(result.status)
+            ),
+        )?;
+        if let Err(error) = self.flush_ordered_provider_headers(&turn.pane_id, &execution) {
+            if !self.external_result_publication_is_retained(key, &result) {
+                return Err(error);
+            }
+            self.hold_external_publication(key, &error)?;
+            return Ok(true);
+        }
+        self.external_completion_phase(key, ExternalCompletionPhase::PublicationAccepted)?;
+        if let Some(error) = self.external_group_required_failure(key) {
+            return Err(error);
+        }
+        self.transfer_external_completion(key)?;
         let siblings_pending = execution.action_results.iter().any(|result| {
             matches!(result.status, ActionStatus::Running | ActionStatus::Blocked)
                 && !self.action_result_is_inactive_pending_shell_sibling(&turn.turn_id, result)
@@ -960,12 +1077,9 @@ impl RuntimeSessionService {
             self.agent_turn_executions_mut().remove(&turn.turn_id);
             return Ok(true);
         }
-        // Every deferred external family - MCP calls and network actions - must
-        // commit its settled result here, otherwise the provider tool-result
-        // projection is suppressed for the whole execution group and the model
-        // repeats a call whose answer it never received.
+        // Canonical execution/context already owns this result. Group lifecycle
+        // below is distinct from per-action required-gate and publication stages.
         let observed_result = execution.action_results[result_index].clone();
-        self.append_settled_external_action_context(&turn.turn_id, &observed_result)?;
         if self.agent_turn_is_human_paused(&turn.turn_id) {
             self.retain_human_paused_execution(&turn, execution, &[observed_result])?;
             return Ok(true);

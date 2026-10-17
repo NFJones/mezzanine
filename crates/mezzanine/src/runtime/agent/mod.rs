@@ -202,6 +202,7 @@ mod audit;
 mod bookkeeping;
 mod child_failures;
 mod cleanup_ownership;
+mod completion;
 pub(crate) use bookkeeping::{
     RuntimeBookkeepingCandidate, RuntimeBookkeepingCandidateWork,
     RuntimeBookkeepingTranscriptReadWork,
@@ -541,6 +542,9 @@ pub(crate) struct RuntimeAgentComponent {
     pending_approved_external_actions: BTreeMap<(String, String), Option<String>>,
     /// Approved external actions currently owned by async workers.
     claimed_approved_external_actions: BTreeMap<(String, String), String>,
+    /// Exact admitted-attempt outcomes/phases, never a worker replay queue.
+    /// Heap ownership keeps payload and phase growth out of actor stack frames.
+    completion_settlements: Box<completion::RuntimeCompletionSettlements>,
     /// Cooperative cancellation shared only with each exact claimed attempt.
     approved_external_cancellations: BTreeMap<
         (String, String),

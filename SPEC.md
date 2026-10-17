@@ -4860,6 +4860,12 @@ pre-install error MUST leave that same tuple/occurrence owned; retry MUST NOT
 replace it with a newly captured clock or source. Acknowledgment and removal
 MUST refer only to the successfully installed original component. Presentation
 source acceptance alone is not canonical execution commit or required-gate success.
+Approved external integration completion MUST transfer its exact outcome into
+actor ownership before retiring the matching worker claim. Canonical terminal
+result/context ownership precedes optional result installation. Required audit
+and completed-hook stages distinguish entry from acceptance; a failed stage
+retains the original typed error and MUST NOT be replayed on duplicate delivery.
+An unchanged duplicate is not another applied execution or transport dispatch.
 If projection is unavailable, validation fails, or source mismatches cannot be
 reconciled independently, Mezzanine MUST remove only the still-provisional
 owned suffix and present validated source through normal renderers. Provider

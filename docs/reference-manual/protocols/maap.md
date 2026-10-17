@@ -61,6 +61,11 @@ that tuple for publication-only retry, without a new occurrence or changed body;
 only successful installation acknowledges and removes the original source.
 This log-source acknowledgment is not execution, canonical-result, or required
 audit/hook gate acceptance and never authorizes action replay.
+Approved external completion retains its actor-issued attempt and original
+execution group before consuming worker delivery ownership. Terminal context is
+retained before optional result installation; completed-hook/audit failures stay
+typed errors, not a reason to resubmit the performed action. Exact duplicate
+delivery does not invoke those gates again or count another applied execution.
 
 ## Action catalog
 
