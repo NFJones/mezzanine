@@ -518,7 +518,10 @@ fn runtime_ordered_command_ack_transaction_markers_are_exact() {
 /// A replacement conversation cannot consume or publish an older failed suffix.
 /// Existing terminal cleanup then retires only that old turn's queued and
 /// published receipts. This tests isolation without changing lifecycle draining
-/// or claiming to fix deferred-log transfer during teardown.
+/// or claiming to fix deferred-log transfer during teardown. The render-only
+/// fixture first settles its exact shell-session binding through that owner's
+/// normal completion API; it does not bypass the active-turn rebind refusal or
+/// model a complete terminal lifecycle handoff.
 #[test]
 fn runtime_ordered_command_ack_rebind_fences_retained_suffix() {
     let mut fixture = command_fixture("rebind", &["OLD_FIRST_ACK", "OLD_SECOND_ACK"], false);
@@ -538,6 +541,19 @@ fn runtime_ordered_command_ack_rebind_fences_retained_suffix() {
             .is_err()
     );
     let retained = fixture.service.presentation.agent_queued_provider_commands[&key].clone();
+    assert!(
+        fixture
+            .service
+            .agent_shell_store_mut()
+            .bind_conversation("%1", "ack-replacement", 0)
+            .is_err(),
+        "a running shell-session binding must remain fenced"
+    );
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .finish_turn("%1", &fixture.execution.request.turn_id)
+        .unwrap();
     fixture
         .service
         .agent_shell_store_mut()
