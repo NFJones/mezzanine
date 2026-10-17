@@ -89,7 +89,8 @@ subsystem modules rather than expanding `crates/mezzanine/src/main.rs`.
 
 ## Testing Requirements
 - Use `just check` for fast type-checking while developing.
-- All changes must pass all CI checks capable of running on the current machine before handoff.
+- Run tests against the smallest relevant code subset while implementing changes in a branch other than main.
+- All changes must pass all CI checks capable of running on the current machine before merge into main.
 - Prefer end-to-end coverage for feature changes whenever possible.
 
 ## Commit & Pull Request Requirements
