@@ -223,18 +223,21 @@ fn assert_command_publications(fixture: &CommandFixture) {
                     |entry| entry.id == expected.id && entry.occurrence == expected.occurrence
                 ))
         );
-        let copy_sources = styled
+        let command_rows = styled
             .iter()
             .filter(|row| {
                 row.presentation
                     .as_ref()
                     .is_some_and(|entry| entry.id == expected.id)
             })
-            .filter_map(|row| row.copy_source.as_ref())
             .collect::<Vec<_>>();
-        assert!(!copy_sources.is_empty());
-        assert!(copy_sources.iter().all(|source| {
-            source.id.owner() == expected.id && source.text.as_ref() == fixture.commands[index]
+        assert!(!command_rows.is_empty());
+        // These unwrapped command rows intentionally use the existing legacy
+        // copy text, not typed raw-source ownership. Acknowledgment must retain
+        // that contract rather than manufacture a new source association.
+        let expected_copy = format!("$ {}", fixture.commands[index]);
+        assert!(command_rows.iter().all(|row| {
+            row.copy_source.is_none() && row.copy_text.as_deref() == Some(expected_copy.as_str())
         }));
         let count = fixture
             .commands
