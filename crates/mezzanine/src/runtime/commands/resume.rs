@@ -73,6 +73,9 @@ pub(crate) struct SavedForkRead {
     /// Owned-fixture post-bind and close uncertainty faults, never production policy.
     #[cfg(test)]
     test_fault: std::sync::atomic::AtomicU8,
+    /// Exact test-owned child returned before any target binding, never authority.
+    #[cfg(test)]
+    test_returned_native_pid: std::sync::atomic::AtomicU32,
 }
 
 /// In-memory adoption decision; neither cancellation nor a missing reply is
@@ -114,6 +117,8 @@ pub(super) fn read_saved_fork(work: &SavedForkWork) -> Result<SavedForkRead> {
         adoption: std::sync::Mutex::new(SavedForkAdoption::default()),
         #[cfg(test)]
         test_fault: std::sync::atomic::AtomicU8::new(0),
+        #[cfg(test)]
+        test_returned_native_pid: std::sync::atomic::AtomicU32::new(0),
     })
 }
 
@@ -1790,10 +1795,18 @@ impl RuntimeSessionService {
 
     /// Selects a post-bind fixture failure: one cleans normally, two retains a
     /// live pane, and three reports uncertainty after the real pane close.
+    /// Four returns the actual native guard before binding the target.
     #[cfg(test)]
     pub(crate) fn fail_saved_fork_adoption_for_tests(read: &SavedForkRead, fault: u8) {
         read.test_fault
             .store(fault, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Reports the exact child identity observed by the pre-bind fixture seam.
+    #[cfg(test)]
+    pub(crate) fn saved_fork_returned_native_pid_for_tests(read: &SavedForkRead) -> u32 {
+        read.test_returned_native_pid
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Installs only live pane state from a worker-owned durable publication.
@@ -1853,6 +1866,18 @@ impl RuntimeSessionService {
             }
         };
         let setup_result = (|| -> Result<_> {
+            #[cfg(test)]
+            if read.test_fault.load(std::sync::atomic::Ordering::SeqCst) == 4 {
+                // Reuse the real handoff/Drop owners to model a startup guard
+                // returned before this worker ever communicates the target id.
+                let process = self.take_running_pane_process_for_adapter(&started.pane_id)?;
+                read.test_returned_native_pid
+                    .store(process.primary_pid(), std::sync::atomic::Ordering::SeqCst);
+                drop(process);
+                return Err(MezError::invalid_state(
+                    "injected fork pre-binding native guard return",
+                ));
+            }
             #[cfg(test)]
             if self.take_agent_fork_after_persistence_failure_for_tests() {
                 return Err(MezError::invalid_state(

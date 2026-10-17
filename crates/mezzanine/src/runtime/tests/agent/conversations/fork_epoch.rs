@@ -552,11 +552,13 @@ fn runtime_saved_fork_lost_and_duplicate_adoption_replies_retain_history() {
 /// Failure after binding covers normal rollback, a retained live pane, and a
 /// secondary close error after membership removal. Only proven complete teardown
 /// allows deletion; primary and secondary errors survive worker settlement.
-#[test]
-fn runtime_saved_fork_post_bind_cleanup_retains_uncertain_targets() {
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_saved_fork_post_bind_cleanup_retains_uncertain_targets() {
     for fault in [1, 2, 3] {
         let (mut service, primary, store, root) =
             fork_transaction_fixture("fork-post-bind-cleanup");
+        let native = service.native_pane_retirement_owner();
+        let original_native = native.outstanding();
         let work = claim_saved_fork(&mut service, &primary);
         let read = publish_saved_fork(&work);
         RuntimeSessionService::fail_saved_fork_adoption_for_tests(&read, fault);
@@ -564,25 +566,141 @@ fn runtime_saved_fork_post_bind_cleanup_retains_uncertain_targets() {
             &work,
             crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read.clone()),
         );
-        let crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { message, .. } =
-            RuntimeSessionService::finish_saved_fork_worker(&read, reply)
+        // Observe BEFORE compensation or independent fixture cleanup. A bound
+        // target never crosses an adapter handoff within synchronous adoption.
+        // Native slots clear only on actual wait/reap, not map/JoinHandle removal.
+        let native_before_compensation = native.outstanding();
+        let returned_before_compensation = native.returned_count();
+        let target_before_compensation = root.join("fork-target").is_dir();
+        let outcome = RuntimeSessionService::finish_saved_fork_worker(&read, reply);
+        let native_after_compensation = native.outstanding();
+        let target_retained = store.saved_session("fork-target").unwrap().is_some();
+        let source_intact = store.inspect("fork-source").unwrap().len() == 1;
+        // All phase observations above precede independent fixture teardown.
+        // Attempt every exact cleanup before assertions can unwind a live child.
+        let manager_cleanup = service.terminate_all_pane_processes();
+        service.release_native_panes_for_retirement();
+        native.seal();
+        let native_cleanup = crate::host::async_runtime::drain_native_pane_retirement(
+            &native,
+            tokio::time::Instant::now()
+                + crate::host::async_runtime::NATIVE_PANE_RETIREMENT_TIMEOUT,
+        )
+        .await;
+        let remaining = native.outstanding();
+        if remaining == 0 {
+            fs::remove_dir_all(root).unwrap();
+        }
+        manager_cleanup.unwrap();
+        native_cleanup.unwrap();
+        let crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { message, .. } = outcome
         else {
             panic!("setup must fail")
         };
-        assert!(message.contains("post-binding setup failure"), "{message}");
-        assert_eq!(
-            store.saved_session("fork-target").unwrap().is_some(),
-            fault != 1,
-            "{message}"
+        assert!(original_native > 0, "fixture must own a real source child");
+        assert!(
+            target_before_compensation,
+            "storage survives until worker compensation"
         );
+        assert_eq!(
+            native_before_compensation,
+            original_native + usize::from(fault == 2)
+        );
+        assert_eq!(
+            returned_before_compensation, 0,
+            "bound rollback must not certify a returned child by map absence"
+        );
+        assert_eq!(native_after_compensation, native_before_compensation);
+        assert!(message.contains("post-binding setup failure"), "{message}");
+        assert_eq!(target_retained, fault != 1, "{message}");
         if fault != 1 {
             assert!(message.contains("close failure"), "{message}");
             assert!(message.contains("retained"), "{message}");
         }
-        assert_eq!(store.inspect("fork-source").unwrap().len(), 1);
-        service.terminate_all_pane_processes().unwrap();
+        assert!(source_intact);
+        assert_eq!(remaining, 0);
+    }
+}
+
+/// A pre-bind returned child is an exact native obligation, not an adopted
+/// conversation. Fork compensation may remove only its own unadopted target
+/// while that child remains reserved; native completion stays false until the
+/// actual returned handle is waited/reaped by the existing bounded drain.
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_saved_fork_pre_bind_return_keeps_exact_native_obligation() {
+    let (mut service, primary, store, root) = fork_transaction_fixture("fork-pre-bind-native");
+    let native = service.native_pane_retirement_owner();
+    let original_native = native.outstanding();
+    let work = claim_saved_fork(&mut service, &primary);
+    let read = publish_saved_fork(&work);
+    RuntimeSessionService::fail_saved_fork_adoption_for_tests(&read, 4);
+    let reply = service.complete_agent_command_work(
+        &work,
+        crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read.clone()),
+    );
+    let before = (
+        native.outstanding(),
+        native.returned_count(),
+        root.join("fork-target").is_dir(),
+    );
+    let unbound = !service
+        .agent_shell_store()
+        .sessions()
+        .any(|session| session.session_id == "fork-target");
+    let expected_pid = RuntimeSessionService::saved_fork_returned_native_pid_for_tests(&read);
+    // Wait-only claim observes the already-owned exact child, never a numeric
+    // reopen or a new native eligibility capture/signaling attempt.
+    let returned_pid = native.begin_drain().ok().and_then(|mut drain| {
+        let child = drain.take_returned()?;
+        let pid = child.process_id();
+        drop(child);
+        pid
+    });
+    let outcome = RuntimeSessionService::finish_saved_fork_worker(&read, reply);
+    let after = (
+        native.outstanding(),
+        native.returned_count(),
+        root.join("fork-target").exists(),
+    );
+    let source_intact = store.inspect("fork-source").unwrap().len() == 1;
+    // Attempt every exact cleanup before assertions can unwind the fixture.
+    let manager_cleanup = service.terminate_all_pane_processes();
+    service.release_native_panes_for_retirement();
+    native.seal();
+    let native_cleanup = crate::host::async_runtime::drain_native_pane_retirement(
+        &native,
+        tokio::time::Instant::now() + crate::host::async_runtime::NATIVE_PANE_RETIREMENT_TIMEOUT,
+    )
+    .await;
+    let remaining = native.outstanding();
+    if remaining == 0 {
         fs::remove_dir_all(root).unwrap();
     }
+    manager_cleanup.unwrap();
+    native_cleanup.unwrap();
+    assert!(original_native > 0);
+    assert_eq!(before, (original_native + 1, 1, true));
+    assert!(
+        unbound,
+        "returned startup child must never acquire the target conversation"
+    );
+    assert_ne!(expected_pid, 0);
+    assert_eq!(
+        returned_pid,
+        Some(expected_pid),
+        "retain the exact original native Child"
+    );
+    assert!(
+        matches!(outcome, crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { ref message, .. }
+        if message.contains("pre-binding native guard return"))
+    );
+    assert_eq!(
+        after,
+        (original_native + 1, 1, false),
+        "storage compensation cannot certify native completion"
+    );
+    assert!(source_intact);
+    assert_eq!(remaining, 0);
 }
 
 /// A secondary storage failure after safe post-bind pane teardown retains a
