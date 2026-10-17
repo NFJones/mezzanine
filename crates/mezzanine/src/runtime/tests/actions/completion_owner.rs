@@ -9,12 +9,22 @@
 use super::*;
 use mez_agent::{ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution};
 
+/// Owns the generated directory even if fixture construction fails or panics.
+struct CompletionRoot(PathBuf);
+
+impl Drop for CompletionRoot {
+    /// Removes only the unique root created by the existing test helper.
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Isolated actor state with one accepted claimed fetch and a pending sibling.
 /// Keeping the sibling running leaves exact group-owned result/context evidence
 /// inspectable without confusing terminal cleanup with result acceptance.
 struct CompletionFixture {
     service: RuntimeSessionService,
-    root: PathBuf,
+    _root: CompletionRoot,
     turn: AgentTurnRecord,
     action: AgentAction,
     attempt: String,
@@ -27,12 +37,12 @@ impl CompletionFixture {
     /// production actor API, then claims its exact generated attempt. No role,
     /// permission, sandbox or admission bypass is enabled and no network runs.
     async fn fetch() -> Self {
-        let root = temp_root("completed-result-owner");
-        fs::create_dir(root.join("transcripts")).unwrap();
+        let root = CompletionRoot(temp_root("completed-result-owner"));
+        fs::create_dir(root.0.join("transcripts")).unwrap();
         let mut service = RuntimeServiceFixture::new()
-            .control_socket(root.join("control.sock"))
+            .control_socket(root.0.join("control.sock"))
             .build();
-        service.set_agent_transcript_store(AgentTranscriptStore::new(root.join("transcripts")));
+        service.set_agent_transcript_store(AgentTranscriptStore::new(root.0.join("transcripts")));
         service
             .attach_primary("primary", true, Size::new(120, 32).unwrap(), 120)
             .unwrap();
@@ -107,6 +117,18 @@ impl CompletionFixture {
             .get(&turn.turn_id)
             .unwrap()
             .clone();
+        // Approved execution text is produced by actual claim preparation,
+        // not by receiving the initial Running worker execution. Claim before
+        // asserting the header; never manufacture publication flags.
+        let dispatch = service
+            .claim_approved_external_action(&turn.turn_id, &action.id)
+            .unwrap()
+            .expect("accepted worker attempt");
+        assert!(service.approved_external_action_attempt_is_current(
+            &turn.turn_id,
+            &action.id,
+            &dispatch.attempt,
+        ));
         service
             .flush_ordered_provider_headers("%1", &execution)
             .unwrap();
@@ -151,10 +173,6 @@ impl CompletionFixture {
                 .pending_approved_external_actions()
                 .contains(&(turn.turn_id.clone(), sibling.id.clone()))
         );
-        let dispatch = service
-            .claim_approved_external_action(&turn.turn_id, &action.id)
-            .unwrap()
-            .expect("accepted worker attempt");
         assert!(service.approved_external_action_attempt_is_current(
             &turn.turn_id,
             &action.id,
@@ -168,7 +186,7 @@ impl CompletionFixture {
         );
         Self {
             service,
-            root,
+            _root: root,
             turn,
             action,
             attempt: dispatch.attempt,
@@ -203,7 +221,6 @@ impl Drop for CompletionFixture {
     /// Cancels/releases only resources of this generated runtime on every exit.
     fn drop(&mut self) {
         let _ = self.service.terminate_all_pane_processes();
-        let _ = fs::remove_dir_all(&self.root);
     }
 }
 
