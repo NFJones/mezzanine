@@ -4,10 +4,15 @@
 //! admission supply the regression evidence. Role/capability labels remain
 //! immutable routing metadata, never proof of current parent/cleanup authority.
 //! Preparation executes only after the real work is proven to contain no auth,
-//! MCP or accounting I/O; no model/provider transport or action is dispatched.
+//! MCP or accounting I/O. Action-flow controls use only fixed in-memory model
+//! responses and ordinary local messaging/discovery, never provider transports.
 
 use super::*;
 use mez_core::ids::AgentId;
+
+mod action_flows;
+mod identity_guards;
+mod lifecycle_controls;
 
 /// A genuine persistent worker C1 can independently resume saved ROOT C2 in its
 /// existing pane and start real work without changing the native registration.
