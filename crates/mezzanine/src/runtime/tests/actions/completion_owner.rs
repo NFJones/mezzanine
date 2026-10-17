@@ -359,6 +359,16 @@ impl Drop for CompletionFixture {
 async fn runtime_completion_owner_cancels_issued_token_before_preview_retirement_error() {
     use std::sync::atomic::Ordering;
     let mut fixture = CompletionFixture::fetch().await;
+    // The shared fetch fixture needs Verbose to establish its real header.
+    // Transient previews intentionally do not exist in shell-view/Verbose mode;
+    // choose the ordinary preview-eligible display mode before this UI-only cut.
+    assert!(fixture.service.agent_shell_view_enabled("%1"));
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Normal)
+        .unwrap();
+    assert!(!fixture.service.agent_shell_view_enabled("%1"));
     assert!(
         fixture
             .service
