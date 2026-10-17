@@ -13,7 +13,7 @@ mod search_transport_contracts;
 #[tokio::test]
 /// Characterizes legacy zero/default/hard counts, exact domain conjunction and
 /// absence of a transmitted recency parameter. These are extraction fixtures,
-/// not new semantics: zero deliberately remains a successful empty result.
+/// not new semantics: zero clips recognized results without claiming zero hits.
 async fn network_search_legacy_wire_and_count_characterization() {
     for (requested, count) in [(None, 10), (Some(0), 0), (Some(99), 50)] {
         let action = AgentAction {
@@ -70,7 +70,7 @@ async fn network_search_legacy_wire_and_count_characterization() {
         );
         assert!(content.ends_with("[mez: recency filtering is best-effort for this backend]"));
         if count == 0 {
-            assert!(content.starts_with("No web results were found."));
+            assert!(content.starts_with("No web result entries were requested (max_results = 0)."));
         }
         let structured: serde_json::Value =
             serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
@@ -85,22 +85,15 @@ async fn network_search_legacy_wire_and_count_characterization() {
 }
 
 #[tokio::test]
-/// Pins legacy HTML scanning, including nested-title cleanup, incomplete-anchor
-/// withholding and successful empty HTML/202 responses. False-empty response
-/// classification is intentionally a separate issue, not this extraction.
+/// Pins complete-anchor title cleanup and legacy permissive nonblank links.
+/// Pending, empty and incomplete responses have separate failed-outcome tests.
 async fn network_search_legacy_anchor_and_empty_characterization() {
     for (status, body, expected) in [
         (
             200,
-            "<a class=\"result__a\" href=\"https://example.test/a\"><b>A</b> &amp; B</a><a class=\"result__a\" href=\"https://example.test/b\">unfinished",
+            "<a class=\"result__a\" href=\"https://example.test/a\"><b>A</b> &amp; B</a>",
             "1. A & B\n   https://example.test/a",
         ),
-        (
-            200,
-            "<a class=\"result__a\" href=\"https://example.test/a\">unfinished",
-            "No web results were found.",
-        ),
-        (202, "<html>challenge</html>", "No web results were found."),
         (
             200,
             "<a class=\"result__a\" href=\"javascript:legacy\">Legacy</a>",
@@ -143,9 +136,9 @@ async fn network_search_legacy_anchor_and_empty_characterization() {
 }
 
 #[tokio::test]
-/// Distinguishes transport/body retention from the independently bounded final
-/// action context. The old body truncator appends its notice beyond the cap;
-/// its byte metadata and UTF-8 boundary are retained during extraction.
+/// A complete bounded body can still produce a title larger than model context.
+/// Final context clipping remains independently UTF-8 safe; response truncation
+/// failures are tested separately and never promote a partial result corpus.
 async fn network_search_legacy_body_and_final_context_characterization() {
     let action = AgentAction {
         id: "search-bounds".to_string(),
@@ -160,7 +153,7 @@ async fn network_search_legacy_body_and_final_context_characterization() {
     let body = format!(
         "{prefix}{}</a>{}",
         "é".repeat(140_000),
-        "x".repeat(1024 * 1024)
+        "x".repeat(512 * 1024)
     );
     let body_bytes = body.len();
     let transport = AsyncFakeProviderHttpTransport {
@@ -177,8 +170,8 @@ async fn network_search_legacy_body_and_final_context_characterization() {
     let structured: serde_json::Value =
         serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
     assert_eq!(structured["response"]["body_bytes"], body_bytes);
-    assert_eq!(structured["response"]["html_truncated"], true);
-    assert!(structured["response"]["returned_bytes"].as_u64().unwrap() > 1024 * 1024);
+    assert_eq!(structured["response"]["html_truncated"], false);
+    assert_eq!(structured["response"]["returned_bytes"], body_bytes);
     let context = action_result_context_content(&result);
     assert!(context.contains("[mez: action result content truncated after 262144 bytes]"));
     assert!(!context.contains('�'));

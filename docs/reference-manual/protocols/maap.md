@@ -272,9 +272,21 @@ unchanged: HTTPS HTML GET, ten results by default, fifty maximum, 1MiB retained
 HTML, 30s deadline and independently bounded 256KiB final-content context.
 Numbered title/link output and complete-clean-anchor progress are retained.
 Compatibility `domains` append ordered `site:` terms; `recency_days` is not sent
-to DDG and only produces a best-effort warning. Requested zero, incomplete
-anchors, permissive nonblank links and successful empty/challenge HTML remain
-legacy quirks, not stronger filtering or false-empty classification guarantees.
+to DDG and only produces a best-effort warning. Legacy nonblank links remain
+permissive, not strict citation validation. Requested zero limits output only;
+a valid recognized response reports that no entries were requested, not that
+the provider found zero matching sources.
+
+Only a complete, bounded HTTP 200 response with recognized completed result
+anchors succeeds. Pending HTTP 202, unrelated/nonresult markup, malformed or
+unfinished anchors, and truncation fail with `network_search_unusable_response`.
+This code carries safe HTTP/size/truncation/outcome metadata and actionable
+guidance, never raw HTML or an inferred CAPTCHA/blocking cause. No genuine
+completed-empty DDG shape is currently qualified: even genuinely empty but
+unrecognized pages fail honestly rather than fabricate a successful no-results
+answer. No automatic retry, provider switch, fallback or challenge solving is
+performed. Complete cleaned progress entries are provisional and are removed on
+final failure; exact attempt/revision and sibling-correction rules are unchanged.
 
 Future strict contracts are separate: checked HTTP(S) links without userinfo,
 explicit snippet/extractive/generated provenance, optional observed dates and

@@ -247,5 +247,17 @@ async fn runtime_unusable_ddg_result_retires_progress_and_preserves_sibling_corr
             )
             .unwrap()
     );
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    for marker in ["network_search_unusable_response", "USABLE_SIBLING_BODY"] {
+        assert_eq!(
+            context
+                .blocks()
+                .iter()
+                .filter(|block| block.source == ContextSourceKind::ActionResult
+                    && block.content.contains(marker))
+                .count(),
+            1
+        );
+    }
     service.terminate_all_pane_processes().unwrap();
 }
