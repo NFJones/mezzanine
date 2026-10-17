@@ -345,6 +345,9 @@ impl RuntimeSessionService {
         state: AgentTurnState,
     ) -> Result<Option<AgentShellSession>> {
         let pane_present = self.find_pane_descriptor(&turn.pane_id).is_some();
+        if !pane_present {
+            self.retire_subagent_cleanup_pane_binding(&turn.pane_id);
+        }
         let current_conversation = self
             .agent_shell_store()
             .get(&turn.pane_id)
@@ -451,6 +454,7 @@ impl RuntimeSessionService {
                     .clone(),
             )
         } else {
+            self.retire_subagent_cleanup_pane_binding(&turn.pane_id);
             self.agent_shell_store_mut().remove_session(&turn.pane_id)
         };
         if pane_present
@@ -537,11 +541,6 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut interrupted = 0usize;
         for turn in turns {
-            let fence_conversation_id = self
-                .agent
-                .fenced_subagent_descendants
-                .get(&turn.agent_id)
-                .cloned();
             let _ = self.cancel_agent_work(&turn.turn_id);
             self.cancel_live_shell_transactions_for_turn(&turn.turn_id)?;
             self.agent
@@ -551,11 +550,6 @@ impl RuntimeSessionService {
                 .claimed_agent_provider_tasks
                 .remove(&turn.turn_id);
             self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?;
-            if let Some(conversation_id) = fence_conversation_id {
-                self.agent
-                    .fenced_subagent_descendants
-                    .insert(turn.agent_id.clone(), conversation_id);
-            }
             interrupted = interrupted.saturating_add(1);
         }
         Ok(interrupted)
@@ -804,6 +798,9 @@ impl RuntimeSessionService {
             return Ok(0);
         }
         for pane_id in &pane_ids {
+            if self.find_pane_descriptor(pane_id).is_none() {
+                self.retire_subagent_cleanup_pane_binding(pane_id);
+            }
             let parent_agent_id = format!("agent-{pane_id}");
             self.close_subagent_descendants_for_parent_agent(&parent_agent_id, reason)?;
         }
@@ -853,6 +850,7 @@ impl RuntimeSessionService {
                 )?;
                 self.clear_terminal_agent_turn_runtime_state(&turn.turn_id);
                 if !pane_present {
+                    self.retire_subagent_cleanup_pane_binding(&turn.pane_id);
                     self.agent_shell_store_mut().remove_session(&turn.pane_id);
                 }
             }
@@ -884,20 +882,51 @@ impl RuntimeSessionService {
         parent_agent_id: &str,
         reason: &str,
     ) -> Result<usize> {
-        let descendants = self.subagent_descendant_agent_ids_for_parent(parent_agent_id);
+        let Some(conversation_id) = parent_agent_id
+            .strip_prefix("agent-")
+            .and_then(|pane| self.agent_shell_store().get(pane))
+            .map(|shell| shell.session_id.clone())
+        else {
+            return Ok(0);
+        };
+        self.close_subagent_descendants_for_parent_conversation(
+            parent_agent_id,
+            &conversation_id,
+            reason,
+        )
+    }
+
+    /// Closes only exact live cleanup obligations for an expected current
+    /// parent conversation. Late callbacks cannot adopt a replacement binding;
+    /// fenced original children remain obligations of the same native owner.
+    pub(crate) fn close_subagent_descendants_for_parent_conversation(
+        &mut self,
+        parent_agent_id: &str,
+        expected_conversation_id: &str,
+        reason: &str,
+    ) -> Result<usize> {
+        if parent_agent_id
+            .strip_prefix("agent-")
+            .and_then(|pane| self.agent_shell_store().get(pane))
+            .is_none_or(|shell| shell.session_id != expected_conversation_id)
+        {
+            return Ok(0);
+        }
+        let descendants = self.subagent_cleanup_descendant_agent_ids(parent_agent_id, None);
         if descendants.is_empty() {
             return Ok(0);
         }
-        let Some(primary_client_id) = self.session.layout_owner_client_id().cloned() else {
-            for agent_id in descendants {
-                if let Some(pane_id) = runtime_agent_pane_id(&agent_id) {
-                    self.cleanup_removed_pane_runtime_state(pane_id.as_str())?;
-                }
-            }
-            return Ok(0);
-        };
+        let primary_client_id = self.session.layout_owner_client_id().cloned();
         let mut closed = 0usize;
         for agent_id in descendants {
+            // A prior child's settlement may have changed a later binding.
+            // Revalidate before signals, layout mutation, or missing-pane cleanup.
+            if !self
+                .subagent_cleanup_descendant_agent_ids(parent_agent_id, None)
+                .contains(&agent_id)
+            {
+                continue;
+            }
             let Some(pane_id) = runtime_agent_pane_id(&agent_id) else {
                 self.deregister_macro_managed_subagent(&agent_id);
                 self.remove_subagent_authority_state(&agent_id);
@@ -909,7 +938,11 @@ impl RuntimeSessionService {
                     r#"{{"pane_id":"{}","force":true}}"#,
                     json_escape(&pane_id_string)
                 );
-                self.dispatch_runtime_pane_close(&primary_client_id, &params)?;
+                if let Some(primary_client_id) = &primary_client_id {
+                    self.dispatch_runtime_pane_close(primary_client_id, &params)?;
+                } else {
+                    self.close_runtime_owned_subagent_pane(&pane_id_string)?;
+                }
                 closed = closed.saturating_add(1);
                 self.append_lifecycle_event(
                     EventKind::AgentStatus,
@@ -928,37 +961,13 @@ impl RuntimeSessionService {
         Ok(closed)
     }
 
-    /// Returns descendant subagent ids deepest-first for deterministic closure.
-    ///
-    /// # Parameters
-    /// - `parent_agent_id`: Direct or root parent agent id to inspect.
-    fn subagent_descendant_agent_ids_for_parent(&self, parent_agent_id: &str) -> Vec<String> {
-        let mut descendants = self
-            .agent
-            .subagent_lineage
-            .iter()
-            .filter(|(agent_id, lineage)| {
-                agent_id != &parent_agent_id
-                    && self.subagent_lineage_has_ancestor(lineage, parent_agent_id)
-            })
-            .map(|(agent_id, lineage)| (lineage.depth, agent_id.clone()))
-            .collect::<Vec<_>>();
-        descendants.sort_by(|(left_depth, left_agent), (right_depth, right_agent)| {
-            right_depth
-                .cmp(left_depth)
-                .then_with(|| left_agent.cmp(right_agent))
-        });
-        descendants
-            .into_iter()
-            .map(|(_depth, agent_id)| agent_id)
-            .collect()
-    }
-
-    /// Reports whether a lineage record is below a target ancestor.
+    /// Reports structural ancestry only for the existing cycle-safety oracle.
+    /// Destructive production cleanup uses exact live ownership instead.
     ///
     /// # Parameters
     /// - `lineage`: Child lineage to walk upward.
     /// - `ancestor_agent_id`: Candidate ancestor agent id.
+    #[cfg(test)]
     pub(crate) fn subagent_lineage_has_ancestor(
         &self,
         lineage: &super::super::service_state::RuntimeSubagentLineage,

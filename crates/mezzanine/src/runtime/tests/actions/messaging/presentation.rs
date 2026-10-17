@@ -1077,7 +1077,13 @@ fn runtime_direct_parent_peer_message_uses_stable_label_only_for_valid_exact_lin
             .any(|line| line.starts_with("│ parent> restored parent")),
         "validated restored lineage must retain the parent presentation alias"
     );
-    service.fence_subagent_descendants_for_parent_conversation("agent-%1", "replacement");
+    // This presentation-only negative control installs explicit fenced state.
+    // Structural lineage cannot mint destructive lifecycle ownership/fences.
+    service.restore_subagent_descendant_fences(std::collections::BTreeMap::from([(
+        "agent-%2".to_string(),
+        Some("original-parent-conversation".to_string()),
+    )]));
+    assert!(service.subagent_descendant_is_fenced("agent-%2"));
     assert!(
         !service.runtime_peer_message_sender_is_direct_parent("agent-%2", "agent-%1"),
         "a fenced historical edge must fall back to ordinary endpoint labeling"

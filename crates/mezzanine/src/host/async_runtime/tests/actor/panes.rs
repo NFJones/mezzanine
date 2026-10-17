@@ -218,7 +218,13 @@ async fn async_actor_applies_foreground_process_metadata_to_pane_title() {
 /// this path before pane lifecycle polling can be removed from daemon ticks.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_applies_process_exit_events_to_session_state() {
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+    let mut service = test_service();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let mut process = service.take_running_pane_process_for_adapter("%1").unwrap();
+    let pid = process.primary_pid();
+    let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+    let status = process.terminate(Duration::from_millis(10)).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
 
@@ -227,8 +233,8 @@ async fn async_actor_applies_process_exit_events_to_session_state() {
         batch.push(RuntimeEvent::Process(ProcessEvent::Exited {
             pane_id: "%1".to_string(),
             primary_pid: None,
-            exit_code: Some(0),
-            signal: None,
+            exit_code: status.code,
+            signal: status.signal.map(|signal| signal.to_string()),
         }));
 
         let report = handle.submit_runtime_events(batch).await.unwrap();
@@ -244,6 +250,10 @@ async fn async_actor_applies_process_exit_events_to_session_state() {
     let ((), exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.commands_processed, 2);
     assert!(exit.service.session().windows().is_empty());
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(pid),
+        Some(token)
+    );
 }
 
 /// Verifies that typed process-spawn events initialize pane lifecycle state
@@ -1754,4 +1764,162 @@ async fn async_actor_attached_step_drains_record_browser_refresh_dispatch() {
     let ((), exit) = tokio::join!(client, actor.run());
 
     assert!(exit.commands_processed >= 2);
+}
+
+/// A stale exit from a genuinely prior adapter generation must be rejected
+/// before descendant cleanup, even when it names the same real PID. The same
+/// process moves through two actual handoffs; only the current owner's later
+/// explicit close may retire its genuine child and queue native termination.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_stale_parent_exit_keeps_current_delegated_child() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-cleanup-actor-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new()
+        .control_socket(root.join("c.sock"))
+        .build();
+    service.set_agent_transcript_store(crate::storage::transcript::AgentTranscriptStore::new(
+        root.join("transcripts"),
+    ));
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "native-cleanup-owner".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nshell_mode = \"native\"\n[permissions]\nsandbox = \"policy-only\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("cleanup-owner", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let child = service
+        .spawn_runtime_persistent_subagent_session_owned(
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "worker".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: String::new(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: false,
+            },
+            &conversation,
+            "generated current owner",
+        )
+        .unwrap();
+    let child: serde_json::Value = serde_json::from_str(&child).unwrap();
+    let child_pane = child["pane"]["pane_id"].as_str().unwrap().to_string();
+    let first = service
+        .take_running_pane_process_instances_for_adapter(8)
+        .unwrap();
+    let child_pid = first
+        .iter()
+        .find(|(instance, _)| instance.pane_id == child_pane)
+        .unwrap()
+        .1
+        .primary_pid();
+    let child_token = mez_mux::process::process_start_token_for_pid(child_pid).unwrap();
+    let old_parent = first
+        .iter()
+        .find(|(instance, _)| instance.pane_id == "%1")
+        .unwrap()
+        .0
+        .clone();
+    for (instance, process) in first {
+        service
+            .restore_running_pane_process_from_adapter(instance.pane_id, process)
+            .unwrap();
+    }
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let processes = handle
+            .take_running_pane_process_instances_for_adapter(8)
+            .await
+            .unwrap();
+        let (current_parent, parent) = processes
+            .iter()
+            .find(|(instance, _)| instance.pane_id == "%1")
+            .unwrap();
+        assert_ne!(old_parent, *current_parent);
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::PaneProcess {
+            instance: old_parent,
+            event: PaneProcessEvent::Process(ProcessEvent::Exited {
+                pane_id: "%1".to_string(),
+                primary_pid: Some(parent.primary_pid()),
+                exit_code: Some(0),
+                signal: None,
+            }),
+        });
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.applied, 0);
+        handle.shutdown().await.unwrap();
+        processes
+    };
+    let (mut processes, mut exit) = tokio::join!(client, actor.run());
+    assert!(
+        exit.service
+            .session()
+            .windows()
+            .iter()
+            .flat_map(|window| window.panes())
+            .any(|pane| pane.id.as_str() == child_pane)
+    );
+    let (child_instance, child_process) = processes
+        .iter()
+        .find(|(instance, _)| instance.pane_id == child_pane)
+        .unwrap();
+    assert_eq!(child_process.primary_pid(), child_pid);
+    assert_eq!(
+        exit.service
+            .adapter_owned_pane_process_instance(&child_pane),
+        Some(child_instance.clone())
+    );
+    assert_eq!(
+        mez_mux::process::process_start_token_for_pid(child_pid),
+        Some(child_token)
+    );
+    exit.service
+        .dispatch_runtime_pane_close(&primary, r#"{"pane_id":"%1","force":true}"#)
+        .unwrap();
+    assert!(
+        !exit
+            .service
+            .session()
+            .windows()
+            .iter()
+            .flat_map(|window| window.panes())
+            .any(|pane| pane.id.as_str() == child_pane)
+    );
+    for (_, process) in &mut processes {
+        process.terminate(Duration::from_millis(10)).unwrap();
+    }
+    exit.service.terminate_all_pane_processes().unwrap();
 }

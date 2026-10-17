@@ -15868,7 +15868,42 @@ lineage record for delegation limits: direct parent, root, depth, display name,
 and terminal status. Structural lineage alone MUST NOT re-establish live parent
 authority, child-pane placement, or transient parent/child orchestration state;
 a restored child therefore cannot delegate until live authority is established
-by a new runtime relationship. If a checkpoint records an active turn that cannot be
+by a new runtime relationship. Historical structural ancestry MUST NOT authorize
+parent-exit, pane-close, failed-spawn, macro, or replacement-fencing teardown.
+Destructive descendant traversal MUST validate every current cleanup edge and
+STOP at any historical-only intermediate, not merely exclude restored leaves.
+Cleanup ownership MUST come from the actual live delegation's exact parent
+runtime incarnation/conversation and exact child native owner/binding, never
+persisted root/depth/label fields or missing OS evidence. A successful fresh
+local spawn MAY commit a runtime-only logical parent incarnation before parent
+native startup; merely having no process MUST NOT create such authority. The
+incarnation MUST be captured before child setup, published only after successful
+setup, preserved through conversation-only fencing, and retired with its pane or
+shell lifetime. Its first actual native installation MAY migrate that exact
+captured incarnation without recapturing a conversation; later replacement MUST
+NOT adopt its old obligations. Raw exit events without retained actual native
+ownership MUST be inert even when a logical cleanup incarnation exists.
+An exact runtime-owned routed setup/loop binding transition or initial ordinary
+loop binding/restoration MAY preserve already validated incoming and outgoing
+cleanup edges across its own ephemeral conversation changes. Ordinary loop
+continuity MUST be sealed to the installed loop incarnation and current owned
+binding, retired at loop/pane/session retirement, and MUST NOT be reconstructed
+after independent resume or native replacement.
+The original delegator conversation MUST remain immutable. A runtime-only
+current-parent cleanup qualifier MAY observe the same owned parent restoration;
+ordinary resume, saved lineage, or matching pane IDs MUST NOT mint it. Binding
+and proof updates MUST be atomic, including rollback after partial binding
+errors, and MUST NOT grant execution or permission authority.
+A stale callback MUST be inert
+before turn, signal, layout, scope, or identity mutation. Genuine children fenced
+by parent conversation replacement MUST retain their original same-owner cleanup
+obligation across further replacements; they MUST NOT be adopted by the new
+conversation or leaked by treating all fenced edges as historical. Failed resume
+MUST restore cleanup proof and fences transactionally. Qualified persistent
+snapshot restoration MAY establish cleanup edges only after both exact bindings
+from that same successful restore operation have actual current runtime owners;
+pending qualification and standalone saved lineage MUST NOT authorize teardown.
+If a checkpoint records an active turn that cannot be
 reconnected after restart, Mezzanine MUST restore the conversation binding but
 MUST mark the turn as interrupted and require a fresh user action to retry.
 

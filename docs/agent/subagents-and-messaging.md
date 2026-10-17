@@ -74,6 +74,37 @@ Replacing or removing that owner closes or fences its persistent children;
 they are not daemons that survive an unrelated `/new` task. Omit `lifetime`
 for ordinary one-task delegation.
 
+### Saved lineage and live cleanup ownership
+
+Resuming a saved child conversation independently preserves its historical
+parent alias and delegation limits. That history does not let a reused parent
+pane close the resumed conversation, interrupt its work, retire its messaging
+identity, or terminate its native process. Cleanup stops at each historical
+edge, including an intermediate pane with genuine children of its own.
+
+Live cleanup belongs to the exact parent runtime incarnation/conversation
+and child conversation/process owner. A successful local delegation retains its
+cleanup obligation even if the parent's native process has not started yet;
+saved lineage and process absence alone cannot grant that authority. Moving the
+same process to an async adapter preserves the obligation; replacing a process
+or independently rebinding a child cannot transfer it. Runtime-owned routed
+setup and an exact initial loop binding/restoration retain already proven
+incoming and outgoing obligations through their own ephemeral binding changes.
+The loop incarnation and unchanged native owner are checked before every
+cleanup-only migration; a later independent binding cannot be adopted.
+That cleanup-only observation preserves the
+original delegator and does not grant permission or execution authority.
+A genuine child fenced after its parent changes conversation retains its
+original cleanup obligation without regaining execution or permission authority.
+An owning parent's close or process exit still retires those genuine children,
+even when no primary client is attached. Late callbacks for an older binding
+cannot close a replacement conversation.
+
+A successful full snapshot restore can re-establish persistent cleanup only
+when both exact conversations from that operation acquire their native process
+owners. Standalone conversation resume and partially completed restoration do
+not create that authority.
+
 ### Generated window names after closure
 
 Generated subagent window names reflect the panes currently hosted in the

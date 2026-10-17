@@ -9,6 +9,8 @@ use crate::runtime::RuntimeAgentCompactionTask;
 use crate::runtime::agent_state::RuntimeAgentCompactionTarget;
 use mez_agent::AutoSizingRoutingSelection;
 
+mod cleanup;
+
 /// Builds a stable pane identity for routed primary-authority tests.
 fn routed_path_resolution_environment(working_directory: &Path) -> mez_agent::EnvironmentSignature {
     mez_agent::EnvironmentSignature::new(
@@ -36,6 +38,16 @@ fn selected_routed_loop_with_mode(
     command: &str,
     shell_mode: crate::runtime::config::ShellMode,
 ) -> (RuntimeSessionService, String, mez_agent::AgentTurnRecord) {
+    selected_routed_loop_with_parent(command, shell_mode, false)
+}
+
+/// Selects a real routed worker with an optional actual native parent owner.
+/// Existing processless-parent scenarios remain supported by the public APIs.
+fn selected_routed_loop_with_parent(
+    command: &str,
+    shell_mode: crate::runtime::config::ShellMode,
+    start_parent: bool,
+) -> (RuntimeSessionService, String, mez_agent::AgentTurnRecord) {
     let mut service = test_runtime_service();
     service.set_agent_default_shell_mode(shell_mode);
     service
@@ -45,6 +57,9 @@ fn selected_routed_loop_with_mode(
     let _primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
+    if start_parent {
+        service.start_initial_pane_process(Some("cat")).unwrap();
+    }
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"ready\n");
     service.set_pane_screen("%1".to_string(), screen);
