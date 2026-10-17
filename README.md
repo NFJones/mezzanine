@@ -63,6 +63,8 @@ does not activate paid search or change the default backend.
 - **An agent that lives where the work lives:** each pane gets its own
   independent, terminal-local conversation alongside the shell, editor, logs,
   or service it is helping you operate.
+  Saved-conversation changes keep the pane's established messaging identity
+  without reviving former delegation authority.
 - **Actions you can inspect and control:** commands, patches, approvals, MCP
   calls, and subagent work are explicit rather than hidden behind a chat UI.
 - **Agents that can coordinate, not just delegate:** discover peers, exchange
