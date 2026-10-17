@@ -7,6 +7,7 @@
 use super::*;
 
 mod parent_replacement;
+mod saved_fork;
 
 /// Leaves a real recorded parent turn idle so user-directed resume is legal.
 /// Its original identity remains the stale-action witness after replacement.
