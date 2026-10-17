@@ -937,12 +937,25 @@ pub struct AsyncRuntimeSessionActor {
     pub(super) metrics: AsyncRuntimeActorMetrics,
 }
 
+/// Admission evidence for the owner-specific shutdown event only. Transport
+/// closure is distinct from an actor-produced reducer error (the outer Result)
+/// and is never native completion or permission to replay arbitrary events.
+#[derive(Debug)]
+pub(crate) enum ShutdownEventAdmission {
+    /// The actor accepted and applied the shutdown event.
+    Admitted,
+    /// The send channel closed or its oneshot reply was lost.
+    TransportUnavailable(MezError),
+}
+
 /// Carries Async Runtime Session Handle state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone)]
 pub struct AsyncRuntimeSessionHandle {
+    /// Native cleanup survives actor closure and abortable worker lifetimes.
+    pub(crate) native_pane_retirement: mez_mux::process::PaneProcessRetirementOwner,
     /// Stores the sender value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

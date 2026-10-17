@@ -656,7 +656,8 @@ pub struct RuntimeAgentCompactionTask {
     pub model_profile: ModelProfile,
     /// Provider request submitted by the async compaction worker.
     pub request: ModelRequest,
-    /// Keep the plan-derived summary output ceiling unchanged on provider retry.
+    /// Preserve configured provider output allocation on auxiliary retry; this
+    /// is not a semantic allowance or evidence of wire support.
     pub preserve_summary_output_budget: bool,
     /// Original manual-compactor source, retained across temporary chunk/synthesis work.
     pub manual_retry_source: Option<String>,
@@ -682,13 +683,51 @@ pub struct RuntimeAgentCompactionTask {
 /// summary and advancing to another frozen chunk/range/synthesis source.
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeSummaryCorrection {
+    /// Manual frozen word allowance, captured by preparation, never from a
+    /// correction target or provider output allocation. Active tasks use plan.
+    pub manual_words: Option<usize>,
+    /// Advisory complete-candidate replan target in estimated INPUT tokens.
+    /// Only the measured final-fit owner may replace it. Frozen-valid output
+    /// still reaches complete-fit/no-progress validation above this target.
+    pub effective_input_tokens: Option<usize>,
     /// Empty/malformed corrections consumed for this source; always finite.
     pub empty_attempts: u8,
-    /// Last rejected cost/bytes; oversize correction must strictly improve both
-    /// dimensions that remain invalid, rather than repeat ignored guidance.
-    pub last_size: Option<(usize, usize)>,
-    /// Enforceable ceiling for the current source, retained through transport retries.
-    pub output_ceiling: Option<usize>,
+    /// Last size-bearing rejection with its fixed unit. Empty/malformed output
+    /// cannot replace this predecessor with an unmeasured zero semantic cost.
+    pub last_rejection: Option<mez_agent::context_compaction::ModelCompactionSummaryRejection>,
+    /// First correction generation for this exact source, not provider calls.
+    pub source_generation: Option<u64>,
+    /// Corrections admitted for this source; transport retries are separate.
+    pub corrections_admitted: u32,
+    /// Advisory nonzero target, never an acceptance threshold or wire cap.
+    pub guidance_target: Option<usize>,
+    /// Unit attached to guidance_target, not inferred from another target.
+    pub guidance_is_input_tokens: bool,
+    /// Content-free receipt of the last accepted source, retained through its
+    /// complete-fit validation. Never used as another source's progress state.
+    pub(crate) accepted_summary: Option<Box<crate::error::CompactionFailureEvidence>>,
+}
+
+impl RuntimeSummaryCorrection {
+    /// Starts manual work with an immutable word allowance independent of the
+    /// provider allocation. Progress resets must retain this authority.
+    pub fn for_manual_words(words: usize) -> Self {
+        Self {
+            manual_words: Some(words),
+            ..Self::default()
+        }
+    }
+
+    /// Advances valid source without forgetting frozen authority, final-fit
+    /// advisory state or its content-free accepted-output receipt.
+    pub fn reset_progress(&mut self) {
+        self.empty_attempts = 0;
+        self.last_rejection = None;
+        self.source_generation = None;
+        self.corrections_admitted = 0;
+        self.guidance_target = None;
+        self.guidance_is_input_tokens = false;
+    }
 }
 
 /// Bounded work remaining before one manual conversation summary can commit.

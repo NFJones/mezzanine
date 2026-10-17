@@ -817,7 +817,10 @@ impl RuntimeSessionService {
             compaction_epoch: prepared_epoch,
             transport_retry_attempts: 0,
             transport_retry_delay_ms: None,
-            summary_correction: Default::default(),
+            summary_correction:
+                crate::runtime::agent_state::RuntimeSummaryCorrection::for_manual_words(
+                    summary_budget_words,
+                ),
             pane_id: pane_id.to_string(),
             accounting_origin: self.capture_accounting_origin_for_pane(pane_id),
             conversation_id: conversation_id.clone(),
@@ -1440,6 +1443,7 @@ impl RuntimeSessionService {
                 })?;
                 chunks.summaries.push(summary.clone());
                 if let Some(next) = chunks.pending.pop() {
+                    task.summary_correction.accepted_summary = None;
                     runtime_rebuild_conversation_compaction_request(&mut task, next)?;
                     self.queue_agent_compaction_task(task.clone());
                     return Ok(());
@@ -1460,6 +1464,7 @@ impl RuntimeSessionService {
                     )?;
                     chunks.synthesis_source_bytes = Some(synthesis.len());
                     chunks.summaries.clear();
+                    task.summary_correction.accepted_summary = None;
                     runtime_rebuild_conversation_compaction_request(&mut task, synthesis)?;
                     self.queue_agent_compaction_task(task.clone());
                     return Ok(());
@@ -1500,6 +1505,7 @@ impl RuntimeSessionService {
                     }
                 };
                 if let Some(blocks) = next_blocks {
+                    task.summary_correction.accepted_summary = None;
                     runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
                     self.append_agent_trace_turn_event(
                         pane_id,
@@ -1857,6 +1863,7 @@ impl RuntimeSessionService {
                         final_request_retry.last_input_tokens = Some(retry_estimate.input_tokens);
                         final_request_retry.attempts = 0;
                         final_request_retry.summary_ceiling = None;
+                        task.summary_correction.accepted_summary = None;
                         completed_summaries.clear();
                         pending_blocks.clear();
                         *synthesis_source_bytes = None;
@@ -1903,7 +1910,6 @@ impl RuntimeSessionService {
                             let blocks =
                                 runtime_redact_compaction_blocks(plan.replacement_blocks());
                             runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
-                            task.request.max_output_tokens = Some(next_budget);
                             self.append_agent_trace_turn_event(
                                 pane_id,
                                 &turn_id,
@@ -2116,6 +2122,7 @@ impl RuntimeSessionService {
                                 final_request_retry.last_input_tokens = Some(candidate_tokens);
                                 final_request_retry.attempts = 0;
                                 final_request_retry.summary_ceiling = None;
+                                task.summary_correction.accepted_summary = None;
                                 completed_summaries.clear();
                                 pending_blocks.clear();
                                 *synthesis_source_bytes = None;
@@ -2270,8 +2277,8 @@ impl RuntimeSessionService {
                     let (previous, attempts) = task.manual_final_retry.unwrap_or((usize::MAX, 0));
                     if next_budget > 0
                         && task
-                            .request
-                            .max_output_tokens
+                            .summary_correction
+                            .effective_input_tokens
                             .is_none_or(|ceiling| next_budget < ceiling)
                         && candidate_tokens < previous
                     {
@@ -2286,7 +2293,13 @@ impl RuntimeSessionService {
                         }
                         task.manual_final_retry =
                             Some((candidate_tokens, attempts.saturating_add(1)));
-                        task.request.max_output_tokens = Some(next_budget);
+                        task.summary_correction.effective_input_tokens = Some(next_budget);
+                        task.summary_correction.reset_progress();
+                        summary_correction::communicate_summary_target(
+                            &mut task.request,
+                            next_budget,
+                            true,
+                        );
                         self.queue_agent_compaction_task(task.clone());
                         return Ok(());
                     }
@@ -2324,6 +2337,22 @@ impl RuntimeSessionService {
             Ok(())
         })();
         if let Err(error) = application {
+            let error = if error.compaction_failure().is_some() {
+                error
+            } else {
+                error.with_compaction_failure(summary_correction::compaction_failure_evidence(
+                    &task,
+                    None,
+                    crate::error::CompactionFailurePhase::CompleteCandidate,
+                    crate::error::CompactionFailureDisposition::CandidateRejected,
+                ))
+            };
+            if let Some(facts) = error.compaction_failure() {
+                self.append_agent_status_text_to_terminal_buffer(
+                    pane_id,
+                    &facts.diagnostic_line(),
+                )?;
+            }
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
                 &format!(
@@ -2332,10 +2361,10 @@ impl RuntimeSessionService {
                 ),
             )?;
             if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
-                self.fail_running_turn_after_compaction_failure(
+                self.fail_running_turn_after_compaction_error(
                     resume_turn_id,
                     &task.source,
-                    error.message(),
+                    &error,
                 )?;
             }
         }
@@ -2483,7 +2512,9 @@ impl RuntimeSessionService {
         summary: &str,
     ) -> Result<AgentContext> {
         let summary_words = model_context_text_word_count(summary);
-        let summary_budget_words = task.request.max_output_tokens.unwrap_or(usize::MAX);
+        let summary_budget_words = task.summary_correction.manual_words.ok_or_else(|| {
+            MezError::invalid_state("manual compaction frozen word allowance is missing")
+        })?;
         if summary_words > summary_budget_words {
             return Err(MezError::invalid_state(format!(
                 "manual compaction summary exceeds its frozen output budget: summary_words={summary_words} summary_budget_words={summary_budget_words}"
@@ -2903,6 +2934,12 @@ impl RuntimeSessionService {
                 })
             {
                 if let Err(error) = self.correct_malformed_compaction_response(&mut task) {
+                    if let Some(facts) = error.compaction_failure() {
+                        self.append_agent_status_text_to_terminal_buffer(
+                            pane_id,
+                            &facts.diagnostic_line(),
+                        )?;
+                    }
                     self.append_agent_status_text_to_terminal_buffer(
                         pane_id,
                         &format!(
@@ -2911,11 +2948,7 @@ impl RuntimeSessionService {
                         ),
                     )?;
                     if let Some(turn) = task.resume_turn_id.as_deref() {
-                        self.fail_running_turn_after_compaction_failure(
-                            turn,
-                            &task.source,
-                            error.message(),
-                        )?;
+                        self.fail_running_turn_after_compaction_error(turn, &task.source, &error)?;
                     }
                 }
                 return Ok(true);
@@ -3132,15 +3165,34 @@ impl RuntimeSessionService {
                     return Ok(true);
                 }
             }
+            let disposition = match retry_class {
+                ProviderErrorRetryClass::RetryableTransport => {
+                    crate::error::CompactionFailureDisposition::TransportExhausted
+                }
+                ProviderErrorRetryClass::OutputLimit => {
+                    crate::error::CompactionFailureDisposition::OutputLimit
+                }
+                ProviderErrorRetryClass::ContextLimit => {
+                    crate::error::CompactionFailureDisposition::ContextFloor
+                }
+                _ => crate::error::CompactionFailureDisposition::ProviderRejected,
+            };
+            let facts = summary_correction::compaction_failure_evidence(
+                &task,
+                None,
+                crate::error::CompactionFailurePhase::ProviderInference,
+                disposition,
+            );
+            self.append_agent_status_text_to_terminal_buffer(pane_id, &facts.diagnostic_line())?;
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
                 &format!("agent: compact failed during provider request: {message}"),
             )?;
             if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
-                self.fail_running_turn_after_compaction_failure(
+                self.fail_running_turn_after_compaction_error(
                     resume_turn_id,
                     &task.source,
-                    message,
+                    &MezError::invalid_state(message).with_compaction_failure(facts),
                 )?;
             }
             return Ok(true);
@@ -3165,6 +3217,21 @@ impl RuntimeSessionService {
         source: &str,
         message: &str,
     ) -> Result<()> {
+        self.fail_running_turn_after_compaction_error(
+            turn_id,
+            source,
+            &MezError::invalid_state(message),
+        )
+    }
+
+    /// Preserves typed auxiliary provenance while adding automatic-recovery
+    /// context. This wrapper must not manufacture ordinary MAAP recovery facts.
+    fn fail_running_turn_after_compaction_error(
+        &mut self,
+        turn_id: &str,
+        source: &str,
+        cause: &MezError,
+    ) -> Result<()> {
         let Some(turn) = self
             .agent_turn_ledger()
             .turns()
@@ -3181,9 +3248,15 @@ impl RuntimeSessionService {
             return Ok(());
         };
         let error = MezError::invalid_state(format!(
-            "automatic {} compaction failed before provider retry: {message}",
+            "automatic {} compaction failed before provider retry: {}",
             runtime_compaction_failure_source_label(source),
+            cause.message(),
         ));
+        let error = if let Some(facts) = cause.compaction_failure() {
+            error.with_compaction_failure(facts.clone())
+        } else {
+            error
+        };
         if let Err(application_error) = self.fail_agent_turn_for_provider_error(
             &turn,
             &model_profile.provider,
@@ -3446,23 +3519,17 @@ fn runtime_rebuild_active_turn_compaction_request(
         &blocks,
         task.request.allowed_actions.clone(),
     )?;
-    runtime_limit_compaction_summary_output(
-        &mut task.request,
-        final_request_retry
-            .summary_ceiling
-            .unwrap_or(plan.summary_budget_words())
-            .min(plan.summary_budget_words())
-            .min(task.summary_correction.output_ceiling.unwrap_or(usize::MAX)),
-    );
-    let ceiling = task
-        .request
-        .max_output_tokens
-        .unwrap_or(plan.summary_budget_words());
-    summary_correction::communicate_summary_target(
-        &mut task.request,
-        ceiling,
-        plan.planning_budget().1,
-    );
+    runtime_limit_compaction_summary_output(&mut task.request, plan.summary_budget_words());
+    let effective = final_request_retry.summary_ceiling;
+    task.summary_correction.effective_input_tokens = effective;
+    let (ceiling, tokens) = if let Some(target) = task.summary_correction.guidance_target {
+        (target, task.summary_correction.guidance_is_input_tokens)
+    } else if let Some(target) = effective {
+        (target, true)
+    } else {
+        (plan.summary_budget_words(), plan.planning_budget().1)
+    };
+    summary_correction::communicate_summary_target(&mut task.request, ceiling, tokens);
     let mut messages = task.request.messages.iter().cloned().collect::<Vec<_>>();
     for message in correction_guidance {
         messages.insert(2.min(messages.len()), message);
@@ -3472,23 +3539,14 @@ fn runtime_rebuild_active_turn_compaction_request(
     Ok(())
 }
 
-/// Bounds active-turn compactor output to the summary budget reserved by its
-/// frozen replacement plan.
-///
-/// Configured input-cap retries tighten that plan after a non-reducing pass.
-/// The model request must carry the same ceiling; otherwise a provider may keep
-/// returning a profile-sized summary that is too large for the rebuilt request.
+/// Communicates the semantic word allowance without changing provider output
+/// allocation. Words, estimated input tokens and provider generation tokens are
+/// different units. Canonical adapters alone determine supported wire controls;
+/// OpenAI deliberately transmits no max_output_tokens in any request.
 fn runtime_limit_compaction_summary_output(
     request: &mut ModelRequest,
     summary_budget_words: usize,
 ) {
-    let bounded_budget = summary_budget_words.max(1);
-    request.max_output_tokens = Some(
-        request
-            .max_output_tokens
-            .unwrap_or(bounded_budget)
-            .min(bounded_budget),
-    );
     summary_correction::communicate_summary_target(request, summary_budget_words, false);
 }
 
@@ -3657,29 +3715,16 @@ fn runtime_redact_compaction_blocks(blocks: &[ContextBlock]) -> Vec<ContextBlock
         .collect()
 }
 
-/// Extracts the model-authored markdown summary from a compaction response.
+/// Extracts the completed payload through the same local optional-frame decoder
+/// used before frozen-budget validation. Parser errors carry no response text.
 pub(super) fn runtime_model_compaction_summary_from_response(
     response: &ModelResponse,
+    turn_id: &str,
+    agent_id: &str,
 ) -> Result<String> {
-    let summary = response
-        .action_batch
-        .as_ref()
-        .and_then(|batch| {
-            batch.actions.iter().find_map(|action| {
-                if let AgentActionPayload::Say { text, .. } = &action.payload {
-                    Some(text.trim().to_string())
-                } else {
-                    None
-                }
-            })
-        })
-        .unwrap_or_else(|| response.raw_text.trim().to_string());
-    if summary.trim().is_empty() {
-        return Err(MezError::invalid_state(
-            "model compaction response did not contain a summary",
-        ));
-    }
-    Ok(summary)
+    summary_correction::completed_summary(response, turn_id, agent_id).map_err(|()| {
+        MezError::invalid_state("model compaction response contained a malformed summary frame")
+    })
 }
 
 /// Formats the durable memory record stored after model-authored compaction.

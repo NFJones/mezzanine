@@ -661,6 +661,16 @@ impl ServeCliArgs {
     }
 }
 
+/// Pairs concrete foreground startup intent with its mandatory outer native
+/// owner. Callers obtain the owner from the retained CLI outcome before factory
+/// construction; this bundle supplies no default/untracked ownership fallback.
+pub(super) struct OwnedRuntimeDaemonStartup {
+    /// Initial/restore policy consumed by the existing session factory.
+    pub(super) startup: RuntimeDaemonStartup,
+    /// Exact cleanup owner independently retained by the outer CLI lifetime.
+    pub(super) native: mez_mux::process::PaneProcessRetirementOwner,
+}
+
 /// Carries Runtime Daemon Startup state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -768,6 +778,7 @@ pub(super) async fn run_serve<W: Write>(
     interactive: bool,
     output_format: CliOutputFormat,
     stdout: &mut W,
+    native: &mut super::native_exit::CliNativeOwnership,
 ) -> Result<()> {
     let session_name = args.session_name.clone();
     let mut options = args.into_parsed()?;
@@ -830,8 +841,11 @@ pub(super) async fn run_serve<W: Write>(
             root: paths.root().to_path_buf(),
         },
         options,
-        RuntimeDaemonStartup::Initial {
-            explicit_command: None,
+        OwnedRuntimeDaemonStartup {
+            startup: RuntimeDaemonStartup::Initial {
+                explicit_command: None,
+            },
+            native: native.foreground(),
         },
     )
     .await
@@ -968,46 +982,54 @@ pub(super) async fn run_foreground_control_daemon(
     created_at_unix_seconds: u64,
     config: LoadedRuntimeConfig,
     options: ParsedServeOptions,
-    startup: RuntimeDaemonStartup,
+    owned_startup: OwnedRuntimeDaemonStartup,
 ) -> Result<()> {
+    let OwnedRuntimeDaemonStartup { startup, native } = owned_startup;
     let attached_primary_client_id = options.attached_primary_client_id.clone();
     let config_layers = direct_unix_session_config_layers(config.layers);
-    let runtime = SessionFactory::create(SessionFactoryRequest {
-        session,
-        owner_uid,
-        created_at_unix_seconds,
-        config: SessionRuntimeConfig {
-            layers: config_layers,
-            root: config.root,
-        },
-        sockets: SessionSocketPublication {
-            control_path: socket_path,
-            publish_control: true,
-            message_path: options.message_socket,
-            event_path: options.event_socket,
-            publish_registry: true,
-        },
-        limits: SessionRuntimeLimits {
-            max_control_connections: options.limits.max_control_connections,
-            max_message_connections: options.limits.max_message_connections,
-            max_event_connections: options.limits.max_event_connections,
-            max_event_batches_per_connection: options.limits.max_event_batches_per_connection,
-        },
-        startup: match startup {
-            RuntimeDaemonStartup::Initial { explicit_command } => SessionRuntimeStartup::Initial {
-                explicit_command,
-                start_directory: None,
-                environment: None,
+    let runtime = SessionFactory::create_with_native_owner(
+        SessionFactoryRequest {
+            session,
+            owner_uid,
+            created_at_unix_seconds,
+            config: SessionRuntimeConfig {
+                layers: config_layers,
+                root: config.root,
             },
-            RuntimeDaemonStartup::RestoredSnapshot {
-                payload,
-                restart_command,
-            } => SessionRuntimeStartup::RestoredSnapshot {
-                payload,
-                restart_command,
+            sockets: SessionSocketPublication {
+                control_path: socket_path,
+                publish_control: true,
+                message_path: options.message_socket,
+                event_path: options.event_socket,
+                publish_registry: true,
+            },
+            limits: SessionRuntimeLimits {
+                max_control_connections: options.limits.max_control_connections,
+                max_message_connections: options.limits.max_message_connections,
+                max_event_connections: options.limits.max_event_connections,
+                max_event_batches_per_connection: options.limits.max_event_batches_per_connection,
+            },
+            startup: match startup {
+                RuntimeDaemonStartup::Initial { explicit_command } => {
+                    SessionRuntimeStartup::Initial {
+                        explicit_command,
+                        start_directory: None,
+                        environment: None,
+                    }
+                }
+                RuntimeDaemonStartup::RestoredSnapshot {
+                    payload,
+                    restart_command,
+                } => SessionRuntimeStartup::RestoredSnapshot {
+                    payload,
+                    restart_command,
+                },
             },
         },
-    })
+        native,
+        #[cfg(test)]
+        None,
+    )
     .await?;
     let handle = runtime.handle();
     let attached_client_size = runtime.attached_client_size();

@@ -38,6 +38,7 @@ mod fake;
 mod helpers;
 mod process_service;
 mod pty;
+mod retirement;
 mod service_types;
 #[cfg(test)]
 mod side_effects;
@@ -56,8 +57,15 @@ pub use driver_service::{
 pub use fake::AsyncFakePaneProcessIo;
 #[cfg(test)]
 pub(crate) use helpers::run_owned_pane_process_worker;
+#[cfg(test)]
 pub use process_service::run_async_pane_process_service;
 pub use pty::AsyncPtyPaneProcessIo;
+#[cfg(test)]
+pub(crate) use retirement::drain_native_pane_retirement;
+pub(crate) use retirement::{
+    NATIVE_PANE_RETIREMENT_TIMEOUT, advance_native_pane_retirement_for_attempt,
+    drain_native_pane_retirement_for_attempt,
+};
 pub(crate) use service_types::AsyncPaneProcessWorkerOutcome;
 #[cfg(test)]
 pub use service_types::{AsyncPaneIoSideEffectServiceConfig, AsyncPaneIoSideEffectServiceReport};

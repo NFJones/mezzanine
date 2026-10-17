@@ -7,6 +7,31 @@
 use super::*;
 
 impl RuntimeSessionService {
+    /// Shares native cleanup ownership with session/host shutdown adapters.
+    pub(crate) fn native_pane_retirement_owner(
+        &self,
+    ) -> mez_mux::process::PaneProcessRetirementOwner {
+        self.process.pane_processes.retirement_owner()
+    }
+
+    /// Installs mandatory outer ownership before startup/editor/restore spawns.
+    pub(crate) fn install_native_pane_retirement_owner(
+        &mut self,
+        owner: mez_mux::process::PaneProcessRetirementOwner,
+    ) -> Result<()> {
+        self.process
+            .pane_processes
+            .install_retirement_owner(owner)?;
+        Ok(())
+    }
+
+    /// Returns manager/editor child guards without an unbounded native wait.
+    /// Worker-owned children return independently when their tasks settle.
+    pub(crate) fn release_native_panes_for_retirement(&mut self) {
+        self.process.pane_processes.release_for_retirement();
+        self.external_editor.release_for_retirement();
+    }
+
     /// Transfers one running PTY to an adapter, retaining runtime metadata.
     /// The caller must install the adapter before routing deferred input.
     pub fn take_running_pane_process_for_adapter(&mut self, pane_id: &str) -> Result<PaneProcess> {
@@ -30,15 +55,16 @@ impl RuntimeSessionService {
                 .pane_current_working_directories
                 .insert(pane_id.to_string(), current_working_directory);
         }
-        let process = self
-            .process
-            .pane_processes
-            .take_running_pane_process(pane_id)?;
-        self.process.next_detached_pane_generation = self
+        let generation = self
             .process
             .next_detached_pane_generation
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("pane process generation exhausted"))?;
+        let process = self
+            .process
+            .pane_processes
+            .take_running_pane_process(pane_id)?;
+        self.process.next_detached_pane_generation = generation;
         self.process.detached_pane_processes.insert(
             pane_id.to_string(),
             DetachedPaneProcess {
