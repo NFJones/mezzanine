@@ -47,10 +47,21 @@ async fn public_host_stop_rejects_incomplete_or_lost_receipt() {
             };
             if let Some(result) = result {
                 let body = serde_json::json!({"jsonrpc":"2.0","id":"host-cli","result":result});
-                stream
+                if let Err(error) = stream
                     .write_all(&crate::control::encode_control_body(&body.to_string()))
                     .await
-                    .unwrap();
+                {
+                    // The original client deadline may win under concurrent
+                    // load. Its closed endpoint is a lost receipt, not a fake
+                    // server setup failure or permission to renew that budget.
+                    assert!(
+                        matches!(
+                            error.kind(),
+                            io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+                        ),
+                        "unexpected receipt fixture write failure: {error}"
+                    );
+                }
             }
             drop(stream);
             drop(listener);
