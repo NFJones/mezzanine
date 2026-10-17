@@ -649,7 +649,10 @@ impl RuntimeSessionService {
             for pane in root_panes {
                 self.ensure_primary_agent_name(&pane)?;
             }
-            self.checkpoint_agent_session_metadata_for_restore(Some(&installed_cleanup_bindings))?;
+            self.checkpoint_agent_session_metadata_for_restore(
+                Some(&installed_cleanup_bindings),
+                None,
+            )?;
             let panes = self
                 .agent_shell_store()
                 .sessions()
@@ -733,17 +736,29 @@ impl RuntimeSessionService {
     /// which pane should point at which conversation when the same Mezzanine
     /// session is restored.
     pub(crate) fn checkpoint_agent_session_metadata(&mut self) -> Result<usize> {
-        self.checkpoint_agent_session_metadata_for_restore(None)
+        self.checkpoint_agent_session_metadata_for_restore(None, None)
     }
 
-    /// Captures metadata without durable reads on the actor. Only the complete
-    /// restore path supplies its already validated installed pairs; that sealed
-    /// set preserves nonauthorizing qualification before native startup. Live
+    /// Captures the sealed real spawn's metadata after complete setup and before
+    /// the final proof publication. Only the existing opaque prepared parent and
+    /// validated actual native child can supply this inert qualification.
+    pub(crate) fn checkpoint_agent_session_metadata_for_fresh(
+        &mut self,
+        parent: &crate::runtime::agent::RuntimePreparedCleanupParent,
+        child: &str,
+    ) -> Result<usize> {
+        self.checkpoint_agent_session_metadata_for_restore(None, Some((parent, child)))
+    }
+
+    /// Captures metadata without durable reads on the actor. Only complete
+    /// restore pairs or sealed actual fresh setup supply extra qualification;
+    /// those contexts preserve inert evidence before proof publication. Live
     /// cleanup edges are still published only after successful restore and exact
     /// native qualification, never by this checkpoint marker alone.
     fn checkpoint_agent_session_metadata_for_restore(
         &mut self,
         restoring: Option<&std::collections::BTreeSet<(String, String)>>,
+        fresh: Option<(&crate::runtime::agent::RuntimePreparedCleanupParent, &str)>,
     ) -> Result<usize> {
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(0);
@@ -799,6 +814,14 @@ impl RuntimeSessionService {
                     persistent_subagent_owned: {
                         let agent_id = format!("agent-{}", session.pane_id);
                         self.persistent_subagent_checkpoint_is_owned(&agent_id, &conversation_id)
+                            || fresh.is_some_and(|(parent, child)| {
+                                self.prepared_fresh_subagent_checkpoint_is_owned(
+                                    parent,
+                                    child,
+                                    &agent_id,
+                                    &conversation_id,
+                                )
+                            })
                             || restoring.is_some_and(|installed| {
                                 self.persistent_subagent(&agent_id)
                                     .is_some_and(|persistent| {

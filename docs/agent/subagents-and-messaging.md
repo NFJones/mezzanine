@@ -93,7 +93,7 @@ Active checkpoint metadata version 7 retains a separate, nonauthorizing
 qualification flag. Missing flags in older checkpoints mean false: historical
 bindings and preferences can restore structurally, but not as persistent owned
 pairs. True is captured only from the actual current relationship or its exact
-qualified restore operation, and still requires the original installed parent
+sealed fresh setup/qualified restore operation, and still requires the original installed parent
 pair and native ownership checks. This changes the checkpoint format, not the
 Mezzanine configuration schema, and does not make saved history a grant.
 

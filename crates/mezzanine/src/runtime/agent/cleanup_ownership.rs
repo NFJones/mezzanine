@@ -34,6 +34,9 @@ pub(super) struct RuntimeSubagentCleanupState {
     /// Exercises failure after owned parent restoration but before child release.
     #[cfg(test)]
     fail_routed_recovery_before_release: bool,
+    /// Exercises the final persistent checkpoint before any proof is published.
+    #[cfg(test)]
+    fail_fresh_persistent_checkpoint: bool,
 }
 
 /// Current exclusive runtime owner of one captured conversation binding.
@@ -408,17 +411,15 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Atomically publishes a successful actual fresh delegation's capability.
-    /// Both bindings are checked against the original prepared parent and
-    /// actual native child; a replacement conversation is never recaptured.
-    /// The spawn owner calls this after response preparation and all fallible
-    /// setup, rolling back its newly created child if validation fails.
-    pub(crate) fn commit_fresh_subagent_cleanup_ownership(
-        &mut self,
-        prepared: RuntimePreparedCleanupParent,
+    /// Validates the exact prepared parent and actual fresh child without
+    /// publishing a capability. The non-Clone token belongs to the real spawn
+    /// owner; saved lineage cannot prepare or substitute this operation.
+    fn validated_fresh_subagent_cleanup_edge(
+        &self,
+        prepared: &RuntimePreparedCleanupParent,
         child_agent_id: &str,
-    ) -> Result<()> {
-        let parent = prepared.binding;
+    ) -> Result<RuntimeSubagentCleanupOwnership> {
+        let parent = prepared.binding.clone();
         let pane = parent.agent_id.strip_prefix("agent-").ok_or_else(|| {
             MezError::invalid_state("prepared cleanup parent identity is invalid")
         })?;
@@ -461,7 +462,8 @@ impl RuntimeSessionService {
         let persistent_matches =
             self.persistent_subagent(child_agent_id)
                 .is_none_or(|persistent| {
-                    persistent.parent_agent_id == parent.agent_id
+                    !persistent.close_authority_revoked
+                        && persistent.parent_agent_id == parent.agent_id
                         && persistent.parent_conversation_id == parent.conversation_id
                         && persistent.conversation_id == child.conversation_id
                 });
@@ -470,23 +472,67 @@ impl RuntimeSessionService {
                 "fresh delegation cleanup binding changed during setup",
             ));
         }
+        Ok(RuntimeSubagentCleanupOwnership {
+            current_parent_conversation_id: parent.conversation_id.clone(),
+            parent,
+            child,
+        })
+    }
+
+    /// Publishes the exact successful fresh spawn's durable qualification before
+    /// its final infallible runtime proof commit. All fallible setup and response
+    /// preparation already succeeded; a checkpoint failure publishes no Local
+    /// capability/edge and the original spawn owner rolls back its actual child.
+    pub(crate) fn commit_fresh_subagent_cleanup_ownership(
+        &mut self,
+        prepared: RuntimePreparedCleanupParent,
+        child_agent_id: &str,
+    ) -> Result<()> {
+        let edge = self.validated_fresh_subagent_cleanup_edge(&prepared, child_agent_id)?;
+        if self.persistent_subagent(child_agent_id).is_some() {
+            #[cfg(test)]
+            if std::mem::take(&mut self.agent.subagent_cleanup.fail_fresh_persistent_checkpoint)
+                && let Some(store) = self.persistence.cloned_transcript_store()
+            {
+                store.fail_next_agent_session_metadata_write();
+            }
+            self.checkpoint_agent_session_metadata_for_fresh(&prepared, child_agent_id)?;
+        }
         if prepared.reserved_local
-            && let CleanupProcessOwner::Local(generation) = &parent.process
+            && let CleanupProcessOwner::Local(generation) = &edge.parent.process
         {
             self.agent
                 .subagent_cleanup
                 .local_parents
-                .insert(parent.agent_id.clone(), *generation);
+                .insert(edge.parent.agent_id.clone(), *generation);
         }
-        self.agent.subagent_cleanup.ownership.insert(
-            child_agent_id.to_string(),
-            RuntimeSubagentCleanupOwnership {
-                current_parent_conversation_id: parent.conversation_id.clone(),
-                parent,
-                child,
-            },
-        );
+        self.agent
+            .subagent_cleanup
+            .ownership
+            .insert(child_agent_id.to_string(), edge);
         Ok(())
+    }
+
+    /// Qualifies only the exact child inside the already validated real fresh
+    /// spawn operation. This is inert capture evidence, never a live edge.
+    pub(crate) fn prepared_fresh_subagent_checkpoint_is_owned(
+        &self,
+        prepared: &RuntimePreparedCleanupParent,
+        spawned_child: &str,
+        checkpoint_child: &str,
+        durable_conversation_id: &str,
+    ) -> bool {
+        spawned_child == checkpoint_child
+            && self.persistent_subagent(spawned_child).is_some()
+            && self
+                .validated_fresh_subagent_cleanup_edge(prepared, spawned_child)
+                .is_ok_and(|edge| edge.child.conversation_id == durable_conversation_id)
+    }
+
+    /// Injects a pre-publication checkpoint failure after all real spawn setup.
+    #[cfg(test)]
+    pub(crate) fn fail_next_fresh_subagent_checkpoint_for_tests(&mut self) {
+        self.agent.subagent_cleanup.fail_fresh_persistent_checkpoint = true;
     }
 
     /// Retires a shell/pane lifetime so identical later labels or conversation

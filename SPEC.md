@@ -10302,7 +10302,10 @@ The baseline action types are:
   their saved history remains independently resumable without parent authority.
   Active checkpoint metadata version 7 MUST capture a nonauthorizing persistent
   ownership qualifier only from the exact current nonrevoked runtime relationship
-  or the same qualified restore operation. Historical bindings remain readable
+  or the same sealed fresh setup/qualified restore operation. Successful fresh
+  spawn MUST publish that qualification before its final infallible proof commit;
+  checkpoint failure MUST leave no newly published Local capability or edge.
+  Historical bindings remain readable
   and resumable with false qualification. Earlier metadata versions MUST decode
   qualification as false; current missing/malformed flags and extra columns MUST
   reject. True alone MUST NOT grant ownership without the original installed

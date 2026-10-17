@@ -6,6 +6,8 @@
 
 use super::*;
 
+mod fresh_spawn;
+
 /// Restarts only this fixture's session/store with new runtime/native owners.
 /// Original manager children are terminated and reaped before replacement; the
 /// enclosing fixture owns every new child and cleans it on assertion failure.

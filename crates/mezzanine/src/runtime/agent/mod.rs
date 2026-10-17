@@ -206,6 +206,7 @@ pub(crate) use bookkeeping::{
     RuntimeBookkeepingCandidate, RuntimeBookkeepingCandidateWork,
     RuntimeBookkeepingTranscriptReadWork,
 };
+pub(crate) use cleanup_ownership::RuntimePreparedCleanupParent;
 mod config_change;
 mod context_documents;
 mod discovery;
