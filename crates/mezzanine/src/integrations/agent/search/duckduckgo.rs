@@ -71,12 +71,28 @@ fn scan(body: &str, max_results: usize) -> Scan {
             break;
         };
         cursor = tag.end;
+        // These contexts have nested or environment-dependent HTML semantics.
+        // Fail unsupported pages rather than approximate them and expose inert
+        // anchors after a premature closing delimiter.
         if !tag.closing
             && [
-                "script", "style", "textarea", "title", "template", "noscript",
+                "template",
+                "noscript",
+                "xmp",
+                "iframe",
+                "noembed",
+                "plaintext",
             ]
             .iter()
             .any(|name| tag.name.eq_ignore_ascii_case(name))
+        {
+            parsed.invalid = true;
+            break;
+        }
+        if !tag.closing
+            && ["script", "style", "textarea", "title"]
+                .iter()
+                .any(|name| tag.name.eq_ignore_ascii_case(name))
         {
             if selected.is_some() {
                 parsed.invalid = true;
@@ -186,28 +202,43 @@ fn read_tag(body: &str, start: usize) -> Option<Tag<'_>> {
         }
     }
     let end = end?;
-    let mut inner = body[start + 1..end].trim();
+    let mut inner = body[start + 1..end].trim_end_matches(is_html_space);
     let closing = inner.starts_with('/');
     if closing {
-        inner = inner[1..].trim_start();
+        inner = &inner[1..];
     }
     let self_closing = inner.ends_with('/');
-    if self_closing {
-        inner = inner[..inner.len() - 1].trim_end();
+    if closing && self_closing {
+        return None;
     }
-    let name_end = inner.find(char::is_whitespace).unwrap_or(inner.len());
+    if self_closing {
+        inner = inner[..inner.len() - 1].trim_end_matches(is_html_space);
+    }
+    let name_end = inner.find(is_html_space).unwrap_or(inner.len());
     let name = &inner[..name_end];
-    if name.is_empty() {
+    let declaration = !closing && name.eq_ignore_ascii_case("!doctype");
+    if !declaration
+        && (!name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b':')))
+    {
         return None;
     }
     Some(Tag {
         name,
-        attributes: inner[name_end..].trim(),
+        attributes: inner[name_end..].trim_matches(is_html_space),
         start,
         end: end + 1,
         closing,
         self_closing,
     })
+}
+
+/// HTML tag/attribute separators are the five ASCII space characters, not
+/// Unicode whitespace or repaired delimiters immediately following `<` or `/`.
+fn is_html_space(ch: char) -> bool {
+    matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{000c}')
 }
 
 /// Finds a real raw-text closing tag rather than parsing embedded fake anchors.
@@ -232,18 +263,18 @@ fn raw_text_end(body: &str, mut cursor: usize, name: &str) -> Option<usize> {
 /// incomplete values are unsupported rather than repaired using a later tag.
 fn attribute<'a>(mut attributes: &'a str, requested: &str) -> Result<Option<&'a str>, ()> {
     let mut found = None;
-    while !attributes.trim_start().is_empty() {
-        attributes = attributes.trim_start();
+    while !attributes.trim_start_matches(is_html_space).is_empty() {
+        attributes = attributes.trim_start_matches(is_html_space);
         let end = attributes
-            .find(|ch: char| ch.is_whitespace() || ch == '=')
+            .find(|ch: char| is_html_space(ch) || ch == '=')
             .unwrap_or(attributes.len());
         if end == 0 {
             return Err(());
         }
         let name = &attributes[..end];
-        attributes = attributes[end..].trim_start();
+        attributes = attributes[end..].trim_start_matches(is_html_space);
         let value = if let Some(rest) = attributes.strip_prefix('=') {
-            attributes = rest.trim_start();
+            attributes = rest.trim_start_matches(is_html_space);
             if let Some(quote) = attributes
                 .chars()
                 .next()
@@ -256,15 +287,13 @@ fn attribute<'a>(mut attributes: &'a str, requested: &str) -> Result<Option<&'a 
                 if attributes
                     .chars()
                     .next()
-                    .is_some_and(|ch| !ch.is_whitespace())
+                    .is_some_and(|ch| !is_html_space(ch))
                 {
                     return Err(());
                 }
                 value
             } else {
-                let end = attributes
-                    .find(char::is_whitespace)
-                    .unwrap_or(attributes.len());
+                let end = attributes.find(is_html_space).unwrap_or(attributes.len());
                 if end == 0 {
                     return Err(());
                 }
