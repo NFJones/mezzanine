@@ -118,10 +118,14 @@ async fn runtime_unusable_ddg_result_retires_progress_and_preserves_sibling_corr
         .claim_approved_external_action(&turn.turn_id, &search.id)
         .unwrap()
         .unwrap();
-    let fetch_dispatch = service
-        .claim_approved_external_action(&turn.turn_id, &fetch.id)
-        .unwrap()
-        .unwrap();
+    // One external action is issued at a time. The sibling remains queued,
+    // not independently claimable until the search's terminal result settles.
+    assert!(
+        service
+            .claim_approved_external_action(&turn.turn_id, &fetch.id)
+            .unwrap()
+            .is_none()
+    );
     let mut sources = vec![];
     let failed = crate::integrations::agent::network::execute_network_action_with_transport_async_with_progress(
         &turn, &search, &PendingSearchResponse, &mut |source| sources.push(source),
@@ -145,8 +149,9 @@ async fn runtime_unusable_ddg_result_retires_progress_and_preserves_sibling_corr
         ),
     };
     let mut wrong_attempt = progress.clone();
-    wrong_attempt.presentation.execution =
-        mez_agent::ActionPresentationExecutionIdentity::Attempt(fetch_dispatch.attempt.clone());
+    wrong_attempt.presentation.execution = mez_agent::ActionPresentationExecutionIdentity::Attempt(
+        format!("{}-stale", search_dispatch.attempt),
+    );
     assert!(
         !service
             .apply_approved_external_action_progress(wrong_attempt)
@@ -195,6 +200,10 @@ async fn runtime_unusable_ddg_result_retires_progress_and_preserves_sibling_corr
             .apply_approved_external_action_progress(progress)
             .unwrap()
     );
+    let fetch_dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &fetch.id)
+        .unwrap()
+        .expect("queued sibling remains owned after search failure");
     assert!(
         service
             .complete_approved_external_action(
