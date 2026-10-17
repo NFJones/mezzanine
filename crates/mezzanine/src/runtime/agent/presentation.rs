@@ -4,6 +4,11 @@
 //! pane transcript buffers. It centralizes visible rationale, `say` action,
 //! deferred output, and terminal failure diagnostics so execution modules can
 //! update state without duplicating display policy.
+//!
+//! Accepted queued components retain their existing response/ordinal and entry
+//! identities until installation succeeds. A multi-command drain acknowledges
+//! each installed identity before advancing, so a failed suffix cannot replay
+//! its durable prefix or replace its original occurrence/copy attribution.
 
 use super::{
     ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnState, BTreeSet, Result,
@@ -940,7 +945,17 @@ impl RuntimeSessionService {
                         })?;
                         self.presentation
                             .agent_published_provider_commands
-                            .insert((key.clone(), entry_id));
+                            .insert((key.clone(), entry_id.clone()));
+                        // Installation is the acknowledgment boundary for this
+                        // exact entry, not for the entire command vector. Keep
+                        // a later failed command and its suffix unchanged.
+                        if let Some(pending) = self
+                            .presentation
+                            .agent_queued_provider_commands
+                            .get_mut(&key)
+                        {
+                            pending.retain(|(_, entry)| entry.id != entry_id);
+                        }
                     }
                     self.presentation
                         .agent_queued_provider_commands

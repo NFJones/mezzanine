@@ -50,6 +50,11 @@ successful installation. Pending command, result and outcome components remain
 ordering barriers even after their header is visible. A bounded presentation-only
 retry cannot replay actions or provider requests; repeated publication failure
 is reported rather than acknowledged as missing output.
+Multiple command entries at one action ordinal are acknowledged individually
+after installation. If a later entry fails before installation, retry retains
+that entry and its remaining suffix without reappending an installed prefix.
+Equal command text with different accepted entry identities remains distinct;
+retries preserve each entry's original occurrence and source/copy attribution.
 
 ## Action catalog
 

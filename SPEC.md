@@ -4784,6 +4784,12 @@ ordinal. A failed installation MAY receive one bounded presentation-only retry;
 it MUST NOT redispatch an action or provider request. Repeated failure MUST
 remain explicit with the failed source retained, never silently acknowledge
 missing output. Successfully installed components MUST NOT be appended again.
+When one action ordinal retains multiple command entries, each successful
+installation MUST acknowledge only that exact entry before the next command is
+attempted. A later pre-install failure MUST retain the failed entry and remaining
+suffix, not replay the installed prefix. Entries with equal command text but
+distinct accepted identities MUST remain distinct, preserving their original
+occurrence, source, copy attribution and persistence identity.
 If projection is unavailable, validation fails, or source mismatches cannot be
 reconciled independently, Mezzanine MUST remove only the still-provisional
 owned suffix and present validated source through normal renderers. Provider
