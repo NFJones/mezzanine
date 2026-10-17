@@ -25,7 +25,9 @@ fn presentation_occurrence_legacy_v5_missing_steering_stamp_stays_unknown() {
         status: SteeringRecoveryStatus::Admitted(7),
     });
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
-    let (prefix, _) = encoded.rsplit_once('\t').unwrap();
+    let (pre_ownership, ownership) = encoded.rsplit_once('\t').unwrap();
+    assert_eq!(ownership, "false");
+    let (prefix, _) = pre_ownership.rsplit_once('\t').unwrap();
     let mut rows = serde_json::to_value(&metadata.steering_recovery).unwrap();
     rows[0].as_object_mut().unwrap().remove("occurrence");
     let json = serde_json::to_string(&rows)
@@ -37,7 +39,7 @@ fn presentation_occurrence_legacy_v5_missing_steering_stamp_stays_unknown() {
     let legacy = format!(
         "{}\t{json}",
         prefix.replacen(
-            "mez-agent-session-metadata/6",
+            "mez-agent-session-metadata/7",
             "mez-agent-session-metadata/5",
             1
         )

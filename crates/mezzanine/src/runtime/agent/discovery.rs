@@ -203,7 +203,8 @@ impl RuntimeSessionService {
                 "parent_agent_id": persistent
                     .map(|record| agent_list_bounded_text(&record.parent_agent_id)),
                 "owned_by_self": persistent.is_some_and(|record| {
-                    record.parent_agent_id == turn.agent_id
+                    !record.close_authority_revoked
+                        && record.parent_agent_id == turn.agent_id
                         && record.parent_conversation_id == turn.conversation_id
                 }),
                 "truncated": row_truncated,

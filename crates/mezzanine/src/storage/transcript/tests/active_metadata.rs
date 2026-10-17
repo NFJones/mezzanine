@@ -6,6 +6,8 @@
 use super::*;
 use std::io::{Read, Seek, SeekFrom};
 
+mod ownership;
+
 /// Namespace creation and an AlreadyExists retry both require the parent sync
 /// barrier before any empty/nonempty checkpoint can be acknowledged. Failure
 /// after mkdir leaves no authoritative checkpoint; exact retry remains possible.

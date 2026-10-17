@@ -74,6 +74,33 @@ Replacing or removing that owner closes or fences its persistent children;
 they are not daemons that survive an unrelated `/new` task. Omit `lifetime`
 for ordinary one-task delegation.
 
+`close_agent` revalidates the exact child conversation and native runtime owner,
+not just the parent metadata returned by discovery. Independently resuming a
+different conversation into the child pane revokes the old parent's close
+authority; returning to the same saved UUID does not restore it. Rejected closes
+leave the replacement process, task, context, messaging identity and scopes
+untouched. Genuine idle reuse and already proven runtime-owned restore/loop
+transitions retain their existing ownership. Failed resume rolls the old
+authority back exactly. Completed-close no-ops are bounded to the original
+parent binding and cannot retire a partially bound replacement whose layout
+entry is absent but shell or native ownership remains.
+Original metadata can remain for mandatory fenced cleanup after parent
+replacement, with explicit-close authority irreversibly revoked for that
+relationship. It is not advertised as caller-owned, converted to a completed
+close, or checkpointed as an active owned pair. Saved child history remains
+available for independent resume; a matching UUID cannot recreate the grant.
+Active checkpoint metadata version 7 retains a separate, nonauthorizing
+qualification flag. Missing flags in older checkpoints mean false: historical
+bindings and preferences can restore structurally, but not as persistent owned
+pairs. True is captured only from the actual current relationship or its exact
+sealed fresh setup/qualified restore operation, and still requires the original installed parent
+pair and native ownership checks. This changes the checkpoint format, not the
+Mezzanine configuration schema, and does not make saved history a grant.
+For off-actor persistence, capture/enqueue precedes runtime proof publication;
+durability follows worker settlement, not queue acceptance. A later write failure
+retries only its current immutable metadata generation, never the spawn or a
+replacement occupant. Synchronous precommit failure still rolls back setup.
+
 ### Saved lineage and live cleanup ownership
 
 Resuming a saved child conversation independently preserves its historical

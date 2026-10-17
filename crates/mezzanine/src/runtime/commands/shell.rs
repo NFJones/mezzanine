@@ -1217,6 +1217,9 @@ impl RuntimeSessionService {
         if let Some(AgentShellCommandOutcome::Mutated { command, .. }) = outcome.as_ref()
             && matches!(command.as_str(), "new" | "clear")
         {
+            let agent_id = format!("agent-{pane_id}");
+            self.retire_persistent_subagent_binding(&agent_id);
+            self.revoke_persistent_close_for_parent(&agent_id);
             self.discard_agent_compaction_steering(&pane_id);
             self.agent.cancel_agent_command(&pane_id);
             if let Some(conversation_id) = replaced_conversation_id.as_deref() {

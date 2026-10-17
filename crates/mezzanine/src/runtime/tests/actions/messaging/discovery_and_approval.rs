@@ -292,6 +292,7 @@ fn runtime_list_agents_reports_persistent_parent_ownership() {
             parent_agent_id: turn.agent_id.clone(),
             parent_conversation_id,
             objective: "Triage persistent peer requests".to_string(),
+            close_authority_revoked: false,
         },
     );
 
@@ -306,6 +307,23 @@ fn runtime_list_agents_reports_persistent_parent_ownership() {
     assert_eq!(row["parent_agent_id"], turn.agent_id);
     assert_eq!(row["owned_by_self"], true);
     assert_eq!(row["objective"], "Triage persistent peer requests");
+    service.revoke_persistent_close_for_parent(&turn.agent_id);
+    let revoked =
+        execute_list_agents_action(&mut service, &turn, Some("subagent"), Some("session"));
+    let row = revoked["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent_id"] == "agent-%2")
+        .unwrap();
+    assert_eq!(
+        row["persistent"], true,
+        "original cleanup metadata stays descriptive"
+    );
+    assert_eq!(
+        row["owned_by_self"], false,
+        "revocation is not new lifecycle authority"
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 

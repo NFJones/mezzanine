@@ -1494,6 +1494,7 @@ fn agent_session_metadata(
         mezzanine_session_id: mezzanine_session_id.to_string(),
         pane_id: "%1".to_string(),
         conversation_id: conversation_id.to_string(),
+        persistent_subagent_owned: false,
         primary_display_name: None,
         steering_recovery: Vec::new(),
         prompt_cache_lineage_id: format!("lineage-{conversation_id}"),
@@ -4261,7 +4262,9 @@ fn transcript_store_exports_prompt_history_without_creating_the_store() {
 fn agent_session_metadata_decoder_accepts_pre_pane_identity_rows() {
     let metadata = agent_session_metadata("$legacy", "legacy-conversation");
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
-    let (pre_recovery_row, recovery) = encoded.rsplit_once('\t').unwrap();
+    let (pre_ownership_row, ownership) = encoded.rsplit_once('\t').unwrap();
+    assert_eq!(ownership, "false");
+    let (pre_recovery_row, recovery) = pre_ownership_row.rsplit_once('\t').unwrap();
     assert_eq!(recovery, "[]");
     let (pre_name_row, name) = pre_recovery_row.rsplit_once('\t').unwrap();
     assert!(name.is_empty());
@@ -4275,7 +4278,7 @@ fn agent_session_metadata_decoder_accepts_pre_pane_identity_rows() {
     assert!(appended_field.is_empty());
 
     let legacy_row = legacy_row.replacen(
-        "mez-agent-session-metadata/6",
+        "mez-agent-session-metadata/7",
         "mez-agent-session-metadata/1",
         1,
     );
@@ -4304,7 +4307,7 @@ fn agent_session_metadata_round_trips_project_partitions() {
         usage,
     }];
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
-    assert!(encoded.starts_with("mez-agent-session-metadata/6\t"));
+    assert!(encoded.starts_with("mez-agent-session-metadata/7\t"));
     assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
     metadata.project_token_usage[0].usage.input_tokens += 1;
     assert!(encode_agent_session_metadata(&metadata).is_err());
@@ -4328,9 +4331,11 @@ fn agent_session_metadata_steering_recovery_round_trip_and_v3_migration() {
     }];
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
     assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
-    let (legacy, _) = encoded.rsplit_once('\t').unwrap();
+    let (pre_ownership, ownership) = encoded.rsplit_once('\t').unwrap();
+    assert_eq!(ownership, "false");
+    let (legacy, _) = pre_ownership.rsplit_once('\t').unwrap();
     let legacy = legacy.replacen(
-        "mez-agent-session-metadata/6",
+        "mez-agent-session-metadata/7",
         "mez-agent-session-metadata/3",
         1,
     );
@@ -4344,7 +4349,9 @@ fn agent_session_metadata_steering_recovery_round_trip_and_v3_migration() {
     second.acceptance_order = 3;
     unordered.steering_recovery.push(second);
     let encoded = encode_agent_session_metadata(&unordered).unwrap();
-    let (prefix, _) = encoded.rsplit_once('\t').unwrap();
+    let (pre_ownership, ownership) = encoded.rsplit_once('\t').unwrap();
+    assert_eq!(ownership, "false");
+    let (prefix, _) = pre_ownership.rsplit_once('\t').unwrap();
     let mut rows = serde_json::to_value(&unordered.steering_recovery).unwrap();
     for row in rows.as_array_mut().unwrap() {
         row.as_object_mut().unwrap().remove("acceptance_order");
@@ -4352,7 +4359,7 @@ fn agent_session_metadata_steering_recovery_round_trip_and_v3_migration() {
     let legacy = format!(
         "{}\t{}",
         prefix.replacen(
-            "mez-agent-session-metadata/6",
+            "mez-agent-session-metadata/7",
             "mez-agent-session-metadata/4",
             1
         ),

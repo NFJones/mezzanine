@@ -8,6 +8,7 @@
 use super::*;
 
 mod loop_routing;
+mod persistent_close;
 
 /// Owns one private generated session and its native delegation fixtures.
 struct CleanupFixture {

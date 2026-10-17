@@ -34,7 +34,9 @@ const LEGACY_PROMPT_HISTORY_VERSION: &str = "mez-agent-prompt-history/1";
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/6";
+const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/7";
+/// Acceptance-stamped receipts before explicit persistent ownership qualification.
+const UNQUALIFIED_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/6";
 /// Ordered steering receipts before immutable acceptance-time provenance.
 const UNSTAMPED_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/5";
 /// Recovery evidence before explicit producer acceptance order.
@@ -508,6 +510,7 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
         metadata.primary_display_name.clone().unwrap_or_default(),
         serde_json::to_string(&metadata.steering_recovery)
             .map_err(|_| MezError::invalid_state("steering recovery metadata encoding failed"))?,
+        metadata.persistent_subagent_owned.to_string(),
     ]
     .into_iter()
     .map(|field| escape_field(&field))
@@ -523,8 +526,12 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         .is_some_and(|version| version == LEGACY_AGENT_SESSION_METADATA_VERSION);
     let current = fields.first().is_some_and(|version| {
         version == AGENT_SESSION_METADATA_VERSION
+            || version == UNQUALIFIED_AGENT_SESSION_METADATA_VERSION
             || version == UNSTAMPED_AGENT_SESSION_METADATA_VERSION
     });
+    let qualified_version = fields
+        .first()
+        .is_some_and(|version| version == AGENT_SESSION_METADATA_VERSION);
     let project_version = fields
         .first()
         .is_some_and(|version| version == PROJECT_AGENT_SESSION_METADATA_VERSION);
@@ -534,7 +541,8 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
     let unordered_version = fields
         .first()
         .is_some_and(|version| version == UNORDERED_AGENT_SESSION_METADATA_VERSION);
-    if !((current && fields.len() == 35)
+    if !((qualified_version && fields.len() == 36)
+        || (current && !qualified_version && fields.len() == 35)
         || (unordered_version && fields.len() == 35)
         || (identity_version && fields.len() == 34)
         || (project_version && fields.len() == 33)
@@ -678,6 +686,16 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         mezzanine_session_id: fields[1].clone(),
         pane_id: fields[2].clone(),
         conversation_id: fields[3].clone(),
+        persistent_subagent_owned: if qualified_version {
+            parse_bool(
+                &fields[35],
+                "agent session persistent ownership qualification",
+            )?
+        } else {
+            // Older metadata never distinguished an actual owned relationship
+            // from a historical persistent contract or independently rebound CID.
+            false
+        },
         primary_display_name: fields.get(33).filter(|value| !value.is_empty()).cloned(),
         steering_recovery: if current {
             serde_json::from_str(&fields[34])
