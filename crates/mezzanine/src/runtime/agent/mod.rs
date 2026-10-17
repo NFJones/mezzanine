@@ -1208,7 +1208,7 @@ impl RuntimeAgentComponent {
 #[derive(Clone)]
 pub(crate) struct RuntimeSubagentAuthoritySnapshot {
     lineage: Option<RuntimeSubagentLineage>,
-    persistent: Option<RuntimePersistentSubagent>,
+    persistent: BTreeMap<String, RuntimePersistentSubagent>,
     retired_persistent: BTreeMap<String, RuntimePersistentSubagent>,
     cleanup_ownership: Option<cleanup_ownership::RuntimeSubagentCleanupOwnership>,
     pending_cleanup_restore: BTreeMap<String, cleanup_ownership::PendingCleanupRestore>,
@@ -1319,6 +1319,16 @@ impl RuntimeSessionService {
         self.agent
             .retired_persistent_subagents
             .retain(|_, retired| retired.parent_agent_id != agent_id);
+    }
+
+    /// Revokes both active and completed persistent metadata attributed to an
+    /// independently replaced parent. Original fenced descendant cleanup edges
+    /// remain separately owned: they cannot mint new completed-close evidence.
+    pub(crate) fn retire_persistent_subagent_records_for_parent(&mut self, agent_id: &str) {
+        self.retire_persistent_close_evidence_for_parent(agent_id);
+        self.agent
+            .persistent_subagents
+            .retain(|_, persistent| persistent.parent_agent_id != agent_id);
     }
 
     /// Retains bounded ownership evidence after a persistent child's teardown completes.
@@ -1538,7 +1548,7 @@ impl RuntimeSessionService {
     ) -> RuntimeSubagentAuthoritySnapshot {
         RuntimeSubagentAuthoritySnapshot {
             lineage: self.subagent_lineage(agent_id).cloned(),
-            persistent: self.persistent_subagent(agent_id).cloned(),
+            persistent: self.agent.persistent_subagents.clone(),
             retired_persistent: self.agent.retired_persistent_subagents.clone(),
             cleanup_ownership: self.agent.subagent_cleanup.ownership.get(agent_id).cloned(),
             pending_cleanup_restore: self.agent.subagent_cleanup.pending_restore.clone(),
@@ -1565,6 +1575,7 @@ impl RuntimeSessionService {
         snapshot: RuntimeSubagentAuthoritySnapshot,
     ) {
         self.remove_subagent_authority_state(agent_id);
+        self.agent.persistent_subagents = snapshot.persistent;
         self.agent.retired_persistent_subagents = snapshot.retired_persistent;
         self.agent.subagent_scopes = snapshot.scope_registry;
         self.agent.subagent_cleanup.pending_restore = snapshot.pending_cleanup_restore;
@@ -1583,11 +1594,6 @@ impl RuntimeSessionService {
             self.agent
                 .subagent_lineage
                 .insert(agent_id.to_string(), lineage);
-        }
-        if let Some(persistent) = snapshot.persistent {
-            self.agent
-                .persistent_subagents
-                .insert(agent_id.to_string(), persistent);
         }
         if snapshot.restored_lineage {
             self.agent

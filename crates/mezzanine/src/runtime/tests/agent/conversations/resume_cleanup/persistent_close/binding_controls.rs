@@ -6,6 +6,8 @@
 
 use super::*;
 
+mod parent_replacement;
+
 /// Leaves a real recorded parent turn idle so user-directed resume is legal.
 /// Its original identity remains the stale-action witness after replacement.
 fn idle_parent_turn(fixture: &mut CleanupFixture) -> AgentTurnRecord {
