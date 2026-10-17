@@ -723,6 +723,7 @@ impl RuntimeSessionService {
                     .map(|membership| membership.scope_id()),
             )?;
             if conversation_replaced {
+                self.retire_persistent_close_evidence_for_parent(&agent_id);
                 self.discard_agent_compaction_steering(pane_id);
                 self.clear_received_peer_message_presentations_for_conversation(
                     pane_id,
@@ -818,6 +819,7 @@ impl RuntimeSessionService {
                     );
                 }
             } else {
+                self.clear_retired_persistent_subagent(&agent_id);
                 self.remove_subagent_authority_state(&agent_id);
             }
             self.capture_agent_session_allowed_actions_for_pane(pane_id)?;

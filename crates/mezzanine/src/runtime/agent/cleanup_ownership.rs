@@ -494,6 +494,14 @@ impl RuntimeSessionService {
     /// replacement uses fencing instead and must not call this operation.
     pub(crate) fn retire_subagent_cleanup_pane_binding(&mut self, pane_id: &str) {
         let agent_id = format!("agent-{pane_id}");
+        self.retire_persistent_close_evidence_for_parent(&agent_id);
+        // Reusing a logical/native parent lifetime cannot reclaim even an
+        // already-absent child through leftover persistent metadata. Do not
+        // erase this pane's OWN incoming record here: centralized successful
+        // child retirement still captures it for the bounded repeat-close path.
+        self.agent
+            .persistent_subagents
+            .retain(|_, persistent| persistent.parent_agent_id != agent_id);
         self.agent
             .subagent_cleanup
             .owned_loops
@@ -928,6 +936,35 @@ impl RuntimeSessionService {
             .local_parents
             .remove(&agent_id)
             .map(CleanupProcessOwner::Local);
+        // Metadata alone cannot survive a superseding native owner and later
+        // become completed-close evidence. The only first-install exception is
+        // an exact pair installed by the existing successful restore operation;
+        // pending qualification still grants no live close until both owners
+        // publish their strict edge. Actual manager/adapter handoff uses the
+        // separate proof migration path, never this replacement operation.
+        self.agent.retired_persistent_subagents.remove(&agent_id);
+        if local.is_none() {
+            self.retire_persistent_close_evidence_for_parent(&agent_id);
+        }
+        let pending = &self.agent.subagent_cleanup.pending_restore;
+        self.agent.persistent_subagents.retain(|child, persistent| {
+            let child_first_restore = pending.get(child).is_some_and(|restore| {
+                restore.child_process.is_none()
+                    && restore.child_conversation_id == persistent.conversation_id
+                    && restore.parent_agent_id == persistent.parent_agent_id
+                    && restore.parent_conversation_id == persistent.parent_conversation_id
+            });
+            let parent_first_restore = pending.get(child).is_some_and(|restore| {
+                restore.parent_process.is_none()
+                    && restore.child_conversation_id == persistent.conversation_id
+                    && restore.parent_agent_id == persistent.parent_agent_id
+                    && restore.parent_conversation_id == persistent.parent_conversation_id
+            });
+            (child != &agent_id || local.is_some() || child_first_restore)
+                && (persistent.parent_agent_id != agent_id
+                    || local.is_some()
+                    || parent_first_restore)
+        });
         self.agent.subagent_cleanup.ownership.retain(|_, edge| {
             (edge.parent.agent_id != agent_id || local.as_ref() == Some(&edge.parent.process))
                 && (edge.child.agent_id != agent_id || local.as_ref() == Some(&edge.child.process))

@@ -10286,9 +10286,23 @@ The baseline action types are:
   owner. A repeat request for a child whose completed closure is still recorded
   for that same owner MUST succeed as a no-op with `closed: false`; this bounded
   retirement evidence is runtime-session-local and grants no live authority.
+  Active ownership MUST additionally validate the exact legitimately delegated
+  child conversation/native runtime incarnation immediately before destructive
+  close. Independent child resume or native replacement MUST revoke stale
+  persistent metadata; identical saved conversation IDs or public labels MUST
+  NOT recover it. Genuine idle reuse, qualified runtime-owned snapshot restore,
+  and already sealed child-owned loop transitions MAY preserve their existing
+  capabilities; saved lineage alone MUST NOT mint one. Independently replacing
+  the parent MUST revoke its completed-close evidence and fence live explicit
+  close authority, even if a later resume returns to the old conversation ID.
+  Failed replacement MUST restore the exact prior active/retired records and
+  cleanup proofs transactionally without rewinding incarnation high-water marks.
   An authoritative same-owner persistent-child record whose pane is already
   absent MUST likewise retire its remaining runtime state and succeed with
   `closed: false`; absence of a pane is not by itself an unavailable identity.
+  Missing layout alone MUST NOT authorize that cleanup or a retired no-op while
+  any current shell/native/adapter binding remains at the target. Rejection MUST
+  have no signal, layout, task, context, identity or scope effect on a replacement.
   Known retained completed closures need no rediscovery.
   Malformed agent identifiers MUST return `invalid_params`; syntactically valid
   unknown, foreign, non-persistent, and otherwise inaccessible identities MUST

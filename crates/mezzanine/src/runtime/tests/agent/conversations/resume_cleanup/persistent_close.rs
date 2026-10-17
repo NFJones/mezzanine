@@ -8,6 +8,8 @@
 use super::*;
 use mez_agent::ActionResult;
 
+mod binding_controls;
+
 /// Starts a synthetic parent turn without executing any provider request.
 fn parent_turn(fixture: &mut CleanupFixture) -> AgentTurnRecord {
     let started = fixture
@@ -168,6 +170,12 @@ fn runtime_persistent_close_rejects_independently_resumed_child() {
             .turn(&child_turn.turn_id)
             .unwrap()
             .clone();
+        let shell = fixture
+            .service
+            .agent_shell_store()
+            .get(pane)
+            .unwrap()
+            .clone();
         let identity_id = mez_core::ids::AgentId::opaque(child.clone()).unwrap();
         let identity = fixture
             .service
@@ -182,6 +190,7 @@ fn runtime_persistent_close_rejects_independently_resumed_child() {
         let rejected = close_action(&mut fixture.service, &parent, &child);
         assert_eq!(denial(&rejected), unavailable, "replacement mode={mode}");
         fixture.assert_native_identity(&child, native);
+        assert_eq!(fixture.service.agent_shell_store().get(pane), Some(&shell));
         assert_eq!(
             fixture
                 .service

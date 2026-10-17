@@ -895,7 +895,10 @@ impl RuntimeSessionService {
         Ok(executed)
     }
 
-    /// Closes one persistent child after verifying the authoritative ownership record.
+    /// Closes only an exact live owned child, never a pane selected by stale
+    /// persistent metadata. Existing cleanup capabilities qualify native and
+    /// sealed owned-loop continuity; saved lineage or matching IDs cannot.
+    /// Rejections precede all signal, task, layout, scope and identity effects.
     fn execute_close_agent_action_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
@@ -915,15 +918,22 @@ impl RuntimeSessionService {
                 "persistent child is unavailable; refresh list_agents with agent_type=subagent or all; verify a persistent child owned by the current parent conversation and retry once with a verified target; otherwise abandon the close and continue useful work or report a concrete cleanup limitation. Do not repeat an unchanged unavailable close, guess identifiers, widen scope, bypass ownership, or claim closure. Discovery is not authority; execution revalidates live ownership.",
             )
         };
+        if runtime_agent_pane_id(&turn.agent_id).is_none_or(|pane| pane.as_str() != turn.pane_id)
+            || self.find_pane_descriptor(&turn.pane_id).is_none()
+            || self
+                .agent_shell_store()
+                .get(&turn.pane_id)
+                .is_none_or(|shell| shell.session_id != turn.conversation_id)
+        {
+            return Ok(unavailable()?);
+        }
         let Some(persistent) = self.persistent_subagent(agent_id).cloned() else {
             let already_closed =
                 self.retired_persistent_subagent(agent_id)
                     .is_some_and(|retired| {
                         retired.parent_agent_id == turn.agent_id
                             && retired.parent_conversation_id == turn.conversation_id
-                            && runtime_agent_pane_id(agent_id).is_some_and(|pane_id| {
-                                self.find_pane_descriptor(pane_id.as_str()).is_none()
-                            })
+                            && self.persistent_close_target_is_absent(agent_id)
                     });
             if already_closed {
                 return Ok(ActionResult::succeeded(
@@ -944,6 +954,9 @@ impl RuntimeSessionService {
             return Ok(unavailable()?);
         };
         if self.find_pane_descriptor(pane_id.as_str()).is_none() {
+            if !self.persistent_close_target_is_absent(agent_id) {
+                return Ok(unavailable()?);
+            }
             self.remove_subagent_task_routes_for_parent(agent_id);
             self.remove_joined_subagent_dependencies_for_agent(agent_id);
             self.integration
@@ -954,7 +967,6 @@ impl RuntimeSessionService {
                 .model_profile_overrides_mut()
                 .subagent_profiles
                 .remove(agent_id);
-            self.remember_retired_persistent_subagent(agent_id, persistent.clone());
             self.remove_subagent_authority_state(agent_id);
             self.deregister_macro_managed_subagent(agent_id);
             if let Some(identity) = mez_core::ids::AgentId::opaque(agent_id.to_string()) {
@@ -962,6 +974,7 @@ impl RuntimeSessionService {
                     .message_service_mut()
                     .retire_agent_identity(&identity);
             }
+            self.remember_retired_persistent_subagent(agent_id, persistent);
             return Ok(ActionResult::succeeded(
                 turn,
                 action,
@@ -972,6 +985,14 @@ impl RuntimeSessionService {
         let Some(primary) = self.session.layout_owner_client_id().cloned() else {
             return Ok(unavailable()?);
         };
+        // Final actor-owned check immediately before the destructive primitive.
+        // A parent returning independently to its old CID cannot unfence an old
+        // child. An exact child-owned loop may retain the existing sealed edge.
+        if self.subagent_descendant_is_fenced(agent_id)
+            || !self.subagent_cleanup_child_is_owned_by_turn(agent_id, turn)
+        {
+            return Ok(unavailable()?);
+        }
         self.dispatch_runtime_pane_close(
             &primary,
             &format!(
@@ -985,6 +1006,20 @@ impl RuntimeSessionService {
             vec!["persistent child closed".to_string()],
             Some(serde_json::json!({"closed": true, "agent_id": agent_id}).to_string()),
         ))
+    }
+
+    /// Requires absence of every current binding, not merely missing layout.
+    /// A partially installed/replaced occupant must never be retired by an old
+    /// active record or a completed-close no-op. No state changes occur here.
+    fn persistent_close_target_is_absent(&self, agent_id: &str) -> bool {
+        runtime_agent_pane_id(agent_id).is_some_and(|pane| {
+            self.find_pane_descriptor(pane.as_str()).is_none()
+                && self.agent_shell_store().get(pane.as_str()).is_none()
+                && self.manager_owned_pane_process_pid(pane.as_str()).is_none()
+                && self
+                    .adapter_owned_pane_process_instance(pane.as_str())
+                    .is_none()
+        })
     }
 
     /// Executes one MAAP `spawn_agent` action through the runtime subagent

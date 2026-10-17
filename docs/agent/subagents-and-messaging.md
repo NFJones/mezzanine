@@ -74,6 +74,17 @@ Replacing or removing that owner closes or fences its persistent children;
 they are not daemons that survive an unrelated `/new` task. Omit `lifetime`
 for ordinary one-task delegation.
 
+`close_agent` revalidates the exact child conversation and native runtime owner,
+not just the parent metadata returned by discovery. Independently resuming a
+different conversation into the child pane revokes the old parent's close
+authority; returning to the same saved UUID does not restore it. Rejected closes
+leave the replacement process, task, context, messaging identity and scopes
+untouched. Genuine idle reuse and already proven runtime-owned restore/loop
+transitions retain their existing ownership. Failed resume rolls the old
+authority back exactly. Completed-close no-ops are bounded to the original
+parent binding and cannot retire a partially bound replacement whose layout
+entry is absent but shell or native ownership remains.
+
 ### Saved lineage and live cleanup ownership
 
 Resuming a saved child conversation independently preserves its historical

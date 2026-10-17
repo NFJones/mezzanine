@@ -51,7 +51,9 @@ pub(crate) struct RuntimeSubagentLineage {
     pub terminal: bool,
 }
 
-/// Runtime ownership retained for one reusable MMP subagent.
+/// Runtime metadata retained for one reusable MMP subagent. Live destructive
+/// authority additionally requires the existing exact native cleanup capability;
+/// these conversation strings alone cannot authorize a replacement occupant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimePersistentSubagent {
     /// Durable child conversation kept across task turns.
