@@ -59,7 +59,7 @@ enum HostCliCommand {
     Status,
     /// Requests graceful host shutdown.
     Stop {
-        /// Maximum seconds to wait for the host socket to disappear.
+        /// Maximum seconds to observe native and runtime shutdown completion.
         #[arg(long, default_value_t = 10)]
         timeout: u64,
     },
@@ -73,21 +73,30 @@ pub(super) async fn run_host<W: Write>(
     env: CliEnv,
     output_format: CliOutputFormat,
     stdout: &mut W,
+    native: &mut super::native_exit::CliNativeOwnership,
 ) -> Result<()> {
     match args.command {
         HostCliCommand::Serve {
             max_sessions,
             max_live_sessions,
-        } => run_host_serve(env, max_sessions, max_live_sessions, output_format, stdout).await,
+        } => {
+            run_host_serve(
+                env,
+                max_sessions,
+                max_live_sessions,
+                output_format,
+                stdout,
+                native,
+            )
+            .await
+        }
         HostCliCommand::Status => {
             let result = request_host(&env, "host/get", serde_json::json!({})).await?;
             write_json_or_plain(stdout, output_format, &serialize_json(&result)?)
         }
         HostCliCommand::Stop { timeout } => {
-            let result =
-                request_host(&env, "host/shutdown", serde_json::json!({"force": false})).await?;
-            write_json_or_plain(stdout, output_format, &serialize_json(&result)?)?;
-            wait_for_host_stop(&env, Duration::from_secs(timeout)).await
+            let result = stop_host_with_completion(&env, Duration::from_secs(timeout)).await?;
+            write_json_or_plain(stdout, output_format, &serialize_json(&result)?)
         }
         HostCliCommand::Reconcile => {
             let result = request_host(&env, "host/reconcile", serde_json::json!({})).await?;
@@ -102,6 +111,7 @@ async fn run_host_serve<W: Write>(
     max_live_sessions_override: Option<usize>,
     output_format: CliOutputFormat,
     stdout: &mut W,
+    native: &mut super::native_exit::CliNativeOwnership,
 ) -> Result<()> {
     let paths = env.config_paths()?;
     let config_path = paths.ensure_default_config()?;
@@ -183,6 +193,7 @@ async fn run_host_serve<W: Write>(
         },
         ownership,
     )?;
+    native.retain_host(server.router().native_cleanup_owner())?;
     if let Some(iroh) = iroh.as_mut() {
         iroh.set_audit_log(server.audit_log_handle());
     }
@@ -602,19 +613,35 @@ fn spawn_background_host(env: &CliEnv) -> Result<()> {
     Ok(())
 }
 
-async fn wait_for_host_stop(env: &CliEnv, timeout: Duration) -> Result<()> {
-    let runtime_root = default_socket_directory(&env.runtime)?.path;
-    let socket = host_socket_path(&runtime_root)?;
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if !socket.exists() {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+/// Observes the original authenticated connection's final native/publication
+/// verdict under one creation-time budget. Admission, EOF, socket removal and
+/// replacement hosts never substitute for an explicit healthy completion reply.
+async fn stop_host_with_completion(env: &CliEnv, timeout: Duration) -> Result<serde_json::Value> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| MezError::invalid_args("host stop deadline is not representable"))?;
+    let result = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        request_host(
+            env,
+            "host/shutdown",
+            serde_json::json!({"force": false, "wait_for_completion": true}),
+        ),
+    )
+    .await
+    .map_err(|_| {
+        MezError::invalid_state("host shutdown completion remains unproven at deadline")
+    })??;
+    if result
+        .get("shutdown_completed")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return Err(MezError::invalid_state(
+            "host response did not prove shutdown completion",
+        ));
     }
-    Err(MezError::invalid_state(
-        "persistent host did not stop before timeout",
-    ))
+    Ok(result)
 }
 
 async fn host_shutdown_signal() {
@@ -651,6 +678,8 @@ mod tests {
     use crate::runtime::RuntimeEnv;
 
     use super::*;
+
+    mod native_stop;
 
     /// Remote listener failure remains the reported service error only after
     /// the local Unix listener has completed its shutdown path.

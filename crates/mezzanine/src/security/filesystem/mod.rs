@@ -10,8 +10,10 @@
     reason = "native filesystem primitives await the dependent patch dispatcher"
 )]
 pub(crate) mod capability;
+mod identity;
 mod resolution;
 
+pub(crate) use identity::stat_device;
 pub(crate) use resolution::host_resolved_path_scopes;
 #[cfg(any(test, target_os = "macos"))]
 pub(crate) use resolution::resolve_host_path;

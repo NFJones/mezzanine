@@ -78,6 +78,8 @@ pub(crate) struct AsyncPaneCertificationSnapshot {
     pub certification_pending: bool,
     /// Whether certified environment context has been published.
     pub environment_signature_present: bool,
+    /// Whole-map transaction count observed before fixture lifecycle cleanup.
+    pub running_shell_transactions: usize,
     /// Current semantic readiness state for the pane.
     pub readiness: mez_agent::PaneReadinessState,
     /// Latest stable certification rejection, when certification failed.
@@ -181,13 +183,16 @@ pub(crate) use client::attached_terminal_client_service_exit;
 pub use client::build_async_attached_terminal_client_service;
 #[cfg(test)]
 pub(crate) use client::execute_approved_external_action;
+#[cfg(test)]
+pub use client::run_async_agent_command_service;
 pub use client::{
-    AsyncAttachedTerminalClientServiceConfig, run_async_agent_command_service,
-    run_async_agent_provider_service, run_async_attached_terminal_client_service,
+    AsyncAttachedTerminalClientServiceConfig, run_async_agent_provider_service,
+    run_async_attached_terminal_client_service,
 };
 pub(crate) use config::AsyncRuntimeRequestLane;
 pub(crate) use config::ClientClipboardRouteLease;
 pub(crate) use config::ControlConnectionCleanupLease;
+pub(crate) use config::ShutdownEventAdmission;
 pub use config::{
     AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig, AsyncControlInputResult,
     AsyncMessageFanout, AsyncMessageInputResult, AsyncRuntimeActorConfig, AsyncRuntimeActorExit,
@@ -211,6 +216,8 @@ pub use events::{
 pub use pane_io::AsyncFakePaneProcessIo;
 pub use pane_io::build_async_pane_process_supervisor_service;
 #[cfg(test)]
+pub(crate) use pane_io::drain_native_pane_retirement;
+#[cfg(test)]
 pub use pane_io::{
     AsyncPaneForegroundProcess, AsyncPaneIoSideEffectServiceConfig, AsyncPaneProcessDriver,
     AsyncPaneProcessDriverConfig, AsyncPaneProcessDriverServiceConfig, AsyncPaneProcessIo,
@@ -220,6 +227,10 @@ pub use pane_io::{
 };
 #[cfg(test)]
 pub(crate) use pane_io::{AsyncPaneProcessWorkerOutcome, run_owned_pane_process_worker};
+pub(crate) use pane_io::{
+    NATIVE_PANE_RETIREMENT_TIMEOUT, advance_native_pane_retirement_for_attempt,
+    drain_native_pane_retirement_for_attempt,
+};
 pub use side_effects::{
     AsyncClientOutputFlushServiceReport, AsyncRuntimeSideEffectServiceConfig,
     build_async_hook_side_effect_service, build_async_host_clipboard_side_effect_service,

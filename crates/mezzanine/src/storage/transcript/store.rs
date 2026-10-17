@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self as std_fs, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -68,6 +69,32 @@ fn consume_failure_countdown(counter: &AtomicU8) -> u8 {
 pub(crate) struct ConversationTranscriptView {
     pub(crate) committed: Vec<TranscriptEntry>,
     pub(crate) logical: Vec<TranscriptEntry>,
+}
+
+/// Ownership of one newly published fork generation, not merely its reusable id.
+/// Keeping the directory open prevents inode reuse after a cooperating delete.
+/// It grants only conditional compensation, never execution or access authority.
+#[derive(Debug, Clone)]
+pub(crate) struct ForkPublication {
+    /// Complete archival summary returned by the validated fork transaction.
+    pub(crate) summary: ConversationSummary,
+    /// Open directory whose device/inode identify this exact created generation.
+    directory: Arc<std_fs::File>,
+    /// Target mutation lease retained across actor adoption; source ownership is
+    /// released as soon as its coherent snapshot has been copied.
+    lease: Arc<Mutex<Option<std_fs::File>>>,
+}
+
+impl ForkPublication {
+    /// Ends the worker's exclusive adoption/compensation boundary. Directory
+    /// identity remains available for later conditional compensation checks.
+    pub(crate) fn release_adoption_lease(&self) -> Result<()> {
+        self.lease
+            .lock()
+            .map_err(|_| MezError::invalid_state("fork lease poisoned"))?
+            .take();
+        Ok(())
+    }
 }
 
 /// Bounded read shape for a captured conversation history snapshot.
@@ -543,6 +570,12 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
+            fail_fork_cleanup: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            archive_recovery_read_barrier: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            presentation_lock_barrier: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             active_metadata_fault: Arc::new(AtomicU8::new(0)),
@@ -586,6 +619,9 @@ impl AgentTranscriptStore {
             fail_metadata_write_after_promotion: Arc::new(AtomicBool::new(false)),
             fail_legacy_promotion_permissions_after_rename: Arc::new(AtomicBool::new(false)),
             fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
+            fail_fork_cleanup: Arc::new(AtomicBool::new(false)),
+            archive_recovery_read_barrier: Arc::new(Mutex::new(None)),
+            presentation_lock_barrier: Arc::new(Mutex::new(None)),
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
             fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
             active_metadata_fault: Arc::new(AtomicU8::new(0)),
@@ -648,6 +684,12 @@ impl AgentTranscriptStore {
     pub fn fail_next_archive_recovery_journal_removal(&self) {
         self.fail_archive_recovery_journal_removal
             .store(true, Ordering::SeqCst);
+    }
+
+    /// Leaves a failed provisional fork for restart recovery in focused tests.
+    #[cfg(test)]
+    pub fn fail_next_fork_cleanup(&self) {
+        self.fail_fork_cleanup.store(true, Ordering::SeqCst);
     }
 
     /// Causes the next agent-session metadata replacement to fail in focused tests.
@@ -804,6 +846,9 @@ impl AgentTranscriptStore {
     /// owns reclaiming those rows.
     pub fn saved_session(&self, conversation_id: &str) -> Result<Option<SavedAgentSession>> {
         validate_conversation_id(conversation_id)?;
+        if self.active_delete_pending(conversation_id)? {
+            return Ok(None);
+        }
         if self.is_unrestorable_legacy_subagent(conversation_id)? {
             return Ok(None);
         }
@@ -935,6 +980,9 @@ impl AgentTranscriptStore {
         conversation_id: &str,
     ) -> Result<Option<CatalogCandidate>> {
         validate_conversation_id(conversation_id)?;
+        if self.active_delete_pending(conversation_id)? {
+            return Ok(None);
+        }
         let existing = catalog::record_for_mutation(self, conversation_id)?;
         let named = self.read_named_sessions_index()?.remove(conversation_id);
         let session_dir = self.session_dir_for(conversation_id)?;
@@ -1313,18 +1361,32 @@ impl AgentTranscriptStore {
         self.save_compaction_projection(epoch, Some(frozen_rows), None)
     }
 
-    /// Fences a distinct terminal handoff against its exact authoritative epoch.
-    pub(super) fn save_terminal_compaction_ranges_with_proof(
+    /// Fences a distinct terminal handoff against its exact authoritative epoch
+    /// while its caller holds the conversation mutation lock.
+    pub(super) fn save_terminal_compaction_ranges_with_proof_locked(
         &self,
         epoch: AgentCompactionEpoch,
         frozen_rows: &[TranscriptEntry],
         baseline: &Option<AgentCompactionEpoch>,
     ) -> Result<()> {
-        self.save_compaction_projection(epoch, Some(frozen_rows), Some(baseline))
+        self.save_compaction_projection_locked(epoch, Some(frozen_rows), Some(baseline))
     }
 
     /// Shares the crash-safe v1 and v2 publication boundary.
     fn save_compaction_projection(
+        &self,
+        epoch: AgentCompactionEpoch,
+        frozen_rows: Option<&[TranscriptEntry]>,
+        baseline: Option<&Option<AgentCompactionEpoch>>,
+    ) -> Result<()> {
+        let _conversation_lock = self.acquire_conversation_lock(&epoch.conversation_id)?;
+        self.save_compaction_projection_locked(epoch, frozen_rows, baseline)
+    }
+
+    /// Validates and publishes one epoch while the caller owns the conversation
+    /// mutation lock. Forks and terminal witnesses use the identical publication
+    /// contract without recursively acquiring an independent `flock` descriptor.
+    fn save_compaction_projection_locked(
         &self,
         epoch: AgentCompactionEpoch,
         frozen_rows: Option<&[TranscriptEntry]>,
@@ -1342,7 +1404,6 @@ impl AgentTranscriptStore {
                 "compaction epoch summary is empty or exceeds the accepted size limit",
             ));
         }
-        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
         let latest_sequence = match self.next_sequence(conversation_id) {
             Ok(next) => Some(next.saturating_sub(1)),
             Err(error) if error.kind() == MezErrorKind::NotFound => None,
@@ -1933,12 +1994,18 @@ impl AgentTranscriptStore {
     /// Presentation rows are user-interface replay state. They intentionally
     /// live beside, not inside, model-facing transcript history.
     pub fn append_presentation(&self, entry: &AgentPresentationEntry) -> Result<()> {
+        let _conversation_lock = self.acquire_conversation_lock(&entry.conversation_id)?;
+        self.append_presentation_locked(entry)
+    }
+
+    /// Uses the ordinary presentation append path under existing ownership.
+    /// Fork capture holds the target lock through epoch and metadata publication.
+    fn append_presentation_locked(&self, entry: &AgentPresentationEntry) -> Result<()> {
         let entry = entry.normalized_for_agent_log_wrap();
         entry.validate()?;
         if entry.source_content_type.as_deref() == Some(super::steering::CONTENT_TYPE) {
-            return self.append_presentation_many(&[entry]).map(|_| ());
+            return self.append_presentation_many_locked(&[entry]).map(|_| ());
         }
-        let _conversation_lock = self.acquire_conversation_lock(&entry.conversation_id)?;
         self.ensure_session_dir(&entry.conversation_id)?;
         let path = self.presentation_path_for(&entry.conversation_id)?;
         let encoded = entry.encode()?;
@@ -1964,6 +2031,15 @@ impl AgentTranscriptStore {
         let Some(first) = entries.first() else {
             return Ok(0);
         };
+        let _conversation_lock = self.acquire_conversation_lock(&first.conversation_id)?;
+        self.append_presentation_many_locked(entries)
+    }
+
+    /// Assigns and persists a batch while its conversation lock is already held.
+    fn append_presentation_many_locked(&self, entries: &[AgentPresentationEntry]) -> Result<usize> {
+        let Some(first) = entries.first() else {
+            return Ok(0);
+        };
         validate_conversation_id(&first.conversation_id)?;
         if entries
             .iter()
@@ -1973,7 +2049,6 @@ impl AgentTranscriptStore {
                 "presentation batch entries must share one conversation",
             ));
         }
-        let _conversation_lock = self.acquire_conversation_lock(&first.conversation_id)?;
         let mut steering_sources = BTreeMap::new();
         if entries.iter().any(|entry| {
             entry.source_content_type.as_deref() == Some(super::steering::CONTENT_TYPE)
@@ -2064,6 +2139,9 @@ impl AgentTranscriptStore {
 
     /// Updates one catalog row after a presentation append without replaying history.
     fn upsert_catalog_after_presentation(&self, entry: &AgentPresentationEntry) -> Result<()> {
+        if self.active_delete_pending(&entry.conversation_id)? {
+            return Ok(());
+        }
         let existing = catalog::record_for_mutation(self, &entry.conversation_id)?;
         let named = if existing.is_none() {
             self.read_named_sessions_index()?
@@ -2126,29 +2204,6 @@ impl AgentTranscriptStore {
         catalog::upsert(self, &candidate, entry.created_at_unix_seconds)
     }
 
-    /// Reads all presentation entries and their durable latest sequence under
-    /// the conversation lock.
-    ///
-    /// A caller can retain the returned sequence as a source token and reject
-    /// a projection when another writer appended presentation state later.
-    pub fn inspect_presentation_snapshot(
-        &self,
-        conversation_id: &str,
-    ) -> Result<(Vec<AgentPresentationEntry>, u64)> {
-        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
-        let entries = self.inspect_presentation_unlocked(conversation_id)?;
-        let sequence = self
-            .read_presentation_index(conversation_id)?
-            .unwrap_or_else(|| {
-                entries
-                    .iter()
-                    .map(|entry| entry.sequence)
-                    .max()
-                    .unwrap_or_default()
-            });
-        Ok((entries, sequence))
-    }
-
     /// Acquires the presentation mutation lock and returns a coherent snapshot.
     ///
     /// The returned lock remains held until its owner drops it. Direct resume
@@ -2158,6 +2213,26 @@ impl AgentTranscriptStore {
         &self,
         conversation_id: &str,
     ) -> Result<(std::fs::File, Vec<AgentPresentationEntry>, u64)> {
+        #[cfg(test)]
+        if let Some(barrier) = self
+            .presentation_lock_barrier
+            .lock()
+            .map_err(|_| MezError::invalid_state("presentation test barrier poisoned"))?
+            .take()
+        {
+            barrier
+                .observed
+                .send(())
+                .map_err(|_| MezError::invalid_state("presentation test observer disconnected"))?;
+            barrier
+                .resume
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "presentation lock test barrier failed: {error}"
+                    ))
+                })?;
+        }
         let lock = self.acquire_conversation_lock(conversation_id)?;
         let entries = self.inspect_presentation_unlocked(conversation_id)?;
         let sequence = self
@@ -2170,6 +2245,17 @@ impl AgentTranscriptStore {
                     .unwrap_or_default()
             });
         Ok((lock, entries, sequence))
+    }
+
+    /// Installs a single owned-fixture pre-lock handshake for causal resume tests.
+    #[cfg(test)]
+    pub(crate) fn gate_next_presentation_lock_for_tests(
+        &self,
+        observed: std::sync::mpsc::Sender<()>,
+        resume: std::sync::mpsc::Receiver<()>,
+    ) {
+        *self.presentation_lock_barrier.lock().unwrap() =
+            Some(super::types::ArchiveRecoveryReadBarrier { observed, resume });
     }
 
     /// Reads all presentation entries for one conversation.
@@ -2608,6 +2694,11 @@ impl AgentTranscriptStore {
         // emits the row and its terminator in separate writes, so an unlocked
         // scan can otherwise mistake a healthy in-flight append for corruption.
         let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        if self.active_delete_pending(conversation_id)? {
+            return Err(MezError::invalid_state(
+                "conversation publication or deletion is incomplete",
+            ));
+        }
         if matches!(read, ConversationTranscriptRead::Latest(_)) {
             let path = self.existing_transcript_path_for(conversation_id)?;
             if !path.exists() {
@@ -3334,6 +3425,9 @@ impl AgentTranscriptStore {
         payload_layout: CatalogPayloadLayout,
         named: Option<&NamedAgentSession>,
     ) -> Result<Option<CatalogCandidate>> {
+        if self.active_delete_pending(conversation_id)? {
+            return Ok(None);
+        }
         if self.is_unrestorable_legacy_subagent(conversation_id)? {
             return Ok(None);
         }
@@ -3705,24 +3799,105 @@ impl AgentTranscriptStore {
     /// Forks an existing conversation into a new conversation id.
     ///
     /// Returns a conflict error when the target already exists and an invalid
-    /// state error when the source conversation has no entries.
+    /// state error when the source has no entries or required history is invalid.
+    /// Deterministically ordered conversation locks fence cooperating writers
+    /// through capture, target publication and compensation. The source is never
+    /// modified, including when committed terminal witnesses await publication.
+    /// This does not claim atomicity against arbitrary external file writers.
+    #[cfg(test)]
     pub fn fork(
         &self,
         source_conversation_id: &str,
         target_conversation_id: &str,
         created_at_unix_seconds: u64,
     ) -> Result<ConversationSummary> {
+        let publication = self.fork_owned(
+            source_conversation_id,
+            target_conversation_id,
+            created_at_unix_seconds,
+        )?;
+        publication.release_adoption_lease()?;
+        Ok(publication.summary)
+    }
+
+    /// Publishes a fork and captures its generation while mutation ownership is
+    /// still held. Deferred pane adoption retains this receipt for compensation.
+    #[cfg(test)]
+    pub(crate) fn fork_owned(
+        &self,
+        source_conversation_id: &str,
+        target_conversation_id: &str,
+        created_at_unix_seconds: u64,
+    ) -> Result<ForkPublication> {
+        self.fork_owned_cancellable(
+            source_conversation_id,
+            target_conversation_id,
+            created_at_unix_seconds,
+            &[],
+            0,
+        )
+    }
+
+    /// Publishes through the identical transaction with cancellation observed at
+    /// ownership acquisition and between archive rows. Already-published work
+    /// still has a sole receipt owner and must settle through adoption/cleanup.
+    pub(crate) fn fork_owned_cancellable(
+        &self,
+        source_conversation_id: &str,
+        target_conversation_id: &str,
+        created_at_unix_seconds: u64,
+        cancelled: &[&std::sync::atomic::AtomicBool],
+        minimum_source_entries: u64,
+    ) -> Result<ForkPublication> {
+        validate_conversation_id(source_conversation_id)?;
         validate_conversation_id(target_conversation_id)?;
-        if self.conversation_exists(target_conversation_id)? {
+        if source_conversation_id == target_conversation_id {
             return Err(MezError::conflict("target conversation already exists"));
         }
-        let entries = self.inspect(source_conversation_id)?;
+        let mut ids = [source_conversation_id, target_conversation_id];
+        ids.sort_unstable();
+        let mut conversation_locks = ids
+            .into_iter()
+            .map(|id| {
+                if cancelled.is_empty() {
+                    self.acquire_conversation_lock(id)
+                } else {
+                    self.acquire_fork_conversation_lock(id, cancelled)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // Accepted rows can own chronology before any archive/catalog exists.
+        // Both identities are locked, so receipt admission/retirement cannot
+        // race this fence. Settlement belongs to the existing persistence owner.
+        self.ensure_fork_receipts_settled(source_conversation_id, target_conversation_id)?;
+        if self.conversation_exists(target_conversation_id)?
+            || self.fork_target_recovery_artifacts_exist(target_conversation_id)?
+            || (catalog::catalog_path(self).exists()
+                && catalog::record_for_mutation(self, target_conversation_id)?.is_some())
+            || self
+                .read_named_sessions_index()?
+                .contains_key(target_conversation_id)
+        {
+            return Err(MezError::conflict("target conversation already exists"));
+        }
+        if self.active_delete_pending(source_conversation_id)? {
+            return Err(MezError::invalid_state(
+                "source conversation publication or deletion is incomplete",
+            ));
+        }
+        let entries = self.inspect_validated_transcript(source_conversation_id)?;
+        if (entries.len() as u64) < minimum_source_entries {
+            return Err(MezError::conflict(
+                "saved fork archive does not cover accepted source chronology",
+            ));
+        }
         if entries.is_empty() {
             return Err(MezError::invalid_state(
                 "source conversation has no entries",
             ));
         }
-        let presentations = self.inspect_presentation(source_conversation_id)?;
+        let epoch = self.compaction_epoch(source_conversation_id)?;
+        let presentations = self.inspect_presentation_unlocked(source_conversation_id)?;
         let fallback_source = if presentations.is_empty() {
             Some(super::fallback::Source::from_records(&entries)?.encode()?)
         } else {
@@ -3730,19 +3905,49 @@ impl AgentTranscriptStore {
         };
         let fallback_pane = entries[0].pane_id.clone();
         let fork_result = (|| {
+            // The existing active-delete journal owns compensation until all
+            // target payloads and its authoritative projection are durable.
+            self.begin_fork_publication(target_conversation_id)?;
+            let mut frozen_rows = Vec::new();
             for entry in entries {
-                let forked = TranscriptEntry {
+                if cancelled
+                    .iter()
+                    .any(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+                {
+                    return Err(MezError::invalid_state(
+                        "saved fork worker cancelled during publication",
+                    ));
+                }
+                let mut forked = TranscriptEntry {
                     conversation_id: target_conversation_id.to_string(),
                     created_at_unix_seconds,
                     ..entry
                 };
-                self.append(&forked)?;
+                if forked.role == mez_agent::transcript::TranscriptRole::System
+                    && let Some(content) =
+                        super::compaction_handoff::TerminalCompactionHandoff::fork_content(
+                            &forked.content,
+                            source_conversation_id,
+                            target_conversation_id,
+                        )?
+                {
+                    forked.content = content;
+                }
+                forked.validate()?;
+                self.append_one_locked(&forked)?;
+                if epoch.as_ref().is_some_and(|epoch| {
+                    epoch.ranges.iter().any(|range| {
+                        (range.first_sequence..=range.through_sequence).contains(&forked.sequence)
+                    })
+                }) {
+                    frozen_rows.push(forked);
+                }
             }
             // Transcript creation time remains fork-local. Only a genuinely
             // transcript-only source needs original bounded record evidence in
             // the existing presentation channel; later forks copy it unchanged.
             if let Some(source) = fallback_source {
-                self.append_presentation(&AgentPresentationEntry {
+                self.append_presentation_locked(&AgentPresentationEntry {
                     conversation_id: target_conversation_id.to_string(),
                     sequence: 1,
                     created_at_unix_seconds,
@@ -3782,20 +3987,94 @@ impl AgentTranscriptStore {
                     source.conversation_id = target_conversation_id.to_string();
                     forked.source_text = Some(source.encode()?);
                 }
-                self.append_presentation(&forked)?;
+                self.append_presentation_locked(&forked)?;
             }
-            self.saved_session(target_conversation_id)?
+            if let Some(mut epoch) = epoch {
+                epoch.conversation_id = target_conversation_id.to_string();
+                self.save_compaction_projection_locked(epoch, Some(&frozen_rows), Some(&None))?;
+            }
+            // Reconcile only the new target. The existing owner validates the
+            // translated baseline and exact copied occurrence payloads; it never
+            // reconstructs summaries or executes historical actions.
+            self.publish_terminal_compaction_handoffs_locked(target_conversation_id)?;
+            self.complete_fork_publication(target_conversation_id)?;
+            self.upsert_catalog_from_files(target_conversation_id, None)?;
+            let summary = self
+                .saved_session(target_conversation_id)?
                 .map(|session| session.summary)
-                .ok_or_else(|| MezError::invalid_state("forked conversation summary missing"))
+                .ok_or_else(|| MezError::invalid_state("forked conversation summary missing"))?;
+            let directory = Arc::new(std_fs::File::open(
+                self.session_dir_path(target_conversation_id)?,
+            )?);
+            Ok(ForkPublication {
+                summary,
+                directory,
+                lease: Arc::new(Mutex::new(None)),
+            })
         })();
-        if fork_result.is_err()
-            && let Err(cleanup_error) = self.delete(target_conversation_id)
-        {
-            return Err(MezError::invalid_state(format!(
-                "conversation fork failed and target cleanup failed: {cleanup_error}"
-            )));
+        if let Err(error) = fork_result {
+            return match self.compensate_failed_fork_locked(target_conversation_id) {
+                Ok(_) => Err(error),
+                Err(cleanup_error) => Err(MezError::new(
+                    error.kind(),
+                    format!(
+                        "conversation fork failed: {error}; target cleanup failed: {cleanup_error}"
+                    ),
+                )),
+            };
         }
-        fork_result
+        let publication = fork_result?;
+        let target_index = usize::from(ids[0] != target_conversation_id);
+        *publication
+            .lease
+            .lock()
+            .map_err(|_| MezError::invalid_state("fork lease poisoned"))? =
+            Some(conversation_locks.remove(target_index));
+        Ok(publication)
+    }
+
+    /// Compensates only the generation created by this fork. A missing or replaced
+    /// target is retained without modifying its catalog, recovery intent or name.
+    /// Callers must independently prove that no live pane still needs this data.
+    pub(crate) fn compensate_fork_publication(
+        &self,
+        publication: &ForkPublication,
+    ) -> Result<bool> {
+        let id = &publication.summary.conversation_id;
+        let lease = publication
+            .lease
+            .lock()
+            .map_err(|_| MezError::invalid_state("fork lease poisoned"))?;
+        let _lock = if lease.is_none() {
+            Some(self.acquire_conversation_lock(id)?)
+        } else {
+            None
+        };
+        let current = match std_fs::symlink_metadata(self.session_dir_path(id)?) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        let owned = publication.directory.metadata()?;
+        if !current.is_dir() || (current.dev(), current.ino()) != (owned.dev(), owned.ino()) {
+            return Ok(false);
+        }
+        // This target has not been adopted anywhere: the retained lease fences
+        // every cooperating resume. Preserve a restart owner if deletion fails.
+        self.begin_fork_publication(id)?;
+        self.compensate_failed_fork_locked(id)
+    }
+
+    /// Removes only the freshly owned target under its existing mutation lock.
+    /// A failed compensation leaves the durable intent for restart recovery.
+    fn compensate_failed_fork_locked(&self, conversation_id: &str) -> Result<bool> {
+        #[cfg(test)]
+        if self.fail_fork_cleanup.swap(false, Ordering::SeqCst) {
+            return Err(MezError::invalid_state(
+                "injected fork target cleanup failure",
+            ));
+        }
+        self.delete_locked(conversation_id)
     }
 
     /// Appends one submitted agent prompt to the bounded shared history file.

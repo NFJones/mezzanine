@@ -18,15 +18,19 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use mez_mux::layout::Size;
+use mez_mux::process::PaneProcessRetirementOwner;
 use mez_mux::session::Session;
 
 use crate::config::ConfigLayer;
 use crate::error::{MezError, Result};
+#[cfg(test)]
+use crate::host::async_runtime::drain_native_pane_retirement;
 use crate::host::async_runtime::{
     AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeDaemonConfig,
     AsyncRuntimeDaemonListeners, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AsyncRuntimeSessionActor, AsyncRuntimeSessionHandle, AsyncRuntimeSupervisionReport,
-    build_async_runtime_daemon_services, build_async_runtime_session_services,
+    NATIVE_PANE_RETIREMENT_TIMEOUT, build_async_runtime_daemon_services,
+    build_async_runtime_session_services, drain_native_pane_retirement_for_attempt,
     supervise_async_runtime_services,
 };
 use crate::host::power_inhibition::{
@@ -34,9 +38,8 @@ use crate::host::power_inhibition::{
 };
 use crate::runtime::x11::RuntimeX11Proxy;
 use crate::runtime::{
-    RuntimeEvent, RuntimeEventBatch, RuntimeIrohShutdownHandle, RuntimeLifecycleState,
-    RuntimePowerInhibitionStatus, RuntimeSessionService, ShutdownEvent, bind_control_socket,
-    build_runtime_iroh_control_service,
+    RuntimeIrohShutdownHandle, RuntimeLifecycleState, RuntimePowerInhibitionStatus,
+    RuntimeSessionService, ShutdownEvent, bind_control_socket, build_runtime_iroh_control_service,
 };
 use crate::security::auth::{AuthPaths, AuthStore};
 use crate::security::project::{ProjectTrustStore, default_trust_database_path};
@@ -55,7 +58,10 @@ mod supervisor;
     unused_imports,
     reason = "the persistent host consumes these supervisor contracts in the next architecture phase"
 )]
-pub(crate) use supervisor::{SessionSupervisor, SessionSupervisorSnapshot, SessionSupervisorState};
+pub(crate) use supervisor::{
+    NativeContinuationScope, PreparedCliNativeRetry, SessionSupervisor, SessionSupervisorSnapshot,
+    SessionSupervisorState,
+};
 
 /// Configuration layers and protected storage root used by one session.
 #[derive(Debug, Clone)]
@@ -149,13 +155,35 @@ pub(crate) struct SessionFactoryRequest {
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct SessionFactory;
 
+/// Test-local post-spawn observation only; child ownership remains in the real
+/// manager. `true` release injects a labelled registry-boundary failure, while
+/// dropping the start future exercises actual factory cancellation cleanup.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct NativePaneStartupProbe {
+    spawned: tokio::sync::oneshot::Sender<Vec<(u32, Option<u64>)>>,
+    release: tokio::sync::oneshot::Receiver<bool>,
+}
+
 impl SessionFactory {
     /// Constructs and readies one isolated session runtime.
     ///
     /// The returned handle is usable immediately. Any error removes sockets
     /// and registry publication created during this attempt. Pane startup is
     /// deliberately last among fallible configuration and binding work.
+    #[cfg(test)]
     pub(crate) async fn create(request: SessionFactoryRequest) -> Result<SessionRuntime> {
+        Self::create_with_native_owner(request, PaneProcessRetirementOwner::default(), None).await
+    }
+
+    /// Constructs a session under a mandatory preexisting native owner.
+    /// The host/foreground caller retains this owner across startup failure,
+    /// cancellation, runtime failure and later bounded cleanup retries.
+    pub(crate) async fn create_with_native_owner(
+        request: SessionFactoryRequest,
+        native: PaneProcessRetirementOwner,
+        #[cfg(test)] native_probe: Option<NativePaneStartupProbe>,
+    ) -> Result<SessionRuntime> {
         validate_request(&request)?;
         let session_id = request.session.id.to_string();
         let registry = request
@@ -195,6 +223,7 @@ impl SessionFactory {
             1024,
             4096,
         )?;
+        service.install_native_pane_retirement_owner(native)?;
         if let Some(registry) = registry.clone() {
             service.set_session_registry(registry);
         }
@@ -255,13 +284,36 @@ impl SessionFactory {
         #[cfg(test)]
         startup_timing.advance("pane-startup");
         if let Err(error) = start_session(&mut service, request.startup) {
-            let _ = service.terminate_all_pane_processes();
+            service.release_native_panes_for_retirement();
             return Err(error);
         }
         #[cfg(test)]
+        let injected_registry_failure = if let Some(probe) = native_probe {
+            let witnesses = service
+                .pane_processes()
+                .tracked_running_pane_ids()
+                .into_iter()
+                .filter_map(|id| service.pane_processes().primary_pid(&id))
+                .map(|pid| (pid, mez_mux::process::process_start_token_for_pid(pid)))
+                .collect();
+            let _ = probe.spawned.send(witnesses);
+            probe.release.await.unwrap_or(true)
+        } else {
+            false
+        };
+        #[cfg(test)]
         startup_timing.advance("registry-publication");
-        if let Err(error) = service.persist_registry_update() {
-            let _ = service.terminate_all_pane_processes();
+        let registry_update = service.persist_registry_update();
+        #[cfg(test)]
+        let registry_update = if injected_registry_failure {
+            Err(MezError::invalid_state(
+                "injected post-spawn registry-boundary failure",
+            ))
+        } else {
+            registry_update
+        };
+        if let Err(error) = registry_update {
+            service.release_native_panes_for_retirement();
             return Err(error);
         }
         #[cfg(test)]
@@ -284,7 +336,7 @@ impl SessionFactory {
         let mut services = match services_result {
             Ok(services) => services,
             Err(error) => {
-                let _ = actor.terminate_owned_pane_processes();
+                actor.release_owned_native_panes();
                 return Err(error);
             }
         };
@@ -333,6 +385,11 @@ pub(crate) struct SessionRuntimeHandle {
 }
 
 impl SessionRuntimeHandle {
+    /// Shares native ownership independently of the actor's lifecycle/channel.
+    pub(crate) fn native_retirement_owner(&self) -> PaneProcessRetirementOwner {
+        self.actor.native_pane_retirement.clone()
+    }
+
     /// Stable session identity owned by this handle.
     pub(crate) fn session_id(&self) -> &str {
         &self.session_id
@@ -370,14 +427,42 @@ impl SessionRuntimeHandle {
         reason: impl Into<String>,
         force: bool,
     ) -> Result<()> {
-        let mut batch = RuntimeEventBatch::new();
-        batch.push(RuntimeEvent::Shutdown(ShutdownEvent {
-            reason: reason.into(),
-            force,
-            failed: false,
-        }));
-        self.actor.submit_runtime_events(batch).await?;
-        Ok(())
+        self.native_retirement_owner().request_shutdown(force);
+        let lifecycle = self.actor.lifecycle_state_watcher();
+        let admission = self
+            .actor
+            .admit_owner_shutdown(ShutdownEvent {
+                reason: reason.into(),
+                force,
+                failed: false,
+            })
+            .await?;
+        let state = *lifecycle.borrow();
+        Self::resolve_owner_shutdown_admission(admission, state)
+    }
+
+    /// Classifies only the typed transport outcome against the same handle's
+    /// watched intent. Genuine actor errors never enter this predicate. This
+    /// proves redundant admission only, not runtime or native completion.
+    fn resolve_owner_shutdown_admission(
+        admission: crate::host::async_runtime::ShutdownEventAdmission,
+        state: RuntimeLifecycleState,
+    ) -> Result<()> {
+        match admission {
+            crate::host::async_runtime::ShutdownEventAdmission::Admitted => Ok(()),
+            crate::host::async_runtime::ShutdownEventAdmission::TransportUnavailable(error) => {
+                // Same-handle terminal intent proves only redundant admission.
+                // The supervisor still requires exact completion and native wait.
+                if matches!(
+                    state,
+                    RuntimeLifecycleState::Stopping | RuntimeLifecycleState::Killed
+                ) {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 }
 
@@ -446,13 +531,64 @@ impl SessionRuntime {
             };
             let result = supervise_async_runtime_services(services, cancellation).await;
             let shutdown = shutdown_handle.shutdown().await;
-            // Preserve the initiating supervision error while still reporting
-            // actor cleanup failures when supervision itself completed normally.
-            result.and_then(|report| shutdown.map(|_| report))
+            (result, shutdown)
         };
-        let (supervision, mut actor_exit) = tokio::join!(daemon, actor.run());
-        actor_exit.service.terminate_all_pane_processes()?;
-        let supervision = supervision?;
+        let ((supervision, shutdown), mut actor_exit) = tokio::join!(daemon, actor.run());
+        // Shutdown's reply is a plain lifecycle value: errors at this specific
+        // request boundary are send/reply transport errors, not reducer errors.
+        // Only the actual joined actor exit can classify redundant closure.
+        let shutdown = match shutdown {
+            Err(_)
+                if matches!(
+                    actor_exit.service.lifecycle_state(),
+                    RuntimeLifecycleState::Stopping | RuntimeLifecycleState::Killed
+                ) =>
+            {
+                Ok(())
+            }
+            result => result.map(|_| ()),
+        };
+        // Preserve the initiating supervision error while still reporting
+        // actor cleanup failures when supervision itself completed normally.
+        let supervision = supervision.and_then(|report| shutdown.map(|()| report));
+        let native = self.handle.native_retirement_owner();
+        let attempt = native.initial_shutdown_attempt(
+            supervision.is_err()
+                || matches!(
+                    actor_exit.service.lifecycle_state(),
+                    RuntimeLifecycleState::Killed | RuntimeLifecycleState::Failed
+                ),
+        );
+        native.seal();
+        actor_exit.service.release_native_panes_for_retirement();
+        let cleanup = match attempt {
+            Ok(Some(attempt)) => {
+                drain_native_pane_retirement_for_attempt(
+                    &native,
+                    &attempt,
+                    tokio::time::Instant::from_std(attempt.deadline()),
+                )
+                .await
+            }
+            Ok(None) => native
+                .cleanup_failure()
+                .map_or(Ok(()), |failure| Err(MezError::invalid_state(failure))),
+            Err(error) => Err(error.into()),
+        };
+        let supervision = match (supervision, cleanup) {
+            (Ok(report), Ok(())) => report,
+            (Err(primary), Ok(())) => return Err(primary),
+            (Ok(_), Err(cleanup)) => return Err(cleanup),
+            (Err(primary), Err(cleanup)) => {
+                return Err(MezError::new(
+                    primary.kind(),
+                    format!(
+                        "{}; native cleanup also failed: {cleanup}",
+                        primary.message()
+                    ),
+                ));
+            }
+        };
         Ok(SessionRuntimeCompletion {
             service: actor_exit.service,
             supervision,
@@ -463,7 +599,7 @@ impl SessionRuntime {
 impl Drop for SessionRuntime {
     fn drop(&mut self) {
         if let Some(actor) = self.actor.as_mut() {
-            let _ = actor.terminate_owned_pane_processes();
+            actor.release_owned_native_panes();
         }
     }
 }
@@ -816,6 +952,39 @@ mod tests {
         assert_eq!(report.services[0].exit.work_units, 0);
     }
 
+    /// Classified transport closure cannot be blessed by Running, Detached or
+    /// Failed intent. Only Stopping/Killed admit a redundant shutdown, retaining
+    /// the original transport error kind/cause for every negative control.
+    #[test]
+    fn owner_shutdown_transport_requires_same_handle_terminal_intent() {
+        use crate::host::async_runtime::ShutdownEventAdmission;
+        for state in [
+            RuntimeLifecycleState::Running,
+            RuntimeLifecycleState::Detached,
+            RuntimeLifecycleState::Stopping,
+            RuntimeLifecycleState::Killed,
+            RuntimeLifecycleState::Failed,
+        ] {
+            let outcome = SessionRuntimeHandle::resolve_owner_shutdown_admission(
+                ShutdownEventAdmission::TransportUnavailable(MezError::new(
+                    crate::MezErrorKind::Io,
+                    "classified closed transport",
+                )),
+                state,
+            );
+            if matches!(
+                state,
+                RuntimeLifecycleState::Stopping | RuntimeLifecycleState::Killed
+            ) {
+                assert!(outcome.is_ok());
+            } else {
+                let error = outcome.unwrap_err();
+                assert_eq!(error.kind(), crate::MezErrorKind::Io);
+                assert!(error.message().contains("classified closed transport"));
+            }
+        }
+    }
+
     /// Two reusable runtimes must retain independent actors and lifecycle state.
     #[tokio::test(flavor = "current_thread")]
     async fn session_factory_constructs_and_isolates_independent_runtimes() {
@@ -1001,7 +1170,7 @@ mod tests {
             ..request
         };
 
-        let runtime = SessionFactory::create(request).await.unwrap();
+        let (runtime, native, witnesses) = create_metadata_runtime(request).await;
         let registry = SessionRegistry::new(root.clone(), crate::runtime::current_effective_uid());
         assert!(control.exists());
         assert_eq!(registry.list().unwrap().len(), 1);
@@ -1010,6 +1179,7 @@ mod tests {
 
         assert!(!control.exists());
         assert!(registry.list().unwrap().is_empty());
+        retire_metadata_fixture(native, witnesses).await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1036,7 +1206,7 @@ mod tests {
             ]),
         };
 
-        let runtime = SessionFactory::create(request).await.unwrap();
+        let (runtime, native, witnesses) = create_metadata_runtime(request).await;
         tokio::time::timeout(Duration::from_secs(2), async {
             while fs::read_to_string(&observed).map_or(true, |value| value.trim().is_empty()) {
                 tokio::task::yield_now().await;
@@ -1056,6 +1226,7 @@ mod tests {
         assert_eq!(lines[2..], ["101", "37", "unset"]);
 
         drop(runtime);
+        retire_metadata_fixture(native, witnesses).await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1091,7 +1262,7 @@ mod tests {
             ]),
         };
 
-        let runtime = SessionFactory::create(request).await.unwrap();
+        let (runtime, native, witnesses) = create_metadata_runtime(request).await;
         tokio::time::timeout(Duration::from_secs(2), async {
             while fs::read_to_string(&observed).map_or(true, |value| value.lines().count() < 2) {
                 tokio::task::yield_now().await;
@@ -1125,6 +1296,7 @@ mod tests {
         drop(runtime);
         assert!(!authority_path.exists());
         assert!(!root.join("x11-sessions").exists());
+        retire_metadata_fixture(native, witnesses).await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1147,7 +1319,7 @@ mod tests {
             ]),
         };
 
-        let runtime = SessionFactory::create(request).await.unwrap();
+        let (runtime, native, witnesses) = create_metadata_runtime(request).await;
         tokio::time::timeout(Duration::from_secs(2), async {
             while fs::read_to_string(&observed).map_or(true, |value| value.lines().count() < 2) {
                 tokio::task::yield_now().await;
@@ -1159,6 +1331,7 @@ mod tests {
         assert_eq!(fs::read_to_string(&observed).unwrap(), "unset\nunset\n");
         assert!(!root.join("x11-sessions").exists());
         drop(runtime);
+        retire_metadata_fixture(native, witnesses).await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1312,6 +1485,9 @@ mod tests {
             if let Some(environment) = process.environment()
                 && !environment.is_empty()
             {
+                service
+                    .restore_running_pane_process_from_adapter(pane_id, process)
+                    .expect("return the same restored native owner after observation");
                 return environment;
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -1497,7 +1673,7 @@ mod tests {
         let mut request = test_request("initial-fragment", root.clone(), control.clone());
         let id = request.session.id.to_string();
         request.sockets.publish_control = true;
-        let runtime = SessionFactory::create(request).await.unwrap();
+        let (runtime, native, witnesses) = create_metadata_runtime(request).await;
         let connection = tokio::net::UnixStream::connect(&control).await.unwrap();
         assert!(store.load_agent_session_metadata(&id).unwrap().is_empty());
         let notice = store
@@ -1512,6 +1688,7 @@ mod tests {
         drop(connection);
         drop(runtime);
         assert!(!control.exists());
+        retire_metadata_fixture(native, witnesses).await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1593,6 +1770,63 @@ mod tests {
         );
 
         fixture.cleanup();
+    }
+
+    /// Metadata fixtures retain their native owner before actual spawn. The
+    /// existing observation-only gate captures exact witnesses without taking
+    /// children; no native completion is claimed by factory or runtime Drop.
+    async fn create_metadata_runtime(
+        request: SessionFactoryRequest,
+    ) -> (
+        SessionRuntime,
+        PaneProcessRetirementOwner,
+        Vec<(u32, Option<u64>)>,
+    ) {
+        let native = PaneProcessRetirementOwner::default();
+        let (spawned, witnesses) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let observer = async {
+            let witnesses = witnesses.await.unwrap();
+            release.send(false).unwrap();
+            witnesses
+        };
+        let (runtime, witnesses) = tokio::join!(
+            SessionFactory::create_with_native_owner(
+                request,
+                native.clone(),
+                Some(NativePaneStartupProbe {
+                    spawned,
+                    release: released
+                })
+            ),
+            observer
+        );
+        (runtime.unwrap(), native, witnesses)
+    }
+
+    /// Explicit fixture retirement occurs AFTER original metadata/artifact
+    /// assertions. It uses the production bounded drain and strict original-PID
+    /// ESRCH; it cannot substitute for the worker/session lifecycle regressions.
+    async fn retire_metadata_fixture(
+        native: PaneProcessRetirementOwner,
+        witnesses: Vec<(u32, Option<u64>)>,
+    ) {
+        native.seal();
+        drain_native_pane_retirement(
+            &native,
+            tokio::time::Instant::now() + NATIVE_PANE_RETIREMENT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert_eq!(native.outstanding(), 0);
+        for (pid, start) in witnesses {
+            let exact = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
+            assert_eq!(
+                rustix::process::test_kill_process(exact),
+                Err(rustix::io::Errno::SRCH),
+                "fixture retirement did not reap exact original child {pid} {start:?}"
+            );
+        }
     }
 
     async fn create_test_runtime(name: &str) -> SessionRuntime {

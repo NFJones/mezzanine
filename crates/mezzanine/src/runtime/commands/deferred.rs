@@ -49,6 +49,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
     SavedSessionsBrowser,
     /// Direct saved-session resume reads and durable presentation replay input.
     DirectResume,
+    /// Saved-fork publication and generation-safe compensation.
+    SavedFork,
     /// Pane-local modified-file summaries.
     ModifiedFiles,
     /// Pending-approval browser reads.
@@ -80,6 +82,7 @@ pub(crate) fn off_actor_command_family(
             Some(RuntimeAgentCommandFamily::SavedSessionsBrowser)
         }
         "resume" => Some(RuntimeAgentCommandFamily::DirectResume),
+        "fork" => Some(RuntimeAgentCommandFamily::SavedFork),
         "list-modified-files" => Some(RuntimeAgentCommandFamily::ModifiedFiles),
         "show-approvals" => Some(RuntimeAgentCommandFamily::ApprovalsBrowser),
         "list-personalities" => Some(RuntimeAgentCommandFamily::PersonalitiesBrowser),
@@ -165,7 +168,7 @@ impl RuntimeSessionService {
                     )
             }
             "sync-builtin-skills" => self.integration.config_root().is_some(),
-            "resume" => self.persistence.transcript_store().is_some(),
+            "resume" | "fork" => self.persistence.transcript_store().is_some(),
             "list-personalities" => {
                 super::preferences::runtime_agent_list_personalities_args_are_empty(input)
             }
@@ -541,6 +544,21 @@ impl RuntimeSessionService {
                         working_directory: self.pane_current_working_directory(pane_id),
                         presentation_source_revision,
                     }),
+                }
+            }
+            RuntimeAgentCommandFamily::SavedFork => {
+                match self.prepare_saved_fork_work(_primary_client_id, pane_id, input) {
+                    Ok(fork) => RuntimeAgentCommandPrepared::SavedFork(Box::new(fork)),
+                    Err(error) => {
+                        return self.fail_agent_command_before_claim(
+                            pane_id,
+                            conversation_id,
+                            command,
+                            input,
+                            claim_generation,
+                            error.message(),
+                        );
+                    }
                 }
             }
             RuntimeAgentCommandFamily::ModifiedFiles => {
@@ -919,6 +937,17 @@ impl RuntimeSessionService {
                     },
                 };
             }
+            RuntimeAgentCommandPrepared::SavedFork(fork) => {
+                return match super::resume::read_saved_fork(fork) {
+                    Ok(read) => {
+                        RuntimeAgentCommandAsyncOutcome::SavedFork(std::sync::Arc::new(read))
+                    }
+                    Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    },
+                };
+            }
             RuntimeAgentCommandPrepared::ModifiedFiles { files } => {
                 super::lists::runtime_agent_modified_files_body(files.as_ref())
             }
@@ -1033,6 +1062,7 @@ impl RuntimeSessionService {
             direct_resume @ RuntimeAgentCommandAsyncOutcome::DirectResume { .. } => {
                 return Ok(direct_resume);
             }
+            fork @ RuntimeAgentCommandAsyncOutcome::SavedFork(_) => return Ok(fork),
             projected @ RuntimeAgentCommandAsyncOutcome::Projected { .. } => return Ok(projected),
         };
         let hide_prompt = runtime_agent_shell_visibility(&body).as_deref() == Some("hidden");
@@ -1066,6 +1096,22 @@ impl RuntimeSessionService {
         work: &RuntimeAgentCommandAsyncWork,
         outcome: RuntimeAgentCommandAsyncOutcome,
     ) -> Result<bool> {
+        if let RuntimeAgentCommandAsyncOutcome::SavedFork(read) = outcome {
+            return self.adopt_saved_fork_command(work, &read);
+        }
+        if matches!(work.prepared, RuntimeAgentCommandPrepared::SavedFork(_))
+            && !self.persistence.transcript_uses_adapter()
+            && matches!(
+                outcome,
+                RuntimeAgentCommandAsyncOutcome::Response { .. }
+                    | RuntimeAgentCommandAsyncOutcome::Projected { failed: false, .. }
+            )
+        {
+            // Direct-service callers have no adapter. The worker has released
+            // the target lease, and binding persistence cannot depend on whether
+            // the source display claim was cancelled after successful adoption.
+            self.checkpoint_agent_session_metadata()?;
+        }
         if let RuntimeAgentCommandPrepared::Status(report) = &work.prepared {
             if !self.status_report_is_current(report) {
                 self.agent.cancel_matching_agent_command(
@@ -1115,6 +1161,9 @@ impl RuntimeSessionService {
             .take_pending_record_browser_overlay_claim_stack(&work.pane_id, work.claim_generation);
         let body = match outcome {
             RuntimeAgentCommandAsyncOutcome::Response { body } => body,
+            RuntimeAgentCommandAsyncOutcome::SavedFork(_) => {
+                unreachable!("fork adoption handled above")
+            }
             RuntimeAgentCommandAsyncOutcome::Failed { message, kind } => {
                 RuntimeSessionService::deferred_agent_command_failure_body(work, &message, kind)
             }
@@ -1269,7 +1318,16 @@ impl RuntimeSessionService {
                 continue;
             };
             let outcome = RuntimeSessionService::execute_deferred_agent_command(&work);
+            let outcome = if let RuntimeAgentCommandAsyncOutcome::SavedFork(read) = outcome {
+                let adoption = self.adopt_saved_fork_command(&work, &read);
+                Self::finish_saved_fork_worker(&read, adoption)
+            } else {
+                outcome
+            };
             let body = match outcome {
+                RuntimeAgentCommandAsyncOutcome::SavedFork(_) => {
+                    unreachable!("fork adoption settled above")
+                }
                 RuntimeAgentCommandAsyncOutcome::DirectResume { store, read } => {
                     let outcome = self.execute_agent_shell_resume_command_with_read(
                         &work.pane_id,

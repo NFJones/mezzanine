@@ -112,7 +112,8 @@ impl RuntimeManualCompactionRequestWork {
             compaction_epoch: self.owner.compaction_epoch,
             transport_retry_attempts: 0,
             transport_retry_delay_ms: None,
-            summary_correction: Default::default(),
+            summary_correction:
+                crate::runtime::agent_state::RuntimeSummaryCorrection::for_manual_words(words),
             pane_id: self.owner.pane_id.clone(),
             accounting_origin: self.origin.clone(),
             conversation_id: self.owner.conversation_id.clone(),

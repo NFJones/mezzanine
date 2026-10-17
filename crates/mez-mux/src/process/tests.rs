@@ -701,78 +701,70 @@ fn pane_process_manager_terminates_tracked_pane() {
     assert!(manager.is_empty());
 }
 
-/// Escalation must terminate the owned root even if cached PTY group metadata
-/// points to another test-owned process. A short-lived root bounds the red
-/// regression without leaving a hung or orphaned process behind.
+/// Public foreground metadata must not authorize another root's cleanup.
+/// Both masters stay open through exact root reap and a fresh child-generated
+/// sibling reply. Independent fixture cleanup precedes the isolation assertions.
 #[test]
 fn pane_termination_kills_owned_root_when_cached_group_differs() {
     let mut root = spawn_pane_process(
         &test_shell(),
-        Some("sleep 2"),
+        Some("cat"),
         &test_environment(),
         Size::new(80, 24).unwrap(),
     )
     .unwrap();
-    let mut other = spawn_pane_process(
-        &test_shell(),
-        Some("sleep 2"),
-        &test_environment(),
+    let mut other = super::spawn_argv_pty_process(
+        std::path::Path::new("/bin/sh"),
+        &[
+            "-c".into(),
+            "while IFS= read -r line; do printf 'child-reply:%s\\n' \"$line\"; done".into(),
+        ],
+        &[],
         Size::new(80, 24).unwrap(),
+        None,
     )
     .unwrap();
+    let held_root = root.duplicate_master_fd().unwrap();
+    let held_other = other.duplicate_master_fd().unwrap();
     root.process_group_leader = Some(other.primary_pid as i32);
     let result = root.terminate(Duration::from_millis(10));
-    other.terminate(Duration::from_millis(10)).unwrap();
+    let root_reaped = matches!(root.poll_exit(), Ok(Some(_)));
+    let pid = rustix::process::Pid::from_raw(i32::try_from(root.primary_pid).unwrap()).unwrap();
+    let root_absent = rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH);
+    let other_live = matches!(other.poll_exit(), Ok(None));
+    let input_ok = other.write_input(b"public-metadata-probe\n").is_ok();
+    let mut output = Vec::new();
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while input_ok && Instant::now() < deadline {
+        let Ok(bytes) = other.read_available_output(4096) else {
+            break;
+        };
+        output.extend(bytes);
+        if String::from_utf8_lossy(&output).contains("child-reply:public-metadata-probe") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let responded = String::from_utf8_lossy(&output).contains("child-reply:public-metadata-probe");
+    let root_cleanup = root.terminate(Duration::from_millis(10));
+    let other_cleanup = other.terminate(Duration::from_millis(10));
+    drop((held_root, held_other));
+    assert!(
+        root_cleanup.is_ok() && other_cleanup.is_ok(),
+        "fixture cleanup failed"
+    );
+    assert!(
+        root_reaped && root_absent,
+        "root did not reap before sibling probe"
+    );
+    assert!(
+        other_live && responded,
+        "public metadata authorized sibling signaling"
+    );
     assert!(
         !result.unwrap().success(),
         "the owned root exited naturally instead of being terminated"
     );
-}
-
-/// Verifies pane process manager retains ownership when termination fails.
-///
-/// Teardown may fail while signaling or waiting on the pane process. The
-/// manager must keep the process handle in that case so callers can inspect,
-/// retry, or clean up the pane through the normal lifecycle path instead of
-/// losing ownership of a still-live child.
-#[test]
-fn pane_process_manager_retains_process_when_termination_fails() {
-    let mut manager = PaneProcessManager::new();
-    let pane_id = "%1";
-    let pid = manager
-        .spawn_for_pane(
-            pane_id,
-            &test_shell(),
-            Some("sleep 30"),
-            &test_environment(),
-            Size::new(80, 24).unwrap(),
-        )
-        .unwrap();
-
-    manager
-        .processes
-        .get_mut(pane_id)
-        .unwrap()
-        .process_group_leader = Some(-1);
-    let error = manager
-        .terminate_pane_with_grace(pane_id, Duration::from_millis(10))
-        .unwrap_err();
-
-    assert_eq!(error.kind(), crate::MuxErrorKind::InvalidState);
-    assert!(manager.contains_pane(pane_id));
-    assert_eq!(manager.primary_pid(pane_id), Some(pid));
-
-    manager
-        .processes
-        .get_mut(pane_id)
-        .unwrap()
-        .process_group_leader = None;
-    let terminated = manager
-        .terminate_pane_with_grace(pane_id, Duration::from_millis(50))
-        .unwrap()
-        .unwrap();
-    assert_eq!(terminated.primary_pid, pid);
-    assert!(manager.is_empty());
 }
 
 /// Verifies pane process manager terminate all removes every tracked process.

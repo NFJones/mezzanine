@@ -33,7 +33,7 @@ pub struct AsyncPtyPaneProcessIo {
 
 impl AsyncPtyPaneProcessIo {
     /// Creates an async PTY backend for one live pane process.
-    pub fn new(pane_id: impl Into<String>, mut process: super::PaneProcess) -> Result<Self> {
+    pub fn new(pane_id: impl Into<String>, process: super::PaneProcess) -> Result<Self> {
         let pane_id = pane_id.into();
         if pane_id.trim().is_empty() {
             return Err(MezError::invalid_args(
@@ -43,14 +43,12 @@ impl AsyncPtyPaneProcessIo {
         let fd = match process.duplicate_master_fd() {
             Ok(fd) => fd,
             Err(error) => {
-                let _ = process.send_signal_to_process_group(rustix::process::Signal::KILL);
                 return Err(error.into());
             }
         };
         let pty = match AsyncFd::new(AsyncPanePtyFd { fd }) {
             Ok(pty) => pty,
             Err(error) => {
-                let _ = process.send_signal_to_process_group(rustix::process::Signal::KILL);
                 return Err(error.into());
             }
         };
@@ -59,21 +57,6 @@ impl AsyncPtyPaneProcessIo {
             process,
             pty,
         })
-    }
-}
-
-impl Drop for AsyncPtyPaneProcessIo {
-    /// Runs the drop operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn drop(&mut self) {
-        if self.process.recorded_exit_status().is_none() {
-            let _ = self
-                .process
-                .send_signal_to_process_group(rustix::process::Signal::KILL);
-        }
     }
 }
 
@@ -282,57 +265,22 @@ pub(super) async fn terminate_pane_process_async(
     if let Some(status) = process.poll_exit()? {
         return Ok(status);
     }
-    if force {
-        process.send_signal_to_process_group(rustix::process::Signal::KILL)?;
-        return wait_for_pane_process_exit_async(process, Duration::from_secs(1)).await;
-    }
-    process.send_signal_to_process_group(rustix::process::Signal::HUP)?;
-    if let Some(status) =
-        wait_for_optional_pane_process_exit_async(process, Duration::from_millis(500)).await?
-    {
-        return Ok(status);
-    }
-    process.send_signal_to_process_group(rustix::process::Signal::TERM)?;
-    if let Some(status) =
-        wait_for_optional_pane_process_exit_async(process, Duration::from_millis(500)).await?
-    {
-        return Ok(status);
-    }
-    process.send_signal_to_process_group(rustix::process::Signal::KILL)?;
-    wait_for_pane_process_exit_async(process, Duration::from_secs(1)).await
-}
-
-/// Runs the wait for pane process exit async operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) async fn wait_for_pane_process_exit_async(
-    process: &mut super::PaneProcess,
-    timeout: Duration,
-) -> Result<super::PaneExitStatus> {
-    wait_for_optional_pane_process_exit_async(process, timeout)
-        .await?
-        .ok_or_else(|| MezError::invalid_state("pane process did not exit after kill signal"))
-}
-
-/// Runs the wait for optional pane process exit async operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) async fn wait_for_optional_pane_process_exit_async(
-    process: &mut super::PaneProcess,
-    timeout: Duration,
-) -> Result<Option<super::PaneExitStatus>> {
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::from_std(process.begin_native_termination(force)?);
     loop {
+        // Read-only native status observation is safe after the deadline;
+        // issuing a new signal/escalation after it is not.
         if let Some(status) = process.poll_exit()? {
-            return Ok(Some(status));
+            return Ok(status);
         }
         if Instant::now() >= deadline {
-            return Ok(None);
+            return Err(MezError::invalid_state(
+                "pane process native termination deadline expired; exact ownership retained",
+            ));
         }
-        sleep(Duration::from_millis(10)).await;
+        if let Some(status) = process.poll_native_termination(force)? {
+            return Ok(status);
+        }
+        sleep(Duration::from_millis(10).min(deadline.saturating_duration_since(Instant::now())))
+            .await;
     }
 }

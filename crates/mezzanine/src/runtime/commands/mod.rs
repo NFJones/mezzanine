@@ -80,6 +80,9 @@ pub(crate) use overlay_refresh::SAVED_SESSION_OVERLAY_REFRESH_KEY;
 mod preferences;
 mod remember;
 mod resume;
+#[cfg(test)]
+pub(crate) use resume::read_direct_resume;
+pub(crate) use resume::{SavedForkRead, SavedForkWork};
 mod sandbox;
 mod shell;
 mod shell_mode;
@@ -2162,7 +2165,12 @@ mod tests {
             provider_transcript_events: Vec::new(),
         };
 
-        let summary = runtime_model_compaction_summary_from_response(&response).unwrap();
+        let summary = runtime_model_compaction_summary_from_response(
+            &response,
+            "compact-fixture",
+            "agent-%1",
+        )
+        .unwrap();
 
         assert_eq!(summary, "## Summary\n\nKeep this.");
     }

@@ -340,6 +340,8 @@ pub(crate) enum RuntimeAgentCommandPrepared {
         /// Immutable renderer inputs captured before the blocking worker starts.
         projection: Box<RuntimeDirectResumeProjectionWork>,
     },
+    /// Publishes a saved fork on the existing blocking command worker.
+    SavedFork(Box<crate::runtime::commands::SavedForkWork>),
     /// Renders the pane's tracked modified-file summary.
     ///
     /// `/list-modified-files` formats the pane's retained modification map; the
@@ -530,6 +532,8 @@ pub(crate) enum RuntimeAgentCommandAsyncOutcome {
         /// Immutable durable session, transcript, and presentation data.
         read: Box<RuntimeDirectResumeRead>,
     },
+    /// Worker-owned publication awaiting actor adoption, not final settlement.
+    SavedFork(std::sync::Arc<crate::runtime::commands::SavedForkRead>),
     /// Immutable command display projection built outside actor ownership.
     Projected {
         /// Preparsed and width-resolved display content ready for actor-owned installation.

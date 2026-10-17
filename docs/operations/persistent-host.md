@@ -201,6 +201,89 @@ restart interrupts its supervised sessions, pane processes, and agent work.
 Hosted-local checkpoints recover layout/state, not the old live processes;
 remote active leases are not reconstructed after restart.
 
+Native pane cleanup is complete only after the original owned child has been
+waited for and reaped. A sent signal, closed actor channel, cancelled worker or
+disappearing socket is not that acknowledgement. Graceful termination retains
+the original HUP/TERM/KILL budget across worker cancellation; force also targets
+the exact owned root rather than trusting cached foreground-group metadata.
+Cleanup signals use the native root's immutable birth group, established by
+the UNIX PTY spawn/session contract, and exact force uses nonblocking native
+KILL rather than portable HUP-and-sleep. Missing, invalid or mismatched group
+authority reports failure but still attempts safe exact-root force and bounded
+wait. Foreground/job-control observations remain metadata, not signal authority.
+This covers the root and its birth group, not every foreground job, detached
+descendant, session or cgroup; normal kernel/shell PTY hangup behavior remains.
+Synchronous custom grace is capped at the default 500 ms, using TERM at one
+effective interval and KILL at two from the original termination start. This
+reserves force/wait capacity within the same finite deadline. Handoff
+does not replay completed stages or delay a force upgrade. Continuations of an
+expired attempt observe status without new signals and remain unproven until
+wait; cancellation, automatic retry and Drop do not renew that attempt.
+Within one cleanup call, added pending/deadline context preserves the first
+typed failure's kind and cause. Durable cancellation/host receipts retain only
+bounded private diagnostic evidence and sticky failure status; retries expose
+an unproven/failure barrier, not a reconstructed original OS-error category.
+
+If native cleanup cannot be proved within its deadline, the live host retains
+the exact session generation in cleanup-pending state (reported as stopping).
+Native failure details remain in private runtime diagnostics/captured stderr,
+not public host-status error strings. It is not evicted with terminal history or made
+available for identity reuse. New managed pane, restored-pane and editor child
+admission is fenced while unproven returned cleanup remains; existing sibling
+I/O is not capped or stopped merely to make room for a cleanup record. Review
+the diagnostic rather than searching for or killing numeric PIDs or repeating
+user commands. Ordinary repeated Host stop/maintenance continues its existing
+attempt and can observe later waits; it does not grant a fresh post-expiry
+signal budget. Administrative Host retry authority is not added by this repair.
+
+A repeated stop may arrive after the original actor channel has closed but
+before its native drain and completion callback settle. Only typed transport
+closure with terminal intent from that same handle is redundant admission;
+actor/reducer failures still fail. Final host shutdown waits for the captured
+generation's non-evictable completion receipt, successful callback/publication,
+sealed native zero and fresh failure receipts. An absent entry, closed watch,
+or evicted status row is not a healthy completion receipt.
+The entry remains registered through callback and terminal publication; their
+cleanup failures latch privately before removal, even without an existing
+watch receiver or terminal history. A later shutdown cannot miss that failure.
+Final `CliExit` cleanup waits for the same publication barrier. Borrowed status
+remains nonzero while it is pending or unknown, even when the actual native
+child count is zero; callback obligations do not inflate that count.
+
+`mez host stop` requests the final shutdown verdict on the same protected local
+connection and succeeds only after the host confirms native retirement and
+runtime completion publication. Its `--timeout` covers the whole operation,
+including connection and response. A removed socket, an admission-only
+`shutting_down` reply, or a lost/failed completion reply is not success; the CLI
+reports shutdown as unproven rather than polling a replacement host or retrying
+effects. Programmatic `host/shutdown` callers can request the same contract with
+`wait_for_completion: true` and must require `shutdown_completed: true`.
+Without that request, the existing response still proves admission only.
+
+Rust embedders receive `CliExit` from `mezzanine::run_cli()`, not a bare `u8`.
+Borrow `code()` and `pending_native_children()` while retaining the outcome;
+use `retry_native_cleanup(budget)` inside a caller-owned Tokio runtime for an
+explicit bounded retry. Pending/unknown cleanup forces nonzero without losing
+an original nonzero command code. Cleanup failures remain sticky after retry.
+The explicit call captures its creation-time budget and exact owner/source/
+attempt preparation before the returned future is polled. Admission happens
+only after a caller runtime is available. A sealed, quiescent all-Returned owner
+whose real prior attempt expired can receive a new checked retry epoch; busy or
+stale owners are left untouched while eligible siblings still progress. A new
+epoch may force owned roots without replaying graceful stages or erasing the
+original elapsed timeline or failure receipt. Initial/no-plan work still uses
+initial authority, and one pane's local deadline never poisons healthy siblings.
+Old suspended or unpolled scopes cannot adopt the new epoch. Automatic initial
+CLI cleanup and Host finalization never mint it, including lease replay and
+maintenance. This path grants no authority over arbitrary numeric processes.
+`Termination::report` and dropping the outcome explicitly abandon retry
+ownership; neither proves OS process exit or native reaping. Final destruction
+can provide only disclosed best-effort signaling/kernel adoption, not a healthy
+shutdown receipt. Help and exact internal-child paths remain dependency-free.
+Ordinary and pretty Rust Debug formatting of `CliExit` show only effective code
+and a pending count (or unknown), not private cleanup/session diagnostics or
+native owner/handle internals.
+
 Before a planned restart:
 
 1. Inspect `mez list --all` and `mez lease list --all`; notify attached users.

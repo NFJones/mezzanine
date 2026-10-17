@@ -2299,7 +2299,10 @@ impl RuntimeSessionService {
             .remove(pane_id);
     }
 
-    /// Terminates every process still owned by the runtime.
+    /// Synchronous fixture cleanup for manager-owned roots only. Production
+    /// releases guards to the bounded async native owner instead; this helper
+    /// cannot prove completion of processes already handed to workers.
+    #[cfg(test)]
     pub(crate) fn terminate_all_pane_processes(&mut self) -> Result<Vec<ExitedPaneProcess>> {
         Ok(self.process.pane_processes.terminate_all()?)
     }

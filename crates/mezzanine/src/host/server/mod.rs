@@ -6,6 +6,11 @@
 //! selected session actor through its compatibility Unix control socket. The
 //! live registry is discovery output only and is never treated as durable
 //! lease state.
+//!
+//! Completion-requesting shutdown clients transfer their authenticated response
+//! stream to the serving owner before connection draining. Final replies are
+//! published only after native/runtime settlement, bounded by the original
+//! connection and shutdown budgets; client loss cannot cancel the native owner.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -112,6 +117,47 @@ struct HostConnectionResult {
     method: String,
     failure: Option<String>,
     shutdown: Option<HostShutdownRequest>,
+    /// Request id whose authenticated stream must receive the final verdict.
+    completion_id: Option<Value>,
+}
+
+/// An authenticated shutdown reply retained outside the connections being
+/// drained. Its deadline was captured at accept, never renewed after cleanup.
+struct HostShutdownCompletion {
+    stream: tokio::net::UnixStream,
+    id: Value,
+    deadline: tokio::time::Instant,
+}
+
+impl HostShutdownCompletion {
+    /// Publishes only the actual host cleanup/publication result on the exact
+    /// original connection. Transport failure is unproven, never healthy Stop.
+    async fn publish(mut self, force: bool, result: &Result<()>) -> Result<()> {
+        // timeout_at polls ready I/O before its timer, so it is not an effect
+        // fence for a budget already consumed by native/runtime settlement.
+        if tokio::time::Instant::now() >= self.deadline {
+            return Err(MezError::invalid_state(
+                "host shutdown completion reply deadline expired",
+            ));
+        }
+        let body = match result {
+            Ok(()) => json!({"jsonrpc":"2.0","id":self.id,"result":{
+                "shutting_down":true,"force":force,"shutdown_completed":true
+            }}),
+            Err(error) => host_error_response(self.id, error),
+        };
+        tokio::time::timeout_at(self.deadline, async {
+            self.stream
+                .write_all(&crate::control::encode_control_body(&body.to_string()))
+                .await?;
+            self.stream.flush().await
+        })
+        .await
+        .map_err(|_| {
+            MezError::invalid_state("host shutdown completion reply deadline expired")
+        })??;
+        Ok(())
+    }
 }
 
 fn record_host_maintenance_state(
@@ -237,7 +283,7 @@ impl HostServer {
         let mut authority_changes = self.router.authority_changes();
         let mut maintenance_failures = HashSet::new();
         let mut local_capacity_saturated = false;
-        let shutdown = loop {
+        let (shutdown, completion) = loop {
             let authority_delay = self.router.time_until_next_lease_expiry()?;
             let authority_maintenance = async move {
                 match authority_delay {
@@ -248,7 +294,7 @@ impl HostServer {
             tokio::select! {
                 () = &mut cancellation => {
                     self.router.start_draining()?;
-                    break HostShutdownRequest { force: false };
+                    break (HostShutdownRequest { force: false }, None);
                 }
                 () = authority_maintenance => {
                     let expiry_failure = self.router.expire_due_leases().await.err().map(|error| error.to_string());
@@ -289,10 +335,10 @@ impl HostServer {
                         );
                         local_capacity_saturated = false;
                     }
-                    if let Some(Some(request)) = completed {
+                    if let Some(Some((request, completion))) = completed {
                         let request: HostShutdownRequest = request;
                         self.router.start_draining()?;
-                        break request;
+                        break (request, completion);
                     }
                 }
                 accepted = self.listener.accept(), if connections.len() < HOST_CONTROL_CONNECTION_LIMIT => {
@@ -314,9 +360,10 @@ impl HostServer {
                         );
                         continue;
                     }
+                    let deadline = tokio::time::Instant::now() + HOST_CONTROL_CONNECTION_TIMEOUT;
                     connections.push(async move {
-                        match tokio::time::timeout(
-                            HOST_CONTROL_CONNECTION_TIMEOUT,
+                        match tokio::time::timeout_at(
+                            deadline,
                             self.serve_connection(&mut stream),
                         )
                         .await
@@ -332,7 +379,14 @@ impl HostServer {
                                         result.method
                                     ),
                                 }
-                                result.shutdown
+                                result.shutdown.map(|request| {
+                                    let completion = result.completion_id.map(|id| HostShutdownCompletion {
+                                        stream,
+                                        id,
+                                        deadline,
+                                    });
+                                    (request, completion)
+                                })
                             }
                             Ok(Err(error)) => {
                                 eprintln!("mez host: local client request failed: uid {peer_uid}, error {error}");
@@ -354,25 +408,52 @@ impl HostServer {
                 }
             }
         };
-        let draining = self.router.begin_draining();
-        tokio::pin!(draining);
-        loop {
-            tokio::select! {
-                result = &mut draining => {
-                    result?;
-                    break;
+        // A deferred reply cannot extend either its original connection budget
+        // or the existing host shutdown budget. It owns no admission lease and
+        // remains outside the connection futures dropped during draining.
+        let completion = completion.map(|mut reply| {
+            reply.deadline = reply
+                .deadline
+                .min(tokio::time::Instant::now() + self.config.shutdown_timeout);
+            reply
+        });
+        let result = async {
+            let draining = self.router.begin_draining();
+            tokio::pin!(draining);
+            loop {
+                tokio::select! {
+                    result = &mut draining => {
+                        result?;
+                        break;
+                    }
+                    _ = connections.next(), if !connections.is_empty() => {}
                 }
-                _ = connections.next(), if !connections.is_empty() => {}
             }
+            drop(connections);
+            if !shutdown.force {
+                Box::pin(self.router.checkpoint_active_local_assignments_strict()).await?;
+            }
+            self.router
+                .shutdown_all(shutdown.force, self.config.shutdown_timeout)
+                .await?;
+            self.router.mark_stopped()
         }
-        drop(connections);
-        if !shutdown.force {
-            Box::pin(self.router.checkpoint_active_local_assignments_strict()).await?;
+        .await;
+        let publication = match completion {
+            Some(reply) => reply.publish(shutdown.force, &result).await,
+            None => Ok(()),
+        };
+        match (result, publication) {
+            (Err(primary), Err(publication)) => Err(MezError::new(
+                primary.kind(),
+                format!(
+                    "{}; shutdown completion reply also failed: {publication}",
+                    primary.message()
+                ),
+            )),
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
         }
-        self.router
-            .shutdown_all(shutdown.force, self.config.shutdown_timeout)
-            .await?;
-        self.router.mark_stopped()
     }
 
     fn serve_connection<'a>(
@@ -399,24 +480,36 @@ impl HostServer {
             let result = self.dispatch_managed_request(&request).await;
             let (body, shutdown, failure) = match result {
                 Ok((result, shutdown)) => (
-                    json!({"jsonrpc":"2.0","id":id,"result":result}),
+                    json!({"jsonrpc":"2.0","id":id.clone(),"result":result}),
                     shutdown,
                     None,
                 ),
                 Err(error) => {
                     let failure = format!("{}: {}", host_error_name(error.kind()), error.message());
-                    (host_error_response(id, &error), None, Some(failure))
+                    (host_error_response(id.clone(), &error), None, Some(failure))
                 }
             };
-            framed
-                .get_mut()
-                .write_all(&crate::control::encode_control_body(&body.to_string()))
-                .await?;
-            framed.get_mut().flush().await?;
+            let completion_id = shutdown
+                .filter(|_| {
+                    request
+                        .get("params")
+                        .and_then(|params| params.get("wait_for_completion"))
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                })
+                .map(|_| id);
+            if completion_id.is_none() {
+                framed
+                    .get_mut()
+                    .write_all(&crate::control::encode_control_body(&body.to_string()))
+                    .await?;
+                framed.get_mut().flush().await?;
+            }
             Ok(HostConnectionResult {
                 method,
                 failure,
                 shutdown,
+                completion_id,
             })
         })
     }
@@ -1592,6 +1685,8 @@ mod tests {
     use crate::storage::snapshot::SnapshotRepository;
 
     use super::*;
+
+    mod shutdown_completion;
 
     fn test_root(_name: &str) -> PathBuf {
         let root = PathBuf::from("/tmp").join(format!(

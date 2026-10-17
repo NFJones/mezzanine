@@ -30,6 +30,35 @@ need the same care as the files being worked on.
 Hiding the agent shell or detaching the client does not start a new
 conversation. Saved history can also be resumed after restart. A fork receives
 a snapshot of its source conversation and does not absorb later parent work.
+That snapshot includes the saved compaction projection: the first request and
+later resumes retain the same model-written summary and exact uncovered history,
+including selective summaries at their original positions. The full source
+archive remains inspectable; covered raw rows do not reappear as active context.
+Missing or corrupt required compaction state fails visibly rather than creating
+a raw-history fork. Fork publication and any eligible saved terminal-handoff
+reconciliation affect only the new target, never the parent's stored bytes.
+If source persistence or terminal bookkeeping has not settled, the fork fails
+visibly instead of cloning a shorter archive. Retry after the original storage
+owner settles; retained append receipts reserve target identities as well.
+Failed cloning or pane setup removes only the newly created target; requesting
+an existing target does not overwrite or delete it. Forks retain source occurrence
+times while receiving their own conversation/catalog creation time, identity,
+name state and later appends. Historical usage and actions are not charged or
+executed again, and copied history grants no new execution authority.
+Cloning and storage rollback run on the command worker, so a large or locked
+archive does not block terminal/control handling. A cancelled or stale fork
+removes only its own unadopted target generation. If pane teardown or the adoption
+reply is uncertain, Mezzanine retains the complete target and reports the failure
+instead of risking live history; retained recovery intent owns any incomplete
+safe cleanup. A waiting resume rechecks the target under the same storage lease.
+Command-service cancellation and supervisor shutdown retain and observe fork
+workers until they retire; a service error does not turn cleanup into detached
+background work or erase the original failure.
+For authenticated `agent/shell/command` control requests, a stored `/fork`
+acknowledges acceptance with a mutation result and null body/turn. Observe the
+visible source shell for eventual success or failure; that initial response is
+not completion. Reusing its idempotency key returns the original acknowledgment
+without creating another fork. Other control commands keep their inline results.
 Conversation continuity is not proof that a command completed or that the
 filesystem is unchanged: verify interrupted work before asking the agent to
 continue.
@@ -167,10 +196,29 @@ Completed summaries are also checked before private chunk/synthesis staging.
 Empty or malformed output, oversized UTF-8 text, and text above the frozen word
 or estimated-input-token allowance retry only auxiliary summarization of the
 same validated source. The rejected text is not published or quoted back. The
-model receives the local unit/byte target separately from the provider's output
-token ceiling and response-framing overhead. Oversize corrections tighten that
-ceiling and must shrink every still-invalid size dimension; ignored guidance
-fails visibly. Empty/malformed output gets at most two corrections per current
+model receives the actual word/input-token unit and independent UTF-8 byte bound.
+Compaction keeps its raw-text provider contract. If the model instead returns
+the requested final-say JSON or `mezzanine-action-json` frame, local validation
+extracts that one final payload before measuring or publishing it; malformed
+frames consume the same finite correction budget, never execution authority.
+Unframed JSON is recognized only by a top-level rationale plus an actions array
+with type-tagged objects (or empty actions), not an isolated field name. Unknown
+or non-final typed actions still fail validation. Ordinary JSON/data/code fences
+and incomplete unframed JSON remain raw summary text under the same local bounds;
+an explicit `mezzanine-action-json` fence also identifies incomplete frames.
+Shorter correction guidance never becomes a stricter semantic acceptance limit:
+a summary fitting the original allowance proceeds to complete-request fit even
+above guidance. OpenAI never receives `max_output_tokens` in ordinary, compaction,
+auxiliary or retry requests, streaming or not. Existing omission/cache behavior
+is intentional; other providers retain genuinely supported generation controls
+and configured framing/reasoning headroom. Still-invalid output must shrink each
+fixed invalid dimension. Guidance stays nonzero and invalid output at the issued
+floor fails with typed, content-free provenance rather than halving to zero.
+Full-request fit and nonreducing-candidate checks still decide publication; no
+summary is truncated and no ordinary action is replayed. Auxiliary diagnostics
+separate phase/generation, frozen units, measured sizes, advisory targets and
+actual admitted corrections from ordinary MAAP recovery counts.
+Empty/malformed output gets at most two corrections per current
 source, even with unlimited transport retries. Advancing legitimate chunks or
 ranges has no arbitrary total-response cap. Earlier accepted summaries stay
 private until the complete replay fits. Known auxiliary expense counts once,

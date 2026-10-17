@@ -144,6 +144,9 @@ mod lease;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod mcp;
+/// Retains exact native cleanup through CLI errors and runtime destruction.
+mod native_exit;
+pub use native_exit::CliExit;
 /// Exposes the memory module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

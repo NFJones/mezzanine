@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::serve::{ServeCliArgs, assign_unique_live_session_id};
+use super::serve::{OwnedRuntimeDaemonStartup, ServeCliArgs, assign_unique_live_session_id};
 use super::{
     Args, CliEnv, CliOutputFormat, ConfigPaths, LayoutLoadPlan, LoadedRuntimeConfig, MezError,
     ParsedServeOptions, RestoredSnapshotDaemonRequest, Result, RuntimeDaemonStartup,
@@ -36,6 +36,7 @@ pub(super) async fn run_snapshot<W: Write>(
     interactive: bool,
     output_format: CliOutputFormat,
     stdout: &mut W,
+    native: &mut super::native_exit::CliNativeOwnership,
 ) -> Result<()> {
     let paths = env.config_paths()?;
     let repository = SnapshotRepository::new(paths.root().join("snapshots"));
@@ -74,11 +75,16 @@ pub(super) async fn run_snapshot<W: Write>(
                     },
                     output_format,
                     stdout,
+                    native,
                 )
                 .await?;
             } else {
-                let output =
-                    restored_snapshot_json(restored, resume.restart_command.as_deref(), &paths)?;
+                let output = restored_snapshot_json(
+                    restored,
+                    resume.restart_command.as_deref(),
+                    &paths,
+                    native,
+                )?;
                 write_json_or_plain(stdout, output_format, &output)?;
             }
         }
@@ -108,6 +114,7 @@ pub(super) async fn run_snapshot<W: Write>(
                     },
                     output_format,
                     stdout,
+                    native,
                 )
                 .await?;
             } else {
@@ -115,8 +122,12 @@ pub(super) async fn run_snapshot<W: Write>(
                     resume.session_id.as_deref(),
                     resolve_shell(env.shell)?,
                 )?;
-                let output =
-                    restored_snapshot_json(restored, resume.restart_command.as_deref(), &paths)?;
+                let output = restored_snapshot_json(
+                    restored,
+                    resume.restart_command.as_deref(),
+                    &paths,
+                    native,
+                )?;
                 write_json_or_plain(stdout, output_format, &output)?;
             }
         }
@@ -246,6 +257,7 @@ pub(super) async fn run_restored_snapshot_daemon<W: Write>(
     request: RestoredSnapshotDaemonRequest<'_>,
     output_format: CliOutputFormat,
     stdout: &mut W,
+    native: &mut super::native_exit::CliNativeOwnership,
 ) -> Result<()> {
     let RestoredSnapshotDaemonRequest {
         mut restored,
@@ -312,9 +324,12 @@ pub(super) async fn run_restored_snapshot_daemon<W: Write>(
             root: paths.root().to_path_buf(),
         },
         options,
-        RuntimeDaemonStartup::RestoredSnapshot {
-            payload: Box::new(payload),
-            restart_command,
+        OwnedRuntimeDaemonStartup {
+            startup: RuntimeDaemonStartup::RestoredSnapshot {
+                payload: Box::new(payload),
+                restart_command,
+            },
+            native: native.foreground(),
         },
     )
     .await
@@ -390,6 +405,7 @@ pub(super) fn restored_snapshot_json(
     restored: SnapshotRestoreResult,
     restart_command: Option<&str>,
     paths: &ConfigPaths,
+    native: &mut super::native_exit::CliNativeOwnership,
 ) -> Result<String> {
     if let Some(command) = restart_command
         && command.trim().is_empty()
@@ -415,10 +431,11 @@ pub(super) fn restored_snapshot_json(
         16,
         4096,
     )?;
+    service.install_native_pane_retirement_owner(native.foreground())?;
     let starts = service.restart_restored_pane_processes(Some(command))?;
     let session_json = restored_session_json(service.session());
     let restarted_json = pane_process_starts_json(&starts);
-    service.terminate_all_pane_processes()?;
+    service.release_native_panes_for_retirement();
     Ok(format!(
         r#"{{"restored":true,"live":false,"restarted":true,"restarted_panes":{},"session":{},"resume_plan":{}}}"#,
         restarted_json,

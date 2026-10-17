@@ -44,17 +44,27 @@ impl UnixAncestryBudget {
         if count == 0 {
             return Err(unavailable());
         }
-        self.reserved
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |used| {
-                used.checked_add(count)
-                    .filter(|next| *next <= MAX_RETAINED_ANCESTORS)
-            })
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "Unix ancestry capacity unavailable",
-                )
-            })?;
+        let mut used = self.reserved.load(Ordering::SeqCst);
+        loop {
+            let next = used
+                .checked_add(count)
+                .filter(|next| *next <= MAX_RETAINED_ANCESTORS)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "Unix ancestry capacity unavailable",
+                    )
+                })?;
+            match self.reserved.compare_exchange_weak(
+                used,
+                next,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break,
+                Err(current) => used = current,
+            }
+        }
         Ok(AncestryReservation {
             budget: self.clone(),
             count,
@@ -362,6 +372,35 @@ mod tests {
         drop(second);
         assert_eq!(budget.reserved(), 128);
         drop(replacement);
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    /// Competing whole-chain reservations cannot overbook the aggregate budget.
+    /// Keep every successful guard until all workers finish, then prove each
+    /// charge is released exactly once and the entire capacity is reusable.
+    #[test]
+    fn unix_ancestry_budget_concurrent_reservations_never_overbook() {
+        let budget = Arc::new(UnixAncestryBudget::default());
+        let barrier = std::sync::Barrier::new(16);
+        let reservations = std::thread::scope(|scope| {
+            let workers = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        budget.reserve(64).ok()
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .filter_map(|worker| worker.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(reservations.len(), 8);
+        assert_eq!(budget.reserved(), MAX_RETAINED_ANCESTORS);
+        drop(reservations);
+        assert_eq!(budget.reserved(), 0);
+        drop(budget.reserve(MAX_RETAINED_ANCESTORS).unwrap());
         assert_eq!(budget.reserved(), 0);
     }
 }

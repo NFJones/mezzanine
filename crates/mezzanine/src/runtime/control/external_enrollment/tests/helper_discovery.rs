@@ -89,11 +89,42 @@ async fn external_helper_discovery_retains_exact_producer_source_through_settlem
     let root = mez_mux::process::process_parent_identity_for_pid(work.process.process_id).unwrap();
     let origin = work.origin.clone();
     let worker_budget = work.ancestry_budget.clone();
-    let source_less =
-        tokio::task::spawn_blocking(move || origin.capture_ancestry(root, &worker_budget))
-            .await
-            .unwrap()
-            .unwrap();
+    let retained = work.ancestry.get().unwrap().clone();
+    // Diagnostic scalars distinguish helper-origin lifetime from the separately
+    // retained producer witness. Measure inside the existing worker, excluding
+    // scheduler queue time; no new native capture or authority is introduced.
+    // A refusal still fails this test. Elapsed time is not rejection-branch proof.
+    let (source_less, elapsed, before, after) = tokio::task::spawn_blocking(move || {
+        let before = (
+            origin.is_live(),
+            retained.is_live(),
+            retained.test_ancestor_is_live(root),
+            worker_budget.reserved(),
+        );
+        let started = std::time::Instant::now();
+        let result = origin.capture_ancestry(root, &worker_budget);
+        let elapsed = started.elapsed();
+        let after = result.as_ref().err().map(|_| {
+            (
+                origin.is_live(),
+                retained.is_live(),
+                retained.test_ancestor_is_live(root),
+                worker_budget.reserved(),
+            )
+        });
+        // Return no retained diagnostic owners: all clones must drop before the
+        // existing witness replacement and final descriptor-budget assertions.
+        (result, elapsed, before, after)
+    })
+    .await
+    .unwrap();
+    let source_less = source_less.unwrap_or_else(|error| {
+        panic!(
+            "source-less native witness capture refused: kind={:?} elapsed_us={} (helper_live, retained_producer_live, root_live, reserved) before={before:?} after={after:?}",
+            error.kind(),
+            elapsed.as_micros(),
+        )
+    });
     assert!(source_less.is_live());
     assert!(!source_less.source_matches(producer.uid(), producer.identity));
     // Fresh real native evidence, but deliberately the wrong witness kind.
