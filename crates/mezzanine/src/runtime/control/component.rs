@@ -133,7 +133,7 @@ impl RuntimeControlComponent {
     }
 
     /// Sets only a fixture overflow boundary, never a production setting.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn set_external_agent_generation_for_tests(&mut self, generation: u64) {
         self.external_agent_generation = generation;
     }

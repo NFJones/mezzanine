@@ -223,7 +223,7 @@ impl LiveSourceAnchors {
 impl RuntimeSessionService {
     /// Reports only test-owned fence state: retired, revision, held ancestry and
     /// accepted-input presence. This grants no source or transport authority.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn external_source_anchor_fence_for_tests(
         &self,
         owner: &str,
@@ -289,7 +289,7 @@ impl RuntimeSessionService {
     }
 
     /// Sets only a fixture memory quota; no production setting or authority exists.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn external_source_anchor_limit_for_tests(&mut self, limit: usize) {
         self.control.external_sources_mut().limit = Some(limit);
     }

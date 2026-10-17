@@ -156,7 +156,7 @@ impl RawPaneChild {
                 "native birth process group authority does not match its owned root",
             ));
         }
-        send_signal_to_pane_process_group(group, signal)
+        send_signal_to_pane_process_group(group, signal, || self.child.try_wait().map(|_| ()))
     }
 
     /// Issues only inherent nonblocking exact-root KILL for the known native

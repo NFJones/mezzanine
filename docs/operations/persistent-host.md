@@ -213,6 +213,12 @@ authority reports failure but still attempts safe exact-root force and bounded
 wait. Foreground/job-control observations remain metadata, not signal authority.
 This covers the root and its birth group, not every foreground job, detached
 descendant, session or cgroup; normal kernel/shell PTY hangup behavior remains.
+On macOS, an exited but unreaped group can return EPERM even to an existence
+probe. Cleanup observes/reaps the retained exact child before checking group
+absence again. Only authoritative ESRCH makes the denied send benign; root
+exit alone, surviving group members, continued denial or a wait failure still
+report failure. This reconciliation sends no additional termination signal
+and does not renew the cleanup deadline.
 Synchronous custom grace is capped at the default 500 ms, using TERM at one
 effective interval and KILL at two from the original termination start. This
 reserves force/wait capacity within the same finite deadline. Handoff

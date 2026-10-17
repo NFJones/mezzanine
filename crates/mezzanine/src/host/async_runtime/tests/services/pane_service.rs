@@ -1163,7 +1163,9 @@ async fn async_foreign_fish_child_clears_bootstrap_pending() {
 /// This exercises the production actor and pane-worker ownership path rather
 /// than writing directly to the PTY. The original draft must remain discarded
 /// after Fish publishes its authenticated parent-return event, while a fresh
-/// command must execute immediately.
+/// command must execute immediately. Capture acceptance before lifecycle stop
+/// and await the supervisor's exact native retirement before closing actor
+/// ingress. Actor closure and fallback cleanup cannot excuse a failed verdict.
 #[tokio::test(flavor = "current_thread")]
 async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_responsive_parent() {
     let Some(fish) = [
@@ -1225,17 +1227,18 @@ async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_respo
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
+    let native = service.native_pane_retirement_owner();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
     let pane_worker_handle = handle.clone();
     let client_handle = handle.clone();
-    let pane_worker_done = StdArc::new(AtomicBool::new(false));
-    let pane_worker_stop = StdArc::clone(&pane_worker_done);
+    let client_native = native.clone();
+    let (worker_finished, worker_completion) = tokio::sync::oneshot::channel();
     let client_executed_path = executed_path.clone();
 
     let pane_worker = async move {
-        run_async_pane_process_supervisor_service(
+        let result = run_async_pane_process_supervisor_service(
             pane_worker_handle,
             AsyncPaneProcessSupervisorServiceConfig {
                 max_polls: u64::MAX,
@@ -1249,12 +1252,11 @@ async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_respo
                     foreground_metadata_interval: Duration::from_millis(10),
                 },
             },
-            move |_, state| {
-                pane_worker_stop.load(Ordering::SeqCst)
-                    || matches!(state, RuntimeLifecycleState::Stopping)
-            },
+            |_, state| matches!(state, RuntimeLifecycleState::Stopping),
         )
-        .await
+        .await;
+        // Deliver errors too, so exact fallback cleanup precedes assertions.
+        let _ = worker_finished.send(result);
     };
 
     let client = async move {
@@ -1417,50 +1419,120 @@ async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_respo
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        pane_worker_done.store(true, Ordering::SeqCst);
-        client_handle.shutdown().await.unwrap()
+        // Save acceptance before stopping can erase the pane or its authority.
+        // Watched lifecycle stop wakes supervisor AND workers before ingress
+        // closes; an atomic flag alone provides no such wake/order guarantee.
+        let before_stop = client_handle.pane_certification_snapshot("%1").await;
+        let pane_text = client_handle.managed_shell_process_screen_text("%1").await;
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Shutdown(ShutdownEvent {
+            reason: "owned Fish no-prompt fixture ordered teardown".to_string(),
+            force: false,
+            failed: false,
+        }));
+        let stop_admission = client_handle.submit_runtime_events(batch).await;
+        let supervisor = worker_completion.await;
+        let native_before_close = (
+            client_native.outstanding(),
+            client_native.returned_count(),
+            client_native.has_cleanup_failure(),
+        );
+        let lifecycle_before_close = client_handle.lifecycle_state().await;
+        let actor_close = client_handle.shutdown().await;
+        (
+            before_stop,
+            pane_text,
+            stop_admission,
+            supervisor,
+            native_before_close,
+            lifecycle_before_close,
+            actor_close,
+        )
     };
 
-    let (lifecycle, supervisor, mut actor_exit) =
-        tokio::time::timeout(Duration::from_secs(45), async {
-            let (client, worker, actor) = tokio::join!(client, pane_worker, actor.run());
-            (client, worker, actor)
-        })
-        .await
-        .expect("dirty Fish no-prompt exit should not hang");
-    assert_eq!(lifecycle, RuntimeLifecycleState::Running);
-    if let Err(error) = supervisor {
-        assert!(
-            matches!(
-                error.message(),
-                "async runtime session actor is closed"
-                    | "async runtime session actor reply was dropped"
-            ),
-            "pane supervisor failed before actor shutdown: {error}"
-        );
-    }
-    let responsive_terminal_state = std::fs::read_to_string(&executed_path).unwrap();
+    let joined = tokio::time::timeout(Duration::from_secs(45), async {
+        tokio::join!(client, pane_worker, actor.run())
+    })
+    .await;
+    let (observed, mut actor_exit) = match joined {
+        Ok((observed, (), actor_exit)) => (observed, actor_exit),
+        Err(error) => {
+            let actor_close = handle.shutdown().await;
+            native.seal();
+            let cleanup = crate::host::async_runtime::drain_native_pane_retirement(
+                &native,
+                tokio::time::Instant::now()
+                    + crate::host::async_runtime::NATIVE_PANE_RETIREMENT_TIMEOUT,
+            )
+            .await;
+            panic!(
+                "dirty Fish original45s fixture deadline: {error}; native_outstanding={} returned={} failed={} actor_close_ok={} fallback_cleanup_ok={}",
+                native.outstanding(),
+                native.returned_count(),
+                native.has_cleanup_failure(),
+                actor_close.is_ok(),
+                cleanup.is_ok()
+            );
+        }
+    };
+    let responsive_terminal_state = std::fs::read_to_string(&executed_path);
+    let draft_discarded = !discarded_path.exists();
+    // Attempt cleanup before assertions, without replacing pre-close verdicts.
+    let manager_cleanup = actor_exit.service.terminate_all_pane_processes();
+    actor_exit.service.release_native_panes_for_retirement();
+    native.seal();
+    let native_cleanup = crate::host::async_runtime::drain_native_pane_retirement(
+        &native,
+        tokio::time::Instant::now() + crate::host::async_runtime::NATIVE_PANE_RETIREMENT_TIMEOUT,
+    )
+    .await;
+    let _ = std::fs::remove_file(&executed_path);
+    let _ = std::fs::remove_file(&discarded_path);
+    std::fs::remove_dir_all(fixture_root).unwrap();
+    let (
+        before_stop,
+        pane_text,
+        stop_admission,
+        supervisor,
+        native_before_close,
+        lifecycle_before_close,
+        actor_close,
+    ) = observed;
+    let before_stop = before_stop.expect("capture Fish acceptance before lifecycle stop");
+    assert!(!before_stop.child_active && !before_stop.bootstrap_pending);
+    assert_eq!(before_stop.running_shell_transactions, 0);
+    assert!(!before_stop.environment_signature_present);
+    stop_admission.expect("Fish stop must be admitted while actor ingress is live");
+    let report = supervisor
+        .expect("same Fish supervisor must deliver its actual result")
+        .expect("Fish supervisor must retire its native child before actor closure");
+    assert_eq!(report.terminal_state, RuntimeLifecycleState::Stopping);
+    assert!(report.spawned_workers >= 1);
+    assert_eq!(native_before_close, (0, 0, false));
+    assert_eq!(
+        lifecycle_before_close.unwrap(),
+        RuntimeLifecycleState::Stopping
+    );
+    assert_eq!(actor_close.unwrap(), RuntimeLifecycleState::Stopping);
+    let responsive_terminal_state = responsive_terminal_state.unwrap();
     assert!(
         !responsive_terminal_state
             .split(|character: char| character.is_whitespace() || character == ';')
             .any(|field| field == "-echo"),
         "Fish parent terminal echo remained disabled after no-prompt exit: {responsive_terminal_state}"
     );
-    let pane_text = actor_exit
-        .service
-        .pane_screen("%1")
-        .map(|screen| screen.normal_content_lines().join("\n"))
-        .unwrap_or_default();
+    let pane_text = pane_text.expect("capture Fish output before lifecycle stop");
     assert!(
         pane_text.contains("__MEZ_ASYNC_FISH_PARENT_RESPONSIVE__"),
         "returned Fish parent output remained hidden after no-prompt exit: {pane_text:?}"
     );
     assert!(
-        !discarded_path.exists(),
+        draft_discarded,
         "discarded Fish draft executed after no-prompt exit"
     );
-    actor_exit.service.terminate_all_pane_processes().unwrap();
-    std::fs::remove_file(executed_path).unwrap();
+    manager_cleanup.unwrap();
+    native_cleanup.unwrap();
+    assert_eq!(native.outstanding(), 0);
 }
 
 /// Verifies a managed Zsh pane remains responsive when agent mode is entered

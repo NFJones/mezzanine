@@ -2256,6 +2256,14 @@ the root and its birth group, not disposal of all foreground jobs, detached
 descendants, sessions or cgroups; normal kernel/shell PTY hangup behavior still
 applies. Successful native wait MUST suppress every subsequent cleanup signal.
 
+An EPERM group-send race MAY trigger another nonblocking wait on the retained
+exact child before probing group absence. Darwin can report EPERM for an
+exited-but-unreaped group, including signal-zero probes. Only a typed ESRCH
+absence probe after that observation makes the denied send benign; root exit
+alone, a present/denied/unreadable group or a failed native wait MUST NOT do so.
+The native wait result MUST remain cached for exact-owner settlement, and
+reconciliation MUST NOT resend a cleanup signal or extend the attempt deadline.
+
 Daemon-managed pane, restored-pane and external-editor children MUST reserve
 an exact native cleanup return slot before spawn. Manager-to-worker handoff,
 cancelled replies, backend construction failure, unpolled workers and service

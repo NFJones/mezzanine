@@ -81,7 +81,7 @@ pub(crate) struct ExternalUsageBeginWork {
 
 impl ExternalUsageBeginWork {
     /// Forces only a test-owned settlement deadline without changing authority.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn expire_for_tests(&mut self) {
         self.deadline = Instant::now();
     }
@@ -130,7 +130,7 @@ impl ExternalUsageBeginWork {
 
 impl RuntimeSessionService {
     /// Reports metadata reservations without exposing private producer handles.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn external_usage_begin_pending_for_tests(&self) -> usize {
         self.control.external_usage_begins().pending.len()
     }
