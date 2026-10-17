@@ -10300,6 +10300,14 @@ The baseline action types are:
   survive owned native handoff and MUST NOT be a capability when false.
   Revoked relationships MUST NOT be checkpointed as active restore-owned pairs;
   their saved history remains independently resumable without parent authority.
+  Active checkpoint metadata version 7 MUST capture a nonauthorizing persistent
+  ownership qualifier only from the exact current nonrevoked runtime relationship
+  or the same qualified restore operation. Historical bindings remain readable
+  and resumable with false qualification. Earlier metadata versions MUST decode
+  qualification as false; current missing/malformed flags and extra columns MUST
+  reject. True alone MUST NOT grant ownership without the original installed
+  parent pair and unchanged native cleanup qualification. No actor-side history
+  read or saved-lineage inference MAY manufacture that qualifier.
   Failed replacement MUST restore the exact prior active/retired records and
   cleanup proofs transactionally without rewinding incarnation high-water marks.
   An authoritative same-owner persistent-child record whose pane is already

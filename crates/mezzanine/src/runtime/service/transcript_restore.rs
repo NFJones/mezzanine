@@ -216,7 +216,9 @@ impl RuntimeSessionService {
                     "subagent conversation cannot restore without durable lineage",
                 ));
             }
-            let persistent_owner = if subagent_lifetime == mez_agent::SubagentLifetime::Persistent {
+            let persistent_owner = if metadata.persistent_subagent_owned
+                && subagent_lifetime == mez_agent::SubagentLifetime::Persistent
+            {
                 let lineage = subagent_lineage.as_ref().ok_or_else(|| {
                     MezError::invalid_state("persistent subagent restore requires durable lineage")
                 })?;
@@ -647,7 +649,7 @@ impl RuntimeSessionService {
             for pane in root_panes {
                 self.ensure_primary_agent_name(&pane)?;
             }
-            self.checkpoint_agent_session_metadata()?;
+            self.checkpoint_agent_session_metadata_for_restore(Some(&installed_cleanup_bindings))?;
             let panes = self
                 .agent_shell_store()
                 .sessions()
@@ -731,6 +733,18 @@ impl RuntimeSessionService {
     /// which pane should point at which conversation when the same Mezzanine
     /// session is restored.
     pub(crate) fn checkpoint_agent_session_metadata(&mut self) -> Result<usize> {
+        self.checkpoint_agent_session_metadata_for_restore(None)
+    }
+
+    /// Captures metadata without durable reads on the actor. Only the complete
+    /// restore path supplies its already validated installed pairs; that sealed
+    /// set preserves nonauthorizing qualification before native startup. Live
+    /// cleanup edges are still published only after successful restore and exact
+    /// native qualification, never by this checkpoint marker alone.
+    fn checkpoint_agent_session_metadata_for_restore(
+        &mut self,
+        restoring: Option<&std::collections::BTreeSet<(String, String)>>,
+    ) -> Result<usize> {
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(0);
         };
@@ -738,15 +752,6 @@ impl RuntimeSessionService {
         let records = self
             .agent_shell_store()
             .sessions()
-            // A revoked persistent relationship remains runtime cleanup
-            // metadata, not a restorable ownership pair. Keep its history
-            // available for independent resume but omit its active binding so
-            // a later matching parent CID cannot recreate authority from the
-            // immutable saved contract or a default false runtime marker.
-            .filter(|session| {
-                self.persistent_subagent(&format!("agent-{}", session.pane_id))
-                    .is_none_or(|persistent| !persistent.close_authority_revoked)
-            })
             .filter(|session| runtime_pane_by_id(&self.session, &session.pane_id).is_ok())
             .filter(|session| {
                 session
@@ -791,6 +796,25 @@ impl RuntimeSessionService {
                     mezzanine_session_id: mezzanine_session_id.clone(),
                     pane_id: session.pane_id.clone(),
                     conversation_id: conversation_id.clone(),
+                    persistent_subagent_owned: {
+                        let agent_id = format!("agent-{}", session.pane_id);
+                        self.persistent_subagent_checkpoint_is_owned(&agent_id, &conversation_id)
+                            || restoring.is_some_and(|installed| {
+                                self.persistent_subagent(&agent_id)
+                                    .is_some_and(|persistent| {
+                                        !persistent.close_authority_revoked
+                                            && persistent.conversation_id == conversation_id
+                                            && installed.contains(&(
+                                                agent_id.clone(),
+                                                conversation_id.clone(),
+                                            ))
+                                            && installed.contains(&(
+                                                persistent.parent_agent_id.clone(),
+                                                persistent.parent_conversation_id.clone(),
+                                            ))
+                                    })
+                            })
+                    },
                     steering_recovery: self
                         .steering_recovery_checkpoint(&session.pane_id, &conversation_id)?,
                     primary_display_name: if session.ephemeral {

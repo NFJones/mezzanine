@@ -1297,6 +1297,67 @@ impl RuntimeSessionService {
         descendants.into_iter().map(|(_, child)| child).collect()
     }
 
+    /// Captures nonauthorizing checkpoint qualification from an existing exact
+    /// edge or a previously successful restore's still-current pending pair.
+    /// Projected owned-loop durable identity must match the original record.
+    /// A bare persistent contract, absent runtime record or matching CID cannot
+    /// create this evidence, and it never substitutes for live native proof.
+    pub(crate) fn persistent_subagent_checkpoint_is_owned(
+        &self,
+        child_agent_id: &str,
+        durable_conversation_id: &str,
+    ) -> bool {
+        let Some(persistent) = self
+            .persistent_subagent(child_agent_id)
+            .filter(|persistent| {
+                !persistent.close_authority_revoked
+                    && persistent.conversation_id == durable_conversation_id
+            })
+        else {
+            return false;
+        };
+        if self
+            .validated_subagent_cleanup_edge(child_agent_id, None)
+            .is_some_and(|edge| {
+                edge.parent.agent_id == persistent.parent_agent_id
+                    && edge.parent.conversation_id == persistent.parent_conversation_id
+            })
+        {
+            return true;
+        }
+        self.agent
+            .subagent_cleanup
+            .pending_restore
+            .get(child_agent_id)
+            .is_some_and(|pending| {
+                let Some(child_pane) = child_agent_id.strip_prefix("agent-") else {
+                    return false;
+                };
+                let Some(parent_pane) = pending.parent_agent_id.strip_prefix("agent-") else {
+                    return false;
+                };
+                pending.child_conversation_id == persistent.conversation_id
+                    && pending.parent_agent_id == persistent.parent_agent_id
+                    && pending.parent_conversation_id == persistent.parent_conversation_id
+                    && self.find_pane_descriptor(child_pane).is_some()
+                    && self.find_pane_descriptor(parent_pane).is_some()
+                    && self
+                        .agent_shell_store()
+                        .get(child_pane)
+                        .is_some_and(|shell| shell.session_id == pending.child_conversation_id)
+                    && self
+                        .agent_shell_store()
+                        .get(parent_pane)
+                        .is_some_and(|shell| shell.session_id == pending.parent_conversation_id)
+                    && pending.child_process.as_ref().is_none_or(|owner| {
+                        self.cleanup_process_owner(child_pane).as_ref() == Some(owner)
+                    })
+                    && pending.parent_process.as_ref().is_none_or(|owner| {
+                        self.cleanup_process_owner(parent_pane).as_ref() == Some(owner)
+                    })
+            })
+    }
+
     /// Rejects stale conversation callbacks before any descendant or direct
     /// macro-child closure, including a separately resumed child binding.
     pub(crate) fn subagent_cleanup_child_is_owned_by_turn(

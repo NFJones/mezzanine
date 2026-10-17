@@ -6,6 +6,48 @@
 
 use super::*;
 
+/// Restarts only this fixture's session/store with new runtime/native owners.
+/// Original manager children are terminated and reaped before replacement; the
+/// enclosing fixture owns every new child and cleans it on assertion failure.
+fn restore_fresh_runtime(fixture: &mut CleanupFixture) {
+    let mut session = fixture.service.session.clone();
+    fixture.service.terminate_all_pane_processes().unwrap();
+    let panes = session
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes())
+        .map(|pane| pane.id.to_string())
+        .collect::<Vec<_>>();
+    for pane in panes {
+        session.set_pane_live_state(&pane, false).unwrap();
+    }
+    let mut restarted = RuntimeServiceFixture::new()
+        .control_socket(fixture.root.join("restored.sock"))
+        .build_with_session(session);
+    restarted.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    restarted.set_agent_transcript_store(fixture.store.clone());
+    // Transfer the runtime before any new native startup, so fixture Drop also
+    // terminates/reaps new children if a later startup/assertion fails.
+    fixture.service = restarted;
+    fixture
+        .service
+        .restore_agent_sessions_from_transcript_store()
+        .unwrap();
+    fixture
+        .service
+        .start_initial_pane_process(Some("cat"))
+        .unwrap();
+    fixture
+        .service
+        .session
+        .set_pane_live_state("%1", true)
+        .unwrap();
+    fixture
+        .service
+        .restart_restored_pane_processes(Some("cat"))
+        .unwrap();
+}
+
 /// Real idle children and authoritative already-absent children cannot retain
 /// explicit-close authority across P1 -> P2 -> P1. A failed replacement restores
 /// the exact outgoing record and cleanup proof; successful replacement revokes
@@ -128,7 +170,17 @@ fn runtime_persistent_close_revocation_survives_local_native_handoff() {
             .close_subagent_descendants_for_parent_conversation(
                 "agent-%1",
                 &parent.conversation_id,
-                "original fenced cleanup remains mandatory"
+                "stale original callback remains inert"
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        fixture
+            .service
+            .close_subagent_descendants_for_parent_agent(
+                "agent-%1",
+                "current owner retains original fenced obligation"
             )
             .unwrap(),
         1
@@ -178,15 +230,177 @@ fn runtime_persistent_close_revoked_pair_cannot_rehydrate_from_checkpoint() {
         .store
         .load_agent_session_metadata(fixture.service.session().id.as_str())
         .unwrap();
-    assert!(!checkpoint.iter().any(|record| record.pane_id == pane));
-    assert!(!fixture.store.inspect(&original_child).unwrap().is_empty());
-    fixture
-        .service
-        .restore_agent_sessions_from_transcript_store()
+    let child_checkpoint = checkpoint
+        .iter()
+        .find(|record| record.pane_id == pane)
         .unwrap();
+    assert!(!child_checkpoint.persistent_subagent_owned);
+    assert!(!fixture.store.inspect(&original_child).unwrap().is_empty());
+    restore_fresh_runtime(&mut fixture);
     assert!(fixture.service.persistent_subagent(&child).is_none());
+    let native = fixture.native_identity(&child);
     assert_eq!(
         close_action(&mut fixture.service, &parent, &child).status,
         ActionStatus::Rejected
     );
+    fixture.assert_native_identity(&child, native);
+}
+
+/// Record absence after independent same-ID return or actual native replacement
+/// cannot be confused with a fresh persistent grant when checkpointing. Fresh
+/// runtime restoration retains historical bindings but no close/scopes proof.
+#[test]
+fn runtime_persistent_close_orphan_checkpoint_cannot_recreate_ownership() {
+    for mode in ["independent-return", "native-child", "native-parent"] {
+        let mut fixture = CleanupFixture::new();
+        let child = fixture.spawn("agent-%1");
+        let pane = child.strip_prefix("agent-").unwrap();
+        let original = fixture
+            .service
+            .persistent_subagent(&child)
+            .unwrap()
+            .conversation_id
+            .clone();
+        fixture.save(&original, None);
+        let parent = idle_parent_turn(&mut fixture);
+        if mode == "independent-return" {
+            fixture.save("orphan-intermediate", Some("agent-%1"));
+            fixture.resume(&child, "orphan-intermediate");
+            fixture.resume(&child, &original);
+        } else {
+            let replaced = if mode == "native-parent" { "%1" } else { pane };
+            let descriptor = fixture.service.find_pane_descriptor(replaced).unwrap();
+            fixture
+                .service
+                .terminate_runtime_pane_process(replaced, true)
+                .unwrap();
+            fixture
+                .service
+                .start_pane_process_with_start_directory(descriptor, Some("cat"), None)
+                .unwrap();
+        }
+        assert!(fixture.service.persistent_subagent(&child).is_none());
+        fixture.service.checkpoint_agent_session_metadata().unwrap();
+        let records = fixture
+            .store
+            .load_agent_session_metadata(fixture.service.session().id.as_str())
+            .unwrap();
+        let record = records
+            .iter()
+            .find(|record| record.pane_id == pane)
+            .unwrap();
+        assert_eq!(record.conversation_id, original);
+        assert!(!record.persistent_subagent_owned);
+        restore_fresh_runtime(&mut fixture);
+        assert_eq!(
+            fixture
+                .service
+                .agent_shell_store()
+                .get(pane)
+                .unwrap()
+                .session_id,
+            original
+        );
+        assert!(fixture.service.persistent_subagent(&child).is_none());
+        assert!(
+            !fixture
+                .service
+                .subagent_lineage_has_live_parent_authority(&child)
+        );
+        assert!(!fixture.service.has_subagent_scope_declaration(&child));
+        let native = fixture.native_identity(&child);
+        assert_eq!(
+            close_action(&mut fixture.service, &parent, &child).status,
+            ActionStatus::Rejected
+        );
+        fixture.assert_native_identity(&child, native);
+    }
+}
+
+/// A genuine sealed first-loop projection checkpoints the durable child CID
+/// with qualification, rather than the temporary UUID or a label-derived grant.
+#[test]
+fn runtime_persistent_close_owned_loop_checkpoints_exact_durable_qualification() {
+    let mut fixture = CleanupFixture::new();
+    let child = fixture.spawn("agent-%1");
+    let pane = child.strip_prefix("agent-").unwrap();
+    let original = fixture
+        .service
+        .persistent_subagent(&child)
+        .unwrap()
+        .conversation_id
+        .clone();
+    fixture
+        .service
+        .execute_agent_shell_loop_command(pane, "/loop --fork --limit 1 checkpoint owned loop")
+        .unwrap();
+    assert_ne!(
+        fixture
+            .service
+            .agent_shell_store()
+            .get(pane)
+            .unwrap()
+            .session_id,
+        original
+    );
+    fixture.service.checkpoint_agent_session_metadata().unwrap();
+    let records = fixture
+        .store
+        .load_agent_session_metadata(fixture.service.session().id.as_str())
+        .unwrap();
+    let record = records
+        .iter()
+        .find(|record| record.pane_id == pane)
+        .unwrap();
+    assert_eq!(record.conversation_id, original);
+    assert!(record.persistent_subagent_owned);
+}
+
+/// A true checkpoint marker cannot qualify a historical child against a
+/// different parent conversation installed by the same fresh restore. Native
+/// startup does not substitute for the missing original-parent pair.
+#[test]
+fn runtime_persistent_close_true_checkpoint_requires_original_parent_pair() {
+    let mut fixture = CleanupFixture::new();
+    let child = fixture.spawn("agent-%1");
+    let pane = child.strip_prefix("agent-").unwrap();
+    fixture.save("wrong-qualified-parent", None);
+    fixture.service.checkpoint_agent_session_metadata().unwrap();
+    let session_id = fixture.service.session().id.as_str().to_string();
+    let mut records = fixture
+        .store
+        .load_agent_session_metadata(&session_id)
+        .unwrap();
+    assert!(
+        records
+            .iter()
+            .find(|record| record.pane_id == pane)
+            .unwrap()
+            .persistent_subagent_owned
+    );
+    let parent = records
+        .iter_mut()
+        .find(|record| record.pane_id == "%1")
+        .unwrap();
+    parent.conversation_id = "wrong-qualified-parent".to_string();
+    parent.transcript_entries = 1;
+    parent.primary_display_name = None;
+    fixture
+        .store
+        .save_agent_session_metadata_checkpoint(&session_id, &records)
+        .unwrap();
+    restore_fresh_runtime(&mut fixture);
+    assert!(fixture.service.persistent_subagent(&child).is_none());
+    let current_parent = parent_turn(&mut fixture);
+    assert!(
+        !fixture
+            .service
+            .subagent_cleanup_child_is_owned_by_turn(&child, &current_parent)
+    );
+    let native = fixture.native_identity(&child);
+    assert_eq!(
+        close_action(&mut fixture.service, &current_parent, &child).status,
+        ActionStatus::Rejected
+    );
+    fixture.assert_native_identity(&child, native);
 }

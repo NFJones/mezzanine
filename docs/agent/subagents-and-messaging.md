@@ -89,6 +89,13 @@ replacement, with explicit-close authority irreversibly revoked for that
 relationship. It is not advertised as caller-owned, converted to a completed
 close, or checkpointed as an active owned pair. Saved child history remains
 available for independent resume; a matching UUID cannot recreate the grant.
+Active checkpoint metadata version 7 retains a separate, nonauthorizing
+qualification flag. Missing flags in older checkpoints mean false: historical
+bindings and preferences can restore structurally, but not as persistent owned
+pairs. True is captured only from the actual current relationship or its exact
+qualified restore operation, and still requires the original installed parent
+pair and native ownership checks. This changes the checkpoint format, not the
+Mezzanine configuration schema, and does not make saved history a grant.
 
 ### Saved lineage and live cleanup ownership
 
