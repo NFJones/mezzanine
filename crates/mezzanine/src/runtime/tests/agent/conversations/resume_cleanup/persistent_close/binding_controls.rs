@@ -37,8 +37,13 @@ fn runtime_persistent_close_new_and_clear_revoke_old_child_record() {
         let original = fixture.service.persistent_subagent(&child).unwrap().clone();
         let native = fixture.native_identity(&child);
         let parent = parent_turn(&mut fixture);
+        fixture
+            .service
+            .session
+            .select_pane_global(&fixture.primary, pane)
+            .unwrap();
         let response = fixture.service.dispatch_runtime_control_body(
-            &format!(r#"{{"jsonrpc":"2.0","id":"replace-child","method":"agent/shell/command","params":{{"pane_id":"{pane}","idempotency_key":"replace-child","input":"{command}"}}}}"#),
+            &format!(r#"{{"jsonrpc":"2.0","id":"replace-child","method":"agent/shell/command","params":{{"idempotency_key":"replace-child","input":"{command}"}}}}"#),
             &fixture.primary,
         );
         assert!(!response.contains("\"error\""), "{response}");

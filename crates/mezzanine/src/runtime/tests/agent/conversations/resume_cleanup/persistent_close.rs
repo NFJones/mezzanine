@@ -147,7 +147,8 @@ fn runtime_persistent_close_rejects_independently_resumed_child() {
         );
         fixture.resume(&child, "close-independent-target");
         if mode == "same-id-return" {
-            fixture.save(&original.conversation_id, Some("agent-%1"));
+            // Actual spawn already saved this immutable persistent contract.
+            fixture.save(&original.conversation_id, None);
             fixture.resume(&child, &original.conversation_id);
         }
         let session = fixture
@@ -157,19 +158,41 @@ fn runtime_persistent_close_rejects_independently_resumed_child() {
             .unwrap()
             .session_id
             .clone();
-        let child_turn = fixture
-            .service
-            .start_agent_prompt_turn(pane, "replacement task must survive")
-            .unwrap();
-        fixture
-            .service
-            .remove_pending_agent_provider_task(&child_turn.turn_id);
+        let child_turn_id = if mode == "root" {
+            // Ordinary root prompt admission after delegated-pane resume hits
+            // the separate MMP sender-role conflict. Isolate close ownership
+            // using synthetic queued root work, retaining actual saved resume,
+            // native process and MMP identity. Root prompt startup is NOT
+            // qualified by this fixture; subagent modes use real admission.
+            let mut queued = parent.clone();
+            queued.turn_id = "synthetic-replacement-root-task".to_string();
+            queued.conversation_id = session.clone();
+            queued.agent_id = child.clone();
+            queued.pane_id = pane.to_string();
+            queued.parent_turn_id = None;
+            fixture
+                .service
+                .agent_turn_ledger_mut()
+                .queue_turn(queued.clone())
+                .unwrap();
+            queued.turn_id
+        } else {
+            let started = fixture
+                .service
+                .start_agent_prompt_turn(pane, "replacement task must survive")
+                .unwrap();
+            fixture
+                .service
+                .remove_pending_agent_provider_task(&started.turn_id);
+            started.turn_id
+        };
         let task = fixture
             .service
             .agent_turn_ledger()
-            .turn(&child_turn.turn_id)
+            .turn(&child_turn_id)
             .unwrap()
             .clone();
+        let context = fixture.store.inspect(&session).unwrap();
         let shell = fixture
             .service
             .agent_shell_store()
@@ -201,12 +224,10 @@ fn runtime_persistent_close_rejects_independently_resumed_child() {
             session
         );
         assert_eq!(
-            fixture
-                .service
-                .agent_turn_ledger()
-                .turn(&child_turn.turn_id),
+            fixture.service.agent_turn_ledger().turn(&child_turn_id),
             Some(&task)
         );
+        assert_eq!(fixture.store.inspect(&session).unwrap(), context);
         assert_eq!(
             fixture
                 .service
@@ -357,7 +378,7 @@ fn runtime_persistent_close_preserves_same_owned_child_and_loop() {
         let native = fixture.native_identity(&child);
         let parent = parent_turn(&mut fixture);
         if mode == "same-conversation" {
-            fixture.save(&original.conversation_id, Some("agent-%1"));
+            fixture.save(&original.conversation_id, None);
             fixture.resume(&child, &original.conversation_id);
         } else {
             fixture
