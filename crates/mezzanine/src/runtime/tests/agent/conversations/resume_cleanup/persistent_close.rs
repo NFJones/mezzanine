@@ -80,19 +80,22 @@ fn denial(result: &ActionResult) -> (ActionStatus, Option<String>, Option<String
 }
 
 /// Requires a shell-generated receipt containing its own PID, not input echo.
-/// Paths and markers are exclusively generated ASCII fixture data.
+/// The fixture explicitly requires a UTF-8 temporary path and quotes it as one
+/// POSIX shell word; arbitrary apostrophes cannot masquerade as a close failure.
 fn assert_input(fixture: &mut CleanupFixture, child: &str, pid: u32, marker: &str) {
     let pane = child.strip_prefix("agent-").unwrap();
     let receipt = fixture.root.join("close-input-receipt");
+    let quoted_receipt = mez_agent::shell::shell_quote(
+        receipt
+            .to_str()
+            .expect("input receipt fixture requires a UTF-8 TMPDIR"),
+    );
+    let quoted_marker = mez_agent::shell::shell_quote(marker);
     fixture
         .service
         .write_runtime_pane_input(
             pane,
-            format!(
-                "printf '%s:%s\\n' \"$$\" '{marker}' >> '{}'\n",
-                receipt.display()
-            )
-            .as_bytes(),
+            format!("printf '%s:%s\\n' \"$$\" {quoted_marker} >> {quoted_receipt}\n").as_bytes(),
         )
         .unwrap();
     let expected = format!("{pid}:{marker}");
@@ -354,6 +357,16 @@ fn runtime_persistent_close_preserves_same_owned_child_and_loop() {
                     &format!("/loop {mode} --limit 1 fixture-owned iteration"),
                 )
                 .unwrap();
+            assert_eq!(fixture.service.agent_loop_state(pane).unwrap().iteration, 1);
+            assert_ne!(
+                fixture
+                    .service
+                    .agent_shell_store()
+                    .get(pane)
+                    .unwrap()
+                    .session_id,
+                original.conversation_id
+            );
         }
         assert!(
             fixture
