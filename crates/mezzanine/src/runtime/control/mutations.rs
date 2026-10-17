@@ -1187,11 +1187,14 @@ impl RuntimeSessionService {
                 .capabilities
                 .iter()
                 .any(|cap| cap == "external-harness");
-            if !existing.capabilities.is_empty() && (!runtime_harness || foreign_harness) {
+            if foreign_harness {
                 return Err(MezError::conflict(
                     "runtime agent identity has conflicting harness metadata",
                 ));
             }
+            // A missing native qualifier is not an invalid routing vector.
+            // Without positive qualification do not normalize anything: the
+            // original candidate still crosses ordinary lower reconciliation.
             if runtime_harness
                 && !foreign_harness
                 && existing.pane_id == pane_id

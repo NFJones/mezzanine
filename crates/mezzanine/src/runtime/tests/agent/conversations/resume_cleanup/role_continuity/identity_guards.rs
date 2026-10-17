@@ -96,14 +96,7 @@ fn runtime_native_refresh_preserves_defaults_but_rejects_creation_conflicts() {
 /// wildcard that silently adopts it. Every rejection retains the whole owner.
 #[test]
 fn runtime_native_refresh_rejects_project_pane_window_and_harness_confusion() {
-    for confusion in [
-        "project",
-        "pane",
-        "window",
-        "foreign",
-        "mixed",
-        "missing-harness",
-    ] {
+    for confusion in ["project", "pane", "window", "foreign", "mixed"] {
         let mut fixture = CleanupFixture::new();
         let pane = PaneId::opaque("%1").unwrap();
         let descriptor = fixture.service.find_pane_descriptor("%1").unwrap();
@@ -154,11 +147,7 @@ fn runtime_native_refresh_rejects_project_pane_window_and_harness_confusion() {
                 registered.capabilities.push("external-harness".into());
                 "harness"
             }
-            _ => {
-                registered.role = Some("agent".into());
-                registered.capabilities = vec!["unrelated-registration".into()];
-                "harness"
-            }
+            _ => unreachable!("confusion cases are fixed fixture labels"),
         };
         fixture
             .service
@@ -172,6 +161,45 @@ fn runtime_native_refresh_rejects_project_pane_window_and_harness_confusion() {
             .unwrap_err();
         assert!(error.message().contains(expected), "{confusion}: {error}");
         assert_eq!(message_snapshot(&fixture.service), before, "{confusion}");
+    }
+}
+
+/// Missing native qualification is not a blanket registration error. Ordinary
+/// same-role/empty refresh preserves arbitrary routing labels, while a role
+/// change or populated capability replacement still fails through lower atomic
+/// reconciliation. Labels do not become native qualification or an exemption.
+#[test]
+fn runtime_native_refresh_without_qualification_keeps_ordinary_lower_rules() {
+    for role in ["agent", "worker"] {
+        let mut fixture = CleanupFixture::new();
+        let created = fixture
+            .service
+            .ensure_runtime_message_identity(
+                "agent-%1",
+                None,
+                role,
+                &["reviewer-route", "local-audience"],
+                10,
+            )
+            .unwrap();
+        let before = message_snapshot(&fixture.service);
+        let refreshed =
+            fixture
+                .service
+                .ensure_runtime_message_identity("agent-%1", None, "agent", &[], 11);
+        if role == "agent" {
+            assert_eq!(refreshed.unwrap(), created);
+        } else {
+            let error = refreshed.unwrap_err();
+            assert!(error.message().contains("role cannot change"));
+        }
+        assert_eq!(message_snapshot(&fixture.service), before);
+        let error = fixture
+            .service
+            .ensure_runtime_message_identity("agent-%1", None, role, &["agent-harness"], 12)
+            .unwrap_err();
+        assert!(error.message().contains("capabilities cannot change"));
+        assert_eq!(message_snapshot(&fixture.service), before);
     }
 }
 
