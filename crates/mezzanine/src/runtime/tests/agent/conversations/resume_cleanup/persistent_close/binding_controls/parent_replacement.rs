@@ -12,7 +12,7 @@ mod fresh_spawn;
 /// Original manager children are terminated and reaped before replacement; the
 /// enclosing fixture owns every new child and cleans it on assertion failure.
 fn restore_fresh_runtime(fixture: &mut CleanupFixture) {
-    let mut session = fixture.service.session.clone();
+    let mut session = fixture.service.session().clone();
     fixture.service.terminate_all_pane_processes().unwrap();
     let panes = session
         .windows()
