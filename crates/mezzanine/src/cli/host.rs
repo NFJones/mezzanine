@@ -665,6 +665,8 @@ mod tests {
 
     use super::*;
 
+    mod native_stop;
+
     /// Remote listener failure remains the reported service error only after
     /// the local Unix listener has completed its shutdown path.
     #[tokio::test(flavor = "current_thread")]
