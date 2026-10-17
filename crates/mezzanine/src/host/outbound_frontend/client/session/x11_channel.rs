@@ -96,7 +96,7 @@ impl X11ChannelOpener {
         let opener = Self {
             discovery,
             name: name.to_string(),
-            device: socket.st_dev,
+            device: stat_device(&socket),
             inode: socket.st_ino,
             handle,
             session,
@@ -124,7 +124,7 @@ impl X11ChannelOpener {
                 "outbound X11 dedicated socket must remain private",
             ));
         }
-        if socket.st_dev != self.device || socket.st_ino != self.inode {
+        if stat_device(&socket) != self.device || socket.st_ino != self.inode {
             return Err(MezError::conflict("outbound X11 dedicated socket changed"));
         }
         Ok(())

@@ -196,10 +196,29 @@ Completed summaries are also checked before private chunk/synthesis staging.
 Empty or malformed output, oversized UTF-8 text, and text above the frozen word
 or estimated-input-token allowance retry only auxiliary summarization of the
 same validated source. The rejected text is not published or quoted back. The
-model receives the local unit/byte target separately from the provider's output
-token ceiling and response-framing overhead. Oversize corrections tighten that
-ceiling and must shrink every still-invalid size dimension; ignored guidance
-fails visibly. Empty/malformed output gets at most two corrections per current
+model receives the actual word/input-token unit and independent UTF-8 byte bound.
+Compaction keeps its raw-text provider contract. If the model instead returns
+the requested final-say JSON or `mezzanine-action-json` frame, local validation
+extracts that one final payload before measuring or publishing it; malformed
+frames consume the same finite correction budget, never execution authority.
+Unframed JSON is recognized only by a top-level rationale plus an actions array
+with type-tagged objects (or empty actions), not an isolated field name. Unknown
+or non-final typed actions still fail validation. Ordinary JSON/data/code fences
+and incomplete unframed JSON remain raw summary text under the same local bounds;
+an explicit `mezzanine-action-json` fence also identifies incomplete frames.
+Shorter correction guidance never becomes a stricter semantic acceptance limit:
+a summary fitting the original allowance proceeds to complete-request fit even
+above guidance. OpenAI never receives `max_output_tokens` in ordinary, compaction,
+auxiliary or retry requests, streaming or not. Existing omission/cache behavior
+is intentional; other providers retain genuinely supported generation controls
+and configured framing/reasoning headroom. Still-invalid output must shrink each
+fixed invalid dimension. Guidance stays nonzero and invalid output at the issued
+floor fails with typed, content-free provenance rather than halving to zero.
+Full-request fit and nonreducing-candidate checks still decide publication; no
+summary is truncated and no ordinary action is replayed. Auxiliary diagnostics
+separate phase/generation, frozen units, measured sizes, advisory targets and
+actual admitted corrections from ordinary MAAP recovery counts.
+Empty/malformed output gets at most two corrections per current
 source, even with unlimited transport retries. Advancing legitimate chunks or
 ranges has no arbitrary total-response cap. Earlier accepted summaries stay
 private until the complete replay fits. Known auxiliary expense counts once,

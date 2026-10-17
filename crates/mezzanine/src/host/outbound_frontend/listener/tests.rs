@@ -10,6 +10,36 @@ use futures_util::{SinkExt, StreamExt};
 use std::os::unix::fs::PermissionsExt;
 use tokio_util::codec::Framed;
 
+/// Cleanup must require both device and inode equality, even when the other
+/// component still matches a real socket. Synthetic stale evidence isolates
+/// each guard without depending on multiple mounted devices or inode reuse.
+#[test]
+fn outbound_frontend_cleanup_preserves_device_or_inode_mismatch() {
+    use std::os::unix::fs::MetadataExt;
+    for change_device in [true, false] {
+        let root =
+            std::env::temp_dir().join(format!("mez-clean-id-{:032x}", rand::random::<u128>()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join(SOCKET_NAME);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        let publication = SocketPublication {
+            directory: std::fs::File::open(&root).unwrap(),
+            path: path.clone(),
+            device: metadata.dev() ^ u64::from(change_device),
+            inode: metadata.ino() ^ u64::from(!change_device),
+        };
+        drop(publication);
+        let current = std::fs::symlink_metadata(&path).unwrap();
+        assert_eq!(
+            (current.dev(), current.ino()),
+            (metadata.dev(), metadata.ino())
+        );
+        drop(listener);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// The real supervisor must advance a later hello while an earlier peer is
 /// silent. Cancellation disposes both owned pipelines and releases capacity;
 /// listener disposal and graceful endpoint shutdown remain caller-owned.

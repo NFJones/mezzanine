@@ -1706,6 +1706,12 @@ The internal readiness connector authenticates the Unix peer and negotiates a
 bounded hello while retaining the exact local stream. Discovery checks private
 root/socket identity without creating or replacing state; socket existence alone
 does not establish readiness or remote session authority.
+Election, discovery and listener cleanup compare both device and inode through
+no-follow observations and retained directory descriptors. Native stat device
+numbers use std's u64 identity representation: full-width unsigned on Linux,
+sign-extended from signed 32-bit on macOS, including high-bit device values.
+Cleanup preserves observed replacement sockets; its final check/unlink remains
+a cooperative same-user boundary, not atomic compare-and-delete.
 Internal startup composition now joins election and readiness under one deadline,
 invoking at most one caller-supplied launcher for missing/refused discovery. It
 reprobes after election and retains the guard until readiness. Protocol and

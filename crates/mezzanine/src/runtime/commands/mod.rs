@@ -2165,7 +2165,12 @@ mod tests {
             provider_transcript_events: Vec::new(),
         };
 
-        let summary = runtime_model_compaction_summary_from_response(&response).unwrap();
+        let summary = runtime_model_compaction_summary_from_response(
+            &response,
+            "compact-fixture",
+            "agent-%1",
+        )
+        .unwrap();
 
         assert_eq!(summary, "## Summary\n\nKeep this.");
     }
