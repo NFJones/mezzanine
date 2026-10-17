@@ -97,14 +97,28 @@ impl RuntimeBookkeepingCandidate {
     /// This is an in-process handoff identity, not a new transcript wire format.
     pub(crate) fn completion_snapshot_bytes(&self) -> Result<Vec<u8>> {
         use std::os::unix::ffi::OsStrExt;
+        // These are the two existing producer namespaces, not arbitrary keys.
+        let key_matches_original = self.persistence_key.0 == self.turn.conversation_id
+            && (self.persistence_key.1 == self.turn.turn_id
+                || self.persistence_key.1 == format!("interrupted:{}", self.turn.turn_id));
         if self.read.conversation_id != self.turn.conversation_id
             || self.read.pane_id != self.turn.pane_id
             || self.read.turn_id != self.turn.turn_id
-            || self.persistence_key
-                != (self.turn.conversation_id.clone(), self.turn.turn_id.clone())
+            || !key_matches_original
         {
             return Err(MezError::invalid_state(
                 "completion candidate differs from original transcript owner",
+            ));
+        }
+        if self
+            .entries
+            .iter()
+            .chain(self.directory.iter())
+            .chain(self.read.pending.iter())
+            .any(|entry| entry.conversation_id != self.turn.conversation_id)
+        {
+            return Err(MezError::invalid_state(
+                "completion candidate contains foreign conversation evidence",
             ));
         }
         #[derive(serde::Serialize)]
