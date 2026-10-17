@@ -8,6 +8,7 @@
 use super::*;
 
 mod loop_routing;
+mod persistent_close;
 mod role_continuity;
 
 /// Owns one private generated session and its native delegation fixtures.

@@ -19,6 +19,10 @@ pub struct AgentSessionMetadata {
     pub pane_id: String,
     /// Durable conversation identity bound to the pane.
     pub conversation_id: String,
+    /// Nonauthorizing qualification captured from an actual current persistent
+    /// relationship. False/legacy metadata restores history structurally only;
+    /// true still requires the same restore's exact parent pair and native proof.
+    pub persistent_subagent_owned: bool,
     /// Immutable primary display identity; absent for legacy or child bindings.
     pub primary_display_name: Option<String>,
     /// Stable prompt-cache lineage identity for provider routing continuity.

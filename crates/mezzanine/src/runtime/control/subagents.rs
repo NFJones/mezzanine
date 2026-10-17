@@ -1049,6 +1049,7 @@ impl RuntimeSessionService {
                     parent_agent_id: spawn.parent_agent_id.clone(),
                     parent_conversation_id: parent_conversation_id.clone(),
                     objective: objective.clone(),
+                    close_authority_revoked: false,
                 },
             );
         }

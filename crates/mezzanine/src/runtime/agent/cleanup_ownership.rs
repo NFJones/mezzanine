@@ -34,6 +34,9 @@ pub(super) struct RuntimeSubagentCleanupState {
     /// Exercises failure after owned parent restoration but before child release.
     #[cfg(test)]
     fail_routed_recovery_before_release: bool,
+    /// Exercises the final persistent checkpoint before any proof is published.
+    #[cfg(test)]
+    fail_fresh_persistent_checkpoint: bool,
 }
 
 /// Current exclusive runtime owner of one captured conversation binding.
@@ -408,17 +411,15 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Atomically publishes a successful actual fresh delegation's capability.
-    /// Both bindings are checked against the original prepared parent and
-    /// actual native child; a replacement conversation is never recaptured.
-    /// The spawn owner calls this after response preparation and all fallible
-    /// setup, rolling back its newly created child if validation fails.
-    pub(crate) fn commit_fresh_subagent_cleanup_ownership(
-        &mut self,
-        prepared: RuntimePreparedCleanupParent,
+    /// Validates the exact prepared parent and actual fresh child without
+    /// publishing a capability. The non-Clone token belongs to the real spawn
+    /// owner; saved lineage cannot prepare or substitute this operation.
+    fn validated_fresh_subagent_cleanup_edge(
+        &self,
+        prepared: &RuntimePreparedCleanupParent,
         child_agent_id: &str,
-    ) -> Result<()> {
-        let parent = prepared.binding;
+    ) -> Result<RuntimeSubagentCleanupOwnership> {
+        let parent = prepared.binding.clone();
         let pane = parent.agent_id.strip_prefix("agent-").ok_or_else(|| {
             MezError::invalid_state("prepared cleanup parent identity is invalid")
         })?;
@@ -461,7 +462,8 @@ impl RuntimeSessionService {
         let persistent_matches =
             self.persistent_subagent(child_agent_id)
                 .is_none_or(|persistent| {
-                    persistent.parent_agent_id == parent.agent_id
+                    !persistent.close_authority_revoked
+                        && persistent.parent_agent_id == parent.agent_id
                         && persistent.parent_conversation_id == parent.conversation_id
                         && persistent.conversation_id == child.conversation_id
                 });
@@ -470,23 +472,68 @@ impl RuntimeSessionService {
                 "fresh delegation cleanup binding changed during setup",
             ));
         }
+        Ok(RuntimeSubagentCleanupOwnership {
+            current_parent_conversation_id: parent.conversation_id.clone(),
+            parent,
+            child,
+        })
+    }
+
+    /// Captures/enqueues qualified metadata before the final infallible proof
+    /// commit. Synchronous capture/write failure publishes no Local capability
+    /// or edge and the spawn owner rolls back its actual child. With the adapter,
+    /// durability completes later: existing generation-fenced retries preserve
+    /// this actual relationship and must never replay spawn or transfer ownership.
+    pub(crate) fn commit_fresh_subagent_cleanup_ownership(
+        &mut self,
+        prepared: RuntimePreparedCleanupParent,
+        child_agent_id: &str,
+    ) -> Result<()> {
+        let edge = self.validated_fresh_subagent_cleanup_edge(&prepared, child_agent_id)?;
+        if self.persistent_subagent(child_agent_id).is_some() {
+            #[cfg(test)]
+            if std::mem::take(&mut self.agent.subagent_cleanup.fail_fresh_persistent_checkpoint)
+                && let Some(store) = self.persistence.cloned_transcript_store()
+            {
+                store.fail_next_agent_session_metadata_write();
+            }
+            self.checkpoint_agent_session_metadata_for_fresh(&prepared, child_agent_id)?;
+        }
         if prepared.reserved_local
-            && let CleanupProcessOwner::Local(generation) = &parent.process
+            && let CleanupProcessOwner::Local(generation) = &edge.parent.process
         {
             self.agent
                 .subagent_cleanup
                 .local_parents
-                .insert(parent.agent_id.clone(), *generation);
+                .insert(edge.parent.agent_id.clone(), *generation);
         }
-        self.agent.subagent_cleanup.ownership.insert(
-            child_agent_id.to_string(),
-            RuntimeSubagentCleanupOwnership {
-                current_parent_conversation_id: parent.conversation_id.clone(),
-                parent,
-                child,
-            },
-        );
+        self.agent
+            .subagent_cleanup
+            .ownership
+            .insert(child_agent_id.to_string(), edge);
         Ok(())
+    }
+
+    /// Qualifies only the exact child inside the already validated real fresh
+    /// spawn operation. This is inert capture evidence, never a live edge.
+    pub(crate) fn prepared_fresh_subagent_checkpoint_is_owned(
+        &self,
+        prepared: &RuntimePreparedCleanupParent,
+        spawned_child: &str,
+        checkpoint_child: &str,
+        durable_conversation_id: &str,
+    ) -> bool {
+        spawned_child == checkpoint_child
+            && self.persistent_subagent(spawned_child).is_some()
+            && self
+                .validated_fresh_subagent_cleanup_edge(prepared, spawned_child)
+                .is_ok_and(|edge| edge.child.conversation_id == durable_conversation_id)
+    }
+
+    /// Injects a pre-publication checkpoint failure after all real spawn setup.
+    #[cfg(test)]
+    pub(crate) fn fail_next_fresh_subagent_checkpoint_for_tests(&mut self) {
+        self.agent.subagent_cleanup.fail_fresh_persistent_checkpoint = true;
     }
 
     /// Retires a shell/pane lifetime so identical later labels or conversation
@@ -494,6 +541,14 @@ impl RuntimeSessionService {
     /// replacement uses fencing instead and must not call this operation.
     pub(crate) fn retire_subagent_cleanup_pane_binding(&mut self, pane_id: &str) {
         let agent_id = format!("agent-{pane_id}");
+        self.retire_persistent_close_evidence_for_parent(&agent_id);
+        // Reusing a logical/native parent lifetime cannot reclaim even an
+        // already-absent child through leftover persistent metadata. Do not
+        // erase this pane's OWN incoming record here: centralized successful
+        // child retirement still captures it for the bounded repeat-close path.
+        self.agent
+            .persistent_subagents
+            .retain(|_, persistent| persistent.parent_agent_id != agent_id);
         self.agent
             .subagent_cleanup
             .owned_loops
@@ -827,7 +882,8 @@ impl RuntimeSessionService {
     ) {
         self.agent.subagent_cleanup.pending_restore.clear();
         for (child, persistent) in &self.agent.persistent_subagents {
-            if installed.contains(&(child.clone(), persistent.conversation_id.clone()))
+            if !persistent.close_authority_revoked
+                && installed.contains(&(child.clone(), persistent.conversation_id.clone()))
                 && installed.contains(&(
                     persistent.parent_agent_id.clone(),
                     persistent.parent_conversation_id.clone(),
@@ -928,6 +984,35 @@ impl RuntimeSessionService {
             .local_parents
             .remove(&agent_id)
             .map(CleanupProcessOwner::Local);
+        // Metadata alone cannot survive a superseding native owner and later
+        // become completed-close evidence. The only first-install exception is
+        // an exact pair installed by the existing successful restore operation;
+        // pending qualification still grants no live close until both owners
+        // publish their strict edge. Actual manager/adapter handoff uses the
+        // separate proof migration path, never this replacement operation.
+        self.agent.retired_persistent_subagents.remove(&agent_id);
+        if local.is_none() {
+            self.retire_persistent_close_evidence_for_parent(&agent_id);
+        }
+        let pending = &self.agent.subagent_cleanup.pending_restore;
+        self.agent.persistent_subagents.retain(|child, persistent| {
+            let child_first_restore = pending.get(child).is_some_and(|restore| {
+                restore.child_process.is_none()
+                    && restore.child_conversation_id == persistent.conversation_id
+                    && restore.parent_agent_id == persistent.parent_agent_id
+                    && restore.parent_conversation_id == persistent.parent_conversation_id
+            });
+            let parent_first_restore = pending.get(child).is_some_and(|restore| {
+                restore.parent_process.is_none()
+                    && restore.child_conversation_id == persistent.conversation_id
+                    && restore.parent_agent_id == persistent.parent_agent_id
+                    && restore.parent_conversation_id == persistent.parent_conversation_id
+            });
+            (child != &agent_id || local.is_some() || child_first_restore)
+                && (persistent.parent_agent_id != agent_id
+                    || local.is_some()
+                    || parent_first_restore)
+        });
         self.agent.subagent_cleanup.ownership.retain(|_, edge| {
             (edge.parent.agent_id != agent_id || local.as_ref() == Some(&edge.parent.process))
                 && (edge.child.agent_id != agent_id || local.as_ref() == Some(&edge.child.process))
@@ -1257,6 +1342,67 @@ impl RuntimeSessionService {
             right_depth.cmp(left_depth).then_with(|| left.cmp(right))
         });
         descendants.into_iter().map(|(_, child)| child).collect()
+    }
+
+    /// Captures nonauthorizing checkpoint qualification from an existing exact
+    /// edge or a previously successful restore's still-current pending pair.
+    /// Projected owned-loop durable identity must match the original record.
+    /// A bare persistent contract, absent runtime record or matching CID cannot
+    /// create this evidence, and it never substitutes for live native proof.
+    pub(crate) fn persistent_subagent_checkpoint_is_owned(
+        &self,
+        child_agent_id: &str,
+        durable_conversation_id: &str,
+    ) -> bool {
+        let Some(persistent) = self
+            .persistent_subagent(child_agent_id)
+            .filter(|persistent| {
+                !persistent.close_authority_revoked
+                    && persistent.conversation_id == durable_conversation_id
+            })
+        else {
+            return false;
+        };
+        if self
+            .validated_subagent_cleanup_edge(child_agent_id, None)
+            .is_some_and(|edge| {
+                edge.parent.agent_id == persistent.parent_agent_id
+                    && edge.parent.conversation_id == persistent.parent_conversation_id
+            })
+        {
+            return true;
+        }
+        self.agent
+            .subagent_cleanup
+            .pending_restore
+            .get(child_agent_id)
+            .is_some_and(|pending| {
+                let Some(child_pane) = child_agent_id.strip_prefix("agent-") else {
+                    return false;
+                };
+                let Some(parent_pane) = pending.parent_agent_id.strip_prefix("agent-") else {
+                    return false;
+                };
+                pending.child_conversation_id == persistent.conversation_id
+                    && pending.parent_agent_id == persistent.parent_agent_id
+                    && pending.parent_conversation_id == persistent.parent_conversation_id
+                    && self.find_pane_descriptor(child_pane).is_some()
+                    && self.find_pane_descriptor(parent_pane).is_some()
+                    && self
+                        .agent_shell_store()
+                        .get(child_pane)
+                        .is_some_and(|shell| shell.session_id == pending.child_conversation_id)
+                    && self
+                        .agent_shell_store()
+                        .get(parent_pane)
+                        .is_some_and(|shell| shell.session_id == pending.parent_conversation_id)
+                    && pending.child_process.as_ref().is_none_or(|owner| {
+                        self.cleanup_process_owner(child_pane).as_ref() == Some(owner)
+                    })
+                    && pending.parent_process.as_ref().is_none_or(|owner| {
+                        self.cleanup_process_owner(parent_pane).as_ref() == Some(owner)
+                    })
+            })
     }
 
     /// Rejects stale conversation callbacks before any descendant or direct

@@ -1151,6 +1151,7 @@ fn runtime_close_agent_retires_owned_persistent_child_runtime_state() {
             parent_agent_id: parent_turn.agent_id.clone(),
             parent_conversation_id: parent_turn.conversation_id.clone(),
             objective: "stale persistent child".to_string(),
+            close_authority_revoked: false,
         },
     );
     let stale = execute_close_agent_for_test(&mut service, &parent_turn, "agent-%997");

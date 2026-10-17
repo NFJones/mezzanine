@@ -21,6 +21,7 @@ fn valid_checkpoint() -> AgentSessionMetadata {
         mezzanine_session_id: "$1".to_string(),
         pane_id: "%1".to_string(),
         conversation_id: "conversation-1".to_string(),
+        persistent_subagent_owned: false,
         primary_display_name: None,
         steering_recovery: Vec::new(),
         prompt_cache_lineage_id: "lineage-1".to_string(),
