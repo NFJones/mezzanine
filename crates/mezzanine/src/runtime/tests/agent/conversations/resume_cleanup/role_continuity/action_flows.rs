@@ -7,6 +7,7 @@
 //! forged planned result. No live credential, MCP or provider transport runs.
 
 use super::*;
+use crate::runtime::current_unix_seconds;
 use mez_agent::messaging::{Envelope, MessageScope, ProjectMembership, Recipient};
 use std::time::{Duration, Instant};
 
