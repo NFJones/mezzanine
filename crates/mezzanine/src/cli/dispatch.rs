@@ -9,6 +9,7 @@
 use clap::CommandFactory;
 
 use super::env::{CliArgv, CliArgvParse};
+use super::native_exit::{CliExit, CliNativeOwnership};
 use super::{
     CliCommand, CliInvocation, ConfigPaths, IsTerminal, MezError, OsString, PathBuf, Result,
     RuntimeEnv, Write, cli_idempotency_key, ensure_host_available, ensure_private_socket_directory,
@@ -26,23 +27,31 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub fn run() -> u8 {
+pub fn run() -> CliExit {
     let args = std::env::args().collect::<Vec<_>>();
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
 
-    match run_process(args, &mut stdout) {
+    let mut native = CliNativeOwnership::default();
+    let code = match run_process_retained(args, &mut stdout, &mut native) {
         Ok(code) => code,
         Err(error) => {
             let _ = writeln!(stderr, "mez: {error}");
             1
         }
+    };
+    if let Some(error) = &native.cleanup_diagnostic {
+        let _ = writeln!(stderr, "mez: native cleanup: {error}");
     }
+    CliExit::owned(code, native)
 }
 
-/// Runs argument-only recovery before loading strict policy or creating Tokio.
-/// Errors preserve the process exit-one diagnostic boundary in `run`.
-fn run_process<W: Write>(args: Vec<String>, stdout: &mut W) -> Result<u8> {
+/// Keeps native ownership outside Tokio, including runtime destruction.
+fn run_process_retained<W: Write>(
+    args: Vec<String>,
+    stdout: &mut W,
+    native: &mut CliNativeOwnership,
+) -> Result<u8> {
     let Some(parsed) = prepare_command(&args, ConfigPaths::from_process_env, stdout)? else {
         return Ok(0);
     };
@@ -58,12 +67,20 @@ fn run_process<W: Write>(args: Vec<String>, stdout: &mut W) -> Result<u8> {
     let env = CliEnv::from_process();
     let invocation = parsed.into_invocation(&env.runtime, env.mez.as_ref())?;
     let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
-    runtime.block_on(Box::pin(run_invocation(
+    let result = runtime.block_on(Box::pin(run_invocation(
         invocation,
         env,
         interactive,
         stdout,
-    )))
+        native,
+    )));
+    // Preserve the primary command result while recording a secondary bounded
+    // native verdict. Ownership survives runtime Drop and late task returns.
+    let _ = runtime.block_on(native.cleanup(
+        tokio::time::Instant::now() + crate::host::async_runtime::NATIVE_PANE_RETIREMENT_TIMEOUT,
+    ));
+    drop(runtime);
+    result
 }
 
 /// Parses once and executes only dependency-minimal display/diagnostic intents.
@@ -203,7 +220,27 @@ async fn run_with_inner<W: Write, E: Write>(
         return Ok(0);
     };
     let invocation = parsed.into_invocation(&env.runtime, env.mez.as_ref())?;
-    Box::pin(run_invocation(invocation, env, interactive, stdout)).await
+    let mut native = CliNativeOwnership::default();
+    let result = Box::pin(run_invocation(
+        invocation,
+        env,
+        interactive,
+        stdout,
+        &mut native,
+    ))
+    .await;
+    native
+        .cleanup(
+            tokio::time::Instant::now()
+                + crate::host::async_runtime::NATIVE_PANE_RETIREMENT_TIMEOUT,
+        )
+        .await?;
+    if native.pending_count()? != 0 {
+        return Err(MezError::invalid_state(
+            "test CLI adapter cannot discard pending native ownership",
+        ));
+    }
+    result
 }
 
 /// Dispatches a runtime-dependent intent; recovery has already returned.
@@ -212,6 +249,7 @@ async fn run_invocation<W: Write>(
     env: CliEnv,
     interactive: bool,
     stdout: &mut W,
+    native: &mut CliNativeOwnership,
 ) -> Result<u8> {
     if invocation.control_target.is_unix()
         && !matches!(
@@ -336,7 +374,7 @@ async fn run_invocation<W: Write>(
         }
         Some(CliCommand::Config(args)) => run_config(args, env, output_format, stdout).await?,
         Some(CliCommand::Host(args)) => {
-            Box::pin(run_host(args, env, output_format, stdout)).await?
+            Box::pin(run_host(args, env, output_format, stdout, native)).await?
         }
         Some(CliCommand::Lease(args)) => {
             Box::pin(run_lease(
@@ -418,6 +456,7 @@ async fn run_invocation<W: Write>(
                 interactive,
                 output_format,
                 stdout,
+                native,
             ))
             .await?
         }
@@ -575,6 +614,7 @@ async fn run_invocation<W: Write>(
                 interactive,
                 output_format,
                 stdout,
+                native,
             ))
             .await?;
         }
@@ -634,7 +674,14 @@ fn cli_dispatch_future_has_bounded_inline_state() {
         None,
     )
     .unwrap();
-    let future = run_invocation(invocation, CliEnv::default(), false, &mut output);
+    let mut native = CliNativeOwnership::default();
+    let future = run_invocation(
+        invocation,
+        CliEnv::default(),
+        false,
+        &mut output,
+        &mut native,
+    );
     let bytes = std::mem::size_of_val(&future);
     assert!(
         bytes <= 64 * 1024,

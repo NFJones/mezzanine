@@ -12,7 +12,8 @@ use mez_terminal::TerminalSize;
 
 use super::pane::PaneProcess;
 use super::process_metadata::RawEnvironmentEntry;
-use super::spawn::{spawn_pane_process, spawn_pane_process_with_start_directory};
+use super::retirement::PaneProcessRetirementOwner;
+use super::spawn::spawn_pane_process_retained;
 use super::types::{
     ExitedPaneProcess, PaneExitStatus, PaneProcessEnvironment, PaneProcessLaunch,
     PaneProcessOutput, ShellInputDelivery,
@@ -35,6 +36,8 @@ pub struct PaneProcessManager {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) processes: BTreeMap<String, PaneProcess>,
+    /// Retains exact native cleanup through asynchronous adapter cancellation.
+    retirement: PaneProcessRetirementOwner,
     /// Test-only foreground process-group observations.
     ///
     /// Runtime tests use this override to model hosts where the synchronous
@@ -52,6 +55,7 @@ impl PaneProcessManager {
     pub fn new() -> Self {
         Self {
             processes: BTreeMap::new(),
+            retirement: PaneProcessRetirementOwner::default(),
             foreground_process_group_ids_for_test: BTreeMap::new(),
         }
     }
@@ -73,7 +77,15 @@ impl PaneProcessManager {
         if self.processes.contains_key(&pane_id) {
             return Err(MezError::conflict("pane already has a primary process"));
         }
-        let process = spawn_pane_process(launch, explicit_command, environment, size)?;
+        let reservation = self.retirement.reserve()?;
+        let process = spawn_pane_process_retained(
+            launch,
+            explicit_command,
+            environment,
+            size,
+            None,
+            Some(reservation),
+        )?;
         let pid = process.primary_pid();
         self.processes.insert(pane_id, process);
         Ok(pid)
@@ -97,16 +109,40 @@ impl PaneProcessManager {
         if self.processes.contains_key(&pane_id) {
             return Err(MezError::conflict("pane already has a primary process"));
         }
-        let process = spawn_pane_process_with_start_directory(
+        let reservation = self.retirement.reserve()?;
+        let process = spawn_pane_process_retained(
             launch,
             explicit_command,
             environment,
             size,
             start_directory,
+            Some(reservation),
         )?;
         let pid = process.primary_pid();
         self.processes.insert(pane_id, process);
         Ok(pid)
+    }
+
+    /// Shares the mandatory native cleanup owner with session/editor adapters.
+    pub fn retirement_owner(&self) -> PaneProcessRetirementOwner {
+        self.retirement.clone()
+    }
+
+    /// Installs the caller's native owner before any managed process exists.
+    pub fn install_retirement_owner(&mut self, owner: PaneProcessRetirementOwner) -> Result<()> {
+        if !self.processes.is_empty() || self.retirement.outstanding() != 0 {
+            return Err(MezError::invalid_state(
+                "native retirement owner must be installed before spawn",
+            ));
+        }
+        self.retirement = owner;
+        Ok(())
+    }
+
+    /// Returns manager-owned guards for bounded asynchronous cleanup.
+    /// No wait is performed here; each guard returns to its preallocated slot.
+    pub fn release_for_retirement(&mut self) {
+        self.processes.clear();
     }
 
     /// Runs the primary pid operation for this subsystem.
@@ -286,7 +322,7 @@ impl PaneProcessManager {
     pub fn insert_running_pane_process(
         &mut self,
         pane_id: impl Into<String>,
-        process: PaneProcess,
+        mut process: PaneProcess,
     ) -> Result<u32> {
         let pane_id = pane_id.into();
         if self.processes.contains_key(&pane_id) {
@@ -297,6 +333,7 @@ impl PaneProcessManager {
                 "exited pane process cannot be inserted as running",
             ));
         }
+        process.child.adopt(&self.retirement)?;
         let pid = process.primary_pid();
         self.processes.insert(pane_id, process);
         Ok(pid)

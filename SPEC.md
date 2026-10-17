@@ -2246,6 +2246,104 @@ before reaping it. Cached PTY process-group metadata alone MUST NOT leave the
 root alive while teardown waits for its exit. Signal and reap failures MUST
 retain process ownership for diagnosis and retry.
 
+Native cleanup group authority MUST be immutable birth-root authority minted
+from the actual owned native child at the UNIX PTY spawn boundary. Cached or
+live foreground-job observations MUST NOT authorize cleanup signals. Missing,
+invalid, mismatched or opaque authority MUST fail closed for numeric group
+signals without skipping safe independent exact-root force/wait. Exact force
+MUST NOT invoke a blocking portable HUP/grace implementation. Cleanup scope is
+the root and its birth group, not disposal of all foreground jobs, detached
+descendants, sessions or cgroups; normal kernel/shell PTY hangup behavior still
+applies. Successful native wait MUST suppress every subsequent cleanup signal.
+
+Daemon-managed pane, restored-pane and external-editor children MUST reserve
+an exact native cleanup return slot before spawn. Manager-to-worker handoff,
+cancelled replies, backend construction failure, unpolled workers and service
+cancellation MUST preserve that same child handle until a successful native
+wait/reap. Sending a signal, joining an aborted task, an empty return queue or
+publishing a synthetic exit event MUST NOT be accepted as native completion.
+
+Native cleanup MUST use a finite absolute deadline and attempt independent
+safe sibling cleanup even after one failure. Graceful HUP/TERM/KILL progress
+and its original deadline MUST survive cancellation without restarting grace;
+force escalation MUST also address the exact owned root. Native wait success
+MUST release cleanup capacity independently of final PTY output draining.
+Synchronous and asynchronous advancement MUST share retained sent-stage and
+force-upgrade decisions. Custom synchronous grace is an absolute stage offset
+from the original start, capped at the default 500 ms to reserve force/wait
+capacity, not a renewed per-call wait. Once an attempt's retained deadline
+expires, continuations of THAT attempt MUST observe status only and retain
+failure/ownership rather than issue late signals. Cancellation, dropped futures,
+automatic reentry and destruction MUST NOT create or renew retry authority.
+
+An explicit `CliExit::retry_native_cleanup(budget)` call MAY admit a new finite
+attempt for the exact sealed native owner only after all remaining resources
+are Returned, no reservation/lease/drain is active, and their actual prior
+authority has expired. Owner/source/attempt identity and the caller's absolute
+creation-time deadline MUST be captured before first poll; runtime validation
+MUST precede admission. Busy, stale, foreign, expired or exhausted-generation
+admission MUST reject before changing resources, epochs, budgets or progress.
+The new attempt MUST preserve original native origins, HUP/TERM sent stages,
+monotonic force intent, successful-force progress and the first failure receipt.
+It MAY force the exact root under its new budget, never restart graceful stages.
+Initial registration is identity only: pane-local deadlines MUST NOT become a
+shared budget for healthy siblings or newly admitted children. Only a genuine
+owner-wide shutdown request supplies an initial shared plan. Successful source
+reuse at native idle MUST fence old scopes without retaining completed-child
+history. Automatic host stop, reconciliation, expiry, rollback and lease replay
+may bind a preallocated no-admission owner only to its FIRST initial source,
+with the original creation budget; this MUST NOT bind a reused source or retry
+epoch. These automatic paths
+MUST NOT mint this explicit retry authority; no administrative Host retry mint
+is implied by this CLI/library contract.
+
+Unproven returned cleanup MUST fence new managed pane/editor/restore native
+admission until settled, without interrupting existing siblings or imposing a
+hidden normal-live-pane cap. Every already-admitted child MUST retain its own
+preallocated return slot if all children fail simultaneously. Retained state is
+bounded by admitted unreaped resources (with vacant high-water allocation
+reclaimed at idle), not by an invented absolute global process limit. Final
+shutdown sealing MUST be monotonic and MUST prevent later startup admission.
+
+A live host MUST retain cleanup-pending exact session generations outside
+evictable terminal history; actor closure MUST NOT release their child handles
+or permit identity reuse. Foreground/library CLI completion MUST carry opaque
+retryable cleanup ownership past command errors and asynchronous-runtime
+destruction. Its borrowed exit status MUST be nonzero for pending or unknown
+cleanup, while preserving an original nonzero command status. Reporting or
+dropping that outcome is explicit abandonment, not proof of OS process exit or
+native retirement. Destruction of every owner/process permits only disclosed
+best-effort signaling and kernel adoption, never a successful reap claim.
+Public opaque CLI Debug formatting MUST expose only coarse effective exit and
+pending/unknown status, never private retained diagnostics, owners or handles.
+
+Redundant shutdown transport closure MAY establish admission idempotence only
+with terminal intent from the same retained actor handle; actor/reducer errors
+MUST remain errors. Successful host shutdown MUST also observe that exact
+generation's native wait and completion callback/entry publication, independently
+of evictable history. Missing entries, closed completion publishers and zero
+child counts alone MUST NOT prove healthy completion. Callback or publication
+failure MUST NOT publish a healthy exact completion receipt.
+In-flight completion publication MUST remain in the host shutdown barrier;
+cleanup failure MUST latch before the matching entry can disappear, including
+when no receipt receiver exists and terminal history is disabled.
+Final CLI cleanup and borrowed exit status MUST include this publication
+barrier, without counting callback obligations as synthetic native children.
+
+Public `mez host stop` success MUST require an explicit healthy completion
+verdict from its original authenticated host connection, after checkpoint,
+native retirement and exact runtime publication have succeeded. A host shutdown
+request with `wait_for_completion: true` MUST defer its response until that
+verdict, returning `shutdown_completed: true` only for successful completion.
+Ordinary `shutting_down` responses establish admission only. Missing or false
+completion fields, transport closure, socket removal, host replacement and
+deadline expiry MUST remain unproven/error; the client MUST NOT reconnect or
+fall back to filesystem disappearance. One client deadline MUST cover connect,
+request and completion. The server MUST retain its original connection deadline
+clipped by the existing shutdown budget, preserve primary cleanup failure when
+reply publication also fails, and retain native ownership independently of the
+client's cancellation or failed reply delivery.
+
 ### 5.3 Shared SQLite Session-State Storage
 
 Session-state stores that adopt SQLite MUST use one database per concern. A

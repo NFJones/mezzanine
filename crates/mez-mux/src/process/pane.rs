@@ -24,7 +24,6 @@ use super::process_metadata::{
     process_executable_path_for_pid, process_name_for_pid,
 };
 use super::pty::{PTY_IO_CHUNK_BYTES, pty_size};
-use super::signals::send_signal_to_pane_process_group;
 #[cfg(target_os = "macos")]
 use super::types::ShellInputPacing;
 use super::types::{PaneExitStatus, ShellInputDelivery};
@@ -213,7 +212,7 @@ pub struct PaneProcess {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) child: Box<dyn portable_pty::Child + Send + Sync>,
+    pub(super) child: super::retirement::RetainedPaneChild,
     /// Stores the master value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -763,64 +762,85 @@ impl PaneProcess {
 
     /// Terminates the pane process group and returns the primary child status.
     ///
-    /// An already-exited child is polled and reaped before any signal is sent,
-    /// preventing a stale PTY foreground-group identifier from targeting a
-    /// reused process group. Live children receive HUP, TERM, and KILL with the
-    /// supplied grace period between stages. Final escalation also terminates
-    /// the owned root child before reaping: cached PTY group metadata may name
-    /// a different foreground job. Signal or wait failures are returned to the
-    /// caller without discarding child ownership.
+    /// Polls before signaling the immutable native birth group, never cached
+    /// foreground metadata. HUP/TERM grace is clipped to the child's original
+    /// absolute cleanup deadline. Group errors do not skip independent exact
+    /// root force and bounded wait; the first typed failure is returned even
+    /// when that wait succeeds. Unproven children remain owned for retry.
     pub fn terminate(&mut self, grace: Duration) -> Result<PaneExitStatus> {
         if let Some(status) = self.poll_exit()? {
             return Ok(status);
         }
-
-        self.send_signal_to_process_group(Signal::HUP)?;
-        if let Some(status) = self.wait_until_exit(grace)? {
-            return Ok(status);
-        }
-
-        self.send_signal_to_process_group(Signal::TERM)?;
-        if let Some(status) = self.wait_until_exit(grace)? {
-            return Ok(status);
-        }
-
-        self.send_signal_to_process_group(Signal::KILL)?;
-        // PTY group metadata can name a foreground job rather than the root.
-        // With no group, the fallback above already terminates the child.
-        // Otherwise recheck exit before using the owned root handle as well.
-        if self.process_group_leader.is_some() {
-            if let Some(status) = self.poll_exit()? {
-                return Ok(status);
-            }
-            if let Err(error) = self.child.kill() {
-                if let Some(status) = self.poll_exit()? {
-                    return Ok(status);
+        let deadline = self.child.begin_termination(false)?;
+        let mut first = None;
+        loop {
+            match self.child.poll_termination_with_grace(false, grace) {
+                Ok(Some(status)) => {
+                    let status = PaneExitStatus::from_portable_exit_status(status);
+                    self.exit_status = Some(status);
+                    return first.map_or(Ok(status), Err);
                 }
-                return Err(error.into());
+                Ok(None) => {}
+                Err(error) => {
+                    first.get_or_insert(error);
+                }
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                let error = MezError::invalid_state(
+                    "owned native child did not reap before its cleanup deadline",
+                );
+                self.child.record_failure("native synchronous wait", &error);
+                return Err(first.unwrap_or(error));
+            }
+            match self.wait_until_exit(Duration::from_millis(5).min(remaining)) {
+                Ok(Some(status)) => return first.map_or(Ok(status), Err),
+                Ok(None) => {}
+                Err(error) => {
+                    self.child.record_failure("native synchronous wait", &error);
+                    first.get_or_insert(error);
+                }
             }
         }
-        let status = self.child.wait()?;
-        let status = PaneExitStatus::from_portable_exit_status(status);
-        self.exit_status = Some(status);
-        Ok(status)
     }
 
-    /// Runs the send signal to process group operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Signals checked native birth authority, not public foreground metadata.
+    /// KILL independently addresses the exact root even if group signaling
+    /// fails; no signal is issued after an authoritative successful wait.
     #[doc(hidden)]
     pub fn send_signal_to_process_group(&mut self, signal: Signal) -> Result<()> {
-        if let Some(process_group_leader) = self.process_group_leader {
-            send_signal_to_pane_process_group(process_group_leader, signal)
-        } else if signal == Signal::KILL {
-            self.child.kill()?;
-            Ok(())
-        } else {
-            Ok(())
+        if self.poll_exit()?.is_some() {
+            return Ok(());
         }
+        if !self.child.record_signal(signal)? {
+            return Ok(());
+        }
+        if signal == Signal::KILL {
+            self.child.force_retirement()
+        } else {
+            self.child.signal_group(signal)
+        }
+    }
+
+    /// Kills the exact native root independently of cached foreground metadata.
+    /// Native completion still requires a subsequent successful poll/wait.
+    pub fn kill_owned_root(&mut self) -> Result<()> {
+        self.child.kill().map_err(Into::into)
+    }
+
+    /// Starts/continues one absolute native termination budget across handoffs.
+    pub fn begin_native_termination(&mut self, force: bool) -> Result<Instant> {
+        self.child.begin_termination(force)
+    }
+
+    /// Advances retained native signal/wait progress without blocking.
+    pub fn poll_native_termination(&mut self, force: bool) -> Result<Option<PaneExitStatus>> {
+        let Some(status) = self.child.poll_termination(force)? else {
+            return Ok(None);
+        };
+        let status = PaneExitStatus::from_portable_exit_status(status);
+        self.exit_status = Some(status);
+        Ok(Some(status))
     }
 
     /// Runs the wait until exit operation for this subsystem.

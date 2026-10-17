@@ -19,6 +19,7 @@ use super::pane::{PaneProcess, configure_pty_master_nonblocking};
 #[cfg(target_os = "macos")]
 use super::process_metadata::RawEnvironmentEntry;
 use super::pty::pty_size;
+use super::retirement::{PaneProcessChildReservation, RetainedPaneChild};
 use super::types::{PaneCommandPlan, PaneProcessEnvironment, PaneProcessLaunch};
 
 /// Opens a PTY and starts one argv-addressed program directly.
@@ -32,6 +33,45 @@ pub fn spawn_argv_pty_process(
     environment: &[(String, String)],
     size: TerminalSize,
     start_directory: Option<&Path>,
+) -> Result<PaneProcess> {
+    spawn_argv_pty_process_inner(
+        executable,
+        arguments,
+        environment,
+        size,
+        start_directory,
+        None,
+    )
+}
+
+/// Spawns a managed editor/native PTY with a pre-spawn cleanup reservation.
+/// The reservation guards the child before missing-PID or configuration errors.
+pub fn spawn_retained_argv_pty_process(
+    executable: &Path,
+    arguments: &[String],
+    environment: &[(String, String)],
+    size: TerminalSize,
+    start_directory: Option<&Path>,
+    reservation: PaneProcessChildReservation,
+) -> Result<PaneProcess> {
+    spawn_argv_pty_process_inner(
+        executable,
+        arguments,
+        environment,
+        size,
+        start_directory,
+        Some(reservation),
+    )
+}
+
+/// Shares argv setup without permitting managed callers to skip reservation.
+fn spawn_argv_pty_process_inner(
+    executable: &Path,
+    arguments: &[String],
+    environment: &[(String, String)],
+    size: TerminalSize,
+    start_directory: Option<&Path>,
+    reservation: Option<PaneProcessChildReservation>,
 ) -> Result<PaneProcess> {
     if executable.as_os_str().is_empty() {
         return Err(MezError::invalid_args(
@@ -58,12 +98,13 @@ pub fn spawn_argv_pty_process(
         .slave
         .spawn_command(command)
         .map_err(|error| MezError::io(format!("failed to spawn PTY process: {error}")))?;
+    let process_group_leader = pair.master.process_group_leader();
+    let child = guard_spawned_child(child, reservation);
     drop(pair.slave);
 
     let primary_pid = child
         .process_id()
         .ok_or_else(|| MezError::invalid_state("spawned PTY process did not expose a pid"))?;
-    let process_group_leader = pair.master.process_group_leader();
     configure_pty_master_nonblocking(pair.master.as_ref())?;
 
     Ok(PaneProcess {
@@ -170,6 +211,25 @@ pub fn spawn_pane_process_with_start_directory(
     size: TerminalSize,
     start_directory: Option<&Path>,
 ) -> Result<PaneProcess> {
+    spawn_pane_process_retained(
+        launch,
+        explicit_command,
+        environment,
+        size,
+        start_directory,
+        None,
+    )
+}
+
+/// Manager-only spawn path; its return slot precedes native creation.
+pub(super) fn spawn_pane_process_retained(
+    launch: &PaneProcessLaunch,
+    explicit_command: Option<&str>,
+    environment: &PaneProcessEnvironment,
+    size: TerminalSize,
+    start_directory: Option<&Path>,
+    reservation: Option<PaneProcessChildReservation>,
+) -> Result<PaneProcess> {
     let plan = pane_command_plan(launch, explicit_command)?;
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -202,12 +262,13 @@ pub fn spawn_pane_process_with_start_directory(
         .slave
         .spawn_command(command)
         .map_err(|error| MezError::io(format!("failed to spawn pane process: {error}")))?;
+    let process_group_leader = pair.master.process_group_leader();
+    let child = guard_spawned_child(child, reservation);
     drop(pair.slave);
 
     let primary_pid = child
         .process_id()
         .ok_or_else(|| MezError::invalid_state("spawned pane process did not expose a pid"))?;
-    let process_group_leader = pair.master.process_group_leader();
     configure_pty_master_nonblocking(pair.master.as_ref())?;
 
     Ok(PaneProcess {
@@ -229,6 +290,29 @@ pub fn spawn_pane_process_with_start_directory(
         initial_working_directory,
         exit_status: None,
     })
+}
+
+/// Installs exact cleanup ownership before PID or PTY setup can fail.
+///
+/// These two native UNIX spawn paths use portable-pty 0.9's UnixSlavePty,
+/// which boxes std Child only after an unconditional successful setsid. That
+/// establishes birth PGID == owned root PID on Linux and macOS. Mint this
+/// private authority here, never from tcgetpgrp (mutable foreground jobs) or
+/// from a generic attached child whose spawn/session contract is unknown.
+fn guard_spawned_child(
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    reservation: Option<PaneProcessChildReservation>,
+) -> RetainedPaneChild {
+    let group = child
+        .as_ref()
+        .as_any()
+        .downcast_ref::<std::process::Child>()
+        .and_then(|child| i32::try_from(child.id()).ok())
+        .filter(|pid| *pid > 0);
+    match reservation {
+        Some(reservation) => reservation.attach(child, group),
+        None => RetainedPaneChild::standalone(child, group),
+    }
 }
 
 /// Runs the initial working directory operation for this subsystem.

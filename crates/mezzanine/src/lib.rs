@@ -29,6 +29,7 @@ pub mod control_client {
     pub use crate::control::{decode_control_frame, encode_control_body};
 }
 
+pub use cli::CliExit;
 pub use error::{MezError, MezErrorKind, Result};
 
 /// Runs one exact code-owned internal child mode before configuration or the
@@ -55,6 +56,11 @@ pub fn internal_process_exit_code() -> Option<u8> {
 /// Runs exact internal children first, then dependency-minimal CLI startup.
 /// Display/recovery never constructs the configured asynchronous runtime;
 /// normal commands retain strict whole-primary policy and CPU validation.
-pub fn run_cli() -> u8 {
-    internal_process_exit_code().unwrap_or_else(cli::run)
+/// The opaque outcome retains unproven native cleanup across command errors
+/// and runtime destruction; reporting/dropping it explicitly abandons retry.
+pub fn run_cli() -> CliExit {
+    match internal_process_exit_code() {
+        Some(code) => CliExit::plain(code),
+        None => cli::run(),
+    }
 }

@@ -210,6 +210,11 @@ impl RuntimeExternalEditorComponent {
             .collect()
     }
 
+    /// Returns pending native guards to their preallocated cleanup slots.
+    pub(crate) fn release_for_retirement(&mut self) {
+        self.pending_processes.clear();
+    }
+
     /// Reports whether an event belongs to the current direct editor process.
     pub(super) fn process_instance_is_current(&self, instance: &PaneProcessInstance) -> bool {
         self.active_by_pane

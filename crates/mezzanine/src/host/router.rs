@@ -308,6 +308,12 @@ impl HostSessionRouter {
         }
     }
 
+    /// Shares the existing native cleanup supervisor with the outer CLI owner.
+    /// This does not transfer sockets, listener/pair policy or session authority.
+    pub(crate) fn native_cleanup_owner(&self) -> SessionSupervisor {
+        self.supervisor.clone()
+    }
+
     /// Subscribes to live lease-authority transitions for routed connection
     /// fencing and nearest-expiry rescheduling.
     pub(crate) fn authority_changes(&self) -> tokio::sync::watch::Receiver<u64> {

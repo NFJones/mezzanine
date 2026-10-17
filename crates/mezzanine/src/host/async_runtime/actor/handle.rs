@@ -1288,6 +1288,58 @@ impl AsyncRuntimeSessionHandle {
         Ok(report)
     }
 
+    /// Admits exactly one owner shutdown event, retaining typed transport
+    /// unavailability separately from genuine reducer errors. This keeps the
+    /// normal event API and generic/MMP request semantics unchanged, including
+    /// the same bounded side-effect backpressure retries for this event.
+    pub(crate) async fn admit_owner_shutdown(
+        &self,
+        shutdown: crate::runtime::ShutdownEvent,
+    ) -> Result<crate::host::async_runtime::ShutdownEventAdmission> {
+        use crate::host::async_runtime::ShutdownEventAdmission;
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(crate::runtime::RuntimeEvent::Shutdown(shutdown));
+        let mut attempt = 0u32;
+        loop {
+            let (reply, response) = oneshot::channel();
+            if let Err(error) = self
+                .sender
+                .send(AsyncRuntimeRequestEnvelope::new(
+                    AsyncRuntimeRequest::SubmitRuntimeEvents {
+                        batch: batch.clone(),
+                        reply,
+                    },
+                ))
+                .await
+            {
+                return Ok(ShutdownEventAdmission::TransportUnavailable(error));
+            }
+            let result = match response.await {
+                Ok(result) => result,
+                Err(_) => {
+                    return Ok(ShutdownEventAdmission::TransportUnavailable(
+                        MezError::invalid_state("async runtime session actor reply was dropped"),
+                    ));
+                }
+            };
+            match result {
+                Ok(_) => return Ok(ShutdownEventAdmission::Admitted),
+                Err(error)
+                    if attempt < SIDE_EFFECT_QUEUE_FULL_RETRIES
+                        && is_retryable_side_effect_queue_full_error(&error) =>
+                {
+                    attempt = attempt.saturating_add(1);
+                    tokio::task::yield_now().await;
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        u64::from(attempt).saturating_mul(5),
+                    ))
+                    .await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     /// Submits presentation-only provider progress without allowing bounded
     /// render-queue pressure to preempt the authoritative provider outcome.
     /// A partially applied presentation batch is not replayed; other errors

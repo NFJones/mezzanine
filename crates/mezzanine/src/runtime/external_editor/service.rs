@@ -32,7 +32,7 @@ use crate::runtime::{
     runtime_pane_by_id, runtime_random_marker_token,
 };
 use crate::ui::readline::ReadlineInputDecoder;
-use mez_mux::process::{PaneProcess, spawn_argv_pty_process};
+use mez_mux::process::{PaneProcess, spawn_retained_argv_pty_process};
 use mez_terminal::TerminalScreen;
 
 impl RuntimeSessionService {
@@ -135,7 +135,16 @@ impl RuntimeSessionService {
                 self.terminal_term().to_string(),
             )))
             .collect::<Vec<_>>();
-        let process = spawn_argv_pty_process(
+        let reservation = self
+            .native_pane_retirement_owner()
+            .reserve()
+            .map_err(|error| {
+                let _ = fs::remove_dir_all(&artifacts.session_directory);
+                MezError::invalid_state(format!(
+                    "cannot admit external editor native process: {error}"
+                ))
+            })?;
+        let process = spawn_retained_argv_pty_process(
             &runner,
             &[
                 INTERNAL_EDITOR_ARGUMENT.to_string(),
@@ -144,6 +153,7 @@ impl RuntimeSessionService {
             &environment,
             size,
             self.pane_current_working_directory(pane_id).as_deref(),
+            reservation,
         )
         .map_err(|error| {
             let _ = fs::remove_dir_all(&artifacts.session_directory);
