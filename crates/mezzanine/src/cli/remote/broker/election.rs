@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use rustix::fs::{AtFlags, FlockOperation, Mode, OFlags, flock, open, openat, statat};
 
 use crate::error::{MezError, Result};
+use crate::security::filesystem::stat_device;
 
 const LOCK_NAME: &str = "outbound.startup.lock";
 
@@ -93,7 +94,7 @@ impl StartupElection {
         }
         let named = statat(&self.root, LOCK_NAME, AtFlags::SYMLINK_NOFOLLOW)
             .map_err(std::io::Error::from)?;
-        if named.st_dev != held.dev() || named.st_ino != held.ino() {
+        if stat_device(&named) != held.dev() || named.st_ino != held.ino() {
             return Err(MezError::conflict("outbound startup lock changed"));
         }
         Ok(())

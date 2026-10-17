@@ -459,12 +459,13 @@ fn active_metadata_rejects_namespace_and_checkpoint_symlink_aliases() {
     assert!(store.load_agent_session_metadata("$x").is_err());
     assert_eq!(fs::read(outside).unwrap(), b"not checkpoint authority");
     fs::remove_file(&path).unwrap();
-    rustix::fs::mkfifoat(
-        rustix::fs::CWD,
-        &path,
-        rustix::fs::Mode::from_bits_truncate(0o600),
-    )
-    .unwrap();
+    use std::os::unix::ffi::OsStrExt;
+    let fifo = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: fifo is a live NUL-terminated path in our unique temporary root.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    assert!(std::os::unix::fs::FileTypeExt::is_fifo(
+        &fs::symlink_metadata(&path).unwrap().file_type()
+    ));
     assert!(store.load_agent_session_metadata("$x").is_err());
 }
 

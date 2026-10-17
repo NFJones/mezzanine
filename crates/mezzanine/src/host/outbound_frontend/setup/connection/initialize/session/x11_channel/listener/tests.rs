@@ -91,6 +91,38 @@ async fn outbound_x11_listener_bounds_admission_and_retains_endpoint() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// Dedicated-channel cleanup independently requires device and inode equality.
+/// A real socket with one synthetic stale identity component must survive,
+/// protecting the same predicate as the primary listener on both platforms.
+#[test]
+fn outbound_x11_cleanup_preserves_device_or_inode_mismatch() {
+    use std::os::unix::fs::MetadataExt;
+    for change_device in [true, false] {
+        let root =
+            std::env::temp_dir().join(format!("mez-xclean-id-{:016x}", rand::random::<u64>()));
+        std::fs::create_dir(&root).unwrap();
+        let name = "fixture.sock".to_string();
+        let path = root.join(&name);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        let publication = Publication {
+            directory: std::fs::File::open(&root).unwrap(),
+            name,
+            path: path.clone(),
+            device: metadata.dev() ^ u64::from(change_device),
+            inode: metadata.ino() ^ u64::from(!change_device),
+        };
+        drop(publication);
+        let current = std::fs::symlink_metadata(&path).unwrap();
+        assert_eq!(
+            (current.dev(), current.ino()),
+            (metadata.dev(), metadata.ino())
+        );
+        drop(listener);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 /// Exclusive publication preserves existing regular/symlink/live socket entries.
 /// Held-directory cleanup removes only its socket after root relocation, leaving
 /// replacements untouched. Invalid limits cannot create discovery state.
