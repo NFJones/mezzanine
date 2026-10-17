@@ -151,13 +151,23 @@ impl X11RelaySource {
                 "outbound X11 channel deadline invalid",
             ));
         }
-        let occurrence = self
-            .occurrence
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .map_err(|_| MezError::conflict("outbound X11 occurrence exhausted"))?
-            + 1;
+        // This watermark publishes identity only, not relay state. Recompute
+        // the checked successor after every failed CAS, including spurious ones.
+        let mut previous = self.occurrence.load(Ordering::Relaxed);
+        let occurrence = loop {
+            let next = previous
+                .checked_add(1)
+                .ok_or_else(|| MezError::conflict("outbound X11 occurrence exhausted"))?;
+            match self.occurrence.compare_exchange_weak(
+                previous,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break next,
+                Err(current) => previous = current,
+            }
+        };
         let reserved = X11RelayReservation {
             endpoint: self.endpoint.clone(),
             connection: self.connection.clone(),
