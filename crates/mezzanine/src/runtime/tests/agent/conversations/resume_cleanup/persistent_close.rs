@@ -6,6 +6,7 @@
 //! positive controls retain real retirement and bounded completed-close reuse.
 
 use super::*;
+use mez_agent::ActionResult;
 
 /// Starts a synthetic parent turn without executing any provider request.
 fn parent_turn(fixture: &mut CleanupFixture) -> AgentTurnRecord {
