@@ -430,26 +430,78 @@ mod tests {
             )
             .await;
         let refusal = receive.await.unwrap();
+        // Freeze the immediate post-Claim facts BEFORE drain can reconcile
+        // pending work and BEFORE teardown. Missing custody stays an Option
+        // until the legal refusal/conservation preconditions have been checked.
+        let source_after_claim = actor
+            .service
+            .original_completion_source_for_tests(&turn.turn_id, &group);
+        let lease_error_after_claim = actor.service.provider_lease_refusal_for_tests().cloned();
+        let generation_after_claim = actor.timers.next_provider_claim_generation;
+        let timer_after_claim = actor.timers.provider_claim.get(&turn.turn_id).cloned();
+        let claimed_after_claim = actor.service.agent_provider_task_is_claimed(&turn.turn_id);
+        let pending_after_claim = actor.service.agent_provider_task_is_pending(&turn.turn_id);
+        let accounting_after_claim = actor
+            .service
+            .provider_refusal_accounting_for_tests(&turn.turn_id, generation_after_claim);
+        let ledger_after_claim = actor
+            .service
+            .agent_turn_ledger()
+            .turn(&turn.turn_id)
+            .map(|turn| turn.state);
+        let critical_after_claim = actor.service.ensure_completion_admission_open().err();
+        let external_after_claim = actor.service.pending_approved_external_actions();
+
+        // Use the supported combined drain: provider dispatch lives in its
+        // dedicated route, not the raw side_effects deque. Never execute it.
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(super::super::AsyncRuntimeRequest::DrainRuntimeSideEffects {
+                limit: 1024,
+                reply,
+            })
+            .await;
+        let drained = receive.await;
+        // Shutdown is handled by the actor's synchronous message boundary, not
+        // handle_request. Settle this workerless fixture before any expected
+        // assertion failure; teardown must not replace the frozen evidence.
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        let shutdown_requested =
+            actor.dispatch_message_request(super::super::AsyncRuntimeRequest::Shutdown { reply });
+        let shutdown = receive.await;
+        drop(actor);
+
+        let queued = drained.unwrap().unwrap();
+        assert!(shutdown_requested);
+        assert!(
+            shutdown.unwrap().is_ok(),
+            "fixture shutdown must settle before the custody oracle"
+        );
         assert!(
             !matches!(&refusal, Ok(Some(_))),
             "admission must withhold the worker dispatch"
         );
         assert_eq!(
-            actor.timers.next_provider_claim_generation, 1,
+            generation_after_claim, 1,
             "setup: request must reach actual provisional claim recording"
         );
-        assert!(!actor.timers.provider_claim.contains_key(&turn.turn_id));
-        assert!(!actor.service.agent_provider_task_is_owned(&turn.turn_id));
-        assert!(actor.side_effects.iter().any(|effect| matches!(effect,
+        assert!(timer_after_claim.is_none());
+        assert!(!claimed_after_claim);
+        assert!(queued.iter().any(|effect| matches!(effect,
             RuntimeSideEffect::DispatchAgentProvider { turn_id, .. } if turn_id == "unrelated-retained-work")));
-        let (refused_turn, refused_generation, refused_error) = actor.service
-            .provider_lease_refusal_for_tests()
-            .expect("setup: must observe actual timer refusal, not a source-stage/claim-precondition error");
-        assert_eq!(refused_turn, &turn.turn_id);
-        assert_eq!(
-            *refused_generation,
-            actor.timers.next_provider_claim_generation
+        assert!(!queued.iter().any(|effect| matches!(effect,
+            RuntimeSideEffect::ScheduleTimer { key, .. }
+                if key.kind == RuntimeTimerKind::ProviderClaim && key.owner_id == turn.turn_id)));
+        let (issued_turn, issued_provider, issued_model, _issued_origin) = accounting_after_claim
+            .expect("setup: provisional claim must retain its actual issued accounting owner");
+        assert_eq!(issued_turn, turn);
+        assert_eq!(issued_provider, "runtime-batch");
+        assert_eq!(issued_model, "test");
+        let (refused_turn, refused_generation, refused_error) = lease_error_after_claim.expect(
+            "setup: must observe actual timer refusal, not a source-stage/claim-precondition error",
         );
+        assert_eq!(refused_turn, turn.turn_id);
+        assert_eq!(refused_generation, generation_after_claim);
         assert_eq!(
             refused_error.kind(),
             MezError::invalid_state("type oracle").kind()
@@ -459,11 +511,19 @@ mod tests {
                 .message()
                 .starts_with(SIDE_EFFECT_QUEUE_FULL_PREFIX)
         );
+        let terminal = ledger_after_claim.is_some_and(|state| {
+            matches!(state, AgentTurnState::Failed | AgentTurnState::Interrupted)
+        });
+        assert!(
+            terminal || critical_after_claim.is_some(),
+            "nonterminal refusal needs the existing bounded retained-failure owner, not an unleased runnable claim"
+        );
+        assert!(!pending_after_claim);
+        assert!(external_after_claim.is_empty());
 
-        // Desired baseline oracle: inspect immediately after the real request,
-        // before shutdown/expiry/retry can alter custody or hide the boundary.
-        let (retained_execution, retained_context, primary) = actor.service
-            .original_completion_source_for_tests(&turn.turn_id, &group)
+        // Desired oracle uses only the frozen immediate-post-Claim source.
+        // Drain/shutdown cannot heal, erase or substitute its custody result.
+        let (retained_execution, retained_context, primary) = source_after_claim
             .expect("F668_CUSTODY: exact original RuntimeOnly G1 result and context lost at undispatched lease refusal");
         assert_eq!(
             retained_execution, original_execution,
@@ -480,22 +540,6 @@ mod tests {
             .expect("exact typed refusal must remain reported or retained");
         assert_eq!(primary.kind(), refused_error.kind());
         assert_eq!(primary.message(), refused_error.message());
-        let terminal = actor
-            .service
-            .agent_turn_ledger()
-            .turn(&turn.turn_id)
-            .is_some_and(|turn| {
-                matches!(
-                    turn.state,
-                    AgentTurnState::Failed | AgentTurnState::Interrupted
-                )
-            });
-        assert!(
-            terminal || actor.service.ensure_completion_admission_open().is_err(),
-            "nonterminal refusal needs the existing bounded retained-failure owner, not an unleased runnable claim"
-        );
-        assert!(!actor.service.agent_provider_task_is_pending(&turn.turn_id));
-        assert!(actor.service.pending_approved_external_actions().is_empty());
     }
 
     /// A full non-droppable side-effect queue rejects the mandatory auxiliary

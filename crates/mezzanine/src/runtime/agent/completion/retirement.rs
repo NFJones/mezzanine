@@ -162,6 +162,30 @@ impl CompletionGroup {
 }
 
 impl RuntimeSessionService {
+    /// Observes frozen issued accounting without changing or settling expense.
+    #[cfg(test)]
+    pub(crate) fn provider_refusal_accounting_for_tests(
+        &self,
+        turn_id: &str,
+        generation: u64,
+    ) -> Option<(
+        AgentTurnRecord,
+        String,
+        String,
+        crate::storage::token_usage::AccountingOrigin,
+    )> {
+        let owner = self
+            .agent
+            .provider_accounting_owners
+            .get(&(turn_id.to_string(), generation))?;
+        Some((
+            owner.turn.clone(),
+            owner.profile.provider.clone(),
+            owner.profile.model.clone(),
+            owner.origin.clone(),
+        ))
+    }
+
     /// Observes the actual lease error; never changes claims or group failures.
     #[cfg(test)]
     pub(crate) fn observe_provider_lease_refusal_for_tests(
