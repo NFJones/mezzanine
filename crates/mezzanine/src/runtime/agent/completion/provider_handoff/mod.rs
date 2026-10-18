@@ -15,6 +15,9 @@ use crate::runtime::RuntimeAgentProviderDispatch;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
+mod loop_restore;
+use loop_restore::OwnLoopRestore;
+
 #[cfg(test)]
 mod tests;
 
@@ -39,6 +42,22 @@ pub(super) struct ProviderHandoffOwner {
     pub(super) routed: CompletionMilestone,
     pub(super) routed_result: Option<bool>,
     pub(super) source_frozen: bool,
+    own_loop_restore: Option<Arc<OwnLoopRestore>>,
+    #[cfg(test)]
+    consumer_probe: Option<(bool, bool, u64)>,
+}
+
+/// Read-only phase facts for isolated real-actor refusal controls.
+#[cfg(test)]
+pub(crate) struct ProviderRefusalTestFacts {
+    pub(crate) live_before: bool,
+    pub(crate) live_after: bool,
+    pub(crate) consumer_entries: u64,
+    pub(crate) secondary: Vec<MezError>,
+    pub(crate) task_entered: bool,
+    pub(crate) task_accepted: bool,
+    pub(crate) scheduler_accepted: bool,
+    pub(crate) settlement_terminal: bool,
 }
 
 /// Opaque original-group/attempt permit, distinct from a public turn label.
@@ -60,6 +79,100 @@ impl CompletionProviderHandoff {
 }
 
 impl RuntimeSessionService {
+    /// The common correction facade calls this after actual queue insertion,
+    /// before any legacy caller can discard its live execution slot. Move the
+    /// actual original source into the same admitted group, without a clone.
+    pub(in crate::runtime::agent) fn retain_queued_completion_correction_source(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        let Some(group) = self.agent.completion_settlements.groups.get(&turn.turn_id) else {
+            return Ok(());
+        };
+        if group.correction_execution.as_ref().is_some() {
+            return Ok(());
+        }
+        if matches!(
+            group.correction_execution,
+            CompletionCapture::Captured(None)
+        ) {
+            return Err(MezError::invalid_state(
+                "correction source was already transferred; recapture prohibited",
+            ));
+        }
+        let execution = self
+            .agent_turn_executions()
+            .get(&turn.turn_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("queued correction original execution is unavailable")
+            })?;
+        self.ensure_completion_settlement_source_current(turn, execution)?;
+        let execution = self.agent_turn_executions_mut().remove(&turn.turn_id);
+        if let Some(group) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(&turn.turn_id)
+        {
+            group.correction_execution.capture_once(|| execution);
+        }
+        Ok(())
+    }
+
+    /// Captures exact phase/secondary evidence without treating observations as
+    /// production custody or manufacturing a successful consumer disposition.
+    #[cfg(test)]
+    pub(crate) fn provider_refusal_test_facts(
+        &self,
+        turn_id: &str,
+        expected_group: &str,
+    ) -> Option<ProviderRefusalTestFacts> {
+        let group = self.agent.completion_settlements.groups.get(turn_id)?;
+        if group.group.as_str() != expected_group {
+            return None;
+        }
+        let owner = group.provider_handoff.as_ref()?;
+        let (live_before, live_after, consumer_entries) =
+            owner.consumer_probe.unwrap_or((false, false, 0));
+        Some(ProviderRefusalTestFacts {
+            live_before,
+            live_after,
+            consumer_entries,
+            secondary: group
+                .secondary_failures
+                .iter()
+                .map(|failure| (*failure.error).clone())
+                .collect(),
+            task_entered: group.task_result == CompletionMilestone::Entered,
+            task_accepted: group.task_result == CompletionMilestone::Accepted,
+            scheduler_accepted: group.scheduler == CompletionMilestone::Accepted,
+            settlement_terminal: owner.settlement == CompletionMilestone::Accepted,
+        })
+    }
+
+    /// Known negative failure inhibits NEW work; it must not abort mandatory
+    /// checkpoint/cleanup suffixes after actual Failed ledger bookkeeping. No
+    /// admission gate is cleared or bypassed to start any task: the count is zero.
+    pub(in crate::runtime::agent) fn start_ready_after_completion_cleanup(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> Result<usize> {
+        if self.provider_refusal_is_armed(&turn.turn_id) {
+            self.ensure_provider_refusal_failed_source(turn, AgentTurnState::Failed)?;
+            if !self
+                .agent_turn_ledger()
+                .turn(&turn.turn_id)
+                .is_some_and(|turn| turn.state == AgentTurnState::Failed)
+            {
+                return Err(MezError::invalid_state(
+                    "negative cleanup has not committed Failed ledger state",
+                ));
+            }
+            return Ok(0);
+        }
+        self.start_ready_agent_turns()
+    }
+
     /// Selects one inert fault in an isolated actor fixture, not a live policy.
     #[cfg(test)]
     pub(crate) fn set_provider_handoff_fault_for_tests(&mut self, fault: &'static str) {
@@ -129,7 +242,7 @@ impl RuntimeSessionService {
             || self
                 .agent_shell_store()
                 .get(&group.turn.pane_id)
-                .is_some_and(|session| session.session_id != group.turn.conversation_id)
+                .is_some_and(|_| !self.provider_refusal_shell_binding_owned(&turn.turn_id))
             || crate::runtime::agent::provider_execution::provider_log_execution_group_id(
                 execution,
             )? != group.group
@@ -231,7 +344,7 @@ impl RuntimeSessionService {
         {
             group.scheduler = CompletionMilestone::Accepted;
         }
-        self.start_ready_agent_turns()?;
+        self.start_ready_after_completion_cleanup(turn)?;
         Ok(())
     }
 
@@ -381,6 +494,7 @@ impl RuntimeSessionService {
         let original = self
             .agent_turn_executions()
             .get(&turn.turn_id)
+            .or_else(|| group.correction_execution.as_ref())
             .ok_or_else(|| {
                 MezError::invalid_state("provider refusal lost original execution before overwrite")
             })?;
@@ -392,7 +506,24 @@ impl RuntimeSessionService {
                 "provider refusal cannot capture replacement or missing context",
             ));
         }
-        let execution = self.agent_turn_executions_mut().remove(&turn.turn_id);
+        let from_correction = group.correction_execution.as_ref().is_some();
+        let execution = if from_correction {
+            self.agent
+                .completion_settlements
+                .groups
+                .get_mut(&turn.turn_id)
+                .and_then(|group| {
+                    match std::mem::replace(
+                        &mut group.correction_execution,
+                        CompletionCapture::Captured(None),
+                    ) {
+                        CompletionCapture::Captured(execution) => execution,
+                        CompletionCapture::NotCaptured => None,
+                    }
+                })
+        } else {
+            self.agent_turn_executions_mut().remove(&turn.turn_id)
+        };
         if let Some(group) = self
             .agent
             .completion_settlements
@@ -434,7 +565,7 @@ impl RuntimeSessionService {
             || self
                 .agent_shell_store()
                 .get(&permit.turn.pane_id)
-                .is_some_and(|session| session.session_id != permit.turn.conversation_id)
+                .is_some_and(|_| !self.provider_refusal_shell_binding_owned(turn_id))
         {
             let error =
                 MezError::invalid_state("provider refusal binding changed before component close");
@@ -543,10 +674,22 @@ impl RuntimeSessionService {
         }
         #[cfg(test)]
         if self.take_provider_handoff_fault_for_tests("task_consumer") {
+            let live_before = self.provider_refusal_context_is_live(&turn.turn_id)
+                && self.agent_turn_contexts().contains_key(&turn.turn_id);
             self.detach_failed_completion_backing(&turn.turn_id);
-            if !self.provider_refusal_context_is_live(&turn.turn_id)
-                || !self.agent_turn_contexts().contains_key(&turn.turn_id)
+            let live_after = self.provider_refusal_context_is_live(&turn.turn_id)
+                && self.agent_turn_contexts().contains_key(&turn.turn_id);
+            if let Some(owner) = self
+                .agent
+                .completion_settlements
+                .groups
+                .get_mut(&turn.turn_id)
+                .and_then(|group| group.provider_handoff.as_mut())
             {
+                let count = owner.consumer_probe.map_or(0, |probe| probe.2) + 1;
+                owner.consumer_probe = Some((live_before, live_after, count));
+            }
+            if !live_before || !live_after {
                 return Err(MezError::invalid_state(
                     "nested refusal capture lost the original live consumer context",
                 ));
@@ -695,10 +838,32 @@ impl RuntimeSessionService {
         let execution = self
             .agent_turn_executions()
             .get(&dispatch.turn.turn_id)
+            .or_else(|| group.correction_execution.as_ref())
             .ok_or_else(|| {
                 MezError::invalid_state("provider handoff original execution is unavailable")
             })?;
-        self.ensure_completion_settlement_source_current(&dispatch.turn, execution)?;
+        if self
+            .agent_turn_executions()
+            .contains_key(&dispatch.turn.turn_id)
+        {
+            self.ensure_completion_settlement_source_current(&dispatch.turn, execution)?;
+        } else if group.correction_execution.as_ref().is_none()
+            || execution.request.turn_id != group.turn.turn_id
+            || execution.request.agent_id != group.turn.agent_id
+            || crate::runtime::agent::provider_execution::provider_log_execution_group_id(
+                execution,
+            )? != group.group
+            || !self
+                .agent_turn_contexts()
+                .contains_key(&dispatch.turn.turn_id)
+            || group.turn.agent_id != dispatch.turn.agent_id
+            || group.turn.pane_id != dispatch.turn.pane_id
+            || group.turn.conversation_id != dispatch.turn.conversation_id
+        {
+            return Err(MezError::invalid_state(
+                "provider correction handoff lost its exact transferred source",
+            ));
+        }
         let original_snapshot = match &group.transcript {
             CompletionTranscriptTarget::Original { .. } => Some(
                 group
@@ -737,6 +902,9 @@ impl RuntimeSessionService {
                 routed: CompletionMilestone::NotEntered,
                 routed_result: None,
                 source_frozen: false,
+                own_loop_restore: None,
+                #[cfg(test)]
+                consumer_probe: None,
             });
         }
         Ok(permit)

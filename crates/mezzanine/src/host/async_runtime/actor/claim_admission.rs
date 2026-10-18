@@ -500,27 +500,24 @@ mod tests {
             .map(|turn| turn.state);
         let critical_after_claim = actor.service.ensure_completion_admission_open().err();
         let external_after_claim = actor.service.pending_approved_external_actions();
-        if fault == Some("task_consumer") {
+        let phases_after_claim = actor
+            .service
+            .provider_refusal_test_facts(&turn.turn_id, &group);
+        let duplicate_after_claim = if fault == Some("task_consumer") {
             let duplicate = actor.service.fail_configured_agent_provider_task(
                 &turn.turn_id,
                 &MezError::invalid_state("duplicate refusal must not replace primary"),
             );
-            assert!(
-                duplicate.is_err(),
-                "entered refusal is retained, not replayed"
-            );
             let after_duplicate = actor
                 .service
                 .original_completion_source_for_tests(&turn.turn_id, &group);
-            assert_eq!(
-                after_duplicate.as_ref().map(|source| &source.0),
-                source_after_claim.as_ref().map(|source| &source.0)
-            );
-            assert_eq!(
-                after_duplicate.as_ref().map(|source| &source.1),
-                source_after_claim.as_ref().map(|source| &source.1)
-            );
-        }
+            let phases = actor
+                .service
+                .provider_refusal_test_facts(&turn.turn_id, &group);
+            Some((duplicate, after_duplicate, phases))
+        } else {
+            None
+        };
 
         // The acceptance control attempts another REAL preparation request,
         // after freezing first-claim facts. It does not fabricate a second claim.
@@ -660,6 +657,36 @@ mod tests {
         );
         assert!(!pending_after_claim);
         assert!(external_after_claim.is_empty());
+        let phases = phases_after_claim.expect("exact negative phase owner");
+        if fault == Some("task_consumer") {
+            assert!(phases.live_before && phases.live_after && phases.task_entered);
+            assert_eq!(phases.consumer_entries, 1);
+            assert!(phases.secondary.iter().any(
+                |error| error.message() == "injected required refusal context consumer failure"
+            ));
+            assert!(!phases.secondary.iter().any(|error| error.message()
+                == "nested refusal capture lost the original live consumer context"));
+            let (duplicate, after_duplicate, after_phases) = duplicate_after_claim.unwrap();
+            assert!(
+                duplicate.is_err(),
+                "entered refusal is retained, not replayed"
+            );
+            assert_eq!(after_phases.unwrap().consumer_entries, 1);
+            assert_eq!(
+                after_duplicate.as_ref().map(|source| &source.0),
+                source_after_claim.as_ref().map(|source| &source.0)
+            );
+            assert_eq!(
+                after_duplicate.as_ref().map(|source| &source.1),
+                source_after_claim.as_ref().map(|source| &source.1)
+            );
+        } else {
+            assert_eq!(ledger_after_claim, Some(AgentTurnState::Failed));
+            assert!(
+                phases.task_accepted && phases.scheduler_accepted && phases.settlement_terminal,
+                "healthy negative bookkeeping must finish its actual terminal milestones before reporting settlement"
+            );
+        }
 
         // Desired oracle uses only the frozen immediate-post-Claim source.
         // Drain/shutdown cannot heal, erase or substitute its custody result.

@@ -1229,6 +1229,7 @@ impl RuntimeSessionService {
         if state.mode == RuntimeAgentLoopMode::ReuseCurrentConversation {
             return Ok(());
         }
+        let completion_restore = self.prepare_completion_provider_loop_restore(pane_id, state)?;
         if let Some(parent_turn_id) = state.routed_parent_turn_id.as_deref() {
             if self.agent_shell_store().get(pane_id).is_none() {
                 return Ok(());
@@ -1265,6 +1266,7 @@ impl RuntimeSessionService {
                     .restore_session(pane_id, previous)?;
                 return Err(error);
             }
+            Self::acknowledge_completion_provider_loop_restore(completion_restore);
             self.restore_agent_loop_parent_projection(&state.loop_id, pane_id);
             self.sync_prepared_runtime_agent_objective_for_conversation(
                 pane_id,
@@ -1299,6 +1301,7 @@ impl RuntimeSessionService {
                 .restore_session(pane_id, previous)?;
             return Err(error);
         }
+        Self::acknowledge_completion_provider_loop_restore(completion_restore);
         self.agent_shell_store_mut()
             .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
         self.install_primary_agent_name(pane_id, state.parent_display_name.clone())?;

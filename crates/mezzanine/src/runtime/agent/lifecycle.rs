@@ -250,7 +250,7 @@ impl RuntimeSessionService {
         ) {
             self.close_terminal_subagent_pane_if_pending(&turn)?;
         }
-        self.start_ready_agent_turns()?;
+        self.start_ready_after_completion_cleanup(&turn)?;
         if !completion_attention_eligible {
             self.presentation.acknowledge_completion_attention(pane_id);
         }
@@ -532,7 +532,7 @@ impl RuntimeSessionService {
         {
             self.close_terminal_subagent_pane_if_pending(turn)?;
         }
-        self.start_ready_agent_turns()?;
+        self.start_ready_after_completion_cleanup(turn)?;
         if !completion_attention_eligible {
             self.presentation
                 .acknowledge_completion_attention(&turn.pane_id);

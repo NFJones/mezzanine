@@ -212,6 +212,7 @@ impl RuntimeSessionService {
             let queued =
                 self.queue_agent_failure_feedback_after_retention(turn, execution, reason)?;
             if queued {
+                self.retain_queued_completion_correction_source(turn)?;
                 self.clear_completion_settlement_intent(&turn.turn_id);
                 Ok(CompletionSettlementDisposition::Queued)
             } else {

@@ -128,6 +128,9 @@ pub(super) struct CompletionGroup {
     pub(super) handoff: Option<Box<CompletionTranscriptHandoff>>,
     pub(super) provider_handoff: Option<ProviderHandoffOwner>,
     pub(super) failed_backing: Option<Box<CompletionFailedBacking>>,
+    /// Actual healthy correction source moved before legacy callers discard
+    /// their live execution slot; not failed backing or another history queue.
+    pub(super) correction_execution: CompletionCapture<Option<AgentTurnExecution>>,
     pub(super) primary_failure: Option<Box<CompletionRequiredFailure>>,
     /// At most one first error per entered action/attempt/stage; duplicates do
     /// not create new diagnostics or a new retry/settlement generation.
@@ -276,7 +279,9 @@ impl RuntimeSessionService {
             (backing.execution.as_ref()?, backing.context.as_ref()?)
         } else {
             (
-                self.agent_turn_executions().get(turn_id)?,
+                self.agent_turn_executions()
+                    .get(turn_id)
+                    .or_else(|| group.correction_execution.as_ref())?,
                 self.agent_turn_contexts().get(turn_id)?,
             )
         };
@@ -411,6 +416,7 @@ impl RuntimeSessionService {
                 handoff: None,
                 provider_handoff: None,
                 failed_backing: None,
+                correction_execution: CompletionCapture::NotCaptured,
                 primary_failure: None,
                 secondary_failures: Vec::new(),
                 safe_failure_evidence: None,
@@ -546,6 +552,7 @@ impl RuntimeSessionService {
             .is_none_or(|backing| matches!(backing.patch_states, CompletionCapture::NotCaptured));
         let take_phases = backing
             .is_none_or(|backing| matches!(backing.patch_phases, CompletionCapture::NotCaptured));
+        let from_correction = take_execution && group.correction_execution.as_ref().is_some();
         if self.provider_refusal_is_armed(turn_id)
             && (take_execution || take_context || take_native || take_states || take_phases)
             && (!self.agent_turn_ledger().turn(turn_id).is_some_and(|turn| {
@@ -555,7 +562,7 @@ impl RuntimeSessionService {
             }) || self
                 .agent_shell_store()
                 .get(&group.turn.pane_id)
-                .is_some_and(|session| session.session_id != group.turn.conversation_id))
+                .is_some_and(|_| !self.provider_refusal_shell_binding_owned(turn_id)))
         {
             let error =
                 MezError::invalid_state("refusal component capture original binding changed");
@@ -571,6 +578,7 @@ impl RuntimeSessionService {
         // Negative custody may never adopt the newly installed provider-error
         // execution (or a later group). Leave the actual live value untouched.
         if take_execution
+            && !from_correction
             && self.provider_refusal_is_armed(turn_id)
             && self
                 .agent_turn_executions()
@@ -625,7 +633,23 @@ impl RuntimeSessionService {
                 patch_phases.push((action_id, phase));
             }
         }
-        let execution = take_execution.then(|| self.agent_turn_executions_mut().remove(turn_id));
+        let execution = if from_correction {
+            self.agent
+                .completion_settlements
+                .groups
+                .get_mut(turn_id)
+                .map(|group| {
+                    match std::mem::replace(
+                        &mut group.correction_execution,
+                        CompletionCapture::Captured(None),
+                    ) {
+                        CompletionCapture::Captured(execution) => execution,
+                        CompletionCapture::NotCaptured => None,
+                    }
+                })
+        } else {
+            take_execution.then(|| self.agent_turn_executions_mut().remove(turn_id))
+        };
         let context = take_context.then(|| self.agent_turn_contexts_mut().remove(turn_id));
         if let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) {
             let backing = group.failed_backing.get_or_insert_with(Default::default);
@@ -738,6 +762,7 @@ impl RuntimeSessionService {
         let execution = self
             .agent_turn_executions()
             .get(turn_id)
+            .or_else(|| group.correction_execution.as_ref())
             .filter(|_| !frozen_refusal && self.agent_turn_contexts().contains_key(turn_id));
         let fresh_source = execution.is_some();
         let mut candidate = if let Some(execution) = execution {
