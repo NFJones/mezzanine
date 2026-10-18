@@ -11,6 +11,69 @@ use mez_agent::AutoSizingRoutingSelection;
 
 mod cleanup;
 
+/// A real routed native claim under the fixture's explicit ask/policy-only
+/// policy must retain a synthetic terminal outcome before optional installation
+/// fails. Debug exercises activity RESULT, Verbose the shell-view raw body.
+/// No approval bypass, sandbox capability fabrication, command execution or
+/// launch-count inference is used: only claim-derived delivery identity and
+/// returned bytes are synthetic. This is not platform sandbox execution proof.
+#[test]
+fn runtime_routed_native_completion_retains_result_before_optional_install() {
+    for level in [mez_agent::AgentLogLevel::Debug, mez_agent::AgentLogLevel::Verbose] {
+        let (mut service, _, worker_turn) = selected_routed_loop("/loop --limit 3 inspect retained native outcome");
+        assert!(!service.permission_policy().approval_bypass());
+        service.agent_shell_store_mut().set_log_level(&worker_turn.pane_id, level).unwrap();
+        let action = mez_agent::AgentAction {
+            id: "native-completion-owner".to_string(),
+            payload: mez_agent::AgentActionPayload::ShellCommand {
+                summary: "Inspect completion ownership".to_string(),
+                command: "printf unexecuted-fixture".to_string(),
+                interactive: false, stateful: false, timeout_ms: Some(5_000),
+            },
+        };
+        let provider = RuntimeBatchProvider { response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(), model: "test".to_string(),
+            raw_text: "admit native completion fixture".to_string(), usage: Default::default(),
+            latest_request_usage: None, quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "retain completed native payload".to_string(), actions: vec![action.clone()],
+            }), provider_transcript_events: Vec::new(),
+        }};
+        service.execute_agent_turn_with_provider(&worker_turn.turn_id, &provider,
+            runtime_model_profile("runtime-batch", "test")).unwrap();
+        let dispatch = service.claim_native_shell_action(&worker_turn.turn_id, &action.id)
+            .unwrap().expect("ordinary policy must admit the exact native dispatch");
+        assert!(!dispatch.capability_probe_only, "policy-only fixture has no fabricated probe result");
+        assert!(!service.permission_policy().approval_bypass());
+        let execution = service.agent_turn_executions().get(&worker_turn.turn_id).unwrap().clone();
+        service.flush_ordered_provider_headers(&worker_turn.pane_id, &execution).unwrap();
+        let body = "F668_NATIVE_CLAIMED_EXACT_BODY\n";
+        let outcome = crate::runtime::RuntimeNativeShellOutcome {
+            turn_id: dispatch.turn_id.clone(), action_id: dispatch.action_id.clone(),
+            marker: dispatch.marker.clone(), command: dispatch.request.transaction.command.clone(),
+            started_at_unix_ms: dispatch.started_at_unix_ms, sandbox_capability: None,
+            capability_probe_only: dispatch.capability_probe_only, launch_counts: None,
+            result: Ok(mez_agent::ShellExecutionOutput::new(Some(0), body.to_string(),
+                String::new(), false, false)),
+        };
+        service.fail_agent_presentation_install_for_tests(0);
+        assert!(service.complete_native_shell_action(outcome.clone()).unwrap());
+        service.retry_completion_publications();
+        assert!(!service.complete_native_shell_action(outcome).unwrap());
+        assert!(service.claim_native_shell_action(&worker_turn.turn_id, &action.id).unwrap().is_none());
+        let retained = service.agent_turn_executions().get(&worker_turn.turn_id).unwrap();
+        let result = retained.action_results.iter().find(|result| result.action_id == action.id).unwrap();
+        assert_eq!(result.status, ActionStatus::Succeeded);
+        assert!(result.content_text().contains(body.trim()));
+        assert!(result.structured_content_json.as_deref().unwrap().contains(&dispatch.marker));
+        assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
+        service.ensure_completion_admission_open().unwrap();
+        let rows = service.agent_pane_screen(&worker_turn.pane_id).unwrap().normal_content_lines().join("\n");
+        assert_eq!(rows.matches(body.trim()).count(), 1, "{level:?}: {rows}");
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
 /// Builds a stable pane identity for routed primary-authority tests.
 fn routed_path_resolution_environment(working_directory: &Path) -> mez_agent::EnvironmentSignature {
     mez_agent::EnvironmentSignature::new(

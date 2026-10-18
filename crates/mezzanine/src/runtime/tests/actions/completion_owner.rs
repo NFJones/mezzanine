@@ -637,7 +637,9 @@ async fn runtime_completion_owner_late_repository_does_not_override_original_no_
     assert_eq!(fixture.service.agent_turn_ledger().turn(&fixture.turn.turn_id).unwrap().state,
         AgentTurnState::Completed);
     assert!(fixture.service.claim_bookkeeping_candidates().is_empty());
-    assert!(store.inspect(&fixture.turn.conversation_id).unwrap().is_empty());
+    let raw_path = store.transcript_path(&fixture.turn.conversation_id).unwrap();
+    assert!(!raw_path.exists(), "no-save policy must not manufacture an empty RAW archive");
+    assert!(fixture.service.persistence.pending_transcript_entries_at_path(&raw_path, &fixture.turn.conversation_id).unwrap().is_empty());
     fixture.service.ensure_completion_admission_open().unwrap();
 }
 
