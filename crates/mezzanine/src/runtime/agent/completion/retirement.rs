@@ -61,12 +61,42 @@ pub(super) struct CompletionRequiredFailure {
 }
 
 /// Moved canonical backing of a failed group, not a cloned parallel timeline.
+/// Captured absence is final; it never authorizes adopting a later live value.
+#[derive(Default)]
+pub(super) enum CompletionCapture<T> {
+    #[default]
+    NotCaptured,
+    Captured(T),
+}
+
+impl<T> CompletionCapture<T> {
+    /// Runs the actual move only for an unobserved component. Captured absence
+    /// is final and must never adopt a replacement inserted under a reused key.
+    pub(super) fn capture_once(&mut self, capture: impl FnOnce() -> T) {
+        if matches!(self, Self::NotCaptured) {
+            *self = Self::Captured(capture());
+        }
+    }
+}
+
+impl<T> CompletionCapture<Option<T>> {
+    /// Borrows an actually captured value, without a live-map fallback.
+    pub(super) fn as_ref(&self) -> Option<&T> {
+        match self {
+            Self::Captured(value) => value.as_ref(),
+            Self::NotCaptured => None,
+        }
+    }
+}
+
+/// Per-component transfer within the original failed group, not another queue.
+#[derive(Default)]
 pub(super) struct CompletionFailedBacking {
-    pub(super) execution: Option<AgentTurnExecution>,
-    pub(super) context: Option<mez_agent::AgentContext>,
-    pub(super) pending_native: Vec<crate::runtime::RuntimeNativeShellDispatch>,
-    pub(super) patch_states: Vec<(String, RuntimeApplyPatchBatchState)>,
-    pub(super) patch_phases: Vec<(String, RuntimePendingApplyPatchPhase)>,
+    pub(super) execution: CompletionCapture<Option<AgentTurnExecution>>,
+    pub(super) context: CompletionCapture<Option<mez_agent::AgentContext>>,
+    pub(super) pending_native: CompletionCapture<Vec<crate::runtime::RuntimeNativeShellDispatch>>,
+    pub(super) patch_states: CompletionCapture<Vec<(String, RuntimeApplyPatchBatchState)>>,
+    pub(super) patch_phases: CompletionCapture<Vec<(String, RuntimePendingApplyPatchPhase)>>,
 }
 
 /// The exact immutable candidate and its cached actual producer witness.
@@ -86,6 +116,8 @@ pub(in crate::runtime::agent) enum CompletionTranscriptOwnership {
 /// One bounded admitted execution-group slot; per-action transfer cannot erase
 /// its original target, required errors, or group-finalization milestones.
 pub(super) struct CompletionGroup {
+    /// Strong private identity keeps an old permit distinct after slot reuse.
+    pub(super) identity: std::sync::Arc<()>,
     pub(super) turn: AgentTurnRecord,
     pub(super) group: mez_agent::ContextExecutionGroupId,
     pub(super) actions: Vec<(String, String, usize)>,
@@ -94,6 +126,7 @@ pub(super) struct CompletionGroup {
     pub(super) context_committed: BTreeSet<(String, String)>,
     pub(super) transcript: CompletionTranscriptTarget,
     pub(super) handoff: Option<Box<CompletionTranscriptHandoff>>,
+    pub(super) provider_handoff: Option<ProviderHandoffOwner>,
     pub(super) failed_backing: Option<Box<CompletionFailedBacking>>,
     pub(super) primary_failure: Option<Box<CompletionRequiredFailure>>,
     /// At most one first error per entered action/attempt/stage; duplicates do
@@ -367,6 +400,7 @@ impl RuntimeSessionService {
         self.agent.completion_settlements.groups.insert(
             turn_id.to_string(),
             Box::new(CompletionGroup {
+                identity: std::sync::Arc::new(()),
                 turn,
                 group: group_id.clone(),
                 actions,
@@ -375,6 +409,7 @@ impl RuntimeSessionService {
                 context_committed: BTreeSet::new(),
                 transcript,
                 handoff: None,
+                provider_handoff: None,
                 failed_backing: None,
                 primary_failure: None,
                 secondary_failures: Vec::new(),
@@ -496,60 +531,97 @@ impl RuntimeSessionService {
     /// Moves failed backing before any bypass clear can destroy it. A second
     /// cleanup cannot overwrite the original owner or create another timeline.
     pub(in crate::runtime::agent) fn detach_failed_completion_backing(&mut self, turn_id: &str) {
-        if self
-            .agent
-            .completion_settlements
-            .groups
-            .get(turn_id)
-            .is_none_or(|group| group.failed_backing.is_some())
+        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
+            return;
+        };
+        let backing = group.failed_backing.as_ref();
+        let take_execution = backing
+            .is_none_or(|backing| matches!(backing.execution, CompletionCapture::NotCaptured));
+        let take_context = !self.provider_refusal_context_is_live(turn_id)
+            && backing
+                .is_none_or(|backing| matches!(backing.context, CompletionCapture::NotCaptured));
+        let take_native = backing
+            .is_none_or(|backing| matches!(backing.pending_native, CompletionCapture::NotCaptured));
+        let take_states = backing
+            .is_none_or(|backing| matches!(backing.patch_states, CompletionCapture::NotCaptured));
+        let take_phases = backing
+            .is_none_or(|backing| matches!(backing.patch_phases, CompletionCapture::NotCaptured));
+        // Negative custody may never adopt the newly installed provider-error
+        // execution (or a later group). Leave the actual live value untouched.
+        if take_execution
+            && self.provider_refusal_is_armed(turn_id)
+            && self
+                .agent_turn_executions()
+                .get(turn_id)
+                .is_some_and(|execution| {
+                    crate::runtime::agent::provider_execution::provider_log_execution_group_id(
+                        execution,
+                    )
+                    .map_or(true, |identity| identity != group.group)
+                })
         {
+            let error =
+                MezError::invalid_state("refusal capture does not own the original execution");
+            self.record_completion_required_failure(
+                turn_id,
+                "refusal_capture_owner",
+                None,
+                None,
+                &error,
+            );
             return;
         }
-        let action_ids = self
-            .agent
-            .completion_settlements
-            .groups
-            .get(turn_id)
-            .map(|group| {
-                group
-                    .actions
-                    .iter()
-                    .map(|(id, _, _)| id.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let native_keys = self
-            .agent
-            .pending_native_shell_dispatches
-            .keys()
-            .filter(|(owner, _)| owner == turn_id)
-            .cloned()
+        let action_ids = group
+            .actions
+            .iter()
+            .map(|(id, _, _)| id.clone())
             .collect::<Vec<_>>();
-        let pending_native = native_keys
-            .into_iter()
-            .filter_map(|key| self.agent.pending_native_shell_dispatches.remove(&key))
-            .collect();
+        let pending_native = if take_native {
+            let keys = self
+                .agent
+                .pending_native_shell_dispatches
+                .keys()
+                .filter(|(owner, _)| owner == turn_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            Some(
+                keys.into_iter()
+                    .filter_map(|key| self.agent.pending_native_shell_dispatches.remove(&key))
+                    .collect(),
+            )
+        } else {
+            None
+        };
         let mut patch_states = Vec::new();
         let mut patch_phases = Vec::new();
         for action_id in action_ids {
             let key = Self::apply_patch_batch_state_key(turn_id, &action_id);
-            if let Some(state) = self.agent.apply_patch_batch_states.remove(&key) {
+            if take_states && let Some(state) = self.agent.apply_patch_batch_states.remove(&key) {
                 patch_states.push((action_id.clone(), state));
             }
-            if let Some(phase) = self.agent.pending_apply_patch_phases.remove(&key) {
+            if take_phases && let Some(phase) = self.agent.pending_apply_patch_phases.remove(&key) {
                 patch_phases.push((action_id, phase));
             }
         }
-        let execution = self.agent_turn_executions_mut().remove(turn_id);
-        let context = self.agent_turn_contexts_mut().remove(turn_id);
+        let execution = take_execution.then(|| self.agent_turn_executions_mut().remove(turn_id));
+        let context = take_context.then(|| self.agent_turn_contexts_mut().remove(turn_id));
         if let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) {
-            group.failed_backing = Some(Box::new(CompletionFailedBacking {
-                execution,
-                context,
-                pending_native,
-                patch_states,
-                patch_phases,
-            }));
+            let backing = group.failed_backing.get_or_insert_with(Default::default);
+            if let Some(execution) = execution {
+                backing.execution.capture_once(|| execution);
+            }
+            if let Some(context) = context {
+                backing.context.capture_once(|| context);
+            }
+            if let Some(native) = pending_native {
+                backing.pending_native.capture_once(|| native);
+            }
+            if take_states {
+                backing.patch_states.capture_once(|| patch_states);
+            }
+            if take_phases {
+                backing.patch_phases.capture_once(|| patch_phases);
+            }
             group.paint_revoked = true;
         }
     }
