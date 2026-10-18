@@ -184,14 +184,34 @@ mod tests {
             .agent_shell_store_mut()
             .enter_or_resume("%1")
             .unwrap();
-        let started = service
-            .start_agent_prompt_turn("%1", "retain original RuntimeOnly results")
+        // Use the real visible prompt entry point. Its display ACK is not
+        // evidence of admission: assert the actual pending/ledger binding.
+        let _ack = service
+            .execute_agent_shell_command(&primary, "retain original RuntimeOnly results")
             .unwrap();
+        let pending = service.pending_agent_provider_tasks();
+        assert_eq!(
+            pending.len(),
+            1,
+            "setup: prompt must admit exactly one real provider task"
+        );
+        let task = &pending[0];
         let turn = service
             .agent_turn_ledger()
-            .turn(&started.turn_id)
+            .turn(&task.turn_id)
             .unwrap()
             .clone();
+        assert_eq!(turn.state, AgentTurnState::Running);
+        assert_eq!(turn.pane_id, "%1");
+        assert_eq!(turn.agent_id, task.agent_id);
+        let session = service.agent_shell_store().get("%1").unwrap();
+        assert_eq!(session.session_id, turn.conversation_id);
+        assert_eq!(
+            session.running_turn_id.as_deref(),
+            Some(turn.turn_id.as_str())
+        );
+        assert!(service.agent_provider_task_is_pending(&turn.turn_id));
+        assert!(!service.agent_provider_task_is_claimed(&turn.turn_id));
         let agent = AgentId::opaque(turn.agent_id.clone()).unwrap();
         service.remove_pending_agent_provider_task(&turn.turn_id);
         let actions: Vec<_> = ["first", "second"]
