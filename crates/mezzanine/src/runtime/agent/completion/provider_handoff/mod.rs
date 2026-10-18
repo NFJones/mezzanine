@@ -7,9 +7,12 @@
 //! Positive consumption is nonfallible and identity-qualified after all actor
 //! admission work. Merely dropping a permit never releases original custody.
 
-use super::retirement::{CompletionMilestone, CompletionTranscriptTarget};
+use super::retirement::{
+    CompletionCapture, CompletionFailedBacking, CompletionMilestone, CompletionTranscriptTarget,
+};
 use super::*;
 use crate::runtime::RuntimeAgentProviderDispatch;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -33,6 +36,9 @@ pub(super) struct ProviderHandoffOwner {
     pub(super) settlement: CompletionMilestone,
     pub(super) context_consumers_open: bool,
     pub(super) task_disposition: Option<crate::runtime::agent::TerminalResultDisposition>,
+    pub(super) routed: CompletionMilestone,
+    pub(super) routed_result: Option<bool>,
+    pub(super) source_frozen: bool,
 }
 
 /// Opaque original-group/attempt permit, distinct from a public turn label.
@@ -54,6 +60,577 @@ impl CompletionProviderHandoff {
 }
 
 impl RuntimeSessionService {
+    /// Selects one inert fault in an isolated actor fixture, not a live policy.
+    #[cfg(test)]
+    pub(crate) fn set_provider_handoff_fault_for_tests(&mut self, fault: &'static str) {
+        self.agent
+            .completion_settlements
+            .provider_handoff_fault_for_tests = Some(fault);
+    }
+
+    /// Consumes only the named boundary; an unrelated path cannot heal it.
+    #[cfg(test)]
+    pub(crate) fn take_provider_handoff_fault_for_tests(&mut self, fault: &'static str) -> bool {
+        if self
+            .agent
+            .completion_settlements
+            .provider_handoff_fault_for_tests
+            == Some(fault)
+        {
+            self.agent
+                .completion_settlements
+                .provider_handoff_fault_for_tests = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Validates the distinct negative disposition. This is failure bookkeeping
+    /// with retained original custody, never success, archive acceptance, or
+    /// permission for another provider/action/assessment continuation.
+    fn ensure_provider_refusal_failed_source(
+        &self,
+        turn: &AgentTurnRecord,
+        state: AgentTurnState,
+    ) -> Result<()> {
+        let group = self
+            .agent
+            .completion_settlements
+            .groups
+            .get(&turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("negative completion group is missing"))?;
+        let owner = group
+            .provider_handoff
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("negative completion owner is missing"))?;
+        let backing = group.failed_backing.as_ref().ok_or_else(|| {
+            MezError::invalid_state("negative completion has no retained original backing")
+        })?;
+        let execution = backing.execution.as_ref().ok_or_else(|| {
+            MezError::invalid_state("negative completion has no captured original execution")
+        })?;
+        if state != AgentTurnState::Failed
+            || owner.rejection.is_none()
+            || owner.settlement != CompletionMilestone::Entered
+            || !owner.source_frozen
+            || group.primary_failure.is_none()
+            || group.turn.agent_id != turn.agent_id
+            || group.turn.pane_id != turn.pane_id
+            || group.turn.conversation_id != turn.conversation_id
+            || crate::runtime::agent::provider_execution::provider_log_execution_group_id(
+                execution,
+            )? != group.group
+            || (!self.provider_refusal_context_is_live(&turn.turn_id)
+                && backing.context.as_ref().is_none())
+            || (self.provider_refusal_context_is_live(&turn.turn_id)
+                && !self.agent_turn_contexts().contains_key(&turn.turn_id))
+        {
+            return Err(MezError::invalid_state(
+                "negative completion does not own its original Failed cleanup disposition",
+            ));
+        }
+        if matches!(
+            group.transcript,
+            CompletionTranscriptTarget::Original { .. }
+        ) && owner.original_snapshot.is_none()
+        {
+            return Err(MezError::invalid_state(
+                "negative completion lost original archive qualification",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Ordinary terminal retirement keeps its existing gates. Only the exact
+    /// negative Failed disposition may retain backing instead of discharging
+    /// those positive gates. It cannot authorize Completed or Interrupted work.
+    pub(in crate::runtime::agent) fn prepare_completion_terminal_cleanup(
+        &mut self,
+        turn: &AgentTurnRecord,
+        state: AgentTurnState,
+    ) -> Result<()> {
+        if !self.provider_refusal_is_armed(&turn.turn_id) {
+            return self.ensure_completion_terminal_retirement(&turn.turn_id);
+        }
+        self.ensure_provider_refusal_failed_source(turn, state)?;
+        self.detach_failed_completion_backing(&turn.turn_id);
+        self.ensure_provider_refusal_failed_source(turn, state)
+    }
+
+    /// Completes only the same negative task/scheduler suffix. The original
+    /// required failure remains primary; no positive completion gate is cleared
+    /// or marked accepted. Ambiguous effect entry remains bounded, not replayed.
+    pub(in crate::runtime::agent) fn finalize_completion_provider_refusal(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+        reason: &str,
+    ) -> Result<()> {
+        self.ensure_provider_refusal_failed_source(turn, execution.terminal_state)?;
+        self.emit_provider_error_terminal_result(turn, execution)?;
+        let scheduler = self
+            .agent
+            .completion_settlements
+            .groups
+            .get(&turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("negative scheduler owner is missing"))?
+            .scheduler;
+        match scheduler {
+            CompletionMilestone::Entered => {
+                return Err(MezError::invalid_state(
+                    "negative scheduler result is ambiguous; replay prohibited",
+                ));
+            }
+            CompletionMilestone::Accepted => return Ok(()),
+            CompletionMilestone::NotEntered => {}
+        }
+        if let Some(group) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(&turn.turn_id)
+        {
+            group.scheduler = CompletionMilestone::Entered;
+        }
+        self.complete_running_agent_turn_and_start_ready(turn, AgentTurnState::Failed, reason)?;
+        if let Some(group) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(&turn.turn_id)
+        {
+            group.scheduler = CompletionMilestone::Accepted;
+        }
+        self.start_ready_agent_turns()?;
+        Ok(())
+    }
+
+    /// Enters the exact actual-refusal scope once. Generic provider failures,
+    /// stale permits and a merely prepared marker cannot enter this path.
+    pub(in crate::runtime::agent) fn begin_completion_provider_refusal(
+        &mut self,
+        turn_id: &str,
+    ) -> Result<Option<CompletionProviderHandoff>> {
+        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
+            return Ok(None);
+        };
+        let Some(owner) = group
+            .provider_handoff
+            .as_ref()
+            .filter(|owner| owner.rejection.is_some())
+        else {
+            return Ok(None);
+        };
+        let permit = CompletionProviderHandoff {
+            turn: group.turn.clone(),
+            generation: owner.generation,
+            disposition: CompletionProviderClaimDisposition::Ordinary,
+            original: Some((
+                group.identity.clone(),
+                owner.identity.clone(),
+                group.group.clone(),
+            )),
+        };
+        if owner.settlement != CompletionMilestone::NotEntered
+            || !self.provider_handoff_claim_matches(&permit)
+        {
+            return Err(self.completion_group_failure(turn_id).unwrap_or_else(|| {
+                MezError::invalid_state(
+                    "provider refusal is already entered or no longer owns its claim",
+                )
+            }));
+        }
+        if let Some(owner) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(turn_id)
+            .and_then(|group| group.provider_handoff.as_mut())
+        {
+            owner.settlement = CompletionMilestone::Entered;
+            owner.context_consumers_open = true;
+        }
+        Ok(Some(permit))
+    }
+
+    /// Qualifies the accepted original projection before overwrite or failure
+    /// evidence restaging. A witness is producer ownership, not disk durability.
+    pub(in crate::runtime::agent) fn freeze_completion_provider_refusal_source(
+        &mut self,
+        permit: &CompletionProviderHandoff,
+    ) -> Result<()> {
+        if !self.provider_handoff_group_matches(permit) {
+            return Err(MezError::invalid_state(
+                "provider refusal original group changed",
+            ));
+        }
+        let group = self
+            .agent
+            .completion_settlements
+            .groups
+            .get(&permit.turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("provider refusal source is unavailable"))?;
+        let owner = group
+            .provider_handoff
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("provider refusal witness is unavailable"))?;
+        if let CompletionTranscriptTarget::Original { .. } = &group.transcript {
+            let witness = owner.original_snapshot.as_ref().ok_or_else(|| {
+                MezError::invalid_state("provider refusal original archive witness is missing")
+            })?;
+            let candidate = &group
+                .handoff
+                .as_ref()
+                .ok_or_else(|| {
+                    MezError::invalid_state("provider refusal original candidate is missing")
+                })?
+                .candidate;
+            let digest: String = Sha256::digest(candidate.completion_snapshot_bytes()?)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            if digest != witness.snapshot_id() {
+                return Err(MezError::invalid_state(
+                    "provider refusal original snapshot changed before capture",
+                ));
+            }
+        }
+        if let Some(owner) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(&permit.turn.turn_id)
+            .and_then(|group| group.provider_handoff.as_mut())
+        {
+            owner.source_frozen = true;
+        }
+        Ok(())
+    }
+
+    /// Captures actual original execution immediately before provider-error
+    /// insertion. Context stays in its original live scope for loop/routed
+    /// consumers; no removal/rebind or clone is used to satisfy those consumers.
+    pub(in crate::runtime::agent) fn capture_completion_before_provider_error(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        if !self.provider_refusal_is_armed(&turn.turn_id) {
+            return Ok(());
+        }
+        let group = self
+            .agent
+            .completion_settlements
+            .groups
+            .get(&turn.turn_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("provider refusal capture group is unavailable")
+            })?;
+        let owner = group.provider_handoff.as_ref().ok_or_else(|| {
+            MezError::invalid_state("provider refusal capture owner is unavailable")
+        })?;
+        if owner.settlement != CompletionMilestone::Entered
+            || !owner.context_consumers_open
+            || !owner.source_frozen
+            || group.turn.agent_id != turn.agent_id
+            || group.turn.pane_id != turn.pane_id
+            || group.turn.conversation_id != turn.conversation_id
+        {
+            return Err(MezError::invalid_state(
+                "provider refusal capture is not in its original consumer scope",
+            ));
+        }
+        if group
+            .failed_backing
+            .as_ref()
+            .is_some_and(|backing| !matches!(backing.execution, CompletionCapture::NotCaptured))
+        {
+            return Err(MezError::invalid_state(
+                "provider refusal execution capture already occurred; overwrite replay prohibited",
+            ));
+        }
+        let original = self
+            .agent_turn_executions()
+            .get(&turn.turn_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("provider refusal lost original execution before overwrite")
+            })?;
+        if crate::runtime::agent::provider_execution::provider_log_execution_group_id(original)?
+            != group.group
+            || !self.agent_turn_contexts().contains_key(&turn.turn_id)
+        {
+            return Err(MezError::invalid_state(
+                "provider refusal cannot capture replacement or missing context",
+            ));
+        }
+        let execution = self.agent_turn_executions_mut().remove(&turn.turn_id);
+        if let Some(group) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(&turn.turn_id)
+        {
+            group
+                .failed_backing
+                .get_or_insert_with(|| Box::new(CompletionFailedBacking::default()))
+                .execution
+                .capture_once(|| execution);
+        }
+        // Capture remaining non-context components before any nested cleanup.
+        // The original context-open flag is honored inside every detach entry.
+        self.detach_failed_completion_backing(&turn.turn_id);
+        Ok(())
+    }
+
+    /// Closes the same strong scope on every return and completes each remaining
+    /// component once. Actual settlement errors stay secondary to the refusal;
+    /// a duplicate entered scope never replays audit, task, routed or loop work.
+    pub(in crate::runtime::agent) fn finish_completion_provider_refusal(
+        &mut self,
+        permit: CompletionProviderHandoff,
+        result: Result<()>,
+    ) -> Result<()> {
+        if !self.provider_handoff_group_matches(&permit) {
+            return result.and_then(|()| {
+                Err(MezError::invalid_state(
+                    "provider refusal original scope changed before close",
+                ))
+            });
+        }
+        let turn_id = permit.turn.turn_id.as_str();
+        if !self
+            .agent_turn_ledger()
+            .turn(turn_id)
+            .is_some_and(|turn| permit.matches_turn(turn))
+            || self
+                .agent_shell_store()
+                .get(&permit.turn.pane_id)
+                .is_some_and(|session| session.session_id != permit.turn.conversation_id)
+        {
+            let error =
+                MezError::invalid_state("provider refusal binding changed before component close");
+            self.record_completion_required_failure(
+                turn_id,
+                "provider_refusal_binding",
+                None,
+                None,
+                &error,
+            );
+            return Err(self.completion_group_failure(turn_id).unwrap_or(error));
+        }
+        if let Err(error) = &result {
+            self.record_completion_required_failure(
+                turn_id,
+                "provider_refusal_settlement",
+                None,
+                None,
+                error,
+            );
+        }
+        let terminal = self
+            .agent_turn_ledger()
+            .turn(turn_id)
+            .is_some_and(|turn| turn.state == AgentTurnState::Failed)
+            && self
+                .agent
+                .completion_settlements
+                .groups
+                .get(turn_id)
+                .is_some_and(|group| {
+                    group.task_result == CompletionMilestone::Accepted
+                        && group.scheduler == CompletionMilestone::Accepted
+                });
+        if let Some(owner) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(turn_id)
+            .and_then(|group| group.provider_handoff.as_mut())
+        {
+            owner.context_consumers_open = false;
+            if result.is_ok() && terminal {
+                owner.settlement = CompletionMilestone::Accepted;
+            }
+        }
+        // These are only this undispatched claim and original group; never a
+        // current-pane scan or replacement claim cancellation.
+        if self.provider_handoff_claim_matches(&permit) {
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
+        }
+        self.agent.pending_agent_provider_tasks.remove(turn_id);
+        self.detach_failed_completion_backing(turn_id);
+        match result {
+            Ok(()) if terminal => Ok(()),
+            Ok(()) => Err(self.completion_group_failure(turn_id).unwrap_or_else(|| {
+                MezError::invalid_state(
+                    "negative provider settlement remains retained, not terminal",
+                )
+            })),
+            Err(error) => Err(self.completion_group_failure(turn_id).unwrap_or(error)),
+        }
+    }
+
+    /// Enters the FIRST existing task-result emission before any loop/routed
+    /// effects and caches its real disposition. Entered-but-unaccepted is never
+    /// retried. Ordinary/provider failures without this exact scope are unchanged.
+    pub(in crate::runtime::agent) fn emit_provider_error_terminal_result(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> Result<crate::runtime::agent::TerminalResultDisposition> {
+        if !self.provider_refusal_is_armed(&turn.turn_id) {
+            return self.emit_subagent_task_result_for_execution(turn, execution);
+        }
+        let group = self
+            .agent
+            .completion_settlements
+            .groups
+            .get(&turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("provider refusal task owner is missing"))?;
+        match group.task_result {
+            CompletionMilestone::Accepted => {
+                return group
+                    .provider_handoff
+                    .as_ref()
+                    .and_then(|owner| owner.task_disposition)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("provider refusal task disposition is missing")
+                    });
+            }
+            CompletionMilestone::Entered => {
+                return Err(MezError::invalid_state(
+                    "provider refusal task result is ambiguous; replay prohibited",
+                ));
+            }
+            CompletionMilestone::NotEntered => {}
+        }
+        if let Some(group) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(&turn.turn_id)
+        {
+            group.task_result = CompletionMilestone::Entered;
+        }
+        #[cfg(test)]
+        if self.take_provider_handoff_fault_for_tests("task_consumer") {
+            self.detach_failed_completion_backing(&turn.turn_id);
+            if !self.provider_refusal_context_is_live(&turn.turn_id)
+                || !self.agent_turn_contexts().contains_key(&turn.turn_id)
+            {
+                return Err(MezError::invalid_state(
+                    "nested refusal capture lost the original live consumer context",
+                ));
+            }
+            return Err(MezError::invalid_state(
+                "injected required refusal context consumer failure",
+            ));
+        }
+        let disposition = self.emit_subagent_task_result_for_execution(turn, execution)?;
+        if let Some(group) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(&turn.turn_id)
+        {
+            group.task_result = CompletionMilestone::Accepted;
+            if let Some(owner) = group.provider_handoff.as_mut() {
+                owner.task_disposition = Some(disposition);
+            }
+        }
+        Ok(disposition)
+    }
+
+    /// Keeps the later mutable routed-context consumer in the SAME live scope,
+    /// separately recording entry before effects. No retained-context rebinding.
+    pub(in crate::runtime::agent) fn complete_provider_error_routed_presentation(
+        &mut self,
+        turn_id: &str,
+        state: AgentTurnState,
+    ) -> Result<bool> {
+        if !self.provider_refusal_is_armed(turn_id) {
+            return self.complete_routed_presentation(turn_id, state);
+        }
+        let owner = self
+            .agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .and_then(|group| group.provider_handoff.as_ref())
+            .ok_or_else(|| MezError::invalid_state("provider refusal routed owner is missing"))?;
+        match owner.routed {
+            CompletionMilestone::Accepted => {
+                return owner.routed_result.ok_or_else(|| {
+                    MezError::invalid_state("provider refusal routed disposition is missing")
+                });
+            }
+            CompletionMilestone::Entered => {
+                return Err(MezError::invalid_state(
+                    "provider refusal routed result is ambiguous; replay prohibited",
+                ));
+            }
+            CompletionMilestone::NotEntered => {}
+        }
+        if let Some(owner) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(turn_id)
+            .and_then(|group| group.provider_handoff.as_mut())
+        {
+            owner.routed = CompletionMilestone::Entered;
+        }
+        let result = self.complete_routed_presentation(turn_id, state)?;
+        if let Some(owner) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(turn_id)
+            .and_then(|group| group.provider_handoff.as_mut())
+        {
+            owner.routed = CompletionMilestone::Accepted;
+            owner.routed_result = Some(result);
+        }
+        Ok(result)
+    }
+
+    /// Called only by the actual actor lease-rejection boundary, before its
+    /// existing failure settlement removes the undispatched claim.
+    pub(crate) fn reject_completion_provider_lease(
+        &mut self,
+        permit: &CompletionProviderHandoff,
+        error: &MezError,
+    ) -> bool {
+        self.reject_completion_provider_handoff(
+            permit,
+            ProviderHandoffRejection::LeaseRejected,
+            error,
+        )
+    }
+
+    /// Distinguishes an admitted timer followed by pre-dispatch queue failure
+    /// from timer refusal. The old timer is not restarted or treated as a worker.
+    pub(crate) fn reject_completion_provider_queue(
+        &mut self,
+        permit: &CompletionProviderHandoff,
+        error: &MezError,
+    ) -> bool {
+        let rejected = self.reject_completion_provider_handoff(
+            permit,
+            ProviderHandoffRejection::AdmittedLeaseQueueRejected,
+            error,
+        );
+        #[cfg(test)]
+        if rejected {
+            self.observe_provider_lease_refusal_for_tests(
+                &permit.turn.turn_id,
+                permit.generation,
+                error,
+            );
+        }
+        rejected
+    }
+
     /// Freezes a nonauthorizing permit before provisional claim mutation.
     /// All fallible source/gate checks precede installation. Assessment keeps
     /// its unchanged dedicated owner and receives no ordinary refusal permit.
@@ -128,6 +705,9 @@ impl RuntimeSessionService {
                 settlement: CompletionMilestone::NotEntered,
                 context_consumers_open: false,
                 task_disposition: None,
+                routed: CompletionMilestone::NotEntered,
+                routed_result: None,
+                source_frozen: false,
             });
         }
         Ok(permit)
@@ -175,6 +755,20 @@ impl RuntimeSessionService {
         if !self.provider_handoff_claim_matches(permit) {
             return false;
         }
+        if !self
+            .agent_turn_ledger()
+            .turn(&permit.turn.turn_id)
+            .is_some_and(|turn| permit.matches_turn(turn) && turn.state == AgentTurnState::Running)
+            || !self
+                .agent_shell_store()
+                .get(&permit.turn.pane_id)
+                .is_some_and(|session| {
+                    session.session_id == permit.turn.conversation_id
+                        && session.running_turn_id.as_deref() == Some(permit.turn.turn_id.as_str())
+                })
+        {
+            return false;
+        }
         if permit.disposition == CompletionProviderClaimDisposition::RetainedManagedAssessment {
             return true;
         }
@@ -195,6 +789,9 @@ impl RuntimeSessionService {
             .get(&permit.turn.turn_id)
             .is_some_and(|group| {
                 group.primary_failure.is_none()
+                    && !group.paint_revoked
+                    && group.scope.is_none()
+                    && group.failed_backing.is_none()
                     && group
                         .provider_handoff
                         .as_ref()

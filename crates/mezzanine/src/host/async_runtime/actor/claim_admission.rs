@@ -80,6 +80,18 @@ impl AsyncRuntimeSessionActor {
         owner: WorkerClaimLease<'_>,
         effects: Vec<RuntimeSideEffect>,
     ) -> Result<bool> {
+        self.admit_worker_claim_lease_with_refusal(owner, effects, |_, _| {})
+    }
+
+    /// The provider caller may qualify its exact negative completion event at
+    /// this actual boundary, before unchanged refusal settlement clears claim
+    /// attribution. Compaction and legacy no-group callers keep the same path.
+    pub(super) fn admit_worker_claim_lease_with_refusal(
+        &mut self,
+        owner: WorkerClaimLease<'_>,
+        effects: Vec<RuntimeSideEffect>,
+        on_refusal: impl FnOnce(&mut crate::runtime::RuntimeSessionService, &MezError),
+    ) -> Result<bool> {
         if !owner.is_current(self) {
             return Ok(false);
         }
@@ -110,6 +122,7 @@ impl AsyncRuntimeSessionActor {
         // No await or worker handoff occurs between recording and this guard.
         // Still check identity explicitly so a future caller cannot settle a replacement.
         if owner.is_current(self) {
+            on_refusal(&mut self.service, &error);
             match owner {
                 WorkerClaimLease::Provider { turn_id, .. } => self
                     .service
@@ -153,6 +166,37 @@ mod tests {
     /// distinct from all readiness, preparation and refusal precondition checks.
     #[tokio::test(flavor = "current_thread")]
     async fn provider_lease_refusal_retains_original_runtime_only_completion() {
+        run_runtime_only_completion_handoff(false, None).await;
+    }
+
+    /// Free capacity admits one actual lease and carries original chronology
+    /// into the returned dispatch. A second real preparation request must not
+    /// renew the same claimed work or create another claim generation. No
+    /// provider is invoked; every observed effect remains inert fixture data.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_lease_acceptance_hands_off_original_group_once() {
+        run_runtime_only_completion_handoff(true, None).await;
+    }
+
+    /// An admitted timer followed by an actual pre-dispatch queue fault must
+    /// retain original source without dispatch or renewal. The existing timer
+    /// may become stale after exact failed-claim settlement; it is not restarted.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_post_lease_queue_failure_retains_original_completion() {
+        run_runtime_only_completion_handoff(false, Some("after_lease")).await;
+    }
+
+    /// Nested original-backing capture cannot remove a still-required live
+    /// consumer context. A fault after entering that consumer stays secondary,
+    /// and duplicate failure ingress must not repeat task/loop/routed effects.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_refusal_context_consumer_failure_keeps_original_source() {
+        run_runtime_only_completion_handoff(false, Some("task_consumer")).await;
+    }
+
+    /// Uses identical real admission/completion setup for refusal and acceptance;
+    /// the refusal oracle remains evaluated on the frozen pre-drain source.
+    async fn run_runtime_only_completion_handoff(accept_lease: bool, fault: Option<&'static str>) {
         use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
         use crate::host::async_runtime::actor::queue::SIDE_EFFECT_QUEUE_FULL_PREFIX;
         use crate::runtime::{RuntimeApprovedExternalActionOutcome, RuntimeSessionService};
@@ -411,13 +455,18 @@ mod tests {
             RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::ProviderClaim)));
         assert!(actor.service.agent_provider_task_is_pending(&turn.turn_id));
         assert!(!actor.service.agent_provider_task_is_claimed(&turn.turn_id));
-        actor.side_effect_buffer = 1;
-        actor
-            .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
-                agent_id: agent.clone(),
-                turn_id: "unrelated-retained-work".into(),
-            }])
-            .unwrap();
+        if let Some(fault) = fault {
+            actor.service.set_provider_handoff_fault_for_tests(fault);
+        }
+        if !accept_lease && fault != Some("after_lease") {
+            actor.side_effect_buffer = 1;
+            actor
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: agent.clone(),
+                    turn_id: "unrelated-retained-work".into(),
+                }])
+                .unwrap();
+        }
         let (reply, receive) = tokio::sync::oneshot::channel();
         actor
             .handle_request(
@@ -451,6 +500,45 @@ mod tests {
             .map(|turn| turn.state);
         let critical_after_claim = actor.service.ensure_completion_admission_open().err();
         let external_after_claim = actor.service.pending_approved_external_actions();
+        if fault == Some("task_consumer") {
+            let duplicate = actor.service.fail_configured_agent_provider_task(
+                &turn.turn_id,
+                &MezError::invalid_state("duplicate refusal must not replace primary"),
+            );
+            assert!(
+                duplicate.is_err(),
+                "entered refusal is retained, not replayed"
+            );
+            let after_duplicate = actor
+                .service
+                .original_completion_source_for_tests(&turn.turn_id, &group);
+            assert_eq!(
+                after_duplicate.as_ref().map(|source| &source.0),
+                source_after_claim.as_ref().map(|source| &source.0)
+            );
+            assert_eq!(
+                after_duplicate.as_ref().map(|source| &source.1),
+                source_after_claim.as_ref().map(|source| &source.1)
+            );
+        }
+
+        // The acceptance control attempts another REAL preparation request,
+        // after freezing first-claim facts. It does not fabricate a second claim.
+        let repeat_preparation = if accept_lease {
+            let (reply, receive) = tokio::sync::oneshot::channel();
+            actor
+                .handle_request(
+                    super::super::AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+                        agent_id: agent.clone(),
+                        turn_id: turn.turn_id.clone(),
+                        reply,
+                    },
+                )
+                .await;
+            Some(receive.await)
+        } else {
+            None
+        };
 
         // Use the supported combined drain: provider dispatch lives in its
         // dedicated route, not the raw side_effects deque. Never execute it.
@@ -477,6 +565,43 @@ mod tests {
             shutdown.unwrap().is_ok(),
             "fixture shutdown must settle before the custody oracle"
         );
+        if accept_lease {
+            assert_eq!(generation_after_claim, 1);
+            assert!(claimed_after_claim && !pending_after_claim);
+            assert!(timer_after_claim.is_some());
+            assert!(
+                source_after_claim.is_none(),
+                "accepted handoff must release its exact original group"
+            );
+            assert!(lease_error_after_claim.is_none());
+            assert!(accounting_after_claim.is_some());
+            assert!(external_after_claim.is_empty());
+            assert_eq!(
+                queued
+                    .iter()
+                    .filter(|effect| matches!(effect,
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::ProviderClaim && key.owner_id == turn.turn_id))
+                    .count(),
+                1
+            );
+            assert!(
+                repeat_preparation.unwrap().unwrap().unwrap().is_none(),
+                "claimed work must not prepare/renew a duplicate dispatch"
+            );
+            let dispatch = refusal
+                .unwrap()
+                .expect("actual admitted continuation dispatch");
+            assert_eq!(dispatch.claim_generation, 1);
+            assert!(
+                dispatch
+                    .context
+                    .durable()
+                    .chronology()
+                    .starts_with(original_context.chronology())
+            );
+            return;
+        }
         assert!(
             !matches!(&refusal, Ok(Some(_))),
             "admission must withhold the worker dispatch"
@@ -485,13 +610,21 @@ mod tests {
             generation_after_claim, 1,
             "setup: request must reach actual provisional claim recording"
         );
-        assert!(timer_after_claim.is_none());
+        assert_eq!(timer_after_claim.is_some(), fault == Some("after_lease"));
         assert!(!claimed_after_claim);
-        assert!(queued.iter().any(|effect| matches!(effect,
+        if fault != Some("after_lease") {
+            assert!(queued.iter().any(|effect| matches!(effect,
             RuntimeSideEffect::DispatchAgentProvider { turn_id, .. } if turn_id == "unrelated-retained-work")));
-        assert!(!queued.iter().any(|effect| matches!(effect,
+        }
+        assert_eq!(
+            queued
+                .iter()
+                .filter(|effect| matches!(effect,
             RuntimeSideEffect::ScheduleTimer { key, .. }
-                if key.kind == RuntimeTimerKind::ProviderClaim && key.owner_id == turn.turn_id)));
+                if key.kind == RuntimeTimerKind::ProviderClaim && key.owner_id == turn.turn_id))
+                .count(),
+            usize::from(fault == Some("after_lease"))
+        );
         let (issued_turn, issued_provider, issued_model, _issued_origin) = accounting_after_claim
             .expect("setup: provisional claim must retain its actual issued accounting owner");
         assert_eq!(issued_turn, turn);
@@ -506,11 +639,18 @@ mod tests {
             refused_error.kind(),
             MezError::invalid_state("type oracle").kind()
         );
-        assert!(
-            refused_error
-                .message()
-                .starts_with(SIDE_EFFECT_QUEUE_FULL_PREFIX)
-        );
+        if fault == Some("after_lease") {
+            assert_eq!(
+                refused_error.message(),
+                "injected post-lease provider queue failure"
+            );
+        } else {
+            assert!(
+                refused_error
+                    .message()
+                    .starts_with(SIDE_EFFECT_QUEUE_FULL_PREFIX)
+            );
+        }
         let terminal = ledger_after_claim.is_some_and(|state| {
             matches!(state, AgentTurnState::Failed | AgentTurnState::Interrupted)
         });

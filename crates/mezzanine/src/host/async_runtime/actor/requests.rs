@@ -2913,34 +2913,60 @@ impl AsyncRuntimeSessionActor {
                         self.timers.next_provider_claim_generation =
                             self.timers.next_provider_claim_generation.saturating_add(1);
                         let generation = self.timers.next_provider_claim_generation;
-                        let transition = match self.service.record_claimed_agent_provider_task(
-                            &dispatch,
-                            generation,
-                            DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
-                        ) {
-                            Ok(transition) => transition,
-                            Err(error) => {
-                                self.service
-                                    .fail_configured_agent_provider_task(&turn_id, &error)?;
-                                self.queue_deferred_pane_io_side_effects_from_service()?;
-                                self.queue_shell_transaction_timer_side_effects()?;
-                                return Ok(None);
-                            }
-                        };
+                        let (transition, handoff) =
+                            match self.service.record_claimed_agent_provider_task(
+                                &dispatch,
+                                generation,
+                                DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
+                            ) {
+                                Ok(transition) => transition,
+                                Err(error) => {
+                                    self.service
+                                        .fail_configured_agent_provider_task(&turn_id, &error)?;
+                                    self.queue_deferred_pane_io_side_effects_from_service()?;
+                                    self.queue_shell_transaction_timer_side_effects()?;
+                                    return Ok(None);
+                                }
+                            };
                         dispatch.claim_generation = generation;
-                        if !self.admit_worker_claim_lease(
+                        if !self.admit_worker_claim_lease_with_refusal(
                             WorkerClaimLease::Provider {
                                 agent_id: &agent_id,
                                 turn_id: &turn_id,
                                 generation,
                             },
                             transition.side_effects,
+                            |service, error| {
+                                service.reject_completion_provider_lease(&handoff, error);
+                            },
                         )? {
                             self.queue_deferred_pane_io_side_effects_from_service()?;
                             self.queue_shell_transaction_timer_side_effects()?;
                             return Ok(None);
                         }
-                        self.queue_deferred_pane_io_side_effects_from_service()?;
+                        #[cfg(test)]
+                        let deferred = if self
+                            .service
+                            .take_provider_handoff_fault_for_tests("after_lease")
+                        {
+                            Err(MezError::invalid_state(
+                                "injected post-lease provider queue failure",
+                            ))
+                        } else {
+                            self.queue_deferred_pane_io_side_effects_from_service()
+                        };
+                        #[cfg(not(test))]
+                        let deferred = self.queue_deferred_pane_io_side_effects_from_service();
+                        if let Err(error) = deferred {
+                            self.service
+                                .reject_completion_provider_queue(&handoff, &error);
+                            self.service
+                                .fail_configured_agent_provider_task(&turn_id, &error)?;
+                            return Err(error);
+                        }
+                        if !self.service.accept_completion_provider_handoff(&handoff) {
+                            return Ok(None);
+                        }
                         self.service.acknowledge_admitted_steering(&dispatch);
                         Ok(Some(dispatch))
                     } else {

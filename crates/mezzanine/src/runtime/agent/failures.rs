@@ -218,12 +218,15 @@ impl RuntimeSessionService {
         if let Some(facts) = error.recovery_facts() {
             execution.attach_recovery_facts(facts.clone());
         }
+        self.capture_completion_before_provider_error(turn)?;
         self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution.clone());
         let transcript_entries =
             self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
-        self.emit_subagent_task_result_for_execution(turn, &execution)?;
-        if !self.complete_routed_presentation(&turn.turn_id, AgentTurnState::Failed)? {
+        self.emit_provider_error_terminal_result(turn, &execution)?;
+        if !self
+            .complete_provider_error_routed_presentation(&turn.turn_id, AgentTurnState::Failed)?
+        {
             self.complete_running_agent_turn_and_start_ready(
                 turn,
                 AgentTurnState::Failed,

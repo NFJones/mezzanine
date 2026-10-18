@@ -138,6 +138,9 @@ pub(super) struct RuntimeCompletionSettlements {
     /// Observational only: the actual admission error before refusal settlement.
     #[cfg(test)]
     provider_lease_refusal_for_tests: Option<(String, u64, MezError)>,
+    /// One isolated real-boundary fault; never a production admission input.
+    #[cfg(test)]
+    provider_handoff_fault_for_tests: Option<&'static str>,
 }
 
 impl fmt::Debug for RuntimeCompletionSettlements {

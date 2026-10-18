@@ -546,6 +546,28 @@ impl RuntimeSessionService {
             .is_none_or(|backing| matches!(backing.patch_states, CompletionCapture::NotCaptured));
         let take_phases = backing
             .is_none_or(|backing| matches!(backing.patch_phases, CompletionCapture::NotCaptured));
+        if self.provider_refusal_is_armed(turn_id)
+            && (take_execution || take_context || take_native || take_states || take_phases)
+            && (!self.agent_turn_ledger().turn(turn_id).is_some_and(|turn| {
+                turn.agent_id == group.turn.agent_id
+                    && turn.pane_id == group.turn.pane_id
+                    && turn.conversation_id == group.turn.conversation_id
+            }) || self
+                .agent_shell_store()
+                .get(&group.turn.pane_id)
+                .is_some_and(|session| session.session_id != group.turn.conversation_id))
+        {
+            let error =
+                MezError::invalid_state("refusal component capture original binding changed");
+            self.record_completion_required_failure(
+                turn_id,
+                "refusal_capture_binding",
+                None,
+                None,
+                &error,
+            );
+            return;
+        }
         // Negative custody may never adopt the newly installed provider-error
         // execution (or a later group). Leave the actual live value untouched.
         if take_execution
@@ -706,10 +728,17 @@ impl RuntimeSessionService {
             return Ok(());
         }
         let existing = group.handoff.as_ref();
+        // Only an actual ordinary refusal with prequalified original source may
+        // use this frozen projection. General forced cleanup must still project
+        // its current original backing; an arbitrary stale cache is not proof.
+        let frozen_refusal = group
+            .provider_handoff
+            .as_ref()
+            .is_some_and(|owner| owner.rejection.is_some() && owner.source_frozen);
         let execution = self
             .agent_turn_executions()
             .get(turn_id)
-            .filter(|_| self.agent_turn_contexts().contains_key(turn_id));
+            .filter(|_| !frozen_refusal && self.agent_turn_contexts().contains_key(turn_id));
         let fresh_source = execution.is_some();
         let mut candidate = if let Some(execution) = execution {
             let CompletionTranscriptTarget::Original { read, directory } = &group.transcript else {
@@ -1117,42 +1146,6 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Releases a successful group only after the actual provider claim owner
-    /// and accounting record have been installed in the same actor transition.
-    pub(in crate::runtime::agent) fn release_completion_group_for_provider_claim(
-        &mut self,
-        dispatch: &crate::runtime::RuntimeAgentProviderDispatch,
-    ) -> Result<()> {
-        self.ensure_completion_provider_dispatch_ready(dispatch)?;
-        let turn_id = dispatch.turn.turn_id.as_str();
-        if self.completion_provider_claim_disposition(turn_id)?
-            == CompletionProviderClaimDisposition::RetainedManagedAssessment
-        {
-            return Ok(());
-        }
-        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
-            return Ok(());
-        };
-        let group_id = group.group.clone();
-        // All raw/gate/publication obligations have transferred. Retained
-        // duplicate recognition ends only at this actual next-provider claim,
-        // never merely because one successful sibling finished its callback.
-        self.agent
-            .completion_settlements
-            .external
-            .retain(|_, receipt| {
-                receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
-            });
-        self.agent
-            .completion_settlements
-            .native
-            .retain(|_, receipt| {
-                receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
-            });
-        self.agent.completion_settlements.groups.remove(turn_id);
-        Ok(())
-    }
-
     /// A known retained delivery must never be rewritten as an issued-unknown
     /// result merely because projection failed. Compare the exact current claim
     /// generation, not any older observed phase of the same action.
@@ -1328,6 +1321,9 @@ impl RuntimeSessionService {
         execution: &AgentTurnExecution,
         reason: &str,
     ) -> Result<()> {
+        if self.provider_refusal_is_armed(&turn.turn_id) {
+            return self.finalize_completion_provider_refusal(turn, execution, reason);
+        }
         self.ensure_completion_required_gates_ready(&turn.turn_id)?;
         let publication_pending =
             self.agent

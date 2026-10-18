@@ -4848,6 +4848,14 @@ ordinal. A failed installation MAY receive one bounded presentation-only retry;
 it MUST NOT redispatch an action or provider request. Repeated failure MUST
 remain explicit with the failed source retained, never silently acknowledge
 missing output. Successfully installed components MUST NOT be appended again.
+Installing provisional provider claim/accounting state MUST NOT discharge an
+original completion group. Ordinary handoff requires actual bounded lease
+admission and completion of the actor's remaining fallible pre-dispatch steps.
+Lease refusal MUST retain exact original result/context custody before any
+provider-error overwrite. Its negative Failed-settlement disposition MUST keep
+the original typed failure and once-only task/scheduler/consumer obligations;
+it MUST NOT acknowledge ordinary success or replay effects. Dedicated existing
+preterminal assessment custody is not an ordinary handoff or refusal permit.
 When one action ordinal retains multiple command entries, each successful
 installation MUST acknowledge only that exact entry before the next command is
 attempted. A later pre-install failure MUST retain the failed entry and remaining

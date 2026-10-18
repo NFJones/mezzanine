@@ -135,7 +135,7 @@ impl RuntimeSessionService {
         if state == AgentTurnState::Interrupted {
             self.prepare_completion_forced_retirement(turn)?;
         } else {
-            self.ensure_completion_terminal_retirement(turn_id)?;
+            self.prepare_completion_terminal_cleanup(turn, state)?;
         }
         let completion_attention_eligible = self.subagent_lineage(&turn.agent_id).is_none();
         let suppress_exit_output = self
@@ -269,8 +269,18 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Result<()> {
         self.request_agent_worker_cancellation_for_turn(turn_id);
-        let completion_retirement = if self.ensure_completion_terminal_retirement(turn_id).is_err()
-        {
+        let completion_retirement = if self.provider_refusal_is_armed(turn_id) {
+            let turn = self.completion_original_turn(turn_id).ok_or_else(|| {
+                MezError::invalid_state("negative cleanup original turn is missing")
+            })?;
+            let state = self
+                .agent_turn_ledger()
+                .turn(turn_id)
+                .map(|turn| turn.state)
+                .ok_or_else(|| MezError::invalid_state("negative cleanup ledger is missing"))?;
+            self.prepare_completion_terminal_cleanup(&turn, state)?;
+            Ok(())
+        } else if self.ensure_completion_terminal_retirement(turn_id).is_err() {
             if let Some(turn) = self.completion_original_turn(turn_id) {
                 self.prepare_completion_forced_retirement(&turn)
             } else {
@@ -298,7 +308,9 @@ impl RuntimeSessionService {
         self.clear_settled_provider_log_groups_for_turn(turn_id);
         self.clear_accepted_streaming_headers_for_turn(turn_id);
         self.clear_pending_final_say_previews_for_turn(turn_id);
-        self.agent_turn_contexts_mut().remove(turn_id);
+        if !self.provider_refusal_context_is_live(turn_id) {
+            self.agent_turn_contexts_mut().remove(turn_id);
+        }
         self.agent.agent_turn_compaction_handoffs.remove(turn_id);
         self.agent
             .agent_turn_native_shell_timeout_ms
@@ -392,7 +404,7 @@ impl RuntimeSessionService {
         if state == AgentTurnState::Interrupted {
             self.prepare_completion_forced_retirement(turn)?;
         } else {
-            self.ensure_completion_terminal_retirement(&turn.turn_id)?;
+            self.prepare_completion_terminal_cleanup(turn, state)?;
         }
         let pane_present = self.find_pane_descriptor(&turn.pane_id).is_some();
         if !pane_present {
@@ -563,12 +575,12 @@ impl RuntimeSessionService {
                 result,
             );
         }
-        self.ensure_completion_terminal_retirement(&turn.turn_id)?;
+        self.prepare_completion_terminal_cleanup(turn, state)?;
         if self.find_pane_descriptor(&turn.pane_id).is_none() {
             self.cleanup_removed_pane_runtime_state(&turn.pane_id)?;
             return Ok(());
         }
-        if self.complete_routed_presentation(&turn.turn_id, state)? {
+        if self.complete_provider_error_routed_presentation(&turn.turn_id, state)? {
             return Ok(());
         }
         let _ = self.agent.agent_scheduler.complete(&turn.turn_id);
