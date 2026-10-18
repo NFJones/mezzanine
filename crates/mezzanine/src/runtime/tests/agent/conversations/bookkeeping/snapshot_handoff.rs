@@ -32,6 +32,35 @@ impl Drop for NativeFreeBookkeepingRoot {
     }
 }
 
+/// Projects only the actual admitted prompt's immutable event identity for
+/// assertions. The request fixture's synthetic User message is not chronology.
+fn admitted_fixture_prompt(
+    service: &RuntimeSessionService,
+    turn_id: &str,
+) -> mez_agent::TranscriptContextEvent {
+    let event = service
+        .agent_turn_contexts()
+        .get(turn_id)
+        .unwrap()
+        .chronology()
+        .iter()
+        .find(|event| {
+            event.block().source == ContextSourceKind::UserInstruction
+                && event.block().label == "user prompt"
+        })
+        .unwrap();
+    assert_eq!(
+        event.block().content,
+        "native-free retained candidate prompt"
+    );
+    mez_agent::TranscriptContextEvent::user_event(
+        event.sequence().get(),
+        event.block().label.clone(),
+        event.block().content.clone(),
+    )
+    .unwrap()
+}
+
 /// Produces actual ordinary chronology from an admitted prompt, then obtains
 /// its frozen form through the existing retained owner and exact retirement.
 /// The synthetic nonfinal response is projection input, not provider output or
@@ -65,6 +94,7 @@ fn native_free_frozen_candidate(
     assert_eq!(turn.state, AgentTurnState::Running);
     assert_eq!(turn.conversation_id, conversation);
     assert!(service.agent_turn_contexts().contains_key(&turn.turn_id));
+    let expected_prompt = admitted_fixture_prompt(&service, &turn.turn_id);
     assert!(!service.agent_shell_store().get("%1").unwrap().ephemeral);
     assert_eq!(
         service
@@ -114,15 +144,29 @@ fn native_free_frozen_candidate(
         original.candidate.persistence_key,
         (conversation.clone(), turn.turn_id)
     );
-    assert!(original.candidate.entries.iter().any(|row| {
-        row.role == TranscriptRole::User && row.content == "native-free retained candidate prompt"
-    }));
+    assert_eq!(
+        original
+            .candidate
+            .entries
+            .iter()
+            .filter(|row| {
+                row.role == TranscriptRole::System
+                    && mez_agent::TranscriptContextEvent::from_transcript_content(&row.content)
+                        .as_ref()
+                        == Some(&expected_prompt)
+            })
+            .count(),
+        1
+    );
     assert!(
         original
             .candidate
             .entries
             .iter()
-            .all(|row| row.conversation_id == conversation)
+            .all(|row| row.conversation_id == conversation
+                && row.turn_id == original.candidate.turn.turn_id
+                && row.agent_id == original.candidate.turn.agent_id
+                && row.pane_id == original.candidate.turn.pane_id)
     );
     let candidate = service
         .persistence
@@ -469,6 +513,7 @@ fn runtime_completion_handoff_checked_read_rejects_same_frontier_cas() {
 fn runtime_completion_handoff_claim_keeps_frozen_read_after_frontier_advance() {
     let root = NativeFreeBookkeepingRoot::new("completion-frozen-frontier");
     let (mut service, candidate) = native_free_frozen_candidate(&root);
+    let expected_prompt = admitted_fixture_prompt(&service, &candidate.turn.turn_id);
     let store = service.persistence.cloned_transcript_store().unwrap();
     let conversation = candidate.turn.conversation_id.clone();
     let path = store.transcript_path(&conversation).unwrap();
@@ -528,8 +573,18 @@ fn runtime_completion_handoff_claim_keeps_frozen_read_after_frontier_advance() {
             .iter()
             .all(|row| row.conversation_id == conversation)
     );
-    assert!(accepted.iter().any(|row| row.role == TranscriptRole::User
-        && row.content == "native-free retained candidate prompt"));
+    assert_eq!(
+        accepted
+            .iter()
+            .filter(|row| {
+                row.role == TranscriptRole::System
+                    && mez_agent::TranscriptContextEvent::from_transcript_content(&row.content)
+                        .as_ref()
+                        == Some(&expected_prompt)
+            })
+            .count(),
+        1
+    );
     assert!(accepted.iter().all(|row| row.validate().is_ok()));
     assert!(
         accepted
