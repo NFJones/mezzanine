@@ -31,9 +31,56 @@ pub(super) struct RuntimeCompletionArchiveObservation {
     logical_digest: String,
 }
 
-/// Uses every row field; sequence/content-only equality is not row identity.
+/// Explicit archive identity projection, independent of lower-crate serialization.
+#[derive(serde::Serialize)]
+struct ArchiveRowIdentity<'a> {
+    conversation_id: &'a str,
+    sequence: u64,
+    created_at_unix_seconds: u64,
+    role: &'static str,
+    turn_id: &'a str,
+    agent_id: &'a str,
+    pane_id: &'a str,
+    content: &'a str,
+}
+
+impl<'a> From<&'a TranscriptEntry> for ArchiveRowIdentity<'a> {
+    /// Exhaustive destructuring makes additions to row identity require a decision.
+    fn from(entry: &'a TranscriptEntry) -> Self {
+        let TranscriptEntry {
+            conversation_id,
+            sequence,
+            created_at_unix_seconds,
+            role,
+            turn_id,
+            agent_id,
+            pane_id,
+            content,
+        } = entry;
+        Self {
+            conversation_id,
+            sequence: *sequence,
+            created_at_unix_seconds: *created_at_unix_seconds,
+            role: match role {
+                TranscriptRole::User => "user",
+                TranscriptRole::Assistant => "assistant",
+                TranscriptRole::Tool => "tool",
+                TranscriptRole::System => "system",
+            },
+            turn_id,
+            agent_id,
+            pane_id,
+            content,
+        }
+    }
+}
+
+/// Hashes a fixed-field JSON array projection: escaping, row boundaries and
+/// array order are unambiguous, including empty strings and embedded delimiters.
+/// No raw row or encoded private content is included in diagnostics.
 fn rows_digest(entries: &[TranscriptEntry]) -> Result<String> {
-    let bytes = serde_json::to_vec(entries)
+    let rows: Vec<_> = entries.iter().map(ArchiveRowIdentity::from).collect();
+    let bytes = serde_json::to_vec(&rows)
         .map_err(|_| MezError::invalid_state("original archive row identity cannot be encoded"))?;
     Ok(Sha256::digest(bytes)
         .iter()
@@ -214,5 +261,103 @@ impl RuntimeSessionService {
             minimum_committed_through,
             observed: Arc::new(OnceLock::new()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds inert synthetic row data without involving archive I/O or effects.
+    fn row() -> TranscriptEntry {
+        TranscriptEntry {
+            conversation_id: "conversation".into(),
+            sequence: 1,
+            created_at_unix_seconds: 2,
+            role: TranscriptRole::User,
+            turn_id: "turn".into(),
+            agent_id: "agent".into(),
+            pane_id: "pane".into(),
+            content: "content".into(),
+        }
+    }
+
+    /// Every canonical field must affect identity, even when content/sequence
+    /// match. All four roles must have distinct stable projection labels, so a
+    /// metadata-only substitution cannot attest the original coherent read.
+    #[test]
+    fn archive_digest_covers_every_field_and_role() -> Result<()> {
+        let original = row();
+        let digest = rows_digest(std::slice::from_ref(&original))?;
+        let mut variants = Vec::new();
+        let mut changed = original.clone();
+        changed.conversation_id.push('x');
+        variants.push(changed);
+        let mut changed = original.clone();
+        changed.sequence += 1;
+        variants.push(changed);
+        let mut changed = original.clone();
+        changed.created_at_unix_seconds += 1;
+        variants.push(changed);
+        for role in [
+            TranscriptRole::Assistant,
+            TranscriptRole::Tool,
+            TranscriptRole::System,
+        ] {
+            let mut changed = original.clone();
+            changed.role = role;
+            variants.push(changed);
+        }
+        let mut changed = original.clone();
+        changed.turn_id.push('x');
+        variants.push(changed);
+        let mut changed = original.clone();
+        changed.agent_id.push('x');
+        variants.push(changed);
+        let mut changed = original.clone();
+        changed.pane_id.push('x');
+        variants.push(changed);
+        let mut changed = original.clone();
+        changed.content.push('x');
+        variants.push(changed);
+        let mut digests = std::collections::BTreeSet::from([digest.clone()]);
+        for changed in variants {
+            let changed_digest = rows_digest(&[changed])?;
+            assert_ne!(digest, changed_digest);
+            assert!(digests.insert(changed_digest));
+        }
+        assert_eq!(digest, rows_digest(&[original])?);
+        Ok(())
+    }
+
+    /// JSON framing must distinguish field-boundary shifts, escaped content,
+    /// row count, duplicate rows and order. Concatenating raw strings or hashing
+    /// a set of rows would incorrectly equate at least one of these cases.
+    #[test]
+    fn archive_digest_preserves_field_row_and_order_boundaries() -> Result<()> {
+        let mut first = row();
+        first.turn_id = "ab".into();
+        first.agent_id = "c".into();
+        first.content = "\"},\\\n\0[{".into();
+        let mut shifted = first.clone();
+        shifted.turn_id = "a".into();
+        shifted.agent_id = "bc".into();
+        assert_ne!(
+            rows_digest(&[first.clone()])?,
+            rows_digest(&[shifted.clone()])?
+        );
+        assert_ne!(rows_digest(&[])?, rows_digest(&[first.clone()])?);
+        assert_ne!(
+            rows_digest(&[first.clone()])?,
+            rows_digest(&[first.clone(), first.clone()])?
+        );
+        assert_ne!(
+            rows_digest(&[first.clone(), shifted.clone()])?,
+            rows_digest(&[shifted.clone(), first.clone()])?
+        );
+        let mut joined = first.clone();
+        joined.content.push_str(&shifted.content);
+        assert_ne!(rows_digest(&[joined])?, rows_digest(&[first, shifted])?);
+        Ok(())
     }
 }

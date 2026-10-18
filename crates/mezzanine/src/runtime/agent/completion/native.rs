@@ -48,6 +48,8 @@ impl NativeCompletionPhase {
 /// One actual actor-issued native phase, never an inferred completed action.
 pub(super) struct NativeCompletionReceipt {
     pub(super) owner: ExternalCompletionOwner,
+    /// Frozen grammar from the admitted dispatch, never live pane/callback data.
+    shell_classification: mez_agent::ShellClassification,
     command_sha256: String,
     /// Original actor bytes until first delivery validation; never debugged.
     expected_command: Option<String>,
@@ -58,6 +60,19 @@ pub(super) struct NativeCompletionReceipt {
     pub(super) failure: Option<Box<MezError>>,
     /// Optional diagnostics/installation never become required-gate failures.
     pub(super) publication_failure: Option<Box<MezError>>,
+}
+
+impl NativeCompletionReceipt {
+    /// Compares worker labels only with immutable actor-issued phase identity.
+    /// The worker supplies no trusted classification; the admitted grammar is
+    /// retained even after the live pane or native context has changed.
+    fn matches_issued_outcome(&self, outcome: &RuntimeNativeShellOutcome) -> bool {
+        outcome.capability_probe_only == self.probe_only
+            && outcome.started_at_unix_ms == self.started_at_unix_ms
+            && exact_command_sha256(self.shell_classification.as_str(), &outcome.command)
+                == self.command_sha256
+            && self.expected_command.as_deref() == Some(outcome.command.as_str())
+    }
 }
 
 impl fmt::Debug for NativeCompletionReceipt {
@@ -109,7 +124,11 @@ impl RuntimeSessionService {
             key,
             Box::new(NativeCompletionReceipt {
                 owner,
-                command_sha256: exact_command_sha256(&dispatch.request.transaction.command),
+                shell_classification: dispatch.context.classification(),
+                command_sha256: exact_command_sha256(
+                    dispatch.context.classification().as_str(),
+                    &dispatch.request.transaction.command,
+                ),
                 expected_command: Some(dispatch.request.transaction.command.clone()),
                 started_at_unix_ms: dispatch.started_at_unix_ms,
                 probe_only: dispatch.capability_probe_only,
@@ -180,10 +199,7 @@ impl RuntimeSessionService {
                 "native outcome is already retained",
             ));
         }
-        let identity_matches = outcome.capability_probe_only == receipt.probe_only
-            && outcome.started_at_unix_ms == receipt.started_at_unix_ms
-            && exact_command_sha256(&outcome.command) == receipt.command_sha256
-            && receipt.expected_command.as_deref() == Some(outcome.command.as_str());
+        let identity_matches = receipt.matches_issued_outcome(&outcome);
         receipt.raw = Some(Box::new(outcome));
         receipt.phase = NativeCompletionPhase::OutcomeRetained;
         if identity_matches {
@@ -373,5 +389,85 @@ impl RuntimeSessionService {
             ));
         }
         self.native_completion_phase(key, NativeCompletionPhase::NextPhaseOwned)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Synthetic phase identity checks must use the retained admitted grammar,
+    /// not default to Bash or trust a live pane. This tests receipt comparison
+    /// only: no native command, sandbox probe, provider or hook is executed.
+    /// Command, exact original bytes, timestamp and probe phase remain fences.
+    #[test]
+    fn native_receipt_matches_only_original_classification_and_phase() {
+        for classification in [
+            mez_agent::ShellClassification::Bash,
+            mez_agent::ShellClassification::Zsh,
+            mez_agent::ShellClassification::Fish,
+            mez_agent::ShellClassification::PosixSh,
+        ] {
+            let command = "printf synthetic-receipt";
+            let mut receipt = NativeCompletionReceipt {
+                owner: ExternalCompletionOwner {
+                    turn_id: "turn".into(),
+                    agent_id: "agent".into(),
+                    pane_id: "pane".into(),
+                    conversation_id: "conversation".into(),
+                    group: mez_agent::ContextExecutionGroupId::new("group").unwrap(),
+                    action_id: "action".into(),
+                    action_type: "shell_command".into(),
+                    ordinal: 0,
+                    attempt: "marker".into(),
+                },
+                shell_classification: classification,
+                command_sha256: exact_command_sha256(classification.as_str(), command),
+                expected_command: Some(command.into()),
+                started_at_unix_ms: 7,
+                probe_only: false,
+                phase: NativeCompletionPhase::Issued,
+                raw: None,
+                failure: None,
+                publication_failure: None,
+            };
+            let mut outcome = RuntimeNativeShellOutcome {
+                turn_id: "turn".into(),
+                action_id: "action".into(),
+                marker: "marker".into(),
+                command: command.into(),
+                started_at_unix_ms: 7,
+                sandbox_capability: None,
+                capability_probe_only: false,
+                launch_counts: None,
+                result: Ok(mez_agent::ShellExecutionOutput::new(
+                    Some(0),
+                    String::new(),
+                    String::new(),
+                    false,
+                    false,
+                )),
+            };
+            assert!(receipt.matches_issued_outcome(&outcome));
+            receipt.shell_classification = if classification == mez_agent::ShellClassification::Bash
+            {
+                mez_agent::ShellClassification::Zsh
+            } else {
+                mez_agent::ShellClassification::Bash
+            };
+            assert!(!receipt.matches_issued_outcome(&outcome));
+            receipt.shell_classification = classification;
+            outcome.command.push('x');
+            assert!(!receipt.matches_issued_outcome(&outcome));
+            outcome.command = command.into();
+            outcome.started_at_unix_ms += 1;
+            assert!(!receipt.matches_issued_outcome(&outcome));
+            outcome.started_at_unix_ms = 7;
+            outcome.capability_probe_only = true;
+            assert!(!receipt.matches_issued_outcome(&outcome));
+            outcome.capability_probe_only = false;
+            receipt.expected_command = Some("other original bytes".into());
+            assert!(!receipt.matches_issued_outcome(&outcome));
+        }
     }
 }

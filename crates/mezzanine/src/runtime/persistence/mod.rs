@@ -21,10 +21,9 @@ use super::RuntimeSideEffect;
 mod adapters;
 mod bookkeeping;
 mod transcript_admission;
-pub(crate) use bookkeeping::{
-    RuntimeBookkeepingClaimIdentity, RuntimeCompletionCandidateAcceptance,
-    RuntimeCompletionCandidateWitness,
-};
+#[cfg(test)]
+pub(crate) use bookkeeping::RuntimeCompletionCandidateAcceptance;
+pub(crate) use bookkeeping::{RuntimeBookkeepingClaimIdentity, RuntimeCompletionCandidateWitness};
 pub(crate) use transcript_admission::{
     RuntimeTranscriptAdmissionStamp, RuntimeTranscriptNextSequence,
 };

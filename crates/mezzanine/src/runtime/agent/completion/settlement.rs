@@ -535,11 +535,9 @@ impl RuntimeSessionService {
                                         | AgentTurnState::Interrupted
                                 ) || self.completion_provider_continuation_ready(turn_id))
                         })
-                    && !self
-                        .process
-                        .running_shell_transactions
-                        .values()
-                        .any(|transaction| transaction.turn_id == turn_id)
+                    && self
+                        .running_shell_transaction_targets_for_turn(turn_id)
+                        .is_empty()
                     && !self
                         .agent
                         .pending_approved_external_actions
