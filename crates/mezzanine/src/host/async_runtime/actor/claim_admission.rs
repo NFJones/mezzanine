@@ -791,7 +791,33 @@ mod tests {
         assert!(!pending_after_claim);
         assert!(external_after_claim.is_empty());
         if source == HandoffSource::FreshLoop {
-            assert_eq!(shell_cid_after_claim.as_deref(), Some(parent_cid.as_str()));
+            // Diagnostic only: these values were frozen immediately after
+            // Claim. Never recapture actor/pane/root state after drain/teardown
+            // or print execution/context/private payloads to explain this cut.
+            let phase_facts = phases_after_claim.as_ref().map(|phase| {
+                (
+                    phase.task_entered,
+                    phase.task_accepted,
+                    phase.scheduler_accepted,
+                    phase.settlement_terminal,
+                )
+            });
+            let secondary_facts = phases_after_claim
+                .as_ref()
+                .map(|phase| {
+                    phase
+                        .secondary
+                        .iter()
+                        .map(|error| (error.kind(), error.message()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            assert_eq!(
+                shell_cid_after_claim.as_deref(),
+                Some(parent_cid.as_str()),
+                "F668_LOOP_PHASE frozen_post_claim ledger={ledger_after_claim:?} ack={loop_ack_after_claim} source_present={} task_entered/task_accepted/scheduler_accepted/settlement_terminal={phase_facts:?} secondary_kind_message={secondary_facts:?}",
+                source_after_claim.is_some()
+            );
             assert!(
                 loop_ack_after_claim,
                 "actual own-restore installed ack required, not parent CID text alone"
