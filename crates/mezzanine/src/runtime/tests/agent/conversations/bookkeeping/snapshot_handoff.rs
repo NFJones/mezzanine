@@ -1,8 +1,9 @@
 //! Exact candidate ownership witnesses, not archive or disk receipts.
 //!
-//! The existing stopped-turn fixture produces a real immutable candidate. Its
-//! owned pane child is terminated before any oracle or error injection below;
-//! these tests never submit providers or repeat action/native execution.
+//! Most witness controls retain the existing stopped-turn fixture and terminate
+//! its owned child before their oracles. The three strong-claim/coherent-read
+//! controls instead use an isolated ordinary producer with no native child.
+//! Neither fixture submits providers or repeats action/native execution.
 
 use super::*;
 use crate::runtime::RuntimeBookkeepingCandidate;
@@ -10,6 +11,146 @@ use crate::runtime::persistence::RuntimeCompletionCandidateAcceptance;
 use crate::storage::transcript::compaction_handoff::{
     TerminalCompactionHandoff, TerminalCompactionReplacement,
 };
+
+/// Owns only generated fixture files; declare before service/work bindings so
+/// cleanup follows their teardown, including persistence reset and unwinding.
+struct NativeFreeBookkeepingRoot(PathBuf);
+
+impl NativeFreeBookkeepingRoot {
+    /// Allocates an isolated store/socket parent without touching shared state.
+    fn new(label: &str) -> Self {
+        let root = Self(temp_root(label));
+        std::fs::create_dir_all(&root.0).unwrap();
+        root
+    }
+}
+
+impl Drop for NativeFreeBookkeepingRoot {
+    /// Best-effort local cleanup must not mask a primary assertion failure.
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Produces actual ordinary chronology from an admitted prompt, then obtains
+/// its frozen form through the existing retained owner and exact retirement.
+/// The synthetic nonfinal response is projection input, not provider output or
+/// execution authority. No child, Stop, executor, hook override, or forged
+/// settlement evidence is needed. The caller keeps `root` alive past all work.
+fn native_free_frozen_candidate(
+    root: &NativeFreeBookkeepingRoot,
+) -> (RuntimeSessionService, RuntimeBookkeepingCandidate) {
+    let mut service = RuntimeServiceFixture::new()
+        .control_socket(root.0.join("control.sock"))
+        .build();
+    service.set_agent_transcript_store(AgentTranscriptStore::new(root.0.join("transcripts")));
+    service.persistence.enable_transcript_adapter();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "native-free retained candidate prompt")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .clone();
+    assert_eq!(turn.state, AgentTurnState::Running);
+    assert_eq!(turn.conversation_id, conversation);
+    assert!(service.agent_turn_contexts().contains_key(&turn.turn_id));
+    assert!(!service.agent_shell_store().get("%1").unwrap().ephemeral);
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .running_turn_id
+            .as_deref(),
+        Some(turn.turn_id.as_str())
+    );
+    assert!(!service.agent_provider_task_is_claimed(&turn.turn_id));
+    assert!(service.remove_pending_agent_provider_task(&turn.turn_id));
+    assert!(!service.agent_provider_task_is_owned(&turn.turn_id));
+    assert!(service.tracked_runtime_pane_process_ids().is_empty());
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "inert ordinary bookkeeping projection".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: None,
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: Vec::new(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    assert!(!service.agent_turn_executions().contains_key(&turn.turn_id));
+    assert_eq!(
+        service
+            .persist_runtime_agent_turn_execution_transcript(&turn, &execution)
+            .unwrap(),
+        0
+    );
+    // Actual production of exactly one ordinary candidate, not return zero,
+    // proves the no-group producer branch was taken without private-map access.
+    let mut work = service.claim_bookkeeping_candidates();
+    assert_eq!(work.len(), 1);
+    let original = work.pop().unwrap();
+    assert_eq!(original.candidate.turn, turn);
+    assert_eq!(
+        original.candidate.persistence_key,
+        (conversation.clone(), turn.turn_id)
+    );
+    assert!(original.candidate.entries.iter().any(|row| {
+        row.role == TranscriptRole::User && row.content == "native-free retained candidate prompt"
+    }));
+    assert!(
+        original
+            .candidate
+            .entries
+            .iter()
+            .all(|row| row.conversation_id == conversation)
+    );
+    let candidate = service
+        .persistence
+        .take_bookkeeping_candidate(original.candidate.generation)
+        .unwrap();
+    let expected_read = candidate.read.clone().freeze_completion();
+    let retained = service
+        .persistence
+        .retain_completion_bookkeeping_candidate(candidate)
+        .unwrap();
+    assert!(matches!(
+        retained,
+        RuntimeCompletionCandidateAcceptance::Accepted(_)
+    ));
+    let mut work = service.claim_bookkeeping_candidates();
+    assert_eq!(work.len(), 1);
+    let frozen = work.pop().unwrap();
+    assert_eq!(frozen.candidate.generation, retained.witness().generation());
+    assert_eq!(frozen.read, expected_read);
+    assert_eq!(frozen.candidate.read, frozen.read);
+    let candidate = service
+        .persistence
+        .take_bookkeeping_candidate(frozen.candidate.generation)
+        .unwrap();
+    assert!(!service.persistence.bookkeeping_pending(&conversation));
+    assert!(service.tracked_runtime_pane_process_ids().is_empty());
+    (service, candidate)
+}
 
 /// Both accepted namespaces must remain bound to the exact original turn. A
 /// foreign interruption key or syntactically valid foreign conversation row is
@@ -166,10 +307,15 @@ fn runtime_completion_handoff_exhaustion_does_not_enqueue_or_alias() {
 /// Resetting the component also creates new authority rather than restoring
 /// an old strong handle. No archive read or append is needed for this oracle:
 /// stale work must reject before even considering its supplied read failure.
+/// The native-free ordinary producer supplies the genuinely retained frozen
+/// candidate; legacy generation MAX is not archive sequence exhaustion, and
+/// exact retirement here is not a distinct cancellation-callback test.
 #[test]
 fn runtime_completion_handoff_legacy_alias_keeps_new_claim_after_retire_or_reset() {
     for reset in [false, true] {
-        let (mut service, candidate) = snapshot_candidate("completion-legacy-claim");
+        let root = NativeFreeBookkeepingRoot::new("completion-legacy-claim");
+        let (mut service, candidate) = native_free_frozen_candidate(&root);
+        let conversation = candidate.turn.conversation_id.clone();
         service
             .persistence
             .set_bookkeeping_generation_for_tests(u64::MAX);
@@ -178,6 +324,10 @@ fn runtime_completion_handoff_legacy_alias_keeps_new_claim_after_retire_or_reset
             .queue_bookkeeping_candidate(candidate.clone());
         let stale = service.claim_bookkeeping_candidates().pop().unwrap();
         let stale_clone = stale.clone();
+        let old_identity = service
+            .persistence
+            .bookkeeping_claim_identity(stale.candidate.generation)
+            .unwrap();
         assert_eq!(stale.candidate.generation, u64::MAX);
         if reset {
             service.persistence = Default::default();
@@ -192,6 +342,11 @@ fn runtime_completion_handoff_legacy_alias_keeps_new_claim_after_retire_or_reset
         }
         service.persistence.queue_bookkeeping_candidate(candidate);
         let current = service.claim_bookkeeping_candidates().pop().unwrap();
+        let current_identity = service
+            .persistence
+            .bookkeeping_claim_identity(current.candidate.generation)
+            .unwrap();
+        assert_ne!(old_identity, current_identity);
         assert_eq!(current.candidate.generation, stale.candidate.generation);
         for old in [stale, stale_clone] {
             assert!(
@@ -205,6 +360,12 @@ fn runtime_completion_handoff_legacy_alias_keeps_new_claim_after_retire_or_reset
             );
         }
         assert!(service.claim_bookkeeping_candidates().is_empty());
+        assert_eq!(
+            service
+                .persistence
+                .bookkeeping_claim_identity(current.candidate.generation),
+            Some(current_identity)
+        );
         let error = service
             .complete_bookkeeping_candidate(
                 current.clone(),
@@ -212,6 +373,8 @@ fn runtime_completion_handoff_legacy_alias_keeps_new_claim_after_retire_or_reset
             )
             .unwrap_err();
         assert_eq!(error.message(), "current claim remains owned");
+        assert!(service.persistence.bookkeeping_pending(&conversation));
+        assert!(service.claim_bookkeeping_candidates().is_empty());
         assert!(
             !service
                 .complete_bookkeeping_candidate(
@@ -228,9 +391,12 @@ fn runtime_completion_handoff_legacy_alias_keeps_new_claim_after_retire_or_reset
 /// separately checks that its production CAS invalidates before fallible I/O.
 /// The checked candidate remains blocked and the changed file gets no old-read
 /// suffix, even though the old worker history was successful and contiguous.
+/// Setup uses only the ordinary native-free producer and owned temporary store;
+/// stale rejection is not rollback of a previously accepted durable suffix.
 #[test]
 fn runtime_completion_handoff_checked_read_rejects_same_frontier_cas() {
-    let (mut service, candidate) = snapshot_candidate("completion-cas-read-race");
+    let root = NativeFreeBookkeepingRoot::new("completion-cas-read-race");
+    let (mut service, candidate) = native_free_frozen_candidate(&root);
     let store = service.persistence.cloned_transcript_store().unwrap();
     let row = TranscriptEntry {
         conversation_id: candidate.turn.conversation_id.clone(),
@@ -295,9 +461,26 @@ fn runtime_completion_handoff_checked_read_rejects_same_frontier_cas() {
 /// A same-CID live frontier advance is not permission to replace the original
 /// read hashed by the completion witness. The checked worker must receive the
 /// exact frozen store/frontier/epoch and pending rows, not fresh pane metadata.
+/// Unlike the separate after-check stale-reply control, this advance precedes
+/// claim. Real coherent execution and exact queued-row acceptance are required;
+/// immutable-read equality alone is insufficient and queue acceptance is not
+/// a disk receipt. All setup is native-free and fixture-local.
 #[test]
 fn runtime_completion_handoff_claim_keeps_frozen_read_after_frontier_advance() {
-    let (mut service, candidate) = snapshot_candidate("completion-frozen-frontier");
+    let root = NativeFreeBookkeepingRoot::new("completion-frozen-frontier");
+    let (mut service, candidate) = native_free_frozen_candidate(&root);
+    let store = service.persistence.cloned_transcript_store().unwrap();
+    let conversation = candidate.turn.conversation_id.clone();
+    let path = store.transcript_path(&conversation).unwrap();
+    let mut expected: Vec<_> = candidate
+        .directory
+        .iter()
+        .chain(candidate.entries.iter())
+        .cloned()
+        .collect();
+    for (index, row) in expected.iter_mut().enumerate() {
+        row.sequence = u64::try_from(index).unwrap().checked_add(1).unwrap();
+    }
     service
         .persistence
         .retain_completion_bookkeeping_candidate(candidate.clone())
@@ -309,6 +492,53 @@ fn runtime_completion_handoff_claim_keeps_frozen_read_after_frontier_advance() {
     let work = service.claim_bookkeeping_candidates().pop().unwrap();
     assert_eq!(work.read, candidate.read);
     assert_eq!(work.candidate.read, work.read);
+    // Advance happened BEFORE claim: current accepted-row ownership is sampled
+    // there, while immutable read metadata must still come from the old owner.
+    // An advance AFTER checked execution is the separate stale-reply control.
+    let checked = work.execute();
+    assert!(
+        checked.is_ok(),
+        "the real original-target coherent read must succeed"
+    );
+    let (history, next) = checked.as_ref().unwrap();
+    assert!(history.is_empty());
+    assert_eq!(*next, 1);
+    assert!(
+        service
+            .complete_bookkeeping_candidate(work.clone(), checked)
+            .unwrap()
+    );
+    assert!(
+        !service
+            .complete_bookkeeping_candidate(
+                work,
+                Err(MezError::invalid_state("duplicate must not reenter"))
+            )
+            .unwrap()
+    );
+    assert!(!service.persistence.bookkeeping_pending(&conversation));
+    let accepted = service
+        .persistence
+        .pending_transcript_entries_at_path(&path, &conversation)
+        .unwrap();
+    assert_eq!(accepted, expected);
+    assert!(!accepted.is_empty());
+    assert!(
+        accepted
+            .iter()
+            .all(|row| row.conversation_id == conversation)
+    );
+    assert!(accepted.iter().any(|row| row.role == TranscriptRole::User
+        && row.content == "native-free retained candidate prompt"));
+    assert!(accepted.iter().all(|row| row.validate().is_ok()));
+    assert!(
+        accepted
+            .windows(2)
+            .all(|rows| rows[0].sequence.checked_add(1) == Some(rows[1].sequence))
+    );
+    // This is checked append QUEUE acceptance at the original path, not a disk
+    // receipt. Never use the live session's counter as this acceptance oracle.
+    assert!(store.inspect(&conversation).unwrap().is_empty());
 }
 
 /// A worker reply checked against different read metadata cannot consume the
