@@ -132,6 +132,9 @@ pub(super) struct RuntimeCompletionSettlements {
     /// Isolated lost-ack fault after the unchanged audit append returns.
     #[cfg(test)]
     reject_failure_audit_ack_for_tests: bool,
+    /// Observational only: the actual admission error before refusal settlement.
+    #[cfg(test)]
+    provider_lease_refusal_for_tests: Option<(String, u64, MezError)>,
 }
 
 impl fmt::Debug for RuntimeCompletionSettlements {

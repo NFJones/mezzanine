@@ -162,6 +162,83 @@ impl CompletionGroup {
 }
 
 impl RuntimeSessionService {
+    /// Observes the actual lease error; never changes claims or group failures.
+    #[cfg(test)]
+    pub(crate) fn observe_provider_lease_refusal_for_tests(
+        &mut self,
+        turn_id: &str,
+        generation: u64,
+        error: &MezError,
+    ) {
+        self.agent
+            .completion_settlements
+            .provider_lease_refusal_for_tests =
+            Some((turn_id.to_string(), generation, error.clone()));
+    }
+
+    /// Reads test evidence only, not a production refusal-recovery owner.
+    #[cfg(test)]
+    pub(crate) fn provider_lease_refusal_for_tests(&self) -> Option<&(String, u64, MezError)> {
+        self.agent
+            .completion_settlements
+            .provider_lease_refusal_for_tests
+            .as_ref()
+    }
+
+    /// Observes only an admitted RuntimeOnly group, not a manufactured target.
+    #[cfg(test)]
+    pub(crate) fn runtime_only_completion_group_for_tests(&self, turn_id: &str) -> Option<String> {
+        let group = self.agent.completion_settlements.groups.get(turn_id)?;
+        matches!(
+            &group.transcript,
+            CompletionTranscriptTarget::NoPersistencePolicy(
+                CompletionNoPersistencePolicy::RuntimeOnly
+            )
+        )
+        .then(|| group.group.as_str().to_string())
+    }
+
+    /// Returns exact original-group source and typed primary for custody tests.
+    /// A live replacement execution is never evidence of original custody.
+    /// Clones are observation values only and are not installed or retained.
+    #[cfg(test)]
+    pub(crate) fn original_completion_source_for_tests(
+        &self,
+        turn_id: &str,
+        expected_group: &str,
+    ) -> Option<(
+        AgentTurnExecution,
+        mez_agent::AgentContext,
+        Option<MezError>,
+    )> {
+        let group = self.agent.completion_settlements.groups.get(turn_id)?;
+        if group.group.as_str() != expected_group {
+            return None;
+        }
+        let (execution, context) = if let Some(backing) = group.failed_backing.as_ref() {
+            (backing.execution.as_ref()?, backing.context.as_ref()?)
+        } else {
+            (
+                self.agent_turn_executions().get(turn_id)?,
+                self.agent_turn_contexts().get(turn_id)?,
+            )
+        };
+        if crate::runtime::agent::provider_execution::provider_log_execution_group_id(execution)
+            .ok()?
+            != group.group
+        {
+            return None;
+        }
+        Some((
+            execution.clone(),
+            context.clone(),
+            group
+                .primary_failure
+                .as_ref()
+                .map(|failure| (*failure.error).clone()),
+        ))
+    }
+
     /// Fences only NEW work after a required settlement failure. Already-issued
     /// result ingress, cancellation and reap must never call this admission gate.
     /// Keeping existing admitted slots while refusing new ones bounds failed

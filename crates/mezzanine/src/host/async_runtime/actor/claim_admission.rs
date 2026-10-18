@@ -97,6 +97,16 @@ impl AsyncRuntimeSessionActor {
         let Err(error) = admitted else {
             return Ok(true);
         };
+        #[cfg(test)]
+        if let WorkerClaimLease::Provider {
+            turn_id,
+            generation,
+            ..
+        } = &owner
+        {
+            self.service
+                .observe_provider_lease_refusal_for_tests(turn_id, *generation, &error);
+        }
         // No await or worker handoff occurs between recording and this guard.
         // Still check identity explicitly so a future caller cannot settle a replacement.
         if owner.is_current(self) {
@@ -132,6 +142,320 @@ mod tests {
     use crate::host::async_runtime::AsyncRuntimeActorConfig;
     use crate::test_support::runtime::RuntimeServiceFixture;
     use mez_mux::layout::Size;
+
+    /// A real completed RuntimeOnly G1 must survive refusal of its ordinary
+    /// provider continuation's mandatory timer. Setup admits trusted synthetic
+    /// provider output and two serialized external outcomes through production
+    /// APIs; it never forges a claim/group or executes a provider, HTTP/MCP,
+    /// native command, sandbox probe or assessment. The actual actor request
+    /// handles preparation, provisional accounting and capacity refusal. Inspect
+    /// custody BEFORE shutdown; a missing G1 is the desired baseline failure,
+    /// distinct from all readiness, preparation and refusal precondition checks.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_lease_refusal_retains_original_runtime_only_completion() {
+        use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
+        use crate::host::async_runtime::actor::queue::SIDE_EFFECT_QUEUE_FULL_PREFIX;
+        use crate::runtime::{RuntimeApprovedExternalActionOutcome, RuntimeSessionService};
+        use mez_agent::{
+            ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution, AgentTurnState,
+        };
+
+        let mut service = RuntimeServiceFixture::new().build();
+        let auth_root = std::env::temp_dir().join(format!(
+            "mez-runtime-only-lease-refusal-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        service.set_auth_store(crate::security::auth::AuthStore::new(
+            crate::security::auth::AuthPaths::under_config_root(&auth_root),
+        ));
+        service.replace_config_layers(vec![ConfigLayer {
+            name: "runtime-only-lease-refusal".into(), path: None,
+            format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+            text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"default\"\nshell_mode = \"pane\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.default]\nprovider = \"runtime-batch\"\nmodel = \"test\"\n".into(),
+        }]).unwrap();
+        let primary = service
+            .attach_primary("primary", true, Size::new(120, 32).unwrap(), 120)
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        let started = service
+            .start_agent_prompt_turn("%1", "retain original RuntimeOnly results")
+            .unwrap();
+        let turn = service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .clone();
+        let agent = AgentId::opaque(turn.agent_id.clone()).unwrap();
+        service.remove_pending_agent_provider_task(&turn.turn_id);
+        let actions: Vec<_> = ["first", "second"]
+            .into_iter()
+            .map(|id| AgentAction {
+                id: id.into(),
+                payload: AgentActionPayload::FetchUrl {
+                    url: format!("https://example.test/runtime-only-{id}"),
+                    format: None,
+                    max_bytes: None,
+                },
+            })
+            .collect();
+        let execution = AgentTurnExecution {
+            request: mez_agent::ModelRequest {
+                provider: "runtime-batch".into(),
+                model: "test".into(),
+                model_capabilities: Default::default(),
+                max_input_tokens: None,
+                reasoning_effort: None,
+                thinking_enabled: None,
+                latency_preference: None,
+                prompt_cache_retention: None,
+                max_output_tokens: None,
+                temperature: None,
+                stop: None,
+                prompt_cache_session_id: None,
+                prompt_cache_lineage_id: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
+                issue_actions_enabled: true,
+                interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+                allowed_actions: mez_agent::AllowedActionSet::capability_decision(),
+                messages: vec![mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::User,
+                    source: mez_agent::ContextSourceKind::UserInstruction,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    content: "retain original RuntimeOnly results".into(),
+                }]
+                .into(),
+            },
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".into(),
+                model: "test".into(),
+                raw_text: "synthetic completed-group source".into(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    rationale: "inert ordinary continuation custody".into(),
+                    actions: actions.clone(),
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: Default::default(),
+            action_results: actions
+                .iter()
+                .map(|action| {
+                    ActionResult::running(
+                        &turn,
+                        action,
+                        vec!["awaiting synthetic external completion".into()],
+                        None,
+                    )
+                })
+                .collect(),
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        };
+        service
+            .apply_agent_provider_completed_event(&agent, &turn.turn_id, execution)
+            .await
+            .unwrap();
+        let mut expected_results = Vec::new();
+        for action in &actions {
+            let dispatch = service
+                .claim_approved_external_action(&turn.turn_id, &action.id)
+                .unwrap()
+                .expect("fixture must claim its real serialized external attempt");
+            let result = ActionResult::succeeded(
+                &turn,
+                action,
+                vec![format!("F668_RUNTIME_ONLY_ORIGINAL_{}", action.id)],
+                None,
+            );
+            expected_results.push(result.clone());
+            assert!(
+                service
+                    .complete_approved_external_action(RuntimeApprovedExternalActionOutcome {
+                        turn_id: turn.turn_id.clone(),
+                        action_id: action.id.clone(),
+                        attempt: dispatch.attempt,
+                        result: Ok(result),
+                        mcp_transport: None,
+                    })
+                    .unwrap()
+            );
+        }
+        service.retry_completion_publications();
+        assert!(
+            service.agent_provider_task_is_pending(&turn.turn_id),
+            "setup: completed G1 must queue ordinary continuation"
+        );
+        assert!(
+            service
+                .ready_agent_provider_turn(&agent, &turn.turn_id)
+                .unwrap()
+                .is_some(),
+            "setup: continuation must be genuinely ready"
+        );
+        let group = service.runtime_only_completion_group_for_tests(&turn.turn_id)
+            .expect("setup: actual admission must select RuntimeOnly, not an original store or ephemeral policy");
+        let (original_execution, original_context, original_error) = service
+            .original_completion_source_for_tests(&turn.turn_id, &group)
+            .expect("setup: exact G1 result AND context must exist before claiming");
+        assert_eq!(original_execution.action_results, expected_results);
+        assert!(original_error.is_none());
+        assert!(original_context.chronology().iter().any(|event| {
+            event
+                .execution_group_id()
+                .is_some_and(|owner| owner.as_str() == group)
+                && event
+                    .block()
+                    .content
+                    .contains("F668_RUNTIME_ONLY_ORIGINAL_")
+        }));
+
+        let mut actor = AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default())
+            .unwrap()
+            .1;
+        // Execute the SAME preparation request and worker-side preparation as
+        // the public handle, without starting a provider or the actor run loop.
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(
+                super::super::AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+                    agent_id: agent.clone(),
+                    turn_id: turn.turn_id.clone(),
+                    reply,
+                },
+            )
+            .await;
+        let work = receive
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("setup: real preparation request must return work");
+        assert!(
+            work.mcp_plans.is_empty(),
+            "setup must not execute MCP discovery"
+        );
+        assert!(
+            work.provider_auth_refresh_profiles.is_empty(),
+            "setup must not refresh provider credentials"
+        );
+        assert!(
+            work.accounting_projects.is_none(),
+            "setup must not run an accounting preparation worker"
+        );
+        let preparation = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+        assert!(
+            preparation.provider_refresh_error.is_none(),
+            "setup: preparation failure is NOT the custody regression"
+        );
+        assert!(preparation.mcp.is_empty());
+        assert!(preparation.accounting_projects.is_none());
+        // Drain setup effects through the normal adapter API without executing
+        // them. No worker has received a dispatch and no claim timer may exist.
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(super::super::AsyncRuntimeRequest::DrainRuntimeSideEffects {
+                limit: 1024,
+                reply,
+            })
+            .await;
+        let setup_effects = receive.await.unwrap().unwrap();
+        assert!(!setup_effects.iter().any(|effect| matches!(effect,
+            RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::ProviderClaim)));
+        assert!(!actor.service.agent_provider_task_is_owned(&turn.turn_id));
+        actor.side_effect_buffer = 1;
+        actor
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: agent.clone(),
+                turn_id: "unrelated-retained-work".into(),
+            }])
+            .unwrap();
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(
+                super::super::AsyncRuntimeRequest::ClaimConfiguredAgentProviderTask {
+                    agent_id: agent.clone(),
+                    turn_id: turn.turn_id.clone(),
+                    preparation,
+                    reply,
+                },
+            )
+            .await;
+        let refusal = receive.await.unwrap();
+        assert!(
+            !matches!(&refusal, Ok(Some(_))),
+            "admission must withhold the worker dispatch"
+        );
+        assert_eq!(
+            actor.timers.next_provider_claim_generation, 1,
+            "setup: request must reach actual provisional claim recording"
+        );
+        assert!(!actor.timers.provider_claim.contains_key(&turn.turn_id));
+        assert!(!actor.service.agent_provider_task_is_owned(&turn.turn_id));
+        assert!(actor.side_effects.iter().any(|effect| matches!(effect,
+            RuntimeSideEffect::DispatchAgentProvider { turn_id, .. } if turn_id == "unrelated-retained-work")));
+        let (refused_turn, refused_generation, refused_error) = actor.service
+            .provider_lease_refusal_for_tests()
+            .expect("setup: must observe actual timer refusal, not a source-stage/claim-precondition error");
+        assert_eq!(refused_turn, &turn.turn_id);
+        assert_eq!(
+            *refused_generation,
+            actor.timers.next_provider_claim_generation
+        );
+        assert_eq!(
+            refused_error.kind(),
+            MezError::invalid_state("type oracle").kind()
+        );
+        assert!(
+            refused_error
+                .message()
+                .starts_with(SIDE_EFFECT_QUEUE_FULL_PREFIX)
+        );
+
+        // Desired baseline oracle: inspect immediately after the real request,
+        // before shutdown/expiry/retry can alter custody or hide the boundary.
+        let (retained_execution, retained_context, primary) = actor.service
+            .original_completion_source_for_tests(&turn.turn_id, &group)
+            .expect("F668_CUSTODY: exact original RuntimeOnly G1 result and context lost at undispatched lease refusal");
+        assert_eq!(
+            retained_execution, original_execution,
+            "original canonical result/request must not become provider-error source"
+        );
+        assert!(
+            retained_context
+                .chronology()
+                .starts_with(original_context.chronology()),
+            "original canonical context events and metadata must remain owned in order"
+        );
+        let primary = primary
+            .or_else(|| refusal.err())
+            .expect("exact typed refusal must remain reported or retained");
+        assert_eq!(primary.kind(), refused_error.kind());
+        assert_eq!(primary.message(), refused_error.message());
+        let terminal = actor
+            .service
+            .agent_turn_ledger()
+            .turn(&turn.turn_id)
+            .is_some_and(|turn| {
+                matches!(
+                    turn.state,
+                    AgentTurnState::Failed | AgentTurnState::Interrupted
+                )
+            });
+        assert!(
+            terminal || actor.service.ensure_completion_admission_open().is_err(),
+            "nonterminal refusal needs the existing bounded retained-failure owner, not an unleased runnable claim"
+        );
+        assert!(!actor.service.agent_provider_task_is_pending(&turn.turn_id));
+        assert!(actor.service.pending_approved_external_actions().is_empty());
+    }
 
     /// A full non-droppable side-effect queue rejects the mandatory auxiliary
     /// retry timer before dispatch and settles its exact pending owner. It must
