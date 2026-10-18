@@ -593,7 +593,13 @@ fn runtime_completion_handoff_claim_keeps_frozen_read_after_frontier_advance() {
     );
     // This is checked append QUEUE acceptance at the original path, not a disk
     // receipt. Never use the live session's counter as this acceptance oracle.
-    assert!(store.inspect(&conversation).unwrap().is_empty());
+    // No append worker ran: require typed absence, not a precreated empty file
+    // or a generic read failure mistaken for an empty durable transcript.
+    assert_eq!(
+        store.inspect(&conversation).unwrap_err().kind(),
+        crate::error::MezErrorKind::NotFound
+    );
+    assert!(!path.try_exists().unwrap());
 }
 
 /// A worker reply checked against different read metadata cannot consume the
