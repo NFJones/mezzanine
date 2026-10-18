@@ -1095,10 +1095,9 @@ impl RuntimeSessionService {
             return Ok(true);
         }
         let ready_for_provider_continuation =
-            runtime_execution_ready_for_provider_continuation(&execution);
+            self.completion_provider_continuation_ready(&turn.turn_id);
         if ready_for_provider_continuation && turn.state == AgentTurnState::Running {
-            self.retain_completion_group_transcript(&turn.turn_id)?;
-            self.queue_agent_provider_task(turn.turn_id.clone());
+            self.admit_completion_provider_continuation(&turn.turn_id)?;
         }
         if matches!(
             execution.terminal_state,

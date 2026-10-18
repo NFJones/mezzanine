@@ -26,6 +26,16 @@ impl HumanPause {
 }
 
 impl RuntimeSessionService {
+    /// Matches only the already-retained original pause owner; callers still
+    /// perform attached-primary lifecycle validation before accepting guidance.
+    pub(in crate::runtime::agent) fn human_pause_matches_completion_resume(&self, turn: &AgentTurnRecord, generation: u64) -> bool {
+        self.agent.human_pauses.get(&turn.pane_id).is_some_and(|pause| {
+            pause.generation == generation && pause.target.turn_id.as_deref() == Some(turn.turn_id.as_str())
+                && pause.target.conversation_id == turn.conversation_id
+                && pause.target.agent_id == turn.agent_id
+        })
+    }
+
     /// Adopts a subsequently queued task under an already paused idle conversation.
     pub(crate) fn adopt_human_paused_work(&mut self, work: &super::ScheduledWork) {
         let Some(pane) = work.pane_id.as_deref() else {
@@ -90,12 +100,14 @@ impl RuntimeSessionService {
             ));
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;
+        let mut resumed_provider = None;
         if let Some(turn_id) = target.turn_id.as_deref() {
             let turn = self
                 .agent_turn_ledger()
                 .turn(turn_id)
                 .cloned()
                 .ok_or_else(|| MezError::conflict("retained pause task unavailable"))?;
+            self.ensure_completion_required_gates_ready(turn_id)?;
             // Stage fallible fair admission while human inhibition is still
             // intact. Queue-full must not append guidance or consume approvals.
             let admitted_peer_wait = self
@@ -179,12 +191,20 @@ impl RuntimeSessionService {
                 .ok_or_else(|| MezError::invalid_state("retained task context unavailable"))?
                 .append_user_event(format!("human resume {generation}"), "Continue your retained task from its current state. Do not repeat completed actions or automatically retry uncertain effects. Reevaluate unissued work under current policy; already-running children may continue.")
                 .map_err(|error| MezError::invalid_state(error.to_string()))?;
+            // Keep inhibition until the post-mutation canonical cancellation
+            // and resume evidence have an original-target owner. A required
+            // handoff failure stays typed/fenced; retry cannot replay guidance.
+            self.record_completion_human_resume(turn_id, generation)?;
+            self.prepare_completion_continuation_handoff(turn_id)?;
             self.agent.agent_scheduler = resumed_scheduler;
             if !pending_dependencies && turn.state == AgentTurnState::Running {
-                self.queue_agent_provider_task(turn_id);
+                resumed_provider = Some(turn_id.to_string());
             }
         }
         self.agent.human_pauses.remove(&target.pane_id);
+        if let Some(turn_id) = resumed_provider {
+            self.admit_completion_provider_continuation(&turn_id)?;
+        }
         self.start_ready_agent_turns()?;
         Ok(true)
     }

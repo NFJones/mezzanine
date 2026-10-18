@@ -9,6 +9,68 @@
 use super::*;
 use mez_agent::{ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution};
 
+/// Exact human resume may continue a settled failure without relabelling it or
+/// reissuing its effect. Unissued siblings become Cancelled, and both those
+/// facts plus new guidance must be archived at the original store before the
+/// shared scheduler admits provider continuation. A live repository replacement
+/// cannot receive these RAW rows. This uses synthetic external completion only.
+#[tokio::test]
+async fn runtime_completion_owner_paused_outcome_resumes_with_original_archive_evidence() {
+    for (failed, held) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut fixture = CompletionFixture::fetch().await;
+        let original = fixture.service.persistence.cloned_transcript_store().unwrap();
+        if failed && held {
+            let progress = mez_agent::ActionPresentationProgress::new(&fixture.turn.turn_id,
+                &fixture.action.id, mez_agent::ActionPresentationExecutionIdentity::Attempt(fixture.attempt.clone()),
+                1, mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody,
+                "provisional failed fetch bytes");
+            assert!(fixture.service.apply_action_presentation_progress(progress).unwrap());
+        }
+        let target = fixture.service.capture_agent_lifecycle_target(&fixture.primary, "%1").unwrap();
+        let generation = fixture.service.pause_agent_lifecycle_target(&fixture.primary, &target).unwrap();
+        fixture.service.hold_agent_presentation_installs_for_tests(held);
+        let mut outcome = fixture.outcome();
+        if failed {
+            outcome.result = Ok(ActionResult::failed(&fixture.turn, &fixture.action, ActionStatus::Failed,
+                "fixture_paused_failure", "actual failed result remains failed").unwrap());
+        }
+        assert!(fixture.service.complete_approved_external_action(outcome).unwrap());
+        fixture.service.reconcile_human_pauses().unwrap();
+        assert_eq!(fixture.service.agent_human_pause_status("%1"), Some("paused"));
+        assert!(!fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+        let replacement = AgentTranscriptStore::new(fixture._root.0.join("resume-replacement"));
+        fixture.service.set_agent_transcript_store(replacement.clone());
+        let target = fixture.service.capture_agent_lifecycle_target(&fixture.primary, "%1").unwrap();
+        assert!(fixture.service.resume_agent_lifecycle_target(&fixture.primary, &target, generation).unwrap());
+        if held {
+            assert!(!fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+            assert!(fixture.service.completion_publication_retry_needed_for_turn(&fixture.turn.turn_id));
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+            fixture.service.hold_agent_presentation_installs_for_tests(false);
+            assert_eq!(fixture.service.retry_completion_publications(), 1);
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+        }
+        assert!(fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+        let execution = fixture.retained();
+        assert_eq!(execution.action_results[0].status,
+            if failed { ActionStatus::Failed } else { ActionStatus::Succeeded });
+        assert_eq!(execution.action_results[1].status, ActionStatus::Cancelled);
+        let rows = original.inspect(&fixture.turn.conversation_id).unwrap();
+        assert_eq!(rows.iter().filter(|row| row.content.contains("action result pending-sibling")).count(), 1);
+        assert!(rows.iter().any(|row| row.content.contains("Continue your retained task from its current state")));
+        if failed {
+            assert!(rows.iter().any(|row| row.content.contains("actual failed result remains failed")));
+        }
+        assert!(!replacement.transcript_path(&fixture.turn.conversation_id).unwrap().exists());
+        let agent = AgentId::opaque(fixture.turn.agent_id.clone()).unwrap();
+        assert!(fixture.service.ready_agent_provider_turn(&agent, &fixture.turn.turn_id).unwrap().is_some());
+        assert!(!fixture.service.admit_completion_provider_continuation(&fixture.turn.turn_id).unwrap(),
+            "readiness and repeat admission cannot insert another continuation");
+        fixture.service.ensure_completion_admission_open().unwrap();
+    }
+}
+
 /// Original body, entry, occurrence, transaction and rendering flavor survive
 /// repeated preinstall errors in the SAME RESULT queue. This is a presentation
 /// ownership oracle for native activity/shell-view source shapes, not evidence
@@ -180,6 +242,7 @@ impl Drop for CompletionRoot {
 /// inspectable without confusing terminal cleanup with result acceptance.
 struct CompletionFixture {
     service: RuntimeSessionService,
+    primary: mez_core::ids::ClientId,
     _root: CompletionRoot,
     turn: AgentTurnRecord,
     action: AgentAction,
@@ -213,7 +276,7 @@ impl CompletionFixture {
         if attach_store {
             service.set_agent_transcript_store(AgentTranscriptStore::new(root.0.join("transcripts")));
         }
-        service
+        let primary = service
             .attach_primary("primary", true, Size::new(120, 32).unwrap(), 120)
             .unwrap();
         service
@@ -356,6 +419,7 @@ impl CompletionFixture {
         );
         Self {
             service,
+            primary,
             _root: root,
             turn,
             action,

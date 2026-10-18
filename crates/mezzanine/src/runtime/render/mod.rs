@@ -607,6 +607,9 @@ pub(crate) struct RuntimePresentationComponent {
     /// Test-only countdown to a single failure before durable screen installation.
     #[cfg(test)]
     pub(super) agent_install_failure_countdown: Option<usize>,
+    /// Test-only sustained preinstall failure until explicitly released.
+    #[cfg(test)]
+    pub(super) agent_install_failure_held: bool,
     /// One-shot fault at outbound settlement, after real send acceptance.
     #[cfg(test)]
     reject_next_settled_outbound_projection: bool,

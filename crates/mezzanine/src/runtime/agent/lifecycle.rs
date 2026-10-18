@@ -736,7 +736,7 @@ impl RuntimeSessionService {
                         "injected scheduler-start post-admission failure",
                     ));
                 }
-                self.append_agent_trace_turn_transition(
+                let trace = self.append_agent_trace_turn_transition(
                     &turn,
                     previous_state,
                     AgentTurnState::Running,
@@ -745,7 +745,8 @@ impl RuntimeSessionService {
                     } else {
                         "scheduler_start"
                     },
-                )?;
+                );
+                self.note_completion_optional_error(&turn.turn_id, trace);
                 if previous_state == AgentTurnState::Queued {
                     self.emit_subagent_task_status(
                         &turn,
@@ -767,11 +768,10 @@ impl RuntimeSessionService {
                 started = started.saturating_add(1);
                 let resumed_decided_action = previous_state == AgentTurnState::Blocked
                     && self.resume_decided_agent_action_after_reacquisition(&running.turn_id)?;
-                if !resumed_decided_action {
-                    self.agent
-                        .pending_agent_provider_tasks
-                        .insert(running.turn_id.clone());
-                    self.append_agent_trace_turn_event(
+                if !resumed_decided_action
+                    && self.admit_completion_provider_continuation(&running.turn_id)?
+                {
+                    let trace = self.append_agent_trace_turn_event(
                         &turn.pane_id,
                         &running.turn_id,
                         if previous_state == AgentTurnState::Blocked {
@@ -779,7 +779,8 @@ impl RuntimeSessionService {
                         } else {
                             "provider_task queued reason=scheduler_start"
                         },
-                    )?;
+                    );
+                    self.note_completion_optional_error(&running.turn_id, trace);
                 }
                 Ok(())
             })();

@@ -850,10 +850,9 @@ impl RuntimeSessionService {
 
         self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution.clone());
-        if runtime_execution_ready_for_provider_continuation(&execution) {
-            self.retain_completion_group_transcript(&turn.turn_id)?;
+        if self.completion_provider_continuation_ready(&turn.turn_id) {
             if !self.resume_dependency_wait_if_ready(&turn.turn_id, "spawned_shell_result_ready")? {
-                self.queue_agent_provider_task(turn.turn_id.clone());
+                self.admit_completion_provider_continuation(&turn.turn_id)?;
                 let trace = self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     &turn.turn_id,

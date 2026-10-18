@@ -671,6 +671,9 @@ impl RuntimeSessionService {
         reason: &str,
     ) -> Result<bool> {
         self.ensure_completion_required_gates_ready(parent_turn_id)?;
+        if !self.completion_provider_continuation_ready(parent_turn_id) {
+            return Ok(false);
+        }
         let Some(parent_turn) = self
             .agent_turn_ledger()
             .turns()
@@ -686,27 +689,27 @@ impl RuntimeSessionService {
                 .agent_scheduler
                 .waiting_turns()
                 .any(|work| work.turn_id == parent_turn_id)
-            || !self
-                .agent_turn_executions()
-                .get(parent_turn_id)
-                .is_some_and(runtime_execution_ready_for_provider_continuation)
+            || !self.completion_stored_execution_continuation_ready(parent_turn_id)
         {
             return Ok(false);
         }
+        if !self.prepare_completion_continuation_handoff(parent_turn_id)? { return Ok(false); }
         match self.agent.agent_scheduler.requeue_waiting(parent_turn_id) {
             Ok(_) => {}
             Err(error) if error.kind() == SchedulerErrorKind::QueueFull => return Ok(false),
             Err(error) => return Err(error.into()),
         }
-        self.append_agent_trace_turn_event(
+        let trace = self.append_agent_trace_turn_event(
             &parent_turn.pane_id,
             parent_turn_id,
             &format!("scheduler waiting -> queued reason={reason} capacity=reacquire"),
-        )?;
-        self.append_agent_status_text_to_terminal_buffer(
+        );
+        self.note_completion_optional_error(parent_turn_id, trace);
+        let status = self.append_agent_status_text_to_terminal_buffer(
             &parent_turn.pane_id,
             "agent: dependency results received; continuing",
-        )?;
+        );
+        self.note_completion_optional_error(parent_turn_id, status);
         self.start_ready_agent_turns()?;
         Ok(true)
     }
@@ -851,9 +854,10 @@ impl RuntimeSessionService {
             {
                 self.append_action_result_context_if_absent(&turn.turn_id, result)?;
             }
-            self.agent
-                .pending_agent_provider_tasks
-                .insert(turn.turn_id.clone());
+            if self.completion_owns_transcript_policy(&turn.turn_id) {
+                self.agent_turn_executions_mut().insert(turn.turn_id.clone(), execution.clone());
+            }
+            self.admit_completion_provider_continuation(&turn.turn_id)?;
         }
         Ok(executed)
     }

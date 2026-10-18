@@ -15,6 +15,13 @@ impl RuntimeSessionService {
         self.presentation.agent_install_failure_countdown = Some(after);
     }
 
+    /// Holds the existing preinstall failure cut across callback/idle attempts.
+    /// This does not change execution, queues, policy or production retry limits.
+    #[cfg(test)]
+    pub(crate) fn hold_agent_presentation_installs_for_tests(&mut self, held: bool) {
+        self.presentation.agent_install_failure_held = held;
+    }
+
     /// Removes previews whose final output has already been retained.
     pub(super) fn retire_settled_agent_shell_previews(
         presentation: &mut RuntimeAgentShellPreviewPresentation,
@@ -247,6 +254,10 @@ impl RuntimeSessionService {
         baseline_screen: TerminalScreen,
         presentation: Option<RuntimeAgentShellPreviewPresentation>,
     ) -> Result<()> {
+        #[cfg(test)]
+        if self.presentation.agent_install_failure_held {
+            return Err(MezError::invalid_state("injected held pre-install presentation failure"));
+        }
         #[cfg(test)]
         if let Some(remaining) = self.presentation.agent_install_failure_countdown.as_mut() {
             if *remaining == 0 {

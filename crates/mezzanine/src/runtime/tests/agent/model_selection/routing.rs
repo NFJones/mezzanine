@@ -56,9 +56,21 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
             result: Ok(mez_agent::ShellExecutionOutput::new(Some(0), body.to_string(),
                 String::new(), false, false)),
         };
-        service.fail_agent_presentation_install_for_tests(0);
+        service.hold_agent_presentation_installs_for_tests(true);
         assert!(service.complete_native_shell_action(outcome.clone()).unwrap());
-        service.retry_completion_publications();
+        assert!(service.completion_publication_retry_needed_for_turn(&worker_turn.turn_id));
+        assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
+        service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::Ready);
+        assert_eq!(service.queue_ready_provider_continuation_for_pane(&worker_turn.pane_id).unwrap(), 0,
+            "manual readiness cannot overtake a retained publication obligation");
+        let retained_entry = service.presentation.agent_queued_provider_results.values().next().unwrap().3.clone();
+        assert_eq!(service.retry_completion_publications(), 0);
+        assert_eq!(service.retry_completion_publications(), 0);
+        assert_eq!(service.presentation.agent_queued_provider_results.values().next().unwrap().3.id, retained_entry.id);
+        assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
+        service.hold_agent_presentation_installs_for_tests(false);
+        assert_eq!(service.retry_completion_publications(), 1);
+        assert_eq!(service.retry_completion_publications(), 0);
         assert!(!service.complete_native_shell_action(outcome).unwrap());
         assert!(service.claim_native_shell_action(&worker_turn.turn_id, &action.id).unwrap().is_none());
         let retained = service.agent_turn_executions().get(&worker_turn.turn_id).unwrap();

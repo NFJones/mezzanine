@@ -102,6 +102,9 @@ pub(super) struct CompletionGroup {
     pub(super) safe_failure_evidence: Option<String>,
     pub(super) paint_revoked: bool,
     pub(super) continuation: CompletionMilestone,
+    /// Records already-validated human guidance for this exact group. It only
+    /// permits provider feedback with settled errors, never action authority.
+    pub(super) human_resume_generation: Option<u64>,
     pub(super) task_result: CompletionMilestone,
     pub(super) scheduler: CompletionMilestone,
     pub(super) scope: Option<CompletionScope>,
@@ -253,6 +256,7 @@ impl RuntimeSessionService {
                 secondary_failures: Vec::new(),
                 safe_failure_evidence: None,
                 paint_revoked: false,
+                human_resume_generation: None,
                 continuation: CompletionMilestone::NotEntered,
                 task_result: CompletionMilestone::NotEntered,
                 scheduler: CompletionMilestone::NotEntered,
@@ -504,45 +508,55 @@ impl RuntimeSessionService {
             return Ok(CompletionTranscriptOwnership::NoPersistencePolicy(*policy));
         }
         let existing = group.handoff.as_ref();
-        if let Some(handoff) = existing
-            && handoff.evidence == evidence
-            && let Some(witness) = &handoff.witness
-        {
-            return Ok(CompletionTranscriptOwnership::Candidate(witness.clone()));
-        }
-        let mut candidate = if let Some(handoff) = existing {
-            handoff.candidate.clone()
-        } else {
+        let execution = self.agent_turn_executions().get(turn_id)
+            .filter(|_| self.agent_turn_contexts().contains_key(turn_id));
+        let fresh_source = execution.is_some();
+        let mut candidate = if let Some(execution) = execution {
             let CompletionTranscriptTarget::Original { read, directory } = &group.transcript else {
                 return Err(MezError::invalid_state(
                     "completion archive target is unavailable",
                 ));
             };
-            let execution = self
-                .agent_turn_executions()
-                .get(turn_id)
-                .or_else(|| {
-                    group
-                        .failed_backing
-                        .as_ref()
-                        .and_then(|backing| backing.execution.as_ref())
-                })
-                .ok_or_else(|| {
-                    MezError::invalid_state("completion handoff execution is unavailable")
-                })?;
             self.completion_bookkeeping_candidate(
                 &group.turn,
                 execution,
                 read.clone(),
                 directory.clone(),
             )?
+        } else if let Some(handoff) = existing {
+            // Canonical backing may already have transferred after correction.
+            // Its accepted immutable candidate remains the source, not ambient
+            // replacement pane state or newly sampled repository policy.
+            handoff.candidate.clone()
+        } else {
+            return Err(MezError::invalid_state("completion handoff execution is unavailable"));
         };
-        if existing.is_none_or(|handoff| handoff.evidence != evidence) {
+        if fresh_source || existing.is_none_or(|handoff| handoff.evidence != evidence) {
             Self::append_completion_settlement_evidence(
                 &mut candidate,
                 &group.group,
                 evidence.clone(),
             )?;
+        }
+        if let Some(handoff) = existing
+            && handoff.evidence == evidence
+            && handoff.candidate.entries.len() == candidate.entries.len()
+        {
+            // New projection wall-clock stamps are not new canonical source.
+            // Compare a temporary projection with the original accepted times;
+            // never rewrite the actual candidate/read/hash/witness or pending
+            // archive rows. Changed status/context/content must get a new exact
+            // candidate acceptance even when receipt metadata did not change.
+            let mut comparable = candidate.clone();
+            for (new, original) in comparable.entries.iter_mut().zip(&handoff.candidate.entries) {
+                new.created_at_unix_seconds = original.created_at_unix_seconds;
+            }
+            if comparable.completion_snapshot_bytes()? == handoff.candidate.completion_snapshot_bytes()? {
+                if let Some(witness) = &handoff.witness {
+                    return Ok(CompletionTranscriptOwnership::Candidate(witness.clone()));
+                }
+                candidate = handoff.candidate.clone();
+            }
         }
         // Install the exact rows in their same admitted group before asking the
         // destination to accept them. A rejection keeps all source bytes live.
@@ -589,6 +603,71 @@ impl RuntimeSessionService {
             .is_some_and(|handoff| handoff.witness.is_some())
     }
 
+    /// Existing groups may continue only from settled canonical execution and
+    /// publication. Initial provider work without a completion group is separate.
+    fn completion_continuation_source_ready(&self, turn_id: &str) -> bool {
+        if !self.completion_group_publication_ready(turn_id) { return false; }
+        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else { return true; };
+        let Some(execution) = self.agent_turn_executions().get(turn_id) else { return true; };
+        runtime_execution_ready_for_provider_continuation(execution)
+            || ((group.human_resume_generation.is_some()
+                || self.agent.agent_turn_interaction_kinds.get(turn_id)
+                    == Some(&mez_agent::ModelInteractionKind::RoutedFailureExplanation))
+                && execution.action_results.iter().all(ActionResult::is_terminal))
+    }
+
+    /// Records the existing exact pause/resume contract after caller validation.
+    /// This does not approve an action, reset a failure budget or relabel errors.
+    pub(in crate::runtime::agent) fn record_completion_human_resume(&mut self, turn_id: &str, generation: u64) -> Result<()> {
+        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else { return Ok(()); };
+        if !self.human_pause_matches_completion_resume(&group.turn, generation) {
+            return Err(MezError::conflict("completion resume owner changed"));
+        }
+        if let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) {
+            group.human_resume_generation = Some(generation);
+        }
+        Ok(())
+    }
+
+    /// Stored execution eligibility for dependency wake and its liveness owner;
+    /// initial provider work without stored execution is not a dependency wake.
+    pub(crate) fn completion_stored_execution_continuation_ready(&self, turn_id: &str) -> bool {
+        self.agent_turn_executions().get(turn_id).is_some_and(|execution| {
+            if self.completion_owns_transcript_policy(turn_id) {
+                self.completion_continuation_source_ready(turn_id)
+            } else { runtime_execution_ready_for_provider_continuation(execution) }
+        })
+    }
+
+    /// Read-only wake eligibility shared by dependency admission and its timer.
+    /// Human pause blocks continuation, not original archive retention or paint.
+    pub(crate) fn completion_provider_continuation_ready(&self, turn_id: &str) -> bool {
+        !self.agent_turn_is_human_paused(turn_id)
+            && self.completion_continuation_source_ready(turn_id)
+    }
+
+    /// Prepares only original archive/policy ownership; this does not insert work
+    /// and is permitted while staging an explicit human resume under inhibition.
+    pub(crate) fn prepare_completion_continuation_handoff(&mut self, turn_id: &str) -> Result<bool> {
+        self.ensure_completion_required_gates_ready(turn_id)?;
+        if !self.completion_continuation_source_ready(turn_id) { return Ok(false); }
+        if !self.completion_owns_transcript_policy(turn_id) { return Ok(true); }
+        if let Err(error) = self.retain_completion_group_transcript(turn_id) {
+            self.record_completion_required_failure(turn_id, "continuation_handoff", None, None, &error);
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    /// Shared fallible boundary for callback, resume and scheduler continuation.
+    /// Held paint leaves its existing receipt actionable without requeue replay.
+    pub(crate) fn admit_completion_provider_continuation(&mut self, turn_id: &str) -> Result<bool> {
+        if !self.completion_provider_continuation_ready(turn_id)
+            || !self.prepare_completion_continuation_handoff(turn_id)?
+        { return Ok(false); }
+        Ok(self.queue_completion_provider_task(turn_id.to_string()))
+    }
+
     /// Records an actual pending-provider insertion and its group milestone in
     /// one infallible actor mutation. False remains an unchanged domain result,
     /// never an acknowledgement fabricated for a duplicate or blocked gate.
@@ -604,6 +683,10 @@ impl RuntimeSessionService {
         {
             return false;
         }
+        if self.agent.completion_settlements.groups.get(&turn_id).is_some_and(|group| {
+            matches!(&group.transcript, CompletionTranscriptTarget::Original { .. })
+                && !self.completion_archive_handoff_owned(&turn_id)
+        }) { return false; }
         let (pending, settlements) = (
             &mut self.agent.pending_agent_provider_tasks,
             &mut self.agent.completion_settlements,
@@ -657,6 +740,11 @@ impl RuntimeSessionService {
         };
         if let Some(failure) = &group.primary_failure {
             return Err((*failure.error).clone());
+        }
+        if matches!(&group.transcript, CompletionTranscriptTarget::Original { .. })
+            && !self.completion_archive_handoff_owned(turn_id)
+        {
+            return Err(MezError::invalid_state("completion original transcript handoff is not owned"));
         }
         let actions_owned = !self.completion_group_publication_ready(turn_id)
             || self

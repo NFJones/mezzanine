@@ -973,6 +973,10 @@ impl RuntimeSessionService {
             &remaining,
             self.ui_theme(),
         )?;
+        #[cfg(test)]
+        if self.presentation.agent_install_failure_held {
+            return Err(MezError::invalid_state("injected held pre-install presentation failure"));
+        }
         let installed_lineage = self
             .update_agent_pane_screen_preserving_interaction(
                 pane_id,
@@ -1228,6 +1232,10 @@ impl RuntimeSessionService {
             &remaining,
             self.ui_theme(),
         )?;
+        #[cfg(test)]
+        if self.presentation.agent_install_failure_held {
+            return Err(MezError::invalid_state("injected held pre-install presentation failure"));
+        }
         let installed_lineage = self
             .update_agent_pane_screen_preserving_interaction(
                 pane_id,
