@@ -9,6 +9,28 @@
 use super::*;
 use mez_agent::{ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution};
 
+/// An ordinary issued or publication-held action has no assessment owner and
+/// cannot use the new purpose-qualified integration to skip its original
+/// handoff/continuation gates. This read-only negative oracle creates no
+/// assessment record/request, invokes no backend and leaves canonical custody
+/// unchanged. Positive assessment/lease behavior remains a separate held gate.
+#[tokio::test]
+async fn runtime_completion_owner_ordinary_claim_cannot_skip_custody_gates() {
+    for held in [false, true] {
+        let mut fixture = CompletionFixture::fetch().await;
+        if held {
+            fixture.service.hold_agent_presentation_installs_for_tests(true);
+            let outcome = fixture.outcome();
+            assert!(fixture.service.complete_approved_external_action(outcome).unwrap());
+        }
+        let before = fixture.retained().action_results;
+        let error = fixture.service.validate_completion_claim_readiness_for_tests(&fixture.turn.turn_id).unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+        assert!(!fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+        assert_eq!(fixture.retained().action_results, before);
+    }
+}
+
 /// Exact human resume may continue a settled failure without relabelling it or
 /// reissuing its effect. Unissued siblings become Cancelled, and both those
 /// facts plus new guidance must be archived at the original store before the

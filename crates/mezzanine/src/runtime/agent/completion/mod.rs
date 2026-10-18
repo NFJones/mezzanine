@@ -21,6 +21,8 @@ mod native;
 use native::NativeCompletionReceipt;
 pub(super) use native::{NativeCompletionKey, NativeCompletionPhase};
 mod publication;
+mod claim;
+use claim::CompletionProviderClaimDisposition;
 
 /// Exact actor-issued delivery generation, distinct from presentation text/IDs.
 pub(super) type ExternalCompletionKey = (String, String, String);

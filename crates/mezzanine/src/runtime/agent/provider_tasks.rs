@@ -1912,7 +1912,7 @@ impl RuntimeSessionService {
         timeout_ms: u64,
     ) -> Result<RuntimeTransition> {
         let turn = &dispatch.turn;
-        self.ensure_completion_provider_claim_ready(&turn.turn_id)?;
+        self.ensure_completion_provider_dispatch_ready(dispatch)?;
         let retain_request_chain = dispatch.auto_sizing.is_none()
             && dispatch.macro_judge_request.is_none()
             && dispatch.sandbox_failure_assessment_request.is_none();
@@ -1975,7 +1975,7 @@ impl RuntimeSessionService {
                 checkpoint_usage: Default::default(),
             },
         );
-        self.release_completion_group_for_provider_claim(&turn.turn_id)?;
+        self.release_completion_group_for_provider_claim(dispatch)?;
         Ok(RuntimeTransition {
             applied: true,
             side_effects: vec![RuntimeSideEffect::ScheduleTimer {

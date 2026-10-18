@@ -10820,7 +10820,10 @@ Publication-only recovery MUST use the existing bounded completion/group owner,
 never repeat a completed action, provider request, hook or ambiguous effect,
 and MUST preserve real native, external, dependency and human-pause barriers.
 Readiness probes MUST NOT retire completion backing before an actual provider
-claim. Terminal cleanup and forced cancellation MUST retain original-target
+claim. An existing purpose-qualified preterminal internal assessment MUST retain
+its original completion group and backing; dedicated request presence alone
+MUST NOT grant that disposition or approve any action. Terminal cleanup and
+forced cancellation MUST retain original-target
 evidence on handoff failure and cancel only the exact admitted worker.
 Frozen completion archive identity MUST remain immutable. Fresh archive
 admission MUST be qualified by the original transcript path and conversation,

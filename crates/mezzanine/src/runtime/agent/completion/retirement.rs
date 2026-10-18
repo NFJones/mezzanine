@@ -741,6 +741,15 @@ impl RuntimeSessionService {
         if let Some(failure) = &group.primary_failure {
             return Err((*failure.error).clone());
         }
+        if self.completion_provider_claim_disposition(turn_id)?
+            == CompletionProviderClaimDisposition::RetainedManagedAssessment
+        {
+            // Existing preterminal analysis retains every group/receipt/backing
+            // obligation. It is not an Accepted ordinary continuation or a
+            // terminal archive handoff, and never discharges either one.
+            self.ensure_completion_required_gates_ready(turn_id)?;
+            return Ok(());
+        }
         if matches!(&group.transcript, CompletionTranscriptTarget::Original { .. })
             && !self.completion_archive_handoff_owned(turn_id)
         {
@@ -772,9 +781,15 @@ impl RuntimeSessionService {
     /// and accounting record have been installed in the same actor transition.
     pub(in crate::runtime::agent) fn release_completion_group_for_provider_claim(
         &mut self,
-        turn_id: &str,
+        dispatch: &crate::runtime::RuntimeAgentProviderDispatch,
     ) -> Result<()> {
-        self.ensure_completion_provider_claim_ready(turn_id)?;
+        self.ensure_completion_provider_dispatch_ready(dispatch)?;
+        let turn_id = dispatch.turn.turn_id.as_str();
+        if self.completion_provider_claim_disposition(turn_id)?
+            == CompletionProviderClaimDisposition::RetainedManagedAssessment
+        {
+            return Ok(());
+        }
         let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
             return Ok(());
         };
