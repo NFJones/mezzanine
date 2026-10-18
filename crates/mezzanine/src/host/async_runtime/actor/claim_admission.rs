@@ -243,6 +243,34 @@ mod tests {
         run_completion_handoff(false, None, HandoffSource::FreshLoop).await;
     }
 
+    /// A wrong expected argument to the unchanged lower guard rejects without
+    /// binding, rolls back the exact prior snapshot and never installs an ack.
+    #[tokio::test(flavor = "current_thread")]
+    async fn negative_loop_wrong_turn_rejects_without_ack() {
+        run_completion_handoff(false, Some("loop_wrong_turn"), HandoffSource::FreshLoop).await;
+    }
+
+    /// Failure at the metadata reset boundary follows the same full snapshot
+    /// rollback path; the successful exact restore alone is not an install ack.
+    #[tokio::test(flavor = "current_thread")]
+    async fn negative_loop_metadata_reset_failure_rolls_back_without_ack() {
+        run_completion_handoff(false, Some("loop_metadata_reset"), HandoffSource::FreshLoop).await;
+    }
+
+    /// A pre-commit injected error leaves the real cleanup witness untouched,
+    /// rolls back binding/metadata and cannot publish installed success.
+    #[tokio::test(flavor = "current_thread")]
+    async fn negative_loop_cleanup_commit_failure_rolls_back_without_ack() {
+        run_completion_handoff(false, Some("loop_cleanup_commit"), HandoffSource::FreshLoop).await;
+    }
+
+    /// A failure after actual cleanup commit retains its genuine ack. Duplicate
+    /// negative ingress cannot repeat binding or the task consumer.
+    #[tokio::test(flavor = "current_thread")]
+    async fn negative_loop_postcommit_failure_keeps_ack_without_replay() {
+        run_completion_handoff(false, Some("loop_after_commit"), HandoffSource::FreshLoop).await;
+    }
+
     /// Uses identical real admission/completion setup for refusal and acceptance;
     /// the refusal oracle remains evaluated on the frozen pre-drain source.
     async fn run_completion_handoff(
@@ -511,6 +539,15 @@ mod tests {
                     .contains("F668_RUNTIME_ONLY_ORIGINAL_")
         }));
 
+        let parent_metadata_before_claim = if source == HandoffSource::FreshLoop {
+            Some(
+                service
+                    .loop_parent_metadata_for_tests(&turn.turn_id)
+                    .expect("actual private loop parent metadata"),
+            )
+        } else {
+            None
+        };
         let mut actor = AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default())
             .unwrap()
             .1;
@@ -625,18 +662,21 @@ mod tests {
             .map(|turn| turn.state);
         let critical_after_claim = actor.service.ensure_completion_admission_open().err();
         let external_after_claim = actor.service.pending_approved_external_actions();
-        let shell_cid_after_claim = actor
-            .service
-            .agent_shell_store()
-            .get("%1")
+        let shell_after_claim = actor.service.agent_shell_store().get("%1").cloned();
+        let shell_cid_after_claim = shell_after_claim
+            .as_ref()
             .map(|session| session.session_id.clone());
         let loop_ack_after_claim = actor
             .service
             .provider_loop_restore_ack_for_tests(&turn.turn_id, &group);
+        let loop_facts_after_claim = actor
+            .service
+            .provider_loop_restore_facts_for_tests(&turn.turn_id, &group);
         let phases_after_claim = actor
             .service
             .provider_refusal_test_facts(&turn.turn_id, &group);
-        let duplicate_after_claim = if fault == Some("task_consumer") {
+        let loop_fault = source == HandoffSource::FreshLoop && fault.is_some();
+        let duplicate_after_claim = if fault == Some("task_consumer") || loop_fault {
             let duplicate = actor.service.fail_configured_agent_provider_task(
                 &turn.turn_id,
                 &MezError::invalid_state("duplicate refusal must not replace primary"),
@@ -647,7 +687,10 @@ mod tests {
             let phases = actor
                 .service
                 .provider_refusal_test_facts(&turn.turn_id, &group);
-            Some((duplicate, after_duplicate, phases))
+            let loop_facts = actor
+                .service
+                .provider_loop_restore_facts_for_tests(&turn.turn_id, &group);
+            Some((duplicate, after_duplicate, phases, loop_facts))
         } else {
             None
         };
@@ -812,16 +855,74 @@ mod tests {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            let rolled_back = matches!(
+                fault,
+                Some("loop_wrong_turn" | "loop_metadata_reset" | "loop_cleanup_commit")
+            );
+            let expected_cid = if rolled_back {
+                turn.conversation_id.as_str()
+            } else {
+                parent_cid.as_str()
+            };
             assert_eq!(
                 shell_cid_after_claim.as_deref(),
-                Some(parent_cid.as_str()),
+                Some(expected_cid),
                 "F668_LOOP_PHASE frozen_post_claim ledger={ledger_after_claim:?} ack={loop_ack_after_claim} source_present={} task_entered/task_accepted/scheduler_accepted/settlement_terminal={phase_facts:?} secondary_kind_message={secondary_facts:?}",
                 source_after_claim.is_some()
             );
-            assert!(
-                loop_ack_after_claim,
-                "actual own-restore installed ack required, not parent CID text alone"
-            );
+            let facts = loop_facts_after_claim
+                .as_ref()
+                .expect("real sealed loop receipt observations");
+            assert_eq!(facts.bind_attempts, 1);
+            assert_eq!(facts.ack, !rolled_back);
+            assert_eq!(loop_ack_after_claim, facts.ack);
+            if rolled_back {
+                assert_eq!(
+                    facts.rollback_equal,
+                    Some(true),
+                    "actual full previous snapshot must be restored"
+                );
+                if fault == Some("loop_cleanup_commit") {
+                    assert_eq!(facts.metadata_only, Some(true));
+                    assert_eq!(facts.unacked_parent_rejected, Some(true));
+                } else {
+                    assert!(facts.metadata_only.is_none());
+                }
+                assert!(facts.foreign_snapshot_rejected.is_none());
+            } else {
+                assert!(facts.rollback_equal.is_none());
+                assert_eq!(
+                    facts.metadata_only,
+                    Some(true),
+                    "actual restore/reset differs only in generic metadata fields"
+                );
+                assert_eq!(facts.unacked_parent_rejected, Some(true));
+                assert_eq!(facts.foreign_snapshot_rejected, Some(true));
+                assert_eq!(facts.foreign_scope_rejected, Some(true));
+            }
+            let shell = shell_after_claim
+                .as_ref()
+                .expect("same-pane restored or rolled-back shell");
+            if fault.is_none() {
+                assert!(
+                    shell.running_turn_id.is_none(),
+                    "normal finish must clear the old turn, never a manual clear"
+                );
+                let (allowed, name) = parent_metadata_before_claim.as_ref().unwrap();
+                assert!(
+                    shell.allowed_actions.as_ref() == Some(allowed),
+                    "existing caller restores frozen parent catalog only"
+                );
+                if name.is_some() {
+                    assert!(shell.display_name.as_ref() == name.as_ref());
+                }
+            } else {
+                assert_eq!(
+                    shell.running_turn_id.as_deref(),
+                    Some(turn.turn_id.as_str()),
+                    "failed consumer remains owned, not manually cleared"
+                );
+            }
         }
         let phases = phases_after_claim.expect("exact negative phase owner");
         if fault == Some("task_consumer") {
@@ -832,12 +933,44 @@ mod tests {
             ));
             assert!(!phases.secondary.iter().any(|error| error.message()
                 == "nested refusal capture lost the original live consumer context"));
-            let (duplicate, after_duplicate, after_phases) = duplicate_after_claim.unwrap();
+            let (duplicate, after_duplicate, after_phases, _) = duplicate_after_claim.unwrap();
             assert!(
                 duplicate.is_err(),
                 "entered refusal is retained, not replayed"
             );
             assert_eq!(after_phases.unwrap().consumer_entries, 1);
+            assert_eq!(
+                after_duplicate.as_ref().map(|source| &source.0),
+                source_after_claim.as_ref().map(|source| &source.0)
+            );
+            assert_eq!(
+                after_duplicate.as_ref().map(|source| &source.1),
+                source_after_claim.as_ref().map(|source| &source.1)
+            );
+        } else if loop_fault {
+            assert_eq!(ledger_after_claim, Some(AgentTurnState::Running));
+            assert!(critical_after_claim.is_some() && phases.task_entered && !phases.task_accepted);
+            assert!(!phases.scheduler_accepted && !phases.settlement_terminal);
+            let expected_secondary = match fault.unwrap() {
+                "loop_wrong_turn" => "cannot restore a running conversation for a different turn",
+                "loop_metadata_reset" => "injected negative loop metadata reset failure",
+                "loop_cleanup_commit" => "injected negative loop cleanup commit failure",
+                "loop_after_commit" => "injected negative loop postcommit failure",
+                _ => panic!("unknown isolated loop fault"),
+            };
+            assert!(
+                phases
+                    .secondary
+                    .iter()
+                    .any(|error| error.message() == expected_secondary)
+            );
+            let (duplicate, after_duplicate, _, after_loop) = duplicate_after_claim.unwrap();
+            assert!(duplicate.is_err());
+            assert_eq!(
+                after_loop.unwrap().bind_attempts,
+                1,
+                "duplicate ingress must not re-enter binding"
+            );
             assert_eq!(
                 after_duplicate.as_ref().map(|source| &source.0),
                 source_after_claim.as_ref().map(|source| &source.0)

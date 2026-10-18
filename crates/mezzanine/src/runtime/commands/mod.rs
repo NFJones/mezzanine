@@ -1284,24 +1284,66 @@ impl RuntimeSessionService {
             .get(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("loop restoration shell is unavailable"))?;
-        if let Err(error) = self.agent_shell_store_mut().bind_conversation_with_lineage(
-            pane_id,
-            &state.parent_conversation_id,
-            state.parent_transcript_entries,
-            state.parent_prompt_cache_lineage_id.clone(),
-        ) {
+        #[cfg(test)]
+        let expected_rollback = previous.clone();
+        let binding = if let Some(restore) = completion_restore.as_ref() {
+            self.restore_completion_provider_loop_parent(restore)
+        } else {
             self.agent_shell_store_mut()
+                .bind_conversation_with_lineage(
+                    pane_id,
+                    &state.parent_conversation_id,
+                    state.parent_transcript_entries,
+                    state.parent_prompt_cache_lineage_id.clone(),
+                )
+                .map(|_| ())
+                .map_err(MezError::from)
+        };
+        if let Err(error) = binding {
+            let _rolled_back = self
+                .agent_shell_store_mut()
                 .restore_session(pane_id, previous)?;
-            return Err(error.into());
-        }
-        if let Some(cleanup) = cleanup
-            && let Err(error) = self.commit_owned_loop_cleanup_rebind(cleanup)
-        {
-            self.agent_shell_store_mut()
-                .restore_session(pane_id, previous)?;
+            #[cfg(test)]
+            Self::observe_completion_provider_loop_rollback(
+                completion_restore.as_ref(),
+                _rolled_back == &expected_rollback,
+            );
             return Err(error);
         }
+        if let Some(cleanup) = cleanup {
+            #[cfg(test)]
+            let committed = if completion_restore.is_some()
+                && self.take_provider_handoff_fault_for_tests("loop_cleanup_commit")
+            {
+                Err(MezError::invalid_state(
+                    "injected negative loop cleanup commit failure",
+                ))
+            } else {
+                self.commit_owned_loop_cleanup_rebind(cleanup)
+            };
+            #[cfg(not(test))]
+            let committed = self.commit_owned_loop_cleanup_rebind(cleanup);
+            if let Err(error) = committed {
+                let _rolled_back = self
+                    .agent_shell_store_mut()
+                    .restore_session(pane_id, previous)?;
+                #[cfg(test)]
+                Self::observe_completion_provider_loop_rollback(
+                    completion_restore.as_ref(),
+                    _rolled_back == &expected_rollback,
+                );
+                return Err(error);
+            }
+        }
+        #[cfg(test)]
+        let scoped_restore = completion_restore.is_some();
         Self::acknowledge_completion_provider_loop_restore(completion_restore);
+        #[cfg(test)]
+        if scoped_restore && self.take_provider_handoff_fault_for_tests("loop_after_commit") {
+            return Err(MezError::invalid_state(
+                "injected negative loop postcommit failure",
+            ));
+        }
         self.agent_shell_store_mut()
             .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
         self.install_primary_agent_name(pane_id, state.parent_display_name.clone())?;

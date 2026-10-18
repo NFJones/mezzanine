@@ -4856,6 +4856,12 @@ provider-error overwrite. Its negative Failed-settlement disposition MUST keep
 the original typed failure and once-only task/scheduler/consumer obligations;
 it MUST NOT acknowledge ordinary success or replay effects. Dedicated existing
 preterminal assessment custody is not an ordinary handoff or refusal permit.
+Only an exact armed negative own-loop restoration MAY preserve its frozen old
+running turn through the existing qualified restoration contract. It MUST keep
+the generic durable metadata-reset values, existing incoming/outgoing/native
+cleanup validation and full rollback; installed acknowledgement follows actual
+cleanup commit, not parent CID text. Unqualified active-turn binding remains
+rejected. This exception grants no restored-parent work or project membership.
 When one action ordinal retains multiple command entries, each successful
 installation MUST acknowledge only that exact entry before the next command is
 attempted. A later pre-install failure MUST retain the failed entry and remaining
