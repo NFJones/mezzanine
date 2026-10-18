@@ -118,6 +118,18 @@ impl RuntimeSessionService {
             || group.turn.agent_id != turn.agent_id
             || group.turn.pane_id != turn.pane_id
             || group.turn.conversation_id != turn.conversation_id
+            || !self
+                .agent_turn_ledger()
+                .turn(&turn.turn_id)
+                .is_some_and(|current| {
+                    current.agent_id == group.turn.agent_id
+                        && current.pane_id == group.turn.pane_id
+                        && current.conversation_id == group.turn.conversation_id
+                })
+            || self
+                .agent_shell_store()
+                .get(&group.turn.pane_id)
+                .is_some_and(|session| session.session_id != group.turn.conversation_id)
             || crate::runtime::agent::provider_execution::provider_log_execution_group_id(
                 execution,
             )? != group.group
@@ -140,6 +152,23 @@ impl RuntimeSessionService {
             ));
         }
         Ok(())
+    }
+
+    /// Revalidates the exact negative target before the existing nonfallible
+    /// cancellation prefix. No capture, signal or replacement lookup is performed.
+    pub(in crate::runtime::agent) fn validate_provider_refusal_cleanup_before_cancellation(
+        &self,
+        turn_id: &str,
+    ) -> Result<()> {
+        let turn = self
+            .completion_original_turn(turn_id)
+            .ok_or_else(|| MezError::invalid_state("negative cleanup original turn is missing"))?;
+        let state = self
+            .agent_turn_ledger()
+            .turn(turn_id)
+            .map(|turn| turn.state)
+            .ok_or_else(|| MezError::invalid_state("negative cleanup ledger is missing"))?;
+        self.ensure_provider_refusal_failed_source(&turn, state)
     }
 
     /// Ordinary terminal retirement keeps its existing gates. Only the exact

@@ -268,6 +268,9 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Result<()> {
+        if self.provider_refusal_is_armed(turn_id) {
+            self.validate_provider_refusal_cleanup_before_cancellation(turn_id)?;
+        }
         self.request_agent_worker_cancellation_for_turn(turn_id);
         let completion_retirement = if self.provider_refusal_is_armed(turn_id) {
             let turn = self.completion_original_turn(turn_id).ok_or_else(|| {
