@@ -9,6 +9,286 @@
 use super::*;
 use mez_agent::{ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution};
 
+/// Aggregate and later ordinary error rows share immutable ordered ownership.
+/// This is a presentation-only source fixture, not evidence a loop guard fired
+/// or an action executed. Rendering values must not modify actor canonical truth.
+#[tokio::test]
+async fn runtime_completion_owner_aggregate_outcome_keeps_source_and_successful_prefix() {
+    for first_install_fails in [true, false] {
+        let mut fixture = ordinary_bridge_fixture(true).await;
+        let canonical = fixture.retained();
+        let mut presentation = canonical.clone();
+        presentation.action_results[0] = ActionResult::failed(&fixture.turn, &fixture.action,
+            ActionStatus::Failed, "network_action_limit_exceeded", "F668_AGGREGATE_SOURCE").unwrap();
+        if first_install_fails {
+            assert!(fixture.service.present_agent_action_outcomes_to_terminal_buffer("%1", &presentation).is_err());
+            let source = fixture.service.presentation.agent_queued_provider_outcomes.values()
+                .flatten().find(|entry| entry.1.contains("F668_AGGREGATE_SOURCE")).unwrap().clone();
+            assert!(fixture.service.present_agent_action_outcomes_to_terminal_buffer("%1", &presentation).is_err());
+            let retained = fixture.service.presentation.agent_queued_provider_outcomes.values()
+                .flatten().find(|entry| entry.1.contains("F668_AGGREGATE_SOURCE")).unwrap();
+            assert_eq!(retained.2.id, source.2.id);
+            assert_eq!(retained.2.occurrence, source.2.occurrence);
+            assert_eq!(retained.3, source.3);
+        } else {
+            fixture.service.hold_agent_presentation_installs_for_tests(false);
+            fixture.service.fail_agent_presentation_install_for_tests(1);
+            // The second component may heal within the existing bounded retry;
+            // either way the successful aggregate must not be emitted again.
+            let _publication = fixture.service.present_agent_action_outcomes_to_terminal_buffer("%1", &presentation);
+            assert!(fixture.service.presentation.agent_install_failure_countdown.is_none(), "later component must reach the injected cut");
+        }
+        fixture.service.hold_agent_presentation_installs_for_tests(false);
+        fixture.service.present_agent_action_outcomes_to_terminal_buffer("%1", &presentation).unwrap();
+        fixture.service.present_agent_action_outcomes_to_terminal_buffer("%1", &presentation).unwrap();
+        let rows = fixture.service.agent_pane_screen("%1").unwrap().normal_content_lines().join("\n");
+        assert_eq!(rows.matches("F668_AGGREGATE_SOURCE").count(), 1, "{rows}");
+        assert_eq!(fixture.retained().action_results, canonical.action_results);
+        assert!(!fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+    }
+}
+
+/// A trusted local preflight transition may adopt a same-owner failure without
+/// granting dispatch authority. Stale expected data and changed request/batch/
+/// slot identities cannot overwrite newer canonical work or its frozen source.
+/// No dispatcher, provider, assessment, native worker or approval is invoked.
+#[tokio::test]
+async fn runtime_completion_owner_guarded_canonical_adoption_rejects_foreign_transition() {
+    let mut fixture = CompletionFixture::fetch_with_final_turn(false).await;
+    let expected = fixture.retained();
+    let sibling = expected.response.action_batch.as_ref().unwrap().actions[1].clone();
+    let mut proposed = expected.clone();
+    proposed.action_results[1] = ActionResult::failed(&fixture.turn, &sibling, ActionStatus::Failed,
+        "fixture_preflight_failure", "local preflight failed before dispatch").unwrap();
+    proposed.terminal_state = AgentTurnState::Failed;
+    fixture.service.adopt_completion_canonical_transition_for_tests(&fixture.turn, &expected, &proposed).unwrap();
+    assert_eq!(fixture.retained().action_results, proposed.action_results);
+    let snapshot = fixture.service.retained_completion_snapshot_for_tests(&fixture.turn.turn_id).unwrap().unwrap();
+    for wrong in ["stale", "request", "batch", "slot"] {
+        let mut changed = proposed.clone();
+        match wrong {
+            "stale" => changed.action_results[1].content.push(mez_agent::ActionContentBlock::text("new local content")),
+            "request" => changed.request.turn_id.push_str("-foreign"),
+            "batch" => changed.response.action_batch.as_mut().unwrap().rationale.push_str(" foreign"),
+            "slot" => changed.action_results[1].action_id.push_str("-foreign"),
+            _ => unreachable!(),
+        }
+        let original = if wrong == "stale" { &expected } else { &proposed };
+        assert!(fixture.service.adopt_completion_canonical_transition_for_tests(&fixture.turn, original, &changed).is_err());
+        assert_eq!(fixture.retained().action_results, proposed.action_results);
+        assert_eq!(fixture.service.retained_completion_snapshot_for_tests(&fixture.turn.turn_id).unwrap().unwrap(), snapshot);
+    }
+    assert!(fixture.service.approved_external_action_attempt_is_current(&fixture.turn.turn_id, &fixture.action.id, &fixture.attempt));
+    assert!(!fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+    assert!(fixture.service.claim_bookkeeping_candidates().is_empty());
+}
+
+/// Required-error latching must not retire a different already-issued delivery.
+/// A trusted local preflight failure is adopted while the first external claim
+/// remains live. After a genuine post-append lost acknowledgement, its synthetic
+/// sibling result still reaches canonical custody; primary error and frozen
+/// pre-error source remain unchanged. No transport or assessment executes.
+#[tokio::test]
+async fn runtime_completion_owner_required_error_keeps_admitted_sibling_delivery_live() {
+    let mut fixture = CompletionFixture::fetch_with_final_turn(false).await;
+    let expected = fixture.retained();
+    let sibling = expected.response.action_batch.as_ref().unwrap().actions[1].clone();
+    let mut proposed = expected.clone();
+    proposed.action_results[1] = ActionResult::failed(&fixture.turn, &sibling, ActionStatus::Failed,
+        "fixture_preflight_failure", "unissued local preflight failure").unwrap();
+    proposed.terminal_state = AgentTurnState::Failed;
+    fixture.service.adopt_completion_canonical_transition_for_tests(&fixture.turn, &expected, &proposed).unwrap();
+    let path = fixture._root.0.join("admitted-sibling-audit.jsonl");
+    fixture.service.set_audit_log(crate::security::audit::AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true, path: path.clone(), hash_chain: false, required: true,
+    }));
+    fixture.service.reject_completion_failure_audit_ack_for_tests();
+    let primary = fixture.service.append_runtime_agent_execution_failure_audit(&fixture.turn, &proposed).unwrap_err();
+    let snapshot = fixture.service.retained_completion_snapshot_for_tests(&fixture.turn.turn_id).unwrap().unwrap();
+    let outcome = fixture.outcome();
+    let repeated = fixture.service.complete_approved_external_action(outcome).unwrap_err();
+    assert_eq!(repeated.kind(), primary.kind());
+    assert_eq!(repeated.message(), primary.message());
+    let retained = fixture.service.retained_completion_execution_for_tests(&fixture.turn.turn_id).unwrap();
+    assert_eq!(retained.action_results[0].status, ActionStatus::Succeeded);
+    assert_eq!(retained.action_results[0].content_text(), fixture.expected.content_text());
+    assert_eq!(retained.action_results[1], proposed.action_results[1]);
+    assert_eq!(fixture.service.retained_completion_snapshot_for_tests(&fixture.turn.turn_id).unwrap().unwrap(), snapshot);
+    assert_eq!(fixture.service.completion_failure_audit_phase_for_tests(&fixture.turn.turn_id), Some("entered"));
+    let audit_before_retry = fs::read(&path).unwrap();
+    assert!(fixture.service.append_runtime_agent_execution_failure_audit(&fixture.turn, &proposed).is_err());
+    assert_eq!(fixture.service.retry_completion_publications(), 0);
+    assert_eq!(fs::read(&path).unwrap(), audit_before_retry);
+    assert!(!fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+}
+
+/// Missing audit configuration is explicitly NotRequired, not a claimed write.
+/// Attaching a real audit requirement afterward can append once for the same
+/// failure; the earlier no-op must not suppress the first required operation.
+#[tokio::test]
+async fn runtime_completion_owner_failure_audit_not_required_is_not_append_acceptance() {
+    let mut fixture = ordinary_bridge_fixture(true).await;
+    let execution = fixture.retained();
+    fixture.service.append_runtime_agent_execution_failure_audit(&fixture.turn, &execution).unwrap();
+    assert_eq!(fixture.service.completion_failure_audit_phase_for_tests(&fixture.turn.turn_id), Some("not_required"));
+    let path = fixture._root.0.join("attached-required-audit.jsonl");
+    fixture.service.set_audit_log(crate::security::audit::AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true, path: path.clone(), hash_chain: false, required: true,
+    }));
+    fixture.service.append_runtime_agent_execution_failure_audit(&fixture.turn, &execution).unwrap();
+    fixture.service.append_runtime_agent_execution_failure_audit(&fixture.turn, &execution).unwrap();
+    assert_eq!(fixture.service.completion_failure_audit_phase_for_tests(&fixture.turn.turn_id), Some("accepted"));
+    assert_eq!(fs::read_to_string(path).unwrap().lines().count(), 1);
+    assert_eq!(fixture.service.failure_feedback_attempt_total_for_tests(), 0);
+}
+
+/// Builds canonical ordinary settlement under real serialized external claims.
+/// Returned bytes are synthetic and no network/provider/assessment executes.
+/// A genuine provisional-body rollback keeps failure publication held.
+async fn ordinary_bridge_fixture(failed: bool) -> CompletionFixture {
+    let mut fixture = CompletionFixture::fetch_with_final_turn(false).await;
+    fixture.service.hold_agent_presentation_installs_for_tests(true);
+    let first = fixture.outcome();
+    assert!(fixture.service.complete_approved_external_action(first).unwrap());
+    fixture.service.hold_agent_presentation_installs_for_tests(false);
+    let sibling = fixture.retained().response.action_batch.unwrap().actions[1].clone();
+    let dispatch = fixture.service.claim_approved_external_action(&fixture.turn.turn_id, &sibling.id).unwrap().unwrap();
+    if failed {
+        let progress = mez_agent::ActionPresentationProgress::new(&fixture.turn.turn_id, &sibling.id,
+            mez_agent::ActionPresentationExecutionIdentity::Attempt(dispatch.attempt.clone()), 1,
+            mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody, "unconfirmed ordinary bridge bytes");
+        assert!(fixture.service.apply_action_presentation_progress(progress).unwrap());
+    }
+    fixture.service.hold_agent_presentation_installs_for_tests(true);
+    let result = if failed {
+        ActionResult::failed(&fixture.turn, &sibling, ActionStatus::Failed,
+            "fixture_shared_failure", "F668_SHARED_FAILURE").unwrap()
+    } else {
+        ActionResult::succeeded(&fixture.turn, &sibling, vec!["F668_SHARED_SUCCESS".to_string()], None)
+    };
+    assert!(fixture.service.complete_approved_external_action(crate::runtime::RuntimeApprovedExternalActionOutcome {
+        turn_id: fixture.turn.turn_id.clone(), action_id: sibling.id, attempt: dispatch.attempt,
+        result: Ok(result), mcp_transport: None,
+    }).unwrap());
+    // A prior source may already be installed by claim preparation. Acknowledge
+    // that exact receipt without pretending the still-failing sibling is ready.
+    fixture.service.retry_completion_publications();
+    assert!(!fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+    fixture
+}
+
+/// Ordinary success retains an immutable original candidate but does not accept
+/// an archive/provider milestone while paint is held. Recovery performs one
+/// actual insertion, with no assessment or native invocation.
+#[tokio::test]
+async fn runtime_completion_owner_ordinary_success_bridge_retains_then_queues() {
+    let mut fixture = ordinary_bridge_fixture(false).await;
+    assert!(!fixture.service.admit_completion_provider_continuation(&fixture.turn.turn_id).unwrap());
+    assert!(!fixture.service.admit_completion_provider_continuation(&fixture.turn.turn_id).unwrap());
+    assert!(fixture.service.retained_completion_snapshot_for_tests(&fixture.turn.turn_id).unwrap().is_some());
+    assert!(fixture.service.claim_bookkeeping_candidates().is_empty(), "staging is not producer acceptance");
+    assert_eq!(fixture.service.failure_feedback_attempt_total_for_tests(), 0);
+    assert!(!fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+    fixture.service.hold_agent_presentation_installs_for_tests(false);
+    assert!(fixture.service.retry_completion_publications() > 0);
+    assert!(fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+    assert_eq!(fixture.service.retry_completion_publications(), 0);
+    fixture.service.ensure_completion_admission_open().unwrap();
+}
+
+/// Required failure audit is shared by initial settlement and recovery. Two
+/// retained calls/pump attempts cannot append again, consume correction budget,
+/// change canonical context or claim Queued. The error variant exhausts the
+/// existing candidate generation port, preserving the exact retained payload/read
+/// and typed failure rather than queueing a provider or replaying audit.
+#[tokio::test]
+async fn runtime_completion_owner_failure_bridge_audits_once_and_retains_handoff_error() {
+    use crate::runtime::agent::CompletionSettlementDisposition;
+    for handoff_error in [false, true] {
+        let mut fixture = ordinary_bridge_fixture(true).await;
+        let audit_path = fixture._root.0.join("ordinary-failure-audit.jsonl");
+        fixture.service.set_audit_log(crate::security::audit::AuditLog::new(crate::security::audit::AuditConfig {
+            enabled: true, path: audit_path.clone(), hash_chain: false, required: true,
+        }));
+        let execution = fixture.retained();
+        assert!(fixture.service.present_agent_action_outcomes_to_terminal_buffer("%1", &execution).is_err());
+        fixture.service.append_runtime_agent_execution_failure_audit(&fixture.turn, &execution).unwrap();
+        fixture.service.append_runtime_agent_execution_failure_audit(&fixture.turn, &execution).unwrap();
+        assert_eq!(fs::read_to_string(&audit_path).unwrap().lines().count(), 1);
+        assert_eq!(fixture.service.completion_failure_audit_phase_for_tests(&fixture.turn.turn_id), Some("accepted"));
+        let context_before = runtime_prepared_context_for_turn(&fixture.service, &fixture.turn.turn_id);
+        for _ in 0..2 {
+            let mut current = fixture.retained();
+            assert_eq!(fixture.service.settle_agent_failure_feedback_for_correction(&fixture.turn, &mut current,
+                "ordinary_bridge_fixture").unwrap(), CompletionSettlementDisposition::Retained);
+            assert_eq!(fixture.service.failure_feedback_attempt_total_for_tests(), 0);
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+        }
+        let context_after = runtime_prepared_context_for_turn(&fixture.service, &fixture.turn.turn_id);
+        assert_eq!(canonical_event_oracle(&context_before), canonical_event_oracle(&context_after));
+        assert!(!fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+        fixture.service.hold_agent_presentation_installs_for_tests(false);
+        let expected_snapshot = if handoff_error {
+            let source = fixture.service.publish_and_stage_completion_sources_for_tests(&fixture.turn.turn_id).unwrap();
+            fixture.service.persistence.set_bookkeeping_generation_for_tests(u64::MAX);
+            let mut current = fixture.retained();
+            let error = fixture.service.settle_agent_failure_feedback_for_correction(&fixture.turn, &mut current,
+                "ordinary_bridge_handoff_error").unwrap_err();
+            assert!(error.message().contains("generation exhausted"));
+            Some(source)
+        } else {
+            fixture.service.retry_completion_publications();
+            None
+        };
+        assert_eq!(fs::read_to_string(&audit_path).unwrap().lines().count(), 1);
+        if handoff_error {
+            let error = fixture.service.ensure_completion_admission_open().unwrap_err();
+            assert!(error.message().contains("generation exhausted"));
+            assert!(!fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+            let retained = fixture.service.retained_completion_execution_for_tests(&fixture.turn.turn_id).unwrap();
+            assert_eq!(retained.action_results, execution.action_results);
+            let snapshot = fixture.service.retained_completion_snapshot_for_tests(&fixture.turn.turn_id).unwrap().unwrap();
+            assert_eq!(snapshot, expected_snapshot.unwrap(), "failed producer must retain the exact pre-error source/read bytes");
+            let attempts = fixture.service.failure_feedback_attempt_total_for_tests();
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+            assert_eq!(fixture.service.failure_feedback_attempt_total_for_tests(), attempts);
+        } else {
+            assert!(fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+            let attempts = fixture.service.failure_feedback_attempt_total_for_tests();
+            assert!(attempts > 0);
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+            assert_eq!(fixture.service.failure_feedback_attempt_total_for_tests(), attempts);
+            fixture.service.ensure_completion_admission_open().unwrap();
+        }
+    }
+}
+
+/// Lost acknowledgement after the unchanged audit append is explicitly
+/// Entered/unproven, not healthy Accepted or paint work. Original backing and
+/// staged snapshot survive, and retry cannot append or consume budget again.
+#[tokio::test]
+async fn runtime_completion_owner_failure_audit_lost_ack_never_replays() {
+    let mut fixture = ordinary_bridge_fixture(true).await;
+    let audit_path = fixture._root.0.join("ordinary-lost-audit-ack.jsonl");
+    fixture.service.set_audit_log(crate::security::audit::AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true, path: audit_path.clone(), hash_chain: false, required: true,
+    }));
+    let execution = fixture.retained();
+    fixture.service.reject_completion_failure_audit_ack_for_tests();
+    let error = fixture.service.append_runtime_agent_execution_failure_audit(&fixture.turn, &execution).unwrap_err();
+    assert!(error.message().contains("after audit append"));
+    assert_eq!(fs::read_to_string(&audit_path).unwrap().lines().count(), 1);
+    assert_eq!(fixture.service.completion_failure_audit_phase_for_tests(&fixture.turn.turn_id), Some("entered"));
+    assert_eq!(fixture.service.retained_completion_execution_for_tests(&fixture.turn.turn_id).unwrap().action_results,
+        execution.action_results);
+    assert!(fixture.service.retained_completion_snapshot_for_tests(&fixture.turn.turn_id).unwrap().is_some());
+    assert_eq!(fixture.service.failure_feedback_attempt_total_for_tests(), 0);
+    assert!(!fixture.service.completion_publication_retry_needed_for_turn(&fixture.turn.turn_id));
+    assert!(fixture.service.append_runtime_agent_execution_failure_audit(&fixture.turn, &execution).is_err());
+    assert_eq!(fixture.service.retry_completion_publications(), 0);
+    assert_eq!(fs::read_to_string(&audit_path).unwrap().lines().count(), 1);
+}
+
 /// An ordinary issued or publication-held action has no assessment owner and
 /// cannot use the new purpose-qualified integration to skip its original
 /// handoff/continuation gates. This read-only negative oracle creates no

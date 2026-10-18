@@ -102,6 +102,14 @@ pub(super) struct CompletionGroup {
     pub(super) safe_failure_evidence: Option<String>,
     pub(super) paint_revoked: bool,
     pub(super) continuation: CompletionMilestone,
+    /// One unresolved ordinary settlement, not a provider claim or payload queue.
+    pub(super) pending_settlement: Option<CompletionSettlementIntent>,
+    /// Exact group/failure-qualified required audit entry/acceptance state.
+    pub(super) failure_audit: Option<CompletionFailureAudit>,
+    /// Optional group paint diagnostic when no per-action receipt remains.
+    pub(super) publication_failure: Option<Box<MezError>>,
+    /// Immutable body/say source still requires publication, unlike trace paint.
+    pub(super) publication_held: bool,
     /// Records already-validated human guidance for this exact group. It only
     /// permits provider feedback with settled errors, never action authority.
     pub(super) human_resume_generation: Option<u64>,
@@ -135,6 +143,17 @@ impl fmt::Debug for CompletionGroup {
                     .map(|failure| failure.error.kind()),
             )
             .finish()
+    }
+}
+
+impl CompletionGroup {
+    /// A failed source remains owned while admitted callbacks settle. Healthy
+    /// source changes discard only the cache; immutable accepted destinations
+    /// remain independent. Neither path manufactures a new handoff witness.
+    pub(super) fn source_changed(&mut self) {
+        if self.primary_failure.is_some() {
+            if let Some(handoff) = self.handoff.as_mut() { handoff.witness = None; }
+        } else { self.handoff = None; }
     }
 }
 
@@ -258,6 +277,10 @@ impl RuntimeSessionService {
                 paint_revoked: false,
                 human_resume_generation: None,
                 continuation: CompletionMilestone::NotEntered,
+                pending_settlement: None,
+                failure_audit: None,
+                publication_failure: None,
+                publication_held: false,
                 task_result: CompletionMilestone::NotEntered,
                 scheduler: CompletionMilestone::NotEntered,
                 scope: None,
@@ -290,7 +313,7 @@ impl RuntimeSessionService {
             .issued
             .insert((action_id.to_string(), attempt.to_string()))
         {
-            group.handoff = None;
+            group.source_changed();
         }
         Ok(())
     }
@@ -300,7 +323,7 @@ impl RuntimeSessionService {
     /// destination; the group must hand off its changed evidence separately.
     pub(in crate::runtime::agent) fn invalidate_completion_handoff(&mut self, turn_id: &str) {
         if let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) {
-            group.handoff = None;
+            group.source_changed();
         }
     }
 
@@ -486,14 +509,12 @@ impl RuntimeSessionService {
         .to_string())
     }
 
-    /// Retains an immutable original-target snapshot in the existing candidate
-    /// owner and caches its real witness with no await/fallible gap after that
-    /// owner's successful insertion/reuse. Deliberate no-persistence policy is a
-    /// separate disposition and can never erase mandatory failure/raw ownership.
-    pub(in crate::runtime::agent) fn retain_completion_group_transcript(
+    /// Stages immutable source in the existing bounded group before required
+    /// effects. This does not accept a candidate, append rows or grant a receipt.
+    pub(in crate::runtime::agent) fn stage_completion_group_transcript(
         &mut self,
         turn_id: &str,
-    ) -> Result<CompletionTranscriptOwnership> {
+    ) -> Result<()> {
         let evidence = self.completion_settlement_evidence(turn_id)?;
         let group = self
             .agent
@@ -501,11 +522,11 @@ impl RuntimeSessionService {
             .groups
             .get(turn_id)
             .ok_or_else(|| MezError::invalid_state("completion handoff group is unavailable"))?;
-        if let CompletionTranscriptTarget::NoPersistencePolicy(policy) = &group.transcript {
+        if let CompletionTranscriptTarget::NoPersistencePolicy(_) = &group.transcript {
             if let Some(failure) = &group.primary_failure {
                 return Err((*failure.error).clone());
             }
-            return Ok(CompletionTranscriptOwnership::NoPersistencePolicy(*policy));
+            return Ok(());
         }
         let existing = group.handoff.as_ref();
         let execution = self.agent_turn_executions().get(turn_id)
@@ -552,10 +573,7 @@ impl RuntimeSessionService {
                 new.created_at_unix_seconds = original.created_at_unix_seconds;
             }
             if comparable.completion_snapshot_bytes()? == handoff.candidate.completion_snapshot_bytes()? {
-                if let Some(witness) = &handoff.witness {
-                    return Ok(CompletionTranscriptOwnership::Candidate(witness.clone()));
-                }
-                candidate = handoff.candidate.clone();
+                return Ok(());
             }
         }
         // Install the exact rows in their same admitted group before asking the
@@ -571,10 +589,29 @@ impl RuntimeSessionService {
             witness: None,
             evidence,
         }));
+        Ok(())
+    }
+
+    /// Accepts staged original-target source in the EXISTING checked candidate
+    /// owner and caches its real witness without a fallible/await gap. Staging
+    /// alone is never acceptance, append durability or provider continuation.
+    pub(in crate::runtime::agent) fn retain_completion_group_transcript(
+        &mut self,
+        turn_id: &str,
+    ) -> Result<CompletionTranscriptOwnership> {
+        self.stage_completion_group_transcript(turn_id)?;
+        let group = self.agent.completion_settlements.groups.get_mut(turn_id)
+            .ok_or_else(|| MezError::invalid_state("completion handoff owner disappeared"))?;
+        if let CompletionTranscriptTarget::NoPersistencePolicy(policy) = &group.transcript {
+            return Ok(CompletionTranscriptOwnership::NoPersistencePolicy(*policy));
+        }
         let handoff = group
             .handoff
             .as_mut()
             .ok_or_else(|| MezError::invalid_state("completion snapshot was not installed"))?;
+        if let Some(witness) = &handoff.witness {
+            return Ok(CompletionTranscriptOwnership::Candidate(witness.clone()));
+        }
         let accepted = self
             .persistence
             .retain_completion_bookkeeping_candidate(handoff.candidate.clone())?;
@@ -662,10 +699,38 @@ impl RuntimeSessionService {
     /// Shared fallible boundary for callback, resume and scheduler continuation.
     /// Held paint leaves its existing receipt actionable without requeue replay.
     pub(crate) fn admit_completion_provider_continuation(&mut self, turn_id: &str) -> Result<bool> {
-        if !self.completion_provider_continuation_ready(turn_id)
-            || !self.prepare_completion_continuation_handoff(turn_id)?
-        { return Ok(false); }
-        Ok(self.queue_completion_provider_task(turn_id.to_string()))
+        if !self.completion_owns_transcript_policy(turn_id) {
+            if !self.completion_provider_continuation_ready(turn_id)
+                || !self.prepare_completion_continuation_handoff(turn_id)?
+            { return Ok(false); }
+            return Ok(self.queue_completion_provider_task(turn_id.to_string()));
+        }
+        if let Some(execution) = self.agent_turn_executions().get(turn_id).cloned() {
+            let turn = self.completion_original_turn(turn_id)
+                .ok_or_else(|| MezError::invalid_state("ordinary settlement original turn is unavailable"))?;
+            if let Err(error) = self.ensure_completion_settlement_source_current(&turn, &execution) {
+                self.record_completion_required_failure(turn_id, "settlement_source", None, None, &error);
+                return Err(error);
+            }
+        }
+        let owns_scope = self.begin_completion_scope(turn_id, CompletionScope::Callback);
+        let result = (|| -> Result<bool> {
+            self.stage_completion_group_transcript(turn_id)?;
+            let intent = if self.agent_turn_executions().get(turn_id)
+                .is_some_and(|execution| execution.terminal_state == AgentTurnState::Failed)
+            { CompletionSettlementIntent::Failure } else { CompletionSettlementIntent::Ordinary };
+            self.retain_completion_settlement_intent(turn_id, intent);
+            if !self.completion_settlement_binding_current(turn_id)
+                || !self.completion_provider_continuation_ready(turn_id)
+                || self.completion_settlement_publication_pending(turn_id)
+                || !self.prepare_completion_continuation_handoff(turn_id)?
+            { return Ok(false); }
+            let queued = self.queue_completion_provider_task(turn_id.to_string());
+            if queued { self.clear_completion_settlement_intent(turn_id); }
+            Ok(queued)
+        })();
+        let result = result.map_err(|error| self.retain_completion_settlement_error(turn_id, "ordinary_continuation", error));
+        self.end_completion_scope(turn_id, owns_scope, "ordinary_continuation", false, result)
     }
 
     /// Records an actual pending-provider insertion and its group milestone in
@@ -687,6 +752,10 @@ impl RuntimeSessionService {
             matches!(&group.transcript, CompletionTranscriptTarget::Original { .. })
                 && !self.completion_archive_handoff_owned(&turn_id)
         }) { return false; }
+        if self.agent.completion_settlements.groups.get(&turn_id)
+            .is_some_and(|group| group.pending_settlement.is_some())
+            && self.completion_settlement_publication_pending(&turn_id)
+        { return false; }
         let (pending, settlements) = (
             &mut self.agent.pending_agent_provider_tasks,
             &mut self.agent.completion_settlements,
@@ -756,6 +825,7 @@ impl RuntimeSessionService {
             return Err(MezError::invalid_state("completion original transcript handoff is not owned"));
         }
         let actions_owned = !self.completion_group_publication_ready(turn_id)
+            || (group.pending_settlement.is_some() && self.completion_settlement_publication_pending(turn_id))
             || self
                 .agent
                 .pending_native_shell_dispatches
@@ -1205,6 +1275,20 @@ impl RuntimeSessionService {
             ));
         }
         Ok(())
+    }
+
+    /// Latches a shared-settlement failure while preserving live delivery and
+    /// canonical ownership for already-issued callbacks. Forced retirement is
+    /// the separate boundary that cancels exact workers and moves backing before
+    /// destructive cleanup; an archive/audit error alone must not make them stale.
+    pub(in crate::runtime::agent) fn retain_completion_settlement_error(
+        &mut self, turn_id: &str, stage: &'static str, error: MezError,
+    ) -> MezError {
+        self.record_completion_required_failure(turn_id, stage, None, None, &error);
+        if let Ok(evidence) = self.completion_settlement_evidence(turn_id)
+            && let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id)
+        { group.safe_failure_evidence = Some(evidence); }
+        self.completion_group_failure(turn_id).unwrap_or(error)
     }
 
     /// Keeps primary failure truth after a later lifecycle error, retaining the

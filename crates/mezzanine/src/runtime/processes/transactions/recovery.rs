@@ -83,12 +83,11 @@ impl RuntimeSessionService {
     /// Reports whether a ready dependency wait needs reconciliation.
     pub(crate) fn ready_dependency_wait_recovery_needed(&self) -> bool {
         self.agent_scheduler().waiting_turns().any(|work| {
-            self.completion_provider_continuation_ready(&work.turn_id)
+            self.completion_dependency_reacquisition_ready(&work.turn_id)
                 && self.agent_turn_ledger()
                 .turns()
                 .iter()
                 .any(|turn| turn.turn_id == work.turn_id && turn.state == AgentTurnState::Blocked)
-                && self.completion_stored_execution_continuation_ready(&work.turn_id)
         })
     }
 

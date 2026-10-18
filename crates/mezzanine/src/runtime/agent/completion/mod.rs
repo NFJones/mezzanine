@@ -23,6 +23,10 @@ pub(super) use native::{NativeCompletionKey, NativeCompletionPhase};
 mod publication;
 mod claim;
 use claim::CompletionProviderClaimDisposition;
+mod settlement;
+pub(crate) use settlement::CompletionSettlementDisposition;
+use settlement::CompletionFailureAudit;
+pub(in crate::runtime::agent) use settlement::CompletionSettlementIntent;
 
 /// Exact actor-issued delivery generation, distinct from presentation text/IDs.
 pub(super) type ExternalCompletionKey = (String, String, String);
@@ -125,6 +129,9 @@ pub(super) struct RuntimeCompletionSettlements {
     critical_failure: Option<Box<MezError>>,
     /// A nested lifecycle drain cannot enter the same publication pump twice.
     publication_pump_active: bool,
+    /// Isolated lost-ack fault after the unchanged audit append returns.
+    #[cfg(test)]
+    reject_failure_audit_ack_for_tests: bool,
 }
 
 impl fmt::Debug for RuntimeCompletionSettlements {
@@ -156,6 +163,8 @@ impl RuntimeSessionService {
             .find(|receipt| receipt.owner.turn_id == turn_id)
         {
             receipt.publication_failure = Some(Box::new(error));
+        } else if let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) {
+            group.publication_failure = Some(Box::new(error));
         }
     }
 
@@ -414,7 +423,7 @@ impl RuntimeSessionService {
         receipt.phase = ExternalCompletionPhase::OutcomeRetained;
         if let Some(group) = self.agent.completion_settlements.groups.get_mut(&key.0) {
             group.observed.insert((key.1.clone(), key.2.clone()));
-            group.handoff = None;
+            group.source_changed();
         }
         let validation = current.and_then(|current| {
             if current == receipt.owner {
@@ -513,7 +522,7 @@ impl RuntimeSessionService {
             group
                 .context_committed
                 .insert((key.1.clone(), key.2.clone()));
-            group.handoff = None;
+            group.source_changed();
         }
         Ok(())
     }

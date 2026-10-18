@@ -1072,12 +1072,15 @@ impl RuntimeSessionService {
                 .any(mez_agent::outcome::runtime_action_result_is_feedback_candidate)
         {
             self.append_runtime_agent_execution_failure_audit(&turn, &execution)?;
-            self.retain_completion_group_transcript(&turn.turn_id)?;
-            self.queue_agent_failure_feedback_for_correction(
+            match self.settle_agent_failure_feedback_for_correction(
                 &turn,
                 &mut execution,
                 "approved_external_action_failed",
-            )?
+            )? {
+                super::CompletionSettlementDisposition::Queued => true,
+                super::CompletionSettlementDisposition::Declined => false,
+                super::CompletionSettlementDisposition::Retained => return Ok(true),
+            }
         } else {
             false
         };

@@ -157,7 +157,7 @@ impl RuntimeSessionService {
             receipt.owner.turn_id == turn_id && receipt.phase == NativeCompletionPhase::PublicationHeld
                 && receipt.raw.is_none() && receipt.failure.is_none()
                 && self.completion_paint_owner_is_current(&receipt.owner)
-        }))
+        }) || self.retained_completion_settlement_retry_needed(turn_id))
     }
 
     /// Reports only work that the bounded publication pump can actually advance.
@@ -201,6 +201,16 @@ impl RuntimeSessionService {
             }
             if self.end_completion_scope(&key.0, owns_scope, "publication_continuation", false, result)
                 .is_ok_and(|changed| changed) { advanced += 1; }
+        }
+        let groups = self.agent.completion_settlements.groups.keys()
+            .filter(|turn| self.completion_publication_retry_needed_for_turn(turn)
+                && self.retained_completion_settlement_retry_needed(turn))
+            .cloned().collect::<Vec<_>>();
+        for turn_id in groups {
+            if self.completion_publication_retry_needed_for_turn(&turn_id)
+                && self.recover_retained_completion_settlement(&turn_id).is_ok_and(|changed| changed) {
+                advanced += 1;
+            }
         }
         self.agent.completion_settlements.publication_pump_active = false;
         advanced

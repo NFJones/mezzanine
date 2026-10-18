@@ -394,11 +394,13 @@ impl RuntimeSessionService {
         )?;
         self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_runtime_agent_execution_failure_audit(&turn, &execution)?;
-        let transcript_entries = if self.queue_agent_failure_feedback_for_correction(
+        let feedback = self.settle_agent_failure_feedback_for_correction(
             &turn,
             &mut execution,
             "shell_transaction_runtime_failure",
-        )? {
+        )?;
+        if feedback == super::CompletionSettlementDisposition::Retained { return Ok(1); }
+        let transcript_entries = if feedback == super::CompletionSettlementDisposition::Queued {
             self.agent_turn_executions_mut().remove(&turn.turn_id);
             terminal_state = AgentTurnState::Running;
             0
@@ -597,11 +599,13 @@ impl RuntimeSessionService {
         self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_runtime_agent_execution_failure_audit(&turn, &execution)?;
         let trace_reason = failures[0].trace_reason.as_str();
-        let transcript_entries = if self.queue_agent_failure_feedback_for_correction(
+        let feedback = self.settle_agent_failure_feedback_for_correction(
             &turn,
             &mut execution,
             "shell_transaction_runtime_failure",
-        )? {
+        )?;
+        if feedback == super::CompletionSettlementDisposition::Retained { return Ok(1); }
+        let transcript_entries = if feedback == super::CompletionSettlementDisposition::Queued {
             self.agent_turn_executions_mut().remove(&turn.turn_id);
             0
         } else {
@@ -643,6 +647,17 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
+    ) -> Result<()> {
+        if self.completion_owns_transcript_policy(&turn.turn_id) {
+            return self.append_completion_failure_audit_once(turn, execution,
+                Self::append_runtime_agent_execution_failure_audit_unowned);
+        }
+        self.append_runtime_agent_execution_failure_audit_unowned(turn, execution)
+    }
+
+    /// Unchanged no-group audit/profile behavior and actual append operation.
+    fn append_runtime_agent_execution_failure_audit_unowned(
+        &mut self, turn: &AgentTurnRecord, execution: &AgentTurnExecution,
     ) -> Result<()> {
         let Some(model_profile) = self
             .agent

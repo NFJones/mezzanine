@@ -191,7 +191,7 @@ impl RuntimeSessionService {
         }
         if let Some(group) = self.agent.completion_settlements.groups.get_mut(&key.0) {
             group.observed.insert((key.1.clone(), key.2.clone()));
-            group.handoff = None;
+            group.source_changed();
         }
         if !identity_matches {
             let error =
@@ -244,7 +244,7 @@ impl RuntimeSessionService {
                     .context_committed
                     .insert((key.1.clone(), key.2.clone()));
             }
-            group.handoff = None;
+            group.source_changed();
         }
         Ok(())
     }

@@ -2919,11 +2919,15 @@ impl RuntimeSessionService {
                 })?;
             let failure_feedback_queued = if terminal_state == AgentTurnState::Failed {
                 self.append_runtime_agent_execution_failure_audit(&turn, &execution)?;
-                self.queue_agent_failure_feedback_for_correction(
+                match self.settle_agent_failure_feedback_for_correction(
                     &turn,
                     &mut execution,
                     "shell_transaction_failed_action",
-                )?
+                )? {
+                    crate::runtime::agent::CompletionSettlementDisposition::Queued => true,
+                    crate::runtime::agent::CompletionSettlementDisposition::Declined => false,
+                    crate::runtime::agent::CompletionSettlementDisposition::Retained => return Ok(1),
+                }
             } else {
                 false
             };
@@ -2953,7 +2957,9 @@ impl RuntimeSessionService {
                 if !self
                     .resume_dependency_wait_if_ready(turn_id, "shell_transaction_result_ready")?
                 {
-                    self.queue_agent_provider_task(turn_id.to_string());
+                    if !self.admit_completion_provider_continuation(turn_id)? {
+                        return Ok(1);
+                    }
                     self.append_agent_trace_turn_event(
                         pane_id,
                         turn_id,

@@ -10819,6 +10819,13 @@ source ownership acknowledges publication; this is not disk durability.
 Publication-only recovery MUST use the existing bounded completion/group owner,
 never repeat a completed action, provider request, hook or ambiguous effect,
 and MUST preserve real native, external, dependency and human-pause barriers.
+Shared settlement MUST distinguish retained source/intent from actual queued
+continuation and an ordinary declined correction decision. Retained paint MUST
+NOT consume correction budget, commit context again, or terminalize the task.
+Required failure audit MUST retain exact group/failure-qualified entered and
+accepted ownership; ambiguous append failure MUST remain unproven without replay.
+Missing configured audit/profile MUST remain explicit not-required policy, not a
+claimed append or durability receipt.
 Readiness probes MUST NOT retire completion backing before an actual provider
 claim. An existing purpose-qualified preterminal internal assessment MUST retain
 its original completion group and backing; dedicated request presence alone

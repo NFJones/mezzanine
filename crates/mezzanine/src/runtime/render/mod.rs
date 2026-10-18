@@ -738,7 +738,7 @@ pub(crate) struct RuntimePresentationComponent {
     /// Runtime outcome rows waiting for preceding accepted action logs.
     pub(super) agent_queued_provider_outcomes: std::collections::BTreeMap<
         RuntimeProviderLogOrdinal,
-        Vec<(bool, String, mez_core::presentation::PresentationEntry)>,
+        Vec<(bool, String, mez_core::presentation::PresentationEntry, mez_agent::ActionResult)>,
     >,
     /// Exact outcome rows already published for a validated response and action.
     pub(super) agent_published_provider_outcomes:

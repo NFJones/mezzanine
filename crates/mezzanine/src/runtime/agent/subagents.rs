@@ -671,7 +671,7 @@ impl RuntimeSessionService {
         reason: &str,
     ) -> Result<bool> {
         self.ensure_completion_required_gates_ready(parent_turn_id)?;
-        if !self.completion_provider_continuation_ready(parent_turn_id) {
+        if !self.completion_dependency_reacquisition_ready(parent_turn_id) {
             return Ok(false);
         }
         let Some(parent_turn) = self
@@ -689,11 +689,10 @@ impl RuntimeSessionService {
                 .agent_scheduler
                 .waiting_turns()
                 .any(|work| work.turn_id == parent_turn_id)
-            || !self.completion_stored_execution_continuation_ready(parent_turn_id)
         {
             return Ok(false);
         }
-        if !self.prepare_completion_continuation_handoff(parent_turn_id)? { return Ok(false); }
+        if !self.prepare_completion_dependency_reacquisition(parent_turn_id)? { return Ok(false); }
         match self.agent.agent_scheduler.requeue_waiting(parent_turn_id) {
             Ok(_) => {}
             Err(error) if error.kind() == SchedulerErrorKind::QueueFull => return Ok(false),

@@ -204,6 +204,7 @@ mod child_failures;
 mod cleanup_ownership;
 mod completion;
 pub(in crate::runtime) use completion::CompletionScope;
+pub(in crate::runtime) use completion::CompletionSettlementDisposition;
 pub(crate) use bookkeeping::{
     RuntimeBookkeepingCandidate, RuntimeBookkeepingCandidateWork,
     RuntimeBookkeepingTranscriptReadWork,

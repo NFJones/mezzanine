@@ -827,12 +827,15 @@ impl RuntimeSessionService {
         ) {
             let failure_feedback_queued = if execution.terminal_state == AgentTurnState::Failed {
                 self.append_runtime_agent_execution_failure_audit(&turn, &execution)?;
-                self.retain_completion_group_transcript(&turn.turn_id)?;
-                self.queue_agent_failure_feedback_for_correction(
+                match self.settle_agent_failure_feedback_for_correction(
                     &turn,
                     &mut execution,
                     "spawned_shell_failed_action",
-                )?
+                )? {
+                    super::CompletionSettlementDisposition::Queued => true,
+                    super::CompletionSettlementDisposition::Declined => false,
+                    super::CompletionSettlementDisposition::Retained => return Ok(()),
+                }
             } else {
                 false
             };
@@ -1247,11 +1250,23 @@ impl RuntimeSessionService {
             let _ = self.interrupt_fenced_subagent_descendant_turns()?;
             return Ok(None);
         }
-        self.append_agent_trace_turn_event(
+        let mut original_completion_source = None;
+        if self.completion_owns_transcript_policy(turn_id) {
+            self.ensure_completion_settlement_source_current(&turn, &execution)?;
+            if !self.completion_settlement_binding_current(turn_id) {
+                self.stage_completion_group_transcript(turn_id)?;
+                return Ok(None);
+            }
+            original_completion_source = Some(execution.clone());
+        }
+        let trace = self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,
             "pending_shell_dispatch resume started",
-        )?;
+        );
+        if original_completion_source.is_some() {
+            self.note_completion_optional_error(turn_id, trace);
+        } else { trace?; }
         let mut dispatched = self.dispatch_running_shell_actions_to_panes(&turn, &mut execution)?;
         while self
             .agent
@@ -1265,11 +1280,22 @@ impl RuntimeSessionService {
             );
         }
         self.record_runtime_agent_patch_results_for_turn(&turn, &execution);
+        if execution.terminal_state == AgentTurnState::Failed
+            && let Some(expected) = &mut original_completion_source
+        {
+            self.adopt_completion_canonical_transition(&turn, expected, &execution)?;
+            *expected = execution.clone();
+        }
         // Routed workers own ephemeral presentation panes. A terminal dispatch
         // result settles the routed workflow and closes that pane below, so
         // action outcomes must be rendered while the worker still owns its
         // presentation target.
-        self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
+        let publication = self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution);
+        if original_completion_source.is_some() && execution.terminal_state == AgentTurnState::Failed {
+            if let Err(error) = publication {
+                self.hold_completion_settlement_publication(turn_id, error);
+            }
+        } else { publication?; }
         let mut terminal_state = execution.terminal_state;
         let mut transcript_entries = 0usize;
         if terminal_state == AgentTurnState::Blocked {
@@ -1281,12 +1307,19 @@ impl RuntimeSessionService {
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
         ) {
             let failure_feedback_queued = if terminal_state == AgentTurnState::Failed {
+                if let Some(expected) = &original_completion_source {
+                    self.adopt_completion_canonical_transition(&turn, expected, &execution)?;
+                }
                 self.append_runtime_agent_execution_failure_audit(&turn, &execution)?;
-                self.queue_agent_failure_feedback_for_correction(
+                match self.settle_agent_failure_feedback_for_correction(
                     &turn,
                     &mut execution,
                     "pending_shell_dispatch_failed_action",
-                )?
+                )? {
+                    super::CompletionSettlementDisposition::Queued => true,
+                    super::CompletionSettlementDisposition::Declined => false,
+                    super::CompletionSettlementDisposition::Retained => return Ok(Some(execution)),
+                }
             } else {
                 false
             };
