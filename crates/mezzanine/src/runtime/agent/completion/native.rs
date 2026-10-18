@@ -256,15 +256,17 @@ impl RuntimeSessionService {
         action: &mez_agent::AgentAction,
         result: &ActionResult,
         text: &str,
+        raw_diagnostic: bool,
     ) -> bool {
         let Some(receipt) = self.agent.completion_settlements.native.get(key) else { return false; };
         let owner = &receipt.owner;
         let source_key = (owner.pane_id.clone(), owner.turn_id.clone(), owner.conversation_id.clone(),
             owner.group.clone(), owner.ordinal);
         self.presentation.agent_queued_provider_results.get(&source_key)
-            .is_some_and(|(accepted_action, accepted_result, accepted_text, _, transaction)| {
+            .is_some_and(|(accepted_action, accepted_result, accepted_text, _, transaction, raw)| {
                 accepted_action == action && accepted_result == result && accepted_text == text
                     && transaction.as_deref() == Some(key.2.as_str())
+                    && *raw == raw_diagnostic
             }) || self.presentation.agent_published_provider_results.contains(&(source_key, text.to_string()))
     }
 

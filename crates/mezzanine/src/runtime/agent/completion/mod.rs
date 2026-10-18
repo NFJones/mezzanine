@@ -560,12 +560,13 @@ impl RuntimeSessionService {
         self.presentation
             .agent_queued_provider_results
             .get(&source_key)
-            .is_some_and(|(action, retained, text, _, transaction)| {
+            .is_some_and(|(action, retained, text, _, transaction, raw)| {
                 action.id == owner.action_id
                     && action.action_type() == owner.action_type
                     && retained == result
                     && *text == result.content_text()
                     && transaction.is_none()
+                    && !raw
             })
     }
 

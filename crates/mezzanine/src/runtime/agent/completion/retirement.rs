@@ -1059,10 +1059,7 @@ impl RuntimeSessionService {
             return Err((*failure.error).clone());
         }
         let original_owned = match &group.transcript {
-            CompletionTranscriptTarget::Original { .. } => group
-                .handoff
-                .as_ref()
-                .is_some_and(|handoff| handoff.witness.is_some()),
+            CompletionTranscriptTarget::Original { .. } => self.completion_archive_handoff_owned(turn_id),
             CompletionTranscriptTarget::NoPersistencePolicy(_) => true,
         };
         let raw_pending = self

@@ -223,6 +223,41 @@ fn runtime_completion_handoff_legacy_alias_keeps_new_claim_after_retire_or_reset
     }
 }
 
+/// A real coherent read cannot be admitted after a same-frontier CAS revokes
+/// its original path/CID stamp. This tests the worker consumer; the editor test
+/// separately checks that its production CAS invalidates before fallible I/O.
+/// The checked candidate remains blocked and the changed file gets no old-read
+/// suffix, even though the old worker history was successful and contiguous.
+#[test]
+fn runtime_completion_handoff_checked_read_rejects_same_frontier_cas() {
+    let (mut service, candidate) = snapshot_candidate("completion-cas-read-race");
+    let store = service.persistence.cloned_transcript_store().unwrap();
+    let row = TranscriptEntry {
+        conversation_id: candidate.turn.conversation_id.clone(), sequence: 1,
+        created_at_unix_seconds: 1, role: TranscriptRole::User,
+        turn_id: candidate.turn.turn_id.clone(), agent_id: candidate.turn.agent_id.clone(),
+        pane_id: candidate.turn.pane_id.clone(), content: "before CAS".to_string(),
+    };
+    store.append(&row).unwrap();
+    service.persistence.retain_completion_bookkeeping_candidate(candidate.clone()).unwrap();
+    let work = service.claim_bookkeeping_candidates().pop().unwrap();
+    let checked = work.execute();
+    assert!(checked.is_ok(), "fixture must reach a coherent successful read");
+    let revision = store.transcript_entry_revision(&row).unwrap();
+    let path = store.transcript_path(&row.conversation_id).unwrap();
+    service.persistence.invalidate_transcript_admission_at_path(&path, &row.conversation_id);
+    let changed = store.compare_and_swap_entry_content(&row.conversation_id, row.sequence,
+        &row.pane_id, &revision, "after CAS".to_string()).unwrap();
+    assert!(matches!(changed, crate::storage::transcript::CompareAndSwapTranscriptEntryResult::Updated(_)));
+    let after_cas = store.inspect(&row.conversation_id).unwrap();
+    let error = service.complete_bookkeeping_candidate(work, checked).unwrap_err();
+    assert!(error.message().contains("history changed"));
+    assert!(service.persistence.bookkeeping_pending(&row.conversation_id));
+    assert!(service.claim_bookkeeping_candidates().is_empty());
+    assert!(service.persistence.pending_transcript_entries_at_path(&path, &row.conversation_id).unwrap().is_empty());
+    assert_eq!(store.inspect(&row.conversation_id).unwrap(), after_cas);
+}
+
 /// A same-CID live frontier advance is not permission to replace the original
 /// read hashed by the completion witness. The checked worker must receive the
 /// exact frozen store/frontier/epoch and pending rows, not fresh pane metadata.

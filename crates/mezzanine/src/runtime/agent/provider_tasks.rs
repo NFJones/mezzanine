@@ -1244,11 +1244,12 @@ impl RuntimeSessionService {
             .as_str()
             .to_string();
         self.agent.pending_agent_provider_tasks.remove(turn_id);
-        self.append_agent_trace_turn_event(
+        let trace = self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,
             "provider_task claimed reason=async_provider_worker",
-        )?;
+        );
+        self.note_completion_optional_error(turn_id, trace);
         Ok(Some(RuntimeAgentProviderDispatch {
             accounting_origin: self.capture_accounting_origin_for_pane(&turn.pane_id),
             macro_bridge_recipients: self.macro_bridge_message_recipient_ids(&turn.turn_id),
@@ -1950,13 +1951,14 @@ impl RuntimeSessionService {
                 openai_request_stream,
             },
         );
-        self.append_agent_trace_turn_event(
+        let trace = self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
             &format!(
                 "provider_task claim_lease started generation={generation} timeout_ms={timeout_ms}"
             ),
-        )?;
+        );
+        self.note_completion_optional_error(&turn.turn_id, trace);
         self.agent.provider_accounting_owners.insert(
             (turn.turn_id.clone(), generation),
             super::project_accounting::ProviderAccountingOwner {

@@ -141,17 +141,19 @@ impl RuntimeSessionService {
 
         if state == AgentTurnState::Interrupted {
             self.retain_interrupted_worker_effects(&turn)?;
-            self.ingest_provider_log(
+            let publication = self.ingest_provider_log(
                 pane_id,
                 turn_id,
                 super::presentation::RuntimeProviderLogInput::Interrupted,
-            )?;
+            );
+            self.note_completion_optional_error(turn_id, publication);
         } else if matches!(state, AgentTurnState::Completed | AgentTurnState::Failed) {
-            self.ingest_provider_log(
+            let publication = self.ingest_provider_log(
                 pane_id,
                 turn_id,
                 super::presentation::RuntimeProviderLogInput::Terminal,
-            )?;
+            );
+            self.note_completion_optional_error(turn_id, publication);
         }
 
         if !suppress_exit_output
@@ -165,9 +167,10 @@ impl RuntimeSessionService {
                 self.agent_action_failure_retry_limit(),
                 &self.agent.agent_turn_failure_feedback_attempts,
             );
-            self.present_unrecovered_agent_failure_diagnostics_to_terminal_buffer(
+            let publication = self.present_unrecovered_agent_failure_diagnostics_to_terminal_buffer(
                 pane_id, &execution, &reason,
-            )?;
+            );
+            self.note_completion_optional_error(turn_id, publication);
         }
         let awaiting_redirection = state == AgentTurnState::Interrupted
             && self.interrupted_subagent_awaits_redirection(turn_id);

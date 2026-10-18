@@ -683,17 +683,18 @@ impl RuntimeSessionService {
                     &turn.turn_id, &action.id, &native_progress_identity, sections,
                 )
         });
-        if !is_apply_patch_read && !self.agent_shell_view_enabled(&turn.pane_id)
-            && (exit_code == Some(0) || (is_apply_patch_write && confirmed_partial_apply))
+        let shell_view = self.agent_shell_view_enabled(&turn.pane_id);
+        if !is_apply_patch_read && !combined_output.trim().is_empty()
+            && (shell_view || ((exit_code == Some(0) || (is_apply_patch_write && confirmed_partial_apply))
             && local_action_plan(&action)?.is_some_and(|plan| plan.display_output_after_completion)
             && (self.agent_debug_enabled(&turn.pane_id)
                 || self.agent_action_result_renders_in_normal_mode(&action))
-            && !combined_output.trim().is_empty() && !matching_promoted_patch
+            && !matching_promoted_patch))
         {
             let publication = self.queue_ordered_provider_result_source(&turn.pane_id, &execution,
-                &action, &result, (&combined_output, Some(&outcome.marker)));
+                &action, &result, (&combined_output, Some(&outcome.marker), shell_view));
             if let Err(error) = publication {
-                if !self.native_result_publication_is_owned(key, &action, &result, &combined_output) {
+                if !self.native_result_publication_is_owned(key, &action, &result, &combined_output, shell_view) {
                     return Err(error);
                 }
                 self.note_native_publication_error(key, Err(error));
@@ -724,14 +725,6 @@ impl RuntimeSessionService {
             self.settle_agent_shell_output_preview(&turn.pane_id, &preview_owner);
             let _ =
                 self.retire_action_presentation_progress_for_action(&turn.turn_id, &action.id)?;
-        }
-        if !is_apply_patch_read {
-            if self.agent_shell_view_enabled(&turn.pane_id) && !combined_output.trim().is_empty() {
-                self.append_agent_pty_diagnostic_bytes_to_terminal_buffer(
-                    &turn.pane_id,
-                    combined_output.as_bytes(),
-                )?;
-            }
         }
         if is_apply_patch_write {
             let _ =
@@ -847,7 +840,6 @@ impl RuntimeSessionService {
                 self.agent_turn_executions_mut().remove(&turn.turn_id);
                 return Ok(());
             }
-            self.persist_runtime_agent_turn_execution_transcript(&turn, &execution)?;
             self.complete_running_agent_turn_and_start_ready(
                 &turn,
                 execution.terminal_state,
@@ -859,6 +851,7 @@ impl RuntimeSessionService {
         self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution.clone());
         if runtime_execution_ready_for_provider_continuation(&execution) {
+            self.retain_completion_group_transcript(&turn.turn_id)?;
             if !self.resume_dependency_wait_if_ready(&turn.turn_id, "spawned_shell_result_ready")? {
                 self.queue_agent_provider_task(turn.turn_id.clone());
                 let trace = self.append_agent_trace_turn_event(

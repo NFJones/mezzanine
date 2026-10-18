@@ -9,6 +9,41 @@
 use super::*;
 use mez_agent::{ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution};
 
+/// Original body, entry, occurrence, transaction and rendering flavor survive
+/// repeated preinstall errors in the SAME RESULT queue. This is a presentation
+/// ownership oracle for native activity/shell-view source shapes, not evidence
+/// that a native command or capability probe was executed or authorized.
+#[tokio::test]
+async fn runtime_completion_owner_result_source_keeps_native_transaction_and_raw_mode() {
+    for raw_diagnostic in [false, true] {
+        let mut fixture = CompletionFixture::fetch().await;
+        let execution = fixture.retained();
+        let source = "F668_ORIGINAL_NATIVE_BODY\n";
+        fixture.service.fail_agent_presentation_install_for_tests(0);
+        assert!(fixture.service.queue_ordered_provider_result_source("%1", &execution,
+            &fixture.action, &fixture.expected, (source, Some(&fixture.attempt), raw_diagnostic)).is_err());
+        let accepted = fixture.service.presentation.agent_queued_provider_results.values().next().unwrap().clone();
+        assert_eq!(accepted.2, source);
+        assert_eq!(accepted.4.as_deref(), Some(fixture.attempt.as_str()));
+        assert_eq!(accepted.5, raw_diagnostic);
+        fixture.service.fail_agent_presentation_install_for_tests(0);
+        assert!(fixture.service.queue_ordered_provider_result_source("%1", &execution,
+            &fixture.action, &fixture.expected, (source, Some(&fixture.attempt), raw_diagnostic)).is_err());
+        let retained = fixture.service.presentation.agent_queued_provider_results.values().next().unwrap();
+        assert_eq!(retained.3.id, accepted.3.id);
+        assert_eq!(retained.3.occurrence, accepted.3.occurrence);
+        assert_eq!(retained.4, accepted.4);
+        assert_eq!(retained.5, accepted.5);
+        fixture.service.flush_ordered_provider_headers("%1", &execution).unwrap();
+        fixture.service.flush_ordered_provider_headers("%1", &execution).unwrap();
+        assert!(fixture.service.presentation.agent_queued_provider_results.is_empty());
+        let rows = fixture.service.agent_pane_screen("%1").unwrap().normal_content_lines().join("\n");
+        assert_eq!(rows.matches("F668_ORIGINAL_NATIVE_BODY").count(), 1, "{rows}");
+        assert_eq!(fixture.retained().action_results[0].status, ActionStatus::Running,
+            "presentation acceptance cannot manufacture canonical completion");
+    }
+}
+
 /// A terminal payload naming a different agent is not an authorized result for
 /// this exact claimed action. Preserve it only in the original failed receipt,
 /// keep canonical context untouched, and report the same typed failure on an
@@ -165,12 +200,19 @@ impl CompletionFixture {
     /// Chooses terminal versus provider-continuation semantics before the
     /// trusted provider fixture is admitted; never rewrites a settled receipt.
     async fn fetch_with_final_turn(final_turn: bool) -> Self {
+        Self::fetch_with_save_policy(final_turn, true).await
+    }
+
+    /// Captures original repository policy before the actual worker claim.
+    async fn fetch_with_save_policy(final_turn: bool, attach_store: bool) -> Self {
         let root = CompletionRoot(temp_root("completed-result-owner"));
         fs::create_dir(root.0.join("transcripts")).unwrap();
         let mut service = RuntimeServiceFixture::new()
             .control_socket(root.0.join("control.sock"))
             .build();
-        service.set_agent_transcript_store(AgentTranscriptStore::new(root.0.join("transcripts")));
+        if attach_store {
+            service.set_agent_transcript_store(AgentTranscriptStore::new(root.0.join("transcripts")));
+        }
         service
             .attach_primary("primary", true, Size::new(120, 32).unwrap(), 120)
             .unwrap();
@@ -568,6 +610,68 @@ async fn runtime_completion_owner_retains_fetch_before_immediate_install_failure
         1,
         "{rows}"
     );
+}
+
+/// Attaching a repository after the admitted group captured runtime-only policy
+/// cannot create a legacy mutable-target candidate or RAW append. Completion
+/// still settles canonical outcomes and terminal state; presentation durability
+/// is deliberately not used as the RAW archive oracle.
+#[tokio::test]
+async fn runtime_completion_owner_late_repository_does_not_override_original_no_save() {
+    let mut fixture = CompletionFixture::fetch_with_save_policy(true, false).await;
+    let store = AgentTranscriptStore::new(fixture._root.0.join("late-repository"));
+    fixture.service.set_agent_transcript_store(store.clone());
+    let execution = fixture.retained();
+    assert_eq!(fixture.service.persist_runtime_agent_turn_execution_transcript(&fixture.turn, &execution).unwrap(), 0);
+    assert!(fixture.service.claim_bookkeeping_candidates().is_empty());
+    let outcome = fixture.outcome();
+    assert!(fixture.service.complete_approved_external_action(outcome).unwrap());
+    let sibling = fixture.retained().response.action_batch.unwrap().actions[1].clone();
+    let dispatch = fixture.service.claim_approved_external_action(&fixture.turn.turn_id, &sibling.id)
+        .unwrap().unwrap();
+    let result = ActionResult::succeeded(&fixture.turn, &sibling, vec!["no-save sibling".to_string()], None);
+    assert!(fixture.service.complete_approved_external_action(crate::runtime::RuntimeApprovedExternalActionOutcome {
+        turn_id: fixture.turn.turn_id.clone(), action_id: sibling.id,
+        attempt: dispatch.attempt, result: Ok(result), mcp_transport: None,
+    }).unwrap());
+    assert_eq!(fixture.service.agent_turn_ledger().turn(&fixture.turn.turn_id).unwrap().state,
+        AgentTurnState::Completed);
+    assert!(fixture.service.claim_bookkeeping_candidates().is_empty());
+    assert!(store.inspect(&fixture.turn.conversation_id).unwrap().is_empty());
+    fixture.service.ensure_completion_admission_open().unwrap();
+}
+
+/// The original archive target, not the repository attached at callback time,
+/// owns exactly one frozen candidate. Worker acceptance must queue its RAW rows
+/// only at that original path; legacy count-returning producers cannot add a
+/// parallel mutable candidate or send bytes to the replacement repository.
+#[tokio::test]
+async fn runtime_completion_owner_repository_replacement_has_one_original_candidate() {
+    let mut fixture = CompletionFixture::fetch().await;
+    let original = fixture.service.persistence.cloned_transcript_store().unwrap();
+    let replacement = AgentTranscriptStore::new(fixture._root.0.join("replacement-repository"));
+    fixture.service.persistence.enable_transcript_adapter();
+    fixture.service.set_agent_transcript_store(replacement.clone());
+    let outcome = fixture.outcome();
+    assert!(fixture.service.complete_approved_external_action(outcome).unwrap());
+    let sibling = fixture.retained().response.action_batch.unwrap().actions[1].clone();
+    let dispatch = fixture.service.claim_approved_external_action(&fixture.turn.turn_id, &sibling.id).unwrap().unwrap();
+    let result = ActionResult::succeeded(&fixture.turn, &sibling, vec!["original-store sibling".to_string()], None);
+    assert!(fixture.service.complete_approved_external_action(crate::runtime::RuntimeApprovedExternalActionOutcome {
+        turn_id: fixture.turn.turn_id.clone(), action_id: sibling.id, attempt: dispatch.attempt,
+        result: Ok(result), mcp_transport: None,
+    }).unwrap());
+    let mut work = fixture.service.claim_bookkeeping_candidates();
+    assert_eq!(work.len(), 1, "the group must not also use a legacy candidate");
+    let work = work.pop().unwrap();
+    assert_eq!(work.read, work.read.clone().freeze_completion());
+    let checked = work.execute();
+    assert!(checked.is_ok(), "original checked history must be readable: {checked:?}");
+    assert!(fixture.service.complete_bookkeeping_candidate(work, checked).unwrap());
+    let original_path = original.transcript_path(&fixture.turn.conversation_id).unwrap();
+    let replacement_path = replacement.transcript_path(&fixture.turn.conversation_id).unwrap();
+    assert!(!fixture.service.persistence.pending_transcript_entries_at_path(&original_path, &fixture.turn.conversation_id).unwrap().is_empty());
+    assert!(fixture.service.persistence.pending_transcript_entries_at_path(&replacement_path, &fixture.turn.conversation_id).unwrap().is_empty());
 }
 
 /// A held first result and a successful serialized sibling cannot bypass group

@@ -783,6 +783,12 @@ impl RuntimeSessionService {
             u64,
         )>,
     ) -> Result<usize> {
+        // This legacy API returns a count, never a completion handoff receipt.
+        // The original group owner exclusively admits its frozen target/policy
+        // at continuation/finalization/forced-retirement boundaries instead.
+        if self.completion_owns_transcript_policy(&turn.turn_id) {
+            return Ok(0);
+        }
         let Some((session_conversation_id, session_ephemeral)) = self
             .agent_shell_store()
             .get(&turn.pane_id)
@@ -1067,6 +1073,9 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         reason: &str,
     ) -> Result<usize> {
+        if self.completion_owns_transcript_policy(&turn.turn_id) {
+            return Ok(0);
+        }
         let Some((session_conversation_id, session_ephemeral)) = self
             .agent_shell_store()
             .get(&turn.pane_id)

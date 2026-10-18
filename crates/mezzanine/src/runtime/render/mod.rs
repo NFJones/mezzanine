@@ -726,6 +726,7 @@ pub(crate) struct RuntimePresentationComponent {
             String,
             mez_core::presentation::PresentationEntry,
             Option<String>,
+            bool,
         ),
     >,
     /// Exact verbose result sources already published for an action ordinal.

@@ -1097,14 +1097,13 @@ impl RuntimeSessionService {
         let ready_for_provider_continuation =
             runtime_execution_ready_for_provider_continuation(&execution);
         if ready_for_provider_continuation && turn.state == AgentTurnState::Running {
+            self.retain_completion_group_transcript(&turn.turn_id)?;
             self.queue_agent_provider_task(turn.turn_id.clone());
         }
         if matches!(
             execution.terminal_state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
         ) {
-            let transcript_execution = execution.clone();
-            self.persist_runtime_agent_turn_execution_transcript(&turn, &transcript_execution)?;
             self.complete_running_agent_turn_and_start_ready(
                 &turn,
                 execution.terminal_state,

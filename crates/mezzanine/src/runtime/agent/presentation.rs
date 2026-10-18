@@ -686,18 +686,19 @@ impl RuntimeSessionService {
         result: &mez_agent::ActionResult,
     ) -> Result<()> {
         self.queue_ordered_provider_result_source(pane_id, execution, action, result,
-            (&result.content_text(), None))
+            (&result.content_text(), None, false))
     }
 
     /// Retains the exact original RESULT body and optional native transaction
     /// in the same immutable source owner used by ordinary provider results.
+    /// The final source flag freezes shell-view raw diagnostic rendering.
     pub(crate) fn queue_ordered_provider_result_source(
         &mut self,
         pane_id: &str,
         execution: &AgentTurnExecution,
         action: &mez_agent::AgentAction,
         result: &mez_agent::ActionResult,
-        source: (&str, Option<&str>),
+        source: (&str, Option<&str>, bool),
     ) -> Result<()> {
         if result.turn_id != execution.request.turn_id
             || result.action_id != action.id
@@ -732,6 +733,7 @@ impl RuntimeSessionService {
         );
         let text = source.0.to_string();
         let transaction = source.1.map(str::to_string);
+        let raw_diagnostic = source.2;
         let source_key = (key.clone(), text.clone());
         if self
             .presentation
@@ -754,13 +756,13 @@ impl RuntimeSessionService {
             );
             self.presentation.agent_queued_provider_results.insert(
                 key.clone(),
-                (action.clone(), result.clone(), text.clone(), entry, transaction.clone()),
+                (action.clone(), result.clone(), text.clone(), entry, transaction.clone(), raw_diagnostic),
             );
         }
         if self.presentation.agent_queued_provider_results.get(&key)
-            .is_some_and(|(accepted_action, accepted_result, accepted_text, _, accepted_transaction)| {
+            .is_some_and(|(accepted_action, accepted_result, accepted_text, _, accepted_transaction, accepted_raw)| {
                 accepted_action != action || accepted_result != result || *accepted_text != text
-                    || *accepted_transaction != transaction
+                    || *accepted_transaction != transaction || *accepted_raw != raw_diagnostic
             })
         {
             return Err(crate::error::MezError::invalid_state("RESULT differs from retained source owner"));
@@ -770,7 +772,7 @@ impl RuntimeSessionService {
             .agent_published_provider_headers
             .contains(&key)
         {
-            let (accepted_action, accepted_result, accepted_text, entry, accepted_transaction) = self
+            let (accepted_action, accepted_result, accepted_text, entry, accepted_transaction, accepted_raw) = self
                 .presentation
                 .agent_queued_provider_results
                 .get(&key)
@@ -780,6 +782,9 @@ impl RuntimeSessionService {
                 })?;
             let entry_id = entry.id.clone();
             self.with_presentation_entry(pane_id, entry, |service| {
+                if accepted_raw {
+                    return service.append_agent_pty_diagnostic_bytes_to_terminal_buffer(pane_id, accepted_text.as_bytes());
+                }
                 service.append_ordered_activity_result(
                     pane_id,
                     (key.3.as_str(), key.4, accepted_transaction.as_deref()),
@@ -796,7 +801,7 @@ impl RuntimeSessionService {
                 .presentation
                 .agent_queued_provider_results
                 .get(&key)
-                .is_some_and(|(_, _, text, entry, transaction)| *text == accepted_text && entry.id == entry_id && *transaction == accepted_transaction)
+                .is_some_and(|(_, _, text, entry, transaction, raw)| *text == accepted_text && entry.id == entry_id && *transaction == accepted_transaction && *raw == accepted_raw)
             {
                 self.presentation.agent_queued_provider_results.remove(&key);
             }
@@ -1011,7 +1016,7 @@ impl RuntimeSessionService {
                         .agent_queued_provider_commands
                         .remove(&key);
                 }
-                if let Some((action, result, text, entry, transaction)) = self
+                if let Some((action, result, text, entry, transaction, raw_diagnostic)) = self
                     .presentation
                     .agent_queued_provider_results
                     .get(&key)
@@ -1019,6 +1024,9 @@ impl RuntimeSessionService {
                 {
                     let entry_id = entry.id.clone();
                     self.with_presentation_entry(pane_id, entry, |service| {
+                        if raw_diagnostic {
+                            return service.append_agent_pty_diagnostic_bytes_to_terminal_buffer(pane_id, text.as_bytes());
+                        }
                         service.append_ordered_activity_result(
                             pane_id,
                             (key.3.as_str(), key.4, transaction.as_deref()),
@@ -1032,7 +1040,7 @@ impl RuntimeSessionService {
                         .agent_published_provider_results
                         .insert((key.clone(), text.clone()));
                     if self.presentation.agent_queued_provider_results.get(&key)
-                        .is_some_and(|(_, _, retained_text, entry, retained_transaction)| *retained_text == text && entry.id == entry_id && *retained_transaction == transaction)
+                        .is_some_and(|(_, _, retained_text, entry, retained_transaction, raw)| *retained_text == text && entry.id == entry_id && *retained_transaction == transaction && *raw == raw_diagnostic)
                     {
                         self.presentation.agent_queued_provider_results.remove(&key);
                     }
