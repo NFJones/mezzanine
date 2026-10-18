@@ -156,6 +156,24 @@ mod tests {
     use crate::test_support::runtime::RuntimeServiceFixture;
     use mez_mux::layout::Size;
 
+    /// Chooses real ingress/storage only, never installed owner state.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum HandoffSource {
+        RuntimeOnly,
+        CorrectionRuntimeOnly,
+        CorrectionOriginal,
+        FreshLoop,
+    }
+
+    /// Generated private fixture data, never a preserved worktree/cache path.
+    struct HandoffFixtureRoot(std::path::PathBuf);
+
+    impl Drop for HandoffFixtureRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// A real completed RuntimeOnly G1 must survive refusal of its ordinary
     /// provider continuation's mandatory timer. Setup admits trusted synthetic
     /// provider output and two serialized external outcomes through production
@@ -166,7 +184,7 @@ mod tests {
     /// distinct from all readiness, preparation and refusal precondition checks.
     #[tokio::test(flavor = "current_thread")]
     async fn provider_lease_refusal_retains_original_runtime_only_completion() {
-        run_runtime_only_completion_handoff(false, None).await;
+        run_completion_handoff(false, None, HandoffSource::RuntimeOnly).await;
     }
 
     /// Free capacity admits one actual lease and carries original chronology
@@ -175,7 +193,7 @@ mod tests {
     /// provider is invoked; every observed effect remains inert fixture data.
     #[tokio::test(flavor = "current_thread")]
     async fn provider_lease_acceptance_hands_off_original_group_once() {
-        run_runtime_only_completion_handoff(true, None).await;
+        run_completion_handoff(true, None, HandoffSource::RuntimeOnly).await;
     }
 
     /// An admitted timer followed by an actual pre-dispatch queue fault must
@@ -183,7 +201,7 @@ mod tests {
     /// may become stale after exact failed-claim settlement; it is not restarted.
     #[tokio::test(flavor = "current_thread")]
     async fn provider_post_lease_queue_failure_retains_original_completion() {
-        run_runtime_only_completion_handoff(false, Some("after_lease")).await;
+        run_completion_handoff(false, Some("after_lease"), HandoffSource::RuntimeOnly).await;
     }
 
     /// Nested original-backing capture cannot remove a still-required live
@@ -191,12 +209,47 @@ mod tests {
     /// and duplicate failure ingress must not repeat task/loop/routed effects.
     #[tokio::test(flavor = "current_thread")]
     async fn provider_refusal_context_consumer_failure_keeps_original_source() {
-        run_runtime_only_completion_handoff(false, Some("task_consumer")).await;
+        run_completion_handoff(false, Some("task_consumer"), HandoffSource::RuntimeOnly).await;
+    }
+
+    /// Actual RuntimeOnly correction transfer must remain a legal next claim.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_correction_runtime_only_accepts_transferred_original() {
+        run_completion_handoff(true, None, HandoffSource::CorrectionRuntimeOnly).await;
+    }
+
+    /// RuntimeOnly refusal needs actual transferred failure source, not absence.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_correction_runtime_only_refusal_retains_transferred_original() {
+        run_completion_handoff(false, None, HandoffSource::CorrectionRuntimeOnly).await;
+    }
+
+    /// Original-store correction carries its actual accepted source to admission.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_correction_original_store_accepts_transferred_original() {
+        run_completion_handoff(true, None, HandoffSource::CorrectionOriginal).await;
+    }
+
+    /// Refusal cannot substitute provider-error source for original-store G1.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_correction_original_store_refusal_retains_transferred_original() {
+        run_completion_handoff(false, None, HandoffSource::CorrectionOriginal).await;
+    }
+
+    /// A real standalone fresh-loop failure restores its parent on this pane.
+    /// Only its private installed receipt can qualify closing old custody.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_refusal_closes_source_after_actual_same_pane_loop_restore() {
+        run_completion_handoff(false, None, HandoffSource::FreshLoop).await;
     }
 
     /// Uses identical real admission/completion setup for refusal and acceptance;
     /// the refusal oracle remains evaluated on the frozen pre-drain source.
-    async fn run_runtime_only_completion_handoff(accept_lease: bool, fault: Option<&'static str>) {
+    async fn run_completion_handoff(
+        accept_lease: bool,
+        fault: Option<&'static str>,
+        source: HandoffSource,
+    ) {
         use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
         use crate::host::async_runtime::actor::queue::SIDE_EFFECT_QUEUE_FULL_PREFIX;
         use crate::runtime::{RuntimeApprovedExternalActionOutcome, RuntimeSessionService};
@@ -204,11 +257,14 @@ mod tests {
             ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution, AgentTurnState,
         };
 
-        let mut service = RuntimeServiceFixture::new().build();
-        let auth_root = std::env::temp_dir().join(format!(
-            "mez-runtime-only-lease-refusal-{}",
+        let root = HandoffFixtureRoot(std::env::temp_dir().join(format!(
+            "mez-completion-handoff-fixture-{}",
             crate::storage::token_usage::new_token_usage_event_id()
-        ));
+        )));
+        assert!(!root.0.exists());
+        std::fs::create_dir(&root.0).unwrap();
+        let mut service = RuntimeServiceFixture::new().build();
+        let auth_root = root.0.join("auth");
         assert!(
             !auth_root.exists(),
             "setup requires an isolated absent credential root"
@@ -224,14 +280,35 @@ mod tests {
         let primary = service
             .attach_primary("primary", true, Size::new(120, 32).unwrap(), 120)
             .unwrap();
+        if matches!(
+            source,
+            HandoffSource::CorrectionOriginal | HandoffSource::FreshLoop
+        ) {
+            let transcripts = root.0.join("transcripts");
+            std::fs::create_dir(&transcripts).unwrap();
+            service.set_agent_transcript_store(
+                crate::storage::transcript::AgentTranscriptStore::new(transcripts),
+            );
+        }
         service
             .agent_shell_store_mut()
             .enter_or_resume("%1")
             .unwrap();
         // Use the real visible prompt entry point. Its display ACK is not
         // evidence of admission: assert the actual pending/ledger binding.
+        let parent_cid = service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        let prompt = if source == HandoffSource::FreshLoop {
+            "/loop --new --limit 1 retain original completion evidence"
+        } else {
+            "retain original RuntimeOnly results"
+        };
         let _ack = service
-            .execute_agent_shell_command(&primary, "retain original RuntimeOnly results")
+            .execute_agent_shell_command(&primary, prompt)
             .unwrap();
         let pending = service.pending_agent_provider_tasks();
         assert_eq!(
@@ -250,6 +327,13 @@ mod tests {
         assert_eq!(turn.agent_id, task.agent_id);
         let session = service.agent_shell_store().get("%1").unwrap();
         assert_eq!(session.session_id, turn.conversation_id);
+        if source == HandoffSource::FreshLoop {
+            assert!(session.ephemeral);
+            assert_ne!(
+                turn.conversation_id, parent_cid,
+                "setup requires a real fresh-loop iteration"
+            );
+        }
         assert_eq!(
             session.running_turn_id.as_deref(),
             Some(turn.turn_id.as_str())
@@ -338,12 +422,27 @@ mod tests {
                 .claim_approved_external_action(&turn.turn_id, &action.id)
                 .unwrap()
                 .expect("fixture must claim its real serialized external attempt");
-            let result = ActionResult::succeeded(
-                &turn,
-                action,
-                vec![format!("F668_RUNTIME_ONLY_ORIGINAL_{}", action.id)],
-                None,
-            );
+            let result = if matches!(
+                source,
+                HandoffSource::CorrectionRuntimeOnly | HandoffSource::CorrectionOriginal
+            ) && action.id == "second"
+            {
+                ActionResult::failed(
+                    &turn,
+                    action,
+                    mez_agent::ActionStatus::Failed,
+                    "fixture_shared_failure",
+                    "F668_RUNTIME_ONLY_ORIGINAL_second correction",
+                )
+                .unwrap()
+            } else {
+                ActionResult::succeeded(
+                    &turn,
+                    action,
+                    vec![format!("F668_RUNTIME_ONLY_ORIGINAL_{}", action.id)],
+                    None,
+                )
+            };
             expected_results.push(result.clone());
             assert!(
                 service
@@ -369,12 +468,38 @@ mod tests {
                 .is_some(),
             "setup: continuation must be genuinely ready"
         );
-        let group = service.runtime_only_completion_group_for_tests(&turn.turn_id)
-            .expect("setup: actual admission must select RuntimeOnly, not an original store or ephemeral policy");
+        let (policy, group) = service
+            .completion_source_group_for_tests(&turn.turn_id)
+            .expect("setup requires an actually admitted original completion group");
+        let expected_policy = match source {
+            HandoffSource::CorrectionOriginal => "original",
+            HandoffSource::FreshLoop => "ephemeral",
+            _ => "runtime_only",
+        };
+        assert_eq!(policy, expected_policy);
+        if matches!(
+            source,
+            HandoffSource::CorrectionRuntimeOnly | HandoffSource::CorrectionOriginal
+        ) {
+            assert!(
+                service.agent_turn_executions().get(&turn.turn_id).is_none(),
+                "setup must exercise actual correction transfer and legacy live-slot removal"
+            );
+        }
         let (original_execution, original_context, original_error) = service
             .original_completion_source_for_tests(&turn.turn_id, &group)
             .expect("setup: exact G1 result AND context must exist before claiming");
         assert_eq!(original_execution.action_results, expected_results);
+        if matches!(
+            source,
+            HandoffSource::CorrectionRuntimeOnly | HandoffSource::CorrectionOriginal
+        ) {
+            assert_eq!(
+                original_execution.terminal_state,
+                AgentTurnState::Failed,
+                "retain the original failed source, not the local Running feedback copy"
+            );
+        }
         assert!(original_error.is_none());
         assert!(original_context.chronology().iter().any(|event| {
             event
@@ -500,6 +625,14 @@ mod tests {
             .map(|turn| turn.state);
         let critical_after_claim = actor.service.ensure_completion_admission_open().err();
         let external_after_claim = actor.service.pending_approved_external_actions();
+        let shell_cid_after_claim = actor
+            .service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.session_id.clone());
+        let loop_ack_after_claim = actor
+            .service
+            .provider_loop_restore_ack_for_tests(&turn.turn_id, &group);
         let phases_after_claim = actor
             .service
             .provider_refusal_test_facts(&turn.turn_id, &group);
@@ -657,6 +790,13 @@ mod tests {
         );
         assert!(!pending_after_claim);
         assert!(external_after_claim.is_empty());
+        if source == HandoffSource::FreshLoop {
+            assert_eq!(shell_cid_after_claim.as_deref(), Some(parent_cid.as_str()));
+            assert!(
+                loop_ack_after_claim,
+                "actual own-restore installed ack required, not parent CID text alone"
+            );
+        }
         let phases = phases_after_claim.expect("exact negative phase owner");
         if fault == Some("task_consumer") {
             assert!(phases.live_before && phases.live_after && phases.task_entered);

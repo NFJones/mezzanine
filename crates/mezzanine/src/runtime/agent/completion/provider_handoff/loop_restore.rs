@@ -23,6 +23,27 @@ pub(super) struct OwnLoopRestore {
 pub(crate) struct CompletionProviderLoopRestore(Arc<OwnLoopRestore>);
 
 impl RuntimeSessionService {
+    /// Reads only the exact group's actual shared installed acknowledgement.
+    #[cfg(test)]
+    pub(crate) fn provider_loop_restore_ack_for_tests(
+        &self,
+        turn_id: &str,
+        expected_group: &str,
+    ) -> bool {
+        self.agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .is_some_and(|group| {
+                group.group.as_str() == expected_group
+                    && group
+                        .provider_handoff
+                        .as_ref()
+                        .and_then(|owner| owner.own_loop_restore.as_ref())
+                        .is_some_and(|restore| restore.installed.get().is_some())
+            })
+    }
+
     /// Samples only a real same-pane controller before its own restoration.
     /// Diagnostic loop JSON and public pane/conversation labels grant nothing.
     pub(crate) fn prepare_completion_provider_loop_restore(

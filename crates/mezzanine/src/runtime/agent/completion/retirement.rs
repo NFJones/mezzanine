@@ -245,17 +245,24 @@ impl RuntimeSessionService {
             .as_ref()
     }
 
-    /// Observes only an admitted RuntimeOnly group, not a manufactured target.
+    /// Observes the actual admitted source policy and group, never a target
+    /// manufactured by a test. Policy strings are observation only.
     #[cfg(test)]
-    pub(crate) fn runtime_only_completion_group_for_tests(&self, turn_id: &str) -> Option<String> {
+    pub(crate) fn completion_source_group_for_tests(
+        &self,
+        turn_id: &str,
+    ) -> Option<(&'static str, String)> {
         let group = self.agent.completion_settlements.groups.get(turn_id)?;
-        matches!(
-            &group.transcript,
+        let policy = match &group.transcript {
+            CompletionTranscriptTarget::Original { .. } => "original",
             CompletionTranscriptTarget::NoPersistencePolicy(
-                CompletionNoPersistencePolicy::RuntimeOnly
-            )
-        )
-        .then(|| group.group.as_str().to_string())
+                CompletionNoPersistencePolicy::RuntimeOnly,
+            ) => "runtime_only",
+            CompletionTranscriptTarget::NoPersistencePolicy(
+                CompletionNoPersistencePolicy::Ephemeral,
+            ) => "ephemeral",
+        };
+        Some((policy, group.group.as_str().to_string()))
     }
 
     /// Returns exact original-group source and typed primary for custody tests.
