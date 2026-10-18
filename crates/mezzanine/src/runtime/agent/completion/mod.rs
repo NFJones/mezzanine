@@ -20,12 +20,12 @@ pub(in crate::runtime) use retirement::CompletionScope;
 mod native;
 use native::NativeCompletionReceipt;
 pub(super) use native::{NativeCompletionKey, NativeCompletionPhase};
-mod publication;
 mod claim;
+mod publication;
 use claim::CompletionProviderClaimDisposition;
 mod settlement;
-pub(crate) use settlement::CompletionSettlementDisposition;
 use settlement::CompletionFailureAudit;
+pub(crate) use settlement::CompletionSettlementDisposition;
 pub(in crate::runtime::agent) use settlement::CompletionSettlementIntent;
 
 /// Exact actor-issued delivery generation, distinct from presentation text/IDs.
@@ -154,12 +154,22 @@ impl RuntimeSessionService {
     /// Preserves a bounded optional diagnostic on an existing receipt without
     /// changing required failure truth or authorizing any publication replay.
     pub(crate) fn note_completion_optional_error(&mut self, turn_id: &str, result: Result<()>) {
-        let Err(error) = result else { return; };
-        if let Some(receipt) = self.agent.completion_settlements.external.values_mut()
+        let Err(error) = result else {
+            return;
+        };
+        if let Some(receipt) = self
+            .agent
+            .completion_settlements
+            .external
+            .values_mut()
             .find(|receipt| receipt.owner.turn_id == turn_id)
         {
             receipt.publication_failure = Some(Box::new(error));
-        } else if let Some(receipt) = self.agent.completion_settlements.native.values_mut()
+        } else if let Some(receipt) = self
+            .agent
+            .completion_settlements
+            .native
+            .values_mut()
             .find(|receipt| receipt.owner.turn_id == turn_id)
         {
             receipt.publication_failure = Some(Box::new(error));
@@ -258,11 +268,12 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("completion turn owner is unavailable"))?;
         if turn.state != AgentTurnState::Running
             && !(turn.state == AgentTurnState::Blocked
-                && ((allow_human_pause && self.agent_turn_is_human_paused(turn_id)) || self
-                    .agent
-                    .agent_scheduler
-                    .waiting_turns()
-                    .any(|work| work.turn_id == turn_id)))
+                && ((allow_human_pause && self.agent_turn_is_human_paused(turn_id))
+                    || self
+                        .agent
+                        .agent_scheduler
+                        .waiting_turns()
+                        .any(|work| work.turn_id == turn_id)))
         {
             return Err(MezError::invalid_state(
                 "completion turn binding is retired",

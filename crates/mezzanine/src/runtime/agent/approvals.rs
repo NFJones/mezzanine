@@ -1053,7 +1053,8 @@ impl RuntimeSessionService {
         {
             let observed_result = execution.action_results[result_index].clone();
             self.append_action_result_context_if_absent(&turn.turn_id, &observed_result)?;
-            self.agent_turn_executions_mut().insert(turn.turn_id.clone(), execution.clone());
+            self.agent_turn_executions_mut()
+                .insert(turn.turn_id.clone(), execution.clone());
             self.admit_completion_provider_continuation(&turn.turn_id)?;
             let trace = self.append_agent_trace_turn_event(
                 &turn.pane_id,
@@ -1274,7 +1275,8 @@ impl RuntimeSessionService {
                 {
                     let observed_result = execution.action_results[result_index].clone();
                     self.append_action_result_context_if_absent(&turn.turn_id, &observed_result)?;
-                    self.agent_turn_executions_mut().insert(turn.turn_id.clone(), execution.clone());
+                    self.agent_turn_executions_mut()
+                        .insert(turn.turn_id.clone(), execution.clone());
                     self.admit_completion_provider_continuation(&turn.turn_id)?;
                     let trace = self.append_agent_trace_turn_event(
                         &turn.pane_id,

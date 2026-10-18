@@ -107,7 +107,8 @@ impl RuntimeSessionService {
         for result in &mut execution.action_results {
             let identity = (turn.turn_id.clone(), result.action_id.clone());
             if result.status != ActionStatus::Running
-                || self.completion_current_claim_has_retained_outcome(&turn.turn_id, &result.action_id)
+                || self
+                    .completion_current_claim_has_retained_outcome(&turn.turn_id, &result.action_id)
                 || !(self
                     .agent
                     .claimed_approved_external_actions
@@ -1041,16 +1042,32 @@ impl RuntimeSessionService {
     /// Runs the remaining group suffix only after optional publication has
     /// transferred. Re-read canonical state because another sibling may have
     /// settled since this receipt first retained its outcome.
-    pub(super) fn continue_external_completion(&mut self, key: &ExternalCompletionKey) -> Result<bool> {
+    pub(super) fn continue_external_completion(
+        &mut self,
+        key: &ExternalCompletionKey,
+    ) -> Result<bool> {
         if !self.completion_group_publication_ready(&key.0) {
             return Ok(false);
         }
-        let turn = self.agent_turn_ledger().turn(&key.0).cloned()
+        let turn = self
+            .agent_turn_ledger()
+            .turn(&key.0)
+            .cloned()
             .ok_or_else(|| MezError::invalid_state("external continuation turn is unavailable"))?;
-        let mut execution = self.agent_turn_executions().get(&key.0).cloned()
-            .ok_or_else(|| MezError::invalid_state("external continuation execution is unavailable"))?;
-        let result_index = execution.action_results.iter().position(|result| result.action_id == key.1)
-            .ok_or_else(|| MezError::invalid_state("external continuation result is unavailable"))?;
+        let mut execution = self
+            .agent_turn_executions()
+            .get(&key.0)
+            .cloned()
+            .ok_or_else(|| {
+                MezError::invalid_state("external continuation execution is unavailable")
+            })?;
+        let result_index = execution
+            .action_results
+            .iter()
+            .position(|result| result.action_id == key.1)
+            .ok_or_else(|| {
+                MezError::invalid_state("external continuation result is unavailable")
+            })?;
         if self.agent_turn_is_human_paused(&turn.turn_id) {
             let observed_result = execution.action_results[result_index].clone();
             self.retain_human_paused_execution(&turn, execution, &[observed_result])?;

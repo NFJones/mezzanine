@@ -152,8 +152,12 @@ impl CompletionGroup {
     /// remain independent. Neither path manufactures a new handoff witness.
     pub(super) fn source_changed(&mut self) {
         if self.primary_failure.is_some() {
-            if let Some(handoff) = self.handoff.as_mut() { handoff.witness = None; }
-        } else { self.handoff = None; }
+            if let Some(handoff) = self.handoff.as_mut() {
+                handoff.witness = None;
+            }
+        } else {
+            self.handoff = None;
+        }
     }
 }
 
@@ -529,7 +533,9 @@ impl RuntimeSessionService {
             return Ok(());
         }
         let existing = group.handoff.as_ref();
-        let execution = self.agent_turn_executions().get(turn_id)
+        let execution = self
+            .agent_turn_executions()
+            .get(turn_id)
             .filter(|_| self.agent_turn_contexts().contains_key(turn_id));
         let fresh_source = execution.is_some();
         let mut candidate = if let Some(execution) = execution {
@@ -550,7 +556,9 @@ impl RuntimeSessionService {
             // replacement pane state or newly sampled repository policy.
             handoff.candidate.clone()
         } else {
-            return Err(MezError::invalid_state("completion handoff execution is unavailable"));
+            return Err(MezError::invalid_state(
+                "completion handoff execution is unavailable",
+            ));
         };
         if fresh_source || existing.is_none_or(|handoff| handoff.evidence != evidence) {
             Self::append_completion_settlement_evidence(
@@ -569,10 +577,16 @@ impl RuntimeSessionService {
             // archive rows. Changed status/context/content must get a new exact
             // candidate acceptance even when receipt metadata did not change.
             let mut comparable = candidate.clone();
-            for (new, original) in comparable.entries.iter_mut().zip(&handoff.candidate.entries) {
+            for (new, original) in comparable
+                .entries
+                .iter_mut()
+                .zip(&handoff.candidate.entries)
+            {
                 new.created_at_unix_seconds = original.created_at_unix_seconds;
             }
-            if comparable.completion_snapshot_bytes()? == handoff.candidate.completion_snapshot_bytes()? {
+            if comparable.completion_snapshot_bytes()?
+                == handoff.candidate.completion_snapshot_bytes()?
+            {
                 return Ok(());
             }
         }
@@ -600,7 +614,11 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Result<CompletionTranscriptOwnership> {
         self.stage_completion_group_transcript(turn_id)?;
-        let group = self.agent.completion_settlements.groups.get_mut(turn_id)
+        let group = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(turn_id)
             .ok_or_else(|| MezError::invalid_state("completion handoff owner disappeared"))?;
         if let CompletionTranscriptTarget::NoPersistencePolicy(policy) = &group.transcript {
             return Ok(CompletionTranscriptOwnership::NoPersistencePolicy(*policy));
@@ -643,20 +661,35 @@ impl RuntimeSessionService {
     /// Existing groups may continue only from settled canonical execution and
     /// publication. Initial provider work without a completion group is separate.
     fn completion_continuation_source_ready(&self, turn_id: &str) -> bool {
-        if !self.completion_group_publication_ready(turn_id) { return false; }
-        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else { return true; };
-        let Some(execution) = self.agent_turn_executions().get(turn_id) else { return true; };
+        if !self.completion_group_publication_ready(turn_id) {
+            return false;
+        }
+        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
+            return true;
+        };
+        let Some(execution) = self.agent_turn_executions().get(turn_id) else {
+            return true;
+        };
         runtime_execution_ready_for_provider_continuation(execution)
             || ((group.human_resume_generation.is_some()
                 || self.agent.agent_turn_interaction_kinds.get(turn_id)
                     == Some(&mez_agent::ModelInteractionKind::RoutedFailureExplanation))
-                && execution.action_results.iter().all(ActionResult::is_terminal))
+                && execution
+                    .action_results
+                    .iter()
+                    .all(ActionResult::is_terminal))
     }
 
     /// Records the existing exact pause/resume contract after caller validation.
     /// This does not approve an action, reset a failure budget or relabel errors.
-    pub(in crate::runtime::agent) fn record_completion_human_resume(&mut self, turn_id: &str, generation: u64) -> Result<()> {
-        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else { return Ok(()); };
+    pub(in crate::runtime::agent) fn record_completion_human_resume(
+        &mut self,
+        turn_id: &str,
+        generation: u64,
+    ) -> Result<()> {
+        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
+            return Ok(());
+        };
         if !self.human_pause_matches_completion_resume(&group.turn, generation) {
             return Err(MezError::conflict("completion resume owner changed"));
         }
@@ -669,11 +702,15 @@ impl RuntimeSessionService {
     /// Stored execution eligibility for dependency wake and its liveness owner;
     /// initial provider work without stored execution is not a dependency wake.
     pub(crate) fn completion_stored_execution_continuation_ready(&self, turn_id: &str) -> bool {
-        self.agent_turn_executions().get(turn_id).is_some_and(|execution| {
-            if self.completion_owns_transcript_policy(turn_id) {
-                self.completion_continuation_source_ready(turn_id)
-            } else { runtime_execution_ready_for_provider_continuation(execution) }
-        })
+        self.agent_turn_executions()
+            .get(turn_id)
+            .is_some_and(|execution| {
+                if self.completion_owns_transcript_policy(turn_id) {
+                    self.completion_continuation_source_ready(turn_id)
+                } else {
+                    runtime_execution_ready_for_provider_continuation(execution)
+                }
+            })
     }
 
     /// Read-only wake eligibility shared by dependency admission and its timer.
@@ -685,12 +722,25 @@ impl RuntimeSessionService {
 
     /// Prepares only original archive/policy ownership; this does not insert work
     /// and is permitted while staging an explicit human resume under inhibition.
-    pub(crate) fn prepare_completion_continuation_handoff(&mut self, turn_id: &str) -> Result<bool> {
+    pub(crate) fn prepare_completion_continuation_handoff(
+        &mut self,
+        turn_id: &str,
+    ) -> Result<bool> {
         self.ensure_completion_required_gates_ready(turn_id)?;
-        if !self.completion_continuation_source_ready(turn_id) { return Ok(false); }
-        if !self.completion_owns_transcript_policy(turn_id) { return Ok(true); }
+        if !self.completion_continuation_source_ready(turn_id) {
+            return Ok(false);
+        }
+        if !self.completion_owns_transcript_policy(turn_id) {
+            return Ok(true);
+        }
         if let Err(error) = self.retain_completion_group_transcript(turn_id) {
-            self.record_completion_required_failure(turn_id, "continuation_handoff", None, None, &error);
+            self.record_completion_required_failure(
+                turn_id,
+                "continuation_handoff",
+                None,
+                None,
+                &error,
+            );
             return Err(error);
         }
         Ok(true)
@@ -702,34 +752,56 @@ impl RuntimeSessionService {
         if !self.completion_owns_transcript_policy(turn_id) {
             if !self.completion_provider_continuation_ready(turn_id)
                 || !self.prepare_completion_continuation_handoff(turn_id)?
-            { return Ok(false); }
+            {
+                return Ok(false);
+            }
             return Ok(self.queue_completion_provider_task(turn_id.to_string()));
         }
         if let Some(execution) = self.agent_turn_executions().get(turn_id).cloned() {
-            let turn = self.completion_original_turn(turn_id)
-                .ok_or_else(|| MezError::invalid_state("ordinary settlement original turn is unavailable"))?;
-            if let Err(error) = self.ensure_completion_settlement_source_current(&turn, &execution) {
-                self.record_completion_required_failure(turn_id, "settlement_source", None, None, &error);
+            let turn = self.completion_original_turn(turn_id).ok_or_else(|| {
+                MezError::invalid_state("ordinary settlement original turn is unavailable")
+            })?;
+            if let Err(error) = self.ensure_completion_settlement_source_current(&turn, &execution)
+            {
+                self.record_completion_required_failure(
+                    turn_id,
+                    "settlement_source",
+                    None,
+                    None,
+                    &error,
+                );
                 return Err(error);
             }
         }
         let owns_scope = self.begin_completion_scope(turn_id, CompletionScope::Callback);
         let result = (|| -> Result<bool> {
             self.stage_completion_group_transcript(turn_id)?;
-            let intent = if self.agent_turn_executions().get(turn_id)
+            let intent = if self
+                .agent_turn_executions()
+                .get(turn_id)
                 .is_some_and(|execution| execution.terminal_state == AgentTurnState::Failed)
-            { CompletionSettlementIntent::Failure } else { CompletionSettlementIntent::Ordinary };
+            {
+                CompletionSettlementIntent::Failure
+            } else {
+                CompletionSettlementIntent::Ordinary
+            };
             self.retain_completion_settlement_intent(turn_id, intent);
             if !self.completion_settlement_binding_current(turn_id)
                 || !self.completion_provider_continuation_ready(turn_id)
                 || self.completion_settlement_publication_pending(turn_id)
                 || !self.prepare_completion_continuation_handoff(turn_id)?
-            { return Ok(false); }
+            {
+                return Ok(false);
+            }
             let queued = self.queue_completion_provider_task(turn_id.to_string());
-            if queued { self.clear_completion_settlement_intent(turn_id); }
+            if queued {
+                self.clear_completion_settlement_intent(turn_id);
+            }
             Ok(queued)
         })();
-        let result = result.map_err(|error| self.retain_completion_settlement_error(turn_id, "ordinary_continuation", error));
+        let result = result.map_err(|error| {
+            self.retain_completion_settlement_error(turn_id, "ordinary_continuation", error)
+        });
         self.end_completion_scope(turn_id, owns_scope, "ordinary_continuation", false, result)
     }
 
@@ -743,19 +815,39 @@ impl RuntimeSessionService {
         if self.agent.completion_settlements.critical_failure.is_some() {
             return false;
         }
-        if self.agent.completion_settlements.groups.contains_key(&turn_id)
+        if self
+            .agent
+            .completion_settlements
+            .groups
+            .contains_key(&turn_id)
             && !self.completion_group_publication_ready(&turn_id)
         {
             return false;
         }
-        if self.agent.completion_settlements.groups.get(&turn_id).is_some_and(|group| {
-            matches!(&group.transcript, CompletionTranscriptTarget::Original { .. })
-                && !self.completion_archive_handoff_owned(&turn_id)
-        }) { return false; }
-        if self.agent.completion_settlements.groups.get(&turn_id)
+        if self
+            .agent
+            .completion_settlements
+            .groups
+            .get(&turn_id)
+            .is_some_and(|group| {
+                matches!(
+                    &group.transcript,
+                    CompletionTranscriptTarget::Original { .. }
+                ) && !self.completion_archive_handoff_owned(&turn_id)
+            })
+        {
+            return false;
+        }
+        if self
+            .agent
+            .completion_settlements
+            .groups
+            .get(&turn_id)
             .is_some_and(|group| group.pending_settlement.is_some())
             && self.completion_settlement_publication_pending(&turn_id)
-        { return false; }
+        {
+            return false;
+        }
         let (pending, settlements) = (
             &mut self.agent.pending_agent_provider_tasks,
             &mut self.agent.completion_settlements,
@@ -819,13 +911,18 @@ impl RuntimeSessionService {
             self.ensure_completion_required_gates_ready(turn_id)?;
             return Ok(());
         }
-        if matches!(&group.transcript, CompletionTranscriptTarget::Original { .. })
-            && !self.completion_archive_handoff_owned(turn_id)
+        if matches!(
+            &group.transcript,
+            CompletionTranscriptTarget::Original { .. }
+        ) && !self.completion_archive_handoff_owned(turn_id)
         {
-            return Err(MezError::invalid_state("completion original transcript handoff is not owned"));
+            return Err(MezError::invalid_state(
+                "completion original transcript handoff is not owned",
+            ));
         }
         let actions_owned = !self.completion_group_publication_ready(turn_id)
-            || (group.pending_settlement.is_some() && self.completion_settlement_publication_pending(turn_id))
+            || (group.pending_settlement.is_some()
+                && self.completion_settlement_publication_pending(turn_id))
             || self
                 .agent
                 .pending_native_shell_dispatches
@@ -867,12 +964,18 @@ impl RuntimeSessionService {
         // All raw/gate/publication obligations have transferred. Retained
         // duplicate recognition ends only at this actual next-provider claim,
         // never merely because one successful sibling finished its callback.
-        self.agent.completion_settlements.external.retain(|_, receipt| {
-            receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
-        });
-        self.agent.completion_settlements.native.retain(|_, receipt| {
-            receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
-        });
+        self.agent
+            .completion_settlements
+            .external
+            .retain(|_, receipt| {
+                receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
+            });
+        self.agent
+            .completion_settlements
+            .native
+            .retain(|_, receipt| {
+                receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
+            });
         self.agent.completion_settlements.groups.remove(turn_id);
         Ok(())
     }
@@ -1034,8 +1137,14 @@ impl RuntimeSessionService {
     /// Performs only a group's remaining terminal milestones. Entry is recorded
     /// before each effectful boundary; an ambiguous prior entry never retries the
     /// whole finalizer. A producer witness is not gate acceptance or durability.
-    pub(in crate::runtime::agent) fn completion_group_requires_terminal_finalize(&self, turn_id: &str) -> bool {
-        self.agent.completion_settlements.groups.get(turn_id)
+    pub(in crate::runtime::agent) fn completion_group_requires_terminal_finalize(
+        &self,
+        turn_id: &str,
+    ) -> bool {
+        self.agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
             .is_some_and(|group| group.scheduler == CompletionMilestone::NotEntered)
     }
 
@@ -1232,7 +1341,9 @@ impl RuntimeSessionService {
             return Err((*failure.error).clone());
         }
         let original_owned = match &group.transcript {
-            CompletionTranscriptTarget::Original { .. } => self.completion_archive_handoff_owned(turn_id),
+            CompletionTranscriptTarget::Original { .. } => {
+                self.completion_archive_handoff_owned(turn_id)
+            }
             CompletionTranscriptTarget::NoPersistencePolicy(_) => true,
         };
         let raw_pending = self
@@ -1282,12 +1393,17 @@ impl RuntimeSessionService {
     /// the separate boundary that cancels exact workers and moves backing before
     /// destructive cleanup; an archive/audit error alone must not make them stale.
     pub(in crate::runtime::agent) fn retain_completion_settlement_error(
-        &mut self, turn_id: &str, stage: &'static str, error: MezError,
+        &mut self,
+        turn_id: &str,
+        stage: &'static str,
+        error: MezError,
     ) -> MezError {
         self.record_completion_required_failure(turn_id, stage, None, None, &error);
         if let Ok(evidence) = self.completion_settlement_evidence(turn_id)
             && let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id)
-        { group.safe_failure_evidence = Some(evidence); }
+        {
+            group.safe_failure_evidence = Some(evidence);
+        }
         self.completion_group_failure(turn_id).unwrap_or(error)
     }
 

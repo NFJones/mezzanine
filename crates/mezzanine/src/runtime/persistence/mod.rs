@@ -21,11 +21,12 @@ use super::RuntimeSideEffect;
 mod adapters;
 mod bookkeeping;
 mod transcript_admission;
+pub(crate) use bookkeeping::{
+    RuntimeBookkeepingClaimIdentity, RuntimeCompletionCandidateAcceptance,
+    RuntimeCompletionCandidateWitness,
+};
 pub(crate) use transcript_admission::{
     RuntimeTranscriptAdmissionStamp, RuntimeTranscriptNextSequence,
-};
-pub(crate) use bookkeeping::{
-    RuntimeBookkeepingClaimIdentity, RuntimeCompletionCandidateAcceptance, RuntimeCompletionCandidateWitness,
 };
 mod effects;
 mod objective_mirrors;

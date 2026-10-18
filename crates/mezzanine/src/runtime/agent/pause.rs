@@ -28,12 +28,20 @@ impl HumanPause {
 impl RuntimeSessionService {
     /// Matches only the already-retained original pause owner; callers still
     /// perform attached-primary lifecycle validation before accepting guidance.
-    pub(in crate::runtime::agent) fn human_pause_matches_completion_resume(&self, turn: &AgentTurnRecord, generation: u64) -> bool {
-        self.agent.human_pauses.get(&turn.pane_id).is_some_and(|pause| {
-            pause.generation == generation && pause.target.turn_id.as_deref() == Some(turn.turn_id.as_str())
-                && pause.target.conversation_id == turn.conversation_id
-                && pause.target.agent_id == turn.agent_id
-        })
+    pub(in crate::runtime::agent) fn human_pause_matches_completion_resume(
+        &self,
+        turn: &AgentTurnRecord,
+        generation: u64,
+    ) -> bool {
+        self.agent
+            .human_pauses
+            .get(&turn.pane_id)
+            .is_some_and(|pause| {
+                pause.generation == generation
+                    && pause.target.turn_id.as_deref() == Some(turn.turn_id.as_str())
+                    && pause.target.conversation_id == turn.conversation_id
+                    && pause.target.agent_id == turn.agent_id
+            })
     }
 
     /// Adopts a subsequently queued task under an already paused idle conversation.

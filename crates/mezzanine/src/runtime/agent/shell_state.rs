@@ -1717,7 +1717,10 @@ impl RuntimeSessionService {
     /// completes. Manual readiness overrides use this helper so an operator
     /// can unblock a turn waiting for readiness without waiting for a pending
     /// probe marker to finish.
-    pub(crate) fn queue_ready_provider_continuation_for_pane(&mut self, pane_id: &str) -> Result<usize> {
+    pub(crate) fn queue_ready_provider_continuation_for_pane(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<usize> {
         if self.pane_readiness_state(pane_id) != PaneReadinessState::Ready
             || self.pane_readiness_override_has_pending_probe(pane_id)
         {
@@ -1755,6 +1758,7 @@ impl RuntimeSessionService {
             return Ok(0);
         }
         let turn_id = turn_id.to_string();
-        self.admit_completion_provider_continuation(&turn_id).map(usize::from)
+        self.admit_completion_provider_continuation(&turn_id)
+            .map(usize::from)
     }
 }

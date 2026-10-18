@@ -282,58 +282,69 @@ impl RuntimeSessionService {
 
     /// Constructs a work packet from the same existing claimed owner in either
     /// adapter mode. Original completion reads remain immutable and separate.
-    fn bookkeeping_work_for_candidate(&mut self, candidate: RuntimeBookkeepingCandidate) -> RuntimeBookkeepingCandidateWork {
-                let mut read = if !candidate.read.frozen_completion
-                    && self
-                        .agent_shell_store()
-                        .get(&candidate.turn.pane_id)
-                        .is_some_and(|session| session.session_id == candidate.turn.conversation_id)
-                {
-                    self.capture_bookkeeping_transcript_read(
-                        candidate.read.store.clone(),
-                        &candidate.turn,
-                    )
-                } else {
-                    candidate.read.clone()
-                };
-                if !candidate.read.frozen_completion {
-                    read.pending.extend(
-                        self.persistence
-                            .pending_transcript_entries(&candidate.turn.conversation_id),
-                    );
-                }
-                read.terminal_handoff |= candidate.read.terminal_handoff;
-                let captured = if candidate.read.frozen_completion {
-                    Some(self.capture_completion_archive_read(&candidate))
-                } else {
-                    None
-                };
-                let (completion_archive, completion_capture_error) = match captured {
-                    Some(Ok(archive)) => (Some(Box::new(archive)), None),
-                    Some(Err(error)) => (None, Some(Box::new(error))),
-                    None => (None, None),
-                };
-                let claim = self
-                    .persistence
-                    .bookkeeping_claim_identity(candidate.generation);
-                RuntimeBookkeepingCandidateWork {
-                    candidate,
-                    read,
-                    completion_archive,
-                    completion_capture_error,
-                    claim,
-                }
+    fn bookkeeping_work_for_candidate(
+        &mut self,
+        candidate: RuntimeBookkeepingCandidate,
+    ) -> RuntimeBookkeepingCandidateWork {
+        let mut read = if !candidate.read.frozen_completion
+            && self
+                .agent_shell_store()
+                .get(&candidate.turn.pane_id)
+                .is_some_and(|session| session.session_id == candidate.turn.conversation_id)
+        {
+            self.capture_bookkeeping_transcript_read(candidate.read.store.clone(), &candidate.turn)
+        } else {
+            candidate.read.clone()
+        };
+        if !candidate.read.frozen_completion {
+            read.pending.extend(
+                self.persistence
+                    .pending_transcript_entries(&candidate.turn.conversation_id),
+            );
+        }
+        read.terminal_handoff |= candidate.read.terminal_handoff;
+        let captured = if candidate.read.frozen_completion {
+            Some(self.capture_completion_archive_read(&candidate))
+        } else {
+            None
+        };
+        let (completion_archive, completion_capture_error) = match captured {
+            Some(Ok(archive)) => (Some(Box::new(archive)), None),
+            Some(Err(error)) => (None, Some(Box::new(error))),
+            None => (None, None),
+        };
+        let claim = self
+            .persistence
+            .bookkeeping_claim_identity(candidate.generation);
+        RuntimeBookkeepingCandidateWork {
+            candidate,
+            read,
+            completion_archive,
+            completion_capture_error,
+            claim,
+        }
     }
 
     /// Performs only the already-permitted synchronous checked persistence when
     /// no adapter services candidate work. Producer ownership is cached first;
     /// an I/O error retains the exact blocked candidate and propagates its type.
-    pub(in crate::runtime::agent) fn complete_completion_candidate_inline(&mut self, generation: u64) -> Result<()> {
+    pub(in crate::runtime::agent) fn complete_completion_candidate_inline(
+        &mut self,
+        generation: u64,
+    ) -> Result<()> {
         if self.persistence.transcript_uses_adapter() {
-            return Err(MezError::invalid_state("inline completion persistence is not permitted in adapter mode"));
+            return Err(MezError::invalid_state(
+                "inline completion persistence is not permitted in adapter mode",
+            ));
         }
-        let candidate = self.persistence.claim_bookkeeping_candidate_generation(generation)
-            .ok_or_else(|| MezError::invalid_state("original completion candidate is blocked or has an earlier owner"))?;
+        let candidate = self
+            .persistence
+            .claim_bookkeeping_candidate_generation(generation)
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "original completion candidate is blocked or has an earlier owner",
+                )
+            })?;
         let work = self.bookkeeping_work_for_candidate(candidate);
         let history = work.execute();
         self.complete_bookkeeping_candidate(work, history)?;
@@ -463,7 +474,8 @@ impl RuntimeSessionService {
             Err(error) => return self.block_bookkeeping_after_error(candidate, error),
         };
         if frozen && !self.persistence.transcript_uses_adapter() {
-            let appended = self.append_transcript_with_admission_observation(&store, &entries, true);
+            let appended =
+                self.append_transcript_with_admission_observation(&store, &entries, true);
             if let Err(error) = appended {
                 return self.block_bookkeeping_after_error(candidate, error);
             }
@@ -574,18 +586,31 @@ impl RuntimeSessionService {
     /// optional retry requires the store's definite-precommit proof and repeats
     /// only the identical local append, never execution or an ambiguous effect.
     pub(in crate::runtime) fn append_transcript_with_admission_observation(
-        &mut self, store: &crate::storage::transcript::AgentTranscriptStore,
-        entries: &[TranscriptEntry], retry_precommit_once: bool,
+        &mut self,
+        store: &crate::storage::transcript::AgentTranscriptStore,
+        entries: &[TranscriptEntry],
+        retry_precommit_once: bool,
     ) -> Result<usize> {
-        let Some(first) = entries.first() else { return Ok(0); };
+        let Some(first) = entries.first() else {
+            return Ok(0);
+        };
         let path = store.transcript_path(&first.conversation_id)?;
-        self.persistence.invalidate_transcript_admission_at_path(&path, &first.conversation_id);
+        self.persistence
+            .invalidate_transcript_admission_at_path(&path, &first.conversation_id);
         let result = match store.append_many(entries) {
-            Err(error) if retry_precommit_once && error.local_transcript_precommit_retryable() => store.append_many(entries),
+            Err(error) if retry_precommit_once && error.local_transcript_precommit_retryable() => {
+                store.append_many(entries)
+            }
             result => result,
         };
-        if result.is_ok() && let Some(last) = entries.last() {
-            self.persistence.observe_committed_transcript_at_path(&path, &first.conversation_id, last.sequence);
+        if result.is_ok()
+            && let Some(last) = entries.last()
+        {
+            self.persistence.observe_committed_transcript_at_path(
+                &path,
+                &first.conversation_id,
+                last.sequence,
+            );
         }
         result
     }
@@ -649,13 +674,21 @@ impl RuntimeSessionService {
     /// generic legacy read keeps its CID semantics; completion never labels
     /// different-store rows as part of this original archive.
     pub(in crate::runtime::agent) fn capture_completion_transcript_read(
-        &self, store: crate::storage::transcript::AgentTranscriptStore, turn: &AgentTurnRecord,
+        &self,
+        store: crate::storage::transcript::AgentTranscriptStore,
+        turn: &AgentTurnRecord,
     ) -> Result<RuntimeBookkeepingTranscriptReadWork> {
         let path = store.transcript_path(&turn.conversation_id)?;
         let mut read = self.capture_bookkeeping_transcript_read(store, turn);
-        read.pending = self.persistence.pending_transcript_entries_at_path(&path, &turn.conversation_id)?;
-        let pending = read.pending.iter().map(|entry| entry.sequence)
-            .collect::<std::collections::BTreeSet<_>>().len() as u64;
+        read.pending = self
+            .persistence
+            .pending_transcript_entries_at_path(&path, &turn.conversation_id)?;
+        let pending = read
+            .pending
+            .iter()
+            .map(|entry| entry.sequence)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len() as u64;
         read.committed_prefix_required = read.transcript_entries > pending;
         Ok(read.freeze_completion())
     }

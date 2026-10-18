@@ -224,11 +224,14 @@ impl RuntimePersistenceComponent {
                 "completion append overlaps an accepted original prefix",
             ));
         }
-        if self.deferred_transcript_next_sequences
+        if self
+            .deferred_transcript_next_sequences
             .get(&(path.clone(), first.conversation_id.clone()))
             .is_some_and(|slot| slot.checked_next() == RuntimeTranscriptNextSequence::Exhausted)
         {
-            return Err(MezError::invalid_state("completion transcript sequence is exhausted"));
+            return Err(MezError::invalid_state(
+                "completion transcript sequence is exhausted",
+            ));
         }
         self.queue_transcript(effect);
         Ok(true)
@@ -443,10 +446,14 @@ mod tests {
     /// Produces valid immutable bytes without opening files or spawning work.
     fn row(sequence: u64, text: &str) -> TranscriptEntry {
         TranscriptEntry {
-            conversation_id: "archive-owner".to_string(), sequence,
-            created_at_unix_seconds: 1, role: mez_agent::transcript::TranscriptRole::User,
-            turn_id: "turn-owner".to_string(), agent_id: "agent-owner".to_string(),
-            pane_id: "%1".to_string(), content: text.to_string(),
+            conversation_id: "archive-owner".to_string(),
+            sequence,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-owner".to_string(),
+            agent_id: "agent-owner".to_string(),
+            pane_id: "%1".to_string(),
+            content: text.to_string(),
         }
     }
 
@@ -454,7 +461,8 @@ mod tests {
     fn effect(store: &AgentTranscriptStore, rows: Vec<TranscriptEntry>) -> RuntimeSideEffect {
         RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path("archive-owner").unwrap(),
-            store: store.clone(), entries: rows,
+            store: store.clone(),
+            entries: rows,
         }
     }
 
@@ -470,18 +478,42 @@ mod tests {
         let path_b = b.transcript_path("archive-owner").unwrap();
         let other = owner.capture_transcript_admission_stamp(&path_b, "archive-owner");
         let entries = vec![row(1, "accepted")];
-        assert!(owner.queue_checked_completion_transcript(effect(&a, entries.clone())).unwrap());
+        assert!(
+            owner
+                .queue_checked_completion_transcript(effect(&a, entries.clone()))
+                .unwrap()
+        );
         let stamp = owner.capture_transcript_admission_stamp(&path_a, "archive-owner");
         assert_eq!(stamp.next, RuntimeTranscriptNextSequence::Next(2));
         assert_eq!(stamp.committed_through, 0);
         assert_eq!(owner.take_transcript_effects().len(), 1);
         assert!(owner.transcript_admission_matches(&stamp));
-        assert!(!owner.settle_transcript_write_at_path("archive-owner", 1, &path_a, &[row(1, "foreign")]));
-        assert_eq!(owner.transcript_admission_committed_through(&stamp).unwrap(), 0);
+        assert!(!owner.settle_transcript_write_at_path(
+            "archive-owner",
+            1,
+            &path_a,
+            &[row(1, "foreign")]
+        ));
+        assert_eq!(
+            owner
+                .transcript_admission_committed_through(&stamp)
+                .unwrap(),
+            0
+        );
         assert!(owner.settle_transcript_write_at_path("archive-owner", 1, &path_a, &entries));
         assert!(owner.transcript_admission_matches(&stamp));
-        assert_eq!(owner.transcript_admission_committed_through(&stamp).unwrap(), 1);
-        assert!(owner.pending_transcript_entries_at_path(&path_a, "archive-owner").unwrap().is_empty());
+        assert_eq!(
+            owner
+                .transcript_admission_committed_through(&stamp)
+                .unwrap(),
+            1
+        );
+        assert!(
+            owner
+                .pending_transcript_entries_at_path(&path_a, "archive-owner")
+                .unwrap()
+                .is_empty()
+        );
         assert!(owner.transcript_admission_matches(&other));
     }
 
@@ -502,16 +534,28 @@ mod tests {
         assert!(!owner.transcript_admission_matches(&empty));
         assert!(!owner.transcript_admission_matches(&empty_clone));
         let entries = vec![row(1, "inflight retained")];
-        owner.queue_checked_completion_transcript(effect(&store, entries.clone())).unwrap();
+        owner
+            .queue_checked_completion_transcript(effect(&store, entries.clone()))
+            .unwrap();
         owner.take_transcript_effects();
         let inflight = owner.capture_transcript_admission_stamp(&path, "archive-owner");
         owner.invalidate_transcript_admission_at_path(&path, "archive-owner");
         assert!(!owner.transcript_admission_matches(&inflight));
-        assert_eq!(owner.pending_transcript_entries_at_path(&path, "archive-owner").unwrap(), entries);
+        assert_eq!(
+            owner
+                .pending_transcript_entries_at_path(&path, "archive-owner")
+                .unwrap(),
+            entries
+        );
         let failed = owner.capture_transcript_admission_stamp(&path, "archive-owner");
         owner.cancel_queued_transcript_entries_for_conversation("archive-owner");
         assert!(!owner.transcript_admission_matches(&failed));
-        assert_eq!(owner.pending_transcript_entries_at_path(&path, "archive-owner").unwrap(), entries);
+        assert_eq!(
+            owner
+                .pending_transcript_entries_at_path(&path, "archive-owner")
+                .unwrap(),
+            entries
+        );
         let cancelled = owner.capture_transcript_admission_stamp(&path, "archive-owner");
         assert_eq!(cancelled.committed_through, 0);
     }
@@ -525,19 +569,44 @@ mod tests {
         let store = AgentTranscriptStore::new(PathBuf::from("archive-max"));
         let path = store.transcript_path("archive-owner").unwrap();
         let entries = vec![row(u64::MAX, "last row")];
-        assert!(owner.queue_checked_completion_transcript(effect(&store, entries.clone())).unwrap());
-        assert!(!owner.queue_checked_completion_transcript(effect(&store, entries.clone())).unwrap());
-        assert!(owner.queue_checked_completion_transcript(effect(&store, vec![row(u64::MAX, "conflict")])).is_err());
+        assert!(
+            owner
+                .queue_checked_completion_transcript(effect(&store, entries.clone()))
+                .unwrap()
+        );
+        assert!(
+            !owner
+                .queue_checked_completion_transcript(effect(&store, entries.clone()))
+                .unwrap()
+        );
+        assert!(
+            owner
+                .queue_checked_completion_transcript(effect(
+                    &store,
+                    vec![row(u64::MAX, "conflict")]
+                ))
+                .is_err()
+        );
         let stamp = owner.capture_transcript_admission_stamp(&path, "archive-owner");
         assert_eq!(stamp.next, RuntimeTranscriptNextSequence::Exhausted);
-        assert_eq!(owner.legacy_deferred_transcript_next_sequence("archive-owner"), Some(u64::MAX));
+        assert_eq!(
+            owner.legacy_deferred_transcript_next_sequence("archive-owner"),
+            Some(u64::MAX)
+        );
         assert_eq!(owner.take_transcript_effects().len(), 1);
         assert!(owner.settle_transcript_write_at_path("archive-owner", u64::MAX, &path, &entries));
         owner.cancel_queued_transcript_entries_for_conversation("archive-owner");
         let committed = owner.capture_transcript_admission_stamp(&path, "archive-owner");
         assert_eq!(committed.committed_through, u64::MAX);
         assert_eq!(committed.next, RuntimeTranscriptNextSequence::Exhausted);
-        assert!(owner.queue_checked_completion_transcript(effect(&store, vec![row(u64::MAX, "new after MAX")])).is_err());
+        assert!(
+            owner
+                .queue_checked_completion_transcript(effect(
+                    &store,
+                    vec![row(u64::MAX, "new after MAX")]
+                ))
+                .is_err()
+        );
         assert!(owner.take_transcript_effects().is_empty());
     }
 }

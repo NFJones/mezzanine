@@ -5,13 +5,13 @@
 //! subagent trees close. Provider execution, action dispatch, and presentation
 //! remain in their narrower runtime-agent modules.
 
+use super::CompletionScope;
 use super::{
     AgentShellSession, AgentShellVisibility, AgentTurnRecord, AgentTurnState, EventKind, MezError,
     Result, RuntimeSessionService, TaskState, current_unix_millis, json_escape,
     runtime_agent_finished_footer_line, runtime_agent_pane_id, runtime_agent_turn_state_name,
     runtime_pane_by_id, runtime_unrecovered_failure_reason,
 };
-use super::CompletionScope;
 
 /// Product-owned pane terminal cause, independent of display diagnostic text.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -114,7 +114,9 @@ impl RuntimeSessionService {
             .cloned()
             .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
         if turn.pane_id != pane_id {
-            return Err(MezError::invalid_state("finished turn no longer owns the selected pane"));
+            return Err(MezError::invalid_state(
+                "finished turn no longer owns the selected pane",
+            ));
         }
         let owns_scope = self.begin_completion_scope(turn_id, CompletionScope::Finish);
         let result = self.finish_agent_turn_after_completion_guard(pane_id, turn_id, state, &turn);
@@ -124,7 +126,11 @@ impl RuntimeSessionService {
     /// Runs only after exact shell-turn validation; completion obligations are
     /// checked before footer, ledger, task-result, scheduler or backing mutations.
     fn finish_agent_turn_after_completion_guard(
-        &mut self, pane_id: &str, turn_id: &str, state: AgentTurnState, turn: &AgentTurnRecord,
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        state: AgentTurnState,
+        turn: &AgentTurnRecord,
     ) -> Result<AgentShellSession> {
         if state == AgentTurnState::Interrupted {
             self.prepare_completion_forced_retirement(turn)?;
@@ -167,9 +173,10 @@ impl RuntimeSessionService {
                 self.agent_action_failure_retry_limit(),
                 &self.agent.agent_turn_failure_feedback_attempts,
             );
-            let publication = self.present_unrecovered_agent_failure_diagnostics_to_terminal_buffer(
-                pane_id, &execution, &reason,
-            );
+            let publication = self
+                .present_unrecovered_agent_failure_diagnostics_to_terminal_buffer(
+                    pane_id, &execution, &reason,
+                );
             self.note_completion_optional_error(turn_id, publication);
         }
         let awaiting_redirection = state == AgentTurnState::Interrupted
@@ -357,11 +364,19 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         state: AgentTurnState,
     ) -> Result<Option<AgentShellSession>> {
-        let matches = self.agent_turn_ledger().turn(&turn.turn_id).is_some_and(|current| {
-            current.agent_id == turn.agent_id && current.pane_id == turn.pane_id
-                && current.conversation_id == turn.conversation_id
-        });
-        if !matches { return Err(MezError::invalid_state("terminal cleanup turn owner changed")); }
+        let matches = self
+            .agent_turn_ledger()
+            .turn(&turn.turn_id)
+            .is_some_and(|current| {
+                current.agent_id == turn.agent_id
+                    && current.pane_id == turn.pane_id
+                    && current.conversation_id == turn.conversation_id
+            });
+        if !matches {
+            return Err(MezError::invalid_state(
+                "terminal cleanup turn owner changed",
+            ));
+        }
         let owns_scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Finish);
         let result = self.finish_agent_turn_without_session_after_completion_guard(turn, state);
         self.end_completion_scope(&turn.turn_id, owns_scope, "turn_finalization", true, result)
@@ -370,7 +385,9 @@ impl RuntimeSessionService {
     /// Applies the same group guard before missing-pane binding retirement or
     /// any terminal ledger/task/scheduler cleanup in the detached-session path.
     fn finish_agent_turn_without_session_after_completion_guard(
-        &mut self, turn: &AgentTurnRecord, state: AgentTurnState,
+        &mut self,
+        turn: &AgentTurnRecord,
+        state: AgentTurnState,
     ) -> Result<Option<AgentShellSession>> {
         if state == AgentTurnState::Interrupted {
             self.prepare_completion_forced_retirement(turn)?;
@@ -524,14 +541,27 @@ impl RuntimeSessionService {
         reason: &str,
     ) -> Result<()> {
         if self.completion_group_requires_terminal_finalize(&turn.turn_id) {
-            let execution = self.agent_turn_executions().get(&turn.turn_id).cloned()
-                .ok_or_else(|| MezError::invalid_state("terminal completion execution is unavailable"))?;
+            let execution = self
+                .agent_turn_executions()
+                .get(&turn.turn_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("terminal completion execution is unavailable")
+                })?;
             if execution.terminal_state != state {
-                return Err(MezError::invalid_state("terminal completion state differs from canonical execution"));
+                return Err(MezError::invalid_state(
+                    "terminal completion state differs from canonical execution",
+                ));
             }
             let owns_scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Finish);
             let result = self.finalize_completion_group(turn, &execution, reason);
-            return self.end_completion_scope(&turn.turn_id, owns_scope, "terminal_finalization", true, result);
+            return self.end_completion_scope(
+                &turn.turn_id,
+                owns_scope,
+                "terminal_finalization",
+                true,
+                result,
+            );
         }
         self.ensure_completion_terminal_retirement(&turn.turn_id)?;
         if self.find_pane_descriptor(&turn.pane_id).is_none() {

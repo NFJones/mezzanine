@@ -2926,7 +2926,9 @@ impl RuntimeSessionService {
                 )? {
                     crate::runtime::agent::CompletionSettlementDisposition::Queued => true,
                     crate::runtime::agent::CompletionSettlementDisposition::Declined => false,
-                    crate::runtime::agent::CompletionSettlementDisposition::Retained => return Ok(1),
+                    crate::runtime::agent::CompletionSettlementDisposition::Retained => {
+                        return Ok(1);
+                    }
                 }
             } else {
                 false

@@ -452,22 +452,22 @@ impl RuntimeSessionService {
                     std::slice::from_ref(&result),
                 )?;
                 let paint = (|| -> Result<()> {
-                let _ = self.reconcile_action_presentation_progress_for_execution(
-                    &turn.turn_id,
-                    &action.id,
-                    &mez_agent::ActionPresentationExecutionIdentity::Attempt(
-                        outcome.marker.clone(),
-                    ),
-                    &result,
-                )?;
-                self.append_native_completion_launch_trace(&turn.turn_id, &launch_trace)?;
-                self.append_agent_trace_maap_action_results(
-                    &turn.pane_id,
-                    &turn.turn_id,
-                    "spawned_shell_action_result",
-                    std::slice::from_ref(&result),
-                )?;
-                Ok(())
+                    let _ = self.reconcile_action_presentation_progress_for_execution(
+                        &turn.turn_id,
+                        &action.id,
+                        &mez_agent::ActionPresentationExecutionIdentity::Attempt(
+                            outcome.marker.clone(),
+                        ),
+                        &result,
+                    )?;
+                    self.append_native_completion_launch_trace(&turn.turn_id, &launch_trace)?;
+                    self.append_agent_trace_maap_action_results(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        "spawned_shell_action_result",
+                        std::slice::from_ref(&result),
+                    )?;
+                    Ok(())
                 })();
                 self.note_native_publication_error(key, paint);
                 self.settle_native_shell_execution(key, &turn, execution, vec![result])?;
@@ -559,7 +559,8 @@ impl RuntimeSessionService {
                     },
                 );
                 self.native_completion_phase(key, NativeCompletionPhase::NextPhaseOwned)?;
-                let trace = self.append_native_completion_launch_trace(&turn.turn_id, &launch_trace);
+                let trace =
+                    self.append_native_completion_launch_trace(&turn.turn_id, &launch_trace);
                 self.note_native_publication_error(key, trace);
                 let trace = self.append_agent_trace_turn_event(
                     &turn.pane_id,
@@ -680,71 +681,88 @@ impl RuntimeSessionService {
         let matching_promoted_patch = confirmed_patch_sections.as_ref().is_some_and(|sections| {
             !sections.is_empty()
                 && self.promoted_action_patch_sections_match(
-                    &turn.turn_id, &action.id, &native_progress_identity, sections,
+                    &turn.turn_id,
+                    &action.id,
+                    &native_progress_identity,
+                    sections,
                 )
         });
         let shell_view = self.agent_shell_view_enabled(&turn.pane_id);
-        if !is_apply_patch_read && !combined_output.trim().is_empty()
-            && (shell_view || ((exit_code == Some(0) || (is_apply_patch_write && confirmed_partial_apply))
-            && local_action_plan(&action)?.is_some_and(|plan| plan.display_output_after_completion)
-            && (self.agent_debug_enabled(&turn.pane_id)
-                || self.agent_action_result_renders_in_normal_mode(&action))
-            && !matching_promoted_patch))
+        if !is_apply_patch_read
+            && !combined_output.trim().is_empty()
+            && (shell_view
+                || ((exit_code == Some(0) || (is_apply_patch_write && confirmed_partial_apply))
+                    && local_action_plan(&action)?
+                        .is_some_and(|plan| plan.display_output_after_completion)
+                    && (self.agent_debug_enabled(&turn.pane_id)
+                        || self.agent_action_result_renders_in_normal_mode(&action))
+                    && !matching_promoted_patch))
         {
-            let publication = self.queue_ordered_provider_result_source(&turn.pane_id, &execution,
-                &action, &result, (&combined_output, Some(&outcome.marker), shell_view));
+            let publication = self.queue_ordered_provider_result_source(
+                &turn.pane_id,
+                &execution,
+                &action,
+                &result,
+                (&combined_output, Some(&outcome.marker), shell_view),
+            );
             if let Err(error) = publication {
-                if !self.native_result_publication_is_owned(key, &action, &result, &combined_output, shell_view) {
+                if !self.native_result_publication_is_owned(
+                    key,
+                    &action,
+                    &result,
+                    &combined_output,
+                    shell_view,
+                ) {
                     return Err(error);
                 }
                 self.note_native_publication_error(key, Err(error));
             }
         }
         let paint = (|| -> Result<()> {
-        self.append_native_completion_launch_trace(&turn.turn_id, &launch_trace)?;
-        if matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
-            let lines = latest_agent_shell_transaction_output_lines(
-                &combined_output,
-                self.terminal_shell_output_preview_lines(),
-            );
-            if !lines.is_empty() {
-                let starts_at_entry = !output_truncated
-                    && combined_output
-                        .lines()
-                        .filter(|line| !line.trim().is_empty())
-                        .count()
-                        <= self.terminal_shell_output_preview_lines();
-                self.update_agent_shell_output_preview_with_boundary(
-                    &turn.pane_id,
-                    preview_owner.clone(),
-                    u64::MAX,
-                    &lines,
-                    starts_at_entry,
-                )?;
+            self.append_native_completion_launch_trace(&turn.turn_id, &launch_trace)?;
+            if matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
+                let lines = latest_agent_shell_transaction_output_lines(
+                    &combined_output,
+                    self.terminal_shell_output_preview_lines(),
+                );
+                if !lines.is_empty() {
+                    let starts_at_entry = !output_truncated
+                        && combined_output
+                            .lines()
+                            .filter(|line| !line.trim().is_empty())
+                            .count()
+                            <= self.terminal_shell_output_preview_lines();
+                    self.update_agent_shell_output_preview_with_boundary(
+                        &turn.pane_id,
+                        preview_owner.clone(),
+                        u64::MAX,
+                        &lines,
+                        starts_at_entry,
+                    )?;
+                }
+                self.settle_agent_shell_output_preview(&turn.pane_id, &preview_owner);
+                let _ =
+                    self.retire_action_presentation_progress_for_action(&turn.turn_id, &action.id)?;
             }
-            self.settle_agent_shell_output_preview(&turn.pane_id, &preview_owner);
-            let _ =
-                self.retire_action_presentation_progress_for_action(&turn.turn_id, &action.id)?;
-        }
-        if is_apply_patch_write {
-            let _ =
-                self.retire_action_presentation_progress_for_action(&turn.turn_id, &action.id)?;
-        }
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            &turn.turn_id,
-            &format!(
-                "action {} completed spawned_shell exit_code={:?} marker={}",
-                action.id, exit_code, outcome.marker
-            ),
-        )?;
-        self.append_agent_trace_maap_action_results(
-            &turn.pane_id,
-            &turn.turn_id,
-            "spawned_shell_action_result",
-            &settled_results,
-        )?;
-        Ok(())
+            if is_apply_patch_write {
+                let _ =
+                    self.retire_action_presentation_progress_for_action(&turn.turn_id, &action.id)?;
+            }
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                &format!(
+                    "action {} completed spawned_shell exit_code={:?} marker={}",
+                    action.id, exit_code, outcome.marker
+                ),
+            )?;
+            self.append_agent_trace_maap_action_results(
+                &turn.pane_id,
+                &turn.turn_id,
+                "spawned_shell_action_result",
+                &settled_results,
+            )?;
+            Ok(())
         })();
         self.note_native_publication_error(key, paint);
         self.settle_native_shell_execution(key, &turn, execution, settled_results)?;
@@ -811,12 +829,24 @@ impl RuntimeSessionService {
         if !self.completion_group_publication_ready(&key.0) {
             return Ok(());
         }
-        let turn = self.agent_turn_ledger().turn(&key.0).cloned()
+        let turn = self
+            .agent_turn_ledger()
+            .turn(&key.0)
+            .cloned()
             .ok_or_else(|| MezError::invalid_state("native continuation turn is unavailable"))?;
-        let mut execution = self.agent_turn_executions().get(&key.0).cloned()
-            .ok_or_else(|| MezError::invalid_state("native continuation execution is unavailable"))?;
-        let settled_results = execution.action_results.iter().filter(|result| result.is_terminal())
-            .cloned().collect::<Vec<_>>();
+        let mut execution = self
+            .agent_turn_executions()
+            .get(&key.0)
+            .cloned()
+            .ok_or_else(|| {
+                MezError::invalid_state("native continuation execution is unavailable")
+            })?;
+        let settled_results = execution
+            .action_results
+            .iter()
+            .filter(|result| result.is_terminal())
+            .cloned()
+            .collect::<Vec<_>>();
         if self.agent_turn_is_human_paused(&turn.turn_id) {
             self.retain_human_paused_execution(&turn, execution, &settled_results)?;
             return Ok(());
@@ -1266,7 +1296,9 @@ impl RuntimeSessionService {
         );
         if original_completion_source.is_some() {
             self.note_completion_optional_error(turn_id, trace);
-        } else { trace?; }
+        } else {
+            trace?;
+        }
         let mut dispatched = self.dispatch_running_shell_actions_to_panes(&turn, &mut execution)?;
         while self
             .agent
@@ -1290,12 +1322,17 @@ impl RuntimeSessionService {
         // result settles the routed workflow and closes that pane below, so
         // action outcomes must be rendered while the worker still owns its
         // presentation target.
-        let publication = self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution);
-        if original_completion_source.is_some() && execution.terminal_state == AgentTurnState::Failed {
+        let publication =
+            self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution);
+        if original_completion_source.is_some()
+            && execution.terminal_state == AgentTurnState::Failed
+        {
             if let Err(error) = publication {
                 self.hold_completion_settlement_publication(turn_id, error);
             }
-        } else { publication?; }
+        } else {
+            publication?;
+        }
         let mut terminal_state = execution.terminal_state;
         let mut transcript_entries = 0usize;
         if terminal_state == AgentTurnState::Blocked {

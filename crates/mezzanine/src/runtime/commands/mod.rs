@@ -4,11 +4,11 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use super::agent::CompletionScope;
 use super::agent_state::{
     RuntimeAgentLoopMode, RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
     RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
 };
-use super::agent::CompletionScope;
 use super::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentContext, AgentId,
     AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellVisibility, AgentTurnRecord,
@@ -710,7 +710,10 @@ impl RuntimeSessionService {
     /// Runs after exact target validation and unconditional worker cancellation.
     /// Original-group handoff precedes task-result and shell-binding mutations.
     fn stop_agent_turn_after_completion_guard(
-        &mut self, pane_id: &str, turn: &AgentTurnRecord, turn_id: String,
+        &mut self,
+        pane_id: &str,
+        turn: &AgentTurnRecord,
+        turn_id: String,
     ) -> Result<RuntimeAgentTurnStop> {
         self.prepare_completion_forced_retirement(turn)?;
         let prepared_loop_parent_objective = if let Some(loop_turn) = self.agent_loop_turn(&turn_id)

@@ -692,7 +692,9 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        if !self.prepare_completion_dependency_reacquisition(parent_turn_id)? { return Ok(false); }
+        if !self.prepare_completion_dependency_reacquisition(parent_turn_id)? {
+            return Ok(false);
+        }
         match self.agent.agent_scheduler.requeue_waiting(parent_turn_id) {
             Ok(_) => {}
             Err(error) if error.kind() == SchedulerErrorKind::QueueFull => return Ok(false),
@@ -854,7 +856,8 @@ impl RuntimeSessionService {
                 self.append_action_result_context_if_absent(&turn.turn_id, result)?;
             }
             if self.completion_owns_transcript_policy(&turn.turn_id) {
-                self.agent_turn_executions_mut().insert(turn.turn_id.clone(), execution.clone());
+                self.agent_turn_executions_mut()
+                    .insert(turn.turn_id.clone(), execution.clone());
             }
             self.admit_completion_provider_continuation(&turn.turn_id)?;
         }

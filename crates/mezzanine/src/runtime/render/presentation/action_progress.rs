@@ -975,7 +975,9 @@ impl RuntimeSessionService {
         )?;
         #[cfg(test)]
         if self.presentation.agent_install_failure_held {
-            return Err(MezError::invalid_state("injected held pre-install presentation failure"));
+            return Err(MezError::invalid_state(
+                "injected held pre-install presentation failure",
+            ));
         }
         let installed_lineage = self
             .update_agent_pane_screen_preserving_interaction(
@@ -987,16 +989,26 @@ impl RuntimeSessionService {
                 MezError::invalid_state("executor progress promotion conversation changed")
             })?;
         // Companion baselines also advance only after the actual install.
-        if let Some(streaming) = self.presentation.agent_streaming_say_presentations.get_mut(pane_id)
-            .filter(|streaming| streaming.conversation_id == presentation.conversation_id
-                && streaming.installed_lineage == old_lineage)
+        if let Some(streaming) = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get_mut(pane_id)
+            .filter(|streaming| {
+                streaming.conversation_id == presentation.conversation_id
+                    && streaming.installed_lineage == old_lineage
+            })
         {
             streaming.provider_screen = std::sync::Arc::new(durable_base.clone());
         }
         if let Some(rows) = new_preview_rows
-            && let Some(preview) = self.presentation.agent_shell_output_previews.get_mut(pane_id)
-                .filter(|preview| preview.conversation_id == presentation.conversation_id
-                    && preview.installed_lineage == old_lineage)
+            && let Some(preview) = self
+                .presentation
+                .agent_shell_output_previews
+                .get_mut(pane_id)
+                .filter(|preview| {
+                    preview.conversation_id == presentation.conversation_id
+                        && preview.installed_lineage == old_lineage
+                })
         {
             preview.baseline_screen = std::sync::Arc::new(durable_base);
             preview.transient_rows = rows;
@@ -1234,7 +1246,9 @@ impl RuntimeSessionService {
         )?;
         #[cfg(test)]
         if self.presentation.agent_install_failure_held {
-            return Err(MezError::invalid_state("injected held pre-install presentation failure"));
+            return Err(MezError::invalid_state(
+                "injected held pre-install presentation failure",
+            ));
         }
         let installed_lineage = self
             .update_agent_pane_screen_preserving_interaction(
@@ -1252,7 +1266,9 @@ impl RuntimeSessionService {
             installed_lineage,
         );
         if presentation.components.is_empty() && presentation.promoted_components.is_empty() {
-            self.presentation.action_presentation_progress.remove(pane_id);
+            self.presentation
+                .action_presentation_progress
+                .remove(pane_id);
             return Ok(true);
         }
         presentation.installed_lineage = installed_lineage;
@@ -1320,7 +1336,9 @@ impl RuntimeSessionService {
                         .action_presentation_progress
                         .insert(pane_id, presentation);
                 } else {
-                    self.presentation.action_presentation_progress.remove(&pane_id);
+                    self.presentation
+                        .action_presentation_progress
+                        .remove(&pane_id);
                 }
                 continue;
             }
@@ -1358,7 +1376,9 @@ impl RuntimeSessionService {
                 installed_lineage,
             );
             if presentation.components.is_empty() && presentation.promoted_components.is_empty() {
-                self.presentation.action_presentation_progress.remove(&pane_id);
+                self.presentation
+                    .action_presentation_progress
+                    .remove(&pane_id);
                 continue;
             }
             presentation.installed_lineage = installed_lineage;

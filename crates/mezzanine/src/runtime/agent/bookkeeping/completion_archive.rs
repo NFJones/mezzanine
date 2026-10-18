@@ -138,12 +138,15 @@ impl RuntimeCompletionArchiveRead {
         }
         let reservation_owned = match self.stamp.next {
             RuntimeTranscriptNextSequence::Unknown => true,
-            RuntimeTranscriptNextSequence::Next(next) => next > 0
-                && next.saturating_sub(1) <= observed.logical_through,
+            RuntimeTranscriptNextSequence::Next(next) => {
+                next > 0 && next.saturating_sub(1) <= observed.logical_through
+            }
             RuntimeTranscriptNextSequence::Exhausted => observed.logical_through == u64::MAX,
         };
         if !reservation_owned {
-            return Err(MezError::invalid_state("original archive reservation has no checked logical row owner"));
+            return Err(MezError::invalid_state(
+                "original archive reservation has no checked logical row owner",
+            ));
         }
         let current = service
             .persistence

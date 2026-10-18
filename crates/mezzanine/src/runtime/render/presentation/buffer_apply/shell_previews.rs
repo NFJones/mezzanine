@@ -256,7 +256,9 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         #[cfg(test)]
         if self.presentation.agent_install_failure_held {
-            return Err(MezError::invalid_state("injected held pre-install presentation failure"));
+            return Err(MezError::invalid_state(
+                "injected held pre-install presentation failure",
+            ));
         }
         #[cfg(test)]
         if let Some(remaining) = self.presentation.agent_install_failure_countdown.as_mut() {

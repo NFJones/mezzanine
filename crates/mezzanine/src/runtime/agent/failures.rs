@@ -399,7 +399,9 @@ impl RuntimeSessionService {
             &mut execution,
             "shell_transaction_runtime_failure",
         )?;
-        if feedback == super::CompletionSettlementDisposition::Retained { return Ok(1); }
+        if feedback == super::CompletionSettlementDisposition::Retained {
+            return Ok(1);
+        }
         let transcript_entries = if feedback == super::CompletionSettlementDisposition::Queued {
             self.agent_turn_executions_mut().remove(&turn.turn_id);
             terminal_state = AgentTurnState::Running;
@@ -604,7 +606,9 @@ impl RuntimeSessionService {
             &mut execution,
             "shell_transaction_runtime_failure",
         )?;
-        if feedback == super::CompletionSettlementDisposition::Retained { return Ok(1); }
+        if feedback == super::CompletionSettlementDisposition::Retained {
+            return Ok(1);
+        }
         let transcript_entries = if feedback == super::CompletionSettlementDisposition::Queued {
             self.agent_turn_executions_mut().remove(&turn.turn_id);
             0
@@ -649,15 +653,20 @@ impl RuntimeSessionService {
         execution: &AgentTurnExecution,
     ) -> Result<()> {
         if self.completion_owns_transcript_policy(&turn.turn_id) {
-            return self.append_completion_failure_audit_once(turn, execution,
-                Self::append_runtime_agent_execution_failure_audit_unowned);
+            return self.append_completion_failure_audit_once(
+                turn,
+                execution,
+                Self::append_runtime_agent_execution_failure_audit_unowned,
+            );
         }
         self.append_runtime_agent_execution_failure_audit_unowned(turn, execution)
     }
 
     /// Unchanged no-group audit/profile behavior and actual append operation.
     fn append_runtime_agent_execution_failure_audit_unowned(
-        &mut self, turn: &AgentTurnRecord, execution: &AgentTurnExecution,
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
     ) -> Result<()> {
         let Some(model_profile) = self
             .agent

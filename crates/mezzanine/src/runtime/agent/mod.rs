@@ -203,13 +203,13 @@ mod bookkeeping;
 mod child_failures;
 mod cleanup_ownership;
 mod completion;
-pub(in crate::runtime) use completion::CompletionScope;
-pub(in crate::runtime) use completion::CompletionSettlementDisposition;
 pub(crate) use bookkeeping::{
     RuntimeBookkeepingCandidate, RuntimeBookkeepingCandidateWork,
     RuntimeBookkeepingTranscriptReadWork,
 };
 pub(crate) use cleanup_ownership::RuntimePreparedCleanupParent;
+pub(in crate::runtime) use completion::CompletionScope;
+pub(in crate::runtime) use completion::CompletionSettlementDisposition;
 mod config_change;
 mod context_documents;
 mod discovery;

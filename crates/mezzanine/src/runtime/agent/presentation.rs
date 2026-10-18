@@ -11,8 +11,8 @@
 //! its durable prefix or replace its original occurrence/copy attribution.
 
 use super::{
-    ActionResult, ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnState, BTreeSet, MezError, Result,
-    RuntimeSessionService, SayStatus, runtime_action_result_has_error_code,
+    ActionResult, ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnState, BTreeSet,
+    MezError, Result, RuntimeSessionService, SayStatus, runtime_action_result_has_error_code,
     runtime_action_result_is_terminal_failure, runtime_agent_action_error_suffix,
     runtime_agent_action_has_runtime_visible_effect, runtime_agent_action_outcome_line,
     runtime_agent_action_summary, runtime_agent_batch_rationale_repeats_visible_batch_text,
@@ -685,8 +685,13 @@ impl RuntimeSessionService {
         action: &mez_agent::AgentAction,
         result: &mez_agent::ActionResult,
     ) -> Result<()> {
-        self.queue_ordered_provider_result_source(pane_id, execution, action, result,
-            (&result.content_text(), None, false))
+        self.queue_ordered_provider_result_source(
+            pane_id,
+            execution,
+            action,
+            result,
+            (&result.content_text(), None, false),
+        )
     }
 
     /// Retains the exact original RESULT body and optional native transaction
@@ -756,23 +761,54 @@ impl RuntimeSessionService {
             );
             self.presentation.agent_queued_provider_results.insert(
                 key.clone(),
-                (action.clone(), result.clone(), text.clone(), entry, transaction.clone(), raw_diagnostic),
+                (
+                    action.clone(),
+                    result.clone(),
+                    text.clone(),
+                    entry,
+                    transaction.clone(),
+                    raw_diagnostic,
+                ),
             );
         }
-        if self.presentation.agent_queued_provider_results.get(&key)
-            .is_some_and(|(accepted_action, accepted_result, accepted_text, _, accepted_transaction, accepted_raw)| {
-                accepted_action != action || accepted_result != result || *accepted_text != text
-                    || *accepted_transaction != transaction || *accepted_raw != raw_diagnostic
-            })
+        if self
+            .presentation
+            .agent_queued_provider_results
+            .get(&key)
+            .is_some_and(
+                |(
+                    accepted_action,
+                    accepted_result,
+                    accepted_text,
+                    _,
+                    accepted_transaction,
+                    accepted_raw,
+                )| {
+                    accepted_action != action
+                        || accepted_result != result
+                        || *accepted_text != text
+                        || *accepted_transaction != transaction
+                        || *accepted_raw != raw_diagnostic
+                },
+            )
         {
-            return Err(crate::error::MezError::invalid_state("RESULT differs from retained source owner"));
+            return Err(crate::error::MezError::invalid_state(
+                "RESULT differs from retained source owner",
+            ));
         }
         if self
             .presentation
             .agent_published_provider_headers
             .contains(&key)
         {
-            let (accepted_action, accepted_result, accepted_text, entry, accepted_transaction, accepted_raw) = self
+            let (
+                accepted_action,
+                accepted_result,
+                accepted_text,
+                entry,
+                accepted_transaction,
+                accepted_raw,
+            ) = self
                 .presentation
                 .agent_queued_provider_results
                 .get(&key)
@@ -783,7 +819,10 @@ impl RuntimeSessionService {
             let entry_id = entry.id.clone();
             self.with_presentation_entry(pane_id, entry, |service| {
                 if accepted_raw {
-                    return service.append_agent_pty_diagnostic_bytes_to_terminal_buffer(pane_id, accepted_text.as_bytes());
+                    return service.append_agent_pty_diagnostic_bytes_to_terminal_buffer(
+                        pane_id,
+                        accepted_text.as_bytes(),
+                    );
                 }
                 service.append_ordered_activity_result(
                     pane_id,
@@ -801,7 +840,12 @@ impl RuntimeSessionService {
                 .presentation
                 .agent_queued_provider_results
                 .get(&key)
-                .is_some_and(|(_, _, text, entry, transaction, raw)| *text == accepted_text && entry.id == entry_id && *transaction == accepted_transaction && *raw == accepted_raw)
+                .is_some_and(|(_, _, text, entry, transaction, raw)| {
+                    *text == accepted_text
+                        && entry.id == entry_id
+                        && *transaction == accepted_transaction
+                        && *raw == accepted_raw
+                })
             {
                 self.presentation.agent_queued_provider_results.remove(&key);
             }
@@ -1025,7 +1069,10 @@ impl RuntimeSessionService {
                     let entry_id = entry.id.clone();
                     self.with_presentation_entry(pane_id, entry, |service| {
                         if raw_diagnostic {
-                            return service.append_agent_pty_diagnostic_bytes_to_terminal_buffer(pane_id, text.as_bytes());
+                            return service.append_agent_pty_diagnostic_bytes_to_terminal_buffer(
+                                pane_id,
+                                text.as_bytes(),
+                            );
                         }
                         service.append_ordered_activity_result(
                             pane_id,
@@ -1039,8 +1086,16 @@ impl RuntimeSessionService {
                     self.presentation
                         .agent_published_provider_results
                         .insert((key.clone(), text.clone()));
-                    if self.presentation.agent_queued_provider_results.get(&key)
-                        .is_some_and(|(_, _, retained_text, entry, retained_transaction, raw)| *retained_text == text && entry.id == entry_id && *retained_transaction == transaction && *raw == raw_diagnostic)
+                    if self
+                        .presentation
+                        .agent_queued_provider_results
+                        .get(&key)
+                        .is_some_and(|(_, _, retained_text, entry, retained_transaction, raw)| {
+                            *retained_text == text
+                                && entry.id == entry_id
+                                && *retained_transaction == transaction
+                                && *raw == raw_diagnostic
+                        })
                     {
                         self.presentation.agent_queued_provider_results.remove(&key);
                     }
@@ -1055,7 +1110,12 @@ impl RuntimeSessionService {
                         let entry_id = entry.id.clone();
                         self.with_presentation_entry(pane_id, entry, |service| {
                             service.append_ordered_activity_outcome(
-                                pane_id, execution, action, &accepted_result, is_error, &line,
+                                pane_id,
+                                execution,
+                                action,
+                                &accepted_result,
+                                is_error,
+                                &line,
                             )?;
                             Ok(())
                         })?;
@@ -1069,12 +1129,23 @@ impl RuntimeSessionService {
                             .agent_queued_provider_outcomes
                             .get_mut(&key)
                         {
-                            pending.retain(|entry| entry.0 != is_error || entry.1 != line
-                                || entry.2.id != entry_id || entry.3 != accepted_result);
+                            pending.retain(|entry| {
+                                entry.0 != is_error
+                                    || entry.1 != line
+                                    || entry.2.id != entry_id
+                                    || entry.3 != accepted_result
+                            });
                         }
                     }
-                    if self.presentation.agent_queued_provider_outcomes.get(&key).is_some_and(Vec::is_empty) {
-                        self.presentation.agent_queued_provider_outcomes.remove(&key);
+                    if self
+                        .presentation
+                        .agent_queued_provider_outcomes
+                        .get(&key)
+                        .is_some_and(Vec::is_empty)
+                    {
+                        self.presentation
+                            .agent_queued_provider_outcomes
+                            .remove(&key);
                     }
                 }
                 self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
@@ -1712,12 +1783,28 @@ impl RuntimeSessionService {
                 .iter()
                 .find_map(|result| result.error.as_ref().map(|error| error.message.as_str()))
                 .unwrap_or("runtime loop guard suppressed this action batch");
-            let Some(representative) = matching_results.first().copied() else { continue; };
-            let Some(action) = batch.actions.iter().find(|action| action.id == representative.action_id) else {
-                return Err(MezError::invalid_state("aggregate outcome has no original action"));
+            let Some(representative) = matching_results.first().copied() else {
+                continue;
             };
-            self.publish_ordered_runtime_outcome(pane_id, execution, action, representative,
-                (true, runtime_loop_guard_failure_summary_line(label, matching_results.len(), message)))?;
+            let Some(action) = batch
+                .actions
+                .iter()
+                .find(|action| action.id == representative.action_id)
+            else {
+                return Err(MezError::invalid_state(
+                    "aggregate outcome has no original action",
+                ));
+            };
+            self.publish_ordered_runtime_outcome(
+                pane_id,
+                execution,
+                action,
+                representative,
+                (
+                    true,
+                    runtime_loop_guard_failure_summary_line(label, matching_results.len(), message),
+                ),
+            )?;
             aggregated_result_ids.extend(
                 matching_results
                     .iter()
@@ -1742,7 +1829,13 @@ impl RuntimeSessionService {
             ) else {
                 continue;
             };
-            self.publish_ordered_runtime_outcome(pane_id, execution, action, result, (is_error, line))?;
+            self.publish_ordered_runtime_outcome(
+                pane_id,
+                execution,
+                action,
+                result,
+                (is_error, line),
+            )?;
         }
         Ok(())
     }
@@ -1751,47 +1844,104 @@ impl RuntimeSessionService {
     /// before immediate append and share the same installed-source ack. This is
     /// the existing ordered owner, not an outcome replay queue or execution grant.
     fn publish_ordered_runtime_outcome(
-        &mut self, pane_id: &str, execution: &AgentTurnExecution,
-        action: &mez_agent::AgentAction, result: &ActionResult, source: (bool, String),
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        action: &mez_agent::AgentAction,
+        result: &ActionResult,
+        source: (bool, String),
     ) -> Result<()> {
         let (is_error, line) = source;
         let completion_owned = self.completion_owns_transcript_policy(&execution.request.turn_id);
-        if completion_owned && !self.completion_settlement_binding_current(&execution.request.turn_id) {
+        if completion_owned
+            && !self.completion_settlement_binding_current(&execution.request.turn_id)
+        {
             return Err(MezError::conflict("outcome publication binding is retired"));
         }
-        let owner = self.agent_shell_store().get(pane_id).map(|session| session.session_id.clone());
+        let owner = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone());
         let group = super::provider_execution::provider_log_execution_group_id(execution)?;
-        let index = execution.response.action_batch.as_ref()
-            .and_then(|batch| batch.actions.iter().position(|candidate| candidate.id == action.id));
+        let index = execution.response.action_batch.as_ref().and_then(|batch| {
+            batch
+                .actions
+                .iter()
+                .position(|candidate| candidate.id == action.id)
+        });
         if let (Some(conversation_id), Some(index)) = (owner, index)
             && self.presentation.agent_provider_log_orders.contains_key(&(
-                pane_id.to_string(), execution.request.turn_id.clone(), conversation_id.clone(), group.clone()))
+                pane_id.to_string(),
+                execution.request.turn_id.clone(),
+                conversation_id.clone(),
+                group.clone(),
+            ))
         {
-            let key = (pane_id.to_string(), execution.request.turn_id.clone(), conversation_id, group, index);
-            if self.presentation.agent_published_provider_outcomes.contains(&(key.clone(), is_error, line.clone())) {
+            let key = (
+                pane_id.to_string(),
+                execution.request.turn_id.clone(),
+                conversation_id,
+                group,
+                index,
+            );
+            if self
+                .presentation
+                .agent_published_provider_outcomes
+                .contains(&(key.clone(), is_error, line.clone()))
+            {
                 return Ok(());
             }
-            if !self.presentation.agent_published_provider_headers.contains(&key) {
-                self.presentation.agent_queued_provider_headers.entry(key.clone())
+            if !self
+                .presentation
+                .agent_published_provider_headers
+                .contains(&key)
+            {
+                self.presentation
+                    .agent_queued_provider_headers
+                    .entry(key.clone())
                     .or_insert_with(|| (action.clone(), String::new(), None));
             }
-            let already_queued = self.presentation.agent_queued_provider_outcomes.get(&key)
-                .is_some_and(|pending| pending.iter().any(|entry| entry.0 == is_error && entry.1 == line));
-            let entry = (!already_queued).then(|| self.presentation_entry(pane_id,
-                mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance));
+            let already_queued = self
+                .presentation
+                .agent_queued_provider_outcomes
+                .get(&key)
+                .is_some_and(|pending| {
+                    pending
+                        .iter()
+                        .any(|entry| entry.0 == is_error && entry.1 == line)
+                });
+            let entry = (!already_queued).then(|| {
+                self.presentation_entry(
+                    pane_id,
+                    mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+                )
+            });
             if let Some(entry) = entry {
-                self.presentation.agent_queued_provider_outcomes.entry(key).or_default()
+                self.presentation
+                    .agent_queued_provider_outcomes
+                    .entry(key)
+                    .or_default()
                     .push((is_error, line, entry, result.clone()));
             }
             return self.flush_ordered_provider_headers(pane_id, execution);
         }
         if completion_owned {
-            let error = MezError::invalid_state("outcome publication has no original ordered owner");
-            self.record_completion_required_failure(&execution.request.turn_id, "outcome_publication_owner", None, None, &error);
+            let error =
+                MezError::invalid_state("outcome publication has no original ordered owner");
+            self.record_completion_required_failure(
+                &execution.request.turn_id,
+                "outcome_publication_owner",
+                None,
+                None,
+                &error,
+            );
             return Err(error);
         }
-        if is_error { self.append_agent_error_text_to_terminal_buffer(pane_id, &line) }
-        else { self.append_agent_status_text_to_terminal_buffer(pane_id, &line) }
+        if is_error {
+            self.append_agent_error_text_to_terminal_buffer(pane_id, &line)
+        } else {
+            self.append_agent_status_text_to_terminal_buffer(pane_id, &line)
+        }
     }
 
     /// Presents bounded failure details when the runtime is ending a failed

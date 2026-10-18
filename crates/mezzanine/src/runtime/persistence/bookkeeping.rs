@@ -171,18 +171,32 @@ impl RuntimePersistenceComponent {
 
     /// Claims only the requested oldest conversation candidate for synchronous
     /// completion. It never steals another conversation's pending read claim.
-    pub(crate) fn claim_bookkeeping_candidate_generation(&mut self, generation: u64) -> Option<RuntimeBookkeepingCandidate> {
-        let candidate = self.bookkeeping_candidates.iter().find(|candidate| candidate.generation == generation)?;
+    pub(crate) fn claim_bookkeeping_candidate_generation(
+        &mut self,
+        generation: u64,
+    ) -> Option<RuntimeBookkeepingCandidate> {
+        let candidate = self
+            .bookkeeping_candidates
+            .iter()
+            .find(|candidate| candidate.generation == generation)?;
         let conversation_id = &candidate.turn.conversation_id;
-        if candidate.blocked || self.bookkeeping_claims.contains_key(&generation)
-            || self.bookkeeping_candidates.iter().find(|candidate| &candidate.turn.conversation_id == conversation_id)
+        if candidate.blocked
+            || self.bookkeeping_claims.contains_key(&generation)
+            || self
+                .bookkeeping_candidates
+                .iter()
+                .find(|candidate| &candidate.turn.conversation_id == conversation_id)
                 .is_none_or(|candidate| candidate.generation != generation)
             || self.bookkeeping_candidates.iter().any(|candidate| {
-                &candidate.turn.conversation_id == conversation_id && self.bookkeeping_claims.contains_key(&candidate.generation)
+                &candidate.turn.conversation_id == conversation_id
+                    && self.bookkeeping_claims.contains_key(&candidate.generation)
             })
-        { return None; }
+        {
+            return None;
+        }
         let candidate = candidate.clone();
-        self.bookkeeping_claims.insert(generation, RuntimeBookkeepingClaimIdentity(Arc::new(())));
+        self.bookkeeping_claims
+            .insert(generation, RuntimeBookkeepingClaimIdentity(Arc::new(())));
         Some(candidate)
     }
 
