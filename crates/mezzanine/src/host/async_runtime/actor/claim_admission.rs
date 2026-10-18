@@ -165,6 +165,10 @@ mod tests {
             "mez-runtime-only-lease-refusal-{}",
             crate::storage::token_usage::new_token_usage_event_id()
         ));
+        assert!(
+            !auth_root.exists(),
+            "setup requires an isolated absent credential root"
+        );
         service.set_auth_store(crate::security::auth::AuthStore::new(
             crate::security::auth::AuthPaths::under_config_root(&auth_root),
         ));
@@ -342,10 +346,22 @@ mod tests {
             work.mcp_plans.is_empty(),
             "setup must not execute MCP discovery"
         );
-        assert!(
-            work.provider_auth_refresh_profiles.is_empty(),
-            "setup must not refresh provider credentials"
+        assert_eq!(
+            work.provider_auth_refresh_profiles,
+            vec!["runtime-batch".to_string()]
         );
+        // Actual preparation retains its selected identity. Absent metadata
+        // returns Ok(false) at auth/store.rs before secret lookup or refresh
+        // transport; do not clear profiles or manufacture a preparation result.
+        assert!(
+            work.auth_store
+                .as_ref()
+                .expect("setup auth store")
+                .read_metadata_for_provider("runtime-batch")
+                .unwrap()
+                .is_none()
+        );
+        assert!(!auth_root.exists());
         assert!(
             work.accounting_projects.is_none(),
             "setup must not run an accounting preparation worker"
@@ -357,6 +373,10 @@ mod tests {
         );
         assert!(preparation.mcp.is_empty());
         assert!(preparation.accounting_projects.is_none());
+        assert!(
+            !auth_root.exists(),
+            "inert preparation must not create credential state"
+        );
         // Drain setup effects through the normal adapter API without executing
         // them. No worker has received a dispatch and no claim timer may exist.
         let (reply, receive) = tokio::sync::oneshot::channel();
@@ -369,7 +389,8 @@ mod tests {
         let setup_effects = receive.await.unwrap().unwrap();
         assert!(!setup_effects.iter().any(|effect| matches!(effect,
             RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::ProviderClaim)));
-        assert!(!actor.service.agent_provider_task_is_owned(&turn.turn_id));
+        assert!(actor.service.agent_provider_task_is_pending(&turn.turn_id));
+        assert!(!actor.service.agent_provider_task_is_claimed(&turn.turn_id));
         actor.side_effect_buffer = 1;
         actor
             .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
