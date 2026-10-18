@@ -1,0 +1,1219 @@
+//! Original execution-group handoff and fail-closed retirement ownership.
+//!
+//! This is part of the existing boxed completion owner, not an execution queue,
+//! second context chronology, or persisted-result history. Each admitted group
+//! keeps its original transcript target and action set. A failed forced handoff
+//! moves backing state here before ordinary pane/turn cleanup may discard it.
+//! Candidate acceptance is only producer ownership, never checked append or disk
+//! durability. Only successful destination evidence may advance a milestone.
+
+use super::*;
+use crate::runtime::agent::bookkeeping::{
+    RuntimeBookkeepingCandidate, RuntimeBookkeepingTranscriptReadWork,
+};
+use crate::runtime::persistence::RuntimeCompletionCandidateWitness;
+
+/// Frozen intentional runtime-only policy, distinct from an archive witness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::runtime::agent) enum CompletionNoPersistencePolicy {
+    /// The conversation was deliberately ephemeral before work was issued.
+    Ephemeral,
+    /// This runtime had no transcript repository configured at admission.
+    /// There is no production store-clearing API; an attached original handle
+    /// is retained instead and is never recomputed from a replacement pane.
+    RuntimeOnly,
+}
+
+/// Original target sampled while the exact execution group owns admission.
+pub(super) enum CompletionTranscriptTarget {
+    Original {
+        read: RuntimeBookkeepingTranscriptReadWork,
+        directory: Option<TranscriptEntry>,
+    },
+    NoPersistencePolicy(CompletionNoPersistencePolicy),
+}
+
+/// One non-replayed group continuation or terminal effect boundary.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum CompletionMilestone {
+    #[default]
+    NotEntered,
+    Entered,
+    Accepted,
+}
+
+/// Retention lifetime only, never authorization. Nested lifecycle helpers share
+/// the original outer owner until every fallible suffix has returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::runtime) enum CompletionScope {
+    Callback,
+    Stop,
+    Finish,
+    PaneRemoval,
+}
+
+/// Fixed required-gate provenance; diagnostic text never becomes transcript data.
+pub(super) struct CompletionRequiredFailure {
+    pub(super) stage: &'static str,
+    pub(super) action_id: Option<String>,
+    pub(super) attempt: Option<String>,
+    pub(super) error: Box<MezError>,
+}
+
+/// Moved canonical backing of a failed group, not a cloned parallel timeline.
+pub(super) struct CompletionFailedBacking {
+    pub(super) execution: Option<AgentTurnExecution>,
+    pub(super) context: Option<mez_agent::AgentContext>,
+    pub(super) pending_native: Vec<crate::runtime::RuntimeNativeShellDispatch>,
+    pub(super) patch_states: Vec<(String, RuntimeApplyPatchBatchState)>,
+    pub(super) patch_phases: Vec<(String, RuntimePendingApplyPatchPhase)>,
+}
+
+/// The exact immutable candidate and its cached actual producer witness.
+pub(super) struct CompletionTranscriptHandoff {
+    pub(super) candidate: RuntimeBookkeepingCandidate,
+    pub(super) witness: Option<RuntimeCompletionCandidateWitness>,
+    pub(super) evidence: String,
+}
+
+/// Actual producer ownership is distinct from intentional runtime-only policy;
+/// neither certifies checked append or disk durability.
+pub(in crate::runtime::agent) enum CompletionTranscriptOwnership {
+    Candidate(RuntimeCompletionCandidateWitness),
+    NoPersistencePolicy(CompletionNoPersistencePolicy),
+}
+
+/// One bounded admitted execution-group slot; per-action transfer cannot erase
+/// its original target, required errors, or group-finalization milestones.
+pub(super) struct CompletionGroup {
+    pub(super) turn: AgentTurnRecord,
+    pub(super) group: mez_agent::ContextExecutionGroupId,
+    pub(super) actions: Vec<(String, String, usize)>,
+    pub(super) issued: BTreeSet<(String, String)>,
+    pub(super) observed: BTreeSet<(String, String)>,
+    pub(super) context_committed: BTreeSet<(String, String)>,
+    pub(super) transcript: CompletionTranscriptTarget,
+    pub(super) handoff: Option<Box<CompletionTranscriptHandoff>>,
+    pub(super) failed_backing: Option<Box<CompletionFailedBacking>>,
+    pub(super) primary_failure: Option<Box<CompletionRequiredFailure>>,
+    /// At most one first error per entered action/attempt/stage; duplicates do
+    /// not create new diagnostics or a new retry/settlement generation.
+    pub(super) secondary_failures: Vec<CompletionRequiredFailure>,
+    pub(super) safe_failure_evidence: Option<String>,
+    pub(super) paint_revoked: bool,
+    pub(super) continuation: CompletionMilestone,
+    pub(super) task_result: CompletionMilestone,
+    pub(super) scheduler: CompletionMilestone,
+    pub(super) scope: Option<CompletionScope>,
+    /// Diagnostic provenance only; never used to grant cleanup, paint or work.
+    pub(super) original_loop_role: Option<serde_json::Value>,
+}
+
+impl fmt::Debug for CompletionGroup {
+    /// Generic runtime debug never includes raw output/context/error messages.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompletionGroup")
+            .field("turn_id", &self.turn.turn_id)
+            .field("group", &self.group)
+            .field("actions", &self.actions.len())
+            .field("issued", &self.issued.len())
+            .field("has_handoff", &self.handoff.is_some())
+            .field("has_failed_backing", &self.failed_backing.is_some())
+            .field("paint_revoked", &self.paint_revoked)
+            .field("continuation", &self.continuation)
+            .field("task_result", &self.task_result)
+            .field("scheduler", &self.scheduler)
+            .field(
+                "failure_kind",
+                &self
+                    .primary_failure
+                    .as_ref()
+                    .map(|failure| failure.error.kind()),
+            )
+            .finish()
+    }
+}
+
+impl RuntimeSessionService {
+    /// Fences only NEW work after a required settlement failure. Already-issued
+    /// result ingress, cancellation and reap must never call this admission gate.
+    /// Keeping existing admitted slots while refusing new ones bounds failed
+    /// completion ownership without creating a historical receipt store.
+    pub(crate) fn ensure_completion_admission_open(&self) -> Result<()> {
+        match self
+            .agent
+            .completion_settlements
+            .critical_failure
+            .as_deref()
+        {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+
+    /// Reserves the current canonical group's original read and complete action
+    /// set before physical worker dispatch. An issued attempt is recorded only
+    /// after its actual actor claim, never inferred from an expected sibling.
+    pub(in crate::runtime::agent) fn reserve_completion_group(
+        &mut self,
+        turn_id: &str,
+        group_id: &mez_agent::ContextExecutionGroupId,
+    ) -> Result<()> {
+        self.ensure_completion_admission_open()?;
+        if let Some(group) = self.agent.completion_settlements.groups.get(turn_id) {
+            return if &group.group == group_id
+                && !group.paint_revoked
+                && group.failed_backing.is_none()
+            {
+                Ok(())
+            } else {
+                Err(MezError::invalid_state(
+                    "previous completion group still owns its execution slot",
+                ))
+            };
+        }
+        let turn = self
+            .agent_turn_ledger()
+            .turn(turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("completion group turn is unavailable"))?;
+        let execution = self
+            .agent_turn_executions()
+            .get(turn_id)
+            .ok_or_else(|| MezError::invalid_state("completion group execution is unavailable"))?;
+        if crate::runtime::agent::provider_execution::provider_log_execution_group_id(execution)?
+            != *group_id
+        {
+            return Err(MezError::invalid_state(
+                "completion group differs from canonical execution",
+            ));
+        }
+        let actions = execution
+            .response
+            .action_batch
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("completion group action set is unavailable"))?
+            .actions
+            .iter()
+            .enumerate()
+            .map(|(ordinal, action)| (action.id.clone(), action.action_type().to_string(), ordinal))
+            .collect();
+        let session = self.agent_shell_store().get(&turn.pane_id).ok_or_else(|| {
+            MezError::invalid_state("completion group original binding is unavailable")
+        })?;
+        if session.session_id != turn.conversation_id {
+            return Err(MezError::invalid_state(
+                "completion group original conversation changed",
+            ));
+        }
+        let transcript = if session.ephemeral {
+            CompletionTranscriptTarget::NoPersistencePolicy(
+                CompletionNoPersistencePolicy::Ephemeral,
+            )
+        } else if let Some(store) = self.persistence.cloned_transcript_store() {
+            CompletionTranscriptTarget::Original {
+                read: self.capture_completion_transcript_read(store, &turn)?,
+                directory: self.capture_completion_directory_entry(&turn),
+            }
+        } else {
+            CompletionTranscriptTarget::NoPersistencePolicy(
+                CompletionNoPersistencePolicy::RuntimeOnly,
+            )
+        };
+        let original_loop_role = self.agent_loop_turn(turn_id).and_then(|loop_turn| {
+            self.agent_loop_state_by_id(&loop_turn.loop_id).map(|state| serde_json::json!({
+                "loop_id": loop_turn.loop_id, "old_work_turn_id": turn_id,
+                "work_agent_id": turn.agent_id, "work_conversation_id": turn.conversation_id,
+                "iteration": loop_turn.iteration, "execution_pane_id": state.execution_pane_id,
+                "invoking_pane_id": state.invoking_pane_id,
+                "parent_conversation_id": state.parent_conversation_id,
+                "routed_parent_turn_id": state.routed_parent_turn_id,
+                "completion": state.completion.as_ref().map(|completion| serde_json::json!({
+                    "parent_turn_id": completion.parent_turn_id,
+                    "parent_action_id": completion.parent_action_id,
+                    "first_child_turn_id": completion.child_turn_id,
+                    "child_agent_id": completion.child_agent_id,
+                })),
+            }))
+        });
+        self.agent.completion_settlements.groups.insert(
+            turn_id.to_string(),
+            Box::new(CompletionGroup {
+                turn,
+                group: group_id.clone(),
+                actions,
+                issued: BTreeSet::new(),
+                observed: BTreeSet::new(),
+                context_committed: BTreeSet::new(),
+                transcript,
+                handoff: None,
+                failed_backing: None,
+                primary_failure: None,
+                secondary_failures: Vec::new(),
+                safe_failure_evidence: None,
+                paint_revoked: false,
+                continuation: CompletionMilestone::NotEntered,
+                task_result: CompletionMilestone::NotEntered,
+                scheduler: CompletionMilestone::NotEntered,
+                scope: None,
+                original_loop_role,
+            }),
+        );
+        Ok(())
+    }
+
+    /// Records one actual claimed action/phase and invalidates any older frozen
+    /// snapshot. This is not dispatch acceptance or result acknowledgement.
+    pub(in crate::runtime::agent) fn record_completion_issued_attempt(
+        &mut self,
+        turn_id: &str,
+        action_id: &str,
+        attempt: &str,
+    ) -> Result<()> {
+        let group = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(turn_id)
+            .ok_or_else(|| MezError::invalid_state("issued completion group is unavailable"))?;
+        if !group.actions.iter().any(|(id, _, _)| id == action_id) {
+            return Err(MezError::invalid_state(
+                "issued action is outside admitted completion group",
+            ));
+        }
+        if group
+            .issued
+            .insert((action_id.to_string(), attempt.to_string()))
+        {
+            group.handoff = None;
+        }
+        Ok(())
+    }
+
+    /// A new canonical observation or required failure makes an older candidate
+    /// witness insufficient. Already-owned immutable candidates remain in their
+    /// destination; the group must hand off its changed evidence separately.
+    pub(in crate::runtime::agent) fn invalidate_completion_handoff(&mut self, turn_id: &str) {
+        if let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) {
+            group.handoff = None;
+        }
+    }
+
+    /// Retains the full typed primary error and bounded first secondary errors
+    /// under actual admitted action/phase/stage identities. Transcript projection
+    /// uses only fixed provenance and kind, never these private message bytes.
+    pub(in crate::runtime::agent) fn record_completion_required_failure(
+        &mut self,
+        turn_id: &str,
+        stage: &'static str,
+        action_id: Option<&str>,
+        attempt: Option<&str>,
+        error: &MezError,
+    ) {
+        let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) else {
+            return;
+        };
+        let same = |failure: &CompletionRequiredFailure| {
+            failure.stage == stage
+                && failure.action_id.as_deref() == action_id
+                && failure.attempt.as_deref() == attempt
+        };
+        if group.primary_failure.as_deref().is_some_and(&same)
+            || group.secondary_failures.iter().any(same)
+        {
+            return;
+        }
+        // Action failures can name only an actually issued owner. Group-level
+        // stages are fixed call-site constants, not arbitrary worker labels.
+        if let Some(action_id) = action_id
+            && !group.issued.iter().any(|(action, issued)| {
+                action == action_id && attempt.is_none_or(|attempt| attempt == issued)
+            })
+        {
+            return;
+        }
+        let failure = CompletionRequiredFailure {
+            stage,
+            action_id: action_id.map(str::to_string),
+            attempt: attempt.map(str::to_string),
+            error: Box::new(error.clone()),
+        };
+        if group.primary_failure.is_none() {
+            group.primary_failure = Some(Box::new(failure));
+        } else {
+            group.secondary_failures.push(failure);
+        }
+        if let Some(handoff) = group.handoff.as_mut() {
+            handoff.witness = None;
+        }
+        self.agent
+            .completion_settlements
+            .critical_failure
+            .get_or_insert_with(|| Box::new(error.clone()));
+    }
+
+    /// Revokes only this exact group's paint eligibility. Raw outcomes, claims,
+    /// queued immutable sources and canonical backing remain owned until handoff.
+    pub(in crate::runtime) fn revoke_completion_paint(&mut self, turn_id: &str) {
+        if let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) {
+            group.paint_revoked = true;
+        }
+    }
+
+    /// Moves failed backing before any bypass clear can destroy it. A second
+    /// cleanup cannot overwrite the original owner or create another timeline.
+    pub(in crate::runtime::agent) fn detach_failed_completion_backing(&mut self, turn_id: &str) {
+        if self
+            .agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .is_none_or(|group| group.failed_backing.is_some())
+        {
+            return;
+        }
+        let action_ids = self
+            .agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .map(|group| {
+                group
+                    .actions
+                    .iter()
+                    .map(|(id, _, _)| id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let native_keys = self
+            .agent
+            .pending_native_shell_dispatches
+            .keys()
+            .filter(|(owner, _)| owner == turn_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let pending_native = native_keys
+            .into_iter()
+            .filter_map(|key| self.agent.pending_native_shell_dispatches.remove(&key))
+            .collect();
+        let mut patch_states = Vec::new();
+        let mut patch_phases = Vec::new();
+        for action_id in action_ids {
+            let key = Self::apply_patch_batch_state_key(turn_id, &action_id);
+            if let Some(state) = self.agent.apply_patch_batch_states.remove(&key) {
+                patch_states.push((action_id.clone(), state));
+            }
+            if let Some(phase) = self.agent.pending_apply_patch_phases.remove(&key) {
+                patch_phases.push((action_id, phase));
+            }
+        }
+        let execution = self.agent_turn_executions_mut().remove(turn_id);
+        let context = self.agent_turn_contexts_mut().remove(turn_id);
+        if let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) {
+            group.failed_backing = Some(Box::new(CompletionFailedBacking {
+                execution,
+                context,
+                pending_native,
+                patch_states,
+                patch_phases,
+            }));
+            group.paint_revoked = true;
+        }
+    }
+
+    /// Returns original group failure truth without consulting replacement pane
+    /// metadata or requiring backing to remain indexed in live execution maps.
+    pub(in crate::runtime::agent) fn completion_group_failure(
+        &self,
+        turn_id: &str,
+    ) -> Option<MezError> {
+        self.agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .and_then(|group| group.primary_failure.as_ref())
+            .map(|failure| (*failure.error).clone())
+    }
+
+    /// Builds only fixed-version provenance/kind/identity facts. A retained
+    /// outcome, context commit, candidate witness and gate acceptance are
+    /// deliberately different claims. No private error or invalid output enters
+    /// this SYSTEM evidence; full typed diagnostics remain in the live owner.
+    fn completion_settlement_evidence(&self, turn_id: &str) -> Result<String> {
+        let group = self
+            .agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .ok_or_else(|| MezError::invalid_state("completion evidence group is unavailable"))?;
+        let failures = group
+            .primary_failure
+            .iter()
+            .map(Box::as_ref)
+            .chain(group.secondary_failures.iter())
+            .map(|failure| {
+                serde_json::json!({
+                    "stage": failure.stage,
+                    "error_kind": runtime_mezzanine_error_code(failure.error.kind()),
+                    "action_id": failure.action_id,
+                    "attempt": failure.attempt,
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(serde_json::json!({
+            "completion_settlement": {
+                "version": 1, "group": group.group.as_str(),
+                "turn_id": group.turn.turn_id,
+                "admitted_actions": group.actions,
+                "issued_attempts": group.issued,
+                "retained_delivery_ids": group.observed,
+                "context_committed_ids": group.context_committed,
+                "required_failures": failures,
+                "possible_effects": !group.issued.is_empty(),
+                "automatic_replay_allowed": false,
+                "candidate_witness_is_gate_or_disk_acceptance": false,
+                "paint_revoked": group.paint_revoked,
+                "original_loop_role": group.original_loop_role,
+                "task_result_milestone": format!("{:?}", group.task_result),
+                "scheduler_milestone": format!("{:?}", group.scheduler),
+            }
+        })
+        .to_string())
+    }
+
+    /// Retains an immutable original-target snapshot in the existing candidate
+    /// owner and caches its real witness with no await/fallible gap after that
+    /// owner's successful insertion/reuse. Deliberate no-persistence policy is a
+    /// separate disposition and can never erase mandatory failure/raw ownership.
+    pub(in crate::runtime::agent) fn retain_completion_group_transcript(
+        &mut self,
+        turn_id: &str,
+    ) -> Result<CompletionTranscriptOwnership> {
+        let evidence = self.completion_settlement_evidence(turn_id)?;
+        let group = self
+            .agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .ok_or_else(|| MezError::invalid_state("completion handoff group is unavailable"))?;
+        if let CompletionTranscriptTarget::NoPersistencePolicy(policy) = &group.transcript {
+            if let Some(failure) = &group.primary_failure {
+                return Err((*failure.error).clone());
+            }
+            return Ok(CompletionTranscriptOwnership::NoPersistencePolicy(*policy));
+        }
+        let existing = group.handoff.as_ref();
+        if let Some(handoff) = existing
+            && handoff.evidence == evidence
+            && let Some(witness) = &handoff.witness
+        {
+            return Ok(CompletionTranscriptOwnership::Candidate(witness.clone()));
+        }
+        let mut candidate = if let Some(handoff) = existing {
+            handoff.candidate.clone()
+        } else {
+            let CompletionTranscriptTarget::Original { read, directory } = &group.transcript else {
+                return Err(MezError::invalid_state(
+                    "completion archive target is unavailable",
+                ));
+            };
+            let execution = self
+                .agent_turn_executions()
+                .get(turn_id)
+                .or_else(|| {
+                    group
+                        .failed_backing
+                        .as_ref()
+                        .and_then(|backing| backing.execution.as_ref())
+                })
+                .ok_or_else(|| {
+                    MezError::invalid_state("completion handoff execution is unavailable")
+                })?;
+            self.completion_bookkeeping_candidate(
+                &group.turn,
+                execution,
+                read.clone(),
+                directory.clone(),
+            )?
+        };
+        if existing.is_none_or(|handoff| handoff.evidence != evidence) {
+            Self::append_completion_settlement_evidence(
+                &mut candidate,
+                &group.group,
+                evidence.clone(),
+            )?;
+        }
+        // Install the exact rows in their same admitted group before asking the
+        // destination to accept them. A rejection keeps all source bytes live.
+        let group = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(turn_id)
+            .ok_or_else(|| MezError::invalid_state("completion handoff owner disappeared"))?;
+        group.handoff = Some(Box::new(CompletionTranscriptHandoff {
+            candidate,
+            witness: None,
+            evidence,
+        }));
+        let handoff = group
+            .handoff
+            .as_mut()
+            .ok_or_else(|| MezError::invalid_state("completion snapshot was not installed"))?;
+        let accepted = self
+            .persistence
+            .retain_completion_bookkeeping_candidate(handoff.candidate.clone())?;
+        // The mutable source owner was acquired before producer acceptance. No
+        // fallible lookup, I/O, callback or await separates acceptance and cache.
+        handoff.witness = Some(accepted.witness().clone());
+        if !self.persistence.transcript_uses_adapter() {
+            self.complete_completion_candidate_inline(accepted.witness().generation())?;
+        }
+        Ok(CompletionTranscriptOwnership::Candidate(
+            accepted.witness().clone(),
+        ))
+    }
+
+    /// Distinguishes actual archive ownership from intentional runtime-only
+    /// policy. Legacy persist_* Ok(0) is never consulted as transfer evidence.
+    pub(in crate::runtime::agent) fn completion_archive_handoff_owned(
+        &self,
+        turn_id: &str,
+    ) -> bool {
+        self.agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .and_then(|group| group.handoff.as_ref())
+            .is_some_and(|handoff| handoff.witness.is_some())
+    }
+
+    /// Records an actual pending-provider insertion and its group milestone in
+    /// one infallible actor mutation. False remains an unchanged domain result,
+    /// never an acknowledgement fabricated for a duplicate or blocked gate.
+    pub(in crate::runtime::agent) fn queue_completion_provider_task(
+        &mut self,
+        turn_id: String,
+    ) -> bool {
+        if self.agent.completion_settlements.critical_failure.is_some() {
+            return false;
+        }
+        if self.agent.completion_settlements.groups.contains_key(&turn_id)
+            && !self.completion_group_publication_ready(&turn_id)
+        {
+            return false;
+        }
+        let (pending, settlements) = (
+            &mut self.agent.pending_agent_provider_tasks,
+            &mut self.agent.completion_settlements,
+        );
+        let group = settlements.groups.get_mut(&turn_id);
+        if let Some(group) = group.as_ref()
+            && (group.primary_failure.is_some()
+                || group.paint_revoked
+                || group.continuation == CompletionMilestone::Entered)
+        {
+            return false;
+        }
+        if let Some(group) = group {
+            if group.continuation == CompletionMilestone::NotEntered {
+                if pending.contains(&turn_id) {
+                    return false;
+                }
+                group.continuation = CompletionMilestone::Entered;
+            }
+            let changed = pending.insert(turn_id);
+            if changed {
+                group.continuation = CompletionMilestone::Accepted;
+            }
+            changed
+        } else {
+            pending.insert(turn_id)
+        }
+    }
+
+    /// Defers NEW dispatch inside a terminal task-result/scheduler boundary;
+    /// entered milestones are not success and are not paint-recovery work.
+    pub(crate) fn completion_finalization_holds_new_work(&self) -> bool {
+        self.agent
+            .completion_settlements
+            .groups
+            .values()
+            .any(|group| {
+                group.task_result == CompletionMilestone::Entered
+                    || group.scheduler == CompletionMilestone::Entered
+            })
+    }
+
+    /// Validates provider readiness without consuming original completion
+    /// backing during fallible or asynchronous request preparation.
+    pub(in crate::runtime::agent) fn ensure_completion_provider_claim_ready(
+        &self,
+        turn_id: &str,
+    ) -> Result<()> {
+        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
+            return Ok(());
+        };
+        if let Some(failure) = &group.primary_failure {
+            return Err((*failure.error).clone());
+        }
+        let actions_owned = !self.completion_group_publication_ready(turn_id)
+            || self
+                .agent
+                .pending_native_shell_dispatches
+                .keys()
+                .any(|(owner, _)| owner == turn_id)
+            || self
+                .agent
+                .claimed_native_shell_dispatches
+                .keys()
+                .any(|(owner, _)| owner == turn_id);
+        if group.continuation != CompletionMilestone::Accepted
+            || group.paint_revoked
+            || actions_owned
+        {
+            return Err(MezError::invalid_state(
+                "completion group has not transferred provider continuation",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Releases a successful group only after the actual provider claim owner
+    /// and accounting record have been installed in the same actor transition.
+    pub(in crate::runtime::agent) fn release_completion_group_for_provider_claim(
+        &mut self,
+        turn_id: &str,
+    ) -> Result<()> {
+        self.ensure_completion_provider_claim_ready(turn_id)?;
+        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
+            return Ok(());
+        };
+        let group_id = group.group.clone();
+        // All raw/gate/publication obligations have transferred. Retained
+        // duplicate recognition ends only at this actual next-provider claim,
+        // never merely because one successful sibling finished its callback.
+        self.agent.completion_settlements.external.retain(|_, receipt| {
+            receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
+        });
+        self.agent.completion_settlements.native.retain(|_, receipt| {
+            receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
+        });
+        self.agent.completion_settlements.groups.remove(turn_id);
+        Ok(())
+    }
+
+    /// A known retained delivery must never be rewritten as an issued-unknown
+    /// result merely because projection failed. Compare the exact current claim
+    /// generation, not any older observed phase of the same action.
+    pub(in crate::runtime::agent) fn completion_current_claim_has_retained_outcome(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+    ) -> bool {
+        let identity = (turn_id.to_string(), action_id.to_string());
+        let attempt = self
+            .agent
+            .claimed_approved_external_actions
+            .get(&identity)
+            .or_else(|| self.agent.claimed_native_shell_dispatches.get(&identity));
+        self.agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .is_some_and(|group| {
+                attempt.is_some_and(|attempt| {
+                    group
+                        .observed
+                        .contains(&(action_id.to_string(), attempt.clone()))
+                })
+            })
+    }
+
+    /// Runs the unconditional safety prefix, classifies still-issued unknown
+    /// effects while claim evidence exists, and tries the original-target handoff.
+    /// Every failure moves backing into the same group before caller cleanup can
+    /// erase indices. No worker, hook, audit or finalization effect is replayed.
+    pub(in crate::runtime) fn prepare_completion_forced_retirement(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        self.request_agent_worker_cancellation_for_turn(&turn.turn_id);
+        self.revoke_completion_paint(&turn.turn_id);
+        self.retire_cancelled_mcp_leases_for_turn(&turn.turn_id);
+        if !self
+            .agent
+            .completion_settlements
+            .groups
+            .contains_key(&turn.turn_id)
+        {
+            return Ok(());
+        }
+        if let Err(error) = self.retain_interrupted_worker_effects(turn) {
+            self.record_completion_required_failure(
+                &turn.turn_id,
+                "forced_context",
+                None,
+                None,
+                &error,
+            );
+        }
+        let raw_pending = self
+            .agent
+            .completion_settlements
+            .external
+            .values()
+            .any(|receipt| receipt.owner.turn_id == turn.turn_id && receipt.raw.is_some())
+            || self
+                .agent
+                .completion_settlements
+                .native
+                .values()
+                .any(|receipt| receipt.owner.turn_id == turn.turn_id && receipt.raw.is_some());
+        if raw_pending && self.completion_group_failure(&turn.turn_id).is_none() {
+            let error = MezError::invalid_state(
+                "accepted completion still owns unprojected phase evidence",
+            );
+            self.record_completion_required_failure(
+                &turn.turn_id,
+                "forced_projection_pending",
+                None,
+                None,
+                &error,
+            );
+        }
+        if let Err(error) = self.retain_completion_group_transcript(&turn.turn_id) {
+            self.record_completion_required_failure(
+                &turn.turn_id,
+                "forced_transcript_handoff",
+                None,
+                None,
+                &error,
+            );
+        }
+        if let Some(error) = self.completion_group_failure(&turn.turn_id) {
+            let evidence = self.completion_settlement_evidence(&turn.turn_id)?;
+            if let Some(group) = self
+                .agent
+                .completion_settlements
+                .groups
+                .get_mut(&turn.turn_id)
+            {
+                group.safe_failure_evidence = Some(evidence);
+            }
+            self.detach_failed_completion_backing(&turn.turn_id);
+            self.retire_completion_worker_deliveries(&turn.turn_id);
+            return Err(error);
+        }
+        self.retire_completion_worker_deliveries(&turn.turn_id);
+        Ok(())
+    }
+
+    /// Removes only exact-turn delivery authority after outcomes/uncertainty
+    /// have transferred or moved into failed backing. Every token is signalled
+    /// first, independently of any preceding handoff error.
+    pub(in crate::runtime::agent) fn retire_completion_worker_deliveries(&mut self, turn_id: &str) {
+        self.request_agent_worker_cancellation_for_turn(turn_id);
+        self.retire_cancelled_mcp_leases_for_turn(turn_id);
+        self.agent
+            .pending_approved_external_actions
+            .retain(|(owner, _), _| owner != turn_id);
+        self.agent
+            .claimed_approved_external_actions
+            .retain(|(owner, _), _| owner != turn_id);
+        self.agent
+            .approved_external_cancellations
+            .retain(|(owner, _), _| owner != turn_id);
+        self.agent
+            .pending_native_shell_dispatches
+            .retain(|(owner, _), _| owner != turn_id);
+        self.agent
+            .claimed_native_shell_dispatches
+            .retain(|(owner, _), _| owner != turn_id);
+    }
+
+    /// A legacy transcript producer must not recapture a live/replacement
+    /// target after this group froze its original store or no-save policy.
+    pub(in crate::runtime::agent) fn completion_owns_transcript_policy(
+        &self,
+        turn_id: &str,
+    ) -> bool {
+        self.agent
+            .completion_settlements
+            .groups
+            .contains_key(turn_id)
+    }
+
+    /// Returns the frozen original turn for cleanup, not a replacement shell's
+    /// conversation or role metadata.
+    pub(in crate::runtime::agent) fn completion_original_turn(
+        &self,
+        turn_id: &str,
+    ) -> Option<AgentTurnRecord> {
+        self.agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .map(|group| group.turn.clone())
+    }
+
+    /// Performs only a group's remaining terminal milestones. Entry is recorded
+    /// before each effectful boundary; an ambiguous prior entry never retries the
+    /// whole finalizer. A producer witness is not gate acceptance or durability.
+    pub(in crate::runtime::agent) fn completion_group_requires_terminal_finalize(&self, turn_id: &str) -> bool {
+        self.agent.completion_settlements.groups.get(turn_id)
+            .is_some_and(|group| group.scheduler == CompletionMilestone::NotEntered)
+    }
+
+    /// Performs only the group's remaining entered/accepted milestones.
+    pub(in crate::runtime::agent) fn finalize_completion_group(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+        reason: &str,
+    ) -> Result<()> {
+        self.ensure_completion_required_gates_ready(&turn.turn_id)?;
+        let publication_pending =
+            self.agent
+                .completion_settlements
+                .external
+                .values()
+                .any(|receipt| {
+                    receipt.owner.turn_id == turn.turn_id
+                        && (receipt.raw.is_some()
+                            || receipt.phase != ExternalCompletionPhase::PublicationAccepted)
+                })
+                || self
+                    .agent
+                    .completion_settlements
+                    .native
+                    .values()
+                    .any(|receipt| {
+                        receipt.owner.turn_id == turn.turn_id
+                            && (receipt.raw.is_some()
+                                || !matches!(
+                                    receipt.phase,
+                                    NativeCompletionPhase::PublicationAccepted
+                                        | NativeCompletionPhase::NextPhaseOwned
+                                ))
+                    });
+        if publication_pending {
+            return Err(MezError::invalid_state(
+                "completion publication still owns group finalization",
+            ));
+        }
+        let ownership = match self.retain_completion_group_transcript(&turn.turn_id) {
+            Ok(ownership) => ownership,
+            Err(error) => {
+                self.record_completion_required_failure(
+                    &turn.turn_id,
+                    "transcript_handoff",
+                    None,
+                    None,
+                    &error,
+                );
+                return Err(error);
+            }
+        };
+        match ownership {
+            CompletionTranscriptOwnership::Candidate(witness) => {
+                if self
+                    .agent
+                    .completion_settlements
+                    .groups
+                    .get(&turn.turn_id)
+                    .and_then(|group| group.handoff.as_ref())
+                    .and_then(|handoff| handoff.witness.as_ref())
+                    != Some(&witness)
+                {
+                    return Err(MezError::invalid_state(
+                        "completion candidate witness is not owned by this group",
+                    ));
+                }
+            }
+            CompletionTranscriptOwnership::NoPersistencePolicy(policy) => {
+                let matches = self.agent.completion_settlements.groups.get(&turn.turn_id).is_some_and(|group| {
+                    matches!(&group.transcript, CompletionTranscriptTarget::NoPersistencePolicy(original) if *original == policy)
+                });
+                if !matches {
+                    return Err(MezError::invalid_state(
+                        "completion no-persistence policy changed",
+                    ));
+                }
+            }
+        }
+        let task_result = self
+            .agent
+            .completion_settlements
+            .groups
+            .get(&turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("completion finalization owner is unavailable"))?
+            .task_result;
+        match task_result {
+            CompletionMilestone::Entered => {
+                return Err(MezError::invalid_state(
+                    "terminal task-result acceptance is ambiguous; replay prohibited",
+                ));
+            }
+            CompletionMilestone::Accepted => {}
+            CompletionMilestone::NotEntered => {
+                if let Some(group) = self
+                    .agent
+                    .completion_settlements
+                    .groups
+                    .get_mut(&turn.turn_id)
+                {
+                    group.task_result = CompletionMilestone::Entered;
+                }
+                if let Err(error) = self.emit_subagent_task_result_for_execution(turn, execution) {
+                    self.record_completion_required_failure(
+                        &turn.turn_id,
+                        "terminal_task_result",
+                        None,
+                        None,
+                        &error,
+                    );
+                    return Err(error);
+                }
+                // The outer retention scope prevents nested lifecycle helpers
+                // from removing this group before the actual return is cached.
+                let group = self
+                    .agent
+                    .completion_settlements
+                    .groups
+                    .get_mut(&turn.turn_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("task-result milestone owner disappeared")
+                    })?;
+                group.task_result = CompletionMilestone::Accepted;
+            }
+        }
+        let scheduler = self
+            .agent
+            .completion_settlements
+            .groups
+            .get(&turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("scheduler milestone owner is unavailable"))?
+            .scheduler;
+        match scheduler {
+            CompletionMilestone::Entered => {
+                return Err(MezError::invalid_state(
+                    "terminal scheduler acceptance is ambiguous; replay prohibited",
+                ));
+            }
+            CompletionMilestone::Accepted => return Ok(()),
+            CompletionMilestone::NotEntered => {}
+        }
+        if let Some(group) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(&turn.turn_id)
+        {
+            group.scheduler = CompletionMilestone::Entered;
+        }
+        if let Err(error) =
+            self.complete_running_agent_turn_and_start_ready(turn, execution.terminal_state, reason)
+        {
+            self.record_completion_required_failure(
+                &turn.turn_id,
+                "terminal_scheduler",
+                None,
+                None,
+                &error,
+            );
+            return Err(error);
+        }
+        let group = self
+            .agent
+            .completion_settlements
+            .groups
+            .get_mut(&turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("scheduler milestone owner disappeared"))?;
+        group.scheduler = CompletionMilestone::Accepted;
+        if let Err(error) = self.start_ready_agent_turns() {
+            self.record_completion_required_failure(
+                &turn.turn_id,
+                "terminal_ready_work",
+                None,
+                None,
+                &error,
+            );
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Normal finalization cannot clear a group's backing before required gates,
+    /// publication and its actual transcript/task-result transfer. Forced cleanup
+    /// is separately admitted only after cancellation and original-target handoff.
+    pub(in crate::runtime::agent) fn ensure_completion_terminal_retirement(
+        &self,
+        turn_id: &str,
+    ) -> Result<()> {
+        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
+            return Ok(());
+        };
+        if let Some(failure) = &group.primary_failure {
+            return Err((*failure.error).clone());
+        }
+        let original_owned = match &group.transcript {
+            CompletionTranscriptTarget::Original { .. } => group
+                .handoff
+                .as_ref()
+                .is_some_and(|handoff| handoff.witness.is_some()),
+            CompletionTranscriptTarget::NoPersistencePolicy(_) => true,
+        };
+        let raw_pending = self
+            .agent
+            .completion_settlements
+            .external
+            .values()
+            .any(|receipt| {
+                receipt.owner.turn_id == turn_id
+                    && (receipt.raw.is_some()
+                        || (!group.paint_revoked
+                            && receipt.phase != ExternalCompletionPhase::PublicationAccepted))
+            })
+            || self
+                .agent
+                .completion_settlements
+                .native
+                .values()
+                .any(|receipt| {
+                    receipt.owner.turn_id == turn_id
+                        && (receipt.raw.is_some()
+                            || (!group.paint_revoked
+                                && !matches!(
+                                    receipt.phase,
+                                    NativeCompletionPhase::PublicationAccepted
+                                        | NativeCompletionPhase::NextPhaseOwned
+                                )))
+                });
+        if !original_owned || raw_pending || group.failed_backing.is_some() {
+            return Err(MezError::invalid_state(
+                "completion group has not transferred its retirement evidence",
+            ));
+        }
+        if !group.paint_revoked
+            && (group.task_result != CompletionMilestone::Accepted
+                || group.scheduler == CompletionMilestone::NotEntered)
+        {
+            return Err(MezError::invalid_state(
+                "completion group finalization milestone is unresolved",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Keeps primary failure truth after a later lifecycle error, retaining the
+    /// secondary typed error and moving backing before bypass cleanup can run.
+    pub(in crate::runtime::agent) fn retain_completion_lifecycle_error(
+        &mut self,
+        turn_id: &str,
+        error: MezError,
+    ) -> MezError {
+        self.record_completion_required_failure(turn_id, "turn_finalization", None, None, &error);
+        if let Ok(evidence) = self.completion_settlement_evidence(turn_id)
+            && let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id)
+        {
+            group.safe_failure_evidence = Some(evidence);
+        }
+        self.detach_failed_completion_backing(turn_id);
+        self.completion_group_failure(turn_id).unwrap_or(error)
+    }
+
+    /// Drops only a successfully transferred terminal/forced group. Failed
+    /// owners stay bounded behind the critical admission fence; no timer treats
+    /// them as paint work. Current callback receipts may outlive backing only
+    /// while the same group holds an actual immutable candidate witness.
+    pub(in crate::runtime::agent) fn retire_completion_group_after_transfer(
+        &mut self,
+        turn_id: &str,
+    ) {
+        let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
+            return;
+        };
+        if group.scope.is_some()
+            || group.primary_failure.is_some()
+            || group.failed_backing.is_some()
+            || self.agent_turn_executions().contains_key(turn_id)
+            || (!group.paint_revoked && group.scheduler != CompletionMilestone::Accepted)
+        {
+            return;
+        }
+        let group_id = group.group.clone();
+        self.agent
+            .completion_settlements
+            .external
+            .retain(|_, receipt| {
+                receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
+            });
+        self.agent
+            .completion_settlements
+            .native
+            .retain(|_, receipt| {
+                receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
+            });
+        self.agent.completion_settlements.groups.remove(turn_id);
+    }
+
+    /// Begins an outer retention boundary only after its caller validated the
+    /// actual turn/claim authority. Delegated finish/cleanup never replaces it.
+    pub(in crate::runtime) fn begin_completion_scope(
+        &mut self,
+        turn_id: &str,
+        scope: CompletionScope,
+    ) -> bool {
+        let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) else {
+            return false;
+        };
+        if group.scope.is_some() {
+            return false;
+        }
+        group.scope = Some(scope);
+        true
+    }
+
+    /// Ends a retention boundary after its complete fallible suffix. Required
+    /// errors remain primary; a successful nested helper cannot retire the
+    /// outer owner's snapshot before a later restore/checkpoint can still fail.
+    pub(in crate::runtime) fn end_completion_scope<T>(
+        &mut self,
+        turn_id: &str,
+        owns_scope: bool,
+        stage: &'static str,
+        cleanup_on_error: bool,
+        result: Result<T>,
+    ) -> Result<T> {
+        let result = match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.record_completion_required_failure(turn_id, stage, None, None, &error);
+                if cleanup_on_error
+                    && let Some(turn) = self
+                        .agent
+                        .completion_settlements
+                        .groups
+                        .get(turn_id)
+                        .map(|group| group.turn.clone())
+                {
+                    // Every exact token is signalled before any handoff error
+                    // can return; the helper retains typed primary/secondary
+                    // failures and moves backing instead of dropping payloads.
+                    let _retained_failure = self.prepare_completion_forced_retirement(&turn);
+                }
+                Err(self.completion_group_failure(turn_id).unwrap_or(error))
+            }
+        };
+        if owns_scope && let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id)
+        {
+            group.scope = None;
+        }
+        if result.is_ok() {
+            self.retire_completion_group_after_transfer(turn_id);
+        }
+        result
+    }
+}

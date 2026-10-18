@@ -745,6 +745,10 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Result<Option<AgentTurnRecord>> {
         self.require_live()?;
+        self.ensure_completion_admission_open()?;
+        if self.completion_finalization_holds_new_work() {
+            return Ok(None);
+        }
         if self.agent_turn_is_human_paused(turn_id) {
             return Ok(None);
         }
@@ -803,6 +807,7 @@ impl RuntimeSessionService {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(None);
         }
+        self.ensure_completion_provider_claim_ready(turn_id)?;
         Ok(Some(turn))
     }
 
@@ -1906,6 +1911,7 @@ impl RuntimeSessionService {
         timeout_ms: u64,
     ) -> Result<RuntimeTransition> {
         let turn = &dispatch.turn;
+        self.ensure_completion_provider_claim_ready(&turn.turn_id)?;
         let retain_request_chain = dispatch.auto_sizing.is_none()
             && dispatch.macro_judge_request.is_none()
             && dispatch.sandbox_failure_assessment_request.is_none();
@@ -1967,6 +1973,7 @@ impl RuntimeSessionService {
                 checkpoint_usage: Default::default(),
             },
         );
+        self.release_completion_group_for_provider_claim(&turn.turn_id)?;
         Ok(RuntimeTransition {
             applied: true,
             side_effects: vec![RuntimeSideEffect::ScheduleTimer {

@@ -10808,6 +10808,29 @@ MUST NOT retry a possibly delivered wrapper. Transaction output retention and
 private output-frame rendering MUST preserve bounded incremental state across
 arbitrary PTY chunk boundaries, including split UTF-8 scalars and Base64 frame
 markers, without exposing private framing bytes.
+Completed external and native worker outcomes MUST transfer to the exact
+actor-owned turn/action/group/attempt receipt before their delivery claims or
+native markers retire. Canonical terminal results and context MUST precede
+optional pane paint. Required audit, storage, context and hook failures MUST
+retain their original typed evidence and MUST NOT be retried as publication.
+An installation failure MUST retain the original immutable RESULT source,
+entry, occurrence and native transaction where present. Only matching installed
+source ownership acknowledges publication; this is not disk durability.
+Publication-only recovery MUST use the existing bounded completion/group owner,
+never repeat a completed action, provider request, hook or ambiguous effect,
+and MUST preserve real native, external, dependency and human-pause barriers.
+Readiness probes MUST NOT retire completion backing before an actual provider
+claim. Terminal cleanup and forced cancellation MUST retain original-target
+evidence on handoff failure and cancel only the exact admitted worker.
+Frozen completion archive identity MUST remain immutable. Fresh archive
+admission MUST be qualified by the original transcript path and conversation,
+one coherent checked history/frontier view, exact queued/inflight row bytes and
+the current private strong reservation identity. Cancellation, matching write
+failure, rollback and synchronous in-place writes MUST revoke old read admission
+before fallible diagnostics. Only checked committed observations or exact owned
+successful writes may advance the committed frontier. A committed maximum
+sequence has no successor; legacy conversation-wide cursor compatibility MUST
+NOT manufacture original-target archive proof.
 The `apply_patch` semantic action MUST emit one execution row naming the active path for each per-file read transaction and MUST suppress its internal write-phase start row. It MUST preserve completed per-file mutations when a later file operation in the same patch fails, retain and display confirmed diffs for applied paths, update modified-file tracking for those paths, and identify each failed path or operation so the model can retry only the remaining file work instead of treating the whole patch as rolled back. Machine-readable per-file outcome records MUST be filtered from user-visible diff output; malformed, missing, or truncated records MUST retain generic fail-closed diagnostics.
 The `apply_patch` semantic action MUST synthesize an explicit short timeout
 instead of inheriting the general shell-command default, so malformed or

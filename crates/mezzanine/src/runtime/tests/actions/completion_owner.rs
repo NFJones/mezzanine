@@ -159,6 +159,12 @@ impl CompletionFixture {
     /// production actor API, then claims its exact generated attempt. No role,
     /// permission, sandbox or admission bypass is enabled and no network runs.
     async fn fetch() -> Self {
+        Self::fetch_with_final_turn(true).await
+    }
+
+    /// Chooses terminal versus provider-continuation semantics before the
+    /// trusted provider fixture is admitted; never rewrites a settled receipt.
+    async fn fetch_with_final_turn(final_turn: bool) -> Self {
         let root = CompletionRoot(temp_root("completed-result-owner"));
         fs::create_dir(root.0.join("transcripts")).unwrap();
         let mut service = RuntimeServiceFixture::new()
@@ -223,7 +229,7 @@ impl CompletionFixture {
                     )
                 })
                 .collect(),
-            final_turn: true,
+            final_turn,
             terminal_state: AgentTurnState::Running,
         };
         service
@@ -562,6 +568,51 @@ async fn runtime_completion_owner_retains_fetch_before_immediate_install_failure
         1,
         "{rows}"
     );
+}
+
+/// A held first result and a successful serialized sibling cannot bypass group
+/// publication or strand the provider-claim milestone. The ordinary pump must
+/// acknowledge retained presentation, then either finalize once or permit the
+/// actual next-provider claim. Outcomes are synthetic; neither claim executes
+/// network/provider work, and no completed action is dispatched a second time.
+#[tokio::test]
+async fn runtime_completion_owner_recovers_held_sibling_before_group_continuation() {
+    for final_turn in [false, true] {
+        let mut fixture = CompletionFixture::fetch_with_final_turn(final_turn).await;
+        fixture.service.fail_agent_presentation_install_for_tests(0);
+        let outcome = fixture.outcome();
+        assert!(fixture.service.complete_approved_external_action(outcome).unwrap());
+        assert!(!fixture.service.completion_publication_retry_needed_for_turn(&fixture.turn.turn_id),
+            "the real pending sibling, not paint, owns progress");
+        let sibling = fixture.retained().response.action_batch.unwrap().actions[1].clone();
+        let dispatch = fixture.service.claim_approved_external_action(&fixture.turn.turn_id, &sibling.id)
+            .unwrap().expect("the exact serialized sibling is now claimable");
+        let sibling_result = ActionResult::succeeded(&fixture.turn, &sibling,
+            vec!["F668_SIBLING_COMPLETED_BODY".to_string()], None);
+        assert!(fixture.service.complete_approved_external_action(crate::runtime::RuntimeApprovedExternalActionOutcome {
+            turn_id: fixture.turn.turn_id.clone(), action_id: sibling.id.clone(),
+            attempt: dispatch.attempt.clone(), result: Ok(sibling_result), mcp_transport: None,
+        }).unwrap());
+        assert!(!fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+        assert!(fixture.service.completion_publication_retry_needed_for_turn(&fixture.turn.turn_id));
+        assert_eq!(fixture.service.retry_completion_publications(), 1);
+        assert_eq!(fixture.service.retry_completion_publications(), 0);
+        assert!(!fixture.service.completion_publication_retry_needed_for_turn(&fixture.turn.turn_id));
+        if final_turn {
+            assert_eq!(fixture.service.agent_turn_ledger().turn(&fixture.turn.turn_id).unwrap().state,
+                AgentTurnState::Completed);
+        } else {
+            assert!(fixture.service.agent_provider_task_is_pending(&fixture.turn.turn_id));
+            let agent_id = AgentId::opaque(fixture.turn.agent_id.clone()).unwrap();
+            assert!(fixture.service.ready_agent_provider_turn(&agent_id, &fixture.turn.turn_id).unwrap().is_some(),
+                "publication must permit provider readiness without consuming a claim");
+        }
+        assert!(!fixture.service.complete_approved_external_action(fixture.outcome()).unwrap());
+        let rows = fixture.service.agent_pane_screen("%1").unwrap().normal_content_lines().join("\n");
+        assert_eq!(rows.matches("F668_EXACT_COMPLETED_BODY").count(), 1, "{rows}");
+        assert_eq!(rows.matches("F668_SIBLING_COMPLETED_BODY").count(), 1, "{rows}");
+        fixture.service.ensure_completion_admission_open().unwrap();
+    }
 }
 
 /// The published-header immediate path must retain its exact immutable result

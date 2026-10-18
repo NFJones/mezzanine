@@ -298,6 +298,13 @@ impl RuntimeSessionService {
                         "external transcript editing requires transcript storage",
                     )
                 })?;
+                // An in-place rewrite can change checked archive bytes without
+                // advancing its sequence frontier. Revoke old read admission
+                // before CAS, including an ambiguous rewrite failure; neither
+                // a retained worker digest nor the old tail proves freshness.
+                let path = store.transcript_path(conversation_id)?;
+                self.persistence
+                    .invalidate_transcript_admission_at_path(&path, conversation_id);
                 match store.compare_and_swap_entry_content(
                     conversation_id,
                     *sequence,

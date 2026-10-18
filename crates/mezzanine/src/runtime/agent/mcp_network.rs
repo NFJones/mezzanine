@@ -5,7 +5,7 @@
 //! and provider-continuation context handling from the main runtime agent
 //! facade.
 
-use super::completion::{ExternalCompletionKey, ExternalCompletionPhase};
+use super::completion::{CompletionScope, ExternalCompletionKey, ExternalCompletionPhase};
 #[cfg(test)]
 use super::execute_mcp_action_through_runtime;
 use super::{
@@ -107,6 +107,7 @@ impl RuntimeSessionService {
         for result in &mut execution.action_results {
             let identity = (turn.turn_id.clone(), result.action_id.clone());
             if result.status != ActionStatus::Running
+                || self.completion_current_claim_has_retained_outcome(&turn.turn_id, &result.action_id)
                 || !(self
                     .agent
                     .claimed_approved_external_actions
@@ -492,6 +493,7 @@ impl RuntimeSessionService {
         turn_id: &str,
         action_id: &str,
     ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
+        self.ensure_completion_admission_open()?;
         if self.agent_turn_is_human_paused(turn_id) {
             return Ok(None);
         }
@@ -859,11 +861,12 @@ impl RuntimeSessionService {
         let transport = self.take_retained_mcp_transport(&key);
         self.return_completed_mcp_transport(&identity, transport);
         self.agent.approved_mcp_transport_leases.remove(&identity);
+        let owns_scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
         let applied = self.apply_retained_external_completion(&key);
         if let Err(error) = &applied {
             self.fail_external_completion(&key, error);
         }
-        applied
+        self.end_completion_scope(&key.0, owns_scope, "external_callback", false, applied)
     }
 
     /// Returns only the still-owned leased configuration, not a newer connection.
@@ -1026,43 +1029,34 @@ impl RuntimeSessionService {
                 },
             )?;
             self.external_completion_phase(key, ExternalCompletionPhase::AuditAccepted)?;
-            self.external_completion_phase(key, ExternalCompletionPhase::ProgressPublication)?;
-            let replay_suppressed = self.reconcile_action_presentation_progress_for_execution(
-                &turn.turn_id,
-                &action.id,
-                &mez_agent::ActionPresentationExecutionIdentity::Attempt(key.2.clone()),
-                &result,
-            )?;
-            if !result.is_error && !replay_suppressed && self.agent_verbose_enabled(&turn.pane_id) {
-                self.external_completion_phase(key, ExternalCompletionPhase::ResultPublication)?;
-                if let Err(error) =
-                    self.queue_ordered_provider_result(&turn.pane_id, &execution, &action, &result)
-                {
-                    if !self.external_result_publication_is_retained(key, &result) {
-                        return Err(error);
-                    }
-                    self.hold_external_publication(key, &error)?;
-                }
-            }
         }
-        self.external_completion_phase(key, ExternalCompletionPhase::TracePublication)?;
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            &turn.turn_id,
-            &format!(
-                "action {} {} reason=approved_external_action",
-                action.id,
-                runtime_action_status_name(result.status)
-            ),
-        )?;
-        if let Err(error) = self.flush_ordered_provider_headers(&turn.pane_id, &execution) {
-            if !self.external_result_publication_is_retained(key, &result) {
-                return Err(error);
-            }
-            self.hold_external_publication(key, &error)?;
+        self.ensure_completion_required_gates_ready(&turn.turn_id)?;
+        if !self.publish_retained_external_completion(key)? {
             return Ok(true);
         }
-        self.external_completion_phase(key, ExternalCompletionPhase::PublicationAccepted)?;
+        self.continue_external_completion(key)?;
+        Ok(true)
+    }
+
+    /// Runs the remaining group suffix only after optional publication has
+    /// transferred. Re-read canonical state because another sibling may have
+    /// settled since this receipt first retained its outcome.
+    pub(super) fn continue_external_completion(&mut self, key: &ExternalCompletionKey) -> Result<bool> {
+        if !self.completion_group_publication_ready(&key.0) {
+            return Ok(false);
+        }
+        let turn = self.agent_turn_ledger().turn(&key.0).cloned()
+            .ok_or_else(|| MezError::invalid_state("external continuation turn is unavailable"))?;
+        let mut execution = self.agent_turn_executions().get(&key.0).cloned()
+            .ok_or_else(|| MezError::invalid_state("external continuation execution is unavailable"))?;
+        let result_index = execution.action_results.iter().position(|result| result.action_id == key.1)
+            .ok_or_else(|| MezError::invalid_state("external continuation result is unavailable"))?;
+        if self.agent_turn_is_human_paused(&turn.turn_id) {
+            let observed_result = execution.action_results[result_index].clone();
+            self.retain_human_paused_execution(&turn, execution, &[observed_result])?;
+            self.transfer_external_completion(key)?;
+            return Ok(true);
+        }
         if let Some(error) = self.external_group_required_failure(key) {
             return Err(error);
         }
@@ -1078,6 +1072,7 @@ impl RuntimeSessionService {
                 .any(mez_agent::outcome::runtime_action_result_is_feedback_candidate)
         {
             self.append_runtime_agent_execution_failure_audit(&turn, &execution)?;
+            self.retain_completion_group_transcript(&turn.turn_id)?;
             self.queue_agent_failure_feedback_for_correction(
                 &turn,
                 &mut execution,
@@ -1093,12 +1088,6 @@ impl RuntimeSessionService {
         }
         // Canonical execution/context already owns this result. Group lifecycle
         // below is distinct from per-action required-gate and publication stages.
-        let observed_result = execution.action_results[result_index].clone();
-        if self.agent_turn_is_human_paused(&turn.turn_id) {
-            self.retain_human_paused_execution(&turn, execution, &[observed_result])?;
-            self.transfer_external_completion(key)?;
-            return Ok(true);
-        }
         if siblings_pending && execution.terminal_state == AgentTurnState::Failed {
             self.agent_turn_executions_mut()
                 .insert(turn.turn_id.clone(), execution);
@@ -1108,9 +1097,7 @@ impl RuntimeSessionService {
         let ready_for_provider_continuation =
             runtime_execution_ready_for_provider_continuation(&execution);
         if ready_for_provider_continuation && turn.state == AgentTurnState::Running {
-            self.agent
-                .pending_agent_provider_tasks
-                .insert(turn.turn_id.clone());
+            self.queue_agent_provider_task(turn.turn_id.clone());
         }
         if matches!(
             execution.terminal_state,
@@ -1118,7 +1105,6 @@ impl RuntimeSessionService {
         ) {
             let transcript_execution = execution.clone();
             self.persist_runtime_agent_turn_execution_transcript(&turn, &transcript_execution)?;
-            self.emit_subagent_task_result_for_execution(&turn, &execution)?;
             self.complete_running_agent_turn_and_start_ready(
                 &turn,
                 execution.terminal_state,
@@ -1128,12 +1114,14 @@ impl RuntimeSessionService {
             return Ok(true);
         }
         self.agent_turn_executions_mut()
-            .insert(turn.turn_id.clone(), execution);
+            .insert(turn.turn_id.clone(), execution.clone());
         if ready_for_provider_continuation {
             self.resume_dependency_wait_if_ready(
                 &turn.turn_id,
                 "approved_external_action_result_ready",
             )?;
+        } else if self.execution_has_pending_shell_dispatch(&turn.turn_id, &execution) {
+            let _ = self.dispatch_stored_running_shell_actions(&turn.turn_id)?;
         }
         self.transfer_external_completion(key)?;
         Ok(true)

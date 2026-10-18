@@ -8,6 +8,25 @@ use super::RuntimePersistenceComponent;
 use crate::error::{MezError, Result};
 use crate::runtime::RuntimeBookkeepingCandidate;
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
+
+/// Private active-read identity, not candidate evidence or execution authority.
+/// Strong old work references prevent allocation ABA after claim retirement.
+#[derive(Clone)]
+pub(crate) struct RuntimeBookkeepingClaimIdentity(Arc<()>);
+
+impl PartialEq for RuntimeBookkeepingClaimIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for RuntimeBookkeepingClaimIdentity {}
+impl std::fmt::Debug for RuntimeBookkeepingClaimIdentity {
+    /// Do not publish pointer values as a reconstitutable identifier.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RuntimeBookkeepingClaimIdentity")
+    }
+}
 
 /// Producer-created proof of ownership of one exact immutable candidate.
 /// It is neither checked archive acceptance, disk durability nor gate success.
@@ -98,7 +117,7 @@ impl RuntimePersistenceComponent {
             .ok_or_else(|| {
                 MezError::invalid_state("completion bookkeeping generation exhausted")
             })?;
-        if self.bookkeeping_claims.contains(&generation)
+        if self.bookkeeping_claims.contains_key(&generation)
             || self
                 .bookkeeping_candidates
                 .iter()
@@ -137,13 +156,34 @@ impl RuntimePersistenceComponent {
             .filter_map(|candidate| {
                 if !seen.insert(candidate.turn.conversation_id.clone())
                     || candidate.blocked
-                    || !self.bookkeeping_claims.insert(candidate.generation)
+                    || self.bookkeeping_claims.contains_key(&candidate.generation)
                 {
                     return None;
                 }
+                self.bookkeeping_claims.insert(
+                    candidate.generation,
+                    RuntimeBookkeepingClaimIdentity(Arc::new(())),
+                );
                 Some(candidate.clone())
             })
             .collect()
+    }
+
+    /// Claims only the requested oldest conversation candidate for synchronous
+    /// completion. It never steals another conversation's pending read claim.
+    pub(crate) fn claim_bookkeeping_candidate_generation(&mut self, generation: u64) -> Option<RuntimeBookkeepingCandidate> {
+        let candidate = self.bookkeeping_candidates.iter().find(|candidate| candidate.generation == generation)?;
+        let conversation_id = &candidate.turn.conversation_id;
+        if candidate.blocked || self.bookkeeping_claims.contains_key(&generation)
+            || self.bookkeeping_candidates.iter().find(|candidate| &candidate.turn.conversation_id == conversation_id)
+                .is_none_or(|candidate| candidate.generation != generation)
+            || self.bookkeeping_candidates.iter().any(|candidate| {
+                &candidate.turn.conversation_id == conversation_id && self.bookkeeping_claims.contains_key(&candidate.generation)
+            })
+        { return None; }
+        let candidate = candidate.clone();
+        self.bookkeeping_claims.insert(generation, RuntimeBookkeepingClaimIdentity(Arc::new(())));
+        Some(candidate)
     }
 
     /// Reports whether unchecked history or an unsettled terminal handoff
@@ -169,7 +209,7 @@ impl RuntimePersistenceComponent {
         &mut self,
         generation: u64,
     ) -> Option<RuntimeBookkeepingCandidate> {
-        if !self.bookkeeping_claims.remove(&generation) {
+        if self.bookkeeping_claims.remove(&generation).is_none() {
             return None;
         }
         let index = self
@@ -177,6 +217,39 @@ impl RuntimePersistenceComponent {
             .iter()
             .position(|candidate| candidate.generation == generation)?;
         Some(self.bookkeeping_candidates.remove(index))
+    }
+
+    /// Captures the current claim, never restores a handle received from work.
+    pub(crate) fn bookkeeping_claim_identity(
+        &self,
+        generation: u64,
+    ) -> Option<RuntimeBookkeepingClaimIdentity> {
+        self.bookkeeping_claims.get(&generation).cloned()
+    }
+
+    /// Peeks without consuming the exact owner; stale numeric aliases cannot
+    /// consume a later legacy candidate even if its saturated generation repeats.
+    pub(crate) fn bookkeeping_candidate_for_claim(
+        &self,
+        generation: u64,
+        identity: &RuntimeBookkeepingClaimIdentity,
+    ) -> Option<&RuntimeBookkeepingCandidate> {
+        if self.bookkeeping_claims.get(&generation) != Some(identity) {
+            return None;
+        }
+        self.bookkeeping_candidates
+            .iter()
+            .find(|candidate| candidate.generation == generation)
+    }
+
+    /// Consumes only the same live claim verified before actor admission.
+    pub(crate) fn take_bookkeeping_candidate_for_claim(
+        &mut self,
+        generation: u64,
+        identity: &RuntimeBookkeepingClaimIdentity,
+    ) -> Option<RuntimeBookkeepingCandidate> {
+        self.bookkeeping_candidate_for_claim(generation, identity)?;
+        self.take_bookkeeping_candidate(generation)
     }
 
     /// Retains a failed candidate without automatically replaying an uncertain append.

@@ -725,6 +725,7 @@ pub(crate) struct RuntimePresentationComponent {
             mez_agent::ActionResult,
             String,
             mez_core::presentation::PresentationEntry,
+            Option<String>,
         ),
     >,
     /// Exact verbose result sources already published for an action ordinal.

@@ -203,6 +203,7 @@ mod bookkeeping;
 mod child_failures;
 mod cleanup_ownership;
 mod completion;
+pub(in crate::runtime) use completion::CompletionScope;
 pub(crate) use bookkeeping::{
     RuntimeBookkeepingCandidate, RuntimeBookkeepingCandidateWork,
     RuntimeBookkeepingTranscriptReadWork,
@@ -3654,9 +3655,7 @@ impl RuntimeSessionService {
 
     /// Queues one provider turn when it is not already pending.
     pub(crate) fn queue_agent_provider_task(&mut self, turn_id: impl Into<String>) -> bool {
-        self.agent
-            .pending_agent_provider_tasks
-            .insert(turn_id.into())
+        self.queue_completion_provider_task(turn_id.into())
     }
 
     /// Removes one pending provider turn.

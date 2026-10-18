@@ -8,6 +8,7 @@ use super::agent_state::{
     RuntimeAgentLoopMode, RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
     RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
 };
+use super::agent::CompletionScope;
 use super::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentContext, AgentId,
     AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellVisibility, AgentTurnRecord,
@@ -700,6 +701,18 @@ impl RuntimeSessionService {
             ));
         }
         self.request_agent_worker_cancellation_for_turn(&turn_id);
+        self.revoke_completion_paint(&turn_id);
+        let owns_scope = self.begin_completion_scope(&turn_id, CompletionScope::Stop);
+        let result = self.stop_agent_turn_after_completion_guard(pane_id, &turn, turn_id.clone());
+        self.end_completion_scope(&turn_id, owns_scope, "stop_finalization", true, result)
+    }
+
+    /// Runs after exact target validation and unconditional worker cancellation.
+    /// Original-group handoff precedes task-result and shell-binding mutations.
+    fn stop_agent_turn_after_completion_guard(
+        &mut self, pane_id: &str, turn: &AgentTurnRecord, turn_id: String,
+    ) -> Result<RuntimeAgentTurnStop> {
+        self.prepare_completion_forced_retirement(turn)?;
         let prepared_loop_parent_objective = if let Some(loop_turn) = self.agent_loop_turn(&turn_id)
             && let Some(state) = self.agent_loop_state_by_id(&loop_turn.loop_id)
         {
@@ -1482,6 +1495,7 @@ impl RuntimeSessionService {
         initial_capability: Option<mez_agent::AgentCapability>,
         initial_model_selection: Option<mez_agent::AutoSizingSelection>,
     ) -> Result<RuntimeAgentPromptTurnStart> {
+        self.ensure_completion_admission_open()?;
         self.refresh_project_config_layers_for_pane(pane_id)?;
         if let Some(project_trust_request) = self
             .pending_project_trust_requests_for_agent_work()
@@ -1545,6 +1559,7 @@ impl RuntimeSessionService {
         prompt: &str,
         steering_receipts: Vec<crate::runtime::agent::RuntimeSteeringReceipt>,
     ) -> Result<bool> {
+        self.ensure_completion_admission_open()?;
         self.refresh_project_config_layers_for_pane(pane_id)?;
         if let Some(project_trust_request) = self
             .pending_project_trust_requests_for_agent_work()

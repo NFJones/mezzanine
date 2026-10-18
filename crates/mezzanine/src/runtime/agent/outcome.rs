@@ -140,6 +140,11 @@ impl RuntimeSessionService {
         execution: &mut AgentTurnExecution,
         reason: &str,
     ) -> Result<bool> {
+        if self.agent_turn_is_human_paused(&turn.turn_id)
+            || !self.completion_group_publication_ready(&turn.turn_id)
+        {
+            return Ok(false);
+        }
         if !self.execution_can_feed_failure_to_model(&turn.turn_id, execution) {
             return Ok(false);
         }
@@ -166,11 +171,12 @@ impl RuntimeSessionService {
         let exhausted = !unbounded_apply_patch_recovery && !any_budget_remaining;
         let attempt = attempts_after_update.into_iter().max().unwrap_or(0);
         if exhausted {
-            self.append_agent_trace_turn_event(
+            let trace = self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 &turn.turn_id,
                 "failure feedback exhausted; ending turn as failed",
-            )?;
+            );
+            self.note_completion_optional_error(&turn.turn_id, trace);
             return Ok(false);
         }
         let settled_results = execution
@@ -182,24 +188,26 @@ impl RuntimeSessionService {
         self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
         execution.final_turn = false;
         execution.terminal_state = AgentTurnState::Running;
-        self.agent
-            .pending_agent_provider_tasks
-            .insert(turn.turn_id.clone());
+        if !self.queue_agent_provider_task(turn.turn_id.clone()) {
+            return Err(MezError::invalid_state("failure feedback provider insertion was not accepted"));
+        }
         let feedback_status_line = runtime_failure_feedback_status_line(
             execution,
             attempt,
             attempt_limit,
             unbounded_apply_patch_recovery,
         );
-        self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &feedback_status_line)?;
-        self.append_agent_trace_turn_event(
+        let status = self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &feedback_status_line);
+        self.note_completion_optional_error(&turn.turn_id, status);
+        let trace = self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
             &format!(
                 "provider_task queued reason=action_failure_feedback source={}",
                 reason
             ),
-        )?;
+        );
+        self.note_completion_optional_error(&turn.turn_id, trace);
         Ok(true)
     }
 

@@ -161,6 +161,68 @@ fn runtime_completion_handoff_exhaustion_does_not_enqueue_or_alias() {
     assert!(service.claim_bookkeeping_candidates().is_empty());
 }
 
+/// Retired work and its clones cannot consume a later claim even when the
+/// legacy saturating generator repeats MAX and every candidate byte matches.
+/// Resetting the component also creates new authority rather than restoring
+/// an old strong handle. No archive read or append is needed for this oracle:
+/// stale work must reject before even considering its supplied read failure.
+#[test]
+fn runtime_completion_handoff_legacy_alias_keeps_new_claim_after_retire_or_reset() {
+    for reset in [false, true] {
+        let (mut service, candidate) = snapshot_candidate("completion-legacy-claim");
+        service
+            .persistence
+            .set_bookkeeping_generation_for_tests(u64::MAX);
+        service
+            .persistence
+            .queue_bookkeeping_candidate(candidate.clone());
+        let stale = service.claim_bookkeeping_candidates().pop().unwrap();
+        let stale_clone = stale.clone();
+        assert_eq!(stale.candidate.generation, u64::MAX);
+        if reset {
+            service.persistence = Default::default();
+            service
+                .persistence
+                .set_bookkeeping_generation_for_tests(u64::MAX);
+        } else {
+            service
+                .persistence
+                .take_bookkeeping_candidate(stale.candidate.generation)
+                .unwrap();
+        }
+        service.persistence.queue_bookkeeping_candidate(candidate);
+        let current = service.claim_bookkeeping_candidates().pop().unwrap();
+        assert_eq!(current.candidate.generation, stale.candidate.generation);
+        for old in [stale, stale_clone] {
+            assert!(
+                !service
+                    .complete_bookkeeping_candidate(
+                        old,
+                        Err(MezError::invalid_state("stale read must not be admitted")),
+                    )
+                    .unwrap(),
+                "reset={reset}"
+            );
+        }
+        assert!(service.claim_bookkeeping_candidates().is_empty());
+        let error = service
+            .complete_bookkeeping_candidate(
+                current.clone(),
+                Err(MezError::invalid_state("current claim remains owned")),
+            )
+            .unwrap_err();
+        assert_eq!(error.message(), "current claim remains owned");
+        assert!(
+            !service
+                .complete_bookkeeping_candidate(
+                    current,
+                    Err(MezError::invalid_state("duplicate must not reenter")),
+                )
+                .unwrap()
+        );
+    }
+}
+
 /// A same-CID live frontier advance is not permission to replace the original
 /// read hashed by the completion witness. The checked worker must receive the
 /// exact frozen store/frontier/epoch and pending rows, not fresh pane metadata.

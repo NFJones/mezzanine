@@ -1457,6 +1457,7 @@ impl RuntimeSessionService {
 
     /// Drains transcript and prompt-history persistence through one runtime transition.
     pub(crate) fn drain_transcript_persistence_transition(&mut self) -> RuntimeTransition {
+        self.retry_completion_publications();
         self.retry_steering_presentations();
         if self.steering_recovery_needs_publication() {
             let panes = self

@@ -17,6 +17,10 @@ use crate::storage::token_usage::new_token_usage_event_id;
 use crate::storage::transcript::ConversationTranscriptRead;
 use mez_agent::TranscriptContextEvent;
 
+mod completion_archive;
+use crate::runtime::persistence::RuntimeBookkeepingClaimIdentity;
+use completion_archive::RuntimeCompletionArchiveRead;
+
 /// Maximum recent execution groups retained for in-process idempotency.
 const RUNTIME_PERSISTED_EXECUTION_TRANSCRIPT_LIMIT: usize = 4096;
 
@@ -72,7 +76,7 @@ impl RuntimeBookkeepingTranscriptReadWork {
             .store
             .conversation_transcript_view(
                 &self.conversation_id,
-                if self.terminal_handoff {
+                if self.terminal_handoff || self.frozen_completion {
                     ConversationTranscriptRead::All
                 } else {
                     ConversationTranscriptRead::ForTurn(&self.turn_id)
@@ -90,7 +94,7 @@ impl RuntimeBookkeepingTranscriptReadWork {
 }
 
 /// Immutable chronology retained independently of terminal turn cleanup.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct RuntimeBookkeepingCandidate {
     pub(crate) generation: u64,
     pub(crate) turn: AgentTurnRecord,
@@ -100,6 +104,31 @@ pub(crate) struct RuntimeBookkeepingCandidate {
     pub(crate) entries: Vec<TranscriptEntry>,
     pub(crate) directory: Option<TranscriptEntry>,
     pub(crate) blocked: bool,
+    /// Runtime failure metadata is not immutable evidence identity.
+    pub(crate) failure: Option<Box<MezError>>,
+    pub(crate) publication_failure: Option<Box<MezError>>,
+}
+
+impl std::fmt::Debug for RuntimeBookkeepingCandidate {
+    /// Canonical rows/full typed errors stay owned, not generically printed.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeBookkeepingCandidate")
+            .field("generation", &self.generation)
+            .field("turn_id", &self.turn.turn_id)
+            .field("entries", &self.entries.len())
+            .field("has_directory", &self.directory.is_some())
+            .field("blocked", &self.blocked)
+            .field(
+                "failure_kind",
+                &self.failure.as_ref().map(|error| error.kind()),
+            )
+            .field(
+                "publication_failure_kind",
+                &self.publication_failure.as_ref().map(|error| error.kind()),
+            )
+            .finish()
+    }
 }
 
 impl RuntimeBookkeepingCandidate {
@@ -217,11 +246,26 @@ impl RuntimeBookkeepingCandidate {
 pub(crate) struct RuntimeBookkeepingCandidateWork {
     pub(crate) candidate: RuntimeBookkeepingCandidate,
     pub(crate) read: RuntimeBookkeepingTranscriptReadWork,
+    completion_archive: Option<Box<RuntimeCompletionArchiveRead>>,
+    completion_capture_error: Option<Box<MezError>>,
+    claim: Option<RuntimeBookkeepingClaimIdentity>,
 }
 
 impl RuntimeBookkeepingCandidateWork {
     /// Returns checked turn history and store sequence without accessing actor state.
     pub(crate) fn execute(&self) -> Result<(Vec<TranscriptEntry>, u64)> {
+        if let Some(error) = &self.completion_capture_error {
+            return Err((**error).clone());
+        }
+        if self.read.frozen_completion {
+            return self
+                .completion_archive
+                .as_ref()
+                .ok_or_else(|| {
+                    MezError::invalid_state("original archive read has no admission fence")
+                })?
+                .execute(&self.read);
+        }
         Ok((self.read.execute()?, self.read.next_sequence()?))
     }
 }
@@ -232,7 +276,13 @@ impl RuntimeSessionService {
         self.persistence
             .claim_bookkeeping_candidates()
             .into_iter()
-            .map(|candidate| {
+            .map(|candidate| self.bookkeeping_work_for_candidate(candidate))
+            .collect()
+    }
+
+    /// Constructs a work packet from the same existing claimed owner in either
+    /// adapter mode. Original completion reads remain immutable and separate.
+    fn bookkeeping_work_for_candidate(&mut self, candidate: RuntimeBookkeepingCandidate) -> RuntimeBookkeepingCandidateWork {
                 let mut read = if !candidate.read.frozen_completion
                     && self
                         .agent_shell_store()
@@ -253,9 +303,41 @@ impl RuntimeSessionService {
                     );
                 }
                 read.terminal_handoff |= candidate.read.terminal_handoff;
-                RuntimeBookkeepingCandidateWork { candidate, read }
-            })
-            .collect()
+                let captured = if candidate.read.frozen_completion {
+                    Some(self.capture_completion_archive_read(&candidate))
+                } else {
+                    None
+                };
+                let (completion_archive, completion_capture_error) = match captured {
+                    Some(Ok(archive)) => (Some(Box::new(archive)), None),
+                    Some(Err(error)) => (None, Some(Box::new(error))),
+                    None => (None, None),
+                };
+                let claim = self
+                    .persistence
+                    .bookkeeping_claim_identity(candidate.generation);
+                RuntimeBookkeepingCandidateWork {
+                    candidate,
+                    read,
+                    completion_archive,
+                    completion_capture_error,
+                    claim,
+                }
+    }
+
+    /// Performs only the already-permitted synchronous checked persistence when
+    /// no adapter services candidate work. Producer ownership is cached first;
+    /// an I/O error retains the exact blocked candidate and propagates its type.
+    pub(in crate::runtime::agent) fn complete_completion_candidate_inline(&mut self, generation: u64) -> Result<()> {
+        if self.persistence.transcript_uses_adapter() {
+            return Err(MezError::invalid_state("inline completion persistence is not permitted in adapter mode"));
+        }
+        let candidate = self.persistence.claim_bookkeeping_candidate_generation(generation)
+            .ok_or_else(|| MezError::invalid_state("original completion candidate is blocked or has an earlier owner"))?;
+        let work = self.bookkeeping_work_for_candidate(candidate);
+        let history = work.execute();
+        self.complete_bookkeeping_candidate(work, history)?;
+        Ok(())
     }
 
     /// Accepts one checked candidate, preserving exact owner and append sequencing.
@@ -264,78 +346,148 @@ impl RuntimeSessionService {
         work: RuntimeBookkeepingCandidateWork,
         history: Result<(Vec<TranscriptEntry>, u64)>,
     ) -> Result<bool> {
-        let Some(mut candidate) = self
+        let Some(claim) = work.claim.as_ref() else {
+            return Ok(false);
+        };
+        let Some(owner) = self
             .persistence
-            .take_bookkeeping_candidate(work.candidate.generation)
+            .bookkeeping_candidate_for_claim(work.candidate.generation, claim)
         else {
             return Ok(false);
         };
-        let turn = candidate.turn.clone();
-        let still_bound = self
-            .agent_shell_store()
-            .get(&turn.pane_id)
-            .is_some_and(|session| session.session_id == turn.conversation_id);
-        let (history, sequence) = match history.and_then(|history| {
-            if candidate.read.frozen_completion && work.read != candidate.read {
+        let frozen = owner.read.frozen_completion;
+        let same_candidate = owner.turn == work.candidate.turn
+            && owner.read == work.candidate.read
+            && owner.persistence_key == work.candidate.persistence_key
+            && owner.entries == work.candidate.entries
+            && owner.directory == work.candidate.directory;
+        let still_bound = !frozen
+            && self
+                .agent_shell_store()
+                .get(&owner.turn.pane_id)
+                .is_some_and(|session| session.session_id == owner.turn.conversation_id);
+        let checked = history.and_then(|(history, sequence)| {
+            if !same_candidate || (frozen && work.read != owner.read) {
                 return Err(MezError::invalid_state(
                     "completion worker read differs from frozen candidate owner",
                 ));
             }
-            if still_bound {
+            let observation = if frozen {
+                if let Some(error) = &work.completion_capture_error {
+                    return Err((**error).clone());
+                }
+                let archive = work.completion_archive.as_ref().ok_or_else(|| {
+                    MezError::invalid_state("original archive admission fence is missing")
+                })?;
+                Some(archive.validate(self, &work.read, &history, sequence)?)
+            } else {
+                None
+            };
+            if !frozen && still_bound {
                 work.read.check_owner(self)?;
             }
-            Ok(history)
-        }) {
-            Ok(history) => history,
-            Err(error) => {
-                let detached_completion = candidate.read.frozen_completion;
-                self.persistence.block_bookkeeping_candidate(candidate);
-                if !detached_completion {
-                    self.append_agent_error_text_to_terminal_buffer(
-                        &turn.pane_id,
-                        &format!("agent: transcript bookkeeping blocked: {}", error.message()),
-                    )?;
-                }
-                return Err(error);
+            Ok((history, sequence, observation))
+        });
+        let checked = checked.and_then(|(history, sequence, observation)| {
+            if let (Some(archive), Some(observation)) = (&work.completion_archive, &observation) {
+                self.persistence.observe_checked_transcript_read(
+                    &archive.stamp,
+                    observation.committed_through,
+                )?;
             }
-        };
-        let first_sequence = self
+            Ok((history, sequence, observation))
+        });
+        let Some(candidate) = self
             .persistence
-            .deferred_transcript_next_sequence(&turn.conversation_id)
-            .unwrap_or(sequence)
-            .max(sequence);
-        if first_sequence == 1
-            && let Some(directory) = candidate.directory.take()
+            .take_bookkeeping_candidate_for_claim(work.candidate.generation, claim)
+        else {
+            return Ok(false);
+        };
+        let (history, sequence, observation) = match checked {
+            Ok(checked) => checked,
+            Err(error) => return self.block_bookkeeping_after_error(candidate, error),
+        };
+        let turn = candidate.turn.clone();
+        let next = if let Some(observation) = &observation {
+            observation
+                .logical_through
+                .checked_add(1)
+                .map(crate::runtime::persistence::RuntimeTranscriptNextSequence::Next)
+                .unwrap_or(crate::runtime::persistence::RuntimeTranscriptNextSequence::Exhausted)
+        } else {
+            crate::runtime::persistence::RuntimeTranscriptNextSequence::Next(
+                self.persistence
+                    .deferred_transcript_next_sequence(&turn.conversation_id)
+                    .unwrap_or(sequence)
+                    .max(sequence),
+            )
+        };
+        let first_sequence = match next {
+            crate::runtime::persistence::RuntimeTranscriptNextSequence::Next(sequence) => {
+                Some(sequence)
+            }
+            _ => None,
+        };
+        let mut projection = candidate.entries.clone();
+        if first_sequence == Some(1)
+            && let Some(directory) = &candidate.directory
         {
-            candidate.entries.insert(0, directory);
+            projection.insert(0, directory.clone());
         }
-        let mut entries = Self::new_runtime_transcript_entries(
-            candidate.entries.clone(),
-            &history,
-            first_sequence,
-        );
+        let mut entries = if frozen {
+            match Self::new_completion_transcript_entries(projection, &history, next) {
+                Ok(entries) => entries,
+                Err(error) => return self.block_bookkeeping_after_error(candidate, error),
+            }
+        } else {
+            Self::new_runtime_transcript_entries(
+                projection,
+                &history,
+                first_sequence.unwrap_or(sequence),
+            )
+        };
         let admission = if candidate.read.frozen_completion {
             Self::check_detached_terminal_compaction_handoff_admission(&history, &mut entries)
         } else {
             self.check_terminal_compaction_handoff_admission(&turn, &history, &mut entries)
         };
         if let Err(error) = admission {
-            self.persistence.block_bookkeeping_candidate(candidate);
-            return Err(error);
+            return self.block_bookkeeping_after_error(candidate, error);
         }
         if entries.is_empty() {
             return Ok(true);
         }
-        let store = work.read.store;
-        self.persistence
-            .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
-                path: store.transcript_path(&turn.conversation_id)?,
-                store,
-                entries: entries.clone(),
-            });
+        let store = candidate.read.store.clone();
+        let path = match store.transcript_path(&turn.conversation_id) {
+            Ok(path) => path,
+            Err(error) => return self.block_bookkeeping_after_error(candidate, error),
+        };
+        if frozen && !self.persistence.transcript_uses_adapter() {
+            let appended = self.append_transcript_with_admission_observation(&store, &entries, true);
+            if let Err(error) = appended {
+                return self.block_bookkeeping_after_error(candidate, error);
+            }
+        } else if frozen {
+            if let Err(error) = self.persistence.queue_checked_completion_transcript(
+                RuntimeSideEffect::PersistTranscriptEntries {
+                    path,
+                    store,
+                    entries: entries.clone(),
+                },
+            ) {
+                return self.block_bookkeeping_after_error(candidate, error);
+            }
+        } else {
+            self.persistence
+                .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+                    path,
+                    store,
+                    entries: entries.clone(),
+                });
+        }
         self.agent
             .agent_persisted_execution_transcripts
-            .insert(candidate.persistence_key);
+            .insert(candidate.persistence_key.clone());
         if still_bound && !work.read.frozen_completion {
             self.agent_shell_store_mut()
                 .record_transcript_entries(&turn.pane_id, entries.len())?;
@@ -344,10 +496,98 @@ impl RuntimeSessionService {
                 format!("transcript:{}:{}", turn.pane_id, turn.conversation_id),
             )?;
         }
-        if first_sequence == 1 {
-            self.queue_saved_session_retention_operation(current_unix_seconds().max(1), false)?;
+        if first_sequence == Some(1)
+            && self.persistence.transcript_uses_adapter()
+            && let Err(error) =
+                self.queue_saved_session_retention_operation(current_unix_seconds().max(1), false)
+        {
+            return self.block_bookkeeping_after_error(candidate, error);
         }
         Ok(true)
+    }
+
+    /// Keeps the exact immutable payload and first typed gate failure. Optional
+    /// error paint cannot replace that primary kind/flags or target a frozen C2.
+    fn block_bookkeeping_after_error(
+        &mut self,
+        mut candidate: RuntimeBookkeepingCandidate,
+        error: MezError,
+    ) -> Result<bool> {
+        let primary = candidate
+            .failure
+            .get_or_insert_with(|| Box::new(error))
+            .as_ref()
+            .clone();
+        if !candidate.read.frozen_completion
+            && let Err(publication) = self.append_agent_error_text_to_terminal_buffer(
+                &candidate.turn.pane_id,
+                &format!(
+                    "agent: transcript bookkeeping blocked: {}",
+                    primary.message()
+                ),
+            )
+        {
+            candidate
+                .publication_failure
+                .get_or_insert_with(|| Box::new(publication));
+        }
+        self.persistence.block_bookkeeping_candidate(candidate);
+        self.record_completion_archive_failure(&primary);
+        Err(primary)
+    }
+
+    /// Checked new-row allocation only; duplicates require no successor slot,
+    /// and a valid final MAX row is representable but cannot be followed by MAX+1.
+    fn new_completion_transcript_entries(
+        entries: Vec<TranscriptEntry>,
+        existing: &[TranscriptEntry],
+        mut next: crate::runtime::persistence::RuntimeTranscriptNextSequence,
+    ) -> Result<Vec<TranscriptEntry>> {
+        use crate::runtime::persistence::RuntimeTranscriptNextSequence;
+        let mut identities = existing
+            .iter()
+            .map(Self::runtime_transcript_entry_identity)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut result = Vec::new();
+        for mut entry in entries {
+            if !identities.insert(Self::runtime_transcript_entry_identity(&entry)) {
+                continue;
+            }
+            let RuntimeTranscriptNextSequence::Next(sequence) = next else {
+                return Err(MezError::invalid_state(
+                    "completion transcript sequence is exhausted or unknown",
+                ));
+            };
+            entry.sequence = sequence;
+            next = sequence
+                .checked_add(1)
+                .map(RuntimeTranscriptNextSequence::Next)
+                .unwrap_or(RuntimeTranscriptNextSequence::Exhausted);
+            result.push(entry);
+        }
+        Ok(result)
+    }
+
+    /// Captures the current transcript owner and pending receipts for checked bookkeeping.
+    /// Wraps ONLY existing permitted synchronous writes. Invalidate old reads
+    /// before I/O; confirm a frontier only after actual append success. The one
+    /// optional retry requires the store's definite-precommit proof and repeats
+    /// only the identical local append, never execution or an ambiguous effect.
+    pub(in crate::runtime) fn append_transcript_with_admission_observation(
+        &mut self, store: &crate::storage::transcript::AgentTranscriptStore,
+        entries: &[TranscriptEntry], retry_precommit_once: bool,
+    ) -> Result<usize> {
+        let Some(first) = entries.first() else { return Ok(0); };
+        let path = store.transcript_path(&first.conversation_id)?;
+        self.persistence.invalidate_transcript_admission_at_path(&path, &first.conversation_id);
+        let result = match store.append_many(entries) {
+            Err(error) if retry_precommit_once && error.local_transcript_precommit_retryable() => store.append_many(entries),
+            result => result,
+        };
+        if result.is_ok() && let Some(last) = entries.last() {
+            self.persistence.observe_committed_transcript_at_path(&path, &first.conversation_id, last.sequence);
+        }
+        result
     }
 
     /// Captures the current transcript owner and pending receipts for checked bookkeeping.
@@ -401,6 +641,134 @@ impl RuntimeSessionService {
         execution: &AgentTurnExecution,
     ) -> Result<usize> {
         self.persist_runtime_agent_turn_execution_transcript_with_read(turn, execution, None)
+    }
+
+    /// Captures the original directory bytes while the admitted group still
+    /// owns its pane. Retirement must not sample a replacement working directory.
+    /// Freezes original-target pending ownership before physical dispatch. The
+    /// generic legacy read keeps its CID semantics; completion never labels
+    /// different-store rows as part of this original archive.
+    pub(in crate::runtime::agent) fn capture_completion_transcript_read(
+        &self, store: crate::storage::transcript::AgentTranscriptStore, turn: &AgentTurnRecord,
+    ) -> Result<RuntimeBookkeepingTranscriptReadWork> {
+        let path = store.transcript_path(&turn.conversation_id)?;
+        let mut read = self.capture_bookkeeping_transcript_read(store, turn);
+        read.pending = self.persistence.pending_transcript_entries_at_path(&path, &turn.conversation_id)?;
+        let pending = read.pending.iter().map(|entry| entry.sequence)
+            .collect::<std::collections::BTreeSet<_>>().len() as u64;
+        read.committed_prefix_required = read.transcript_entries > pending;
+        Ok(read.freeze_completion())
+    }
+
+    /// Captures the original directory bytes while the admitted group still
+    /// owns its pane. Retirement must not sample a replacement working directory.
+    pub(in crate::runtime::agent) fn capture_completion_directory_entry(
+        &self,
+        turn: &AgentTurnRecord,
+    ) -> Option<TranscriptEntry> {
+        self.runtime_session_directory_transcript_entry(
+            &turn.conversation_id,
+            1,
+            current_unix_seconds().max(1),
+            turn,
+        )
+    }
+
+    /// Projects canonical original-turn context into one immutable handoff
+    /// candidate before backing is moved or cleared. Placeholder row sequences
+    /// are assigned by the existing checked append owner, not by this producer.
+    pub(in crate::runtime::agent) fn completion_bookkeeping_candidate(
+        &self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+        read: RuntimeBookkeepingTranscriptReadWork,
+        directory: Option<TranscriptEntry>,
+    ) -> Result<RuntimeBookkeepingCandidate> {
+        if execution.request.turn_id != turn.turn_id || execution.request.agent_id != turn.agent_id
+        {
+            return Err(MezError::invalid_state(
+                "completion snapshot differs from original execution",
+            ));
+        }
+        if !self.agent_turn_contexts().contains_key(&turn.turn_id) {
+            return Err(MezError::invalid_state(
+                "completion snapshot lost its original context",
+            ));
+        }
+        let entries = self.runtime_transcript_entries_for_execution(
+            &turn.conversation_id,
+            2,
+            current_unix_seconds().max(1),
+            turn,
+            execution,
+        )?;
+        let candidate = RuntimeBookkeepingCandidate {
+            generation: 0,
+            turn: turn.clone(),
+            read: read.freeze_completion(),
+            persistence_key: (turn.conversation_id.clone(), turn.turn_id.clone()),
+            entries,
+            directory,
+            blocked: false,
+            failure: None,
+            publication_failure: None,
+        };
+        candidate.completion_snapshot_bytes()?;
+        Ok(candidate)
+    }
+
+    /// Adds fixed-schema safe runtime evidence through the existing typed SYSTEM
+    /// execution format. The caller supplies only actor identity/stage/kind facts,
+    /// never raw exception strings or unprojectable output. Existing immutable
+    /// candidates are cloned by their group owner before adding changed facts.
+    pub(in crate::runtime::agent) fn append_completion_settlement_evidence(
+        candidate: &mut RuntimeBookkeepingCandidate,
+        group: &mez_agent::ContextExecutionGroupId,
+        content: String,
+    ) -> Result<()> {
+        let ordinal = candidate
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                match TranscriptContextEvent::from_transcript_content(&entry.content) {
+                    Some(TranscriptContextEvent::ExecutionBlock {
+                        execution_group_id: Some(owner),
+                        ordinal: Some(ordinal),
+                        ..
+                    }) if &owner == group => Some(ordinal),
+                    _ => None,
+                }
+            })
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| MezError::invalid_state("completion evidence ordinal exhausted"))?;
+        let event = TranscriptContextEvent::execution_block_with_metadata(
+            ContextSourceKind::CommittedEvidence,
+            "completion settlement evidence v1",
+            content,
+            group.clone(),
+            ordinal,
+            None,
+        )
+        .ok_or_else(|| MezError::invalid_state("completion evidence cannot be safely encoded"))?;
+        let sequence = u64::try_from(candidate.entries.len())
+            .ok()
+            .and_then(|count| count.checked_add(2))
+            .ok_or_else(|| MezError::invalid_state("completion evidence sequence exhausted"))?;
+        let entry = TranscriptEntry {
+            conversation_id: candidate.turn.conversation_id.clone(),
+            sequence,
+            created_at_unix_seconds: current_unix_seconds().max(1),
+            role: TranscriptRole::System,
+            turn_id: candidate.turn.turn_id.clone(),
+            agent_id: candidate.turn.agent_id.clone(),
+            pane_id: candidate.turn.pane_id.clone(),
+            content: event.to_transcript_content(),
+        };
+        entry.validate()?;
+        candidate.entries.push(entry);
+        Ok(())
     }
 
     /// Accepts worker-checked chronology and sequence evidence before queuing an append.
@@ -460,6 +828,8 @@ impl RuntimeSessionService {
                     entries,
                     directory,
                     blocked: false,
+                    failure: None,
+                    publication_failure: None,
                 });
             return Ok(0);
         }
@@ -527,15 +897,7 @@ impl RuntimeSessionService {
             if entries.is_empty() {
                 return Ok(0);
             }
-            match store.append_many(&entries) {
-                Ok(_) => {}
-                Err(error) if error.local_transcript_precommit_retryable() => {
-                    // The store proved that no row was written. Retry only the
-                    // identical local append, never the accepted execution.
-                    store.append_many(&entries)?;
-                }
-                Err(error) => return Err(error),
-            }
+            self.append_transcript_with_admission_observation(&store, &entries, true)?;
             entries
         };
         self.agent
@@ -640,7 +1002,7 @@ impl RuntimeSessionService {
                     entries: entries.clone(),
                 });
         } else {
-            store.append_many(&entries)?;
+            self.append_transcript_with_admission_observation(&store, &entries, false)?;
         }
         self.record_pane_transcript_ref(
             pane_id,
@@ -816,6 +1178,8 @@ impl RuntimeSessionService {
                     entries,
                     directory: None,
                     blocked: false,
+                    failure: None,
+                    publication_failure: None,
                 });
             return Ok(0);
         }
@@ -838,7 +1202,7 @@ impl RuntimeSessionService {
                 self.queue_saved_session_retention_operation(created_at_unix_seconds, false)?;
             }
         } else {
-            store.append_many(&entries)?;
+            self.append_transcript_with_admission_observation(&store, &entries, false)?;
         }
         self.agent
             .agent_persisted_execution_transcripts

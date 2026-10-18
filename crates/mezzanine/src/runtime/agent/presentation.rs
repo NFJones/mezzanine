@@ -685,6 +685,20 @@ impl RuntimeSessionService {
         action: &mez_agent::AgentAction,
         result: &mez_agent::ActionResult,
     ) -> Result<()> {
+        self.queue_ordered_provider_result_source(pane_id, execution, action, result,
+            (&result.content_text(), None))
+    }
+
+    /// Retains the exact original RESULT body and optional native transaction
+    /// in the same immutable source owner used by ordinary provider results.
+    pub(crate) fn queue_ordered_provider_result_source(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        action: &mez_agent::AgentAction,
+        result: &mez_agent::ActionResult,
+        source: (&str, Option<&str>),
+    ) -> Result<()> {
         if result.turn_id != execution.request.turn_id
             || result.action_id != action.id
             || result.action_type != action.action_type()
@@ -716,7 +730,8 @@ impl RuntimeSessionService {
             group,
             index,
         );
-        let text = result.content_text();
+        let text = source.0.to_string();
+        let transaction = source.1.map(str::to_string);
         let source_key = (key.clone(), text.clone());
         if self
             .presentation
@@ -739,15 +754,23 @@ impl RuntimeSessionService {
             );
             self.presentation.agent_queued_provider_results.insert(
                 key.clone(),
-                (action.clone(), result.clone(), text.clone(), entry),
+                (action.clone(), result.clone(), text.clone(), entry, transaction.clone()),
             );
+        }
+        if self.presentation.agent_queued_provider_results.get(&key)
+            .is_some_and(|(accepted_action, accepted_result, accepted_text, _, accepted_transaction)| {
+                accepted_action != action || accepted_result != result || *accepted_text != text
+                    || *accepted_transaction != transaction
+            })
+        {
+            return Err(crate::error::MezError::invalid_state("RESULT differs from retained source owner"));
         }
         if self
             .presentation
             .agent_published_provider_headers
             .contains(&key)
         {
-            let (accepted_action, accepted_result, accepted_text, entry) = self
+            let (accepted_action, accepted_result, accepted_text, entry, accepted_transaction) = self
                 .presentation
                 .agent_queued_provider_results
                 .get(&key)
@@ -759,7 +782,7 @@ impl RuntimeSessionService {
             self.with_presentation_entry(pane_id, entry, |service| {
                 service.append_ordered_activity_result(
                     pane_id,
-                    (key.3.as_str(), key.4, None),
+                    (key.3.as_str(), key.4, accepted_transaction.as_deref()),
                     &accepted_action,
                     &accepted_result,
                     &accepted_text,
@@ -773,7 +796,7 @@ impl RuntimeSessionService {
                 .presentation
                 .agent_queued_provider_results
                 .get(&key)
-                .is_some_and(|(_, _, text, entry)| *text == accepted_text && entry.id == entry_id)
+                .is_some_and(|(_, _, text, entry, transaction)| *text == accepted_text && entry.id == entry_id && *transaction == accepted_transaction)
             {
                 self.presentation.agent_queued_provider_results.remove(&key);
             }
@@ -988,16 +1011,17 @@ impl RuntimeSessionService {
                         .agent_queued_provider_commands
                         .remove(&key);
                 }
-                if let Some((action, result, text, entry)) = self
+                if let Some((action, result, text, entry, transaction)) = self
                     .presentation
                     .agent_queued_provider_results
                     .get(&key)
                     .cloned()
                 {
+                    let entry_id = entry.id.clone();
                     self.with_presentation_entry(pane_id, entry, |service| {
                         service.append_ordered_activity_result(
                             pane_id,
-                            (key.3.as_str(), key.4, None),
+                            (key.3.as_str(), key.4, transaction.as_deref()),
                             &action,
                             &result,
                             &text,
@@ -1006,8 +1030,12 @@ impl RuntimeSessionService {
                     })?;
                     self.presentation
                         .agent_published_provider_results
-                        .insert((key.clone(), text));
-                    self.presentation.agent_queued_provider_results.remove(&key);
+                        .insert((key.clone(), text.clone()));
+                    if self.presentation.agent_queued_provider_results.get(&key)
+                        .is_some_and(|(_, _, retained_text, entry, retained_transaction)| *retained_text == text && entry.id == entry_id && *retained_transaction == transaction)
+                    {
+                        self.presentation.agent_queued_provider_results.remove(&key);
+                    }
                 }
                 if let Some(outcomes) = self
                     .presentation

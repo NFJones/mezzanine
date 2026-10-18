@@ -355,7 +355,22 @@ impl RuntimeSessionService {
                 source_truncated: component.source_truncated,
             })
             .collect::<Vec<_>>();
-        let mut suppress_final_replay = false;
+        // A prior reconciliation may have promoted one component before a
+        // later component failed. Its exact source still suppresses replay;
+        // absence from the provisional map is not evidence it was unpublished.
+        let mut suppress_final_replay = result.status == ActionStatus::Succeeded
+            && !result.is_error
+            && self
+                .presentation
+                .action_presentation_progress
+                .values()
+                .flat_map(|presentation| presentation.promoted_components.iter())
+                .any(|(key, component)| {
+                    key.turn_id == turn_id
+                        && key.action_id == action_id
+                        && &key.execution == execution
+                        && component.source == result.content_text()
+                });
         for progress in retained {
             suppress_final_replay |=
                 self.reconcile_action_presentation_progress(&progress, result)?;
@@ -865,10 +880,13 @@ impl RuntimeSessionService {
         key: &RuntimeActionPresentationProgressKey,
         progress: &ActionPresentationProgress,
     ) -> Result<bool> {
+        // Compose from a snapshot while the original source/ack owner remains
+        // installed. Any fallible pre-install step leaves that owner intact.
         let Some(mut presentation) = self
             .presentation
             .action_presentation_progress
-            .remove(pane_id)
+            .get(pane_id)
+            .cloned()
         else {
             return Ok(false);
         };
@@ -926,18 +944,8 @@ impl RuntimeSessionService {
             &target_sections,
             self.ui_theme(),
         )?;
-        if let Some(streaming) = self
-            .presentation
-            .agent_streaming_say_presentations
-            .get_mut(pane_id)
-            .filter(|streaming| {
-                streaming.conversation_id == presentation.conversation_id
-                    && streaming.installed_lineage == old_lineage
-            })
-        {
-            streaming.provider_screen = std::sync::Arc::new(durable_base.clone());
-        }
         let mut progress_baseline = durable_base.clone();
+        let mut new_preview_rows = None;
         let preview_source = self
             .presentation
             .agent_shell_output_previews
@@ -955,14 +963,7 @@ impl RuntimeSessionService {
                 self.terminal_shell_output_preview_lines(),
                 self.presentation.settings.terminal_agent_wrap_column_cap,
             )?;
-            if let Some(preview) = self
-                .presentation
-                .agent_shell_output_previews
-                .get_mut(pane_id)
-            {
-                preview.baseline_screen = std::sync::Arc::new(durable_base.clone());
-                preview.transient_rows = reprojected_preview_rows;
-            }
+            new_preview_rows = Some(reprojected_preview_rows);
         }
         presentation.baseline_screen = std::sync::Arc::new(progress_baseline.clone());
         let remaining = self.render_action_progress_components(pane_id, &presentation)?;
@@ -981,6 +982,21 @@ impl RuntimeSessionService {
             .ok_or_else(|| {
                 MezError::invalid_state("executor progress promotion conversation changed")
             })?;
+        // Companion baselines also advance only after the actual install.
+        if let Some(streaming) = self.presentation.agent_streaming_say_presentations.get_mut(pane_id)
+            .filter(|streaming| streaming.conversation_id == presentation.conversation_id
+                && streaming.installed_lineage == old_lineage)
+        {
+            streaming.provider_screen = std::sync::Arc::new(durable_base.clone());
+        }
+        if let Some(rows) = new_preview_rows
+            && let Some(preview) = self.presentation.agent_shell_output_previews.get_mut(pane_id)
+                .filter(|preview| preview.conversation_id == presentation.conversation_id
+                    && preview.installed_lineage == old_lineage)
+        {
+            preview.baseline_screen = std::sync::Arc::new(durable_base);
+            preview.transient_rows = rows;
+        }
         self.synchronize_action_progress_companion_lineage(
             pane_id,
             &presentation.conversation_id,
@@ -1172,7 +1188,8 @@ impl RuntimeSessionService {
         let Some(mut presentation) = self
             .presentation
             .action_presentation_progress
-            .remove(pane_id)
+            .get(pane_id)
+            .cloned()
         else {
             return Ok(false);
         };
@@ -1227,6 +1244,7 @@ impl RuntimeSessionService {
             installed_lineage,
         );
         if presentation.components.is_empty() && presentation.promoted_components.is_empty() {
+            self.presentation.action_presentation_progress.remove(pane_id);
             return Ok(true);
         }
         presentation.installed_lineage = installed_lineage;
@@ -1252,7 +1270,8 @@ impl RuntimeSessionService {
             let Some(mut presentation) = self
                 .presentation
                 .action_presentation_progress
-                .remove(&pane_id)
+                .get(&pane_id)
+                .cloned()
             else {
                 continue;
             };
@@ -1292,6 +1311,8 @@ impl RuntimeSessionService {
                     self.presentation
                         .action_presentation_progress
                         .insert(pane_id, presentation);
+                } else {
+                    self.presentation.action_presentation_progress.remove(&pane_id);
                 }
                 continue;
             }
@@ -1329,6 +1350,7 @@ impl RuntimeSessionService {
                 installed_lineage,
             );
             if presentation.components.is_empty() && presentation.promoted_components.is_empty() {
+                self.presentation.action_presentation_progress.remove(&pane_id);
                 continue;
             }
             presentation.installed_lineage = installed_lineage;

@@ -1,4 +1,4 @@
-//! Actor-owned transfer of already-completed external action outcomes.
+//! Actor-owned transfer and bounded retirement of completed action outcomes.
 //!
 //! A receipt is reserved only for an admitted current execution/action/attempt.
 //! The original outcome moves here before delivery authority is retired. Raw
@@ -7,12 +7,20 @@
 //! chronology. This owner never dispatches actions, retries hooks/audit, grants
 //! policy authority, schedules providers or invents native source evidence.
 //!
-//! This first slice is external-only. Native nonterminal handoff, forced terminal
-//! retirement and receipt-owned idle recovery require their reviewed lifecycle
-//! integration; they must not be approximated by replaying a completion callback.
+//! External and native ingress share the original group retirement owner.
+//! Publication-only recovery never re-enters outcome projection or required
+//! gates; native nonterminal handoff stays with its exact next-phase owner.
 
 use super::*;
 use std::fmt;
+
+mod retirement;
+use retirement::CompletionGroup;
+pub(in crate::runtime) use retirement::CompletionScope;
+mod native;
+use native::NativeCompletionReceipt;
+pub(super) use native::{NativeCompletionKey, NativeCompletionPhase};
+mod publication;
 
 /// Exact actor-issued delivery generation, distinct from presentation text/IDs.
 pub(super) type ExternalCompletionKey = (String, String, String);
@@ -35,6 +43,29 @@ pub(super) enum ExternalCompletionPhase {
     TracePublication,
     PublicationHeld,
     PublicationAccepted,
+}
+
+impl ExternalCompletionPhase {
+    /// Fixed safe provenance for required failure evidence, never error text.
+    fn stage_name(self) -> &'static str {
+        match self {
+            Self::Issued => "external_issued",
+            Self::OutcomeRetained => "external_outcome_retained",
+            Self::Projection => "external_projection",
+            Self::CanonicalRetained => "external_canonical_retained",
+            Self::ContextEntered => "external_context_entered",
+            Self::ContextCommitted => "external_context_committed",
+            Self::AuditEntered => "external_audit_entered",
+            Self::AuditAccepted => "external_audit_accepted",
+            Self::HooksEntered => "external_hooks_entered",
+            Self::HooksAccepted => "external_hooks_accepted",
+            Self::ProgressPublication => "external_progress_publication",
+            Self::ResultPublication => "external_result_publication",
+            Self::TracePublication => "external_trace_publication",
+            Self::PublicationHeld => "external_publication_held",
+            Self::PublicationAccepted => "external_publication_accepted",
+        }
+    }
 }
 
 /// Frozen original actor binding; matching a public pane/CID alone is insufficient.
@@ -60,6 +91,8 @@ struct ExternalCompletionReceipt {
     failure: Option<Box<MezError>>,
     /// Optional installation failure is not required-gate acceptance/failure.
     publication_failure: Option<Box<MezError>>,
+    /// Trace is optional and attempted once; entered is not an install receipt.
+    trace_attempted: bool,
 }
 
 impl fmt::Debug for ExternalCompletionReceipt {
@@ -79,12 +112,63 @@ impl fmt::Debug for ExternalCompletionReceipt {
 }
 
 /// Receipts belong to existing admitted active execution slots, not history.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(super) struct RuntimeCompletionSettlements {
     external: BTreeMap<ExternalCompletionKey, Box<ExternalCompletionReceipt>>,
+    native: BTreeMap<NativeCompletionKey, Box<NativeCompletionReceipt>>,
+    /// Active execution slots only; a required failure fences new work before
+    /// failed owners could accumulate into a historical completion archive.
+    groups: BTreeMap<String, Box<CompletionGroup>>,
+    /// First required failure, never an optional publication installation error.
+    critical_failure: Option<Box<MezError>>,
+    /// A nested lifecycle drain cannot enter the same publication pump twice.
+    publication_pump_active: bool,
+}
+
+impl fmt::Debug for RuntimeCompletionSettlements {
+    /// Retained full typed errors stay live but never enter generic debug text.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeCompletionSettlements")
+            .field("external", &self.external)
+            .field("native", &self.native)
+            .field("groups", &self.groups)
+            .field(
+                "critical_failure_kind",
+                &self.critical_failure.as_ref().map(|error| error.kind()),
+            )
+            .finish()
+    }
 }
 
 impl RuntimeSessionService {
+    /// Preserves a bounded optional diagnostic on an existing receipt without
+    /// changing required failure truth or authorizing any publication replay.
+    pub(crate) fn note_completion_optional_error(&mut self, turn_id: &str, result: Result<()>) {
+        let Err(error) = result else { return; };
+        if let Some(receipt) = self.agent.completion_settlements.external.values_mut()
+            .find(|receipt| receipt.owner.turn_id == turn_id)
+        {
+            receipt.publication_failure = Some(Box::new(error));
+        } else if let Some(receipt) = self.agent.completion_settlements.native.values_mut()
+            .find(|receipt| receipt.owner.turn_id == turn_id)
+        {
+            receipt.publication_failure = Some(Box::new(error));
+        }
+    }
+
+    /// A required original-archive failure fences NEW work while its existing
+    /// immutable candidate remains owned; admitted callbacks/cancel/reap stay open.
+    pub(in crate::runtime::agent) fn record_completion_archive_failure(
+        &mut self,
+        error: &MezError,
+    ) {
+        self.agent
+            .completion_settlements
+            .critical_failure
+            .get_or_insert_with(|| Box::new(error.clone()));
+    }
+
     /// Captures authoritative current group/action metadata before worker release.
     /// Missing or inconsistent group ownership fails before physical dispatch.
     pub(super) fn reserve_external_completion(
@@ -94,6 +178,7 @@ impl RuntimeSessionService {
         attempt: &str,
     ) -> Result<()> {
         let owner = self.external_completion_owner(turn_id, action_id, attempt)?;
+        self.reserve_completion_group(turn_id, &owner.group)?;
         if self
             .agent
             .completion_settlements
@@ -120,6 +205,7 @@ impl RuntimeSessionService {
                 "external completion attempt is already reserved",
             ));
         }
+        self.record_completion_issued_attempt(turn_id, action_id, attempt)?;
         self.agent.completion_settlements.external.insert(
             key,
             Box::new(ExternalCompletionReceipt {
@@ -128,6 +214,7 @@ impl RuntimeSessionService {
                 raw: None,
                 failure: None,
                 publication_failure: None,
+                trace_attempted: false,
             }),
         );
         Ok(())
@@ -140,6 +227,18 @@ impl RuntimeSessionService {
         action_id: &str,
         attempt: &str,
     ) -> Result<ExternalCompletionOwner> {
+        self.completion_owner(turn_id, action_id, attempt, false)
+    }
+
+    /// Paint may settle under an exact human pause; this does not admit a new
+    /// worker delivery or permit continuation through that pause.
+    fn completion_owner(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+        attempt: &str,
+        allow_human_pause: bool,
+    ) -> Result<ExternalCompletionOwner> {
         let turn = self
             .agent_turn_ledger()
             .turns()
@@ -148,11 +247,11 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("completion turn owner is unavailable"))?;
         if turn.state != AgentTurnState::Running
             && !(turn.state == AgentTurnState::Blocked
-                && self
+                && ((allow_human_pause && self.agent_turn_is_human_paused(turn_id)) || self
                     .agent
                     .agent_scheduler
                     .waiting_turns()
-                    .any(|work| work.turn_id == turn_id))
+                    .any(|work| work.turn_id == turn_id)))
         {
             return Err(MezError::invalid_state(
                 "completion turn binding is retired",
@@ -276,12 +375,12 @@ impl RuntimeSessionService {
         if receipt.phase == ExternalCompletionPhase::Issued {
             return Ok(None);
         }
+        if let Some(error) = &receipt.failure {
+            return Err((**error).clone());
+        }
         let current = self.external_completion_owner(turn_id, action_id, attempt);
         if !current.is_ok_and(|current| current == receipt.owner) {
             return Ok(Some(false));
-        }
-        if let Some(error) = &receipt.failure {
-            return Err((**error).clone());
         }
         Ok(Some(false))
     }
@@ -311,6 +410,10 @@ impl RuntimeSessionService {
         }
         receipt.raw = Some(Box::new(outcome));
         receipt.phase = ExternalCompletionPhase::OutcomeRetained;
+        if let Some(group) = self.agent.completion_settlements.groups.get_mut(&key.0) {
+            group.observed.insert((key.1.clone(), key.2.clone()));
+            group.handoff = None;
+        }
         let validation = current.and_then(|current| {
             if current == receipt.owner {
                 Ok(())
@@ -322,6 +425,13 @@ impl RuntimeSessionService {
         });
         if let Err(error) = validation {
             receipt.failure = Some(Box::new(error.clone()));
+            self.record_completion_required_failure(
+                &key.0,
+                ExternalCompletionPhase::OutcomeRetained.stage_name(),
+                Some(&key.1),
+                Some(&key.2),
+                &error,
+            );
             return Err(error);
         }
         Ok(key)
@@ -393,6 +503,15 @@ impl RuntimeSessionService {
         receipt.phase = phase;
         if phase == ExternalCompletionPhase::CanonicalRetained {
             receipt.raw = None;
+            self.invalidate_completion_handoff(&key.0);
+        }
+        if phase == ExternalCompletionPhase::ContextCommitted
+            && let Some(group) = self.agent.completion_settlements.groups.get_mut(&key.0)
+        {
+            group
+                .context_committed
+                .insert((key.1.clone(), key.2.clone()));
+            group.handoff = None;
         }
         Ok(())
     }
@@ -403,10 +522,21 @@ impl RuntimeSessionService {
         key: &ExternalCompletionKey,
         error: &MezError,
     ) {
+        let mut stage = None;
         if let Some(receipt) = self.agent.completion_settlements.external.get_mut(key) {
+            stage = Some(receipt.phase.stage_name());
             receipt
                 .failure
                 .get_or_insert_with(|| Box::new(error.clone()));
+        }
+        if let Some(stage) = stage {
+            self.record_completion_required_failure(
+                &key.0,
+                stage,
+                Some(&key.1),
+                Some(&key.2),
+                error,
+            );
         }
     }
 
@@ -430,11 +560,12 @@ impl RuntimeSessionService {
         self.presentation
             .agent_queued_provider_results
             .get(&source_key)
-            .is_some_and(|(action, retained, text, _)| {
+            .is_some_and(|(action, retained, text, _, transaction)| {
                 action.id == owner.action_id
                     && action.action_type() == owner.action_type
                     && retained == result
                     && *text == result.content_text()
+                    && transaction.is_none()
             })
     }
 
@@ -463,6 +594,9 @@ impl RuntimeSessionService {
     /// A settled sibling cannot schedule another provider across an earlier
     /// required completion gate, including when the sibling is native work.
     pub(crate) fn ensure_completion_required_gates_ready(&self, turn_id: &str) -> Result<()> {
+        if let Some(error) = self.completion_group_failure(turn_id) {
+            return Err(error);
+        }
         if let Some(error) = self
             .agent
             .completion_settlements
@@ -513,6 +647,11 @@ impl RuntimeSessionService {
             .is_some_and(|receipt| receipt.phase == ExternalCompletionPhase::Issued)
         {
             self.agent.completion_settlements.external.remove(&key);
+            if let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) {
+                group
+                    .issued
+                    .remove(&(action_id.to_string(), attempt.to_string()));
+            }
         }
     }
 
@@ -536,6 +675,7 @@ impl RuntimeSessionService {
             ));
         }
         self.agent.completion_settlements.external.remove(key);
+        self.retire_completion_group_after_transfer(&key.0);
         Ok(())
     }
 }

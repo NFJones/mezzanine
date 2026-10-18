@@ -2064,7 +2064,7 @@ impl RuntimeSessionService {
                     entries,
                 });
         } else {
-            store.append_many(&entries)?;
+            self.append_transcript_with_admission_observation(&store, &entries, false)?;
         }
         Ok(())
     }
