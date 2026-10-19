@@ -381,7 +381,16 @@ fn runtime_completion_pane_close_no_group_settles_or_reports_committed_helper_er
         let second = service
             .dispatch_runtime_pane_close(&primary, &params)
             .unwrap_err();
-        assert_eq!(second.kind(), crate::error::MezErrorKind::NotFound);
+        if fail_helper {
+            // The cut precedes runtime-lifecycle synchronization, so the still
+            // live service reaches exact target lookup and refuses its absence.
+            assert_eq!(second.kind(), crate::error::MezErrorKind::NotFound);
+        } else {
+            // Healthy last-pane removal synchronizes Empty to Killed. Its
+            // liveness guard rejects before any repeated target/removal work.
+            assert_eq!(second.kind(), crate::error::MezErrorKind::InvalidState);
+            assert_eq!(second.message(), "runtime service has already been killed");
+        }
         assert_eq!(service.session.mutation_revision(), revision);
     }
 }
