@@ -22,6 +22,16 @@ use super::types::AgentTranscriptStore;
 
 const RECEIPT_VERSION: u64 = 1;
 
+/// One-shot test handshake after receipt path enumeration, before opening files.
+#[cfg(test)]
+#[derive(Debug)]
+pub(super) struct ReceiptEnumerationBarrier {
+    /// Reports that the path snapshot has been captured.
+    observed: std::sync::mpsc::Sender<()>,
+    /// Releases the scan after a competing conversation finishes settlement.
+    resume: std::sync::mpsc::Receiver<()>,
+}
+
 #[derive(Serialize, Deserialize)]
 struct AppendReceipt {
     version: u64,
@@ -132,6 +142,8 @@ impl AgentTranscriptStore {
             .map(|result| result.map(|entry| entry.path()))
             .collect::<std::io::Result<Vec<_>>>()?;
         paths.sort();
+        #[cfg(test)]
+        self.wait_at_receipt_enumeration_barrier()?;
         paths
             .into_iter()
             .filter(|path| !path.to_string_lossy().ends_with(".json.tmp"))
@@ -160,6 +172,41 @@ impl AgentTranscriptStore {
                 Ok((path, receipt, entries))
             })
             .collect()
+    }
+
+    /// Gates one receipt scan on this handle or its clones, without global state.
+    #[cfg(test)]
+    pub(crate) fn gate_next_receipt_enumeration_for_tests(
+        &self,
+        observed: std::sync::mpsc::Sender<()>,
+        resume: std::sync::mpsc::Receiver<()>,
+    ) {
+        *self.receipt_enumeration_barrier.lock().unwrap() =
+            Some(ReceiptEnumerationBarrier { observed, resume });
+    }
+
+    /// Consumes the per-store handshake without retaining its mutex while paused.
+    #[cfg(test)]
+    fn wait_at_receipt_enumeration_barrier(&self) -> Result<()> {
+        let barrier = self
+            .receipt_enumeration_barrier
+            .lock()
+            .map_err(|_| MezError::invalid_state("receipt enumeration test barrier poisoned"))?
+            .take();
+        if let Some(barrier) = barrier {
+            barrier.observed.send(()).map_err(|_| {
+                MezError::invalid_state("receipt enumeration test observer disconnected")
+            })?;
+            barrier
+                .resume
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "receipt enumeration test barrier failed: {error}"
+                    ))
+                })?;
+        }
+        Ok(())
     }
 
     /// Refuses a saved fork while either locked identity has retained receipt
