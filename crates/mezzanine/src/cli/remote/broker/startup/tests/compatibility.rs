@@ -228,6 +228,51 @@ async fn outbound_wire_epoch_incompatible_readiness_never_launches_or_sends_setu
     }
 }
 
+/// Malformed framing is a connected protocol failure, not missing discovery.
+/// Duplicate headers, oversize declarations and invalid UTF-8 must get static
+/// recovery guidance without reflecting bytes, sending setup or invoking launch.
+/// Raw writes remain scoped to the same private Unix fake and joined deadline.
+#[tokio::test]
+async fn outbound_wire_epoch_malformed_framing_has_terminal_owner_guidance() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for bytes in [
+        b"Content-Length: 2\r\nContent-Length: 2\r\nX-Private: untrusted-secret-sentinel\r\n\r\n{}"
+            .as_slice(),
+        b"Content-Length: 4097\r\n\r\n".as_slice(),
+        b"Content-Length: 1\r\n\r\n\xff".as_slice(),
+    ] {
+        let fixture = FakeBroker::new();
+        let launches = AtomicUsize::new(0);
+        let peer = async {
+            let mut peer = fixture.accept().await;
+            peer.next().await.unwrap().unwrap();
+            let mut raw = peer.into_inner();
+            raw.write_all(bytes).await.unwrap();
+            let mut received = Vec::new();
+            raw.read_to_end(&mut received).await.unwrap();
+            assert!(
+                received.is_empty(),
+                "malformed readiness must emit no setup"
+            );
+        };
+        let client = connect_with_launcher(&fixture.root, Duration::from_secs(2), |_| {
+            launches.fetch_add(1, Ordering::SeqCst);
+            Err(MezError::invalid_state("unexpected fixture launch"))
+        });
+        let (result, ()) =
+            tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
+                .await
+                .unwrap();
+        let error = result.err().expect("malformed frame must reject readiness");
+        assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+        assert!(error.io_kind().is_none());
+        assert!(error.message().contains("owner"));
+        assert!(!error.message().contains("untrusted-secret-sentinel"));
+        assert_eq!(launches.load(Ordering::SeqCst), 0);
+        fixture.finish();
+    }
+}
+
 /// Concurrent current-epoch frontends retain distinct exact streams. Rejecting
 /// another candidate must not invalidate retained handles or replace discovery;
 /// this readiness-only fixture does not claim application stream usability.

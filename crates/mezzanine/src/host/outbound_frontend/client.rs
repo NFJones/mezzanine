@@ -142,7 +142,13 @@ impl OutboundFrontendClient {
                         serde_json::json!({"protocol":PROTOCOL}).to_string(),
                     ))
                     .await?;
-                let response = stream.next().await.transpose()?.ok_or_else(|| {
+                let response = stream.next().await.transpose().map_err(|error| {
+                    // Retain classification, never peer bytes or an I/O-absence
+                    // source that could authorize startup after connecting.
+                    MezError::new(error.kind(), format!(
+                        "outbound readiness frame invalid or unavailable; {WIRE_RECOVERY}"
+                    ))
+                })?.ok_or_else(|| {
                     MezError::invalid_state(format!(
                         "outbound readiness reply unavailable or incompatible; {WIRE_RECOVERY}"
                     ))
