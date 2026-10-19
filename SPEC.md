@@ -7726,6 +7726,16 @@ sentinel with no additional bytes. Pane shell mode MUST additionally require
 complete registered transaction framing and decoded output; native shell mode
 MUST execute the probe directly without pane transactions. Pane transaction
 framing MUST delimit the sentinel without relying on a terminal line ending.
+Linux real-Bubblewrap test workloads MUST retain sole ownership of their exact
+unreaped birth root through the final group/root signal decision, and MUST NOT
+signal numeric process/group IDs after reaping. Nonreaping exit observation is
+not a new source of signal authority. Capture and staged stdin MUST use bounded
+nonblocking work and finite output limits under the original absolute deadline,
+including partial setup and unwinding; cleanup MUST NOT restart that deadline or
+join an unbounded reader. Deadline-expired unreaped roots and secondary cleanup
+failures MUST be reported as incomplete cleanup, not successful acceptance.
+This cooperative test-helper bound does not promise to interrupt a stalled
+synchronous spawn or kernel syscall, nor qualify native macOS behavior.
 Probe failures MUST retain a
 bounded escaped output preview, actual exit status when available, decoded and
 observed byte counts, truncation and exact-sentinel state, and a typed failure
