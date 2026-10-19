@@ -455,8 +455,11 @@ impl AsyncRuntimeSessionActor {
     fn steering_presentation_retry_idle_wake_needed(&self) -> bool {
         self.service.steering_presentation_retry_timer_needed()
             && self.timers.idle_cleanup.is_none()
-            && !matches!(self.service.lifecycle_state(),
-                crate::runtime::RuntimeLifecycleState::Killed | crate::runtime::RuntimeLifecycleState::Failed)
+            && !matches!(
+                self.service.lifecycle_state(),
+                crate::runtime::RuntimeLifecycleState::Killed
+                    | crate::runtime::RuntimeLifecycleState::Failed
+            )
     }
 
     /// Separately admits one display wake at a typed timer/capacity drain boundary.
@@ -472,17 +475,22 @@ impl AsyncRuntimeSessionActor {
         // Match normal queue admission's conservative nonpersistence occupancy.
         // Even if coalescing could free space, defer optional work instead of
         // risking the already-admitted mandatory batch's success contract.
-        if self.side_effects.len().saturating_add(self.side_effect_routes.non_persistence_len())
+        if self
+            .side_effects
+            .len()
+            .saturating_add(self.side_effect_routes.non_persistence_len())
             >= self.side_effect_buffer
         {
             return Ok(());
         }
-        let generation = self.timers.last_idle_cleanup_generation.checked_add(1)
+        let generation = self
+            .timers
+            .last_idle_cleanup_generation
+            .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("steering display idle generation exhausted"))?
             .max(async_runtime_current_unix_millis());
         self.queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
-            key: RuntimeTimerKey::new(RuntimeTimerKind::IdleCleanup, "session",
-                generation),
+            key: RuntimeTimerKey::new(RuntimeTimerKind::IdleCleanup, "session", generation),
             delay_ms: DEFAULT_SHELL_RECOVERY_INTERVAL_MS,
         }])
     }

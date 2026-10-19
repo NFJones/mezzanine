@@ -107,20 +107,26 @@ impl RuntimeSessionService {
             return;
         };
         let key = (pane.to_string(), conversation);
-        self.presentation.steering_presentation_retries.retain(|(owner, source), _| {
-            owner != pane || source == &key.1
-        });
+        self.presentation
+            .steering_presentation_retries
+            .retain(|(owner, source), _| owner != pane || source == &key.1);
         // Dirty checkpoint publication and other immediate requests must not
         // bypass pacing or create a second attempt in the same ordinary drain.
-        if self.presentation.steering_presentation_retries.contains_key(&key) {
+        if self
+            .presentation
+            .steering_presentation_retries
+            .contains_key(&key)
+        {
             return;
         }
         if self.reconcile_steering_presentation(pane).is_err() {
-            self.presentation.steering_presentation_retries.insert(key.clone(),
+            self.presentation.steering_presentation_retries.insert(
+                key.clone(),
                 crate::runtime::render::RuntimeSteeringPresentationRetry {
                     next_attempt_at: std::time::Instant::now() + STEERING_DISPLAY_RETRY_DELAY,
                     backoff: 0,
-                });
+                },
+            );
             // Never include accepted source or arbitrary renderer errors in
             // this bounded diagnostic. One event covers the retained episode.
             let _ = self.append_lifecycle_event(crate::runtime::EventKind::Diagnostic,
@@ -152,16 +158,21 @@ impl RuntimeSessionService {
     pub(crate) fn retry_steering_presentations(&mut self) {
         let mut retries = std::mem::take(&mut self.presentation.steering_presentation_retries);
         retries.retain(|(pane, conversation), _| {
-            self.find_pane_descriptor(pane).is_some() && self
-                .agent_shell_store()
-                .get(pane)
-                .is_some_and(|session| session.session_id == *conversation)
+            self.find_pane_descriptor(pane).is_some()
+                && self
+                    .agent_shell_store()
+                    .get(pane)
+                    .is_some_and(|session| session.session_id == *conversation)
         });
         self.presentation.steering_presentation_retries = retries;
         let now = std::time::Instant::now();
         let cursor = &self.presentation.steering_presentation_retry_cursor;
         let retries = &self.presentation.steering_presentation_retries;
-        let due = retries.range((std::ops::Bound::Excluded(cursor.clone()), std::ops::Bound::Unbounded))
+        let due = retries
+            .range((
+                std::ops::Bound::Excluded(cursor.clone()),
+                std::ops::Bound::Unbounded,
+            ))
             .chain(retries.range(..=cursor.clone()))
             .filter(|(_, retry)| retry.next_attempt_at <= now)
             .take(STEERING_DISPLAY_RETRIES_PER_DRAIN)
@@ -172,11 +183,18 @@ impl RuntimeSessionService {
             if self.reconcile_steering_presentation(&key.0).is_ok() {
                 self.presentation.steering_presentation_retries.remove(&key);
                 let effects = self.render_effects_for_clients_projecting_pane(
-                    &key.0, crate::runtime::RenderInvalidationReason::FullRedraw);
+                    &key.0,
+                    crate::runtime::RenderInvalidationReason::FullRedraw,
+                );
                 self.presentation.defer_render_effects(effects);
-            } else if let Some(retry) = self.presentation.steering_presentation_retries.get_mut(&key) {
+            } else if let Some(retry) = self
+                .presentation
+                .steering_presentation_retries
+                .get_mut(&key)
+            {
                 retry.backoff = retry.backoff.saturating_add(1).min(5);
-                retry.next_attempt_at = now + STEERING_DISPLAY_RETRY_DELAY * (1u32 << retry.backoff);
+                retry.next_attempt_at =
+                    now + STEERING_DISPLAY_RETRY_DELAY * (1u32 << retry.backoff);
             }
         }
     }
@@ -357,7 +375,9 @@ impl RuntimeSessionService {
             // prefixes must become observable without waiting for whole-pass
             // success; the existing per-client queue coalesces these effects.
             let effects = self.render_effects_for_clients_projecting_pane(
-                pane, crate::runtime::RenderInvalidationReason::FullRedraw);
+                pane,
+                crate::runtime::RenderInvalidationReason::FullRedraw,
+            );
             self.presentation.defer_render_effects(effects);
         }
         Ok(())

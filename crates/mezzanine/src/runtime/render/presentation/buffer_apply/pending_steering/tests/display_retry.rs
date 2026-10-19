@@ -25,11 +25,21 @@ impl Fixture {
         let mut service = crate::test_support::runtime::RuntimeServiceFixture::new()
             .control_socket(root.join("control.sock"))
             .build();
-        service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
-        let conversation = service.agent_shell_store().get("%1").unwrap().session_id.clone();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        let conversation = service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .session_id
+            .clone();
         let receipt = SteeringRecoveryReceipt {
             occurrence: mez_core::presentation::PresentationOccurrence::new(
-                Some(1234), mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance),
+                Some(1234),
+                mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+            ),
             id: "original-steering-occurrence".into(),
             acceptance_order: 1,
             turn_id: Some("inert-original-turn".into()),
@@ -37,20 +47,38 @@ impl Fixture {
             display: "original accepted source\r\ntrailing source\n".into(),
             status: SteeringRecoveryStatus::Admitted(7),
         };
-        service.restore_steering_recovery("%1", &conversation, std::slice::from_ref(&receipt)).unwrap();
-        service.set_agent_transcript_store(crate::storage::transcript::AgentTranscriptStore::new(root.join("transcripts")));
+        service
+            .restore_steering_recovery("%1", &conversation, std::slice::from_ref(&receipt))
+            .unwrap();
+        service.set_agent_transcript_store(crate::storage::transcript::AgentTranscriptStore::new(
+            root.join("transcripts"),
+        ));
         service.mark_steering_recovery_published();
-        Self { service, root, conversation, receipt }
+        Self {
+            service,
+            root,
+            conversation,
+            receipt,
+        }
     }
 
     /// Reads retained agent rows, not a terminal, provider or process fixture.
     fn text(&self) -> String {
-        self.service.agent_pane_screen("%1").unwrap().normal_content_lines().join("\n")
+        self.service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
     }
 
     /// Models elapsed idle time without a sleep, request, new input or worker.
     fn make_due(&mut self) {
-        for retry in self.service.presentation.steering_presentation_retries.values_mut() {
+        for retry in self
+            .service
+            .presentation
+            .steering_presentation_retries
+            .values_mut()
+        {
             retry.next_attempt_at = std::time::Instant::now();
         }
     }
@@ -77,27 +105,69 @@ fn steering_display_retry_two_failures_then_ordinary_drain_installs_original_onc
     fixture.make_due();
     let failed = fixture.service.drain_transcript_persistence_transition();
     assert!(failed.side_effects.is_empty());
-    assert_eq!(fixture.service.presentation.agent_install_failure_countdown, None);
+    assert_eq!(
+        fixture.service.presentation.agent_install_failure_countdown,
+        None
+    );
     assert!(!fixture.text().contains("original accepted source"));
 
     fixture.make_due();
     let recovered = fixture.service.drain_transcript_persistence_transition();
-    assert_eq!(fixture.text().matches("user> original accepted source").count(), 1);
-    let sources = recovered.side_effects.into_iter().map(|effect| {
-        let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { entry, .. } = effect else {
-            panic!("display recovery emitted a non-steering effect");
-        };
-        assert_eq!(entry.presentation.as_ref().unwrap().id, fixture.receipt.id);
-        crate::storage::transcript::steering::Source::decode(entry.source_text.as_deref().unwrap()).unwrap()
-    }).collect::<Vec<_>>();
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        1
+    );
+    let sources = recovered
+        .side_effects
+        .into_iter()
+        .map(|effect| {
+            let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { entry, .. } =
+                effect
+            else {
+                panic!("display recovery emitted a non-steering effect");
+            };
+            assert_eq!(entry.presentation.as_ref().unwrap().id, fixture.receipt.id);
+            crate::storage::transcript::steering::Source::decode(
+                entry.source_text.as_deref().unwrap(),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0].conversation_id, fixture.conversation);
     assert_eq!(sources[0].receipt, fixture.receipt);
-    assert!(fixture.service.drain_transcript_persistence_transition().side_effects.is_empty());
-    assert_eq!(fixture.text().matches("user> original accepted source").count(), 1);
-    assert!(fixture.service.presentation.steering_presentation_retries.is_empty());
+    assert!(
+        fixture
+            .service
+            .drain_transcript_persistence_transition()
+            .side_effects
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        1
+    );
+    assert!(
+        fixture
+            .service
+            .presentation
+            .steering_presentation_retries
+            .is_empty()
+    );
     assert!(fixture.service.agent_turn_ledger().turns().is_empty());
-    assert_eq!(fixture.service.steering_presentation_receipts("%1").unwrap(), vec![fixture.receipt.clone()]);
+    assert_eq!(
+        fixture
+            .service
+            .steering_presentation_receipts("%1")
+            .unwrap(),
+        vec![fixture.receipt.clone()]
+    );
 }
 
 /// Persistent unavailability must stay enrolled in the one tracked idle timer,
@@ -112,8 +182,15 @@ fn steering_display_retry_many_failures_keep_paced_idle_recovery_live() {
     fixture.service.request_steering_presentation("%1");
     let diagnostic = fixture.service.event_log().unwrap().latest_event_id();
     assert_eq!(diagnostic, before + 1);
-    let events = fixture.service.event_log().unwrap().replay_for(&crate::runtime::EventAudience::AllPrimaries);
-    let event = events.iter().find(|event| event.payload.contains("steering display unavailable")).unwrap();
+    let events = fixture
+        .service
+        .event_log()
+        .unwrap()
+        .replay_for(&crate::runtime::EventAudience::AllPrimaries);
+    let event = events
+        .iter()
+        .find(|event| event.payload.contains("steering display unavailable"))
+        .unwrap();
     assert!(!event.payload.contains("original accepted source"));
     assert!(event.payload.contains(&fixture.conversation));
     let progress = std::collections::BTreeSet::new();
@@ -121,26 +198,86 @@ fn steering_display_retry_many_failures_keep_paced_idle_recovery_live() {
         assert!(fixture.service.steering_presentation_retry_timer_needed());
         fixture.service.fail_agent_presentation_install_for_tests(0);
         // A future deadline, not elapsed wall time, proves no hot-drain attempt.
-        fixture.service.presentation.steering_presentation_retries.values_mut().next().unwrap().next_attempt_at =
-            std::time::Instant::now() + std::time::Duration::from_secs(60);
+        fixture
+            .service
+            .presentation
+            .steering_presentation_retries
+            .values_mut()
+            .next()
+            .unwrap()
+            .next_attempt_at = std::time::Instant::now() + std::time::Duration::from_secs(60);
         fixture.service.request_steering_presentation("%1");
-        assert!(fixture.service.drain_transcript_persistence_transition().side_effects.is_empty());
-        assert_eq!(fixture.service.presentation.agent_install_failure_countdown, Some(0));
+        assert!(
+            fixture
+                .service
+                .drain_transcript_persistence_transition()
+                .side_effects
+                .is_empty()
+        );
+        assert_eq!(
+            fixture.service.presentation.agent_install_failure_countdown,
+            Some(0)
+        );
         fixture.make_due();
-        fixture.service.apply_idle_cleanup_timer_event_with_actor_progress(&progress).unwrap();
-        assert!(fixture.service.drain_transcript_persistence_transition().side_effects.is_empty());
-        assert_eq!(fixture.service.presentation.agent_install_failure_countdown, None);
-        assert_eq!(fixture.service.presentation.steering_presentation_retries.len(), 1);
-        assert!(fixture.service.presentation.steering_presentation_retries.values().next().unwrap().backoff <= 5);
-        assert_eq!(fixture.service.event_log().unwrap().latest_event_id(), diagnostic);
+        fixture
+            .service
+            .apply_idle_cleanup_timer_event_with_actor_progress(&progress)
+            .unwrap();
+        assert!(
+            fixture
+                .service
+                .drain_transcript_persistence_transition()
+                .side_effects
+                .is_empty()
+        );
+        assert_eq!(
+            fixture.service.presentation.agent_install_failure_countdown,
+            None
+        );
+        assert_eq!(
+            fixture
+                .service
+                .presentation
+                .steering_presentation_retries
+                .len(),
+            1
+        );
+        assert!(
+            fixture
+                .service
+                .presentation
+                .steering_presentation_retries
+                .values()
+                .next()
+                .unwrap()
+                .backoff
+                <= 5
+        );
+        assert_eq!(
+            fixture.service.event_log().unwrap().latest_event_id(),
+            diagnostic
+        );
     }
     fixture.make_due();
-    fixture.service.apply_idle_cleanup_timer_event_with_actor_progress(&progress).unwrap();
+    fixture
+        .service
+        .apply_idle_cleanup_timer_event_with_actor_progress(&progress)
+        .unwrap();
     let recovered = fixture.service.drain_transcript_persistence_transition();
     assert_eq!(recovered.side_effects.len(), 1);
-    assert_eq!(fixture.text().matches("user> original accepted source").count(), 1);
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        1
+    );
     assert!(!fixture.service.steering_presentation_retry_timer_needed());
-    assert!(!fixture.service.idle_cleanup_timer_needed_with_actor_progress(&progress));
+    assert!(
+        !fixture
+            .service
+            .idle_cleanup_timer_needed_with_actor_progress(&progress)
+    );
     assert!(fixture.service.agent_turn_ledger().turns().is_empty());
 }
 
@@ -154,25 +291,70 @@ fn steering_display_retry_partial_prefix_preserves_equal_text_order() {
     second.id = "second-equal-text-occurrence".into();
     second.acceptance_order = 2;
     second.occurrence.unix_millis = Some(1235);
-    fixture.service.restore_steering_recovery("%1", &fixture.conversation,
-        &[fixture.receipt.clone(), second.clone()]).unwrap();
+    fixture
+        .service
+        .restore_steering_recovery(
+            "%1",
+            &fixture.conversation,
+            &[fixture.receipt.clone(), second.clone()],
+        )
+        .unwrap();
     fixture.service.fail_agent_presentation_install_for_tests(1);
     fixture.service.request_steering_presentation("%1");
-    assert_eq!(fixture.service.presentation.agent_install_failure_countdown, None);
-    assert_eq!(fixture.text().matches("user> original accepted source").count(), 1);
+    assert_eq!(
+        fixture.service.presentation.agent_install_failure_countdown,
+        None
+    );
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        1
+    );
     let first = fixture.service.drain_transcript_persistence_transition();
     fixture.make_due();
     let second_write = fixture.service.drain_transcript_persistence_transition();
-    let sources = first.side_effects.into_iter().chain(second_write.side_effects).map(|effect| {
-        let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { entry, .. } = effect else {
-            panic!("display recovery emitted a non-steering effect");
-        };
-        crate::storage::transcript::steering::Source::decode(entry.source_text.as_deref().unwrap()).unwrap().receipt
-    }).collect::<Vec<_>>();
+    let sources = first
+        .side_effects
+        .into_iter()
+        .chain(second_write.side_effects)
+        .map(|effect| {
+            let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { entry, .. } =
+                effect
+            else {
+                panic!("display recovery emitted a non-steering effect");
+            };
+            crate::storage::transcript::steering::Source::decode(
+                entry.source_text.as_deref().unwrap(),
+            )
+            .unwrap()
+            .receipt
+        })
+        .collect::<Vec<_>>();
     assert_eq!(sources, vec![fixture.receipt.clone(), second]);
-    assert_eq!(fixture.text().matches("user> original accepted source").count(), 2);
-    assert!(fixture.service.drain_transcript_persistence_transition().side_effects.is_empty());
-    assert_eq!(fixture.service.presentation.presented_steering_receipts.len(), 2);
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        2
+    );
+    assert!(
+        fixture
+            .service
+            .drain_transcript_persistence_transition()
+            .side_effects
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .service
+            .presentation
+            .presented_steering_receipts
+            .len(),
+        2
+    );
     assert!(fixture.service.agent_turn_ledger().turns().is_empty());
 }
 
@@ -188,14 +370,32 @@ fn steering_display_retry_dirty_checkpoint_does_not_bypass_failed_attempt() {
     fixture.service.fail_agent_presentation_install_for_tests(0);
     fixture.make_due();
     let drained = fixture.service.drain_transcript_persistence_transition();
-    assert!(!drained.side_effects.iter().any(|effect| matches!(effect,
-        crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { .. })));
-    assert_eq!(fixture.service.presentation.agent_install_failure_countdown, None);
-    assert_eq!(fixture.service.presentation.steering_presentation_retries.len(), 1);
+    assert!(!drained.side_effects.iter().any(|effect| matches!(
+        effect,
+        crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { .. }
+    )));
+    assert_eq!(
+        fixture.service.presentation.agent_install_failure_countdown,
+        None
+    );
+    assert_eq!(
+        fixture
+            .service
+            .presentation
+            .steering_presentation_retries
+            .len(),
+        1
+    );
     assert!(!fixture.text().contains("original accepted source"));
     fixture.make_due();
     fixture.service.drain_transcript_persistence_transition();
-    assert_eq!(fixture.text().matches("user> original accepted source").count(), 1);
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        1
+    );
 }
 
 /// Conversation replacement and explicit pane presentation teardown retire only
@@ -208,14 +408,33 @@ fn steering_display_retry_retires_replaced_and_removed_owners() {
         fixture.service.fail_agent_presentation_install_for_tests(0);
         fixture.service.request_steering_presentation("%1");
         if remove {
-            fixture.service.presentation.remove_agent_presentation_state("%1");
+            fixture
+                .service
+                .presentation
+                .remove_agent_presentation_state("%1");
             fixture.service.agent_shell_store_mut().remove_session("%1");
         } else {
-            fixture.service.agent_shell_store_mut().start_new_conversation("%1").unwrap();
+            fixture
+                .service
+                .agent_shell_store_mut()
+                .start_new_conversation("%1")
+                .unwrap();
         }
         fixture.make_due();
-        assert!(fixture.service.drain_transcript_persistence_transition().side_effects.is_empty());
-        assert!(fixture.service.presentation.steering_presentation_retries.is_empty());
+        assert!(
+            fixture
+                .service
+                .drain_transcript_persistence_transition()
+                .side_effects
+                .is_empty()
+        );
+        assert!(
+            fixture
+                .service
+                .presentation
+                .steering_presentation_retries
+                .is_empty()
+        );
         assert!(!fixture.service.steering_presentation_retry_timer_needed());
         assert!(!fixture.text().contains("original accepted source"));
         assert!(fixture.service.agent_turn_ledger().turns().is_empty());
@@ -232,14 +451,42 @@ fn steering_display_retry_retires_replaced_and_removed_owners() {
 #[test]
 fn steering_display_retry_bounds_batch_and_does_not_starve_later_panes() {
     let mut fixture = Fixture::new();
-    let primary = fixture.service.session_mut_for_tests().attach_primary("fixture", true).unwrap();
+    let primary = fixture
+        .service
+        .session_mut_for_tests()
+        .attach_primary("fixture", true)
+        .unwrap();
     let mut panes = vec!["%1".to_string()];
     for index in 0..9 {
-        fixture.service.session_mut_for_tests().new_window(&primary, format!("retry-{index}"), true).unwrap();
-        let pane = fixture.service.session().active_window().unwrap().active_pane().id.to_string();
-        fixture.service.agent_shell_store_mut().enter_or_resume(&pane).unwrap();
-        let conversation = fixture.service.agent_shell_store().get(&pane).unwrap().session_id.clone();
-        fixture.service.restore_steering_recovery(&pane, &conversation, std::slice::from_ref(&fixture.receipt)).unwrap();
+        fixture
+            .service
+            .session_mut_for_tests()
+            .new_window(&primary, format!("retry-{index}"), true)
+            .unwrap();
+        let pane = fixture
+            .service
+            .session()
+            .active_window()
+            .unwrap()
+            .active_pane()
+            .id
+            .to_string();
+        fixture
+            .service
+            .agent_shell_store_mut()
+            .enter_or_resume(&pane)
+            .unwrap();
+        let conversation = fixture
+            .service
+            .agent_shell_store()
+            .get(&pane)
+            .unwrap()
+            .session_id
+            .clone();
+        fixture
+            .service
+            .restore_steering_recovery(&pane, &conversation, std::slice::from_ref(&fixture.receipt))
+            .unwrap();
         panes.push(pane);
     }
     for pane in &panes {
@@ -247,21 +494,64 @@ fn steering_display_retry_bounds_batch_and_does_not_starve_later_panes() {
         fixture.service.request_steering_presentation(pane);
     }
     fixture.service.mark_steering_recovery_published();
-    assert_eq!(fixture.service.presentation.steering_presentation_retries.len(), 10);
+    assert_eq!(
+        fixture
+            .service
+            .presentation
+            .steering_presentation_retries
+            .len(),
+        10
+    );
     fixture.make_due();
     fixture.service.fail_agent_presentation_install_for_tests(0);
     let first = fixture.service.drain_transcript_persistence_transition();
-    assert_eq!(first.side_effects.len(), STEERING_DISPLAY_RETRIES_PER_DRAIN - 1);
-    assert_eq!(fixture.service.presentation.steering_presentation_retries.len(), 3);
-    let cursor = fixture.service.presentation.steering_presentation_retry_cursor.clone();
-    assert!(fixture.service.presentation.steering_presentation_retries.keys().any(|key| key > &cursor));
+    assert_eq!(
+        first.side_effects.len(),
+        STEERING_DISPLAY_RETRIES_PER_DRAIN - 1
+    );
+    assert_eq!(
+        fixture
+            .service
+            .presentation
+            .steering_presentation_retries
+            .len(),
+        3
+    );
+    let cursor = fixture
+        .service
+        .presentation
+        .steering_presentation_retry_cursor
+        .clone();
+    assert!(
+        fixture
+            .service
+            .presentation
+            .steering_presentation_retries
+            .keys()
+            .any(|key| key > &cursor)
+    );
     fixture.make_due();
     let later = fixture.service.drain_transcript_persistence_transition();
     assert_eq!(later.side_effects.len(), 3);
-    assert!(fixture.service.presentation.steering_presentation_retries.is_empty());
+    assert!(
+        fixture
+            .service
+            .presentation
+            .steering_presentation_retries
+            .is_empty()
+    );
     for pane in panes {
-        let text = fixture.service.agent_pane_screen(&pane).unwrap().normal_content_lines().join("\n");
-        assert_eq!(text.matches("user> original accepted source").count(), 1, "{pane}: {text}");
+        let text = fixture
+            .service
+            .agent_pane_screen(&pane)
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        assert_eq!(
+            text.matches("user> original accepted source").count(),
+            1,
+            "{pane}: {text}"
+        );
     }
     assert!(fixture.service.agent_turn_ledger().turns().is_empty());
 }
@@ -274,16 +564,48 @@ fn steering_display_retry_hidden_surface_retains_exact_source_until_revealed() {
     let mut fixture = Fixture::new();
     fixture.service.fail_agent_presentation_install_for_tests(0);
     fixture.service.request_steering_presentation("%1");
-    fixture.service.agent_shell_store_mut().request_exit("%1").unwrap();
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .request_exit("%1")
+        .unwrap();
     fixture.make_due();
     let recovered = fixture.service.drain_transcript_persistence_transition();
     assert_eq!(recovered.side_effects.len(), 1);
-    assert_eq!(fixture.text().matches("user> original accepted source").count(), 1);
-    fixture.service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        1
+    );
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
     fixture.service.request_steering_presentation("%1");
-    assert!(fixture.service.drain_transcript_persistence_transition().side_effects.is_empty());
-    assert_eq!(fixture.text().matches("user> original accepted source").count(), 1);
-    assert_eq!(fixture.service.steering_presentation_receipts("%1").unwrap(), vec![fixture.receipt.clone()]);
+    assert!(
+        fixture
+            .service
+            .drain_transcript_persistence_transition()
+            .side_effects
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        1
+    );
+    assert_eq!(
+        fixture
+            .service
+            .steering_presentation_receipts("%1")
+            .unwrap(),
+        vec![fixture.receipt.clone()]
+    );
 }
 
 /// A recovered retained screen must request repaint in the same ordinary drain,
@@ -292,17 +614,49 @@ fn steering_display_retry_hidden_surface_retains_exact_source_until_revealed() {
 #[test]
 fn steering_display_retry_success_emits_same_drain_repaint() {
     let mut fixture = Fixture::new();
-    let primary = fixture.service.session_mut_for_tests().attach_primary("fixture", true).unwrap();
+    let primary = fixture
+        .service
+        .session_mut_for_tests()
+        .attach_primary("fixture", true)
+        .unwrap();
     fixture.service.fail_agent_presentation_install_for_tests(0);
     fixture.service.request_steering_presentation("%1");
     fixture.make_due();
     let recovered = fixture.service.drain_deferred_effects_transition();
-    assert_eq!(recovered.side_effects.iter().filter(|effect| matches!(effect,
-        crate::runtime::RuntimeSideEffect::RenderClient { client_id, .. } if client_id == &primary)).count(), 1);
-    assert_eq!(recovered.side_effects.iter().filter(|effect| matches!(effect,
-        crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { .. })).count(), 1);
-    assert!(fixture.service.drain_deferred_effects_transition().side_effects.is_empty());
-    assert_eq!(fixture.text().matches("user> original accepted source").count(), 1);
+    assert_eq!(
+        recovered
+            .side_effects
+            .iter()
+            .filter(|effect| matches!(effect,
+        crate::runtime::RuntimeSideEffect::RenderClient { client_id, .. } if client_id == &primary))
+            .count(),
+        1
+    );
+    assert_eq!(
+        recovered
+            .side_effects
+            .iter()
+            .filter(|effect| matches!(
+                effect,
+                crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { .. }
+            ))
+            .count(),
+        1
+    );
+    assert!(
+        fixture
+            .service
+            .drain_deferred_effects_transition()
+            .side_effects
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        1
+    );
 }
 
 /// Prefix installation is visible progress even while a later receipt keeps the
@@ -311,29 +665,70 @@ fn steering_display_retry_success_emits_same_drain_repaint() {
 #[test]
 fn steering_display_retry_partial_success_repaints_before_later_failure_recovers() {
     let mut fixture = Fixture::new();
-    let primary = fixture.service.session_mut_for_tests().attach_primary("fixture", true).unwrap();
-    let receipts = (1..=3).map(|order| {
-        let mut receipt = fixture.receipt.clone();
-        receipt.id = format!("ordered-occurrence-{order}");
-        receipt.acceptance_order = order;
-        receipt
-    }).collect::<Vec<_>>();
-    fixture.service.restore_steering_recovery("%1", &fixture.conversation, &receipts).unwrap();
+    let primary = fixture
+        .service
+        .session_mut_for_tests()
+        .attach_primary("fixture", true)
+        .unwrap();
+    let receipts = (1..=3)
+        .map(|order| {
+            let mut receipt = fixture.receipt.clone();
+            receipt.id = format!("ordered-occurrence-{order}");
+            receipt.acceptance_order = order;
+            receipt
+        })
+        .collect::<Vec<_>>();
+    fixture
+        .service
+        .restore_steering_recovery("%1", &fixture.conversation, &receipts)
+        .unwrap();
     fixture.service.fail_agent_presentation_install_for_tests(0);
     fixture.service.request_steering_presentation("%1");
     for (index, receipt) in receipts.iter().enumerate() {
         fixture.make_due();
-        if index < 2 { fixture.service.fail_agent_presentation_install_for_tests(1); }
+        if index < 2 {
+            fixture.service.fail_agent_presentation_install_for_tests(1);
+        }
         let transition = fixture.service.drain_deferred_effects_transition();
         assert_eq!(transition.side_effects.iter().filter(|effect| matches!(effect,
             crate::runtime::RuntimeSideEffect::RenderClient { client_id, .. } if client_id == &primary)).count(), 1);
-        let sources = transition.side_effects.iter().filter_map(|effect| {
-            let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { entry, .. } = effect else { return None; };
-            Some(crate::storage::transcript::steering::Source::decode(entry.source_text.as_deref().unwrap()).unwrap().receipt)
-        }).collect::<Vec<_>>();
+        let sources = transition
+            .side_effects
+            .iter()
+            .filter_map(|effect| {
+                let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation {
+                    entry, ..
+                } = effect
+                else {
+                    return None;
+                };
+                Some(
+                    crate::storage::transcript::steering::Source::decode(
+                        entry.source_text.as_deref().unwrap(),
+                    )
+                    .unwrap()
+                    .receipt,
+                )
+            })
+            .collect::<Vec<_>>();
         assert_eq!(sources, vec![receipt.clone()]);
-        assert_eq!(fixture.text().matches("user> original accepted source").count(), index + 1);
-        assert_eq!(fixture.service.steering_presentation_retry_timer_needed(), index < 2);
+        assert_eq!(
+            fixture
+                .text()
+                .matches("user> original accepted source")
+                .count(),
+            index + 1
+        );
+        assert_eq!(
+            fixture.service.steering_presentation_retry_timer_needed(),
+            index < 2
+        );
     }
-    assert!(fixture.service.drain_deferred_effects_transition().side_effects.is_empty());
+    assert!(
+        fixture
+            .service
+            .drain_deferred_effects_transition()
+            .side_effects
+            .is_empty()
+    );
 }
