@@ -1091,6 +1091,11 @@ fn runtime_settled_conversation_reads_no_title_index_per_turn() {
         );
     }
 
+    assert!(
+        service.objective_mirrors_are_idle_for_tests(),
+        "an unchanged objective refresh must not admit optional mirror work"
+    );
+    service.flush_objective_mirrors_for_tests();
     let titles_after = transcript_store.session_title_mirror_status();
     let objectives_after = transcript_store.session_objective_mirror_status();
     assert_eq!(
@@ -1101,6 +1106,10 @@ fn runtime_settled_conversation_reads_no_title_index_per_turn() {
     assert_eq!(
         objectives_after.index_reads, objectives_before.index_reads,
         "an unchanged objective refresh must not read the objective index"
+    );
+    assert_eq!(
+        objectives_after.index_writes, objectives_before.index_writes,
+        "an unchanged objective refresh must not write the objective index"
     );
     assert!(service.pending_agent_session_title_tasks().is_empty());
 }
