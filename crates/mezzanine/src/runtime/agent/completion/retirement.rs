@@ -30,7 +30,7 @@ pub(in crate::runtime::agent) enum CompletionNoPersistencePolicy {
 /// Original target sampled while the exact execution group owns admission.
 pub(super) enum CompletionTranscriptTarget {
     Original {
-        read: RuntimeBookkeepingTranscriptReadWork,
+        read: Box<RuntimeBookkeepingTranscriptReadWork>,
         directory: Option<TranscriptEntry>,
     },
     NoPersistencePolicy(CompletionNoPersistencePolicy),
@@ -527,7 +527,7 @@ impl RuntimeSessionService {
             )
         } else if let Some(store) = self.persistence.cloned_transcript_store() {
             CompletionTranscriptTarget::Original {
-                read: self.capture_completion_transcript_read(store, &turn)?,
+                read: Box::new(self.capture_completion_transcript_read(store, &turn)?),
                 directory: self.capture_completion_directory_entry(&turn),
             }
         } else {
@@ -923,7 +923,7 @@ impl RuntimeSessionService {
             self.completion_bookkeeping_candidate(
                 &group.turn,
                 execution,
-                read.clone(),
+                read.as_ref().clone(),
                 directory.clone(),
             )?
         } else if let Some(handoff) = existing {

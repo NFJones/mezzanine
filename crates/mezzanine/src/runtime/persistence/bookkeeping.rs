@@ -223,9 +223,7 @@ impl RuntimePersistenceComponent {
         &mut self,
         generation: u64,
     ) -> Option<RuntimeBookkeepingCandidate> {
-        if self.bookkeeping_claims.remove(&generation).is_none() {
-            return None;
-        }
+        self.bookkeeping_claims.remove(&generation)?;
         let index = self
             .bookkeeping_candidates
             .iter()

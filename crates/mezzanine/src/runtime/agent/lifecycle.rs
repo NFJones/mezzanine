@@ -146,7 +146,7 @@ impl RuntimeSessionService {
             });
 
         if state == AgentTurnState::Interrupted {
-            self.retain_interrupted_worker_effects(&turn)?;
+            self.retain_interrupted_worker_effects(turn)?;
             let publication = self.ingest_provider_log(
                 pane_id,
                 turn_id,
@@ -181,14 +181,14 @@ impl RuntimeSessionService {
         }
         let awaiting_redirection = state == AgentTurnState::Interrupted
             && self.interrupted_subagent_awaits_redirection(turn_id);
-        let display_duration_started_at = self.agent_display_duration_started_at(&turn);
+        let display_duration_started_at = self.agent_display_duration_started_at(turn);
         if matches!(
             state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
         ) && !awaiting_redirection
             && !self.terminal_result_claimed_by_execution(turn_id)
         {
-            self.emit_subagent_task_result_for_state(&turn, state)?;
+            self.emit_subagent_task_result_for_state(turn, state)?;
         }
         if !suppress_exit_output
             && let Some(footer) =
@@ -209,7 +209,7 @@ impl RuntimeSessionService {
             self.settle_steering_receipts(turn_id);
         }
         if state == AgentTurnState::Interrupted {
-            self.retain_interrupted_agent_continuation(&turn);
+            self.retain_interrupted_agent_continuation(turn);
         }
         self.reconcile_active_turn_sleep_inhibition();
         if !awaiting_redirection
@@ -224,12 +224,12 @@ impl RuntimeSessionService {
                 .register_completion_attention(pane_id, focused_pane_id.as_deref());
         }
         if state == AgentTurnState::Interrupted {
-            self.persist_interrupted_agent_turn_transcript(&turn, "agent turn stopped")?;
-            self.retain_interrupted_agent_continuation(&turn);
+            self.persist_interrupted_agent_turn_transcript(turn, "agent turn stopped")?;
+            self.retain_interrupted_agent_continuation(turn);
         }
         if !suppress_exit_output {
             let trace = self.append_agent_trace_turn_transition(
-                &turn,
+                turn,
                 previous_state,
                 state,
                 "finish_agent_turn",
@@ -248,9 +248,9 @@ impl RuntimeSessionService {
             state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
         ) {
-            self.close_terminal_subagent_pane_if_pending(&turn)?;
+            self.close_terminal_subagent_pane_if_pending(turn)?;
         }
-        self.start_ready_after_completion_cleanup(&turn)?;
+        self.start_ready_after_completion_cleanup(turn)?;
         if !completion_attention_eligible {
             self.presentation.acknowledge_completion_attention(pane_id);
         }

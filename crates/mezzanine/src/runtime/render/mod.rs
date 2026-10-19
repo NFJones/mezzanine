@@ -593,6 +593,17 @@ type RuntimeProviderLogOrdinal = (
     usize,
 );
 
+/// Immutable action/result source and installation metadata for one queued
+/// verbose result. Naming the existing tuple changes neither storage nor order.
+type RuntimeQueuedProviderResult = (
+    crate::runtime::AgentAction,
+    mez_agent::ActionResult,
+    String,
+    mez_core::presentation::PresentationEntry,
+    Option<String>,
+    bool,
+);
+
 #[derive(Debug, Default)]
 pub(crate) struct RuntimePresentationComponent {
     /// Current atomically replaceable presentation configuration.
@@ -721,17 +732,8 @@ pub(crate) struct RuntimePresentationComponent {
     pub(super) agent_published_provider_commands:
         std::collections::BTreeSet<(RuntimeProviderLogOrdinal, String)>,
     /// Settled verbose results waiting for their action's published header.
-    pub(super) agent_queued_provider_results: std::collections::BTreeMap<
-        RuntimeProviderLogOrdinal,
-        (
-            crate::runtime::AgentAction,
-            mez_agent::ActionResult,
-            String,
-            mez_core::presentation::PresentationEntry,
-            Option<String>,
-            bool,
-        ),
-    >,
+    pub(super) agent_queued_provider_results:
+        std::collections::BTreeMap<RuntimeProviderLogOrdinal, RuntimeQueuedProviderResult>,
     /// Exact verbose result sources already published for an action ordinal.
     pub(super) agent_published_provider_results:
         std::collections::BTreeSet<(RuntimeProviderLogOrdinal, String)>,

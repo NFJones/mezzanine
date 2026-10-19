@@ -781,7 +781,7 @@ impl RuntimeSessionService {
         // Normalize only group liveness; the native action's actual Failed
         // result remains unchanged while an admitted external sibling runs.
         if execution.terminal_state == AgentTurnState::Failed
-            && self.execution_has_running_external_sibling(&turn.turn_id, &execution)
+            && self.execution_has_running_external_sibling(&turn.turn_id, execution)
         {
             execution.terminal_state = AgentTurnState::Running;
         }

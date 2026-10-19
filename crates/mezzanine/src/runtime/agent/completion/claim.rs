@@ -105,8 +105,8 @@ impl RuntimeSessionService {
                 "assessment original action or permission evidence changed",
             ));
         }
-        if let Some(group) = self.agent.completion_settlements.groups.get(turn_id) {
-            if group.paint_revoked
+        if let Some(group) = self.agent.completion_settlements.groups.get(turn_id)
+            && (group.paint_revoked
                 || group.turn.turn_id != turn_id
                 || group.turn.agent_id != turn.agent_id
                 || group.turn.pane_id != turn.pane_id
@@ -121,12 +121,11 @@ impl RuntimeSessionService {
                     .and_then(|groups| groups.get(&action.id))
                     != Some(&group.group)
                 || super::super::provider_execution::provider_log_execution_group_id(execution)?
-                    != group.group
-            {
-                return Err(MezError::invalid_state(
-                    "assessment differs from original completion group",
-                ));
-            }
+                    != group.group)
+        {
+            return Err(MezError::invalid_state(
+                "assessment differs from original completion group",
+            ));
         }
         // The unchanged managed-shell issuer alone creates this record after
         // validating backend status and the original Allow/nonzero outcome.

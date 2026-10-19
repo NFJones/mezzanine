@@ -731,7 +731,7 @@ impl RuntimeSessionService {
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
         );
         let awaiting_redirection =
-            !turn_was_already_terminal && self.retain_subagent_interruption_for_redirection(&turn);
+            !turn_was_already_terminal && self.retain_subagent_interruption_for_redirection(turn);
         let routed_cleanup_error = self.cancel_routed_workflow_for_parent(&turn_id).err();
         let session = if turn_was_already_terminal {
             let running_in_shell = self
@@ -767,7 +767,7 @@ impl RuntimeSessionService {
             session
         } else {
             if !awaiting_redirection {
-                self.emit_cancelled_subagent_task_result(&turn)?;
+                self.emit_cancelled_subagent_task_result(turn)?;
             }
             if self
                 .agent_shell_store()
@@ -777,7 +777,7 @@ impl RuntimeSessionService {
             {
                 self.finish_agent_turn(pane_id, &turn_id, AgentTurnState::Interrupted)?
             } else {
-                self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?
+                self.finish_agent_turn_without_shell_session(turn, AgentTurnState::Interrupted)?
                     .ok_or_else(|| {
                         MezError::invalid_state(
                             "stopped agent turn no longer has a live pane shell session",
