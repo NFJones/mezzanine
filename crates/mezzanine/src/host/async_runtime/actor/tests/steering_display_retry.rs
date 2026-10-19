@@ -83,12 +83,15 @@ impl Drop for Fixture {
 #[tokio::test(flavor = "current_thread")]
 async fn steering_display_retry_optional_wake_preserves_full_queue_durable_admission() {
     let mut fixture = Fixture::new(1);
-    fixture.actor.queue_runtime_side_effects(vec![RuntimeSideEffect::PreparePaneStatusProviders]).unwrap();
+    let filler = RuntimeTimerKey::new(RuntimeTimerKind::ResizeDebounce, "retained-unrelated", 1);
+    fixture.actor.queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+        key: filler.clone(), delay_ms: 250,
+    }]).unwrap();
     let unrelated = RuntimeTimerKey::new(RuntimeTimerKind::ResizeDebounce, "unrelated", 1);
     assert!(fixture.actor.queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
         key: unrelated, delay_ms: 250,
     }]).is_err());
-    assert!(fixture.actor.timers.resize_debounce.is_empty());
+    assert_eq!(fixture.actor.timers.resize_debounce.len(), 1);
     // No store means publication retains dirty evidence without IO. Attaching
     // the store afterward lets the ordinary drain capture mandatory metadata.
     fixture.actor.service.publish_steering_recovery_checkpoint();
@@ -101,8 +104,8 @@ async fn steering_display_retry_optional_wake_preserves_full_queue_durable_admis
     let durable = fixture.actor.drain_persistence_side_effects(32).unwrap();
     assert!(matches!(durable.as_slice(), [RuntimeSideEffect::PersistAgentSessionMetadata { .. }]));
     assert!(fixture.actor.timers.idle_cleanup.is_none());
-    let released = fixture.actor.drain_status_pill_side_effects(1).unwrap();
-    assert!(matches!(released.as_slice(), [RuntimeSideEffect::PreparePaneStatusProviders]));
+    let released = fixture.actor.drain_timer_side_effects(1).unwrap();
+    assert!(matches!(released.as_slice(), [RuntimeSideEffect::ScheduleTimer { key, .. }] if key == &filler));
     for _ in 0..3 { fixture.actor.queue_steering_presentation_retry_idle_wake().unwrap(); }
     let key = fixture.take_idle();
     assert!(fixture.actor.drain_timer_side_effects(32).unwrap().is_empty());
@@ -111,6 +114,44 @@ async fn steering_display_retry_optional_wake_preserves_full_queue_durable_admis
     assert!(matches!(published.as_slice(), [RuntimeSideEffect::PersistSteeringPresentation { .. }]));
     assert!(!fixture.actor.service.steering_presentation_retry_timer_needed());
     assert!(fixture.actor.timers.idle_cleanup.is_none());
+    assert!(fixture.actor.service.agent_turn_ledger().turns().is_empty());
+}
+
+/// An inner empty event application must not admit an optional timer before the
+/// same batch takes its mandatory resize dispatch. At capacity one that dispatch
+/// must survive unchanged; only a later real claim may enroll the idle timer.
+/// Watch revisions are subscriber-local and empty blocked timer polls cannot
+/// perpetually notify themselves. No resize or timer worker is executed here.
+#[tokio::test(flavor = "current_thread")]
+async fn steering_display_retry_inner_event_cannot_displace_mandatory_resize() {
+    let mut fixture = Fixture::new(1);
+    let mut watcher = fixture.actor.side_effect_delivery_tx.subscribe();
+    let sibling = watcher.clone();
+    fixture.fail_initial_display();
+    assert!(fixture.actor.drain_timer_side_effects(0).is_err());
+    assert!(fixture.actor.timers.idle_cleanup.is_none());
+    fixture.actor.queue_runtime_side_effects(Vec::new()).unwrap();
+    assert!(watcher.has_changed().unwrap());
+    watcher.borrow_and_update();
+    assert!(sibling.has_changed().unwrap());
+    assert!(fixture.actor.timers.idle_cleanup.is_none());
+    assert!(fixture.actor.service.apply_pane_resize_completion_event(
+        "%1", Size::new(40, 24).unwrap()).unwrap());
+    let stale = RuntimeTimerKey::new(RuntimeTimerKind::IdleCleanup, "session", 0);
+    fixture.actor.apply_runtime_event_batch(RuntimeEventBatch {
+        events: vec![RuntimeEvent::Timer(TimerEvent { key: stale, now_ms: 1234 })],
+    }).await.unwrap();
+    assert!(fixture.actor.timers.idle_cleanup.is_none());
+    assert!(fixture.actor.service.steering_presentation_retry_timer_needed());
+    let notifications = fixture.actor.metrics.side_effect_delivery_notifications;
+    assert!(fixture.actor.drain_timer_side_effects(1).unwrap().is_empty());
+    assert_eq!(fixture.actor.metrics.side_effect_delivery_notifications, notifications);
+    let mandatory = fixture.actor.drain_runtime_side_effects(1).unwrap();
+    assert!(matches!(mandatory.as_slice(),
+        [RuntimeSideEffect::DispatchAgentPresentationResize { pane_id, debounce_ms }]
+        if pane_id == "%1" && *debounce_ms > 0));
+    let _key = fixture.take_idle();
+    assert!(fixture.actor.drain_timer_side_effects(32).unwrap().is_empty());
     assert!(fixture.actor.service.agent_turn_ledger().turns().is_empty());
 }
 
@@ -141,6 +182,7 @@ async fn steering_display_retry_indefinite_idle_callbacks_eventually_install_onc
     assert_eq!(text.matches("user> actor-owned accepted source").count(), 1);
     assert!(fixture.actor.timers.idle_cleanup.is_none());
     assert!(!fixture.actor.service.steering_presentation_retry_timer_needed());
+    assert!(fixture.actor.drain_timer_side_effects(32).unwrap().is_empty());
     assert!(fixture.actor.service.agent_turn_ledger().turns().is_empty());
 }
 
@@ -160,6 +202,7 @@ async fn steering_display_retry_idle_fences_stale_callbacks_and_terminal_lifecyc
     fixture.idle(key, false).await;
     assert!(!fixture.actor.service.steering_presentation_retry_timer_needed());
     assert!(fixture.actor.timers.idle_cleanup.is_none());
+    assert!(fixture.actor.drain_timer_side_effects(32).unwrap().is_empty());
     for state in [RuntimeLifecycleState::Killed, RuntimeLifecycleState::Failed] {
         let mut stopped = Fixture::new(1);
         stopped.fail_initial_display();

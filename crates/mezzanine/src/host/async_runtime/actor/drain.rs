@@ -207,6 +207,11 @@ impl AsyncRuntimeSessionActor {
                 "async runtime timer side-effect drain limit must be greater than zero",
             ));
         }
+        // The existing timer worker reaches this boundary after serialized
+        // event/request completion, including when its lane was initially empty.
+        // Inner enqueues only notify: optional work cannot steal capacity from
+        // a later mandatory effect in the same event/service drain.
+        self.queue_steering_presentation_retry_idle_wake()?;
         let drained = self.side_effect_routes.drain_timers(limit);
         self.record_side_effect_drain(drained.len())?;
         Ok(drained)

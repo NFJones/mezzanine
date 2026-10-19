@@ -1,8 +1,9 @@
 //! Timer tracking and bounded side-effect queue maintenance.
 //!
 //! Mandatory effect batches retain their existing all-or-error admission. Steering
-//! display recovery separately admits one optional existing idle wake only after
-//! successful admission and only when conservative nonpersistence capacity allows.
+//! display recovery publishes only an existing watch notification during enqueue.
+//! The typed timer drain separately admits one optional existing idle wake only
+//! when conservative nonpersistence capacity allows, after event/request work.
 //! A full lane leaves the original display obligation with the service; actual
 //! capacity progress retries enrollment without replaying any destructive drain.
 //! Tracked timer identity and monotonic generation fence recursive and stale work.
@@ -436,22 +437,36 @@ impl AsyncRuntimeSessionActor {
         for instance in pane_processes {
             self.notify_pane_process_side_effect_delivery(&instance);
         }
-        self.queue_steering_presentation_retry_idle_wake()?;
+        self.notify_steering_presentation_retry_idle_wake();
         Ok(())
     }
 
-    /// Separately admits one optional display-recovery wake after mandatory work.
+    /// Publishes a level-triggered timer-worker wake without consuming capacity.
+    /// Every filtered worker has its own watch revision; an initially unsubscribed
+    /// timer worker also performs a bounded idle poll before claiming timer work.
+    /// Empty zero-progress timer drains never call this notification path.
+    pub(super) fn notify_steering_presentation_retry_idle_wake(&mut self) {
+        if self.steering_presentation_retry_idle_wake_needed() {
+            self.notify_side_effect_delivery();
+        }
+    }
+
+    /// Checks retained display authority and the existing live timer/lifecycle fences.
+    fn steering_presentation_retry_idle_wake_needed(&self) -> bool {
+        self.service.steering_presentation_retry_timer_needed()
+            && self.timers.idle_cleanup.is_none()
+            && !matches!(self.service.lifecycle_state(),
+                crate::runtime::RuntimeLifecycleState::Killed | crate::runtime::RuntimeLifecycleState::Failed)
+    }
+
+    /// Separately admits one display wake at a typed timer/capacity drain boundary.
     /// A full queue retains the original service obligation; real capacity
     /// progress retries enrollment. Never mix this optional timer into a taken
     /// persistence batch or bypass capacity. The serialized preflight has no
     /// await, and successful tracking prevents recursive/duplicate enrollment.
     /// Unexpected enqueue errors propagate rather than masquerading as pressure.
     pub(super) fn queue_steering_presentation_retry_idle_wake(&mut self) -> Result<()> {
-        if !self.service.steering_presentation_retry_timer_needed()
-            || self.timers.idle_cleanup.is_some()
-            || matches!(self.service.lifecycle_state(),
-                crate::runtime::RuntimeLifecycleState::Killed | crate::runtime::RuntimeLifecycleState::Failed)
-        {
+        if !self.steering_presentation_retry_idle_wake_needed() {
             return Ok(());
         }
         // Match normal queue admission's conservative nonpersistence occupancy.

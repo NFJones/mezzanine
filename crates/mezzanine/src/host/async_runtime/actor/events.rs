@@ -266,11 +266,6 @@ impl AsyncRuntimeSessionActor {
                     runtime_event_queue_error_after_service_drain(error, report.applied)
                 })?;
         }
-        // An empty mandatory batch can still have created its first failed
-        // display obligation. Admit its optional wake separately, never in the
-        // destructively drained vector above. Queue success also does this for
-        // direct-request paths; the tracked timer guard makes it idempotent.
-        self.queue_steering_presentation_retry_idle_wake()?;
         if report.applied > 0
             && registry_persistence_required
             && report
@@ -289,6 +284,10 @@ impl AsyncRuntimeSessionActor {
             })?;
             report.side_effects = report.side_effects.saturating_add(1);
         }
+        // Even an empty batch can create its first display obligation. Publish
+        // only a watch wake after all mandatory work; the timer worker's typed
+        // drain separately admits a timer using then-current receipt ownership.
+        self.notify_steering_presentation_retry_idle_wake();
         self.metrics.runtime_event_batches = self.metrics.runtime_event_batches.saturating_add(1);
         self.metrics.runtime_events_accepted = self
             .metrics
