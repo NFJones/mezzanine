@@ -505,10 +505,10 @@ fn runtime_completion_handoff_checked_read_rejects_same_frontier_cas() {
 /// A same-CID live frontier advance is not permission to replace the original
 /// read hashed by the completion witness. The checked worker must receive the
 /// exact frozen store/frontier/epoch and pending rows, not fresh pane metadata.
-/// Unlike the separate after-check stale-reply control, this advance precedes
-/// claim. Real coherent execution and exact queued-row acceptance are required;
-/// immutable-read equality alone is insufficient and queue acceptance is not
-/// a disk receipt. All setup is native-free and fixture-local.
+/// This advance precedes claim; the metadata-independence control advances live
+/// metadata after execution. Real coherent execution and exact queued-row
+/// acceptance are required; immutable-read equality alone is insufficient.
+/// Queue acceptance is not a disk receipt. All setup is native-free and fixture-local.
 #[test]
 fn runtime_completion_handoff_claim_keeps_frozen_read_after_frontier_advance() {
     let root = NativeFreeBookkeepingRoot::new("completion-frozen-frontier");
