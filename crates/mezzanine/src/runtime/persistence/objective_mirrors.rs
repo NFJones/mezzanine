@@ -253,9 +253,7 @@ impl ObjectiveMirrorQueue {
             };
             receipt
         };
-        let Some(entry) = self.entries.get_mut(&receipt.key) else {
-            return None;
-        };
+        let entry = self.entries.get_mut(&receipt.key)?;
         if entry.in_flight != Some(receipt.revision) {
             return None;
         }
