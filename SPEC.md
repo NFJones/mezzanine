@@ -8338,6 +8338,8 @@ backoff, not a lifetime attempt budget that abandons accepted source. Persistent
 unavailability MUST produce a bounded diagnostic without exposing authored source.
 Retries MUST preserve acceptance order, original occurrence/copy source and already
 installed prefixes; replacement conversations MUST NOT receive old display work.
+Failed transactional resume MUST restore the surviving owner's exact retry
+obligations and pacing; provisional presentation replacement is not retirement.
 Pending rows MUST remain absent from ordinary durable presentation sources and
 lower-layer baselines. Visible pending rows use the existing composer log geometry
 and bounded overflow projection, not forced viewport pinning. Layouts without

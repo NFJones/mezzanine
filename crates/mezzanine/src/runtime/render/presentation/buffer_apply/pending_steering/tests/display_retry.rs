@@ -444,6 +444,142 @@ fn steering_display_retry_retires_replaced_and_removed_owners() {
     }
 }
 
+/// A projected resume can replace presentation before a later transaction error.
+/// Rollback must restore the original display obligation with its exact pacing,
+/// installed prefix and receipt source, not silently retire it or fresh-request
+/// recovery. Only a subsequent due ordinary drain may install the remaining row.
+#[test]
+fn steering_display_retry_failed_projected_resume_restores_exact_pacing_and_prefix() {
+    let mut fixture = Fixture::new();
+    let mut second = fixture.receipt.clone();
+    second.id = "rollback-second-occurrence".into();
+    second.acceptance_order = 2;
+    fixture
+        .service
+        .restore_steering_recovery(
+            "%1",
+            &fixture.conversation,
+            &[fixture.receipt.clone(), second.clone()],
+        )
+        .unwrap();
+    fixture.service.mark_steering_recovery_published();
+    fixture.service.fail_agent_presentation_install_for_tests(1);
+    fixture.service.request_steering_presentation("%1");
+    let prefix = fixture.service.drain_transcript_persistence_transition();
+    assert_eq!(prefix.side_effects.len(), 1);
+    let key = ("%1".to_string(), fixture.conversation.clone());
+    let retry = fixture
+        .service
+        .presentation
+        .steering_presentation_retries
+        .get_mut(&key)
+        .unwrap();
+    retry.next_attempt_at = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    retry.backoff = 5;
+    let deadline = retry.next_attempt_at;
+    let store =
+        crate::storage::transcript::AgentTranscriptStore::new(fixture.root.join("transcripts"));
+    store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "rollback-target".into(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "inert-target-turn".into(),
+            agent_id: "agent-%9".into(),
+            pane_id: "%9".into(),
+            content: "replacement source".into(),
+        })
+        .unwrap();
+    let mut prepared =
+        crate::runtime::commands::read_direct_resume(&store, "rollback-target", None).unwrap();
+    let size = fixture.service.agent_pane_screen("%1").unwrap().size();
+    prepared.projection = Some(
+        crate::runtime::service_state::RuntimeDirectResumeProjection {
+            screen: mez_terminal::TerminalScreen::new_with_history_config(size, 100, 10).unwrap(),
+            steering_receipt_ids: Default::default(),
+            prompt_history: Vec::new(),
+            size,
+            presentation_settings: fixture.service.presentation.settings.clone(),
+            history_limit: fixture.service.terminal_history_limit(),
+            history_rotate_lines: fixture.service.terminal_history_rotate_lines(),
+            presentation_source_revision: None,
+        },
+    );
+    fixture
+        .service
+        .fail_next_agent_resume_after_authority_restore_for_tests();
+    let error = fixture
+        .service
+        .execute_agent_shell_resume_command_with_read("%1", store, prepared, false)
+        .unwrap_err();
+    assert!(
+        error.message().contains("post-authority restoration"),
+        "{error}"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .session_id,
+        fixture.conversation
+    );
+    let restored = fixture
+        .service
+        .presentation
+        .steering_presentation_retries
+        .get(&key)
+        .unwrap();
+    assert_eq!(restored.next_attempt_at, deadline);
+    assert_eq!(restored.backoff, 5);
+    assert!(!fixture.service.steering_recovery_needs_publication());
+    assert!(
+        fixture
+            .service
+            .drain_transcript_persistence_transition()
+            .side_effects
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        1
+    );
+    fixture.make_due();
+    let recovered = fixture.service.drain_transcript_persistence_transition();
+    let [crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { entry, .. }] =
+        recovered.side_effects.as_slice()
+    else {
+        panic!("expected only the remaining original occurrence");
+    };
+    let source =
+        crate::storage::transcript::steering::Source::decode(entry.source_text.as_deref().unwrap())
+            .unwrap();
+    assert_eq!(source.conversation_id, fixture.conversation);
+    assert_eq!(source.receipt, second);
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        2
+    );
+    assert!(!fixture.text().contains("replacement source"));
+    assert!(!fixture.service.steering_presentation_retry_timer_needed());
+    assert!(
+        fixture
+            .service
+            .drain_transcript_persistence_transition()
+            .side_effects
+            .is_empty()
+    );
+    assert!(fixture.service.agent_turn_ledger().turns().is_empty());
+}
+
 /// More due owners than one drain's work limit must make fair progress. Pure
 /// session layout construction creates no native panes. Keep the lexically first
 /// owner failing while a later owner beyond the first batch must still install;

@@ -57,7 +57,7 @@ const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 /// A retained display obligation, independent of receipt and persistence ownership.
 /// Backoff caps cadence rather than attempts; only installation or retirement
 /// discharges the original pane/conversation obligation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct RuntimeSteeringPresentationRetry {
     /// Earliest eligible ordinary drain, including drains caused by idle cleanup.
     pub(super) next_attempt_at: std::time::Instant,
@@ -1529,6 +1529,9 @@ pub(crate) struct RuntimeAgentResumePresentationSnapshot {
     prompt_input: Option<RuntimeAgentPromptInput>,
     pending_steering_suffix: Option<(String, u64, usize)>,
     presented_steering_receipts: std::collections::BTreeSet<(String, String, String)>,
+    /// Exact display obligations and pacing restored only for the surviving owner.
+    steering_presentation_retries:
+        std::collections::BTreeMap<(String, String), RuntimeSteeringPresentationRetry>,
     shell_output_previews: Option<RuntimeAgentShellPreviewPresentation>,
     action_presentation_progress: Option<RuntimeActionPresentationProgressPresentation>,
     streaming_say_presentation: Option<RuntimeStreamingSayPresentation>,
@@ -2521,6 +2524,13 @@ impl RuntimeSessionService {
                 .filter(|(pane, _, _)| pane == pane_id)
                 .cloned()
                 .collect(),
+            steering_presentation_retries: self
+                .presentation
+                .steering_presentation_retries
+                .iter()
+                .filter(|((pane, _), _)| pane == pane_id)
+                .map(|(key, retry)| (key.clone(), retry.clone()))
+                .collect(),
             shell_output_previews: self
                 .presentation
                 .agent_shell_output_previews
@@ -2613,6 +2623,10 @@ impl RuntimeSessionService {
         pane_id: &str,
         mut snapshot: RuntimeAgentResumePresentationSnapshot,
     ) {
+        let retry_owner = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone());
         let current_conversation = self
             .agent_pane_screen_state(pane_id)
             .map(|state| state.conversation_id().to_string());
@@ -2673,6 +2687,18 @@ impl RuntimeSessionService {
                 .presented_steering_receipts
                 .into_iter()
                 .filter(|(_, owner, _)| current_conversation.as_deref() == Some(owner.as_str())),
+        );
+        // Provisional replacement is not owner retirement when resume rolls
+        // back. Restore exact deadlines/backoff even if no screen was installed
+        // before the failure; shell conversation identity owns this obligation.
+        self.presentation
+            .steering_presentation_retries
+            .retain(|(pane, _), _| pane != pane_id);
+        self.presentation.steering_presentation_retries.extend(
+            snapshot
+                .steering_presentation_retries
+                .into_iter()
+                .filter(|((_, owner), _)| retry_owner.as_deref() == Some(owner.as_str())),
         );
         self.presentation.agent_prompt_inputs.remove(pane_id);
         self.presentation

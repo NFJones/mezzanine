@@ -97,6 +97,8 @@ ordinary idle drains retry with capped backoff and fair bounded work, even after
 repeated failures and with a current checkpoint. No new input or explicit retry
 request is needed. A bounded source-free diagnostic reports unavailable display;
 successful prefixes are not repeated and replaced owners retire old display work.
+If resume rolls back, the original owner's retries retain their exact deadlines
+and backoff alongside its installed prefix; a failed replacement is not retirement.
 Recovered rows, including a successful prefix before a later installation failure,
 request repaint in the same drain. Idle enrollment is separately admitted: a full
 side-effect queue retains display ownership until real capacity progress can admit
