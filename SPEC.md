@@ -2346,6 +2346,12 @@ prevent first-use shell menus without suppressing normal startup or reading user
 profiles. Compound fixture failures MUST retain arbitrary primary panic payloads
 and secondary errors; the ordinary panic hook may already have run and need not
 render arbitrary compound payload fields.
+The replayed-forgery fixture's final spawned-thread join MUST resume the original
+panic allocation, including its non-Clone compound evidence, rather than replace
+it with an opaque join error. Its best-effort diagnostic MUST contain only bounded
+source-owned stage/checkpoint/error-kind labels and counts, never error or panic
+text, cleanup bodies, paths, pane content, environment, or argv. A last-entered
+checkpoint is provenance only, not proof of causation or native settlement.
 Saved-fork test storage MUST belong to an exclusively created fixture generation;
 an existing PID/counter-named directory MUST NOT be removed to claim ownership.
 Native pane termination alone MUST NOT authorize deletion while a selector
