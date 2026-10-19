@@ -12633,6 +12633,18 @@ The baseline command capabilities are:
   local counters or timestamps. Finite lock admission bounds no filesystem I/O
   latency: stalled storage can delay physical completion indefinitely, but MUST
   NOT grow retained jobs or block unrelated actor or essential persistence work.
+  Optional jobs retained by clones of one store handle MUST carry a revocable
+  exact-conversation registration through physical completion. Conversation
+  deletion MUST revoke those registrations and prune under the same index lock
+  as writes, including when no cache index exists yet. Revoked work MUST NOT
+  confirm a cache value, refresh browsers or suppress a new explicit publication.
+  Registration admission MUST be nonblocking and bounded (at most 4,096 live
+  registrations per shared store handle), with truthful retryable refusal rather
+  than eviction of a live fence. A new publication after the deletion fence MAY
+  reuse the conversation id, but MUST NOT reactivate an old registration. This
+  does not add a cross-process deletion tombstone or redesign existing synchronous
+  conversation deletion; its preexisting storage/lock latency remains outside
+  the nonblocking publication and essential-settlement guarantee.
 - `/list-skills`: Show the effective skills available to the active pane,
   including each skill name, source scope, and description. The display MUST
   use the same catalog that backs `$<skill-name>` prompt expansion. It SHOULD

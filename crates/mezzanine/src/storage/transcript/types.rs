@@ -6,9 +6,10 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 #[cfg(test)]
-use std::sync::atomic::{AtomicBool, AtomicU8};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicU8;
+use std::sync::{Arc, Mutex, Weak};
 
 use mez_agent::AgentConversationKind;
 use mez_agent::transcript::ConversationSummary;
@@ -422,6 +423,9 @@ pub(super) struct ArchiveRecoveryReadBarrier {
 pub(super) struct SessionObjectiveMirrorHandleState {
     /// Last `(conversation_id, bounded objective)` this handle persisted.
     pub(super) last_mirrored: Option<(String, String)>,
+    /// Bounded weak registrations for pending/physical optional jobs. Deletion
+    /// revokes these under the index write lock; no tombstones or I/O live here.
+    pub(super) registrations: Vec<(String, Weak<AtomicBool>)>,
     /// Count of mirror index reads performed by this handle.
     pub(super) index_reads: u64,
     /// Count of mirror index writes performed by this handle.

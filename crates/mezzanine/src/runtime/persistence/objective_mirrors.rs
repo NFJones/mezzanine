@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,7 @@ enum MirrorFailure {
     Io,
     Abandoned,
     Capacity,
+    Registration,
     RevisionExhausted,
     SchedulingExhausted,
 }
@@ -95,6 +96,8 @@ struct MirrorEntry {
     desired: Option<String>,
     revision: u64,
     token: Arc<AtomicU64>,
+    /// Shared-store deletion fence, distinct from local publication revision.
+    registration: Arc<AtomicBool>,
     dirty: bool,
     confirmed: bool,
     /// An admitted old write changed disk; refresh only on current confirmation.
@@ -118,6 +121,7 @@ enum MirrorResult {
 struct MirrorReceipt {
     key: MirrorKey,
     revision: u64,
+    registration: Arc<AtomicBool>,
     result: MirrorResult,
 }
 
@@ -173,7 +177,8 @@ impl ObjectiveMirrorQueue {
         );
         let desired = objective.and_then(bound_session_title);
         if self.entries.get(&key).is_some_and(|entry| {
-            entry.desired == desired
+            entry.registration.load(Ordering::Acquire)
+                && entry.desired == desired
                 && (entry.dirty || entry.in_flight.is_some() || entry.confirmed)
         }) {
             return false;
@@ -197,6 +202,17 @@ impl ObjectiveMirrorQueue {
                 return false;
             }
         }
+        let registration = self
+            .entries
+            .get(&key)
+            .filter(|entry| entry.registration.load(Ordering::Acquire))
+            .map(|entry| entry.registration.clone())
+            .or_else(|| store.register_session_objective_mirror_work(conversation));
+        let Some(registration) = registration else {
+            self.status.refused = self.status.refused.saturating_add(1);
+            self.status.last_failure = Some(MirrorFailure::Registration);
+            return false;
+        };
         let Some(revision) = self.next_revision.checked_add(1) else {
             self.status.refused = self.status.refused.saturating_add(1);
             self.status.last_failure = Some(MirrorFailure::RevisionExhausted);
@@ -211,10 +227,11 @@ impl ObjectiveMirrorQueue {
         self.next_queue_order = queued_at;
         let now = Instant::now();
         let entry = self.entries.entry(key).or_insert_with(|| MirrorEntry {
-            store,
+            store: store.clone(),
             desired: None,
             revision,
             token: Arc::new(AtomicU64::new(revision)),
+            registration: registration.clone(),
             dirty: false,
             confirmed: false,
             refresh_needed: false,
@@ -223,6 +240,11 @@ impl ObjectiveMirrorQueue {
             eligible_at: now,
             updated_at_unix_seconds: 0,
         });
+        if !Arc::ptr_eq(&entry.registration, &registration) {
+            entry.registration = registration;
+            entry.store = store;
+            entry.refresh_needed = false;
+        }
         if !entry.dirty {
             entry.queued_at = queued_at;
         }
@@ -258,6 +280,13 @@ impl ObjectiveMirrorQueue {
             return None;
         }
         entry.in_flight = None;
+        if !entry.registration.load(Ordering::Acquire) {
+            self.entries.remove(&receipt.key);
+            return None;
+        }
+        if !Arc::ptr_eq(&entry.registration, &receipt.registration) {
+            return None;
+        }
         if matches!(receipt.result, MirrorResult::Written(true)) {
             entry.refresh_needed = true;
         }
@@ -308,12 +337,20 @@ impl ObjectiveMirrorQueue {
     /// Reserves at most one physical job; all fairness/key work is bounded by
     /// MAX_OBJECTIVE_MIRROR_KEYS. The slot remains busy until receipt collection.
     fn claim(&mut self) -> Option<RuntimeObjectiveMirrorWork> {
+        // Revocation also retires pending/confirmed suppression records. Keep
+        // physical custody until its receipt arrives, even after deletion.
+        self.entries.retain(|_, entry| {
+            entry.registration.load(Ordering::Acquire) || entry.in_flight.is_some()
+        });
         let now = Instant::now();
         let key = self
             .entries
             .iter()
             .filter(|(_, entry)| {
-                entry.dirty && entry.in_flight.is_none() && entry.eligible_at <= now
+                entry.registration.load(Ordering::Acquire)
+                    && entry.dirty
+                    && entry.in_flight.is_none()
+                    && entry.eligible_at <= now
             })
             .min_by_key(|(_, entry)| entry.queued_at)
             .map(|(key, _)| key.clone())?;
@@ -336,6 +373,7 @@ impl ObjectiveMirrorQueue {
             objective: entry.desired.clone(),
             updated_at_unix_seconds: entry.updated_at_unix_seconds,
             token: entry.token.clone(),
+            registration: entry.registration.clone(),
             slot: self.slot.clone(),
             completed: false,
             #[cfg(test)]
@@ -354,6 +392,8 @@ pub(crate) struct RuntimeObjectiveMirrorWork {
     objective: Option<String>,
     updated_at_unix_seconds: u64,
     token: Arc<AtomicU64>,
+    /// Remains retained through actual completion, including launcher cancel.
+    registration: Arc<AtomicBool>,
     slot: Arc<Mutex<PhysicalSlot>>,
     completed: bool,
     /// Bounded fixture gate after the last revision observation, before write.
@@ -378,7 +418,8 @@ impl RuntimeObjectiveMirrorWork {
             self.objective.as_deref().unwrap_or_default(),
             self.updated_at_unix_seconds,
             || {
-                let current = self.token.load(Ordering::Acquire) == self.revision;
+                let current = self.token.load(Ordering::Acquire) == self.revision
+                    && self.registration.load(Ordering::Acquire);
                 #[cfg(test)]
                 if observations.replace(observations.get() + 1) == 1
                     && current
@@ -405,6 +446,7 @@ impl RuntimeObjectiveMirrorWork {
             *slot = PhysicalSlot::Completed(MirrorReceipt {
                 key: self.key.clone(),
                 revision: self.revision,
+                registration: self.registration.clone(),
                 result,
             });
         }
@@ -448,6 +490,7 @@ impl RuntimeSessionService {
                 MirrorFailure::Io => "io",
                 MirrorFailure::Abandoned => "abandoned",
                 MirrorFailure::Capacity => "capacity",
+                MirrorFailure::Registration => "registration",
                 MirrorFailure::RevisionExhausted => "revision_exhausted",
                 MirrorFailure::SchedulingExhausted => "scheduling_exhausted",
             }),
@@ -573,7 +616,9 @@ mod tests {
                         store.archive_session("deleted", 2).unwrap();
                     }
                     if populated {
-                        store.mirror_session_objective("deleted", "seed", 2).unwrap();
+                        store
+                            .mirror_session_objective("deleted", "seed", 2)
+                            .unwrap();
                     }
                     let mut queue = ObjectiveMirrorQueue::default();
                     assert!(queue.publish(store.clone(), "deleted", Some("retained secret")));
@@ -600,20 +645,137 @@ mod tests {
                     if let Some(work) = claimed.or_else(|| queue.claim()) {
                         work.execute();
                     }
-                    assert!(queue.collect().is_none(), "deleted work must not refresh UI");
+                    assert!(
+                        queue.collect().is_none(),
+                        "deleted work must not refresh UI"
+                    );
                     assert!(queue.claim().is_none(), "deleted work must not retry");
                     assert_eq!(queue.status.confirmed, 0);
                     assert!(store.session_objective_mirror("deleted").unwrap().is_none());
                     assert!(queue.publish(store.clone(), "deleted", Some("retained secret")));
                     settle(&mut queue);
                     assert_eq!(
-                        store.session_objective_mirror("deleted").unwrap().unwrap().objective,
+                        store
+                            .session_objective_mirror("deleted")
+                            .unwrap()
+                            .unwrap()
+                            .objective,
                         "retained secret"
                     );
                     std::fs::remove_dir_all(root).unwrap();
                 }
             }
         }
+    }
+
+    /// Deletion arriving after the writer's final revision check must prune
+    /// after that admitted write, not just revoke before an old write completes.
+    /// The OS-thread gate has its own release timeout; every assertion follows
+    /// explicit gate release and thread joins, so failures do not strand locks.
+    #[test]
+    fn objective_mirror_deletion_prunes_an_already_admitted_write() {
+        let (store, root) = store();
+        let mut queue = ObjectiveMirrorQueue::default();
+        queue.publish(store.clone(), "deleted", Some("admitted secret"));
+        let mut old = queue.claim().unwrap();
+        let registration = old.registration.clone();
+        let (entered, waiting) = std::sync::mpsc::sync_channel(1);
+        let (release, gate) = std::sync::mpsc::sync_channel(1);
+        old.before_write = Some((entered, gate, Arc::new(AtomicBool::new(false))));
+        let worker = std::thread::spawn(move || old.execute());
+        let reached = waiting.recv_timeout(Duration::from_secs(2));
+        let deleting = store.clone();
+        let deletion = std::thread::spawn(move || deleting.delete("deleted"));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while registration.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let revoked_while_write_held = !registration.load(Ordering::Acquire);
+        let _ = release.try_send(());
+        let written = worker.join();
+        let deleted = deletion.join();
+        reached.unwrap();
+        written.unwrap();
+        deleted.unwrap().unwrap();
+        assert!(revoked_while_write_held);
+        assert!(queue.collect().is_none());
+        assert_eq!(queue.status.confirmed, 0);
+        assert!(store.session_objective_mirror("deleted").unwrap().is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A fresh publication after deletion may reuse the CID while its old
+    /// receipt still has custody. The old registration cannot acknowledge or
+    /// clear the new desired value, even when both objective strings match.
+    #[test]
+    fn objective_mirror_new_publication_does_not_reactivate_a_deleted_claim() {
+        for completed in [false, true] {
+            let (store, root) = store();
+            let mut queue = ObjectiveMirrorQueue::default();
+            queue.publish(store.clone(), "same", Some("same objective"));
+            let old = queue.claim().unwrap();
+            let old = if completed {
+                old.execute();
+                None
+            } else {
+                Some(old)
+            };
+            store.delete("same").unwrap();
+            assert!(queue.publish(store.clone(), "same", Some("same objective")));
+            if let Some(old) = old {
+                old.execute();
+            }
+            assert!(queue.collect().is_none());
+            assert_eq!(queue.status.confirmed, 0);
+            settle(&mut queue);
+            assert_eq!(queue.status.confirmed, 1);
+            assert_eq!(
+                store
+                    .session_objective_mirror("same")
+                    .unwrap()
+                    .unwrap()
+                    .objective,
+                "same objective"
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    /// A shared store refuses new registrations at its hard cap without evicting
+    /// live fences or pretending the value was persisted. Dropping one owner
+    /// makes an identical explicit publication retryable without filesystem I/O
+    /// during admission; deletion through a clone revokes all exact-CID owners.
+    #[test]
+    fn objective_mirror_registration_refusal_is_bounded_and_retryable() {
+        let (store, root) = store();
+        let mut registrations = Vec::new();
+        for _ in 0..4096 {
+            registrations.push(
+                store
+                    .register_session_objective_mirror_work("same")
+                    .unwrap(),
+            );
+        }
+        let mut queue = ObjectiveMirrorQueue::default();
+        assert!(!queue.publish(store.clone(), "same", Some("new")));
+        assert!(queue.entries.is_empty());
+        assert_eq!(queue.status.last_failure, Some(MirrorFailure::Registration));
+        assert!(
+            registrations
+                .iter()
+                .all(|token| token.load(Ordering::Acquire))
+        );
+        registrations.pop();
+        assert!(queue.publish(store.clone(), "same", Some("new")));
+        settle(&mut queue);
+        store.clone().delete("same").unwrap();
+        assert!(
+            registrations
+                .iter()
+                .all(|token| !token.load(Ordering::Acquire))
+        );
+        assert!(queue.claim().is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Executes one exact claimed job and consumes its receipt explicitly.

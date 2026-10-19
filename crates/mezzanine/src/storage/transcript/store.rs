@@ -11,10 +11,11 @@ use std::fs::{self as std_fs, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::AtomicU8;
 
 use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
@@ -484,6 +485,9 @@ const SESSION_OBJECTIVE_MIRRORS_QUARANTINE_FILE_NAME: &str = ".session-objective
 /// 600 KiB at this count for bounded objectives), so the byte bound stays a
 /// guard rather than the trigger that disables mirroring.
 pub(super) const SESSION_OBJECTIVE_MIRRORS_MAX_ENTRIES: usize = 4_096;
+/// Hard bound for live optional registrations shared by store clones. Refusal
+/// never evicts a live deletion fence; dead/revoked registrations are reusable.
+const SESSION_OBJECTIVE_MIRROR_REGISTRATIONS_MAX: usize = 4_096;
 /// Maximum accepted length of one bounded mirror recovery diagnostic.
 const SESSION_OBJECTIVE_MIRROR_RECOVERY_REASON_MAX_CHARS: usize = 160;
 /// Versioned root-level index containing bounded generated session titles.
@@ -5174,7 +5178,26 @@ impl AgentTranscriptStore {
     /// treated as empty and replaced with a valid empty index, so a delete can no
     /// longer be blocked by a corrupt cache file.
     pub(super) fn remove_session_objective_mirror(&self, conversation_id: &str) -> Result<bool> {
-        self.mirror_session_objective(conversation_id, "", 0)
+        validate_conversation_id(conversation_id)?;
+        // Revoke immediately, even if lock/open fails. Repeat under the same
+        // lock as writes to fence registrations installed while we waited.
+        // Already-admitted writes finish before this prune, not after it.
+        self.revoke_session_objective_mirror_work(conversation_id);
+        let _lock = self
+            .acquire_session_objective_mirrors_lock(false)?
+            .ok_or_else(|| MezError::invalid_state("blocking objective prune unavailable"))?;
+        self.revoke_session_objective_mirror_work(conversation_id);
+        self.forget_session_objective_mirror(conversation_id);
+        if !self.root.join(SESSION_OBJECTIVE_MIRRORS_FILE_NAME).exists() {
+            return Ok(false);
+        }
+        let write_read = self.read_session_objective_mirror_records_for_write()?;
+        let mut mirrors = write_read.records;
+        let removed = mirrors.remove(conversation_id).is_some();
+        if removed || write_read.recovered {
+            self.write_session_objective_mirror_records(&mirrors)?;
+        }
+        Ok(removed)
     }
 
     /// Loads one validated objective title mirror for focused tests.
@@ -5748,6 +5771,54 @@ impl AgentTranscriptStore {
     /// Returns the shared throttle and diagnostic state for this handle.
     fn session_objective_mirror_handle_state(&self) -> &Mutex<SessionObjectiveMirrorHandleState> {
         &self.session_objective_mirrors
+    }
+
+    /// Registers a pending optional owner using memory and try_lock only. A
+    /// fresh registration is a new publication, even for a previously deleted
+    /// CID; revoked tokens never reactivate. None means truthful admission
+    /// refusal (capacity/contention/poison), not unchanged or persisted success.
+    pub(crate) fn register_session_objective_mirror_work(
+        &self,
+        conversation_id: &str,
+    ) -> Option<Arc<AtomicBool>> {
+        let mut state = self
+            .session_objective_mirror_handle_state()
+            .try_lock()
+            .ok()?;
+        state.registrations.retain(|(_, registration)| {
+            registration
+                .upgrade()
+                .is_some_and(|token| token.load(Ordering::Acquire))
+        });
+        if state.registrations.len() >= SESSION_OBJECTIVE_MIRROR_REGISTRATIONS_MAX {
+            return None;
+        }
+        let token = Arc::new(AtomicBool::new(true));
+        state
+            .registrations
+            .push((conversation_id.to_string(), Arc::downgrade(&token)));
+        Some(token)
+    }
+
+    /// Revokes exact-CID registrations shared by store clones. The mutex never
+    /// spans I/O. Poison recovery is intentional: deletion must still invalidate
+    /// every retained token rather than silently authorize a stale cache write.
+    fn revoke_session_objective_mirror_work(&self, conversation_id: &str) {
+        let mut state = self
+            .session_objective_mirror_handle_state()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.registrations.retain(|(id, registration)| {
+            let Some(token) = registration.upgrade() else {
+                return false;
+            };
+            if id == conversation_id {
+                token.store(false, Ordering::Release);
+                false
+            } else {
+                token.load(Ordering::Acquire)
+            }
+        });
     }
 
     /// Reports whether this handle already persisted the same bounded objective.

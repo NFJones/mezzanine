@@ -209,6 +209,22 @@ explicit objective refresh can retry a failed cache value. Permanently stalled
 storage can retain one physical job indefinitely without creating more jobs or
 blocking essential persistence and unrelated actor requests.
 
+Optional jobs also retain a revocable conversation registration shared by store
+clones. Deletion revokes those registrations and prunes under the index write
+lock, so a retained pre-delete job cannot recreate a successfully pruned row or
+be acknowledged as current. A fresh explicit publication can reuse the same id;
+it receives a different registration, never reactivates the old job. At most
+4,096 live registrations are retained per shared store handle; `registration`
+refusal means bounded capacity, short mutex contention, or unavailable registry
+state, not a persisted cache value. Retry an explicit publication after the
+admission condition clears. No raw conversation, title or path is reported.
+
+This fence is local to clones of one store handle, not a cross-process deletion
+tombstone. Conversation deletion still uses its existing synchronous storage
+operations and blocking cache prune; its latency is not covered by the
+nonblocking objective-publication guarantee. Cache-prune I/O failure remains
+best-effort, as before. No actor-side optional queue drain or worker join is added.
+
 ## Related pages
 
 - [Context and continuity](../agent/context-and-continuity.md)
