@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::runtime::agent::CompletionScope;
+use crate::runtime::runtime_pane_by_id;
 
 /// Compares all generated diagnostic fields, including policy/backend flags.
 /// Formatting is local to fixture-only errors and never produces runtime output.
