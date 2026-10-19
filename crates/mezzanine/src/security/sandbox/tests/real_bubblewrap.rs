@@ -5,22 +5,23 @@
 //! user-namespace profile report an explicit skip instead of conflating host
 //! support with a product probe or policy failure.
 
+mod workload_owner;
+
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::net::TcpListener;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
 use std::os::unix::net::{SocketAddr, UnixListener};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mez_agent::permissions::{
     EffectCompleteness, PathScopes, ResolvedPathEvidence, ResolvedPathKind,
@@ -28,8 +29,6 @@ use mez_agent::permissions::{
 use mez_agent::{
     MarkerToken, ShellChildArgument, ShellChildLaunch, ShellClassification, ShellTransaction,
 };
-
-use crate::host::process::wait_for_child_with_timeout;
 
 use super::*;
 
@@ -193,13 +192,8 @@ fn verified_capability(config: &BubblewrapConfig) -> Option<BubblewrapCapability
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let plan = bubblewrap_capability_probe_plan(config, "/bin/sh").unwrap();
     let mut command = Command::new(&plan.executable);
-    command
-        .args(&plan.arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    let output = bounded_child_output(command.spawn().unwrap(), "Bubblewrap capability probe");
+    command.args(&plan.arguments);
+    let output = bounded_child_output(command, None, "Bubblewrap capability probe");
     if !output.status.success() {
         eprintln!(
             "skipping real Bubblewrap test: production profile unsupported: {}",
@@ -225,72 +219,15 @@ fn shell_quote(value: &Path) -> String {
     format!("'{}'", value.to_string_lossy().replace('\'', "'\"'\"'"))
 }
 
-/// Collects one test-owned subprocess and terminates its process group at the
-/// shared real-Bubblewrap deadline so a kernel or runner stall cannot pin the
-/// complete libtest harness.
-fn bounded_child_output(mut child: std::process::Child, label: &str) -> Output {
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-    let stdout_reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes).unwrap();
-        bytes
-    });
-    let stderr_reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stderr.read_to_end(&mut bytes).unwrap();
-        bytes
-    });
-    let timed_out = wait_for_child_with_timeout(&mut child, REAL_BUBBLEWRAP_EXECUTION_TIMEOUT)
-        .unwrap()
-        .is_none();
-    let process_group_id = i32::try_from(child.id()).unwrap();
-    // The direct child can exit while one of its descendants still holds a
-    // capture pipe open. Terminate any remainder of the test-owned process
-    // group before joining the readers so successful parent exit is bounded too.
-    // SAFETY: callers use `process_group(0)`, making the child PID its
-    // process-group ID; the negative value targets only that test group.
-    unsafe {
-        libc::kill(-process_group_id, libc::SIGKILL);
-    }
-    if timed_out {
-        let _ = child.kill();
-    }
-    let status = child.wait().unwrap();
-    let output = Output {
-        status,
-        stdout: stdout_reader.join().unwrap(),
-        stderr: stderr_reader.join().unwrap(),
-    };
-    assert!(
-        !timed_out,
-        "{label} exceeded {REAL_BUBBLEWRAP_EXECUTION_TIMEOUT:?}: stdout={:?} stderr={:?}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output
-}
-
-#[test]
-/// Verifies successful direct-child exit cannot leave capture readers blocked
-/// on a descendant that inherited the test-owned process group's output pipes.
-fn bounded_child_output_reaps_descendants_that_retain_capture_pipes() {
-    let mut command = Command::new("/bin/sh");
-    command
-        .args(["-c", "sleep 120 &"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    let started = Instant::now();
-
-    let output = bounded_child_output(command.spawn().unwrap(), "leaked pipe regression");
-
-    assert!(output.status.success(), "status={:?}", output.status);
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "capture cleanup took {:?}",
-        started.elapsed()
-    );
+/// Spawns inside a sole-reaper owner; capture, staged stdin, and cleanup share
+/// the immutable deadline. Failures include bounded output and cleanup context.
+fn bounded_child_output(
+    command: Command,
+    input: Option<(Vec<u8>, Vec<u8>)>,
+    label: &str,
+) -> Output {
+    workload_owner::output(command, input, REAL_BUBBLEWRAP_EXECUTION_TIMEOUT)
+        .unwrap_or_else(|error| panic!("{label}: {error}"))
 }
 
 /// Executes a production launch plan through the typed pane transaction seam.
@@ -324,25 +261,19 @@ fn execute_plan(plan: BubblewrapLaunchPlan, command: &str) -> Output {
     .unwrap()
     .with_child_launch(launch);
     let input = transaction.render_for_classification_input(ShellClassification::PosixSh);
-    let mut child = Command::new("/bin/sh")
+    let mut child = Command::new("/bin/sh");
+    child
         .env("MEZ_REAL_SANDBOX_SECRET", "must-not-leak")
         .env("SSH_AUTH_SOCK", "/run/user/1000/ssh-agent.sock")
         .env("GPG_AGENT_INFO", "/run/user/1000/gnupg/S.gpg-agent")
         .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
         .env("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
-        .env("DISPLAY", ":99")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    stdin.write_all(input.wrapper.as_bytes()).unwrap();
-    thread::sleep(Duration::from_millis(50));
-    stdin.write_all(input.payload.as_bytes()).unwrap();
-    drop(stdin);
-    bounded_child_output(child, "real Bubblewrap subprocess")
+        .env("DISPLAY", ":99");
+    bounded_child_output(
+        child,
+        Some((input.wrapper.into_bytes(), input.payload.into_bytes())),
+        "real Bubblewrap subprocess",
+    )
 }
 
 /// Compiles a real launch plan with the fixture's pane-resolved authority.
@@ -809,18 +740,13 @@ fn typed_launch_failure_has_no_unsandboxed_fallback_side_effect() {
     .unwrap()
     .with_child_launch(launch);
     let input = transaction.render_for_classification_input(ShellClassification::PosixSh);
-    let mut child = Command::new("/bin/sh")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    stdin.write_all(input.wrapper.as_bytes()).unwrap();
-    thread::sleep(Duration::from_millis(50));
-    stdin.write_all(input.payload.as_bytes()).unwrap();
-    drop(stdin);
-    let output = child.wait_with_output().unwrap();
+    let mut child = Command::new("/bin/sh");
+    child.env_clear().env("HOME", &fixture.host_home);
+    let output = bounded_child_output(
+        child,
+        Some((input.wrapper.into_bytes(), input.payload.into_bytes())),
+        "failed typed Bubblewrap launch",
+    );
 
     assert!(
         !side_effect.exists(),

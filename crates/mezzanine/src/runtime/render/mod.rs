@@ -3745,8 +3745,14 @@ mod overlay;
 mod paste;
 mod presentation;
 mod selector_pool;
+
+// Narrow test-only inputs for fixture-owned selector shutdown regressions.
 pub(crate) use presentation::{
     PeerMessagePresentation, peer_message_presentation_receive_identity,
+};
+#[cfg(test)]
+pub(crate) use selector_pool::{
+    RuntimeAgentSelectorRefreshOutcome, RuntimeAgentSelectorRefreshSnapshot,
 };
 mod time;
 
