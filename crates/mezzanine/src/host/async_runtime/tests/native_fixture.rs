@@ -5,6 +5,10 @@
 //! actor-close request is serviced. Completed outputs live outside the timed
 //! join, so cancellation cannot discard an already returned service. Only actual
 //! completion counts as joined. Final assertions happen after bounded retirement.
+//! The measured large service/actor input, actor-run future and actor-exit
+//! receipts use selective heap ownership across their concrete boundaries.
+//! Other stage futures and the test harness remain unchanged. Type-layout
+//! reductions do not prove peak stack use or that Box construction is stack-free.
 //!
 //! Storage and an external native-owner reference are preserving guards BEFORE
 //! spawn, including post-spawn hook failure and actor construction panic. Unknown
@@ -112,8 +116,9 @@ impl CloseGate {
     }
 }
 
-/// Completed results survive the deadline selecting over the owning join.
-pub(super) struct Joined<C, W, A = AsyncRuntimeActorExit> {
+/// Completed results survive the deadline selecting over the owning join. The
+/// concrete actor exit stays boxed through capture, this receipt and finish.
+pub(super) struct Joined<C, W, A = Box<AsyncRuntimeActorExit>> {
     pub(super) client: StageResult<C>,
     pub(super) supervisor: StageResult<W>,
     pub(super) actor: StageResult<A>,
@@ -138,7 +143,7 @@ impl<C, W> Joined<C, W> {
     pub(super) fn finish(
         mut self,
         fixture: &NativeFixture,
-    ) -> Result<(C, W, AsyncRuntimeActorExit), Box<FixtureFailure>> {
+    ) -> Result<(C, W, Box<AsyncRuntimeActorExit>), Box<FixtureFailure>> {
         if fixture.settled
             && !self.timed_out
             && self.cleanup.is_empty()
@@ -455,12 +460,12 @@ impl NativeFixture {
     /// fail post-spawn hooks. Actor construction is caught in the same scope.
     pub(super) fn build(
         &mut self,
-        mut service: RuntimeSessionService,
+        mut service: Box<RuntimeSessionService>,
     ) -> Result<
         (
             crate::runtime::PaneProcessStart,
             AsyncRuntimeSessionHandle,
-            AsyncRuntimeSessionActor,
+            Box<AsyncRuntimeSessionActor>,
         ),
         Failure,
     > {
@@ -482,8 +487,8 @@ impl NativeFixture {
                 Some(&self.root),
                 Some(&self.environment),
             )?;
-            let (handle, actor) = AsyncRuntimeActorFixture::from_service(service).build()?;
-            Ok((started, handle, actor))
+            let (handle, actor) = AsyncRuntimeActorFixture::from_service(*service).build()?;
+            Ok((started, handle, Box::new(actor)))
         })) {
             Ok(result) => result.map_err(Failure::Error),
             Err(payload) => Err(Failure::Panic(payload)),
@@ -496,7 +501,7 @@ impl NativeFixture {
         &self,
         client: impl Future<Output = Result<C, MezError>>,
         worker: impl Future<Output = Result<W, MezError>>,
-        actor: AsyncRuntimeSessionActor,
+        actor: Box<AsyncRuntimeSessionActor>,
         handle: &AsyncRuntimeSessionHandle,
         control: JoinControl,
     ) -> Joined<C, W> {
@@ -505,10 +510,14 @@ impl NativeFixture {
             close: gate,
             supervisor_done,
         } = control;
+        // Only this measured large concrete future is boxed; it is the SAME
+        // original actor future, never spawned or recreated. Construction can
+        // still have transients, so static layout is not peak-stack proof.
+        let actor_run = Box::pin(actor.run());
         join_originals_notified(
             client,
             worker,
-            async { Ok(actor.run().await) },
+            async move { Ok(Box::new(actor_run.await)) },
             self.deadline,
             stop,
             || async {

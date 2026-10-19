@@ -2309,7 +2309,7 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
     ));
     let _ = std::fs::remove_file(&sentinel);
     let mut fixture = NativeFixture::new("unmanaged-zsh", Duration::from_secs(30));
-    let mut service = test_service_with_shell(zsh);
+    let mut service = Box::new(test_service_with_shell(zsh));
     service.disable_legacy_managed_startup_for_tests();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)

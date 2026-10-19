@@ -376,8 +376,8 @@ fn spoof_observation(
 struct SpoofCaseOutcome {
     /// Certification snapshot settled by the scenario.
     snapshot: crate::host::async_runtime::AsyncPaneCertificationSnapshot,
-    /// Runtime service after the actor shut down.
-    service: crate::runtime::RuntimeSessionService,
+    /// Same runtime service after shutdown, kept heap-owned across result moves.
+    service: Box<crate::runtime::RuntimeSessionService>,
     /// Fixture log with timeline, screen text, and observed pane input.
     log_text: String,
     /// Foreground process group observed while the fixture owned the pane.
@@ -404,7 +404,7 @@ async fn run_foreground_spoof_case(
     let mut fixture = NativeFixture::new(label, Duration::from_secs(90));
     let root = fixture.root().to_path_buf();
     let (script, log) = write_spoof_fixture(&root);
-    let mut service = test_service_with_shell(shell);
+    let mut service = Box::new(test_service_with_shell(shell));
     service.disable_legacy_managed_startup_for_tests();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
@@ -618,7 +618,7 @@ async fn run_foreground_spoof_case(
     let interrupted = log_text.contains("SIGNAL_INT");
     SpoofCaseOutcome {
         snapshot,
-        service: actor_exit.service,
+        service: Box::new(actor_exit.service),
         log_text,
         fixture_process_group,
         refusal,
