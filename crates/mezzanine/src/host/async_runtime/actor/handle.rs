@@ -1538,6 +1538,16 @@ impl AsyncRuntimeSessionHandle {
             .await
     }
 
+    /// Polls the optional mirror lane without draining essential effects.
+    /// Runtime ownership, not this handle's lifetime, bounds physical jobs.
+    pub(crate) async fn poll_objective_mirror(
+        &self,
+        allow_claim: bool,
+    ) -> Result<Option<crate::runtime::RuntimeObjectiveMirrorWork>> {
+        self.request(|reply| AsyncRuntimeRequest::PollObjectiveMirror { allow_claim, reply })
+            .await
+    }
+
     /// Runs the drain hook side effects operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

@@ -21,6 +21,8 @@ use super::RuntimeSideEffect;
 mod adapters;
 mod bookkeeping;
 mod effects;
+mod objective_mirrors;
+pub(crate) use objective_mirrors::RuntimeObjectiveMirrorWork;
 /// Exact settled-occurrence persistence ownership, separate from screen state.
 mod steering;
 mod stores;
@@ -34,6 +36,8 @@ type InFlightTranscriptBatch = (
 /// Owns repository handles and deferred effects for one application runtime.
 #[derive(Debug, Default)]
 pub(crate) struct RuntimePersistenceComponent {
+    /// Optional cache work owns one physical worker plus bounded newest values.
+    objective_mirrors: objective_mirrors::ObjectiveMirrorQueue,
     snapshot_repository: Option<SnapshotRepository>,
     agent_transcript_store: Option<AgentTranscriptStore>,
     token_usage_store: Option<TokenUsageStore>,

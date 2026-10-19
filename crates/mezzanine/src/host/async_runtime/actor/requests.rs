@@ -3431,6 +3431,10 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(self.drain_persistence_claims(limit));
                 false
             }
+            AsyncRuntimeRequest::PollObjectiveMirror { allow_claim, reply } => {
+                let _ = reply.send(self.service.poll_runtime_objective_mirror(allow_claim));
+                false
+            }
             AsyncRuntimeRequest::RecoverClaimedTranscripts { reply } => {
                 let recovered = self.side_effect_routes.recover_claimed_transcripts();
                 self.side_effect_routes.retry_failed_transcript_receipts();

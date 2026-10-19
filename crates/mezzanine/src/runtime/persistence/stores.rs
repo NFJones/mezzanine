@@ -56,6 +56,9 @@ impl RuntimePersistenceComponent {
 
     /// Attaches the agent transcript store.
     pub(crate) fn set_transcript_store(&mut self, store: AgentTranscriptStore) {
+        // Invalidate queued revisions, never an already admitted physical I/O
+        // operation. Its captured store remains immutable until it finishes.
+        self.objective_mirrors.invalidate();
         self.agent_transcript_store = Some(store);
     }
 

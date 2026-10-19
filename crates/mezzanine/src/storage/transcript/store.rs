@@ -5071,32 +5071,94 @@ impl AgentTranscriptStore {
         objective: &str,
         updated_at_unix_seconds: u64,
     ) -> Result<bool> {
+        self.update_session_objective_mirror(
+            conversation_id,
+            objective,
+            updated_at_unix_seconds,
+            false,
+            || true,
+        )?
+        .ok_or_else(|| {
+            MezError::invalid_state("blocking objective mirror admission was unavailable")
+        })
+    }
+
+    /// Attempts optional display-cache work without waiting for another writer.
+    /// All filesystem operations still belong on a blocking worker. The exact
+    /// caller revision is checked after lock admission and immediately before
+    /// writing; a newer revision admitted during sync needs a serialized followup.
+    /// None means contention, not persisted success. Errors preserve normal
+    /// filesystem/normalization semantics for the caller to report content-free.
+    pub(crate) fn try_mirror_session_objective_if_current(
+        &self,
+        conversation_id: &str,
+        objective: &str,
+        updated_at_unix_seconds: u64,
+        is_current: impl Fn() -> bool,
+    ) -> Result<Option<bool>> {
+        self.update_session_objective_mirror(
+            conversation_id,
+            objective,
+            updated_at_unix_seconds,
+            true,
+            is_current,
+        )
+    }
+
+    /// Shares the unchanged value, clear, recovery and atomic-write owner across
+    /// ordinary blocking callers and the optional nonblocking runtime worker.
+    fn update_session_objective_mirror(
+        &self,
+        conversation_id: &str,
+        objective: &str,
+        updated_at_unix_seconds: u64,
+        nonblocking: bool,
+        is_current: impl Fn() -> bool,
+    ) -> Result<Option<bool>> {
         validate_conversation_id(conversation_id)?;
-        let Some(objective) = bound_session_title(objective) else {
-            return self.remove_session_objective_mirror(conversation_id);
-        };
-        // Unchanged refreshes dominate on the serialized runtime thread, so they
-        // are answered from the last value this handle persisted and never read
-        // or write the bounded index.
-        if self.session_objective_mirror_is_unchanged(conversation_id, &objective) {
-            return Ok(false);
+        let objective = bound_session_title(objective);
+        if let Some(objective) = &objective {
+            if self.session_objective_mirror_is_unchanged(conversation_id, objective) {
+                return Ok(Some(false));
+            }
+        } else {
+            self.forget_session_objective_mirror(conversation_id);
+            if !self.root.join(SESSION_OBJECTIVE_MIRRORS_FILE_NAME).exists() {
+                return Ok(Some(false));
+            }
         }
-        let _lock = self.acquire_session_objective_mirrors_lock()?;
-        let mut mirrors = self
-            .read_session_objective_mirror_records_for_write()?
-            .records;
-        mirrors.insert(
-            conversation_id.to_string(),
-            SessionObjectiveMirror {
-                conversation_id: conversation_id.to_string(),
-                objective: objective.clone(),
-                updated_at_unix_seconds,
-            },
-        );
-        self.compact_session_objective_mirror_records(&mut mirrors, conversation_id);
-        self.write_session_objective_mirror_records(&mirrors)?;
-        self.note_session_objective_mirror_written(conversation_id, &objective);
-        Ok(true)
+        let Some(_lock) = self.acquire_session_objective_mirrors_lock(nonblocking)? else {
+            return Ok(None);
+        };
+        if !is_current() {
+            return Ok(Some(false));
+        }
+        let write_read = self.read_session_objective_mirror_records_for_write()?;
+        let mut mirrors = write_read.records;
+        let changed = if let Some(objective) = &objective {
+            mirrors.insert(
+                conversation_id.to_string(),
+                SessionObjectiveMirror {
+                    conversation_id: conversation_id.to_string(),
+                    objective: objective.clone(),
+                    updated_at_unix_seconds,
+                },
+            );
+            self.compact_session_objective_mirror_records(&mut mirrors, conversation_id);
+            true
+        } else {
+            mirrors.remove(conversation_id).is_some()
+        };
+        if !is_current() {
+            return Ok(Some(false));
+        }
+        if changed || write_read.recovered {
+            self.write_session_objective_mirror_records(&mirrors)?;
+        }
+        if let Some(objective) = &objective {
+            self.note_session_objective_mirror_written(conversation_id, objective);
+        }
+        Ok(Some(changed))
     }
 
     /// Removes one conversation's mirror while holding the index lock.
@@ -5105,19 +5167,7 @@ impl AgentTranscriptStore {
     /// treated as empty and replaced with a valid empty index, so a delete can no
     /// longer be blocked by a corrupt cache file.
     pub(super) fn remove_session_objective_mirror(&self, conversation_id: &str) -> Result<bool> {
-        validate_conversation_id(conversation_id)?;
-        self.forget_session_objective_mirror(conversation_id);
-        if !self.root.join(SESSION_OBJECTIVE_MIRRORS_FILE_NAME).exists() {
-            return Ok(false);
-        }
-        let _lock = self.acquire_session_objective_mirrors_lock()?;
-        let write_read = self.read_session_objective_mirror_records_for_write()?;
-        let mut mirrors = write_read.records;
-        let removed = mirrors.remove(conversation_id).is_some();
-        if removed || write_read.recovered {
-            self.write_session_objective_mirror_records(&mirrors)?;
-        }
-        Ok(removed)
+        self.mirror_session_objective(conversation_id, "", 0)
     }
 
     /// Loads one validated objective title mirror for focused tests.
@@ -5559,7 +5609,10 @@ impl AgentTranscriptStore {
     }
 
     /// Acquires the exclusive advisory lock for objective mirror index mutation.
-    fn acquire_session_objective_mirrors_lock(&self) -> Result<std_fs::File> {
+    fn acquire_session_objective_mirrors_lock(
+        &self,
+        nonblocking: bool,
+    ) -> Result<Option<std_fs::File>> {
         self.ensure_store_dir()?;
         let path = self.root.join(SESSION_OBJECTIVE_MIRRORS_LOCK_FILE_NAME);
         let file = OpenOptions::new()
@@ -5569,8 +5622,16 @@ impl AgentTranscriptStore {
             .truncate(false)
             .open(&path)?;
         set_private_file_permissions(&path)?;
-        flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
-        Ok(file)
+        let mode = if nonblocking {
+            FlockOperation::NonBlockingLockExclusive
+        } else {
+            FlockOperation::LockExclusive
+        };
+        match flock(&file, mode) {
+            Ok(()) => Ok(Some(file)),
+            Err(error) if nonblocking && error == rustix::io::Errno::WOULDBLOCK => Ok(None),
+            Err(error) => Err(std::io::Error::from(error).into()),
+        }
     }
 
     /// Reads and validates the complete objective title mirror index.

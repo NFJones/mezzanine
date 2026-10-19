@@ -2019,15 +2019,15 @@ impl RuntimeSessionService {
         self.sync_runtime_agent_objective_for_pane(pane_id, conversation_id, objective)
     }
 
-    /// Persists one bounded display mirror of a published agent objective.
+    /// Queues one bounded display mirror of a published agent objective.
     ///
     /// The mirror exists so archived and offline conversations can still resolve
     /// a policy-derived title. It is written only from the published objective
     /// value, is bounded by the shared title rules, and never authorizes
     /// anything. The mirror is a cache: a missing, unchanged, or unreadable
-    /// mirror is not an error and never fails a turn. A title change also
-    /// refreshes the cached prompt-selector candidates and any open saved-session
-    /// browser so every surface renders the same row title.
+    /// mirror is not an error and never fails a turn. The return value means a
+    /// new desired cache revision was queued, not written. Its exact worker
+    /// acknowledgment refreshes prompt-selector candidates and saved browsers.
     ///
     /// Ephemeral conversations (routed workers) never persist a transcript and
     /// never enter the saved-session catalog, so they are skipped entirely rather
@@ -2046,17 +2046,7 @@ impl RuntimeSessionService {
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return false;
         };
-        let changed = store
-            .mirror_session_objective(
-                conversation_id,
-                objective.unwrap_or_default(),
-                current_unix_seconds(),
-            )
-            .unwrap_or(false);
-        if changed {
-            self.invalidate_agent_prompt_selector_extra_candidates();
-            let _ = self.refresh_saved_session_overlay_after_title_change();
-        }
+        let changed = self.queue_runtime_objective_mirror(store, conversation_id, objective);
         // Publishing the objective is where a conversation becomes eligible for
         // turn-less generated-title work. Admission is idempotent, never creates
         // a turn, and never fails the objective refresh.

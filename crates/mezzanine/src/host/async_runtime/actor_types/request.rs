@@ -1361,6 +1361,14 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Claim IDs are present only for transcript appends.
         reply: oneshot::Sender<Result<Vec<super::super::actor::routes::PersistenceClaim>>>,
     },
+    /// Collects an exact optional cache receipt and reserves at most one
+    /// physical mirror job, independently of essential persistence effects.
+    PollObjectiveMirror {
+        /// Shutdown collects receipts without starting more optional writes.
+        allow_claim: bool,
+        /// The job guard retains its physical reservation through completion.
+        reply: oneshot::Sender<Option<crate::runtime::RuntimeObjectiveMirrorWork>>,
+    },
     /// Restores unacknowledged transcript work when the sole persistence worker starts.
     RecoverClaimedTranscripts {
         /// Number of exact append effects returned to the ordered worker queue.
@@ -1585,6 +1593,7 @@ impl AsyncRuntimeRequest {
             | Self::DrainTimerSideEffects { .. }
             | Self::DrainPersistenceSideEffects { .. }
             | Self::DrainPersistenceClaims { .. }
+            | Self::PollObjectiveMirror { .. }
             | Self::RecoverClaimedTranscripts { .. }
             | Self::DrainHookSideEffects { .. }
             | Self::DrainHostClipboardSideEffects { .. }

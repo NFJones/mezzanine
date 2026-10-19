@@ -1056,6 +1056,15 @@ where
         report.terminal_state = state;
         let stopping = should_stop(report.polls, state);
 
+        if let Some(work) = handle.poll_objective_mirror(!stopping).await? {
+            // Deliberately do not await optional cache I/O in the essential
+            // persistence loop. The actor-issued guard owns the ONE physical
+            // slot until the blocking closure finishes or actually drops, and
+            // retains its receipt for this or a replacement service to collect.
+            // Dropping this JoinHandle does not release logical/physical capacity.
+            drop(tokio::task::spawn_blocking(move || work.execute()));
+        }
+
         let effects = handle.drain_persistence_claims(config.drain_limit).await?;
         if effects.is_empty() {
             if stopping {
