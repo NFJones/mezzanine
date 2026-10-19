@@ -54,6 +54,16 @@ const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
 /// How long the copied-word highlight remains visible after a double click.
 const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 
+/// A retained display obligation, independent of receipt and persistence ownership.
+/// Backoff caps cadence rather than attempts; only installation or retirement
+/// discharges the original pane/conversation obligation.
+pub(super) struct RuntimeSteeringPresentationRetry {
+    /// Earliest eligible ordinary drain, including drains caused by idle cleanup.
+    pub(super) next_attempt_at: std::time::Instant,
+    /// Saturating backoff exponent, not a remaining lifetime attempt budget.
+    pub(super) backoff: u8,
+}
+
 mod streaming_projection_outcome;
 pub(crate) use streaming_projection_outcome::{
     RuntimeStreamingSayProjectionApplyOutcome, RuntimeStreamingSayProjectionRejection,
@@ -672,8 +682,11 @@ pub(crate) struct RuntimePresentationComponent {
         std::collections::BTreeMap<String, (String, u64, usize)>,
     /// Settled occurrences installed once on the current conversation surface.
     pub(super) presented_steering_receipts: std::collections::BTreeSet<(String, String, String)>,
-    /// One bounded display-only retry, fenced to the original conversation.
-    pub(super) steering_presentation_retries: std::collections::BTreeSet<(String, String)>,
+    /// Retained display-only obligations, one per original pane/conversation.
+    pub(super) steering_presentation_retries:
+        std::collections::BTreeMap<(String, String), RuntimeSteeringPresentationRetry>,
+    /// Last attempted owner for fair bounded ordinary-drain retry selection.
+    pub(super) steering_presentation_retry_cursor: (String, String),
     /// Source-backed provider `say` output awaiting validated completion.
     agent_streaming_say_presentations:
         std::collections::BTreeMap<String, RuntimeStreamingSayPresentation>,
@@ -1969,6 +1982,8 @@ impl RuntimePresentationComponent {
         self.pending_steering_suffixes.remove(pane_id);
         self.presented_steering_receipts
             .retain(|(pane, _, _)| pane != pane_id);
+        self.steering_presentation_retries
+            .retain(|(pane, _), _| pane != pane_id);
         self.action_presentation_progress.remove(pane_id);
         self.agent_streaming_say_presentations.remove(pane_id);
         self.agent_pending_final_say_previews.remove(pane_id);

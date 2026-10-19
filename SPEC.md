@@ -8329,6 +8329,15 @@ user entry; terminal not-sent and recovered admission-unknown evidence MUST keep
 truthful textual labels. Equal text submissions remain distinct occurrences.
 Settled display source MUST carry occurrence identity for replay and exact
 persistence retry; retries MUST NOT resubmit input or repeat visible promotion.
+Failed display installation MUST retain its exact pane/conversation obligation
+until successful installation or explicit owner retirement, independently of
+checkpoint dirtiness and durable-write retries. Ordinary idle drains MUST keep
+retrying after repeated failures without new input or an explicit display request.
+Active retries MUST have bounded per-drain work, fair owner selection and capped
+backoff, not a lifetime attempt budget that abandons accepted source. Persistent
+unavailability MUST produce a bounded diagnostic without exposing authored source.
+Retries MUST preserve acceptance order, original occurrence/copy source and already
+installed prefixes; replacement conversations MUST NOT receive old display work.
 Pending rows MUST remain absent from ordinary durable presentation sources and
 lower-layer baselines. Visible pending rows use the existing composer log geometry
 and bounded overflow projection, not forced viewport pinning. Layouts without

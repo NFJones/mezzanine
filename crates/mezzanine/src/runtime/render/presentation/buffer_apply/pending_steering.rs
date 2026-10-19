@@ -5,9 +5,18 @@
 //! them before capturing baselines. Every installation recomposes this layer
 //! last. Rendering never acknowledges input, persists pending as ordinary user
 //! history, changes canonical chronology or writes the process surface.
+//! Failed settled installations retain an exact pane/conversation obligation.
+//! Ordinary drains retry due owners fairly in bounded batches; tracked idle
+//! cleanup keeps recovery live with capped backoff, never a lifetime attempt
+//! budget. Receipt sources and persistence retries remain independently owned.
 
 use super::*;
 use mez_agent::transcript::SteeringRecoveryStatus;
+
+/// Bounds actor work per ordinary drain without bounding obligation lifetime.
+const STEERING_DISPLAY_RETRIES_PER_DRAIN: usize = 8;
+/// Initial pacing also prevents hot unrelated ingress from spinning on failure.
+const STEERING_DISPLAY_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Associates every display row with one exact accepted occurrence source.
 /// Source selection emits the group once and preserves CRLF and trailing bytes;
@@ -88,7 +97,7 @@ impl RuntimeSessionService {
     }
 
     /// Reconciles new receipt evidence without propagating display failure into
-    /// execution. One retry is retained for the next persistence drain.
+    /// execution. Failure retains the exact obligation until install/retirement.
     pub(crate) fn request_steering_presentation(&mut self, pane: &str) {
         let Some(conversation) = self
             .agent_shell_store()
@@ -98,24 +107,68 @@ impl RuntimeSessionService {
             return;
         };
         let key = (pane.to_string(), conversation);
+        self.presentation.steering_presentation_retries.retain(|(owner, source), _| {
+            owner != pane || source == &key.1
+        });
+        // Dirty checkpoint publication and other immediate requests must not
+        // bypass pacing or create a second attempt in the same ordinary drain.
+        if self.presentation.steering_presentation_retries.contains_key(&key) {
+            return;
+        }
         if self.reconcile_steering_presentation(pane).is_err() {
-            self.presentation.steering_presentation_retries.insert(key);
-        } else {
-            self.presentation.steering_presentation_retries.remove(&key);
+            self.presentation.steering_presentation_retries.insert(key.clone(),
+                crate::runtime::render::RuntimeSteeringPresentationRetry {
+                    next_attempt_at: std::time::Instant::now() + STEERING_DISPLAY_RETRY_DELAY,
+                    backoff: 0,
+                });
+            // Never include accepted source or arbitrary renderer errors in
+            // this bounded diagnostic. One event covers the retained episode.
+            let _ = self.append_lifecycle_event(crate::runtime::EventKind::Diagnostic,
+                serde_json::json!({
+                    "diagnostic": "steering display unavailable; original accepted source retained for paced display-only retry",
+                    "pane_id": pane,
+                    "conversation_id": key.1,
+                }).to_string());
         }
     }
 
-    /// Consumes bounded display retries only for their original conversation.
-    /// No provider, input or canonical effects are replayed on this path.
+    /// Keeps existing tracked idle cleanup live while display recovery is owed.
+    /// Backoff bounds actual attempts even when other ingress drains frequently.
+    pub(crate) fn steering_presentation_retry_timer_needed(&self) -> bool {
+        !self.presentation.steering_presentation_retries.is_empty()
+    }
+
+    /// Attempts a bounded fair batch of due original-conversation obligations.
+    /// Failure retains the obligation with capped backoff indefinitely. No
+    /// provider, input, persistence acknowledgment or canonical effects replay.
     pub(crate) fn retry_steering_presentations(&mut self) {
-        let retries = std::mem::take(&mut self.presentation.steering_presentation_retries);
-        for (pane, conversation) in retries {
-            if self
+        let mut retries = std::mem::take(&mut self.presentation.steering_presentation_retries);
+        retries.retain(|(pane, conversation), _| {
+            self.find_pane_descriptor(pane).is_some() && self
                 .agent_shell_store()
-                .get(&pane)
-                .is_some_and(|session| session.session_id == conversation)
-            {
-                let _ = self.reconcile_steering_presentation(&pane);
+                .get(pane)
+                .is_some_and(|session| session.session_id == *conversation)
+        });
+        self.presentation.steering_presentation_retries = retries;
+        let now = std::time::Instant::now();
+        let cursor = &self.presentation.steering_presentation_retry_cursor;
+        let retries = &self.presentation.steering_presentation_retries;
+        let due = retries.range((std::ops::Bound::Excluded(cursor.clone()), std::ops::Bound::Unbounded))
+            .chain(retries.range(..=cursor.clone()))
+            .filter(|(_, retry)| retry.next_attempt_at <= now)
+            .take(STEERING_DISPLAY_RETRIES_PER_DRAIN)
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in due {
+            self.presentation.steering_presentation_retry_cursor = key.clone();
+            if self.reconcile_steering_presentation(&key.0).is_ok() {
+                self.presentation.steering_presentation_retries.remove(&key);
+                let effects = self.render_effects_for_clients_projecting_pane(
+                    &key.0, crate::runtime::RenderInvalidationReason::FullRedraw);
+                self.presentation.defer_render_effects(effects);
+            } else if let Some(retry) = self.presentation.steering_presentation_retries.get_mut(&key) {
+                retry.backoff = retry.backoff.saturating_add(1).min(5);
+                retry.next_attempt_at = now + STEERING_DISPLAY_RETRY_DELAY * (1u32 << retry.backoff);
             }
         }
     }

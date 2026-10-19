@@ -91,7 +91,14 @@ Visible rows are bounded using composer log geometry. When the gutter or log
 rows cannot fit, the preview is omitted while accepted receipt source remains.
 Pending text is not saved
 as ordinary acknowledged prompt history; settled rows carry occurrence identity
-for replay and bounded persistence-only retry. Source-copy selection retains exact
+for replay and bounded persistence-only retry. Display installation failures
+retain a separate pane/conversation obligation:
+ordinary idle drains retry with capped backoff and fair bounded work, even after
+repeated failures and with a current checkpoint. No new input or explicit retry
+request is needed. A bounded source-free diagnostic reports unavailable display;
+successful prefixes are not repeated and replaced owners retire old display work.
+This display recovery does not retry input, provider work or settled effects, and
+does not replace independent durable-write recovery. Source-copy selection retains exact
 display text, including authored CRLF and trailing newlines. Selecting an overflow
 summary or tail row recovers the complete pending source group once; rendered
 copy still selects visible cells. Captured copy views stay frozen during output
