@@ -110,13 +110,16 @@ fn runtime_objective_command_persists_publishes_and_clears_user_precedence() {
             .and_then(|identity| identity.objective.as_deref()),
         Some("Ship the objective")
     );
+    // Metadata and MMP publication above remain immediate. Only the optional
+    // display-cache assertion below waits for explicitly driven worker work.
+    service.flush_objective_mirrors_for_tests();
     assert_eq!(
         transcript_store
             .session_objective_mirror(&conversation_id)
             .unwrap()
             .map(|mirror| mirror.objective),
         Some("Ship the objective".to_string()),
-        "the immediate MMP publication must also refresh the title source"
+        "the settled optional mirror must reflect the immediate MMP publication"
     );
     let prepared = service
         .runtime_agent_effective_objective(&conversation_id, Some("Automatic replacement"))
@@ -137,6 +140,13 @@ fn runtime_objective_command_persists_publishes_and_clears_user_precedence() {
             .message_service()
             .registered_identity(&agent_id)
             .and_then(|identity| identity.objective.as_deref())
+            .is_none()
+    );
+    service.flush_objective_mirrors_for_tests();
+    assert!(
+        transcript_store
+            .session_objective_mirror(&conversation_id)
+            .unwrap()
             .is_none()
     );
 }

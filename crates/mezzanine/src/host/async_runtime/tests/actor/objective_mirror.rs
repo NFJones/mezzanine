@@ -232,6 +232,24 @@ async fn objective_mirror_actor_case(run_service: bool) {
             .execute_agent_shell_command(primary, "/stop".into())
             .await;
         let cancel_before_release = !watchdog.released.load(Ordering::Acquire);
+        let busy_observed = if run_service {
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    let status = handle.metrics().await.unwrap().objective_mirror;
+                    if watchdog.released.load(Ordering::Acquire) {
+                        break false;
+                    }
+                    if status.busy > 0 && status.pending_keys > 0 {
+                        break true;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap_or(false)
+        } else {
+            true
+        };
         let convergence = if run_service {
             watchdog.release_now();
             let observed = tokio::time::timeout(Duration::from_secs(2), async {
@@ -261,12 +279,23 @@ async fn objective_mirror_actor_case(run_service: bool) {
             read_before_release,
             cancel,
             cancel_before_release,
+            busy_observed,
             convergence,
             shutdown,
         )
     };
     let (
-        (adoption, adopted, read, responsive, cancel, cancelled, convergence, shutdown),
+        (
+            adoption,
+            adopted,
+            read,
+            responsive,
+            cancel,
+            cancelled,
+            busy_observed,
+            convergence,
+            shutdown,
+        ),
         persistence,
         mut exit,
     ) = tokio::join!(client, persistence, actor.run());
@@ -291,6 +320,10 @@ async fn objective_mirror_actor_case(run_service: bool) {
     cancel.unwrap();
     shutdown.unwrap();
     convergence.unwrap();
+    assert!(
+        busy_observed,
+        "retry qualification must observe Busy while the real lock is held"
+    );
     if let Some(report) = persistence {
         assert_eq!(report.unwrap().failed, 0);
     }

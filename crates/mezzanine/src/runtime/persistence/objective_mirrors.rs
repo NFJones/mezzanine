@@ -785,6 +785,12 @@ mod tests {
     fn objective_mirror_busy_predecessors_cannot_starve_an_independent_root() {
         let (first, root) = store();
         let (ready, other) = store();
+        // Force the old BTree-key tie-break counterexample, not random order.
+        let (first, root, ready, other) = if root < other {
+            (first, root, ready, other)
+        } else {
+            (ready, other, first, root)
+        };
         let lock = std::fs::OpenOptions::new()
             .read(true)
             .write(true)

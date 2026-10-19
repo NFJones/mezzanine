@@ -579,9 +579,14 @@ fn runtime_generated_title_settlement_writes_the_row_title() {
         .inspect(&conversation_id)
         .unwrap_or_default()
         .len();
+    service.flush_objective_mirrors_for_tests();
     let objective_before = transcript_store
         .session_objective_mirror(&conversation_id)
         .unwrap();
+    assert!(
+        objective_before.is_some(),
+        "preservation must compare an existing objective mirror"
+    );
     let turns_before = service.agent_turn_ledger().turns().len();
 
     assert!(
@@ -657,6 +662,7 @@ fn runtime_generated_title_failure_degrades_with_a_bounded_reason() {
             content: "inspect the backlog".to_string(),
         })
         .unwrap();
+    service.flush_objective_mirrors_for_tests();
     let objective = transcript_store
         .session_objective_mirror(&conversation_id)
         .unwrap()
@@ -889,6 +895,7 @@ fn runtime_settled_conversation_reads_no_title_index_per_turn() {
         .execute_agent_shell_command(&primary, "inspect the backlog")
         .unwrap();
     append_user_prompt(&transcript_store, &conversation_id, "inspect the backlog");
+    service.flush_objective_mirrors_for_tests();
     let objective = transcript_store
         .session_objective_mirror(&conversation_id)
         .unwrap()
