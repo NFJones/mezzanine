@@ -150,14 +150,13 @@ impl<C, W> Joined<C, W> {
             && self.client.failure.is_none()
             && self.supervisor.failure.is_none()
             && self.actor.failure.is_none()
-        {
-            if let (Some(client), Some(worker), Some(actor)) = (
+            && let (Some(client), Some(worker), Some(actor)) = (
                 self.client.value.take(),
                 self.supervisor.value.take(),
                 self.actor.value.take(),
-            ) {
-                return Ok((client, worker, actor));
-            }
+            )
+        {
+            return Ok((client, worker, actor));
         }
         let mut failures = Vec::new();
         for stage in
@@ -540,15 +539,15 @@ impl NativeFixture {
             return;
         }
         self.retired = true;
-        if let Some(exit) = joined.actor.value.as_mut() {
-            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(exit) = joined.actor.value.as_mut()
+            && let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 exit.service.release_native_panes_for_retirement();
-            })) {
-                joined.extra.push((Stage::Actor, Failure::Panic(payload)));
-                joined
-                    .cleanup
-                    .push("manager handle release panicked".into());
-            }
+            }))
+        {
+            joined.extra.push((Stage::Actor, Failure::Panic(payload)));
+            joined
+                .cleanup
+                .push("manager handle release panicked".into());
         }
         self.owner().seal();
         if tokio::time::Instant::now() < self.deadline {

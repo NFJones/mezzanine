@@ -153,16 +153,6 @@ fn write_spoof_fixture(root: &Path) -> (PathBuf, PathBuf) {
     (script, root.join("foreground-fixture.log"))
 }
 
-/// Builds a unique scratch directory for one adversarial fixture run.
-fn fixture_root(label: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!(
-        "mez-certification-spoof-{}-{label}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    root
-}
-
 /// Returns the current fixture log contents, or an empty string before it exists.
 fn fixture_log(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
@@ -232,25 +222,6 @@ async fn run_fixture_supervisor(
         },
     )
     .await
-}
-
-/// Preserves legacy closure interpretation only for unaffected fixture owners.
-/// The failure-safe FCC owner below consumes run_fixture_supervisor directly.
-async fn spawn_pane_supervisor(
-    handle: crate::host::async_runtime::AsyncRuntimeSessionHandle,
-    done: StdArc<AtomicBool>,
-) {
-    let result = run_fixture_supervisor(handle, done).await;
-    if let Err(error) = result {
-        assert!(
-            matches!(
-                error.message(),
-                "async runtime session actor is closed"
-                    | "async runtime session actor reply was dropped"
-            ),
-            "pane supervisor failed before actor shutdown: {error}"
-        );
-    }
 }
 
 /// Returns the first available shell executable from one candidate list.

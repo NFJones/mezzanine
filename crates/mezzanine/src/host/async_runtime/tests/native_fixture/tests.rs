@@ -270,8 +270,9 @@ fn unresolved_custody_shape_never_invokes_late_destructor() {
         }
     }
     let drops = Rc::new(Cell::new(0));
-    let custody = Some(ManuallyDrop::new(DropProbe(drops.clone())));
-    drop(custody);
+    {
+        let _custody = Some(ManuallyDrop::new(DropProbe(drops.clone())));
+    }
     assert_eq!(drops.get(), 0);
 }
 

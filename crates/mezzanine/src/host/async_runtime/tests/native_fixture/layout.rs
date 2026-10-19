@@ -32,20 +32,20 @@ fn fixture_join_size<F>(
     size_of::<F>()
 }
 
-/// Infers a capture future layout for a named ready-result type, without making
-/// that result/future/value or calling capture. This names a monomorphization,
-/// not the runtime layout of every possible generic stage future.
-fn capture_ready_size<T, F>(
-    _: fn(
-        std::future::Ready<Result<T, MezError>>,
-        Stage,
-        Rc<RefCell<Option<StageResult<T>>>>,
-        Rc<RefCell<Vec<Stage>>>,
-        Arc<tokio::sync::Notify>,
-        Arc<AtomicBool>,
-        Completion,
-    ) -> F,
-) -> usize {
+/// Names capture's argument/return signature without constructing its values.
+type CaptureFunction<T, F> = fn(
+    std::future::Ready<Result<T, MezError>>,
+    Stage,
+    Rc<RefCell<Option<StageResult<T>>>>,
+    Rc<RefCell<Vec<Stage>>>,
+    Arc<tokio::sync::Notify>,
+    Arc<AtomicBool>,
+    Completion,
+) -> F;
+
+/// Infers a capture future layout for a named ready-result type without calling
+/// capture. This is one monomorphization, not all concrete client/worker futures.
+fn capture_ready_size<T, F>(_: CaptureFunction<T, F>) -> usize {
     size_of::<F>()
 }
 
