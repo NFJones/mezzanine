@@ -212,7 +212,7 @@ where
 async fn run_fixture_supervisor(
     handle: crate::host::async_runtime::AsyncRuntimeSessionHandle,
     done: StdArc<AtomicBool>,
-) -> Result<crate::host::async_runtime::AsyncPaneProcessSupervisorServiceReport> {
+) -> Result<crate::host::async_runtime::pane_io::AsyncPaneProcessSupervisorServiceReport> {
     run_async_pane_process_supervisor_service(
         handle,
         AsyncPaneProcessSupervisorServiceConfig {
