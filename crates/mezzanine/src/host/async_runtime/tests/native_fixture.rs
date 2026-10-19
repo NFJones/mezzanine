@@ -137,6 +137,50 @@ pub(super) struct FixtureFailure {
     pub(super) root: PathBuf,
 }
 
+impl FixtureFailure {
+    /// Projects only owned stage/kind/count evidence for a thread-boundary
+    /// diagnostic. Arbitrary error/panic text, cleanup bodies and storage paths
+    /// remain in the original report, never reflected here. The entry cap bounds
+    /// output without discarding any primary or secondary owned evidence.
+    pub(super) fn safe_summary(&self) -> String {
+        use std::fmt::Write;
+
+        let mut summary = format!(
+            "fixture-report failure_count={} cleanup_count={} pending={} stages=[",
+            self.failures.len(),
+            self.cleanup.len(),
+            self.pending
+        );
+        for (index, (stage, failure)) in self.failures.iter().take(8).enumerate() {
+            if index != 0 {
+                summary.push(',');
+            }
+            let _ = write!(summary, "{stage:?}:");
+            match failure {
+                Failure::Error(error) => {
+                    let _ = write!(
+                        summary,
+                        "error(kind={:?},io={:?},backend={})",
+                        error.kind(),
+                        error.io_kind(),
+                        error.is_pane_backend_failure()
+                    );
+                }
+                Failure::Panic(_) => summary.push_str("panic"),
+                Failure::UnexpectedCompletion => summary.push_str("unexpected-completion"),
+                Failure::Deadline => summary.push_str("deadline"),
+                Failure::Cancelled => summary.push_str("cancelled"),
+            }
+        }
+        let _ = write!(
+            summary,
+            "] omitted={}",
+            self.failures.len().saturating_sub(8)
+        );
+        summary
+    }
+}
+
 impl<C, W> Joined<C, W> {
     /// Transfers original successful outputs only after the caller retired the
     /// fixture. Failure keeps every original panic payload in one owned report.
