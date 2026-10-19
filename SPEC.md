@@ -2332,6 +2332,20 @@ generation's native wait and completion callback/entry publication, independentl
 of evictable history. Missing entries, closed completion publishers and zero
 child counts alone MUST NOT prove healthy completion. Callback or publication
 failure MUST NOT publish a healthy exact completion receipt.
+Real-shell async test fixtures MUST install preserving native custody before
+startup, including post-spawn hook and actor-construction failures. Their original
+client, supervisor and actor outcomes MUST remain individually owned across
+early errors, panics and timeout; one failure-triggered close MUST keep polling
+the original siblings needed to service it. Cancellation is not an affirmative
+join or native wait receipt. Final fixture assertions MUST follow the bounded
+cleanup decision under the original pre-spawn deadline, without synchronous
+fallback waits or a newly minted cleanup/retry budget. Unknown native custody
+and generated diagnostic storage MUST be preserved, not abandoned to late
+destructor effects. Per-child generated HOME/ZDOTDIR and inert startup files MAY
+prevent first-use shell menus without suppressing normal startup or reading user
+profiles. Compound fixture failures MUST retain arbitrary primary panic payloads
+and secondary errors; the ordinary panic hook may already have run and need not
+render arbitrary compound payload fields.
 In-flight completion publication MUST remain in the host shutdown barrier;
 cleanup failure MUST latch before the matching entry can disappear, including
 when no receipt receiver exists and terminal history is disabled.

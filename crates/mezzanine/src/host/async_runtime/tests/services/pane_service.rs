@@ -1,5 +1,6 @@
 //! Async-runtime tests owned by pane service behavior.
 
+use super::super::native_fixture::{CloseGate, NativeFixture};
 use super::super::*;
 
 /// Verifies that the combined pane process service defers large input
@@ -2307,20 +2308,20 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
             .as_nanos()
     ));
     let _ = std::fs::remove_file(&sentinel);
+    let mut fixture = NativeFixture::new("unmanaged-zsh", Duration::from_secs(30));
     let mut service = test_service_with_shell(zsh);
     service.disable_legacy_managed_startup_for_tests();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    let started = service.start_initial_pane_process(None).unwrap();
-    let native = service.native_pane_retirement_owner();
+    let (started, handle, actor) = match fixture.build(service) {
+        Ok(started) => started,
+        Err(failure) => fixture.fail_setup(failure).await,
+    };
+    let native = fixture.owner().clone();
     let original_root = mez_mux::process::process_parent_identity_for_pid(started.primary_pid);
     let original_pid =
         rustix::process::Pid::from_raw(i32::try_from(started.primary_pid).unwrap()).unwrap();
-
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
-        .build()
-        .unwrap();
     let pane_worker_handle = handle.clone();
     let client_handle = handle.clone();
     let pane_worker_done = StdArc::new(AtomicBool::new(false));
@@ -2334,6 +2335,9 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
     let client_native = native.clone();
     let (worker_finished, worker_completion) = tokio::sync::oneshot::channel();
     let client_sentinel = sentinel.clone();
+    let fixture_stop = pane_worker_done.clone();
+    let close_gate = CloseGate::default();
+    let client_close = close_gate.clone();
     let pane_worker = async move {
         let result = run_async_pane_process_supervisor_service(
             pane_worker_handle.clone(),
@@ -2369,7 +2373,12 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
         );
         // Deliver the actual outcome before assertions can panic. Normal
         // fixture teardown no longer permits even bare actor-closure errors.
+        let stage_result = result
+            .as_ref()
+            .map(|_| ())
+            .map_err(|error| MezError::new(error.kind(), error.message().to_owned()));
         let _ = worker_finished.send((result, diagnostics));
+        stage_result
     };
 
     let client = async move {
@@ -2499,9 +2508,9 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
             actor_before_close.is_ok()
         );
         client_phase.store(3, Ordering::SeqCst);
-        let actor_close = client_handle.shutdown().await;
+        let actor_close = client_close.close(&client_handle).await;
         client_phase.store(4, Ordering::SeqCst);
-        (
+        Ok((
             before_stop,
             stop_admission,
             settled,
@@ -2510,54 +2519,35 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
             original_absent,
             original_birth_observed,
             actor_close,
-        )
+        ))
     };
 
-    let joined = tokio::time::timeout(Duration::from_secs(30), async {
-        tokio::join!(client, pane_worker, actor.run())
-    })
-    .await;
-    let (observed, mut actor_exit) = match joined {
-        Ok((observed, (), actor_exit)) => (observed, actor_exit),
-        Err(error) => {
-            let actor_close = handle.shutdown().await;
-            native.seal();
-            let cleanup = crate::host::async_runtime::drain_native_pane_retirement(
-                &native,
-                tokio::time::Instant::now()
-                    + crate::host::async_runtime::NATIVE_PANE_RETIREMENT_TIMEOUT,
-            )
-            .await;
-            panic!(
-                "unmanaged primary Zsh original30s fixture deadline: {error}; phase={} ingress_closed={} native_outstanding={} returned={} failed={} actor_close_ok={} fallback_cleanup_ok={}",
-                phase.load(Ordering::SeqCst),
-                handle.sender.closed.load(Ordering::Acquire),
-                native.outstanding(),
-                native.returned_count(),
-                native.has_cleanup_failure(),
-                actor_close.is_ok(),
-                cleanup.is_ok()
-            );
-        }
-    };
+    let mut joined = fixture
+        .join(
+            client,
+            pane_worker,
+            actor,
+            &handle,
+            fixture_stop,
+            close_gate,
+        )
+        .await;
     let sentinel_present = sentinel.is_file();
-    let final_transactions_empty = actor_exit
-        .service
-        .running_shell_transactions_for_tests()
-        .is_empty();
-    let final_authority_invalidated = !actor_exit
-        .service
-        .pane_environment_authority_is_certified_for_tests("%1");
-    // Fallback cleanup is always attempted before new teardown assertions, but
-    // its later success can never replace the captured worker/native verdicts.
-    let manager_cleanup = actor_exit.service.terminate_all_pane_processes();
-    actor_exit.service.release_native_panes_for_retirement();
-    native.seal();
-    let native_cleanup = crate::host::async_runtime::drain_native_pane_retirement(
-        &native,
-        tokio::time::Instant::now() + crate::host::async_runtime::NATIVE_PANE_RETIREMENT_TIMEOUT,
-    )
-    .await;
+    let final_transactions_empty = joined.actor.value.as_ref().is_some_and(|exit| {
+        exit.service
+            .running_shell_transactions_for_tests()
+            .is_empty()
+    });
+    let final_authority_invalidated = joined.actor.value.as_ref().is_some_and(|exit| {
+        !exit
+            .service
+            .pane_environment_authority_is_certified_for_tests("%1")
+    });
+    // Retirement cannot replace any captured pre-fallback acceptance receipt.
+    fixture.retire(&mut joined).await;
+    let (observed, (), _actor_exit) = joined
+        .finish(&fixture)
+        .unwrap_or_else(|failure| std::panic::resume_unwind(failure));
     if sentinel_present {
         std::fs::remove_file(sentinel).unwrap();
     }
@@ -2611,7 +2601,5 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
         final_authority_invalidated,
         "hiding agent mode must invalidate the exited child environment authority"
     );
-    manager_cleanup.unwrap();
-    native_cleanup.unwrap();
     assert_eq!(native.outstanding(), 0);
 }

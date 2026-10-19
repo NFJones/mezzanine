@@ -34,6 +34,7 @@
 //! published for either. Both regressions also require the settlement to leave no
 //! pending bootstrap and to publish no shell, environment, or path authority.
 
+use super::super::native_fixture::{CloseGate, NativeFixture};
 use super::super::*;
 
 /// Certification material the adversarial fixture is allowed to replay.
@@ -391,21 +392,25 @@ async fn run_foreground_spoof_case(
     mode: SpoofMode,
     label: &str,
 ) -> SpoofCaseOutcome {
-    let root = fixture_root(label);
+    let mut fixture = NativeFixture::new(label, Duration::from_secs(90));
+    let root = fixture.root().to_path_buf();
     let (script, log) = write_spoof_fixture(&root);
     let mut service = test_service_with_shell(shell);
     service.disable_legacy_managed_startup_for_tests();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    service.start_initial_pane_process(None).unwrap();
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
-        .build()
-        .unwrap();
+    let (_started, handle, actor) = match fixture.build(service) {
+        Ok(started) => started,
+        Err(failure) => fixture.fail_setup(failure).await,
+    };
     let worker_handle = handle.clone();
     let client_handle = handle.clone();
     let worker_done = StdArc::new(AtomicBool::new(false));
     let worker = spawn_pane_supervisor(worker_handle, StdArc::clone(&worker_done));
+    let fixture_stop = worker_done.clone();
+    let close_gate = CloseGate::default();
+    let client_close = close_gate.clone();
 
     let client = async move {
         wait_for_snapshot(&client_handle, "%1", Duration::from_secs(20), |snapshot| {
@@ -557,24 +562,29 @@ async fn run_foreground_spoof_case(
             refusal.map(SpoofRefusal::as_str).unwrap_or("none")
         );
         worker_done.store(true, Ordering::SeqCst);
-        let _ = client_handle.shutdown().await.unwrap();
-        (
+        let _ = client_close.close(&client_handle).await.unwrap();
+        Ok((
             snapshot,
             log_text,
             refusal,
             fixture_process_group,
             observations,
-        )
+        ))
     };
 
-    let ((snapshot, log_text, refusal, fixture_process_group, observations), (), mut actor_exit) =
-        tokio::time::timeout(Duration::from_secs(90), async {
-            tokio::join!(client, worker, actor.run())
-        })
-        .await
-        .expect("adversarial certification scenario should not hang");
+    let worker = async {
+        worker.await;
+        Ok(())
+    };
+    let mut joined = fixture
+        .join(client, worker, actor, &handle, fixture_stop, close_gate)
+        .await;
+    fixture.retire(&mut joined).await;
+    let ((snapshot, log_text, refusal, fixture_process_group, observations), (), actor_exit) =
+        joined
+            .finish(&fixture)
+            .unwrap_or_else(|failure| std::panic::resume_unwind(failure));
     let interrupted = log_text.contains("SIGNAL_INT");
-    actor_exit.service.terminate_all_pane_processes().unwrap();
     SpoofCaseOutcome {
         snapshot,
         service: actor_exit.service,
