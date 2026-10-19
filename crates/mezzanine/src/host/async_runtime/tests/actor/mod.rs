@@ -4,6 +4,7 @@ mod agent_provider;
 mod clients;
 mod events;
 mod lifecycle;
+mod objective_mirror;
 mod panes;
 mod persistence;
 mod provider_dispatch;
