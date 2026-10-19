@@ -508,6 +508,10 @@ impl IsolatedTitleService {
         if !service.tracked_runtime_pane_process_ids().is_empty() {
             errors.push("isolated title shell remains manager-tracked".to_string());
         }
+        // Selector snapshots retain a cloned store and even catalog reads can
+        // create lock files. Join that independently owned pool before removing
+        // the root; dropping the service or pane manager is not its barrier.
+        service.clear_agent_prompt_inputs();
         // The shell never accesses the transcript store. Retire it first so
         // even a stalled optional filesystem operation cannot bypass native reap.
         service.flush_objective_mirrors_for_tests();
