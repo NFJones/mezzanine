@@ -1,4 +1,10 @@
 //! Runtime tests for generated session-title scheduling and settlement.
+//!
+//! Objective-mirror qualification uses an owned launch environment and a
+//! manager-bound teardown guard. These fixtures retain ordinary interactive
+//! shell RC loading without exposing the user's HOME, XDG roots, or startup
+//! environment; their directories outlive both optional mirror I/O and the
+//! exact shell process owned by the runtime manager.
 
 use super::*;
 use crate::runtime::{
@@ -453,6 +459,157 @@ fn title_ready_service(
     (service, transcript_store, primary, conversation_id)
 }
 
+/// Owns the direct title fixture until its exact manager-owned shell is reaped.
+///
+/// No actor, native worker, provider, or process handoff runs in these fixtures.
+/// Cleanup failure preserves the owned directory rather than erasing evidence
+/// or treating manager removal alone as proof of process settlement.
+struct IsolatedTitleService {
+    service: Option<RuntimeSessionService>,
+    root: std::path::PathBuf,
+    primary_pid: Option<u32>,
+}
+
+impl std::ops::Deref for IsolatedTitleService {
+    type Target = RuntimeSessionService;
+
+    /// Borrows the fixture service while this guard still owns its lifecycle.
+    fn deref(&self) -> &Self::Target {
+        self.service.as_ref().unwrap()
+    }
+}
+
+impl std::ops::DerefMut for IsolatedTitleService {
+    /// Mutably borrows the fixture service without transferring process custody.
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.service.as_mut().unwrap()
+    }
+}
+
+impl IsolatedTitleService {
+    /// Drains optional I/O, reaps the exact root, then deletes only this fixture.
+    /// Any failed custody or retirement check leaves the directory in place.
+    fn cleanup(&mut self) -> std::result::Result<(), String> {
+        let service = self.service.as_mut().unwrap();
+        service.flush_objective_mirrors_for_tests();
+        let exited = service
+            .terminate_all_pane_processes()
+            .map_err(|error| format!("isolated title shell cleanup failed: {error}"))?;
+        if let Some(pid) = self.primary_pid
+            && (exited.len() != 1 || exited[0].pane_id != "%1" || exited[0].primary_pid != pid)
+        {
+            return Err("isolated title shell lost exact manager custody".to_string());
+        }
+        if !service.tracked_runtime_pane_process_ids().is_empty() {
+            return Err("isolated title shell remains manager-tracked".to_string());
+        }
+        drop(self.service.take());
+        fs::remove_dir_all(&self.root)
+            .map_err(|error| format!("isolated title fixture removal failed: {error}"))
+    }
+}
+
+impl Drop for IsolatedTitleService {
+    /// Performs the same exact cleanup on success and assertion unwinding.
+    /// Avoids a second panic if the original assertion already failed.
+    fn drop(&mut self) {
+        if let Err(error) = self.cleanup() {
+            if std::thread::panicking() {
+                eprintln!("{error}; isolated fixture preserved");
+            } else {
+                panic!("{error}; isolated fixture preserved");
+            }
+        }
+    }
+}
+
+/// Builds one isolated title fixture using ordinary interactive `/bin/sh` RCs.
+///
+/// The existing launch-context API clears the child environment, not the test
+/// process environment. HOME, every XDG root, ENV, cwd, auth and transcript data
+/// are fixture-owned. A normal ENV startup file records the child's HOME/XDG
+/// values, proving that RC loading was retained rather than disabled. The guard
+/// is installed before spawn so failed startup assertions still reap the root.
+fn isolated_title_ready_service(
+    name: &str,
+) -> (IsolatedTitleService, AgentTranscriptStore, ClientId, String) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = temp_root(name);
+    fs::create_dir_all(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let home = root.join("home");
+    fs::create_dir(&home).unwrap();
+    let mut environment = vec![
+        ("HOME".to_string(), home.to_str().unwrap().to_string()),
+        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+        ("SHELL".to_string(), "/bin/sh".to_string()),
+    ];
+    for key in [
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_STATE_HOME",
+        "XDG_RUNTIME_DIR",
+    ] {
+        let directory = root.join(key);
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        environment.push((key.to_string(), directory.to_str().unwrap().to_string()));
+    }
+    let rc = home.join(".shrc");
+    fs::write(
+        &rc,
+        "printf '%s\\n%s\\n' \"$HOME\" \"$XDG_CONFIG_HOME\" > \"$HOME/rc-loaded\"\n",
+    )
+    .unwrap();
+    environment.push(("ENV".to_string(), rc.to_str().unwrap().to_string()));
+    let service = RuntimeServiceFixture::new()
+        .control_socket(root.join("control.sock"))
+        .build();
+    let mut service = IsolatedTitleService {
+        service: Some(service),
+        root: root.clone(),
+        primary_pid: None,
+    };
+    let transcript = AgentTranscriptStore::new(root.join("transcripts"));
+    service.set_agent_transcript_store(transcript.clone());
+    service.set_auth_store(AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&root.join("auth")),
+    ));
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 10)
+        .unwrap();
+    let started = service
+        .start_initial_pane_process_with_launch_context(None, Some(&home), Some(&environment))
+        .unwrap();
+    service.primary_pid = Some(started.primary_pid);
+    let expected = format!(
+        "{}\n{}\n",
+        home.display(),
+        root.join("XDG_CONFIG_HOME").display()
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while fs::read_to_string(home.join("rc-loaded")).ok().as_deref() != Some(expected.as_str()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "owned shell RC was not loaded"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    (service, transcript, primary, conversation)
+}
+
 /// Appends one numbered user prompt so the bounded summary tracks it.
 ///
 /// The summary sidecar keeps the first user prompt and the most recent one, which
@@ -553,7 +710,7 @@ fn runtime_conversation_start_queues_exactly_one_title_task() {
 #[test]
 fn runtime_generated_title_settlement_writes_the_row_title() {
     let (mut service, transcript_store, primary, conversation_id) =
-        title_ready_service("runtime-title-settlement");
+        isolated_title_ready_service("runtime-title-settlement");
     service
         .execute_agent_shell_command(&primary, "inspect the backlog")
         .unwrap();
@@ -646,7 +803,7 @@ fn runtime_generated_title_settlement_writes_the_row_title() {
 #[test]
 fn runtime_generated_title_failure_degrades_with_a_bounded_reason() {
     let (mut service, transcript_store, primary, conversation_id) =
-        title_ready_service("runtime-title-degrade");
+        isolated_title_ready_service("runtime-title-degrade");
     service
         .execute_agent_shell_command(&primary, "inspect the backlog")
         .unwrap();
@@ -890,7 +1047,7 @@ fn runtime_session_close_cancels_title_tasks() {
 #[test]
 fn runtime_settled_conversation_reads_no_title_index_per_turn() {
     let (mut service, transcript_store, primary, conversation_id) =
-        title_ready_service("runtime-title-zero-reads");
+        isolated_title_ready_service("runtime-title-zero-reads");
     service
         .execute_agent_shell_command(&primary, "inspect the backlog")
         .unwrap();
