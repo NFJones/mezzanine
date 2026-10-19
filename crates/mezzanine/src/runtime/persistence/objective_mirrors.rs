@@ -536,6 +536,86 @@ mod tests {
         (AgentTranscriptStore::new(root.clone()), root)
     }
 
+    /// Pending, claimed and completed-but-uncollected jobs must not restore a
+    /// deleted objective or report it confirmed. Exercise active, archived and
+    /// retention deletion with both absent and populated indices; a clone owns
+    /// deletion so registration sharing is part of the oracle. A genuinely new
+    /// post-delete publication may reuse the CID without reviving old work.
+    #[test]
+    fn objective_mirror_deletion_fences_pending_claimed_and_completed_work() {
+        use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+
+        for lifecycle in ["active", "archived", "retention"] {
+            for phase in ["pending", "claimed", "completed"] {
+                for populated in [false, true] {
+                    let (mut store, root) = store();
+                    store
+                        .set_saved_session_retention_policy(
+                            crate::storage::transcript::SavedSessionRetentionPolicy {
+                                max_active_sessions: 1,
+                                retention_days: 1,
+                            },
+                        )
+                        .unwrap();
+                    store
+                        .append(&TranscriptEntry {
+                            conversation_id: "deleted".into(),
+                            sequence: 1,
+                            created_at_unix_seconds: 1,
+                            role: TranscriptRole::User,
+                            turn_id: "fixture-turn".into(),
+                            agent_id: "agent-%1".into(),
+                            pane_id: "%1".into(),
+                            content: "fixture prompt".into(),
+                        })
+                        .unwrap();
+                    if lifecycle == "archived" {
+                        store.archive_session("deleted", 2).unwrap();
+                    }
+                    if populated {
+                        store.mirror_session_objective("deleted", "seed", 2).unwrap();
+                    }
+                    let mut queue = ObjectiveMirrorQueue::default();
+                    assert!(queue.publish(store.clone(), "deleted", Some("retained secret")));
+                    let claimed = match phase {
+                        "pending" => None,
+                        "completed" => {
+                            queue.claim().unwrap().execute();
+                            None
+                        }
+                        _ => queue.claim(),
+                    };
+                    let deleting = store.clone();
+                    match lifecycle {
+                        "archived" => assert!(deleting.delete_archived_session("deleted").unwrap()),
+                        "retention" => {
+                            let report = deleting
+                                .enforce_saved_session_retention(200_000, &Default::default())
+                                .unwrap();
+                            assert_eq!(report.deleted_conversation_ids, ["deleted"]);
+                            assert!(report.failures.is_empty());
+                        }
+                        _ => assert!(deleting.delete("deleted").unwrap()),
+                    }
+                    if let Some(work) = claimed.or_else(|| queue.claim()) {
+                        work.execute();
+                    }
+                    assert!(queue.collect().is_none(), "deleted work must not refresh UI");
+                    assert!(queue.claim().is_none(), "deleted work must not retry");
+                    assert_eq!(queue.status.confirmed, 0);
+                    assert!(store.session_objective_mirror("deleted").unwrap().is_none());
+                    assert!(queue.publish(store.clone(), "deleted", Some("retained secret")));
+                    settle(&mut queue);
+                    assert_eq!(
+                        store.session_objective_mirror("deleted").unwrap().unwrap().objective,
+                        "retained secret"
+                    );
+                    std::fs::remove_dir_all(root).unwrap();
+                }
+            }
+        }
+    }
+
     /// Executes one exact claimed job and consumes its receipt explicitly.
     fn settle(queue: &mut ObjectiveMirrorQueue) {
         queue.claim().expect("eligible exact mirror job").execute();
