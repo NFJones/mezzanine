@@ -39,19 +39,36 @@ use std::sync::Arc;
 use super::super::native_fixture::{CloseGate, FixtureFailure, JoinControl, NativeFixture};
 use super::super::*;
 
-/// Static last-entered checkpoints for this case only. They locate the caller
+/// The two observed evidence-losing join boundaries, never caller-provided text.
+#[derive(Clone, Copy)]
+enum FixtureCase {
+    ReplayedForgery,
+    SpoofedForegroundAuthority,
+}
+
+impl FixtureCase {
+    /// Preserves the replay label and gives the sibling a distinct static label.
+    fn label(self) -> &'static str {
+        match self {
+            Self::ReplayedForgery => "replayed-forgery",
+            Self::SpoofedForegroundAuthority => "spoofed-foreground-authority",
+        }
+    }
+}
+
+/// Static last-entered checkpoints for these cases only. They locate the caller
 /// boundary, not native process fate or retirement authority. Typed fixture
 /// reports provide the more specific original-stage evidence when available.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
-enum ReplayCheckpoint {
+enum FixtureCheckpoint {
     RuntimeConstruction,
     Scenario,
     CallerAssertions,
     RuntimeDrop,
 }
 
-impl ReplayCheckpoint {
+impl FixtureCheckpoint {
     /// Decodes only source-owned labels, never arbitrary child-provided text.
     fn label(value: usize) -> &'static str {
         match value {
@@ -67,27 +84,35 @@ impl ReplayCheckpoint {
 /// Borrows the real panic without formatting arbitrary payloads or report Debug.
 /// A checkpoint is last-entered provenance only; it cannot establish cleanup,
 /// pre-spawn status, causation, or native settlement.
-fn replay_join_diagnostic(payload: &(dyn std::any::Any + Send), checkpoint: usize) -> String {
-    let provenance = ReplayCheckpoint::label(checkpoint);
+fn fixture_join_diagnostic(
+    payload: &(dyn std::any::Any + Send),
+    checkpoint: usize,
+    case: FixtureCase,
+) -> String {
+    let provenance = FixtureCheckpoint::label(checkpoint);
     let evidence = match payload.downcast_ref::<FixtureFailure>() {
         Some(report) => report.safe_summary(),
         None => "opaque-panic".to_string(),
     };
-    format!("replayed-forgery thread-unwind last-entered={provenance} {evidence}")
+    format!(
+        "{} thread-unwind last-entered={provenance} {evidence}",
+        case.label()
+    )
 }
 
-/// Replaces join().unwrap() only for the replay case: success is unchanged and
+/// Replaces join().unwrap() only for these two cases: success is unchanged and
 /// failure resumes the exact original allocation, including non-Clone primary
 /// and secondary payloads. A failed diagnostic write cannot replace that panic.
-fn finish_replay_thread<T>(
+fn finish_fixture_thread<T>(
     result: std::thread::Result<T>,
     checkpoint: usize,
+    case: FixtureCase,
     output: &mut impl std::io::Write,
 ) -> T {
     match result {
         Ok(value) => value,
         Err(payload) => {
-            let diagnostic = replay_join_diagnostic(payload.as_ref(), checkpoint);
+            let diagnostic = fixture_join_diagnostic(payload.as_ref(), checkpoint, case);
             let _ = writeln!(output, "{diagnostic}");
             std::panic::resume_unwind(payload)
         }
@@ -1050,31 +1075,46 @@ fn async_adversarial_foreground_fixture_owns_pty_and_intercepts_input() {
 /// any environment, path, or command authority.
 #[test]
 fn async_spoofed_foreground_program_cannot_publish_shell_authority() {
-    std::thread::Builder::new()
+    let checkpoint = Arc::new(std::sync::atomic::AtomicUsize::new(
+        FixtureCheckpoint::RuntimeConstruction as usize,
+    ));
+    let child_checkpoint = checkpoint.clone();
+    let thread = std::thread::Builder::new()
         .name("spoofed-foreground-authority".to_string())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap()
-                .block_on(async {
-                    let Some(bash) =
-                        available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
-                    else {
-                        eprintln!(
-                            "skipping adversarial Bash certification test because Bash is unavailable"
-                        );
-                        return;
-                    };
-                    let outcome = run_foreground_spoof_case(bash, SpoofMode::Spoof, "bash-authority")
-                        .await;
-                    assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
-                });
+                .unwrap();
+            runtime.block_on(async {
+                child_checkpoint.store(FixtureCheckpoint::Scenario as usize, Ordering::SeqCst);
+                let Some(bash) =
+                    available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
+                else {
+                    eprintln!(
+                        "skipping adversarial Bash certification test because Bash is unavailable"
+                    );
+                    return;
+                };
+                let outcome =
+                    run_foreground_spoof_case(bash, SpoofMode::Spoof, "bash-authority").await;
+                child_checkpoint.store(
+                    FixtureCheckpoint::CallerAssertions as usize,
+                    Ordering::SeqCst,
+                );
+                assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
+            });
+            child_checkpoint.store(FixtureCheckpoint::RuntimeDrop as usize, Ordering::SeqCst);
+            drop(runtime);
         })
-        .unwrap()
-        .join()
         .unwrap();
+    finish_fixture_thread(
+        thread.join(),
+        checkpoint.load(Ordering::SeqCst),
+        FixtureCase::SpoofedForegroundAuthority,
+        &mut std::io::stderr().lock(),
+    );
 }
 
 /// Verifies a foreground program that never answers certification keeps the
@@ -1266,7 +1306,7 @@ fn async_forged_identity_records_settle_without_abort() {
 #[test]
 fn async_replayed_forgery_settles_without_bootstrap_reentry() {
     let checkpoint = Arc::new(std::sync::atomic::AtomicUsize::new(
-        ReplayCheckpoint::RuntimeConstruction as usize,
+        FixtureCheckpoint::RuntimeConstruction as usize,
     ));
     let child_checkpoint = checkpoint.clone();
     let thread = std::thread::Builder::new()
@@ -1278,7 +1318,7 @@ fn async_replayed_forgery_settles_without_bootstrap_reentry() {
                 .build()
                 .unwrap();
             runtime.block_on(async {
-                child_checkpoint.store(ReplayCheckpoint::Scenario as usize, Ordering::SeqCst);
+                child_checkpoint.store(FixtureCheckpoint::Scenario as usize, Ordering::SeqCst);
                 let Some(bash) =
                     available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
                 else {
@@ -1294,7 +1334,7 @@ fn async_replayed_forgery_settles_without_bootstrap_reentry() {
                 )
                 .await;
                 child_checkpoint.store(
-                    ReplayCheckpoint::CallerAssertions as usize,
+                    FixtureCheckpoint::CallerAssertions as usize,
                     Ordering::SeqCst,
                 );
                 assert!(
@@ -1314,13 +1354,14 @@ fn async_replayed_forgery_settles_without_bootstrap_reentry() {
                 assert_no_spoofed_authority(&outcome, SpoofMode::ForgedIdentity);
                 assert_replay_settlement_is_terminal(&outcome);
             });
-            child_checkpoint.store(ReplayCheckpoint::RuntimeDrop as usize, Ordering::SeqCst);
+            child_checkpoint.store(FixtureCheckpoint::RuntimeDrop as usize, Ordering::SeqCst);
             drop(runtime);
         })
         .unwrap();
-    finish_replay_thread(
+    finish_fixture_thread(
         thread.join(),
         checkpoint.load(Ordering::SeqCst),
+        FixtureCase::ReplayedForgery,
         &mut std::io::stderr().lock(),
     );
 }
