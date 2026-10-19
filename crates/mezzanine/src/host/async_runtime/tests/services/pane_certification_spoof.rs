@@ -34,6 +34,8 @@
 //! published for either. Both regressions also require the settlement to leave no
 //! pending bootstrap and to publish no shell, environment, or path authority.
 
+use std::sync::Arc;
+
 use super::super::native_fixture::{CloseGate, FixtureFailure, JoinControl, NativeFixture};
 use super::super::*;
 
