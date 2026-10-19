@@ -9,5 +9,6 @@ mod persistence;
 mod provider_dispatch;
 mod provider_forks;
 mod provider_retries;
+mod receipt_admission;
 mod rendering;
 mod saved_fork;

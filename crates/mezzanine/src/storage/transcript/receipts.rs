@@ -3,12 +3,20 @@
 //! Receipts retain canonical encoded rows independently of the archive. All
 //! admission and retirement changes share the conversation's append lock; a
 //! receipt is acknowledged only after its file and parent directory are synced.
+//! Canonical filenames route scans to exact locked conversations before any
+//! file is opened; routing never substitutes for full content validation.
+//! Unknown names fail closed, while another conversation's recognized receipt
+//! is checked by its own owner or global recovery, not unrelated admission.
+//! Global recovery discovers identities, then re-enumerates under each exact
+//! lock so a receipt retired before ownership acquisition is benign. Its
+//! accumulated snapshot is preflighted in full before any archive is changed;
+//! new conversations discovered by a later scan remain for the next recovery.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use mez_agent::transcript::{TranscriptEntry, validate_conversation_id};
 use serde::{Deserialize, Serialize};
@@ -121,12 +129,43 @@ fn digest_rows(rows: &[String]) -> String {
         .collect()
 }
 
+/// Parses canonical filename routing identity without opening or trusting rows.
+/// Staging files are not accepted receipts; unknown names fail closed even in a
+/// scoped scan because they cannot safely be assigned to another lock owner.
+fn receipt_conversation_id(path: &Path) -> Result<Option<&str>> {
+    let invalid = || MezError::invalid_state("transcript receipt filename is invalid");
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(invalid)?;
+    let staging = name.ends_with(".json.tmp");
+    let name = if staging {
+        &name[..name.len() - 4]
+    } else {
+        name
+    };
+    let stem = name.strip_suffix(".json").ok_or_else(invalid)?;
+    let (prefix, generation) = stem.rsplit_once('-').ok_or_else(invalid)?;
+    let (conversation_id, sequence) = prefix.rsplit_once('-').ok_or_else(invalid)?;
+    validate_conversation_id(conversation_id)?;
+    for number in [sequence, generation] {
+        if number.len() != 20
+            || !number.bytes().all(|byte| byte.is_ascii_digit())
+            || number.parse::<u64>().ok().is_none_or(|value| value == 0)
+        {
+            return Err(invalid());
+        }
+    }
+    Ok((!staging).then_some(conversation_id))
+}
+
 impl AgentTranscriptStore {
     fn append_receipt_directory(&self) -> PathBuf {
         self.root.join(".append-receipts")
     }
 
-    fn read_append_receipts(&self) -> Result<Vec<(PathBuf, AppendReceipt, Vec<TranscriptEntry>)>> {
+    /// Enumerates paths only, without claiming any conversation's receipt content.
+    fn append_receipt_paths(&self) -> Result<Vec<PathBuf>> {
         let directory = self.append_receipt_directory();
         match fs::symlink_metadata(&directory) {
             Ok(metadata) if metadata.file_type().is_dir() => {}
@@ -144,10 +183,26 @@ impl AgentTranscriptStore {
         paths.sort();
         #[cfg(test)]
         self.wait_at_receipt_enumeration_barrier()?;
+        Ok(paths)
+    }
+
+    /// Reads only identities whose exact append locks the caller already owns.
+    /// Cooperative admission/settlement cannot remove a selected path while its
+    /// lock is held, so every selected stat/read error remains a hard failure.
+    fn read_locked_append_receipts(
+        &self,
+        conversation_ids: &[&str],
+    ) -> Result<Vec<(PathBuf, AppendReceipt, Vec<TranscriptEntry>)>> {
+        let paths = self.append_receipt_paths()?;
         paths
             .into_iter()
-            .filter(|path| !path.to_string_lossy().ends_with(".json.tmp"))
+            .filter_map(|path| match receipt_conversation_id(&path) {
+                Ok(Some(id)) if conversation_ids.contains(&id) => Some(Ok(path)),
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            })
             .map(|path| {
+                let path = path?;
                 if !fs::symlink_metadata(&path)?.file_type().is_file() {
                     return Err(MezError::invalid_state(
                         "transcript receipt is not a regular file",
@@ -172,6 +227,25 @@ impl AgentTranscriptStore {
                 Ok((path, receipt, entries))
             })
             .collect()
+    }
+
+    /// Captures a rolling recovery snapshot under each exact conversation lock.
+    /// Initial names provide lock routing only. Fresh enumeration after locking
+    /// omits benign prior retirement without ignoring errors on selected paths.
+    /// Locks are released here before recovery calls the locking append API.
+    fn read_append_receipts(&self) -> Result<Vec<(PathBuf, AppendReceipt, Vec<TranscriptEntry>)>> {
+        let mut conversation_ids = std::collections::BTreeSet::new();
+        for path in self.append_receipt_paths()? {
+            if let Some(id) = receipt_conversation_id(&path)? {
+                conversation_ids.insert(id.to_owned());
+            }
+        }
+        let mut receipts = Vec::new();
+        for id in conversation_ids {
+            let _lock = self.acquire_conversation_lock(&id)?;
+            receipts.extend(self.read_locked_append_receipts(&[&id])?);
+        }
+        Ok(receipts)
     }
 
     /// Gates one receipt scan on this handle or its clones, without global state.
@@ -213,7 +287,7 @@ impl AgentTranscriptStore {
     /// ownership. This is only an admission fence: the existing persistence
     /// owner must settle accepted rows, and no receipt is replayed or retired.
     pub(super) fn ensure_fork_receipts_settled(&self, source: &str, target: &str) -> Result<()> {
-        for (_, receipt, _) in self.read_append_receipts()? {
+        for (_, receipt, _) in self.read_locked_append_receipts(&[source, target])? {
             if receipt.conversation_id == source || receipt.conversation_id == target {
                 return Err(MezError::conflict(
                     "saved fork requires source and target append receipts to settle",
@@ -253,7 +327,7 @@ impl AgentTranscriptStore {
             Err(error) if error.kind() == MezErrorKind::NotFound => 0,
             Err(error) => return Err(error),
         };
-        let pending = self.read_append_receipts()?;
+        let pending = self.read_locked_append_receipts(&[&receipt.conversation_id])?;
         let mut next_sequence = committed_count
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("transcript receipt sequence overflow"))?;
