@@ -4864,6 +4864,16 @@ a stale close MUST NOT attribute errors, cancel work or retire a replacement.
 An operation error MUST remain primary on stale close. This retention identity
 is not live execution/context authority or permission for pane teardown, and
 pinning a group alone does not retain components already legitimately retired.
+Shared pane shutdown MUST capture its existing selected-pane groups before
+descendant cleanup and retain those exact observations through its complete
+synchronous return. This outer boundary MUST attribute errors without invoking
+additional cancellation or backing cleanup, and MUST NOT adopt later groups.
+Every original observation MUST close even after a mismatch or required failure.
+The original operation error remains aggregate primary; otherwise the first
+exact original required failure in capture order precedes a close mismatch.
+One group's derived primary MUST NOT become another group's operation error.
+This retention boundary does not change inner turn selection, scheduling or
+destructive cleanup authority, nor establish replacement-safe pane teardown.
 Only an exact armed negative own-loop restoration MAY preserve its frozen old
 running turn through the existing qualified restoration contract. It MUST keep
 the generic durable metadata-reset values, existing incoming/outgoing/native

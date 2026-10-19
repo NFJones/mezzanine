@@ -61,6 +61,11 @@ pub(in crate::runtime) struct CompletionScopeObservation {
     owner: Option<CompletionScopeOwner>,
 }
 
+/// Bounded original observations for one synchronous caller. This is retention
+/// and error attribution only, not authority for any caller's destructive work.
+#[must_use = "all original completion observations must be closed"]
+pub(in crate::runtime) struct CompletionScopeSet(Vec<CompletionScopeObservation>);
+
 /// Frozen group allocation and actual installed outer scope, not a new token.
 struct CompletionScopeOwner {
     identity: std::sync::Arc<()>,
@@ -229,6 +234,57 @@ impl CompletionGroup {
 }
 
 impl RuntimeSessionService {
+    /// Arms one inert failure after shutdown capture and before descendants.
+    /// The original typed error is consumed once; no production fault exists.
+    #[cfg(test)]
+    pub(in crate::runtime) fn fail_completion_shutdown_before_descendants_for_tests(
+        &mut self,
+        error: MezError,
+    ) {
+        self.agent.completion_settlements.shutdown_fault_for_tests = Some(error);
+    }
+
+    /// Takes the isolated shutdown cut so tests can prove it was consumed.
+    #[cfg(test)]
+    pub(in crate::runtime) fn take_completion_shutdown_fault_for_tests(
+        &mut self,
+    ) -> Option<MezError> {
+        self.agent
+            .completion_settlements
+            .shutdown_fault_for_tests
+            .take()
+    }
+
+    /// Combines only actually issued lexical observations for close-order tests.
+    /// No identity, claim, scope or cleanup authority is manufactured here.
+    #[cfg(test)]
+    pub(in crate::runtime) fn completion_scope_set_for_tests(
+        observations: Vec<CompletionScopeObservation>,
+    ) -> CompletionScopeSet {
+        CompletionScopeSet(observations)
+    }
+
+    /// Reads each bounded typed failure without changing group custody.
+    #[cfg(test)]
+    pub(in crate::runtime) fn completion_required_failures_for_tests(
+        &self,
+        turn_id: &str,
+    ) -> Vec<(&'static str, MezError)> {
+        self.agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .map_or_else(Vec::new, |group| {
+                group
+                    .primary_failure
+                    .iter()
+                    .map(Box::as_ref)
+                    .chain(group.secondary_failures.iter())
+                    .map(|failure| (failure.stage, (*failure.error).clone()))
+                    .collect()
+            })
+    }
+
     /// Observes actual retention for inert tests without issuing a frame,
     /// replacing a group, or manufacturing archive/dispatch evidence.
     #[cfg(test)]
@@ -1704,6 +1760,72 @@ impl RuntimeSessionService {
                 receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
             });
         self.agent.completion_settlements.groups.remove(turn_id);
+    }
+
+    /// Captures existing groups for the caller's selected panes in stable turn
+    /// order, before any fallible suffix. Newly admitted groups are not added.
+    /// This does not select turns for cancellation or validate live components.
+    pub(in crate::runtime) fn begin_completion_scopes_for_panes(
+        &mut self,
+        pane_ids: &BTreeSet<&str>,
+        scope: CompletionScope,
+    ) -> CompletionScopeSet {
+        let turn_ids = self
+            .agent
+            .completion_settlements
+            .groups
+            .iter()
+            .filter(|(_, group)| pane_ids.contains(group.turn.pane_id.as_str()))
+            .map(|(turn_id, _)| turn_id.clone())
+            .collect::<Vec<_>>();
+        CompletionScopeSet(
+            turn_ids
+                .into_iter()
+                .map(|turn_id| self.begin_completion_scope(&turn_id, scope))
+                .collect(),
+        )
+    }
+
+    /// Closes every original observation without destructive error cleanup.
+    /// Operation failure stays aggregate primary; otherwise exact required
+    /// failures outrank mismatches. Each group sees only the operation's error,
+    /// never another group's derived primary. No close short-circuits the rest.
+    pub(in crate::runtime) fn end_completion_scopes<T>(
+        &mut self,
+        observations: CompletionScopeSet,
+        stage: &'static str,
+        result: Result<T>,
+    ) -> Result<T> {
+        let operation_error = result.as_ref().err().cloned();
+        let mut required_failure = None;
+        let mut mismatch = None;
+        for observation in observations.0 {
+            if operation_error.is_none() && required_failure.is_none() {
+                required_failure = observation.owner.as_ref().and_then(|owner| {
+                    self.agent
+                        .completion_settlements
+                        .groups
+                        .get(&owner.turn.turn_id)
+                        .filter(|group| owner.matches(group))
+                        .and_then(|group| group.primary_failure.as_ref())
+                        .map(|failure| (*failure.error).clone())
+                });
+            }
+            let own_result = operation_error.clone().map_or(Ok(()), Err);
+            if let Err(error) = self.end_completion_scope(observation, stage, false, own_result)
+                && operation_error.is_none()
+                && mismatch.is_none()
+            {
+                mismatch = Some(error);
+            }
+        }
+        match result {
+            Err(error) => Err(error),
+            Ok(value) => match required_failure.or(mismatch) {
+                Some(error) => Err(error),
+                None => Ok(value),
+            },
+        }
     }
 
     /// Begins an outer retention boundary only after its caller validated the

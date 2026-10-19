@@ -141,6 +141,9 @@ pub(super) struct RuntimeCompletionSettlements {
     /// One isolated real-boundary fault; never a production admission input.
     #[cfg(test)]
     provider_handoff_fault_for_tests: Option<&'static str>,
+    /// Consumed after original shutdown observations, before descendant work.
+    #[cfg(test)]
+    shutdown_fault_for_tests: Option<MezError>,
 }
 
 impl fmt::Debug for RuntimeCompletionSettlements {

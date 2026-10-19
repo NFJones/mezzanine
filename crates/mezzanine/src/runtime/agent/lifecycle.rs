@@ -888,7 +888,28 @@ impl RuntimeSessionService {
         if pane_ids.is_empty() {
             return Ok(0);
         }
-        for pane_id in &pane_ids {
+        let observations =
+            self.begin_completion_scopes_for_panes(&pane_ids, CompletionScope::PaneRemoval);
+        let result = self
+            .fail_agent_turns_for_pane_shutdown_after_completion_capture(&pane_ids, reason, cause);
+        self.end_completion_scopes(observations, "pane_shutdown", result)
+    }
+
+    /// Runs the existing shutdown algorithm under an attribution-only pin.
+    /// Current turn selection, cancellation, notification and scheduling remain
+    /// authoritative here; the outer observations grant no mutation authority
+    /// and do not qualify replacement-safe teardown or retain retired backing.
+    fn fail_agent_turns_for_pane_shutdown_after_completion_capture(
+        &mut self,
+        pane_ids: &std::collections::BTreeSet<&str>,
+        reason: &str,
+        cause: PaneShutdownCause,
+    ) -> Result<usize> {
+        #[cfg(test)]
+        if let Some(error) = self.take_completion_shutdown_fault_for_tests() {
+            return Err(error);
+        }
+        for pane_id in pane_ids {
             if self.find_pane_descriptor(pane_id).is_none() {
                 self.retire_subagent_cleanup_pane_binding(pane_id);
             }
@@ -896,7 +917,7 @@ impl RuntimeSessionService {
             self.close_subagent_descendants_for_parent_agent(&parent_agent_id, reason)?;
         }
         if cause == PaneShutdownCause::Requested {
-            for pane_id in &pane_ids {
+            for pane_id in pane_ids {
                 self.mark_pane_closing(*pane_id);
             }
         }
@@ -956,7 +977,7 @@ impl RuntimeSessionService {
             )?;
             failed = failed.saturating_add(1);
         }
-        for pane_id in &pane_ids {
+        for pane_id in pane_ids {
             self.mark_pane_closing(*pane_id);
         }
         self.start_ready_agent_turns()?;
