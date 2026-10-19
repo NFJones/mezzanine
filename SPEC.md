@@ -7734,6 +7734,10 @@ nonblocking work and finite output limits under the original absolute deadline,
 including partial setup and unwinding; cleanup MUST NOT restart that deadline or
 join an unbounded reader. Deadline-expired unreaped roots and secondary cleanup
 failures MUST be reported as incomplete cleanup, not successful acceptance.
+Explicit retirement MUST incorporate secondary errors before returning a result;
+destruction MUST NOT perform external diagnostic I/O or acquire a reporting lock.
+During unwinding the primary panic remains visible, but secondary errors kept
+only in the destroyed owner's memory have no guaranteed reporting channel.
 This cooperative test-helper bound does not promise to interrupt a stalled
 synchronous spawn or kernel syscall, nor qualify native macOS behavior.
 Probe failures MUST retain a

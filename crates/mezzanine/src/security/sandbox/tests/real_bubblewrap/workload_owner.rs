@@ -10,8 +10,12 @@
 //! This is a test helper, not a production sandbox/process API. Synchronous
 //! spawn/syscalls cannot be bounded against arbitrary kernel stalls. At deadline
 //! cleanup is best effort: a still-unreaped root is explicitly an error, not a
-//! cleanup-success claim. Drop makes one final nonblocking reap attempt, reports
-//! residual failures, and never starts a background reaper or extends the budget.
+//! cleanup-success claim. Explicit retirement incorporates secondary errors in
+//! the returned result. Drop uses that same idempotent nonblocking retirement,
+//! never a sink/lock/logger, background reaper, or fresh budget. On panic, the
+//! original panic remains visible but secondary cleanup errors retained only in
+//! this owner's memory are lost when it is destroyed; no unwind reporting or
+//! complete reap is promised.
 
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
@@ -62,6 +66,7 @@ struct Owner<B: Workload> {
     deadline: Instant,
     authority: Authority,
     errors: Vec<String>,
+    retired: bool,
 }
 
 impl<B: Workload> Owner<B> {
@@ -72,6 +77,7 @@ impl<B: Workload> Owner<B> {
             deadline,
             authority: Authority::Armed,
             errors: Vec::new(),
+            retired: false,
         }
     }
 
@@ -179,12 +185,32 @@ impl<B: Workload> Owner<B> {
                 break;
             }
             let remaining = self.deadline.saturating_duration_since(self.backend.now());
-            self.backend.pause(TICK.min(remaining));
+            if !remaining.is_zero() {
+                self.backend.pause(TICK.min(remaining));
+            }
         }
         if status.is_none() && self.authority == Authority::Finalized {
             self.error(
                 "root still unreaped",
                 "nonblocking cleanup incomplete at deadline",
+            );
+        }
+        self.finish(status)
+    }
+
+    /// Retires before constructing a result, retaining secondary cleanup errors
+    /// and rejecting success at or beyond the original completion deadline.
+    fn finish(&mut self, status: Option<ExitStatus>) -> Result<ExitStatus, String> {
+        self.retire();
+        if self.backend.now() >= self.deadline
+            && !self
+                .errors
+                .iter()
+                .any(|error| error.starts_with("original deadline exhausted"))
+        {
+            self.error(
+                "original deadline exhausted",
+                "completion was not within budget",
             );
         }
         if self.errors.is_empty() {
@@ -193,23 +219,25 @@ impl<B: Workload> Owner<B> {
             Err(self.errors.join("; "))
         }
     }
+
+    /// Makes one final nonblocking reap attempt. No external diagnostic I/O is
+    /// possible here, and repeated retirement/Drop is inert even on failure.
+    fn retire(&mut self) {
+        if self.retired {
+            return;
+        }
+        self.retired = true;
+        self.finalize();
+        if self.authority == Authority::Finalized && self.reap().is_none() {
+            self.error("retirement", "root reap unconfirmed; no new cleanup budget");
+        }
+    }
 }
 
 impl<B: Workload> Drop for Owner<B> {
     /// Handles partial setup and unwinding without blocking or post-reap signals.
     fn drop(&mut self) {
-        self.finalize();
-        if self.authority == Authority::Finalized && self.reap().is_none() {
-            self.error("Drop", "root reap unconfirmed; no new cleanup budget");
-        }
-        if !self.errors.is_empty() {
-            // Unlike eprintln!, a broken diagnostic sink must not double-panic.
-            let _ = writeln!(
-                io::stderr().lock(),
-                "workload cleanup: {}",
-                self.errors.join("; ")
-            );
-        }
+        self.retire();
     }
 }
 

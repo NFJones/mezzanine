@@ -40,6 +40,10 @@ struct Fake {
     io_error: bool,
     io_panic: bool,
     reaped: bool,
+    setup_age: Duration,
+    observe_age: Duration,
+    pump_age: Duration,
+    reap_age: Duration,
 }
 
 impl Fake {
@@ -59,6 +63,10 @@ impl Fake {
             io_error: false,
             io_panic: false,
             reaped: false,
+            setup_age: Duration::ZERO,
+            observe_age: Duration::ZERO,
+            pump_age: Duration::ZERO,
+            reap_age: Duration::ZERO,
         }
     }
 
@@ -77,6 +85,7 @@ impl Fake {
 
 impl Workload for Fake {
     fn setup(&mut self) -> io::Result<()> {
+        self.now += self.setup_age;
         // Models taking stdout/stderr/stdin and setting each descriptor flag.
         for stage in 0..6 {
             self.record(Event::Acquired(stage));
@@ -99,6 +108,7 @@ impl Workload for Fake {
 
     fn exited(&mut self) -> io::Result<bool> {
         self.record(Event::Observe(BIRTH));
+        self.now += std::mem::take(&mut self.observe_age);
         match self.observe_error {
             Some(code) => Err(io::Error::from_raw_os_error(code)),
             None => Ok(self.exited),
@@ -127,6 +137,7 @@ impl Workload for Fake {
 
     fn reap(&mut self) -> io::Result<Option<ExitStatus>> {
         self.record(Event::Reap(BIRTH));
+        self.now += std::mem::take(&mut self.reap_age);
         if self.reap_error {
             return Err(io::Error::other("reap denied"));
         }
@@ -140,6 +151,7 @@ impl Workload for Fake {
 
     fn pump(&mut self) -> io::Result<bool> {
         self.record(Event::Pump);
+        self.now += self.pump_age;
         assert!(!self.io_panic, "injected I/O unwind");
         if self.io_error {
             Err(io::Error::other("capture failed"))
@@ -267,7 +279,7 @@ fn capture_and_secondary_signal_errors_are_not_hidden() {
 
 #[test]
 /// An unreapable root at deadline is an explicit error, not successful cleanup.
-/// Drop can try a nonblocking reap once more but cannot signal again or wait.
+/// Explicit retirement tries one last nonblocking reap; later Drop is inert.
 fn pending_reap_is_truthful_and_never_extends_budget() {
     let mut fake = Fake::new();
     fake.reap_pending = true;
@@ -446,4 +458,110 @@ fn staged_input_handles_short_writes_transients_and_wrapper_delay() {
     assert!(!input.write(&mut writer, now + PAYLOAD_DELAY).unwrap());
     assert!(input.write(&mut writer, now + PAYLOAD_DELAY).unwrap());
     assert_eq!(writer.bytes, b"wrapdata");
+}
+
+#[test]
+/// Setup, observation, and final I/O/reap may exhaust the budget inside one
+/// operation. At the exact boundary and beyond, neither acceptance nor a fresh
+/// pump/drain budget is allowed, even when status and all bytes are available.
+fn operation_aging_never_accepts_at_or_beyond_original_deadline() {
+    for age in [TICK * 10, TICK * 11] {
+        for operation in 0..4 {
+            let mut fake = Fake::new();
+            match operation {
+                0 => fake.setup_age = age,
+                1 => fake.observe_age = age,
+                2 => fake.pump_age = age,
+                _ => fake.reap_age = age,
+            }
+            let (mut owner, journal) = fake.owner();
+            let deadline = owner.deadline;
+            let error = owner.collect().unwrap_err();
+            assert!(error.contains("original deadline exhausted"), "{error}");
+            assert!(owner.backend.now >= deadline);
+            let events = journal.borrow();
+            assert!(
+                !events.iter().any(|event| matches!(event, Event::Pause(_))),
+                "fresh budget: {events:?}"
+            );
+            if operation < 2 {
+                assert!(
+                    !events.contains(&Event::Pump),
+                    "pump after exhausted setup/observation"
+                );
+            }
+            assert_order(&events);
+        }
+    }
+}
+
+#[test]
+/// Explicit retirement precedes result assembly, so even a secondary wait error
+/// first discovered during retirement forbids success and remains in the Err.
+/// Reports are owned strings only, with no external sink or reporting lock.
+fn retirement_errors_are_included_before_result_assembly() {
+    let mut fake = Fake::new();
+    fake.reap_error = true;
+    let (mut owner, journal) = fake.owner();
+    owner.finalize();
+    let error = owner.finish(Some(ExitStatus::from_raw(0))).unwrap_err();
+    assert!(error.contains("reap denied"), "{error}");
+    assert!(error.contains("reap unconfirmed"), "{error}");
+    let count = journal.borrow().len();
+    owner.retire();
+    owner.retire();
+    drop(owner);
+    assert_eq!(journal.borrow().len(), count);
+    assert_order(&journal.borrow());
+}
+
+#[test]
+/// Pending reap and failed waits remain idempotently retired. Drop cannot retry
+/// signals/waits, invoke a diagnostic sink, or allocate another cleanup budget.
+fn failed_retirement_and_drop_are_inert_after_explicit_retirement() {
+    for reap_error in [false, true] {
+        let mut fake = Fake::new();
+        fake.reap_pending = !reap_error;
+        fake.reap_error = reap_error;
+        let (mut owner, journal) = fake.owner();
+        owner.retire();
+        assert!(
+            owner
+                .errors
+                .iter()
+                .any(|error| error.contains("reap unconfirmed"))
+        );
+        let count = journal.borrow().len();
+        owner.retire();
+        owner.retire();
+        drop(owner);
+        assert_eq!(journal.borrow().len(), count);
+        assert_order(&journal.borrow());
+    }
+}
+
+#[test]
+/// An unwind keeps its original panic while failed cleanup stays in memory only.
+/// The fake journal observes bounded signal/reap retirement without a reporting
+/// callback, lock, stderr write, or secondary panic replacing the primary panic.
+fn unwind_preserves_primary_panic_without_external_diagnostics() {
+    let mut fake = Fake::new();
+    fake.signal_errors = true;
+    fake.reap_pending = true;
+    let (owner, journal) = fake.owner();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _owner = owner;
+        std::panic::panic_any("primary owner panic");
+    }));
+    let panic = result.unwrap_err();
+    assert_eq!(panic.downcast_ref::<&str>(), Some(&"primary owner panic"));
+    assert_order(&journal.borrow());
+    assert_eq!(
+        journal
+            .borrow()
+            .iter()
+            .filter(|event| matches!(event, Event::Reap(_)))
+            .count(),
+        1
+    );
 }
