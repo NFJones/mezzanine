@@ -651,3 +651,6 @@ impl Drop for NativeFixture {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod layout;
