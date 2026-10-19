@@ -93,7 +93,22 @@ async fn async_actor_receipt_retirement_does_not_stall_unrelated_persistence() {
         .await
         .unwrap()
         .unwrap();
+        let mut receipt_watcher = handle.side_effect_delivery_watcher();
         resume_tx.send(()).unwrap();
+
+        // Worker startup can retry failed service-owned admission. Prove the
+        // original admission created A's exact receipt before invoking any
+        // retry-capable worker, otherwise historical ENOENT could self-repair.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if store.pending_append_receipts().unwrap() == vec![vec![a.clone()]] {
+                    break;
+                }
+                receipt_watcher.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("original A receipt admission must succeed without recovery");
 
         let mut observed_a_before_sentinel = false;
         let report = tokio::time::timeout(
