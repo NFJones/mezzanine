@@ -492,6 +492,9 @@ impl IsolatedTitleService {
     fn cleanup(&mut self) -> std::result::Result<(), String> {
         let service = self.service.as_mut().unwrap();
         service.flush_objective_mirrors_for_tests();
+        if !service.objective_mirrors_are_idle_for_tests() {
+            return Err("isolated title mirror I/O did not become quiescent".to_string());
+        }
         let exited = service
             .terminate_all_pane_processes()
             .map_err(|error| format!("isolated title shell cleanup failed: {error}"))?;
