@@ -170,7 +170,7 @@ impl OutboundFrontendAdmission {
             };
             let body = serde_json::json!({"protocol":PROTOCOL,"handle":handle}).to_string();
             stream.send(ProtocolFrame::new(CONTENT_TYPE, body)).await?;
-            Ok(handle)
+            Ok::<_, MezError>(handle)
         })
         .await
         .map_err(|_| MezError::invalid_state("outbound frontend admission timed out"))??;
