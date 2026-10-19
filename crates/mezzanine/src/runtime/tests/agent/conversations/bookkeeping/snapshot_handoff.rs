@@ -1,7 +1,7 @@
 //! Exact candidate ownership witnesses, not archive or disk receipts.
 //!
 //! Most witness controls retain the existing stopped-turn fixture and terminate
-//! its owned child before their oracles. The three strong-claim/coherent-read
+//! its owned child before their oracles. The six strong-claim/coherent-read
 //! controls instead use an isolated ordinary producer with no native child.
 //! Neither fixture submits providers or repeats action/native execution.
 
@@ -539,7 +539,7 @@ fn runtime_completion_handoff_claim_keeps_frozen_read_after_frontier_advance() {
     assert_eq!(work.candidate.read, work.read);
     // Advance happened BEFORE claim: current accepted-row ownership is sampled
     // there, while immutable read metadata must still come from the old owner.
-    // An advance AFTER checked execution is the separate stale-reply control.
+    // Live metadata changes after execution are also independent of admission.
     let checked = work.execute();
     assert!(
         checked.is_ok(),
@@ -602,76 +602,82 @@ fn runtime_completion_handoff_claim_keeps_frozen_read_after_frontier_advance() {
     assert!(!path.try_exists().unwrap());
 }
 
-/// A worker reply checked against different read metadata cannot consume the
-/// original completion candidate. Retain it blocked for truthful supervision
-/// rather than admitting a checked append under an unrelated snapshot.
+/// Requires typed disk absence as well as path absence: canonical queue
+/// acceptance is not durability, and an unrelated read error is not absence.
+fn assert_native_free_transcript_absent(store: &AgentTranscriptStore, conversation: &str) {
+    assert_eq!(
+        store.inspect(conversation).unwrap_err().kind(),
+        crate::error::MezErrorKind::NotFound
+    );
+    assert!(
+        !store
+            .transcript_path(conversation)
+            .unwrap()
+            .try_exists()
+            .unwrap()
+    );
+}
+
+/// A real successful checked read cannot be transported under recaptured live
+/// metadata instead of its frozen owner. Change only the transport read after
+/// execution, retain blocked custody, and reject duplicate delivery without
+/// accepting any candidate suffix. No synthetic successful history is supplied.
 #[test]
 fn runtime_completion_handoff_rejects_changed_worker_read() {
-    let (mut service, candidate) = snapshot_candidate("completion-wrong-worker-read");
+    let root = NativeFreeBookkeepingRoot::new("completion-wrong-worker-read");
+    let (mut service, candidate) = native_free_frozen_candidate(&root);
+    let store = service.persistence.cloned_transcript_store().unwrap();
+    let conversation = candidate.turn.conversation_id.clone();
+    let path = store.transcript_path(&conversation).unwrap();
     service
         .persistence
         .retain_completion_bookkeeping_candidate(candidate.clone())
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .record_transcript_entries(&candidate.turn.pane_id, 1)
         .unwrap();
     let mut work = service.claim_bookkeeping_candidates().pop().unwrap();
-    work.read = service.capture_bookkeeping_transcript_read(
-        service.persistence.cloned_transcript_store().unwrap(),
-        &candidate.turn,
-    );
-    let error = service
-        .complete_bookkeeping_candidate(work, Ok((Vec::new(), 1)))
-        .unwrap_err();
-    assert!(error.message().contains("frozen candidate owner"));
-    assert!(
-        service
-            .persistence
-            .bookkeeping_pending(&candidate.turn.conversation_id)
-    );
-    assert!(service.claim_bookkeeping_candidates().is_empty());
-}
-
-/// Exact immutable dispatch identity does not certify that checked history is
-/// fresh at actor acceptance. An authentic result arriving after the original
-/// live frontier advanced must fail closed and retain its candidate, without
-/// painting an error into a potentially replaced pane.
-#[test]
-fn runtime_completion_handoff_rejects_authentic_reply_after_frontier_advance() {
-    let (mut service, candidate) = snapshot_candidate("completion-stale-reply");
-    service
-        .persistence
-        .retain_completion_bookkeeping_candidate(candidate.clone())
-        .unwrap();
-    let work = service.claim_bookkeeping_candidates().pop().unwrap();
     let checked = work.execute();
-    assert!(
-        checked.is_ok(),
-        "fixture must reach a successful checked read"
-    );
+    assert!(checked.is_ok(), "fixture must reach a real checked read");
     service
         .agent_shell_store_mut()
         .record_transcript_entries(&candidate.turn.pane_id, 1)
         .unwrap();
+    work.read = service.capture_bookkeeping_transcript_read(store.clone(), &candidate.turn);
+    assert_ne!(work.read, candidate.read);
+    assert_eq!(work.candidate.read, candidate.read);
     let error = service
-        .complete_bookkeeping_candidate(work, checked)
+        .complete_bookkeeping_candidate(work.clone(), checked)
         .unwrap_err();
-    assert!(error.message().contains("history changed"));
+    assert!(error.message().contains("frozen candidate owner"));
+    assert!(service.persistence.bookkeeping_pending(&conversation));
+    assert!(service.claim_bookkeeping_candidates().is_empty());
+    assert!(
+        !service
+            .complete_bookkeeping_candidate(
+                work,
+                Err(MezError::invalid_state("duplicate must not reenter")),
+            )
+            .unwrap()
+    );
     assert!(
         service
             .persistence
-            .bookkeeping_pending(&candidate.turn.conversation_id)
+            .pending_transcript_entries_at_path(&path, &conversation)
+            .unwrap()
+            .is_empty()
     );
-    assert!(service.claim_bookkeeping_candidates().is_empty());
+    assert_native_free_transcript_absent(&store, &conversation);
 }
 
-/// The immutable completion owner also retains the original compaction epoch.
-/// A successful archive read cannot authorize acceptance after compaction has
-/// changed that epoch, even if the transcript counter has not changed.
+/// A real original-path/CID queue acceptance after checked execution rotates
+/// admission identity. The old reply must block without discarding, servicing,
+/// or rolling back the exact newly accepted row. Neither that row nor the
+/// rejected candidate suffix is claimed durable by this native-free control.
 #[test]
-fn runtime_completion_handoff_rejects_authentic_reply_after_epoch_advance() {
-    let (mut service, candidate) = snapshot_candidate("completion-stale-epoch");
+fn runtime_completion_handoff_rejects_reply_after_original_row_admission() {
+    let root = NativeFreeBookkeepingRoot::new("completion-original-row-race");
+    let (mut service, candidate) = native_free_frozen_candidate(&root);
+    let store = service.persistence.cloned_transcript_store().unwrap();
+    let conversation = candidate.turn.conversation_id.clone();
+    let path = store.transcript_path(&conversation).unwrap();
     service
         .persistence
         .retain_completion_bookkeeping_candidate(candidate.clone())
@@ -682,17 +688,166 @@ fn runtime_completion_handoff_rejects_authentic_reply_after_epoch_advance() {
         checked.is_ok(),
         "fixture must reach a successful checked read"
     );
-    service.mark_agent_compacting_for_tests(&candidate.turn.pane_id, 1);
-    let error = service
-        .complete_bookkeeping_candidate(work, checked)
-        .unwrap_err();
-    assert!(error.message().contains("history changed"));
+    let (_, next) = checked.as_ref().unwrap();
+    let row = TranscriptEntry {
+        conversation_id: conversation.clone(),
+        sequence: *next,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: candidate.turn.turn_id.clone(),
+        agent_id: candidate.turn.agent_id.clone(),
+        pane_id: candidate.turn.pane_id.clone(),
+        content: "new original-path admission after checked read".to_string(),
+    };
     assert!(
         service
             .persistence
-            .bookkeeping_pending(&candidate.turn.conversation_id)
+            .queue_checked_completion_transcript(
+                crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
+                    path: path.clone(),
+                    store: store.clone(),
+                    entries: vec![row.clone()],
+                },
+            )
+            .unwrap()
     );
+    assert_eq!(
+        service
+            .persistence
+            .pending_transcript_entries_at_path(&path, &conversation)
+            .unwrap(),
+        vec![row.clone()]
+    );
+    let error = service
+        .complete_bookkeeping_candidate(work.clone(), checked)
+        .unwrap_err();
+    assert!(error.message().contains("history changed"));
+    assert!(service.persistence.bookkeeping_pending(&conversation));
     assert!(service.claim_bookkeeping_candidates().is_empty());
+    assert!(
+        !service
+            .complete_bookkeeping_candidate(
+                work,
+                Err(MezError::invalid_state("duplicate must not reenter")),
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .persistence
+            .pending_transcript_entries_at_path(&path, &conversation)
+            .unwrap(),
+        vec![row]
+    );
+    assert_native_free_transcript_absent(&store, &conversation);
+}
+
+/// Frozen archive admission is independent of live count and rendering epoch
+/// changes after checked execution. Each variant accepts exactly the original
+/// candidate rows and admitted prompt once, retires the candidate, and leaves
+/// changed live metadata untouched. The epoch setter is only a rendering probe,
+/// not production compaction, reset, or replacement permission. Acceptance here
+/// is queued canonical ownership only; no append worker or native child runs.
+#[test]
+fn runtime_completion_handoff_frozen_read_is_independent_of_live_metadata() {
+    for variant in ["count", "render_epoch"] {
+        let root = NativeFreeBookkeepingRoot::new(&format!("completion-live-{variant}"));
+        let (mut service, candidate) = native_free_frozen_candidate(&root);
+        let expected_prompt = admitted_fixture_prompt(&service, &candidate.turn.turn_id);
+        let store = service.persistence.cloned_transcript_store().unwrap();
+        let conversation = candidate.turn.conversation_id.clone();
+        let pane = &candidate.turn.pane_id;
+        let path = store.transcript_path(&conversation).unwrap();
+        let mut expected: Vec<_> = candidate
+            .directory
+            .iter()
+            .chain(candidate.entries.iter())
+            .cloned()
+            .collect();
+        for (index, row) in expected.iter_mut().enumerate() {
+            row.sequence = u64::try_from(index).unwrap().checked_add(1).unwrap();
+        }
+        service
+            .persistence
+            .retain_completion_bookkeeping_candidate(candidate.clone())
+            .unwrap();
+        let work = service.claim_bookkeeping_candidates().pop().unwrap();
+        let checked = work.execute();
+        assert!(checked.is_ok(), "variant={variant} must reach checked read");
+        let (history, next) = checked.as_ref().unwrap();
+        assert!(history.is_empty());
+        assert_eq!(*next, 1);
+        let count = service
+            .agent_shell_store()
+            .get(pane)
+            .unwrap()
+            .transcript_entries;
+        let epoch = service.agent_compaction_epoch(pane);
+        match variant {
+            "count" => {
+                service
+                    .agent_shell_store_mut()
+                    .record_transcript_entries(pane, 1)
+                    .unwrap();
+            }
+            "render_epoch" => service.mark_agent_compacting_for_tests(pane, 1),
+            _ => unreachable!(),
+        }
+        let changed_count = service
+            .agent_shell_store()
+            .get(pane)
+            .unwrap()
+            .transcript_entries;
+        let changed_epoch = service.agent_compaction_epoch(pane);
+        assert_eq!(changed_count, count + u64::from(variant == "count"));
+        assert_eq!(changed_epoch, epoch + u64::from(variant == "render_epoch"));
+        assert_eq!(work.read, candidate.read);
+        assert_eq!(work.candidate.read, candidate.read);
+        assert!(
+            service
+                .complete_bookkeeping_candidate(work.clone(), checked)
+                .unwrap()
+        );
+        assert!(
+            !service
+                .complete_bookkeeping_candidate(
+                    work,
+                    Err(MezError::invalid_state("duplicate must not reenter")),
+                )
+                .unwrap()
+        );
+        assert!(!service.persistence.bookkeeping_pending(&conversation));
+        assert!(service.claim_bookkeeping_candidates().is_empty());
+        let accepted = service
+            .persistence
+            .pending_transcript_entries_at_path(&path, &conversation)
+            .unwrap();
+        assert!(!accepted.is_empty());
+        assert_eq!(accepted, expected);
+        assert_eq!(
+            accepted
+                .iter()
+                .filter(|row| {
+                    row.role == TranscriptRole::System
+                        && mez_agent::TranscriptContextEvent::from_transcript_content(&row.content)
+                            .as_ref()
+                            == Some(&expected_prompt)
+                })
+                .count(),
+            1
+        );
+        assert!(accepted.iter().all(|row| row.validate().is_ok()));
+        assert_eq!(
+            service
+                .agent_shell_store()
+                .get(pane)
+                .unwrap()
+                .transcript_entries,
+            changed_count
+        );
+        assert_eq!(service.agent_compaction_epoch(pane), changed_epoch);
+        assert_native_free_transcript_absent(&store, &conversation);
+    }
 }
 
 /// Freezing belongs to the actual completion producer port, not its caller.
