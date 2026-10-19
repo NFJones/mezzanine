@@ -167,7 +167,10 @@ impl ObjectiveMirrorQueue {
         conversation: &str,
         objective: Option<&str>,
     ) -> bool {
-        let key = (store.root().to_path_buf(), conversation.to_string());
+        let key = (
+            store.objective_mirror_store_root().to_path_buf(),
+            conversation.to_string(),
+        );
         let desired = objective.and_then(bound_session_title);
         if self.entries.get(&key).is_some_and(|entry| {
             entry.desired == desired
@@ -475,7 +478,7 @@ impl RuntimeSessionService {
             && self
                 .persistence
                 .transcript_store()
-                .is_some_and(|store| store.root() == root)
+                .is_some_and(|store| store.objective_mirror_store_root() == root)
         {
             self.invalidate_agent_prompt_selector_extra_candidates();
             let _ = self.refresh_saved_session_overlay_after_title_change();

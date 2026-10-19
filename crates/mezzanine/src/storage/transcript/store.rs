@@ -807,6 +807,13 @@ impl AgentTranscriptStore {
         self.saved_session_retention
     }
 
+    /// Returns the immutable logical root key for optional mirror ownership.
+    /// This performs no canonicalization, metadata lookup or filesystem I/O,
+    /// and the key must never enter content-free cache diagnostics.
+    pub(crate) fn objective_mirror_store_root(&self) -> &Path {
+        &self.root
+    }
+
     /// Returns the root directory used by this store.
     #[cfg(test)]
     pub fn root(&self) -> &Path {
