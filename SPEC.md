@@ -12564,6 +12564,26 @@ The baseline command capabilities are:
   values, and unavailable transcript persistence. Forked and fresh
   conversations MUST NOT inherit a user objective; archive and restore preserve
   it, and deletion removes it with the conversation metadata.
+  The separate saved-session objective-title mirror is a nonessential display
+  cache, not this authoritative user-objective metadata. Published in-memory
+  objectives MUST update immediately; mirror lock/open/read/write/sync work MUST
+  run off the serialized actor and MUST NOT be awaited inside essential
+  persistence settlement. One runtime MUST retain at most 256 captured
+  store/conversation keys and one physical mirror operation or unconsumed result.
+  Pending values MUST coalesce to the newest local revision, including clear.
+  Nonblocking lock contention MUST retain eligible work at a nonzero retry
+  cadence with fair scheduling independent of publication revision. Capacity
+  refusal and filesystem failure MUST remain visible as bounded content-free
+  diagnostics and MUST NOT falsely suppress an identical explicit retry.
+  Stale results MUST NOT confirm newer revisions or rebound stores. An older
+  write already past its last revision check cannot be described as cancelled;
+  newer local work MUST follow it serially, and current confirmation MUST settle
+  any retained refresh debt even when unchanged-value suppression avoids a write.
+  Browser refresh remains actor-owned and asynchronous. Different runtimes use
+  cache last-lock-admitted-writer semantics, not a global ordering inferred from
+  local counters or timestamps. Finite lock admission bounds no filesystem I/O
+  latency: stalled storage can delay physical completion indefinitely, but MUST
+  NOT grow retained jobs or block unrelated actor or essential persistence work.
 - `/list-skills`: Show the effective skills available to the active pane,
   including each skill name, source scope, and description. The display MUST
   use the same catalog that backs `$<skill-name>` prompt expansion. It SHOULD

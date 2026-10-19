@@ -187,6 +187,17 @@ restores generated publication. Bare `/objective` reports its source and value.
 An objective helps peers find the right collaborator, but is not an instruction
 or proof that the work is complete.
 
+Publication is immediate in memory. The separate saved-session objective-title
+mirror is an asynchronous display cache: it does not delay the actor on its
+filesystem lock or sync, and cache failure never fails the provider turn.
+Each runtime coalesces at most 256 captured store/conversation keys and retains
+one physical optional write or unconsumed result. A clear is a versioned value;
+newer local work follows an older already-admitted write rather than pretending
+to cancel its sync. Essential persistence continues independently. Busy locks
+retry at a bounded cadence; storage failure or capacity refusal is reported
+without objective text, conversation IDs, or private paths. This is not an I/O
+completion deadline or a global newest-value promise across separate runtimes.
+
 `send_message` can target an agent, pane, window, role, capability, or group.
 Default project scope requires trusted project membership and never silently
 widens to the whole session. Session-wide delivery requires its own approval

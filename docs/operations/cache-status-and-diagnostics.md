@@ -191,6 +191,24 @@ credentials for an API key.
 4. Review and redact a copy before sharing; never attach raw conversation
    context or credentials merely to explain a cache ratio.
 
+## Objective display-mirror health
+
+The existing async-runtime counts expose `objective_mirror_pending_keys`,
+`objective_mirror_tracked_keys`, `objective_mirror_slot_phase`, and bounded
+confirmed/busy/failed/refused counters plus a fixed last-failure reason. These
+are actor-owned memory observations; querying them does not read the mirror
+index or inspect private filesystem paths.
+
+`in_flight` means one optional worker owns physical I/O; `receipt_pending`
+means its result still owns the slot until actor collection; `observing` is
+short receipt-mutex contention, not evidence that I/O finished. Confirmation
+refers only to a current local cache revision, never a transcript append receipt,
+turn acceptance, provider lease, or proof of durable user-objective metadata.
+Refused/failed counts are not hidden by successful unrelated writes. An identical
+explicit objective refresh can retry a failed cache value. Permanently stalled
+storage can retain one physical job indefinitely without creating more jobs or
+blocking essential persistence and unrelated actor requests.
+
 ## Related pages
 
 - [Context and continuity](../agent/context-and-continuity.md)

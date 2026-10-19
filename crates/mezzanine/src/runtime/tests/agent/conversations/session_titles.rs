@@ -910,6 +910,7 @@ fn runtime_settled_conversation_reads_no_title_index_per_turn() {
             .applied
     );
 
+    service.flush_objective_mirrors_for_tests();
     let titles_before = transcript_store.session_title_mirror_status();
     let objectives_before = transcript_store.session_objective_mirror_status();
     for _turn in 0..3 {

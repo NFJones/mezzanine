@@ -354,6 +354,7 @@ pub(crate) use peer_process_lifetime::{
 mod unix_writer;
 pub(crate) use unix_writer::{UnixOriginStream, enable_unix_writer_credentials};
 mod persistence;
+pub use persistence::RuntimeObjectiveMirrorStatus;
 pub(crate) use persistence::{RuntimeObjectiveMirrorWork, RuntimePersistenceComponent};
 /// Exposes the processes module boundary.
 ///

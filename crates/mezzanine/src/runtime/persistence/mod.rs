@@ -22,6 +22,7 @@ mod adapters;
 mod bookkeeping;
 mod effects;
 mod objective_mirrors;
+pub use objective_mirrors::RuntimeObjectiveMirrorStatus;
 pub(crate) use objective_mirrors::RuntimeObjectiveMirrorWork;
 /// Exact settled-occurrence persistence ownership, separate from screen state.
 mod steering;

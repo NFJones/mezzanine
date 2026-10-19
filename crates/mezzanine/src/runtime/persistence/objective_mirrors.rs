@@ -37,6 +37,7 @@ enum MirrorFailure {
     Abandoned,
     Capacity,
     RevisionExhausted,
+    SchedulingExhausted,
 }
 
 /// Bounded in-memory diagnostics; no title, identifier, raw error or private path.
@@ -49,6 +50,44 @@ struct MirrorStatus {
     last_failure: Option<MirrorFailure>,
 }
 
+/// Content-free actor snapshot of optional objective-cache ownership.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RuntimeObjectiveMirrorStatus {
+    /// Latest desired keys still awaiting an eligible write.
+    pub pending_keys: usize,
+    /// All bounded keys, including unchanged-value suppression records.
+    pub tracked_keys: usize,
+    /// Idle, in_flight, receipt_pending, or observing (short mutex contention).
+    /// Receipt custody is not a claim that physical I/O is still running.
+    pub slot_phase: &'static str,
+    /// Exact current-revision cache confirmations, not transcript receipts.
+    pub confirmed: u64,
+    /// Nonblocking filesystem lock refusals.
+    pub busy: u64,
+    /// Terminal I/O or abandoned-work observations.
+    pub failed: u64,
+    /// Desired updates refused by bounded admission.
+    pub refused: u64,
+    /// Fixed bounded reason only; never a raw error, path, identifier or title.
+    pub last_failure: Option<&'static str>,
+}
+
+impl Default for RuntimeObjectiveMirrorStatus {
+    /// Represents an unused optional cache lane.
+    fn default() -> Self {
+        Self {
+            pending_keys: 0,
+            tracked_keys: 0,
+            slot_phase: "idle",
+            confirmed: 0,
+            busy: 0,
+            failed: 0,
+            refused: 0,
+            last_failure: None,
+        }
+    }
+}
+
 /// One newest desired value and its own exact in-flight revision, if any.
 #[derive(Debug)]
 struct MirrorEntry {
@@ -58,8 +97,10 @@ struct MirrorEntry {
     token: Arc<AtomicU64>,
     dirty: bool,
     confirmed: bool,
+    /// An admitted old write changed disk; refresh only on current confirmation.
+    refresh_needed: bool,
     in_flight: Option<u64>,
-    queued_at: u64,
+    queued_at: u128,
     eligible_at: Instant,
     updated_at_unix_seconds: u64,
 }
@@ -95,8 +136,17 @@ enum PhysicalSlot {
 pub(super) struct ObjectiveMirrorQueue {
     entries: BTreeMap<MirrorKey, MirrorEntry>,
     next_revision: u64,
+    /// Fair attempt ordering is independent from publication revisions.
+    next_queue_order: u128,
     slot: Arc<Mutex<PhysicalSlot>>,
     status: MirrorStatus,
+    /// One bounded fixture probe, never a production scheduling input.
+    #[cfg(test)]
+    next_before_write: Option<(
+        std::sync::mpsc::SyncSender<()>,
+        std::sync::mpsc::Receiver<()>,
+        Arc<std::sync::atomic::AtomicBool>,
+    )>,
 }
 
 impl ObjectiveMirrorQueue {
@@ -129,7 +179,9 @@ impl ObjectiveMirrorQueue {
             let oldest = self
                 .entries
                 .iter()
-                .filter(|(_, entry)| !entry.dirty && entry.in_flight.is_none())
+                .filter(|(_, entry)| {
+                    !entry.dirty && !entry.refresh_needed && entry.in_flight.is_none()
+                })
                 .min_by_key(|(_, entry)| entry.queued_at)
                 .map(|(key, _)| key.clone());
             if let Some(oldest) = oldest {
@@ -148,6 +200,12 @@ impl ObjectiveMirrorQueue {
             return false;
         };
         self.next_revision = revision;
+        let Some(queued_at) = self.next_queue_order.checked_add(1) else {
+            self.status.refused = self.status.refused.saturating_add(1);
+            self.status.last_failure = Some(MirrorFailure::SchedulingExhausted);
+            return false;
+        };
+        self.next_queue_order = queued_at;
         let now = Instant::now();
         let entry = self.entries.entry(key).or_insert_with(|| MirrorEntry {
             store,
@@ -156,13 +214,14 @@ impl ObjectiveMirrorQueue {
             token: Arc::new(AtomicU64::new(revision)),
             dirty: false,
             confirmed: false,
+            refresh_needed: false,
             in_flight: None,
-            queued_at: revision,
+            queued_at,
             eligible_at: now,
             updated_at_unix_seconds: 0,
         });
         if !entry.dirty {
-            entry.queued_at = revision;
+            entry.queued_at = queued_at;
         }
         entry.desired = desired;
         entry.revision = revision;
@@ -194,22 +253,36 @@ impl ObjectiveMirrorQueue {
         let Some(entry) = self.entries.get_mut(&receipt.key) else {
             return None;
         };
-        if entry.in_flight == Some(receipt.revision) {
-            entry.in_flight = None;
+        if entry.in_flight != Some(receipt.revision) {
+            return None;
+        }
+        entry.in_flight = None;
+        if matches!(receipt.result, MirrorResult::Written(true)) {
+            entry.refresh_needed = true;
         }
         if entry.revision != receipt.revision {
             return None;
+        }
+        let retry_order = self.next_queue_order.checked_add(1);
+        if let Some(order) = retry_order {
+            self.next_queue_order = order;
         }
         match receipt.result {
             MirrorResult::Written(changed) => {
                 entry.confirmed = true;
                 entry.dirty = false;
                 self.status.confirmed = self.status.confirmed.saturating_add(1);
-                changed.then_some(receipt.key)
+                let refresh = changed || entry.refresh_needed;
+                entry.refresh_needed = false;
+                refresh.then_some(receipt.key)
             }
             MirrorResult::Busy => {
-                entry.dirty = true;
-                entry.queued_at = self.next_revision;
+                entry.dirty = retry_order.is_some();
+                if let Some(order) = retry_order {
+                    entry.queued_at = order;
+                } else {
+                    self.status.last_failure = Some(MirrorFailure::SchedulingExhausted);
+                }
                 entry.eligible_at = Instant::now() + OBJECTIVE_MIRROR_BUSY_DELAY;
                 self.status.busy = self.status.busy.saturating_add(1);
                 None
@@ -218,9 +291,9 @@ impl ObjectiveMirrorQueue {
                 // A cancelled handoff/panicking optional job is recoverable by
                 // a replacement service without an unrelated publication.
                 // Real filesystem failures wait for an explicit new refresh.
-                entry.dirty = reason == MirrorFailure::Abandoned;
+                entry.dirty = reason == MirrorFailure::Abandoned && retry_order.is_some();
                 if entry.dirty {
-                    entry.queued_at = self.next_revision;
+                    entry.queued_at = retry_order.unwrap_or(entry.queued_at);
                     entry.eligible_at = Instant::now() + OBJECTIVE_MIRROR_BUSY_DELAY;
                 }
                 entry.confirmed = false;
@@ -265,7 +338,7 @@ impl ObjectiveMirrorQueue {
             slot: self.slot.clone(),
             completed: false,
             #[cfg(test)]
-            before_write: None,
+            before_write: self.next_before_write.take(),
         })
     }
 }
@@ -289,6 +362,7 @@ pub(crate) struct RuntimeObjectiveMirrorWork {
     before_write: Option<(
         std::sync::mpsc::SyncSender<()>,
         std::sync::mpsc::Receiver<()>,
+        Arc<std::sync::atomic::AtomicBool>,
     )>,
 }
 
@@ -307,10 +381,11 @@ impl RuntimeObjectiveMirrorWork {
                 #[cfg(test)]
                 if observations.replace(observations.get() + 1) == 1
                     && current
-                    && let Some((entered, release)) = &self.before_write
+                    && let Some((entered, release, released)) = &self.before_write
                 {
                     let _ = entered.try_send(());
                     let _ = release.recv_timeout(Duration::from_secs(3));
+                    released.store(true, Ordering::Release);
                 }
                 current
             },
@@ -348,6 +423,36 @@ impl Drop for RuntimeObjectiveMirrorWork {
 }
 
 impl RuntimeSessionService {
+    /// Returns only bounded memory observations. In particular this must not
+    /// call the filesystem-backed transcript-store mirror status accessor.
+    pub(crate) fn runtime_objective_mirror_status(&self) -> RuntimeObjectiveMirrorStatus {
+        let queue = &self.persistence.objective_mirrors;
+        let slot_phase = match queue.slot.try_lock() {
+            Ok(slot) => match &*slot {
+                PhysicalSlot::Idle => "idle",
+                PhysicalSlot::Reserved(_) => "in_flight",
+                PhysicalSlot::Completed(_) => "receipt_pending",
+            },
+            Err(_) => "observing",
+        };
+        RuntimeObjectiveMirrorStatus {
+            pending_keys: queue.entries.values().filter(|entry| entry.dirty).count(),
+            tracked_keys: queue.entries.len(),
+            slot_phase,
+            confirmed: queue.status.confirmed,
+            busy: queue.status.busy,
+            failed: queue.status.failed,
+            refused: queue.status.refused,
+            last_failure: queue.status.last_failure.map(|reason| match reason {
+                MirrorFailure::Io => "io",
+                MirrorFailure::Abandoned => "abandoned",
+                MirrorFailure::Capacity => "capacity",
+                MirrorFailure::RevisionExhausted => "revision_exhausted",
+                MirrorFailure::SchedulingExhausted => "scheduling_exhausted",
+            }),
+        }
+    }
+
     /// Queues optional mirror work without filesystem access or durable claims.
     pub(crate) fn queue_runtime_objective_mirror(
         &mut self,
@@ -378,6 +483,42 @@ impl RuntimeSessionService {
         allow_claim
             .then(|| self.persistence.objective_mirrors.claim())
             .flatten()
+    }
+
+    /// Explicit non-actor fixture driver; never a synchronous production fallback.
+    #[cfg(test)]
+    pub(crate) fn flush_objective_mirrors_for_tests(&mut self) {
+        for _ in 0..=MAX_OBJECTIVE_MIRROR_KEYS {
+            let Some(work) = self.poll_runtime_objective_mirror(true) else {
+                break;
+            };
+            work.execute();
+        }
+    }
+
+    /// Observes physical receipt/queue quiescence without filesystem access.
+    #[cfg(test)]
+    pub(crate) fn objective_mirrors_are_idle_for_tests(&self) -> bool {
+        let queue = &self.persistence.objective_mirrors;
+        let Ok(slot) = queue.slot.try_lock() else {
+            return false;
+        };
+        matches!(*slot, PhysicalSlot::Idle)
+            && queue
+                .entries
+                .values()
+                .all(|entry| !entry.dirty && entry.in_flight.is_none())
+    }
+
+    /// Installs a one-shot bounded worker probe after final revision observation.
+    #[cfg(test)]
+    pub(crate) fn gate_objective_mirror_write_for_tests(
+        &mut self,
+        entered: std::sync::mpsc::SyncSender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+        released: Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        self.persistence.objective_mirrors.next_before_write = Some((entered, release, released));
     }
 }
 
@@ -453,7 +594,11 @@ mod tests {
         let mut old = queue.claim().unwrap();
         let (entered, waiting) = std::sync::mpsc::sync_channel(1);
         let (release, gate) = std::sync::mpsc::sync_channel(1);
-        old.before_write = Some((entered, gate));
+        old.before_write = Some((
+            entered,
+            gate,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        ));
         let worker = std::thread::spawn(move || old.execute());
         let reached = waiting.recv_timeout(Duration::from_secs(2));
         let queued = queue.publish(store.clone(), "same", None);
@@ -631,5 +776,45 @@ mod tests {
             "latest"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Busy attempts advance a scheduling clock rather than reusing publication
+    /// revision ties. Even with every busy predecessor immediately eligible,
+    /// another captured store's ready key must be serviced within the key bound.
+    #[test]
+    fn objective_mirror_busy_predecessors_cannot_starve_an_independent_root() {
+        let (first, root) = store();
+        let (ready, other) = store();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join(".session-objectives.json.lock"))
+            .unwrap();
+        flock(&lock, FlockOperation::LockExclusive).unwrap();
+        let mut queue = ObjectiveMirrorQueue::default();
+        for index in 0..3 {
+            queue.publish(first.clone(), &format!("busy-{index}"), Some("busy"));
+        }
+        queue.publish(ready.clone(), "ready", Some("ready"));
+        let mut serviced = false;
+        for _ in 0..4 {
+            let work = queue.claim().unwrap();
+            serviced |= work.key.0 == other;
+            work.execute();
+            queue.collect();
+            // An adversarial eligibility schedule makes the ordering oracle
+            // stricter without changing production clocks or retry deadlines.
+            for entry in queue.entries.values_mut() {
+                entry.eligible_at = Instant::now();
+            }
+        }
+        drop(lock);
+        let persisted = ready.session_objective_mirror("ready").unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(other).unwrap();
+        assert!(serviced, "busy entries starved an independent ready key");
+        assert_eq!(persisted.unwrap().objective, "ready");
     }
 }

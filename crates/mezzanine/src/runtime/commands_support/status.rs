@@ -839,6 +839,35 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
         "[async runtime counts]".to_string(),
         format!("commands_processed = {}", metrics.commands_processed),
         format!(
+            "objective_mirror_pending_keys = {}",
+            metrics.objective_mirror.pending_keys
+        ),
+        format!(
+            "objective_mirror_tracked_keys = {}",
+            metrics.objective_mirror.tracked_keys
+        ),
+        format!(
+            "objective_mirror_slot_phase = {:?}",
+            metrics.objective_mirror.slot_phase
+        ),
+        format!(
+            "objective_mirror_confirmed = {}",
+            metrics.objective_mirror.confirmed
+        ),
+        format!("objective_mirror_busy = {}", metrics.objective_mirror.busy),
+        format!(
+            "objective_mirror_failed = {}",
+            metrics.objective_mirror.failed
+        ),
+        format!(
+            "objective_mirror_refused = {}",
+            metrics.objective_mirror.refused
+        ),
+        format!(
+            "objective_mirror_last_failure = {:?}",
+            metrics.objective_mirror.last_failure.unwrap_or("none")
+        ),
+        format!(
             "actor_ingress_queue_depth = {}",
             metrics.actor_ingress_queue_depth
         ),

@@ -1180,6 +1180,7 @@ fn runtime_title_refresh_keeps_unfiltered_resume_scope() {
     assert!(rendered.contains("**Scope:** all projects"), "{rendered}");
 
     assert!(service.mirror_runtime_agent_objective("refresh-scope", Some("Refreshed objective")));
+    service.flush_objective_mirrors_for_tests();
     assert!(
         service
             .run_pending_record_browser_refresh_for_tests()
@@ -1196,6 +1197,44 @@ fn runtime_title_refresh_keeps_unfiltered_resume_scope() {
         rendered.contains("Refreshed objective"),
         "the refreshed row renders the new derived title: {rendered}"
     );
+    // An admitted older A can reach disk after B -> A was published. Its stale
+    // result cannot refresh UI directly, but current unchanged-A confirmation
+    // must pay the retained refresh debt rather than leave this browser stale.
+    let (entered, waiting) = std::sync::mpsc::sync_channel(1);
+    let (release, gate) = std::sync::mpsc::sync_channel(1);
+    service.gate_objective_mirror_write_for_tests(
+        entered,
+        gate,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    );
+    assert!(service.mirror_runtime_agent_objective("refresh-scope", Some("Newest A")));
+    let old = service.poll_runtime_objective_mirror(true).unwrap();
+    let worker = std::thread::spawn(move || old.execute());
+    let reached = waiting.recv_timeout(std::time::Duration::from_secs(2));
+    let queued_b = service.mirror_runtime_agent_objective("refresh-scope", Some("Interim B"));
+    let queued_a = service.mirror_runtime_agent_objective("refresh-scope", Some("Newest A"));
+    let _ = release.try_send(());
+    let joined = worker.join();
+    reached.unwrap();
+    joined.unwrap();
+    assert!(queued_b && queued_a);
+    assert!(service.poll_runtime_objective_mirror(false).is_none());
+    assert!(
+        !service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "stale result must not refresh current UI directly"
+    );
+    service.flush_objective_mirrors_for_tests();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "current unchanged result must settle refresh debt"
+    );
+    let (toggle, rendered) = open_resume_scope_state(&service);
+    assert!(!toggle);
+    assert!(rendered.contains("Newest A"), "{rendered}");
     let _ = std::fs::remove_dir_all(transcript_store.root());
 }
 
@@ -1222,6 +1261,7 @@ fn runtime_cleared_objective_retires_the_mirrored_title() {
     assert!(
         service.mirror_runtime_agent_objective("cleared-objective", Some("Objective to clear"))
     );
+    service.flush_objective_mirrors_for_tests();
     let browser = service.saved_sessions_record_browser().unwrap();
     assert_eq!(
         browser.records()[0].title,
@@ -1232,6 +1272,7 @@ fn runtime_cleared_objective_retires_the_mirrored_title() {
         service.mirror_runtime_agent_objective("cleared-objective", None),
         "a cleared objective retires the retained mirror"
     );
+    service.flush_objective_mirrors_for_tests();
     assert!(
         transcript_store
             .session_objective_mirror("cleared-objective")
@@ -1294,6 +1335,7 @@ fn runtime_ephemeral_conversation_does_not_mirror_an_objective() {
     assert!(
         service.mirror_runtime_agent_objective(&durable_conversation_id, Some("Durable objective"))
     );
+    service.flush_objective_mirrors_for_tests();
     assert_eq!(
         transcript_store
             .session_objective_mirror(&durable_conversation_id)

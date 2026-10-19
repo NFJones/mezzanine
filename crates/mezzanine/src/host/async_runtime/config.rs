@@ -367,6 +367,8 @@ impl AsyncRuntimeLatencyPhase {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AsyncRuntimeActorMetrics {
+    /// Bounded optional cache ownership and content-free degradation snapshot.
+    pub objective_mirror: crate::runtime::RuntimeObjectiveMirrorStatus,
     /// Number of actor requests processed in serialized order.
     pub commands_processed: u64,
     /// Current envelopes buffered before fixed-lane admission.

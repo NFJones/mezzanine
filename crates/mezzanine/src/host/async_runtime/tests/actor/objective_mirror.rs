@@ -16,6 +16,13 @@ struct MirrorLockWatchdog {
 }
 
 impl MirrorLockWatchdog {
+    /// Releases on the normal test path; Drop still joins the independent owner.
+    fn release_now(&self) {
+        if let Some(release) = &self.release {
+            let _ = release.try_send(());
+        }
+    }
+
     /// Acquires the store's real mirror lock before starting the watchdog.
     fn hold(root: &Path) -> Self {
         let lock = std::fs::OpenOptions::new()
@@ -62,6 +69,20 @@ impl Drop for MirrorLockWatchdog {
 /// and result-adoption path, but creates no shell, provider, MCP or sandbox job.
 #[tokio::test(flavor = "current_thread")]
 async fn async_objective_mirror_lock_does_not_stall_provider_adoption_or_actor() {
+    objective_mirror_actor_case(false).await;
+}
+
+/// Objective-only traffic must retry a busy real lock and converge after its
+/// release through the existing persistence worker's bounded idle polls. No
+/// later provider publication, user kick or runtime timer schedules the retry.
+#[tokio::test(flavor = "current_thread")]
+async fn async_objective_only_cache_converges_after_busy_lock_release() {
+    objective_mirror_actor_case(true).await;
+}
+
+/// Shares the exact native-free provider adoption with or without the real
+/// persistence service; only the latter may execute the optional mirror job.
+async fn objective_mirror_actor_case(run_service: bool) {
     let root = std::env::temp_dir().join(format!(
         "mez-objective-lock-{:032x}",
         rand::random::<u128>()
@@ -172,6 +193,25 @@ async fn async_objective_mirror_lock_does_not_stall_provider_adoption_or_actor()
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
+    let stop = AtomicBool::new(false);
+    let stopped = tokio::sync::Notify::new();
+    let persistence = async {
+        if !run_service {
+            return None;
+        }
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 1_000,
+                drain_limit: 16,
+                idle_interval: Duration::from_millis(5),
+            },
+            |_, _| stop.load(Ordering::Acquire),
+        )
+        .await;
+        stopped.notify_one();
+        Some(report)
+    };
     let client = async {
         handle
             .record_claimed_agent_provider_task_for_tests(turn.turn_id.clone(), 1)
@@ -192,6 +232,27 @@ async fn async_objective_mirror_lock_does_not_stall_provider_adoption_or_actor()
             .execute_agent_shell_command(primary, "/stop".into())
             .await;
         let cancel_before_release = !watchdog.released.load(Ordering::Acquire);
+        let convergence = if run_service {
+            watchdog.release_now();
+            let observed = tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let status = handle.metrics().await.unwrap().objective_mirror;
+                    if status.confirmed > 0
+                        && status.pending_keys == 0
+                        && status.slot_phase == "idle"
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await;
+            stop.store(true, Ordering::Release);
+            stopped.notified().await;
+            observed
+        } else {
+            Ok(())
+        };
         let shutdown = handle.shutdown().await;
         (
             adoption,
@@ -200,19 +261,47 @@ async fn async_objective_mirror_lock_does_not_stall_provider_adoption_or_actor()
             read_before_release,
             cancel,
             cancel_before_release,
+            convergence,
             shutdown,
         )
     };
-    let ((adoption, adopted, read, responsive, cancel, cancelled, shutdown), mut exit) =
-        tokio::join!(client, actor.run());
+    let (
+        (adoption, adopted, read, responsive, cancel, cancelled, convergence, shutdown),
+        persistence,
+        mut exit,
+    ) = tokio::join!(client, persistence, actor.run());
     // Release and join before any assertions or filesystem cleanup, including
     // the baseline failure. Drop is also the unwind fallback for early errors.
     drop(watchdog);
-    std::fs::remove_dir_all(&root).unwrap();
+    exit.service.poll_runtime_objective_mirror(false);
+    let idle = !run_service || exit.service.objective_mirrors_are_idle_for_tests();
+    let mirrored = if run_service && idle {
+        store
+            .session_objective_mirror(&conversation)
+            .unwrap()
+            .map(|record| record.objective)
+    } else {
+        None
+    };
+    if idle {
+        std::fs::remove_dir_all(&root).unwrap();
+    }
     assert_eq!(adoption.unwrap().applied, 1);
     read.unwrap();
     cancel.unwrap();
     shutdown.unwrap();
+    convergence.unwrap();
+    if let Some(report) = persistence {
+        assert_eq!(report.unwrap().failed, 0);
+    }
+    assert!(
+        idle,
+        "optional mirror worker did not settle; retained fixture root {}",
+        root.display()
+    );
+    if run_service {
+        assert_eq!(mirrored.as_deref(), Some("new durable objective"));
+    }
     assert!(
         adopted && responsive && cancelled,
         "objective cache lock stalled actor until release: adoption={adopted} read={responsive} cancel={cancelled}"
@@ -225,4 +314,184 @@ async fn async_objective_mirror_lock_does_not_stall_provider_adoption_or_actor()
             .and_then(|identity| identity.objective.as_deref()),
         Some("new durable objective")
     );
+}
+
+/// Optional work already admitted past its final revision observation must not
+/// delay an essential write/completion batch. Stopping its launching service
+/// and replacing the actor/service preserves physical custody, then a newer
+/// objective converges without replaying the essential write. The probe has an
+/// independent blocking-thread deadline; its release guard also handles unwind.
+#[tokio::test(flavor = "current_thread")]
+async fn async_objective_write_does_not_starve_essential_persistence_or_replacement() {
+    struct Release(std::sync::mpsc::SyncSender<()>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = self.0.try_send(());
+        }
+    }
+    let root = std::env::temp_dir().join(format!(
+        "mez-mirror-essential-{:032x}",
+        rand::random::<u128>()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "objective-essential".into(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nsession_title_policy=\"objective\"\n".into(),
+        }])
+        .unwrap();
+    service.set_agent_transcript_store(store.clone());
+    let (entered, waiting) = std::sync::mpsc::sync_channel(1);
+    let (release, gate) = std::sync::mpsc::sync_channel(1);
+    let release = Release(release);
+    let released = StdArc::new(AtomicBool::new(false));
+    service.gate_objective_mirror_write_for_tests(entered, gate, released.clone());
+    assert!(service.mirror_runtime_agent_objective("cache-only", Some("older admitted")));
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let stop = AtomicBool::new(false);
+    let stopped = tokio::sync::Notify::new();
+    let persistence = async {
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 1_000,
+                drain_limit: 16,
+                idle_interval: Duration::from_millis(5),
+            },
+            |_, _| stop.load(Ordering::Acquire),
+        )
+        .await;
+        stopped.notify_one();
+        report
+    };
+    let path = root.join("essential-write");
+    let client = async {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while waiting.try_recv().is_err() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let entered_held = !released.load(Ordering::Acquire);
+        let admitted = handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::Persist {
+                target: PersistenceTarget::Config,
+                path: path.clone(),
+                bytes: b"essential once".to_vec(),
+                mode: PersistenceWriteMode::CreateNew,
+            }])
+            .await;
+        let written = tokio::time::timeout(Duration::from_secs(1), async {
+            while tokio::fs::read(&path).await.is_err() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        stop.store(true, Ordering::Release);
+        stopped.notified().await;
+        let essential_before_release = !released.load(Ordering::Acquire);
+        let status = handle.metrics().await.unwrap().objective_mirror;
+        let shutdown = handle.shutdown().await;
+        (
+            entered_held,
+            admitted,
+            written,
+            essential_before_release,
+            status,
+            shutdown,
+        )
+    };
+    let ((entered_held, admitted, written, essential_held, status, shutdown), persisted, mut exit) =
+        tokio::join!(client, persistence, actor.run());
+    // Keep the original physical job held while replacing its launcher/actor.
+    // A newer pending value cannot free the old slot or issue a second job.
+    let newest = exit
+        .service
+        .mirror_runtime_agent_objective("cache-only", Some("replacement newest"));
+    let duplicated = exit.service.poll_runtime_objective_mirror(true).is_some();
+    drop(release);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(exit.service)
+        .build()
+        .unwrap();
+    let stop = AtomicBool::new(false);
+    let stopped = tokio::sync::Notify::new();
+    let persistence = async {
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 1_000,
+                drain_limit: 16,
+                idle_interval: Duration::from_millis(5),
+            },
+            |_, _| stop.load(Ordering::Acquire),
+        )
+        .await;
+        stopped.notify_one();
+        report
+    };
+    let client = async {
+        let converged = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let status = handle.metrics().await.unwrap().objective_mirror;
+                if status.confirmed > 0 && status.pending_keys == 0 && status.slot_phase == "idle" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        stop.store(true, Ordering::Release);
+        stopped.notified().await;
+        let shutdown = handle.shutdown().await;
+        (converged, shutdown)
+    };
+    let ((converged, final_shutdown), replacement, mut exit) =
+        tokio::join!(client, persistence, actor.run());
+    exit.service.poll_runtime_objective_mirror(false);
+    let idle = exit.service.objective_mirrors_are_idle_for_tests();
+    let mirror = if idle {
+        store
+            .session_objective_mirror("cache-only")
+            .unwrap()
+            .map(|record| record.objective)
+    } else {
+        None
+    };
+    let essential = std::fs::read(&path).unwrap();
+    if idle {
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    assert!(
+        entered_held && essential_held,
+        "essential persistence waited for optional write release"
+    );
+    assert_eq!(admitted.unwrap(), 1);
+    written.unwrap();
+    shutdown.unwrap();
+    final_shutdown.unwrap();
+    converged.unwrap();
+    let persisted = persisted.unwrap();
+    assert_eq!(persisted.completed, 1);
+    assert_eq!(persisted.applied_events, 1);
+    assert_eq!(persisted.failed, 0);
+    assert_eq!(status.slot_phase, "in_flight");
+    assert!(newest && !duplicated);
+    assert_eq!(replacement.unwrap().failed, 0);
+    assert!(
+        idle,
+        "retained unresolved optional fixture {}",
+        root.display()
+    );
+    assert_eq!(mirror.as_deref(), Some("replacement newest"));
+    assert_eq!(essential, b"essential once");
+    assert!(exit.service.tracked_runtime_pane_process_ids().is_empty());
 }

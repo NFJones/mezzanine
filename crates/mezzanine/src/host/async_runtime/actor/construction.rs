@@ -605,6 +605,7 @@ impl AsyncRuntimeSessionActor {
         &self,
     ) -> crate::host::async_runtime::AsyncRuntimeActorMetrics {
         let mut metrics = self.metrics.clone();
+        metrics.objective_mirror = self.service.runtime_objective_mirror_status();
         let ingress = self
             .request_ingress
             .lock()
