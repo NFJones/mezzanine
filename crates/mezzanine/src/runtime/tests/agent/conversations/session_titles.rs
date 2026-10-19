@@ -487,24 +487,35 @@ impl std::ops::DerefMut for IsolatedTitleService {
 }
 
 impl IsolatedTitleService {
-    /// Drains optional I/O, reaps the exact root, then deletes only this fixture.
-    /// Any failed custody or retirement check leaves the directory in place.
+    /// Reaps the exact root independently of optional I/O, then deletes this fixture.
+    /// All safe cleanup stages run; any failure preserves the directory and all
+    /// primary/secondary errors instead of relying on field Drop as a receipt.
     fn cleanup(&mut self) -> std::result::Result<(), String> {
         let service = self.service.as_mut().unwrap();
-        service.flush_objective_mirrors_for_tests();
-        if !service.objective_mirrors_are_idle_for_tests() {
-            return Err("isolated title mirror I/O did not become quiescent".to_string());
-        }
-        let exited = service
-            .terminate_all_pane_processes()
-            .map_err(|error| format!("isolated title shell cleanup failed: {error}"))?;
-        if let Some(pid) = self.primary_pid
-            && (exited.len() != 1 || exited[0].pane_id != "%1" || exited[0].primary_pid != pid)
-        {
-            return Err("isolated title shell lost exact manager custody".to_string());
+        let mut errors = Vec::new();
+        match service.terminate_all_pane_processes() {
+            Ok(exited) => {
+                if let Some(pid) = self.primary_pid
+                    && (exited.len() != 1
+                        || exited[0].pane_id != "%1"
+                        || exited[0].primary_pid != pid)
+                {
+                    errors.push("isolated title shell lost exact manager custody".to_string());
+                }
+            }
+            Err(error) => errors.push(format!("isolated title shell cleanup failed: {error}")),
         }
         if !service.tracked_runtime_pane_process_ids().is_empty() {
-            return Err("isolated title shell remains manager-tracked".to_string());
+            errors.push("isolated title shell remains manager-tracked".to_string());
+        }
+        // The shell never accesses the transcript store. Retire it first so
+        // even a stalled optional filesystem operation cannot bypass native reap.
+        service.flush_objective_mirrors_for_tests();
+        if !service.objective_mirrors_are_idle_for_tests() {
+            errors.push("isolated title mirror I/O did not become quiescent".to_string());
+        }
+        if !errors.is_empty() {
+            return Err(errors.join("; "));
         }
         drop(self.service.take());
         fs::remove_dir_all(&self.root)
