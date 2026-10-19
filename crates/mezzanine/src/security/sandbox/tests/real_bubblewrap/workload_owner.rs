@@ -515,4 +515,7 @@ pub(super) fn output(
 mod journal;
 
 #[cfg(test)]
+mod fixture_policy;
+
+#[cfg(test)]
 mod kernel;

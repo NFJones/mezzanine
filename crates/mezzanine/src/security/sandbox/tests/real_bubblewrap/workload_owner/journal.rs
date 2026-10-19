@@ -5,10 +5,11 @@
 //! final signal decision fails independently of numeric PID reuse or timing.
 //! These tests qualify the shared driver, not Linux syscall adapter semantics.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::os::unix::process::ExitStatusExt;
 use std::rc::Rc;
 
+use super::fixture_policy::{FixturePolicy, Settlement};
 use super::*;
 
 const BIRTH: u64 = 17;
@@ -564,4 +565,107 @@ fn unwind_preserves_primary_panic_without_external_diagnostics() {
             .count(),
         1
     );
+}
+
+/// Supplies complete synthetic settlement evidence without touching the kernel.
+fn complete_settlement() -> Settlement {
+    Settlement {
+        collection_ok: true,
+        root_reaped: true,
+        capture_eof: true,
+        input_closed: true,
+        retired: true,
+        handles_closed: true,
+    }
+}
+
+#[test]
+/// Every unknown settlement fact independently preserves fixture evidence. Reap,
+/// EOF, input closure, retirement, descriptor closure and error-free collection
+/// are not interchangeable, and missing proof cannot silently authorize deletion.
+fn fixture_preservation_requires_every_settlement_fact() {
+    assert!(!FixturePolicy::default().can_delete());
+    for missing in 0..6 {
+        let mut policy = FixturePolicy::default();
+        let slot = policy.reserve();
+        let mut evidence = complete_settlement();
+        match missing {
+            0 => evidence.collection_ok = false,
+            1 => evidence.root_reaped = false,
+            2 => evidence.capture_eof = false,
+            3 => evidence.input_closed = false,
+            4 => evidence.retired = false,
+            _ => evidence.handles_closed = false,
+        }
+        assert!(!policy.settle(slot, evidence));
+        assert!(!policy.can_delete());
+    }
+}
+
+#[test]
+/// The primary cannot settle the independent survivor or a failed spawn attempt.
+/// All distinct reserved slots must settle; duplicate or invalid slot evidence
+/// poisons the deletion decision rather than increasing a success counter.
+fn fixture_deletion_requires_all_distinct_attempted_owners() {
+    let mut policy = FixturePolicy::default();
+    let primary = policy.reserve();
+    let survivor = policy.reserve();
+    assert!(policy.settle(primary, complete_settlement()));
+    assert!(!policy.can_delete());
+    assert!(policy.settle(survivor, complete_settlement()));
+    assert!(policy.can_delete());
+    let failed_spawn = policy.reserve();
+    assert!(!policy.can_delete());
+    assert!(!policy.settle(failed_spawn, Settlement::default()));
+    assert!(!policy.can_delete());
+
+    let mut duplicate = FixturePolicy::default();
+    let slot = duplicate.reserve();
+    assert!(duplicate.settle(slot, complete_settlement()));
+    assert!(!duplicate.settle(slot, complete_settlement()));
+    assert!(!duplicate.can_delete());
+    let mut invalid = FixturePolicy::default();
+    let slot = invalid.reserve();
+    assert!(!invalid.settle(slot + 1, complete_settlement()));
+    assert!(invalid.settle(slot, complete_settlement()));
+    assert!(!invalid.can_delete());
+}
+
+/// Pure destruction probe records only a policy decision, never filesystem I/O.
+struct FixtureDecisionOnDrop {
+    policy: FixturePolicy,
+    decision: Rc<Cell<Option<bool>>>,
+}
+
+impl Drop for FixtureDecisionOnDrop {
+    /// Mirrors the kernel guard's sole deletion predicate without invoking it.
+    fn drop(&mut self) {
+        self.decision.set(Some(self.policy.can_delete()));
+    }
+}
+
+#[test]
+/// Unwind after reserving a child or after settling only the primary preserves
+/// evidence. Dropping an owner, a panic or a timeout cannot substitute for the
+/// missing survivor settlement. This test invokes neither processes nor files.
+fn fixture_unwind_preserves_unresolved_owner_evidence() {
+    for primary_settled in [false, true] {
+        let decision = Rc::new(Cell::new(None));
+        let observed = Rc::clone(&decision);
+        let mut guard = FixtureDecisionOnDrop {
+            policy: FixturePolicy::default(),
+            decision,
+        };
+        let primary = guard.policy.reserve();
+        if primary_settled {
+            assert!(guard.policy.settle(primary, complete_settlement()));
+        }
+        guard.policy.reserve();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = guard;
+            std::panic::panic_any("unresolved fixture owner");
+        }));
+        assert!(result.is_err());
+        assert_eq!(observed.get(), Some(false));
+    }
 }

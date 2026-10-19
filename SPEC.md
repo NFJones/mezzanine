@@ -7738,6 +7738,10 @@ Explicit retirement MUST incorporate secondary errors before returning a result;
 destruction MUST NOT perform external diagnostic I/O or acquire a reporting lock.
 During unwinding the primary panic remains visible, but secondary errors kept
 only in the destroyed owner's memory have no guaranteed reporting channel.
+Synthetic kernel-adapter fixtures MUST preserve their generated storage by
+default before any spawn attempt. Deletion MUST require explicit successful
+collection, exact root reap, capture/input closure, and retirement/destruction
+for every reserved owner; unresolved cleanup or unwind MUST NOT erase evidence.
 This cooperative test-helper bound does not promise to interrupt a stalled
 synchronous spawn or kernel syscall, nor qualify native macOS behavior.
 Probe failures MUST retain a
