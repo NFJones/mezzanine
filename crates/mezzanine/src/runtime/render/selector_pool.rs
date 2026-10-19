@@ -40,6 +40,9 @@ pub(crate) struct RuntimeAgentSelectorRefreshSnapshot {
     /// Test-only gate that holds a worker before it starts the expensive walk.
     #[cfg(test)]
     pub(crate) test_gate: Option<Receiver<()>>,
+    /// Test-only receipt for this exact request after stop/supersession checks.
+    #[cfg(test)]
+    pub(crate) test_claimed: Option<SyncSender<()>>,
 }
 
 /// One queued selector refresh.
@@ -79,6 +82,9 @@ pub(crate) struct RuntimeAgentSelectorRefreshPool {
     live_workers: Arc<AtomicUsize>,
     /// Worker handles joined on shutdown.
     handles: Vec<JoinHandle<()>>,
+    /// Nonblocking test observation after stop is set and before joins begin.
+    #[cfg(test)]
+    shutdown_started: Option<SyncSender<()>>,
 }
 
 impl RuntimeAgentSelectorRefreshPool {
@@ -121,6 +127,8 @@ impl RuntimeAgentSelectorRefreshPool {
             started_workers,
             live_workers,
             handles,
+            #[cfg(test)]
+            shutdown_started: None,
         }
     }
 
@@ -169,10 +177,20 @@ impl RuntimeAgentSelectorRefreshPool {
     /// that need a hard bound must add their own checkpoint inside the walk.
     pub(crate) fn shutdown(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        #[cfg(test)]
+        if let Some(observer) = self.shutdown_started.take() {
+            let _ = observer.try_send(());
+        }
         self.sender = None;
         for handle in self.handles.drain(..) {
             let _ = handle.join();
         }
+    }
+
+    /// Installs a test observation only; no caller can alter the stop decision.
+    #[cfg(test)]
+    pub(crate) fn observe_shutdown_for_tests(&mut self, observer: SyncSender<()>) {
+        self.shutdown_started = Some(observer);
     }
 
     /// Returns how many workers this pool started.
@@ -210,6 +228,10 @@ fn run_selector_refresh_worker(
         }
         if selector_refresh_is_superseded(latest, &request.key, request.generation) {
             continue;
+        }
+        #[cfg(test)]
+        if let Some(claimed) = request.snapshot.test_claimed.as_ref() {
+            let _ = claimed.try_send(());
         }
         #[cfg(test)]
         if let Some(gate) = request.snapshot.test_gate.as_ref() {
@@ -274,6 +296,7 @@ mod tests {
                 transcript_store: None,
                 session_title_policy: crate::session_title::SessionTitlePolicy::default(),
                 test_gate: Some(gate),
+                test_claimed: None,
             },
             release,
         )

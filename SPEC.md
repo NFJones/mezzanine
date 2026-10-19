@@ -2346,6 +2346,15 @@ prevent first-use shell menus without suppressing normal startup or reading user
 profiles. Compound fixture failures MUST retain arbitrary primary panic payloads
 and secondary errors; the ordinary panic hook may already have run and need not
 render arbitrary compound payload fields.
+Saved-fork test storage MUST belong to an exclusively created fixture generation;
+an existing PID/counter-named directory MUST NOT be removed to claim ownership.
+Native pane termination alone MUST NOT authorize deletion while a selector
+snapshot can still enumerate its cloned store and create catalog files. Fixtures
+MUST independently join that owned selector work before deletion and preserve
+storage on cleanup failure. A worker join proves quiescence, not successful
+optional computation; controlled regressions MUST acknowledge the exact claimed
+request before initiating shutdown, keep completion channels drainable, and
+settle gates and original workers before assertions.
 In-flight completion publication MUST remain in the host shutdown barrier;
 cleanup failure MUST latch before the matching entry can disappear, including
 when no receipt receiver exists and terminal history is disabled.
