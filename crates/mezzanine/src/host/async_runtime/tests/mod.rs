@@ -91,6 +91,7 @@ use mez_terminal::TerminalStyleSpan;
 /// on duplicated control-flow logic.
 mod actor_fixture;
 mod fixtures;
+mod native_fixture;
 
 use super::AsyncAttachedTerminalResolvedLoopRequest;
 use fixtures::*;

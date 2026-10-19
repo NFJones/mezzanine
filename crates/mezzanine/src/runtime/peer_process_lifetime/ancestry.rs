@@ -79,7 +79,7 @@ impl UnixAncestryBudget {
 
     /// Deterministic full-capacity injection exercises admission cleanup without
     /// exhausting unrelated process descriptors in a parallel test suite.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn reserve_for_tests(
         self: &Arc<Self>,
         count: usize,
@@ -119,7 +119,7 @@ impl UnixAncestryWitness {
     /// Test-only exact ancestor completion probe. Returns None for an uncaptured
     /// native record rather than inferring lifetime from a supplied numeric PID;
     /// fixture reparenting alone is not the retained pidfd completion boundary.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn test_ancestor_is_live(&self, identity: ProcessParentIdentity) -> Option<bool> {
         self.parents
             .iter()

@@ -34,6 +34,7 @@
 //! published for either. Both regressions also require the settlement to leave no
 //! pending bootstrap and to publish no shell, environment, or path authority.
 
+use super::super::native_fixture::{CloseGate, JoinControl, NativeFixture};
 use super::super::*;
 
 /// Certification material the adversarial fixture is allowed to replay.
@@ -152,16 +153,6 @@ fn write_spoof_fixture(root: &Path) -> (PathBuf, PathBuf) {
     (script, root.join("foreground-fixture.log"))
 }
 
-/// Builds a unique scratch directory for one adversarial fixture run.
-fn fixture_root(label: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!(
-        "mez-certification-spoof-{}-{label}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    root
-}
-
 /// Returns the current fixture log contents, or an empty string before it exists.
 fn fixture_log(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
@@ -207,12 +198,12 @@ where
     }
 }
 
-/// Runs the production pane supervisor service for one adversarial fixture pane.
-async fn spawn_pane_supervisor(
+/// Retains the actual production supervisor report/error without interpretation.
+async fn run_fixture_supervisor(
     handle: crate::host::async_runtime::AsyncRuntimeSessionHandle,
     done: StdArc<AtomicBool>,
-) {
-    let result = run_async_pane_process_supervisor_service(
+) -> Result<crate::host::async_runtime::pane_io::AsyncPaneProcessSupervisorServiceReport> {
+    run_async_pane_process_supervisor_service(
         handle,
         AsyncPaneProcessSupervisorServiceConfig {
             max_polls: u64::MAX,
@@ -230,17 +221,7 @@ async fn spawn_pane_supervisor(
             done.load(Ordering::SeqCst) || matches!(state, RuntimeLifecycleState::Stopping)
         },
     )
-    .await;
-    if let Err(error) = result {
-        assert!(
-            matches!(
-                error.message(),
-                "async runtime session actor is closed"
-                    | "async runtime session actor reply was dropped"
-            ),
-            "pane supervisor failed before actor shutdown: {error}"
-        );
-    }
+    .await
 }
 
 /// Returns the first available shell executable from one candidate list.
@@ -366,8 +347,8 @@ fn spoof_observation(
 struct SpoofCaseOutcome {
     /// Certification snapshot settled by the scenario.
     snapshot: crate::host::async_runtime::AsyncPaneCertificationSnapshot,
-    /// Runtime service after the actor shut down.
-    service: crate::runtime::RuntimeSessionService,
+    /// Same runtime service after shutdown, kept heap-owned across result moves.
+    service: Box<crate::runtime::RuntimeSessionService>,
     /// Fixture log with timeline, screen text, and observed pane input.
     log_text: String,
     /// Foreground process group observed while the fixture owned the pane.
@@ -391,21 +372,26 @@ async fn run_foreground_spoof_case(
     mode: SpoofMode,
     label: &str,
 ) -> SpoofCaseOutcome {
-    let root = fixture_root(label);
+    let mut fixture = NativeFixture::new(label, Duration::from_secs(90));
+    let root = fixture.root().to_path_buf();
     let (script, log) = write_spoof_fixture(&root);
-    let mut service = test_service_with_shell(shell);
+    let mut service = Box::new(test_service_with_shell(shell));
     service.disable_legacy_managed_startup_for_tests();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    service.start_initial_pane_process(None).unwrap();
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
-        .build()
-        .unwrap();
+    let (_started, handle, actor) = match fixture.build(service) {
+        Ok(started) => started,
+        Err(failure) => fixture.fail_setup(failure).await,
+    };
     let worker_handle = handle.clone();
     let client_handle = handle.clone();
     let worker_done = StdArc::new(AtomicBool::new(false));
-    let worker = spawn_pane_supervisor(worker_handle, StdArc::clone(&worker_done));
+    let worker = run_fixture_supervisor(worker_handle, StdArc::clone(&worker_done));
+    let fixture_stop = worker_done.clone();
+    let (worker_finished, worker_completion) = tokio::sync::oneshot::channel();
+    let close_gate = CloseGate::default();
+    let client_close = close_gate.clone();
 
     let client = async move {
         wait_for_snapshot(&client_handle, "%1", Duration::from_secs(20), |snapshot| {
@@ -557,27 +543,53 @@ async fn run_foreground_spoof_case(
             refusal.map(SpoofRefusal::as_str).unwrap_or("none")
         );
         worker_done.store(true, Ordering::SeqCst);
-        let _ = client_handle.shutdown().await.unwrap();
-        (
+        let mut stop = RuntimeEventBatch::new();
+        stop.push(RuntimeEvent::Shutdown(ShutdownEvent {
+            reason: "owned adversarial fixture ordered teardown".into(),
+            force: false,
+            failed: false,
+        }));
+        client_handle.submit_runtime_events(stop).await?;
+        worker_completion.await.map_err(|error| {
+            MezError::invalid_state(format!(
+                "original supervisor completion notification: {error}"
+            ))
+        })?;
+        let _ = client_close.close(&client_handle).await.unwrap();
+        Ok((
             snapshot,
             log_text,
             refusal,
             fixture_process_group,
             observations,
-        )
+        ))
     };
 
-    let ((snapshot, log_text, refusal, fixture_process_group, observations), (), mut actor_exit) =
-        tokio::time::timeout(Duration::from_secs(90), async {
-            tokio::join!(client, worker, actor.run())
-        })
-        .await
-        .expect("adversarial certification scenario should not hang");
+    let mut joined = fixture
+        .join(
+            client,
+            worker,
+            actor,
+            &handle,
+            JoinControl {
+                stop: fixture_stop,
+                close: close_gate,
+                supervisor_done: Some(worker_finished),
+            },
+        )
+        .await;
+    fixture.retire(&mut joined).await;
+    let (
+        (snapshot, log_text, refusal, fixture_process_group, observations),
+        _supervisor_report,
+        actor_exit,
+    ) = joined
+        .finish(&fixture)
+        .unwrap_or_else(|failure| std::panic::resume_unwind(failure));
     let interrupted = log_text.contains("SIGNAL_INT");
-    actor_exit.service.terminate_all_pane_processes().unwrap();
     SpoofCaseOutcome {
         snapshot,
-        service: actor_exit.service,
+        service: Box::new(actor_exit.service),
         log_text,
         fixture_process_group,
         refusal,

@@ -34,7 +34,7 @@ pub(super) struct CodexOrderLease {
     queue: Arc<CodexOrder>,
     ticket: u64,
     finished: AtomicBool,
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     waiting: OnceLock<Arc<tokio::sync::Notify>>,
 }
 
@@ -55,7 +55,7 @@ impl CodexOrder {
             queue: self.clone(),
             ticket,
             finished: AtomicBool::new(false),
-            #[cfg(test)]
+            #[cfg(all(test, target_os = "linux"))]
             waiting: OnceLock::new(),
         }))
     }
@@ -79,7 +79,7 @@ impl CodexOrderLease {
             if state.serving == self.ticket {
                 return Ok(());
             }
-            #[cfg(test)]
+            #[cfg(all(test, target_os = "linux"))]
             if let Some(waiting) = self.waiting.get() {
                 waiting.notify_one();
             }
@@ -141,7 +141,7 @@ impl CodexOrderLease {
     }
 
     /// Deterministic test notification when a later worker actually blocks.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn waiting_for_tests(&self) -> Arc<tokio::sync::Notify> {
         self.waiting
             .get_or_init(|| Arc::new(tokio::sync::Notify::new()))
