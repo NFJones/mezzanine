@@ -1,6 +1,6 @@
 //! Async-runtime tests owned by pane service behavior.
 
-use super::super::native_fixture::{CloseGate, NativeFixture};
+use super::super::native_fixture::{CloseGate, JoinControl, NativeFixture};
 use super::super::*;
 
 /// Verifies that the combined pane process service defers large input
