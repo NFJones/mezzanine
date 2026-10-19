@@ -402,7 +402,7 @@ fn runtime_saved_fork_mcp_invalidation_keeps_usage_and_authority_independent() {
     );
     assert!(service.pending_agent_provider_tasks().is_empty());
     assert_eq!(store.inspect("fork-target").unwrap().len(), 4);
-    service.terminate_all_pane_processes().unwrap();
+    fixture_cleanup::settle(&mut service).unwrap();
     let mut reopened = test_runtime_service();
     reopened.set_agent_transcript_store(AgentTranscriptStore::new(root.clone()));
     let primary = reopened
@@ -434,7 +434,7 @@ fn runtime_saved_fork_mcp_invalidation_keeps_usage_and_authority_independent() {
             .is_empty()
     );
     assert!(reopened.pending_agent_provider_tasks().is_empty());
-    fs::remove_dir_all(root).unwrap();
+    fixture_cleanup::settle_and_remove(&mut reopened, &root, |_| Ok(())).unwrap();
 }
 
 /// A stale source binding, cancelled claim, changed store, deadline cancellation
@@ -546,8 +546,7 @@ fn runtime_saved_fork_lost_and_duplicate_adoption_replies_retain_history() {
                 .summary,
             "FORK_SUMMARY"
         );
-        service.terminate_all_pane_processes().unwrap();
-        fs::remove_dir_all(root).unwrap();
+        fixture_cleanup::settle_and_remove(&mut service, &root, |_| Ok(())).unwrap();
     }
 }
 

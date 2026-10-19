@@ -85,6 +85,16 @@ pub(super) fn settle_and_remove(
     root: &Path,
     before_remove: impl FnOnce(&Path) -> Result<(), &'static str>,
 ) -> Result<(), Vec<CleanupFailure>> {
+    settle(service)?;
+    if let Err(reason) = before_remove(root) {
+        return Err(vec![CleanupFailure::Boundary(reason)]);
+    }
+    std::fs::remove_dir_all(root).map_err(|error| vec![CleanupFailure::Filesystem(error)])
+}
+
+/// Retires one original service without deleting storage needed for reopen.
+/// This is the same independent native/selector barrier used before removal.
+pub(super) fn settle(service: &mut RuntimeSessionService) -> Result<(), Vec<CleanupFailure>> {
     let mut failures = Vec::new();
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         service.terminate_all_pane_processes()
@@ -99,13 +109,11 @@ pub(super) fn settle_and_remove(
     })) {
         failures.push(CleanupFailure::Panic("selector fixture cleanup", payload));
     }
-    if !failures.is_empty() {
-        return Err(failures);
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures)
     }
-    if let Err(reason) = before_remove(root) {
-        return Err(vec![CleanupFailure::Boundary(reason)]);
-    }
-    std::fs::remove_dir_all(root).map_err(|error| vec![CleanupFailure::Filesystem(error)])
 }
 
 #[test]
