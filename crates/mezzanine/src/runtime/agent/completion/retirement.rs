@@ -234,6 +234,43 @@ impl CompletionGroup {
 }
 
 impl RuntimeSessionService {
+    /// Arms one inert failure at an admitted caller or cleanup-helper entry.
+    /// This is absent in production and cannot grant cleanup authority.
+    #[cfg(test)]
+    pub(in crate::runtime) fn fail_pane_retention_entry_for_tests(
+        &mut self,
+        stage: &'static str,
+        error: MezError,
+    ) {
+        self.agent
+            .completion_settlements
+            .pane_retention_fault_for_tests = Some((stage, error));
+    }
+
+    /// Consumes only the matching fixed test cut; other entry paths leave it
+    /// armed so a test can distinguish an unreached boundary from success.
+    #[cfg(test)]
+    pub(in crate::runtime) fn take_pane_retention_fault_for_tests(
+        &mut self,
+        stage: &'static str,
+    ) -> Option<MezError> {
+        if self
+            .agent
+            .completion_settlements
+            .pane_retention_fault_for_tests
+            .as_ref()
+            .is_some_and(|(armed, _)| *armed == stage)
+        {
+            self.agent
+                .completion_settlements
+                .pane_retention_fault_for_tests
+                .take()
+                .map(|(_, error)| error)
+        } else {
+            None
+        }
+    }
+
     /// Arms one inert failure after shutdown capture and before descendants.
     /// The original typed error is consumed once; no production fault exists.
     #[cfg(test)]

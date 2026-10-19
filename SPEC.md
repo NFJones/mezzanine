@@ -4874,6 +4874,15 @@ exact original required failure in capture order precedes a close mismatch.
 One group's derived primary MUST NOT become another group's operation error.
 This retention boundary does not change inner turn selection, scheduling or
 destructive cleanup authority, nor establish replacement-safe pane teardown.
+The generic pane cleanup helper MUST retain its existing groups from entry
+through its complete synchronous return, including present-layout callers.
+An admitted pane-close call with an already resolved explicit target MUST keep
+its original observations across shared shutdown and the complete removal
+suffix. Invalid-target, nonprimary and rejected live/non-force requests MUST NOT
+be latched as required completion failures by that caller boundary. Omitted
+targets retain their separate routing behavior and are not qualified by this
+explicit-target retention rule. Both helper and caller use error-only close;
+neither grants process ownership nor reconstructs legitimately retired context.
 Only an exact armed negative own-loop restoration MAY preserve its frozen old
 running turn through the existing qualified restoration contract. It MUST keep
 the generic durable metadata-reset values, existing incoming/outgoing/native

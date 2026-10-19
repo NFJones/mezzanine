@@ -144,6 +144,9 @@ pub(super) struct RuntimeCompletionSettlements {
     /// Consumed after original shutdown observations, before descendant work.
     #[cfg(test)]
     shutdown_fault_for_tests: Option<MezError>,
+    /// One isolated caller/helper entry cut, consumed only by its fixed stage.
+    #[cfg(test)]
+    pane_retention_fault_for_tests: Option<(&'static str, MezError)>,
 }
 
 impl fmt::Debug for RuntimeCompletionSettlements {
