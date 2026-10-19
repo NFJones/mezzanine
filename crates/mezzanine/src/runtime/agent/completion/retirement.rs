@@ -6,6 +6,9 @@
 //! moves backing state here before ordinary pane/turn cleanup may discard it.
 //! Candidate acceptance is only producer ownership, never checked append or disk
 //! durability. Only successful destination evidence may advance a milestone.
+//! Lexical scopes retain exact groups/errors, not already retired live maps.
+//! Canonical lifetime follows actual required consumers and original candidate
+//! or no-save destinations; error attribution alone cannot reconstruct context.
 
 use super::*;
 use crate::runtime::agent::bookkeeping::{
@@ -1744,23 +1747,6 @@ impl RuntimeSessionService {
         {
             group.safe_failure_evidence = Some(evidence);
         }
-        self.completion_group_failure(turn_id).unwrap_or(error)
-    }
-
-    /// Keeps primary failure truth after a later lifecycle error, retaining the
-    /// secondary typed error and moving backing before bypass cleanup can run.
-    pub(in crate::runtime::agent) fn retain_completion_lifecycle_error(
-        &mut self,
-        turn_id: &str,
-        error: MezError,
-    ) -> MezError {
-        self.record_completion_required_failure(turn_id, "turn_finalization", None, None, &error);
-        if let Ok(evidence) = self.completion_settlement_evidence(turn_id)
-            && let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id)
-        {
-            group.safe_failure_evidence = Some(evidence);
-        }
-        self.detach_failed_completion_backing(turn_id);
         self.completion_group_failure(turn_id).unwrap_or(error)
     }
 
