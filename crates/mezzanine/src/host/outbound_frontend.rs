@@ -23,9 +23,15 @@ use super::outbound_endpoint::OutboundEndpointOwner;
 use crate::error::{MezError, MezErrorKind, Result};
 use crate::protocol::framing::{ProtocolFrame, ProtocolFrameCodec};
 
-const PROTOCOL: &str = "mez-outbound/1";
+/// Exact epoch for the entire local request/response contract, not a product
+/// version. Bump whenever an emitted field or semantic requirement can break an
+/// existing strict consumer, including optional fields such as if_view_identity.
+/// There is deliberately no older-epoch implementation or feature fallback.
+const PROTOCOL: &str = "mez-outbound/2";
 const CONTENT_TYPE: &str = "application/vnd.mezzanine.outbound+json";
 const HELLO_LIMIT: usize = 4096;
+/// Static recovery advice must not reflect peer content or authorize takeover.
+const WIRE_RECOVERY: &str = "inspect the broker lifecycle owner and active sibling attachments; upgrade client and broker together and coordinate explicit retirement before retry; do not replay uncertain operations";
 
 pub(crate) mod client;
 mod clipboard_wire;
@@ -47,6 +53,24 @@ pub(crate) use listener::OutboundFrontendListener;
 #[serde(deny_unknown_fields)]
 struct Hello {
     protocol: String,
+}
+
+/// Validates the complete content-free contract before handle allocation or any
+/// setup/profile/application work. Callers authenticate the peer and root first.
+fn validate_hello(frame: &ProtocolFrame) -> Result<()> {
+    if frame.content_type != CONTENT_TYPE {
+        return Err(MezError::invalid_args(
+            "outbound frontend content type unsupported",
+        ));
+    }
+    let hello: Hello = serde_json::from_str(&frame.body)
+        .map_err(|_| MezError::invalid_args("outbound frontend hello invalid"))?;
+    if hello.protocol != PROTOCOL {
+        return Err(MezError::invalid_args(format!(
+            "outbound frontend wire contract unsupported; {WIRE_RECOVERY}"
+        )));
+    }
+    Ok(())
 }
 
 /// Inert identity for one admitted frontend, scoped to this broker incarnation.
@@ -120,18 +144,7 @@ impl OutboundFrontendAdmission {
                 stream.next().await.transpose()?.ok_or_else(|| {
                     MezError::invalid_state("outbound frontend hello unavailable")
                 })?;
-            if frame.content_type != CONTENT_TYPE {
-                return Err(MezError::invalid_args(
-                    "outbound frontend content type unsupported",
-                ));
-            }
-            let hello: Hello = serde_json::from_str(&frame.body)
-                .map_err(|_| MezError::invalid_args("outbound frontend hello invalid"))?;
-            if hello.protocol != PROTOCOL {
-                return Err(MezError::invalid_args(
-                    "outbound frontend protocol unsupported",
-                ));
-            }
+            validate_hello(&frame)?;
             // Root may have changed while this peer supplied its hello.
             self.endpoint.frontend_config_root()?;
             // Identity allocation publishes no other state. Retry from the

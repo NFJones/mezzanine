@@ -7,6 +7,40 @@
 use super::*;
 use crate::runtime::RuntimeIrohTransportPolicy;
 
+/// The production hello parser accepts exactly the complete current epoch.
+/// Missing/unknown/duplicate fields and unsupported epochs fail before its caller
+/// can allocate a handle, resolve a profile, pair, or create a remote session.
+/// This pure fixture needs neither an endpoint nor a listener/process owner.
+#[test]
+fn outbound_wire_epoch_server_parser_requires_complete_exact_contract() {
+    assert_eq!(PROTOCOL, "mez-outbound/2");
+    validate_hello(&ProtocolFrame::new(
+        CONTENT_TYPE,
+        r#"{"protocol":"mez-outbound/2"}"#,
+    ))
+    .unwrap();
+    for body in [
+        r#"{"protocol":"mez-outbound/1"}"#,
+        r#"{"protocol":"mez-outbound/3"}"#,
+        r#"{}"#,
+        r#"{"protocol":null}"#,
+        r#"{"protocol":"mez-outbound/2","operation":"create"}"#,
+        r#"{"protocol":"mez-outbound/2","protocol":"mez-outbound/2"}"#,
+        "untrusted-secret-sentinel",
+    ] {
+        let error = validate_hello(&ProtocolFrame::new(CONTENT_TYPE, body)).unwrap_err();
+        assert!(error.io_kind().is_none());
+        assert!(!error.message().contains("untrusted-secret-sentinel"));
+    }
+    assert!(
+        validate_hello(&ProtocolFrame::new(
+            "text/plain",
+            r#"{"protocol":"mez-outbound/2"}"#
+        ))
+        .is_err()
+    );
+}
+
 /// Builds one isolated endpoint owner whose caller retains graceful teardown.
 async fn fixture() -> (std::path::PathBuf, OutboundEndpointOwner) {
     let root = std::env::temp_dir().join(format!("mez-frontend-{:032x}", rand::random::<u128>()));
@@ -128,7 +162,8 @@ async fn outbound_frontend_rejection_and_cancellation_release_capacity() {
     let mut admission =
         OutboundFrontendAdmission::new(endpoint.clone(), 1, Duration::from_millis(100)).unwrap();
     for body in [
-        serde_json::json!({"protocol":"mez-outbound/2"}).to_string(),
+        serde_json::json!({"protocol":"mez-outbound/1"}).to_string(),
+        serde_json::json!({"protocol":"mez-outbound/3"}).to_string(),
         serde_json::json!({"protocol":PROTOCOL,"operation":"create"}).to_string(),
         "x".repeat(HELLO_LIMIT + 1),
     ] {

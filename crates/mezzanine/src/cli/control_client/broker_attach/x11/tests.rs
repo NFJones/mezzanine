@@ -76,7 +76,7 @@ async fn broker_attach_x11_prepared_offer_and_cleanup_are_exact() {
             peer.next().await.unwrap().unwrap();
             peer.send(ProtocolFrame::new(
                 "application/vnd.mezzanine.outbound+json",
-                serde_json::json!({"protocol":"mez-outbound/1","handle":handle}).to_string(),
+                serde_json::json!({"protocol":"mez-outbound/2","handle":handle}).to_string(),
             ))
             .await
             .unwrap();

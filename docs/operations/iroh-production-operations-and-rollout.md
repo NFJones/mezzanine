@@ -41,6 +41,43 @@ approve all of the following outside secret-bearing configuration:
 A missing or unapproved row blocks supported production use. Do not substitute
 public n0 service behavior for these records.
 
+## Outbound broker wire upgrades
+
+A long-lived outbound broker can outlive replacement of the installed `mez`
+executable. Local readiness now requires the exact `mez-outbound/2` whole-wire
+epoch, including conditional-view requests and replies. This is independent of
+the product version and remote Iroh negotiation. There is no `/1` compatibility
+implementation or downgrade; a future incompatible local schema must use a new
+epoch even when the product version is unchanged.
+
+On an unsupported/invalid readiness reply or unavailable-or-incompatible EOF:
+
+1. Stop the failed frontend operation. Do not retry uncertain pairing, creation,
+   terminal input or management operations: a lost later reply can leave effects
+   already applied. A hello failure is terminal, not permission for another
+   endpoint or automatic replacement startup.
+2. Identify the **exact broker lifecycle owner** from your deployment's retained
+   launch/service ownership evidence. A socket path or a guessed PID is not
+   lifecycle authority. If ownership is unknown, preserve evidence and escalate
+   to that owner; do not attempt takeover.
+3. Coordinate all live sibling attachments and any uncertain remote work before
+   an explicit maintenance shutdown. A frontend's exit does not establish that
+   the shared broker is unused. Have the lifecycle owner drain/retire its exact
+   broker using the deployment's established shutdown and observation procedure.
+   Do not unlink discovery or lock files, steal identity ownership, or kill an
+   arbitrary process to force readiness.
+4. Align frontend and broker binaries on the same supported local epoch, then
+   let the lifecycle owner establish completed retirement before normal startup.
+   Preserve client identity, profiles and credentials; a wire upgrade is not a
+   reason to rotate keys, re-pair or weaken filesystem/peer authentication.
+5. Reconnect explicitly after ownership and any previous operation outcome have
+   been reconciled. The client does not restart the broker, replay requests, or
+   silently switch endpoints on a connected protocol failure.
+
+An EOF alone does not prove mixed versions. The historical unchanged `/1` hello
+could pass readiness and later reject `if_view_identity`; that schema mechanism
+does not determine the cause of an incident without broker/version evidence.
+
 ## Choose one explicit network policy
 
 Use primary-user configuration and restart the daemon after changes. Project
