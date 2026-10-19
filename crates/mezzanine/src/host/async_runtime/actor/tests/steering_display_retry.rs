@@ -400,11 +400,7 @@ async fn steering_display_retry_idle_fences_stale_callbacks_and_terminal_lifecyc
     for state in [RuntimeLifecycleState::Killed, RuntimeLifecycleState::Failed] {
         let mut stopped = Fixture::new(1);
         stopped.fail_initial_display();
-        stopped
-            .actor
-            .service
-            .session_mut_for_tests()
-            .set_lifecycle_state(state);
+        stopped.actor.service.set_lifecycle_state_for_tests(state);
         stopped
             .actor
             .queue_steering_presentation_retry_idle_wake()

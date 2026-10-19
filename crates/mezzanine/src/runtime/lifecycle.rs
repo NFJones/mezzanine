@@ -38,6 +38,12 @@ impl RuntimeSessionService {
         self.session.lifecycle_state()
     }
 
+    /// Sets lifecycle metadata in inert owner tests without native teardown or hooks.
+    #[cfg(test)]
+    pub(crate) fn set_lifecycle_state_for_tests(&mut self, state: RuntimeLifecycleState) {
+        self.session.set_lifecycle_state(state);
+    }
+
     /// Runs the socket path operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

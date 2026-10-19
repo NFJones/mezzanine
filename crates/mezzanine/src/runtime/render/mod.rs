@@ -57,6 +57,7 @@ const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 /// A retained display obligation, independent of receipt and persistence ownership.
 /// Backoff caps cadence rather than attempts; only installation or retirement
 /// discharges the original pane/conversation obligation.
+#[derive(Debug)]
 pub(super) struct RuntimeSteeringPresentationRetry {
     /// Earliest eligible ordinary drain, including drains caused by idle cleanup.
     pub(super) next_attempt_at: std::time::Instant,

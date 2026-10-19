@@ -366,7 +366,7 @@ fn steering_display_retry_dirty_checkpoint_does_not_bypass_failed_attempt() {
     let mut fixture = Fixture::new();
     fixture.service.fail_agent_presentation_install_for_tests(0);
     fixture.service.request_steering_presentation("%1");
-    fixture.service.agent.steering_recovery_dirty = true;
+    fixture.service.mark_steering_recovery_dirty_for_tests();
     fixture.service.fail_agent_presentation_install_for_tests(0);
     fixture.make_due();
     let drained = fixture.service.drain_transcript_persistence_transition();
