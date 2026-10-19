@@ -2332,6 +2332,29 @@ generation's native wait and completion callback/entry publication, independentl
 of evictable history. Missing entries, closed completion publishers and zero
 child counts alone MUST NOT prove healthy completion. Callback or publication
 failure MUST NOT publish a healthy exact completion receipt.
+Real-shell async test fixtures MUST install preserving native custody before
+startup, including post-spawn hook and actor-construction failures. Their original
+client, supervisor and actor outcomes MUST remain individually owned across
+early errors, panics and timeout; one failure-triggered close MUST keep polling
+the original siblings needed to service it. Cancellation is not an affirmative
+join or native wait receipt. Final fixture assertions MUST follow the bounded
+cleanup decision under the original pre-spawn deadline, without synchronous
+fallback waits or a newly minted cleanup/retry budget. Unknown native custody
+and generated diagnostic storage MUST be preserved, not abandoned to late
+destructor effects. Per-child generated HOME/ZDOTDIR and inert startup files MAY
+prevent first-use shell menus without suppressing normal startup or reading user
+profiles. Compound fixture failures MUST retain arbitrary primary panic payloads
+and secondary errors; the ordinary panic hook may already have run and need not
+render arbitrary compound payload fields.
+Saved-fork test storage MUST belong to an exclusively created fixture generation;
+an existing PID/counter-named directory MUST NOT be removed to claim ownership.
+Native pane termination alone MUST NOT authorize deletion while a selector
+snapshot can still enumerate its cloned store and create catalog files. Fixtures
+MUST independently join that owned selector work before deletion and preserve
+storage on cleanup failure. A worker join proves quiescence, not successful
+optional computation; controlled regressions MUST acknowledge the exact claimed
+request before initiating shutdown, keep completion channels drainable, and
+settle gates and original workers before assertions.
 In-flight completion publication MUST remain in the host shutdown barrier;
 cleanup failure MUST latch before the matching entry can disappear, including
 when no receipt receiver exists and terminal history is disabled.
@@ -7726,6 +7749,24 @@ sentinel with no additional bytes. Pane shell mode MUST additionally require
 complete registered transaction framing and decoded output; native shell mode
 MUST execute the probe directly without pane transactions. Pane transaction
 framing MUST delimit the sentinel without relying on a terminal line ending.
+Linux real-Bubblewrap test workloads MUST retain sole ownership of their exact
+unreaped birth root through the final group/root signal decision, and MUST NOT
+signal numeric process/group IDs after reaping. Nonreaping exit observation is
+not a new source of signal authority. Capture and staged stdin MUST use bounded
+nonblocking work and finite output limits under the original absolute deadline,
+including partial setup and unwinding; cleanup MUST NOT restart that deadline or
+join an unbounded reader. Deadline-expired unreaped roots and secondary cleanup
+failures MUST be reported as incomplete cleanup, not successful acceptance.
+Explicit retirement MUST incorporate secondary errors before returning a result;
+destruction MUST NOT perform external diagnostic I/O or acquire a reporting lock.
+During unwinding the primary panic remains visible, but secondary errors kept
+only in the destroyed owner's memory have no guaranteed reporting channel.
+Synthetic kernel-adapter fixtures MUST preserve their generated storage by
+default before any spawn attempt. Deletion MUST require explicit successful
+collection, exact root reap, capture/input closure, and retirement/destruction
+for every reserved owner; unresolved cleanup or unwind MUST NOT erase evidence.
+This cooperative test-helper bound does not promise to interrupt a stalled
+synchronous spawn or kernel syscall, nor qualify native macOS behavior.
 Probe failures MUST retain a
 bounded escaped output preview, actual exit status when available, decoded and
 observed byte counts, truncation and exact-sentinel state, and a typed failure

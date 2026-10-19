@@ -838,6 +838,8 @@ impl RuntimeSessionService {
             session_title_policy,
             #[cfg(test)]
             test_gate: None,
+            #[cfg(test)]
+            test_claimed: None,
         };
         let outcome = self.agent_prompt_selector_refresh_pool().submit(
             refresh_key.clone(),
