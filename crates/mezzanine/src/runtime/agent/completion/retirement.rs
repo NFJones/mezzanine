@@ -52,6 +52,37 @@ pub(in crate::runtime) enum CompletionScope {
     PaneRemoval,
 }
 
+/// One lexical observation of existing retention, consumed exactly once by its
+/// paired close. This is neither live-source nor destructive cleanup authority;
+/// it must never be stored, cloned, retried, or carried across an await.
+#[must_use = "completion retention must be closed by its synchronous owner"]
+pub(in crate::runtime) struct CompletionScopeObservation {
+    /// Absence at entry cannot adopt a group admitted later under the same key.
+    owner: Option<CompletionScopeOwner>,
+}
+
+/// Frozen group allocation and actual installed outer scope, not a new token.
+struct CompletionScopeOwner {
+    identity: std::sync::Arc<()>,
+    turn: AgentTurnRecord,
+    group: mez_agent::ContextExecutionGroupId,
+    /// Nested requested kinds do not replace the existing installed kind.
+    installed: CompletionScope,
+    /// Only the frame that installed retention may clear it at lexical close.
+    owns_scope: bool,
+}
+
+impl CompletionScopeOwner {
+    /// Checks group identity and installed retention only. This cannot validate
+    /// live execution/context/token maps or confer cancellation authority.
+    fn matches(&self, group: &CompletionGroup) -> bool {
+        std::sync::Arc::ptr_eq(&self.identity, &group.identity)
+            && self.turn == group.turn
+            && self.group == group.group
+            && group.scope == Some(self.installed)
+    }
+}
+
 /// Fixed required-gate provenance; diagnostic text never becomes transcript data.
 pub(super) struct CompletionRequiredFailure {
     pub(super) stage: &'static str,
@@ -198,6 +229,21 @@ impl CompletionGroup {
 }
 
 impl RuntimeSessionService {
+    /// Observes actual retention for inert tests without issuing a frame,
+    /// replacing a group, or manufacturing archive/dispatch evidence.
+    #[cfg(test)]
+    pub(in crate::runtime) fn completion_scope_is_active_for_tests(
+        &self,
+        turn_id: &str,
+        scope: CompletionScope,
+    ) -> bool {
+        self.agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .is_some_and(|group| group.scope == Some(scope))
+    }
+
     /// Observes frozen issued accounting without changing or settling expense.
     #[cfg(test)]
     pub(crate) fn provider_refusal_accounting_for_tests(
@@ -1007,7 +1053,7 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         }
-        let owns_scope = self.begin_completion_scope(turn_id, CompletionScope::Callback);
+        let scope = self.begin_completion_scope(turn_id, CompletionScope::Callback);
         let result = (|| -> Result<bool> {
             self.stage_completion_group_transcript(turn_id)?;
             let intent = if self
@@ -1036,7 +1082,7 @@ impl RuntimeSessionService {
         let result = result.map_err(|error| {
             self.retain_completion_settlement_error(turn_id, "ordinary_continuation", error)
         });
-        self.end_completion_scope(turn_id, owns_scope, "ordinary_continuation", false, result)
+        self.end_completion_scope(scope, "ordinary_continuation", false, result)
     }
 
     /// Records an actual pending-provider insertion and its group milestone in
@@ -1666,49 +1712,68 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
         scope: CompletionScope,
-    ) -> bool {
+    ) -> CompletionScopeObservation {
         let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) else {
-            return false;
+            return CompletionScopeObservation { owner: None };
         };
-        if group.scope.is_some() {
-            return false;
+        let owns_scope = group.scope.is_none();
+        let installed = *group.scope.get_or_insert(scope);
+        CompletionScopeObservation {
+            owner: Some(CompletionScopeOwner {
+                identity: group.identity.clone(),
+                turn: group.turn.clone(),
+                group: group.group.clone(),
+                installed,
+                owns_scope,
+            }),
         }
-        group.scope = Some(scope);
-        true
     }
 
     /// Ends a retention boundary after its complete fallible suffix. Required
     /// errors remain primary; a successful nested helper cannot retire the
     /// outer owner's snapshot before a later restore/checkpoint can still fail.
+    /// Only the exact observed group is eligible for existing error cleanup;
+    /// stale close preserves an operation error without mutating a replacement.
     pub(in crate::runtime) fn end_completion_scope<T>(
         &mut self,
-        turn_id: &str,
-        owns_scope: bool,
+        observation: CompletionScopeObservation,
         stage: &'static str,
         cleanup_on_error: bool,
         result: Result<T>,
     ) -> Result<T> {
+        let Some(owner) = observation.owner else {
+            return result;
+        };
+        let turn_id = owner.turn.turn_id.as_str();
+        if !self
+            .agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .is_some_and(|group| owner.matches(group))
+        {
+            return result.and_then(|_| {
+                Err(MezError::invalid_state(
+                    "completion retention scope owner changed before close",
+                ))
+            });
+        }
         let result = match result {
             Ok(value) => Ok(value),
             Err(error) => {
                 self.record_completion_required_failure(turn_id, stage, None, None, &error);
-                if cleanup_on_error
-                    && let Some(turn) = self
-                        .agent
-                        .completion_settlements
-                        .groups
-                        .get(turn_id)
-                        .map(|group| group.turn.clone())
-                {
+                if cleanup_on_error {
                     // Every exact token is signalled before any handoff error
                     // can return; the helper retains typed primary/secondary
                     // failures and moves backing instead of dropping payloads.
-                    let _retained_failure = self.prepare_completion_forced_retirement(&turn);
+                    let _retained_failure = self.prepare_completion_forced_retirement(&owner.turn);
                 }
                 Err(self.completion_group_failure(turn_id).unwrap_or(error))
             }
         };
-        if owns_scope && let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id)
+        if owner.owns_scope
+            && let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id)
+            && owner.matches(group)
         {
             group.scope = None;
         }

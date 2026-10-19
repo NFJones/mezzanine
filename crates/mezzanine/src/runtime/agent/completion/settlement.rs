@@ -343,7 +343,7 @@ impl RuntimeSessionService {
         append: fn(&mut Self, &AgentTurnRecord, &AgentTurnExecution) -> Result<()>,
     ) -> Result<()> {
         self.ensure_completion_settlement_source_current(turn, execution)?;
-        let owns_scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Callback);
+        let scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Callback);
         let result = (|| -> Result<()> {
             self.stage_completion_group_transcript(&turn.turn_id)?;
             self.retain_completion_settlement_intent(
@@ -441,7 +441,7 @@ impl RuntimeSessionService {
         let result = result.map_err(|error| {
             self.retain_completion_settlement_error(&turn.turn_id, "failure_audit", error)
         });
-        self.end_completion_scope(&turn.turn_id, owns_scope, "failure_audit", false, result)
+        self.end_completion_scope(scope, "failure_audit", false, result)
     }
 
     /// Reports only a current intent whose remaining settlement can advance.
@@ -565,18 +565,12 @@ impl RuntimeSessionService {
         if !self.retained_completion_settlement_retry_needed(turn_id) {
             return Ok(false);
         }
-        let owns_scope = self.begin_completion_scope(turn_id, CompletionScope::Callback);
+        let scope = self.begin_completion_scope(turn_id, CompletionScope::Callback);
         let result = self.recover_retained_completion_settlement_in_scope(turn_id);
         let result = result.map_err(|error| {
             self.retain_completion_settlement_error(turn_id, "retained_ordinary_settlement", error)
         });
-        self.end_completion_scope(
-            turn_id,
-            owns_scope,
-            "retained_ordinary_settlement",
-            false,
-            result,
-        )
+        self.end_completion_scope(scope, "retained_ordinary_settlement", false, result)
     }
 
     /// Remaining suffix under the same group's lifetime guard, never a command

@@ -4856,6 +4856,14 @@ provider-error overwrite. Its negative Failed-settlement disposition MUST keep
 the original typed failure and once-only task/scheduler/consumer obligations;
 it MUST NOT acknowledge ordinary success or replay effects. Dedicated existing
 preterminal assessment custody is not an ordinary handoff or refusal permit.
+Existing synchronous completion-retention scopes MUST close through a consumed,
+non-clonable observation of the original group allocation, immutable turn/group
+identity and actual installed outer scope. A nested requested scope MUST NOT
+replace or clear its outer scope. Absence at entry MUST NOT adopt a later group;
+a stale close MUST NOT attribute errors, cancel work or retire a replacement.
+An operation error MUST remain primary on stale close. This retention identity
+is not live execution/context authority or permission for pane teardown, and
+pinning a group alone does not retain components already legitimately retired.
 Only an exact armed negative own-loop restoration MAY preserve its frozen old
 running turn through the existing qualified restoration contract. It MUST keep
 the generic durable metadata-reset values, existing incoming/outgoing/native

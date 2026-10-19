@@ -702,9 +702,9 @@ impl RuntimeSessionService {
         }
         self.request_agent_worker_cancellation_for_turn(&turn_id);
         self.revoke_completion_paint(&turn_id);
-        let owns_scope = self.begin_completion_scope(&turn_id, CompletionScope::Stop);
+        let scope = self.begin_completion_scope(&turn_id, CompletionScope::Stop);
         let result = self.stop_agent_turn_after_completion_guard(pane_id, &turn, turn_id.clone());
-        self.end_completion_scope(&turn_id, owns_scope, "stop_finalization", true, result)
+        self.end_completion_scope(scope, "stop_finalization", true, result)
     }
 
     /// Runs after exact target validation and unconditional worker cancellation.

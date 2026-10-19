@@ -9,6 +9,8 @@
 use super::*;
 use mez_agent::{ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution};
 
+mod scope_retention;
+
 /// Aggregate and later ordinary error rows share immutable ordered ownership.
 /// This is a presentation-only source fixture, not evidence a loop guard fired
 /// or an action executed. Rendering values must not modify actor canonical truth.

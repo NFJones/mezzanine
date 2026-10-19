@@ -297,12 +297,12 @@ impl RuntimeSessionService {
         // No fallible operation or await separates retention and this transfer.
         self.agent.pending_native_shell_dispatches.remove(&identity);
         self.agent.claimed_native_shell_dispatches.remove(&identity);
-        let owns_scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
+        let scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
         let result = self.apply_retained_native_completion(&key);
         if let Err(error) = &result {
             self.fail_native_completion(&key, error);
         }
-        self.end_completion_scope(&key.0, owns_scope, "native_callback", false, result)
+        self.end_completion_scope(scope, "native_callback", false, result)
     }
 
     /// Projects only a newly retained native phase. Duplicate ingress never

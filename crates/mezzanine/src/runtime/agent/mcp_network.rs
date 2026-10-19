@@ -862,12 +862,12 @@ impl RuntimeSessionService {
         let transport = self.take_retained_mcp_transport(&key);
         self.return_completed_mcp_transport(&identity, transport);
         self.agent.approved_mcp_transport_leases.remove(&identity);
-        let owns_scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
+        let scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
         let applied = self.apply_retained_external_completion(&key);
         if let Err(error) = &applied {
             self.fail_external_completion(&key, error);
         }
-        self.end_completion_scope(&key.0, owns_scope, "external_callback", false, applied)
+        self.end_completion_scope(scope, "external_callback", false, applied)
     }
 
     /// Returns only the still-owned leased configuration, not a newer connection.

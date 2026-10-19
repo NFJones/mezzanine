@@ -118,9 +118,9 @@ impl RuntimeSessionService {
                 "finished turn no longer owns the selected pane",
             ));
         }
-        let owns_scope = self.begin_completion_scope(turn_id, CompletionScope::Finish);
+        let scope = self.begin_completion_scope(turn_id, CompletionScope::Finish);
         let result = self.finish_agent_turn_after_completion_guard(pane_id, turn_id, state, &turn);
-        self.end_completion_scope(turn_id, owns_scope, "turn_finalization", true, result)
+        self.end_completion_scope(scope, "turn_finalization", true, result)
     }
 
     /// Runs only after exact shell-turn validation; completion obligations are
@@ -392,9 +392,9 @@ impl RuntimeSessionService {
                 "terminal cleanup turn owner changed",
             ));
         }
-        let owns_scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Finish);
+        let scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Finish);
         let result = self.finish_agent_turn_without_session_after_completion_guard(turn, state);
-        self.end_completion_scope(&turn.turn_id, owns_scope, "turn_finalization", true, result)
+        self.end_completion_scope(scope, "turn_finalization", true, result)
     }
 
     /// Applies the same group guard before missing-pane binding retirement or
@@ -568,15 +568,9 @@ impl RuntimeSessionService {
                     "terminal completion state differs from canonical execution",
                 ));
             }
-            let owns_scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Finish);
+            let scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Finish);
             let result = self.finalize_completion_group(turn, &execution, reason);
-            return self.end_completion_scope(
-                &turn.turn_id,
-                owns_scope,
-                "terminal_finalization",
-                true,
-                result,
-            );
+            return self.end_completion_scope(scope, "terminal_finalization", true, result);
         }
         self.prepare_completion_terminal_cleanup(turn, state)?;
         if self.find_pane_descriptor(&turn.pane_id).is_none() {

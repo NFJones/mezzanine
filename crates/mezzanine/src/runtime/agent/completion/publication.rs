@@ -366,7 +366,7 @@ impl RuntimeSessionService {
             {
                 continue;
             }
-            let owns_scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
+            let scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
             let publication = if native {
                 self.publish_retained_native_completion(&key)
             } else {
@@ -391,13 +391,7 @@ impl RuntimeSessionService {
                 }
             }
             if self
-                .end_completion_scope(
-                    &key.0,
-                    owns_scope,
-                    "publication_continuation",
-                    false,
-                    result,
-                )
+                .end_completion_scope(scope, "publication_continuation", false, result)
                 .is_ok_and(|changed| changed)
             {
                 advanced += 1;

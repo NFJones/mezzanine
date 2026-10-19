@@ -190,7 +190,7 @@ impl RuntimeSessionService {
             );
             return Err(error);
         }
-        let owns_scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Callback);
+        let scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Callback);
         let result = (|| -> Result<CompletionSettlementDisposition> {
             self.stage_completion_group_transcript(&turn.turn_id)?;
             self.retain_completion_settlement_intent(
@@ -229,13 +229,7 @@ impl RuntimeSessionService {
                 error,
             )
         });
-        self.end_completion_scope(
-            &turn.turn_id,
-            owns_scope,
-            "ordinary_failure_feedback",
-            false,
-            result,
-        )
+        self.end_completion_scope(scope, "ordinary_failure_feedback", false, result)
     }
 
     /// Existing correction policy/budget transition, entered only after the
