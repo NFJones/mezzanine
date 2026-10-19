@@ -109,6 +109,17 @@ async fn objective_mirror_actor_case(run_service: bool) {
         .unwrap()
         .session_id
         .clone();
+    // Direct turn setup intentionally avoids the ordinary prompt/native path;
+    // register its real pane identity before the same publication owner runs.
+    service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            mez_core::ids::PaneId::opaque("%1"),
+            "agent",
+            &["agent-harness"],
+            1,
+        )
+        .unwrap();
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "objective-turn".into(),
         conversation_id: conversation.clone(),
@@ -513,8 +524,13 @@ async fn async_objective_write_does_not_starve_essential_persistence_or_replacem
     final_shutdown.unwrap();
     converged.unwrap();
     let persisted = persisted.unwrap();
-    assert_eq!(persisted.completed, 1);
-    assert_eq!(persisted.applied_events, 1);
+    // Actor construction queues one normal saved-session retention pass. It
+    // and the single CreateNew effect must both settle while the mirror is held.
+    assert_eq!(persisted.drained, 2);
+    assert_eq!(persisted.completed, 2);
+    assert_eq!(persisted.submitted_events, 2);
+    assert_eq!(persisted.applied_events, 2);
+    assert_eq!(persisted.bytes_written, b"essential once".len());
     assert_eq!(persisted.failed, 0);
     assert_eq!(status.slot_phase, "in_flight");
     assert!(newest && !duplicated);
