@@ -2336,6 +2336,8 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
     let (worker_finished, worker_completion) = tokio::sync::oneshot::channel();
     let client_sentinel = sentinel.clone();
     let fixture_stop = pane_worker_done.clone();
+    let worker_diagnostics = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let retained_diagnostics = worker_diagnostics.clone();
     let close_gate = CloseGate::default();
     let client_close = close_gate.clone();
     let pane_worker = async move {
@@ -2371,14 +2373,9 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
             "owned unmanaged-Zsh supervisor settled: ok={} (phase,stop_intent,lifecycle,ingress_closed,native_outstanding,returned,failed)={diagnostics:?}",
             result.is_ok()
         );
-        // Deliver the actual outcome before assertions can panic. Normal
-        // fixture teardown no longer permits even bare actor-closure errors.
-        let stage_result = result
-            .as_ref()
-            .map(|_| ())
-            .map_err(|error| MezError::new(error.kind(), error.message().to_owned()));
-        let _ = worker_finished.send((result, diagnostics));
-        stage_result
+        *retained_diagnostics.borrow_mut() = Some(diagnostics);
+        // Capture stores this ORIGINAL outcome before a completion-only send.
+        result
     };
 
     let client = async move {
@@ -2528,8 +2525,11 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
             pane_worker,
             actor,
             &handle,
-            fixture_stop,
-            close_gate,
+            JoinControl {
+                stop: fixture_stop,
+                close: close_gate,
+                supervisor_done: Some(worker_finished),
+            },
         )
         .await;
     let sentinel_present = sentinel.is_file();
@@ -2545,7 +2545,7 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
     });
     // Retirement cannot replace any captured pre-fallback acceptance receipt.
     fixture.retire(&mut joined).await;
-    let (observed, (), _actor_exit) = joined
+    let (observed, report, _actor_exit) = joined
         .finish(&fixture)
         .unwrap_or_else(|failure| std::panic::resume_unwind(failure));
     if sentinel_present {
@@ -2571,9 +2571,11 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
         "hiding agent mode must invalidate child environment before teardown"
     );
     stop_admission.expect("owned lifecycle stop must be admitted while actor ingress remains open");
-    let (result, diagnostics) =
-        settled.expect("same pane supervisor must report its actual result");
-    let report = result.unwrap_or_else(|error| panic!("owned pane supervisor failed; (phase,stop_intent,lifecycle,ingress_closed,native_outstanding,returned,failed)={diagnostics:?}: {error}"));
+    settled.expect("same pane supervisor must notify after retaining its actual result");
+    let diagnostics = worker_diagnostics
+        .borrow_mut()
+        .take()
+        .expect("same pane supervisor must retain its diagnostic receipt");
     assert_eq!(
         diagnostics,
         (1, true, RuntimeLifecycleState::Stopping, false, 0, 0, false)

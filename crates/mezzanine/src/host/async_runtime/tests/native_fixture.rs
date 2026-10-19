@@ -90,6 +90,13 @@ impl<T> StageResult<T> {
 #[derive(Clone, Default)]
 pub(super) struct CloseGate(Arc<AtomicBool>);
 
+/// Notification carries completion only; original supervisor data stays owned.
+pub(super) struct JoinControl {
+    pub(super) stop: Arc<AtomicBool>,
+    pub(super) close: CloseGate,
+    pub(super) supervisor_done: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
 impl CloseGate {
     /// Issues at most one request while the caller keeps the actor polled.
     pub(super) async fn close(
@@ -184,6 +191,7 @@ async fn capture<T>(
     order: Rc<RefCell<Vec<Stage>>>,
     failed: Arc<tokio::sync::Notify>,
     stop: Arc<AtomicBool>,
+    completed: Option<tokio::sync::oneshot::Sender<()>>,
 ) {
     let mut result = match std::panic::AssertUnwindSafe(future).catch_unwind().await {
         Ok(Ok(value)) => StageResult {
@@ -207,6 +215,10 @@ async fn capture<T>(
     }
     let is_failure = result.failure.is_some();
     *slot.borrow_mut() = Some(result);
+    // Sending to a dropped receiver cannot discard the retained original error.
+    if let Some(completed) = completed {
+        let _ = completed.send(());
+    }
     if is_failure {
         let first = order.borrow().is_empty();
         order.borrow_mut().push(stage);
@@ -226,6 +238,19 @@ async fn join_originals<C, W, A, S: Future<Output = Result<(), MezError>>>(
     deadline: tokio::time::Instant,
     stop: Arc<AtomicBool>,
     shutdown: impl FnOnce() -> S,
+) -> Joined<C, W, A> {
+    join_originals_notified(client, worker, actor, deadline, stop, shutdown, None).await
+}
+
+/// Both real adapters and dropped-receiver regressions use this capture path.
+async fn join_originals_notified<C, W, A, S: Future<Output = Result<(), MezError>>>(
+    client: impl Future<Output = Result<C, MezError>>,
+    worker: impl Future<Output = Result<W, MezError>>,
+    actor: impl Future<Output = Result<A, MezError>>,
+    deadline: tokio::time::Instant,
+    stop: Arc<AtomicBool>,
+    shutdown: impl FnOnce() -> S,
+    supervisor_done: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> Joined<C, W, A> {
     if tokio::time::Instant::now() >= deadline {
         return Joined {
@@ -251,7 +276,8 @@ async fn join_originals<C, W, A, S: Future<Output = Result<(), MezError>>>(
                 client_slot.clone(),
                 order.clone(),
                 failed.clone(),
-                stop.clone()
+                stop.clone(),
+                None
             ),
             capture(
                 worker,
@@ -259,7 +285,8 @@ async fn join_originals<C, W, A, S: Future<Output = Result<(), MezError>>>(
                 worker_slot.clone(),
                 order.clone(),
                 failed.clone(),
-                stop.clone()
+                stop.clone(),
+                supervisor_done
             ),
             capture(
                 actor,
@@ -267,7 +294,8 @@ async fn join_originals<C, W, A, S: Future<Output = Result<(), MezError>>>(
                 actor_slot.clone(),
                 order.clone(),
                 failed.clone(),
-                stop.clone()
+                stop.clone(),
+                None
             )
         );
     };
@@ -332,6 +360,21 @@ async fn join_originals<C, W, A, S: Future<Output = Result<(), MezError>>>(
         timed_out: timed_out || tokio::time::Instant::now() >= deadline,
         extra,
     }
+}
+
+/// Owns preserving storage/custody before any fallible native startup action.
+/// Retains setup primary ownership before polling independently fallible cleanup.
+async fn compound_setup_failure(
+    primary: Failure,
+    cleanup: impl Future<Output = Result<(), MezError>>,
+) -> Vec<(Stage, Failure)> {
+    let mut failures = vec![(Stage::Actor, primary)];
+    match std::panic::AssertUnwindSafe(cleanup).catch_unwind().await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => failures.push((Stage::Actor, Failure::Error(error))),
+        Err(payload) => failures.push((Stage::Actor, Failure::Panic(payload))),
+    }
+    failures
 }
 
 /// Owns preserving storage/custody before any fallible native startup action.
@@ -455,10 +498,14 @@ impl NativeFixture {
         worker: impl Future<Output = Result<W, MezError>>,
         actor: AsyncRuntimeSessionActor,
         handle: &AsyncRuntimeSessionHandle,
-        stop: Arc<AtomicBool>,
-        gate: CloseGate,
+        control: JoinControl,
     ) -> Joined<C, W> {
-        join_originals(
+        let JoinControl {
+            stop,
+            close: gate,
+            supervisor_done,
+        } = control;
+        join_originals_notified(
             client,
             worker,
             async { Ok(actor.run().await) },
@@ -472,6 +519,7 @@ impl NativeFixture {
                     gate.close(handle).await.map(|_| ())
                 }
             },
+            supervisor_done,
         )
         .await
     }
@@ -553,25 +601,31 @@ impl NativeFixture {
     pub(super) async fn fail_setup(&mut self, failure: Failure) -> ! {
         self.retired = true;
         self.owner().seal();
-        let mut cleanup = Vec::new();
-        if tokio::time::Instant::now() < self.deadline {
-            if let Some(attempt) = &self.attempt {
-                if let Err(error) =
-                    crate::host::async_runtime::drain_native_pane_retirement_for_attempt(
-                        self.owner(),
-                        attempt,
-                        self.deadline,
-                    )
-                    .await
-                {
-                    cleanup.push(format!("setup native retirement: {error}"));
-                }
+        let failures = compound_setup_failure(failure, async {
+            if tokio::time::Instant::now() >= self.deadline {
+                return Err(MezError::invalid_state(
+                    "setup cleanup skipped: original deadline exhausted",
+                ));
             }
-        } else {
-            cleanup.push("setup cleanup skipped: original deadline exhausted".into());
-        }
+            let attempt = self
+                .attempt
+                .as_ref()
+                .ok_or_else(|| MezError::invalid_state("setup cleanup token unavailable"))?;
+            crate::host::async_runtime::drain_native_pane_retirement_for_attempt(
+                self.owner(),
+                attempt,
+                self.deadline,
+            )
+            .await
+        })
+        .await;
+        let cleanup = failures
+            .iter()
+            .skip(1)
+            .map(|(_, failure)| format!("setup cleanup: {failure:?}"))
+            .collect();
         std::panic::resume_unwind(Box::new(FixtureFailure {
-            failures: vec![(Stage::Actor, failure)],
+            failures,
             cleanup,
             pending: self.owner().outstanding(),
             root: self.root.clone(),

@@ -34,7 +34,7 @@
 //! published for either. Both regressions also require the settlement to leave no
 //! pending bootstrap and to publish no shell, environment, or path authority.
 
-use super::super::native_fixture::{CloseGate, NativeFixture};
+use super::super::native_fixture::{CloseGate, JoinControl, NativeFixture};
 use super::super::*;
 
 /// Certification material the adversarial fixture is allowed to replay.
@@ -208,12 +208,12 @@ where
     }
 }
 
-/// Runs the production pane supervisor service for one adversarial fixture pane.
-async fn spawn_pane_supervisor(
+/// Retains the actual production supervisor report/error without interpretation.
+async fn run_fixture_supervisor(
     handle: crate::host::async_runtime::AsyncRuntimeSessionHandle,
     done: StdArc<AtomicBool>,
-) {
-    let result = run_async_pane_process_supervisor_service(
+) -> Result<crate::host::async_runtime::AsyncPaneProcessSupervisorServiceReport> {
+    run_async_pane_process_supervisor_service(
         handle,
         AsyncPaneProcessSupervisorServiceConfig {
             max_polls: u64::MAX,
@@ -231,7 +231,16 @@ async fn spawn_pane_supervisor(
             done.load(Ordering::SeqCst) || matches!(state, RuntimeLifecycleState::Stopping)
         },
     )
-    .await;
+    .await
+}
+
+/// Preserves legacy closure interpretation only for unaffected fixture owners.
+/// The failure-safe FCC owner below consumes run_fixture_supervisor directly.
+async fn spawn_pane_supervisor(
+    handle: crate::host::async_runtime::AsyncRuntimeSessionHandle,
+    done: StdArc<AtomicBool>,
+) {
+    let result = run_fixture_supervisor(handle, done).await;
     if let Err(error) = result {
         assert!(
             matches!(
@@ -407,8 +416,9 @@ async fn run_foreground_spoof_case(
     let worker_handle = handle.clone();
     let client_handle = handle.clone();
     let worker_done = StdArc::new(AtomicBool::new(false));
-    let worker = spawn_pane_supervisor(worker_handle, StdArc::clone(&worker_done));
+    let worker = run_fixture_supervisor(worker_handle, StdArc::clone(&worker_done));
     let fixture_stop = worker_done.clone();
+    let (worker_finished, worker_completion) = tokio::sync::oneshot::channel();
     let close_gate = CloseGate::default();
     let client_close = close_gate.clone();
 
@@ -562,6 +572,18 @@ async fn run_foreground_spoof_case(
             refusal.map(SpoofRefusal::as_str).unwrap_or("none")
         );
         worker_done.store(true, Ordering::SeqCst);
+        let mut stop = RuntimeEventBatch::new();
+        stop.push(RuntimeEvent::Shutdown(ShutdownEvent {
+            reason: "owned adversarial fixture ordered teardown".into(),
+            force: false,
+            failed: false,
+        }));
+        client_handle.submit_runtime_events(stop).await?;
+        worker_completion.await.map_err(|error| {
+            MezError::invalid_state(format!(
+                "original supervisor completion notification: {error}"
+            ))
+        })?;
         let _ = client_close.close(&client_handle).await.unwrap();
         Ok((
             snapshot,
@@ -572,18 +594,27 @@ async fn run_foreground_spoof_case(
         ))
     };
 
-    let worker = async {
-        worker.await;
-        Ok(())
-    };
     let mut joined = fixture
-        .join(client, worker, actor, &handle, fixture_stop, close_gate)
+        .join(
+            client,
+            worker,
+            actor,
+            &handle,
+            JoinControl {
+                stop: fixture_stop,
+                close: close_gate,
+                supervisor_done: Some(worker_finished),
+            },
+        )
         .await;
     fixture.retire(&mut joined).await;
-    let ((snapshot, log_text, refusal, fixture_process_group, observations), (), actor_exit) =
-        joined
-            .finish(&fixture)
-            .unwrap_or_else(|failure| std::panic::resume_unwind(failure));
+    let (
+        (snapshot, log_text, refusal, fixture_process_group, observations),
+        _supervisor_report,
+        actor_exit,
+    ) = joined
+        .finish(&fixture)
+        .unwrap_or_else(|failure| std::panic::resume_unwind(failure));
     let interrupted = log_text.contains("SIGNAL_INT");
     SpoofCaseOutcome {
         snapshot,
