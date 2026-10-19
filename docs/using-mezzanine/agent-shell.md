@@ -97,6 +97,11 @@ ordinary idle drains retry with capped backoff and fair bounded work, even after
 repeated failures and with a current checkpoint. No new input or explicit retry
 request is needed. A bounded source-free diagnostic reports unavailable display;
 successful prefixes are not repeated and replaced owners retire old display work.
+Recovered rows, including a successful prefix before a later installation failure,
+request repaint in the same drain. Idle enrollment is separately admitted: a full
+side-effect queue retains display ownership until real capacity progress can admit
+the one tracked wake, without turning an otherwise valid persistence batch into a
+display-timer failure.
 This display recovery does not retry input, provider work or settled effects, and
 does not replace independent durable-write recovery. Source-copy selection retains exact
 display text, including authored CRLF and trailing newlines. Selecting an overflow

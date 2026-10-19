@@ -32,8 +32,8 @@ impl Fixture {
                 Some(1234), mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance),
             id: "original-steering-occurrence".into(),
             acceptance_order: 1,
-            turn_id: None,
-            event_sequence: None,
+            turn_id: Some("inert-original-turn".into()),
+            event_sequence: Some(1),
             display: "original accepted source\r\ntrailing source\n".into(),
             status: SteeringRecoveryStatus::Admitted(7),
         };
@@ -117,13 +117,8 @@ fn steering_display_retry_many_failures_keep_paced_idle_recovery_live() {
     assert!(!event.payload.contains("original accepted source"));
     assert!(event.payload.contains(&fixture.conversation));
     let progress = std::collections::BTreeSet::new();
-    for generation in 1..=12 {
-        assert!(fixture.service.idle_cleanup_timer_needed_with_actor_progress(&progress));
-        let timer = fixture.service.idle_cleanup_timer_transition_with_actor_progress(
-            &progress, false, generation, 250, 250);
-        assert!(matches!(timer.side_effects.as_slice(), [crate::runtime::RuntimeSideEffect::ScheduleTimer { delay_ms: 250, .. }]));
-        assert!(fixture.service.idle_cleanup_timer_transition_with_actor_progress(
-            &progress, true, generation, 250, 250).side_effects.is_empty());
+    for _ in 1..=12 {
+        assert!(fixture.service.steering_presentation_retry_timer_needed());
         fixture.service.fail_agent_presentation_install_for_tests(0);
         // A future deadline, not elapsed wall time, proves no hot-drain attempt.
         fixture.service.presentation.steering_presentation_retries.values_mut().next().unwrap().next_attempt_at =
@@ -308,4 +303,37 @@ fn steering_display_retry_success_emits_same_drain_repaint() {
         crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { .. })).count(), 1);
     assert!(fixture.service.drain_deferred_effects_transition().side_effects.is_empty());
     assert_eq!(fixture.text().matches("user> original accepted source").count(), 1);
+}
+
+/// Prefix installation is visible progress even while a later receipt keeps the
+/// same obligation live. Each partial retry must publish only its newly installed
+/// source and deliver one same-drain repaint, without awaiting whole-pass success.
+#[test]
+fn steering_display_retry_partial_success_repaints_before_later_failure_recovers() {
+    let mut fixture = Fixture::new();
+    let primary = fixture.service.session_mut_for_tests().attach_primary("fixture", true).unwrap();
+    let receipts = (1..=3).map(|order| {
+        let mut receipt = fixture.receipt.clone();
+        receipt.id = format!("ordered-occurrence-{order}");
+        receipt.acceptance_order = order;
+        receipt
+    }).collect::<Vec<_>>();
+    fixture.service.restore_steering_recovery("%1", &fixture.conversation, &receipts).unwrap();
+    fixture.service.fail_agent_presentation_install_for_tests(0);
+    fixture.service.request_steering_presentation("%1");
+    for (index, receipt) in receipts.iter().enumerate() {
+        fixture.make_due();
+        if index < 2 { fixture.service.fail_agent_presentation_install_for_tests(1); }
+        let transition = fixture.service.drain_deferred_effects_transition();
+        assert_eq!(transition.side_effects.iter().filter(|effect| matches!(effect,
+            crate::runtime::RuntimeSideEffect::RenderClient { client_id, .. } if client_id == &primary)).count(), 1);
+        let sources = transition.side_effects.iter().filter_map(|effect| {
+            let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { entry, .. } = effect else { return None; };
+            Some(crate::storage::transcript::steering::Source::decode(entry.source_text.as_deref().unwrap()).unwrap().receipt)
+        }).collect::<Vec<_>>();
+        assert_eq!(sources, vec![receipt.clone()]);
+        assert_eq!(fixture.text().matches("user> original accepted source").count(), index + 1);
+        assert_eq!(fixture.service.steering_presentation_retry_timer_needed(), index < 2);
+    }
+    assert!(fixture.service.drain_deferred_effects_transition().side_effects.is_empty());
 }

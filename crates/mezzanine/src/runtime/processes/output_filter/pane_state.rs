@@ -1218,7 +1218,6 @@ impl RuntimeSessionService {
         actor_progress_turn_ids: &BTreeSet<String>,
     ) -> bool {
         self.external_agent_cleanup_needed()
-            || self.steering_presentation_retry_timer_needed()
             || self.missing_pane_agent_turn_cleanup_needed()
             || self.runtime_agent_surface_startup_timer_needed()
             || self.hidden_shell_render_retention_timer_needed()

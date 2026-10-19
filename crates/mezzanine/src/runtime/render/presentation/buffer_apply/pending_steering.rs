@@ -125,7 +125,7 @@ impl RuntimeSessionService {
             // this bounded diagnostic. One event covers the retained episode.
             let _ = self.append_lifecycle_event(crate::runtime::EventKind::Diagnostic,
                 serde_json::json!({
-                    "diagnostic": "steering display unavailable; original accepted source retained for paced display-only retry",
+                    "diagnostic": "steering display unavailable; receipt retained for paced display-only retry",
                     "pane_id": pane,
                     "conversation_id": key.1,
                 }).to_string());
@@ -136,6 +136,14 @@ impl RuntimeSessionService {
     /// Backoff bounds actual attempts even when other ingress drains frequently.
     pub(crate) fn steering_presentation_retry_timer_needed(&self) -> bool {
         !self.presentation.steering_presentation_retries.is_empty()
+    }
+
+    /// Models elapsed display backoff in inert tests without sleeping or workers.
+    #[cfg(test)]
+    pub(crate) fn make_steering_presentation_retries_due_for_tests(&mut self) {
+        for retry in self.presentation.steering_presentation_retries.values_mut() {
+            retry.next_attempt_at = std::time::Instant::now();
+        }
     }
 
     /// Attempts a bounded fair batch of due original-conversation obligations.
@@ -345,6 +353,12 @@ impl RuntimeSessionService {
             };
             self.append_settled_steering_source(pane, &source)?;
             self.presentation.presented_steering_receipts.insert(key);
+            // A later receipt may fail in this same pass. Already installed
+            // prefixes must become observable without waiting for whole-pass
+            // success; the existing per-client queue coalesces these effects.
+            let effects = self.render_effects_for_clients_projecting_pane(
+                pane, crate::runtime::RenderInvalidationReason::FullRedraw);
+            self.presentation.defer_render_effects(effects);
         }
         Ok(())
     }

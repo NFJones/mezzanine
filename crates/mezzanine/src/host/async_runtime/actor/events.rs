@@ -266,6 +266,11 @@ impl AsyncRuntimeSessionActor {
                     runtime_event_queue_error_after_service_drain(error, report.applied)
                 })?;
         }
+        // An empty mandatory batch can still have created its first failed
+        // display obligation. Admit its optional wake separately, never in the
+        // destructively drained vector above. Queue success also does this for
+        // direct-request paths; the tracked timer guard makes it idempotent.
+        self.queue_steering_presentation_retry_idle_wake()?;
         if report.applied > 0
             && registry_persistence_required
             && report

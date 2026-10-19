@@ -1,4 +1,9 @@
 //! Typed side-effect draining and client rendering.
+//!
+//! Real drain progress is also the existing capacity wake boundary for retained
+//! work. Steering DISPLAY recovery may separately enroll one bounded idle wake
+//! here, but never reruns a service drain, input, provider or settled action.
+//! Unexpected enrollment invariants propagate through these typed drain results.
 
 use super::coalesce::{
     async_runtime_current_unix_millis, pane_io_side_effect_targets_instance,
@@ -38,7 +43,7 @@ impl AsyncRuntimeSessionActor {
             self.side_effect_routes
                 .drain_compat(limit.saturating_sub(effects.len())),
         );
-        self.record_side_effect_drain(effects.len());
+        self.record_side_effect_drain(effects.len())?;
         Ok(effects)
     }
 
@@ -49,11 +54,12 @@ impl AsyncRuntimeSessionActor {
     /// original queue notification in the process. Re-notifying only after real
     /// drain progress keeps retained work responsive without spinning workers
     /// that inspected an unrelated non-empty queue.
-    pub(super) fn record_side_effect_drain(&mut self, drained: usize) {
+    pub(super) fn record_side_effect_drain(&mut self, drained: usize) -> Result<()> {
         // Admission may have failed while the lane was full. The service still
         // owns those exact dispatches; retry after real drain progress without
         // requiring an unrelated runtime event.
         if drained > 0 {
+            self.queue_steering_presentation_retry_idle_wake()?;
             let _ = self.queue_pending_deferred_agent_command_side_effects();
         }
         self.metrics.runtime_side_effects_drained = self
@@ -84,6 +90,7 @@ impl AsyncRuntimeSessionActor {
         if drained > 0 && (!self.side_effects.is_empty() || !self.side_effect_routes.is_empty()) {
             self.notify_side_effect_delivery();
         }
+        Ok(())
     }
 
     /// Runs the drain agent provider dispatch side effects operation for this subsystem.
@@ -101,7 +108,7 @@ impl AsyncRuntimeSessionActor {
             ));
         }
         let drained = self.side_effect_routes.drain_provider(limit);
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
 
@@ -116,7 +123,7 @@ impl AsyncRuntimeSessionActor {
             ));
         }
         let drained = self.side_effect_routes.drain_commands(limit);
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
 
@@ -135,7 +142,7 @@ impl AsyncRuntimeSessionActor {
             ));
         }
         let drained = self.side_effect_routes.drain_renders(limit);
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
 
@@ -162,7 +169,7 @@ impl AsyncRuntimeSessionActor {
         } else {
             Vec::new()
         };
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
 
@@ -182,7 +189,7 @@ impl AsyncRuntimeSessionActor {
             ));
         }
         let drained = self.side_effect_routes.drain_flushes(client_id, limit);
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
 
@@ -201,7 +208,7 @@ impl AsyncRuntimeSessionActor {
             ));
         }
         let drained = self.side_effect_routes.drain_timers(limit);
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
 
@@ -220,7 +227,7 @@ impl AsyncRuntimeSessionActor {
             ));
         }
         let drained = self.side_effect_routes.drain_persistence(limit);
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
 
@@ -235,7 +242,7 @@ impl AsyncRuntimeSessionActor {
             ));
         }
         let drained = self.side_effect_routes.drain_persistence_claims(limit);
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
 
@@ -254,7 +261,7 @@ impl AsyncRuntimeSessionActor {
             ));
         }
         let drained = self.side_effect_routes.drain_hooks(limit);
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
 
@@ -269,7 +276,7 @@ impl AsyncRuntimeSessionActor {
             ));
         }
         let drained = self.side_effect_routes.drain_clipboard(limit);
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
 
@@ -305,7 +312,7 @@ impl AsyncRuntimeSessionActor {
                     }),
             );
         }
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
 
@@ -379,7 +386,7 @@ impl AsyncRuntimeSessionActor {
             }
         }
         self.side_effects = legacy;
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained
             .into_iter()
             .map(|effect| match effect {
@@ -538,7 +545,7 @@ impl AsyncRuntimeSessionActor {
         }
         self.side_effect_routes
             .restore_pane_process(instance.clone(), retained);
-        self.record_side_effect_drain(drained.len());
+        self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
 

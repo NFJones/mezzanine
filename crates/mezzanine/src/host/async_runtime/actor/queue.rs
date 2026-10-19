@@ -1,4 +1,11 @@
 //! Timer tracking and bounded side-effect queue maintenance.
+//!
+//! Mandatory effect batches retain their existing all-or-error admission. Steering
+//! display recovery separately admits one optional existing idle wake only after
+//! successful admission and only when conservative nonpersistence capacity allows.
+//! A full lane leaves the original display obligation with the service; actual
+//! capacity progress retries enrollment without replaying any destructive drain.
+//! Tracked timer identity and monotonic generation fence recursive and stale work.
 
 use super::coalesce::{
     async_runtime_current_unix_millis, async_runtime_duration_millis,
@@ -82,6 +89,8 @@ impl AsyncRuntimeSessionActor {
             }
             RuntimeTimerKind::IdleCleanup => {
                 if scheduled {
+                    self.timers.last_idle_cleanup_generation =
+                        self.timers.last_idle_cleanup_generation.max(key.generation);
                     self.timers.idle_cleanup = Some(key.clone());
                 } else if self.timers.idle_cleanup.as_ref() == Some(key) {
                     self.timers.idle_cleanup = None;
@@ -427,7 +436,40 @@ impl AsyncRuntimeSessionActor {
         for instance in pane_processes {
             self.notify_pane_process_side_effect_delivery(&instance);
         }
+        self.queue_steering_presentation_retry_idle_wake()?;
         Ok(())
+    }
+
+    /// Separately admits one optional display-recovery wake after mandatory work.
+    /// A full queue retains the original service obligation; real capacity
+    /// progress retries enrollment. Never mix this optional timer into a taken
+    /// persistence batch or bypass capacity. The serialized preflight has no
+    /// await, and successful tracking prevents recursive/duplicate enrollment.
+    /// Unexpected enqueue errors propagate rather than masquerading as pressure.
+    pub(super) fn queue_steering_presentation_retry_idle_wake(&mut self) -> Result<()> {
+        if !self.service.steering_presentation_retry_timer_needed()
+            || self.timers.idle_cleanup.is_some()
+            || matches!(self.service.lifecycle_state(),
+                crate::runtime::RuntimeLifecycleState::Killed | crate::runtime::RuntimeLifecycleState::Failed)
+        {
+            return Ok(());
+        }
+        // Match normal queue admission's conservative nonpersistence occupancy.
+        // Even if coalescing could free space, defer optional work instead of
+        // risking the already-admitted mandatory batch's success contract.
+        if self.side_effects.len().saturating_add(self.side_effect_routes.non_persistence_len())
+            >= self.side_effect_buffer
+        {
+            return Ok(());
+        }
+        let generation = self.timers.last_idle_cleanup_generation.checked_add(1)
+            .ok_or_else(|| MezError::invalid_state("steering display idle generation exhausted"))?
+            .max(async_runtime_current_unix_millis());
+        self.queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+            key: RuntimeTimerKey::new(RuntimeTimerKind::IdleCleanup, "session",
+                generation),
+            delay_ms: DEFAULT_SHELL_RECOVERY_INTERVAL_MS,
+        }])
     }
 
     /// Enqueues one runtime side effect, preserving priority pane input order.

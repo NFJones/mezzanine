@@ -1514,7 +1514,6 @@ impl RuntimeSessionService {
     /// Drains all queued external work through one transport-neutral transition.
     pub(crate) fn drain_deferred_effects_transition(&mut self) -> RuntimeTransition {
         let mut side_effects = self.drain_pane_io_transition().side_effects;
-        side_effects.extend(self.presentation.take_deferred_render_effects());
         side_effects.extend(
             self.presentation
                 .take_agent_presentation_resize_dispatch_effects(),
@@ -1528,6 +1527,9 @@ impl RuntimeSessionService {
         side_effects.extend(self.drain_program_hook_transition().side_effects);
         side_effects.extend(self.drain_host_clipboard_read_transition().side_effects);
         side_effects.extend(self.drain_status_pill_refresh_transition().side_effects);
+        // Display retries above can install a source without another input or
+        // cleanup mutation. Deliver their coalesced repaint in this same drain.
+        side_effects.extend(self.presentation.take_deferred_render_effects());
         RuntimeTransition {
             applied: false,
             side_effects,
