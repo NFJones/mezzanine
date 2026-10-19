@@ -465,8 +465,6 @@ fn steering_display_retry_failed_projected_resume_restores_exact_pacing_and_pref
     fixture.service.mark_steering_recovery_published();
     fixture.service.fail_agent_presentation_install_for_tests(1);
     fixture.service.request_steering_presentation("%1");
-    let prefix = fixture.service.drain_transcript_persistence_transition();
-    assert_eq!(prefix.side_effects.len(), 1);
     let key = ("%1".to_string(), fixture.conversation.clone());
     let retry = fixture
         .service
@@ -477,6 +475,8 @@ fn steering_display_retry_failed_projected_resume_restores_exact_pacing_and_pref
     retry.next_attempt_at = std::time::Instant::now() + std::time::Duration::from_secs(60);
     retry.backoff = 5;
     let deadline = retry.next_attempt_at;
+    let prefix = fixture.service.drain_transcript_persistence_transition();
+    assert_eq!(prefix.side_effects.len(), 1);
     let store =
         crate::storage::transcript::AgentTranscriptStore::new(fixture.root.join("transcripts"));
     store
