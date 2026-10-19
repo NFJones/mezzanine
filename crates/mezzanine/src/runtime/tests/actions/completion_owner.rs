@@ -10,6 +10,7 @@ use super::*;
 use mez_agent::{ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution};
 
 mod pane_retention;
+mod progress_retirement;
 mod scope_retention;
 mod shutdown_retention;
 
