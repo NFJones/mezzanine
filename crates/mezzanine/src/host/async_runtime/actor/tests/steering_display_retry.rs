@@ -137,6 +137,9 @@ async fn steering_display_retry_inner_event_cannot_displace_mandatory_resize() {
     assert!(fixture.actor.timers.idle_cleanup.is_none());
     assert!(fixture.actor.service.apply_pane_resize_completion_event(
         "%1", Size::new(40, 24).unwrap()).unwrap());
+    // Keep this pressure-only drain unavailable even if setup was preempted
+    // beyond the real backoff deadline. Eligibility timing is not its subject.
+    fixture.actor.service.fail_agent_presentation_install_for_tests(0);
     let stale = RuntimeTimerKey::new(RuntimeTimerKind::IdleCleanup, "session", 0);
     fixture.actor.apply_runtime_event_batch(RuntimeEventBatch {
         events: vec![RuntimeEvent::Timer(TimerEvent { key: stale, now_ms: 1234 })],
