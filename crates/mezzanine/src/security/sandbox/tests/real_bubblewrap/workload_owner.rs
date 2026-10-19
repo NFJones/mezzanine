@@ -451,12 +451,13 @@ impl Workload for LiveWorkload {
     }
 }
 
-/// Spawns and collects one command without exposing an unguarded Child.
-pub(super) fn output(
+/// Creates the sole owner with its pre-spawn deadline, before fallible setup.
+/// Kernel fixtures reuse this exact path without exposing an unguarded Child.
+fn spawn_owner(
     mut command: Command,
     input: Option<(Vec<u8>, Vec<u8>)>,
     timeout: Duration,
-) -> Result<Output, String> {
+) -> Result<Owner<LiveWorkload>, String> {
     let deadline = Instant::now() + timeout;
     command
         .process_group(0)
@@ -470,7 +471,7 @@ pub(super) fn output(
     let child = command
         .spawn()
         .map_err(|error| format!("spawn workload: {error}"))?;
-    let mut owner = Owner::new(
+    Ok(Owner::new(
         LiveWorkload {
             child,
             stdout: None,
@@ -486,7 +487,16 @@ pub(super) fn output(
             err: Capture::default(),
         },
         deadline,
-    );
+    ))
+}
+
+/// Spawns and collects one command without exposing an unguarded Child.
+pub(super) fn output(
+    command: Command,
+    input: Option<(Vec<u8>, Vec<u8>)>,
+    timeout: Duration,
+) -> Result<Output, String> {
+    let mut owner = spawn_owner(command, input, timeout)?;
     match owner.collect() {
         Ok(status) => Ok(Output {
             status,
@@ -503,3 +513,6 @@ pub(super) fn output(
 
 #[cfg(test)]
 mod journal;
+
+#[cfg(test)]
+mod kernel;

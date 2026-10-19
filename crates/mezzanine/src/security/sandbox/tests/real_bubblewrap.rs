@@ -21,7 +21,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mez_agent::permissions::{
     EffectCompleteness, PathScopes, ResolvedPathEvidence, ResolvedPathKind,
@@ -228,28 +228,6 @@ fn bounded_child_output(
 ) -> Output {
     workload_owner::output(command, input, REAL_BUBBLEWRAP_EXECUTION_TIMEOUT)
         .unwrap_or_else(|error| panic!("{label}: {error}"))
-}
-
-#[test]
-/// Verifies successful direct-child exit cannot leave capture readers blocked
-/// on a descendant that inherited the test-owned process group's output pipes.
-fn bounded_child_output_reaps_descendants_that_retain_capture_pipes() {
-    let fixture = RealBubblewrapFixture::new("capture-owner");
-    let mut command = Command::new("/bin/sh");
-    command
-        .env_clear()
-        .env("HOME", &fixture.host_home)
-        .args(["-c", "/bin/sleep 120 &"]);
-    let started = Instant::now();
-
-    let output = bounded_child_output(command, None, "leaked pipe regression");
-
-    assert!(output.status.success(), "status={:?}", output.status);
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "capture cleanup took {:?}",
-        started.elapsed()
-    );
 }
 
 /// Executes a production launch plan through the typed pane transaction seam.
