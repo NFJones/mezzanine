@@ -561,10 +561,13 @@ fn steering_receipts_terminal_commit_settles_before_trace_failure() {
             1,
             "retain one exact-turn terminal source: rebound={rebound} fault={fault} trace={trace}"
         );
-        // Apply the SAME whitespace-insensitive matcher to positive and fault
-        // arms so wrapping/viewport formatting cannot make absence vacuous.
+        // Apply the SAME gutter/whitespace-insensitive matcher to positive and
+        // fault arms. Every wrapped diagnostic row has a leading display gutter;
+        // it is not part of the retained source and must not break the positive
+        // control (or make the negative check vacuous).
         let compact = |text: &str| {
-            text.chars()
+            text.lines()
+                .flat_map(|line| line.trim_start().strip_prefix('│').unwrap_or(line).chars())
                 .filter(|character| !character.is_whitespace())
                 .collect::<String>()
         };
