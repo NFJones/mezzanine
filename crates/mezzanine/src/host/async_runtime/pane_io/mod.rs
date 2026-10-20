@@ -80,4 +80,9 @@ pub use supervisor::build_async_pane_process_supervisor_service;
 pub use supervisor::run_async_pane_process_supervisor_service;
 
 #[cfg(test)]
+pub(crate) use supervisor::{
+    run_fixture_pane_process_supervisor, wait_for_fixture_supervisor_event_or_stop,
+};
+
+#[cfg(test)]
 mod tests;
