@@ -2346,6 +2346,14 @@ prevent first-use shell menus without suppressing normal startup or reading user
 profiles. Compound fixture failures MUST retain arbitrary primary panic payloads
 and secondary errors; the ordinary panic hook may already have run and need not
 render arbitrary compound payload fields.
+Synchronous initial-Bash reentry qualification MUST keep its original polling,
+reconciliation and certification oracles. Activity-wait iteration counts MUST
+NOT be reported as elapsed time: readable or closed PTYs can wake immediately.
+Bounded diagnostics MAY retain closed bootstrap/readiness states, independent
+pending/signature facts, counts and monotonic elapsed time, never raw pane,
+environment or event payloads. Its original manager-owned native cleanup and
+independent selector shutdown MUST both be attempted before assertion failure
+propagates; unknown native retirement MUST remain unproven and preserve storage.
 Saved-fork test storage MUST belong to an exclusively created fixture generation;
 an existing PID/counter-named directory MUST NOT be removed to claim ownership.
 Native pane termination alone MUST NOT authorize deletion while a selector
