@@ -174,8 +174,11 @@ impl NativePauseGuard {
                 "native pause startup original deadline exhausted",
             ));
         }
+        // pane_command_plan prepends exec to every explicit command. Supplying
+        // another prefix asks the shell to execute an "exec" program instead
+        // of replacing this actual root PID with cat.
         let started = service.start_initial_pane_process_with_launch_context(
-            Some("exec /bin/cat >/dev/null"),
+            Some("/bin/cat >/dev/null"),
             Some(&self.root),
             Some(&self.environment),
         )?;
