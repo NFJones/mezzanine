@@ -5076,6 +5076,7 @@ impl AgentTranscriptStore {
     /// answered from this handle's last persisted value without reading the
     /// bounded index, and an unreadable index is treated as empty and rebuilt
     /// from this value.
+    #[cfg(test)]
     pub fn mirror_session_objective(
         &self,
         conversation_id: &str,
