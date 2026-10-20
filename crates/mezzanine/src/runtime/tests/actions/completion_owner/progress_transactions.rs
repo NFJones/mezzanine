@@ -5,6 +5,7 @@
 
 use super::progress_retirement::{claimed_read_progress, retire_exact_progress};
 use super::*;
+use std::collections::BTreeSet;
 
 /// Checks the production adapter transition before any deadline or pump call.
 fn assert_idle_cleanup_enrolled(service: &RuntimeSessionService) {
