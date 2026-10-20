@@ -8,6 +8,8 @@ use crate::cli::CliEnv;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod compatibility;
+
 /// Two startup callers at one configuration root must invoke only one launcher
 /// and receive distinct retained authenticated streams from the same broker.
 /// The election guard survives launch until readiness; caller cancellation then

@@ -142,16 +142,26 @@ impl OutboundFrontendClient {
                         serde_json::json!({"protocol":PROTOCOL}).to_string(),
                     ))
                     .await?;
-                let response = stream.next().await.transpose()?.ok_or_else(|| {
-                    MezError::invalid_state("outbound readiness reply unavailable")
+                let response = stream.next().await.transpose().map_err(|error| {
+                    // Retain classification, never peer bytes or an I/O-absence
+                    // source that could authorize startup after connecting.
+                    MezError::new(error.kind(), format!(
+                        "outbound readiness frame invalid or unavailable; {WIRE_RECOVERY}"
+                    ))
+                })?.ok_or_else(|| {
+                    MezError::invalid_state(format!(
+                        "outbound readiness reply unavailable or incompatible; {WIRE_RECOVERY}"
+                    ))
                 })?;
                 if response.content_type != CONTENT_TYPE {
-                    return Err(MezError::invalid_args(
-                        "outbound readiness content type unsupported",
-                    ));
+                    return Err(MezError::invalid_args(format!(
+                        "outbound readiness content type unsupported; {WIRE_RECOVERY}"
+                    )));
                 }
                 let reply: HelloResponse = serde_json::from_str(&response.body)
-                    .map_err(|_| MezError::invalid_args("outbound readiness reply invalid"))?;
+                    .map_err(|_| MezError::invalid_args(format!(
+                        "outbound readiness reply invalid or incompatible; {WIRE_RECOVERY}"
+                    )))?;
                 if reply.protocol != PROTOCOL
                     || reply.handle.generation == 0
                     || reply.handle.owner.len() != 32
@@ -161,9 +171,9 @@ impl OutboundFrontendClient {
                         .bytes()
                         .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
                 {
-                    return Err(MezError::invalid_args(
-                        "outbound readiness identity invalid",
-                    ));
+                    return Err(MezError::invalid_args(format!(
+                        "outbound readiness identity invalid or wire contract unsupported; {WIRE_RECOVERY}"
+                    )));
                 }
                 discovery.validate()?;
                 Ok(Self {

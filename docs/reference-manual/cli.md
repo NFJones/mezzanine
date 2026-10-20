@@ -1706,6 +1706,17 @@ The internal readiness connector authenticates the Unix peer and negotiates a
 bounded hello while retaining the exact local stream. Discovery checks private
 root/socket identity without creating or replacing state; socket existence alone
 does not establish readiness or remote session authority.
+The hello token `mez-outbound/2` is the exact whole local-wire contract epoch,
+not the product release or remote transport version. It requires the current
+conditional-view schema; old `/1`, future epochs and missing evidence are rejected
+before broker-side profile setup, pairing, session creation or terminal effects.
+There is no old-protocol or feature fallback. Connected readiness failure never
+authorizes direct endpoint use, replacement startup, or operation replay.
+An EOF can mean unavailable **or** incompatible readiness; it does not establish
+the cause of an earlier conditional-snapshot error. Replacing the installed
+executable does not replace a detached broker. See [outbound broker upgrade
+guidance](../operations/iroh-production-operations-and-rollout.md#outbound-broker-wire-upgrades)
+before coordinating explicit retirement with its owner and sibling attachments.
 Election, discovery and listener cleanup compare both device and inode through
 no-follow observations and retained directory descriptors. Native stat device
 numbers use std's u64 identity representation: full-width unsigned on Linux,

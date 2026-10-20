@@ -173,7 +173,7 @@ async fn broker_attach_success_retains_exact_session_without_endpoint_acquisitio
         stream
             .send(ProtocolFrame::new(
                 "application/vnd.mezzanine.outbound+json",
-                serde_json::json!({"protocol":"mez-outbound/1","handle":handle}).to_string(),
+                serde_json::json!({"protocol":"mez-outbound/2","handle":handle}).to_string(),
             ))
             .await
             .unwrap();
@@ -263,7 +263,7 @@ async fn broker_attach_ready_errors_never_authorize_direct_fallback() {
                 std::fs::remove_file(&socket).unwrap();
             }
             stream.send(ProtocolFrame::new("application/vnd.mezzanine.outbound+json",
-                serde_json::json!({"protocol":if mode == "protocol" { "wrong" } else { "mez-outbound/1" },"handle":handle}).to_string())).await.unwrap();
+                serde_json::json!({"protocol":if mode == "protocol" { "wrong" } else { "mez-outbound/2" },"handle":handle}).to_string())).await.unwrap();
             if mode == "lost-setup" {
                 let setup = stream.next().await.unwrap().unwrap();
                 let setup: serde_json::Value = serde_json::from_str(&setup.body).unwrap();

@@ -60,12 +60,12 @@ fn serve_frontend(
         .unwrap();
     assert_eq!(
         read_frame(&mut stream).unwrap(),
-        json!({"protocol":"mez-outbound/1"})
+        json!({"protocol":"mez-outbound/2"})
     );
     let handle = json!({"owner":"00000000000000000000000000000001","generation":index + 1});
     send_frame(
         &mut stream,
-        json!({"protocol":"mez-outbound/1","handle":handle}),
+        json!({"protocol":"mez-outbound/2","handle":handle}),
     )
     .unwrap();
     let setup = read_frame(&mut stream).unwrap();
