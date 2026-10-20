@@ -63,7 +63,45 @@ where
 pub async fn run_async_pane_process_supervisor_service<F>(
     handle: AsyncRuntimeSessionHandle,
     config: AsyncPaneProcessSupervisorServiceConfig,
+    should_stop: F,
+) -> Result<AsyncPaneProcessSupervisorServiceReport>
+where
+    F: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    run_pane_process_supervisor(
+        handle,
+        config,
+        should_stop,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+
+/// Gives only the original supervisor a fixture-owned cooperative-stop wake.
+/// This test-only adapter leaves the public production API and default path
+/// unchanged; workers never receive or consume this notification port.
+#[cfg(test)]
+pub(crate) async fn run_fixture_pane_process_supervisor<F>(
+    handle: AsyncRuntimeSessionHandle,
+    config: AsyncPaneProcessSupervisorServiceConfig,
+    should_stop: F,
+    stop_wake: std::sync::Arc<tokio::sync::Notify>,
+) -> Result<AsyncPaneProcessSupervisorServiceReport>
+where
+    F: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    run_pane_process_supervisor(handle, config, should_stop, Some(&stop_wake)).await
+}
+
+/// Retains the original supervisor loop and consuming worker-drain semantics.
+/// Optional fixture wake observation exists only in test builds and only around
+/// the idle supervisor wait, never around an in-progress worker/native operation.
+async fn run_pane_process_supervisor<F>(
+    handle: AsyncRuntimeSessionHandle,
+    config: AsyncPaneProcessSupervisorServiceConfig,
     mut should_stop: F,
+    #[cfg(test)] stop_wake: Option<&tokio::sync::Notify>,
 ) -> Result<AsyncPaneProcessSupervisorServiceReport>
 where
     F: FnMut(u64, RuntimeLifecycleState) -> bool,
@@ -113,15 +151,18 @@ where
             }
             if !made_progress && report.polls < config.max_polls {
                 let bounded_idle = (config.max_polls != u64::MAX).then_some(config.idle_interval);
-                if let Some(joined) = wait_for_pane_process_supervisor_wakeup(
+                let event = wait_for_pane_process_supervisor_wakeup(
                     &handle,
                     &mut workers,
                     &mut lifecycle_watcher,
                     &mut side_effect_watcher,
                     bounded_idle,
-                )
-                .await
-                {
+                );
+                #[cfg(test)]
+                let joined = wait_for_fixture_supervisor_event_or_stop(stop_wake, event).await;
+                #[cfg(not(test))]
+                let joined = event.await;
+                if let Some(joined) = joined {
                     record_joined_pane_process_worker(joined, &mut active_panes, &mut report)?;
                 }
             }
@@ -147,6 +188,28 @@ where
     }
     report.terminal_state = *lifecycle_watcher.borrow();
     Ok(report)
+}
+
+/// Wakes only the fixture's original supervisor, including before registration.
+/// This selects only around its idle event/join wait: spawned workers and their
+/// original native waits stay owned and polled. A wake merely re-enters the loop
+/// to recheck stop intent and drain outcomes; it is not successful settlement.
+/// No dedicated port means exactly the original event-only wait.
+#[cfg(test)]
+pub(crate) async fn wait_for_fixture_supervisor_event_or_stop<T>(
+    stop_wake: Option<&tokio::sync::Notify>,
+    event: impl std::future::Future<Output = Option<T>>,
+) -> Option<T> {
+    match stop_wake {
+        Some(stop_wake) => {
+            tokio::select! {
+                biased;
+                _ = stop_wake.notified() => None,
+                event = event => event,
+            }
+        }
+        None => event.await,
+    }
 }
 
 /// Builds the production dynamic pane-process supervisor service.
