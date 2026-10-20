@@ -34,8 +34,92 @@
 //! published for either. Both regressions also require the settlement to leave no
 //! pending bootstrap and to publish no shell, environment, or path authority.
 
-use super::super::native_fixture::{CloseGate, JoinControl, NativeFixture};
+use std::sync::Arc;
+
+use super::super::native_fixture::{CloseGate, FixtureFailure, JoinControl, NativeFixture};
 use super::super::*;
+
+/// The three observed evidence-losing join boundaries, never caller-provided text.
+#[derive(Clone, Copy)]
+enum FixtureCase {
+    ReplayedForgery,
+    SpoofedForegroundAuthority,
+    SpoofedForegroundFishAuthority,
+}
+
+impl FixtureCase {
+    /// Preserves the replay label and gives the sibling a distinct static label.
+    fn label(self) -> &'static str {
+        match self {
+            Self::ReplayedForgery => "replayed-forgery",
+            Self::SpoofedForegroundAuthority => "spoofed-foreground-authority",
+            Self::SpoofedForegroundFishAuthority => "spoofed-foreground-fish-authority",
+        }
+    }
+}
+
+/// Static last-entered checkpoints for these cases only. They locate the caller
+/// boundary, not native process fate or retirement authority. Typed fixture
+/// reports provide the more specific original-stage evidence when available.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+enum FixtureCheckpoint {
+    RuntimeConstruction,
+    Scenario,
+    CallerAssertions,
+    RuntimeDrop,
+}
+
+impl FixtureCheckpoint {
+    /// Decodes only source-owned labels, never arbitrary child-provided text.
+    fn label(value: usize) -> &'static str {
+        match value {
+            value if value == Self::RuntimeConstruction as usize => "runtime-construction",
+            value if value == Self::Scenario as usize => "scenario",
+            value if value == Self::CallerAssertions as usize => "caller-assertions",
+            value if value == Self::RuntimeDrop as usize => "runtime-drop",
+            _ => "unknown",
+        }
+    }
+}
+
+/// Borrows the real panic without formatting arbitrary payloads or report Debug.
+/// A checkpoint is last-entered provenance only; it cannot establish cleanup,
+/// pre-spawn status, causation, or native settlement.
+fn fixture_join_diagnostic(
+    payload: &(dyn std::any::Any + Send),
+    checkpoint: usize,
+    case: FixtureCase,
+) -> String {
+    let provenance = FixtureCheckpoint::label(checkpoint);
+    let evidence = match payload.downcast_ref::<FixtureFailure>() {
+        Some(report) => report.safe_summary(),
+        None => "opaque-panic".to_string(),
+    };
+    format!(
+        "{} thread-unwind last-entered={provenance} {evidence}",
+        case.label()
+    )
+}
+
+/// Replaces join().unwrap() only for these three cases: success is unchanged and
+/// failure resumes the exact original allocation, including non-Clone primary
+/// and secondary payloads. A failed diagnostic write cannot replace that panic.
+fn finish_fixture_thread<T>(
+    result: std::thread::Result<T>,
+    checkpoint: usize,
+    case: FixtureCase,
+    output: &mut impl std::io::Write,
+) -> T {
+    match result {
+        Ok(value) => value,
+        Err(payload) => {
+            let diagnostic = fixture_join_diagnostic(payload.as_ref(), checkpoint, case);
+            let _ = writeln!(output, "{diagnostic}");
+            std::panic::resume_unwind(payload)
+        }
+    }
+}
 
 /// Certification material the adversarial fixture is allowed to replay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -993,31 +1077,46 @@ fn async_adversarial_foreground_fixture_owns_pty_and_intercepts_input() {
 /// any environment, path, or command authority.
 #[test]
 fn async_spoofed_foreground_program_cannot_publish_shell_authority() {
-    std::thread::Builder::new()
+    let checkpoint = Arc::new(std::sync::atomic::AtomicUsize::new(
+        FixtureCheckpoint::RuntimeConstruction as usize,
+    ));
+    let child_checkpoint = checkpoint.clone();
+    let thread = std::thread::Builder::new()
         .name("spoofed-foreground-authority".to_string())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap()
-                .block_on(async {
-                    let Some(bash) =
-                        available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
-                    else {
-                        eprintln!(
-                            "skipping adversarial Bash certification test because Bash is unavailable"
-                        );
-                        return;
-                    };
-                    let outcome = run_foreground_spoof_case(bash, SpoofMode::Spoof, "bash-authority")
-                        .await;
-                    assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
-                });
+                .unwrap();
+            runtime.block_on(async {
+                child_checkpoint.store(FixtureCheckpoint::Scenario as usize, Ordering::SeqCst);
+                let Some(bash) =
+                    available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
+                else {
+                    eprintln!(
+                        "skipping adversarial Bash certification test because Bash is unavailable"
+                    );
+                    return;
+                };
+                let outcome =
+                    run_foreground_spoof_case(bash, SpoofMode::Spoof, "bash-authority").await;
+                child_checkpoint.store(
+                    FixtureCheckpoint::CallerAssertions as usize,
+                    Ordering::SeqCst,
+                );
+                assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
+            });
+            child_checkpoint.store(FixtureCheckpoint::RuntimeDrop as usize, Ordering::SeqCst);
+            drop(runtime);
         })
-        .unwrap()
-        .join()
         .unwrap();
+    finish_fixture_thread(
+        thread.join(),
+        checkpoint.load(Ordering::SeqCst),
+        FixtureCase::SpoofedForegroundAuthority,
+        &mut std::io::stderr().lock(),
+    );
 }
 
 /// Verifies a foreground program that never answers certification keeps the
@@ -1073,33 +1172,48 @@ fn async_silent_foreground_program_keeps_pane_and_receives_no_command() {
 /// Verifies the same spoofing contract when the pane's primary shell is Fish.
 #[test]
 fn async_spoofed_foreground_program_cannot_publish_authority_under_fish() {
-    std::thread::Builder::new()
+    let checkpoint = Arc::new(std::sync::atomic::AtomicUsize::new(
+        FixtureCheckpoint::RuntimeConstruction as usize,
+    ));
+    let child_checkpoint = checkpoint.clone();
+    let thread = std::thread::Builder::new()
         .name("spoofed-foreground-fish-authority".to_string())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap()
-                .block_on(async {
-                    let Some(fish) = available_shell(&[
-                        "/usr/bin/fish",
-                        "/usr/local/bin/fish",
-                        "/opt/homebrew/bin/fish",
-                    ]) else {
-                        eprintln!(
-                            "skipping adversarial Fish certification test because fish is unavailable"
-                        );
-                        return;
-                    };
-                    let outcome = run_foreground_spoof_case(fish, SpoofMode::Spoof, "fish-authority")
-                        .await;
-                    assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
-                });
+                .unwrap();
+            runtime.block_on(async {
+                child_checkpoint.store(FixtureCheckpoint::Scenario as usize, Ordering::SeqCst);
+                let Some(fish) = available_shell(&[
+                    "/usr/bin/fish",
+                    "/usr/local/bin/fish",
+                    "/opt/homebrew/bin/fish",
+                ]) else {
+                    eprintln!(
+                        "skipping adversarial Fish certification test because fish is unavailable"
+                    );
+                    return;
+                };
+                let outcome =
+                    run_foreground_spoof_case(fish, SpoofMode::Spoof, "fish-authority").await;
+                child_checkpoint.store(
+                    FixtureCheckpoint::CallerAssertions as usize,
+                    Ordering::SeqCst,
+                );
+                assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
+            });
+            child_checkpoint.store(FixtureCheckpoint::RuntimeDrop as usize, Ordering::SeqCst);
+            drop(runtime);
         })
-        .unwrap()
-        .join()
         .unwrap();
+    finish_fixture_thread(
+        thread.join(),
+        checkpoint.load(Ordering::SeqCst),
+        FixtureCase::SpoofedForegroundFishAuthority,
+        &mut std::io::stderr().lock(),
+    );
 }
 
 /// Verifies the same spoofing contract when the pane's primary shell is Zsh.
@@ -1208,50 +1322,66 @@ fn async_forged_identity_records_settle_without_abort() {
 /// where a later event re-enters the handoff.
 #[test]
 fn async_replayed_forgery_settles_without_bootstrap_reentry() {
-    std::thread::Builder::new()
+    let checkpoint = Arc::new(std::sync::atomic::AtomicUsize::new(
+        FixtureCheckpoint::RuntimeConstruction as usize,
+    ));
+    let child_checkpoint = checkpoint.clone();
+    let thread = std::thread::Builder::new()
         .name("replayed-forgery-settlement".to_string())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap()
-                .block_on(async {
-                    let Some(bash) = available_shell(&[
-                        "/bin/bash",
-                        "/usr/bin/bash",
-                        "/usr/local/bin/bash",
-                    ]) else {
-                        eprintln!(
-                            "skipping forged identity settlement regression because Bash is unavailable"
-                        );
-                        return;
-                    };
-                    let outcome = run_foreground_spoof_case(
-                        bash,
-                        SpoofMode::ForgedIdentity,
-                        "bash-forged-settle",
-                    )
-                    .await;
-                    assert!(
-                        !outcome.service.pane_bootstrap_is_pending_for_tests("%1"),
-                        "replayed forgery must not leave a pending bootstrap: {}",
-                        outcome.log_text
+                .unwrap();
+            runtime.block_on(async {
+                child_checkpoint.store(FixtureCheckpoint::Scenario as usize, Ordering::SeqCst);
+                let Some(bash) =
+                    available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
+                else {
+                    eprintln!(
+                        "skipping forged identity settlement regression because Bash is unavailable"
                     );
-                    assert!(
-                        !outcome
-                            .service
-                            .running_shell_transactions_for_tests()
-                            .values()
-                            .any(|transaction| transaction.pane_id == "%1"),
-                        "replayed forgery must settle without a running shell transaction: {}",
-                        outcome.log_text
-                    );
-                    assert_no_spoofed_authority(&outcome, SpoofMode::ForgedIdentity);
-                    assert_replay_settlement_is_terminal(&outcome);
-                });
+                    return;
+                };
+                let outcome = run_foreground_spoof_case(
+                    bash,
+                    SpoofMode::ForgedIdentity,
+                    "bash-forged-settle",
+                )
+                .await;
+                child_checkpoint.store(
+                    FixtureCheckpoint::CallerAssertions as usize,
+                    Ordering::SeqCst,
+                );
+                assert!(
+                    !outcome.service.pane_bootstrap_is_pending_for_tests("%1"),
+                    "replayed forgery must not leave a pending bootstrap: {}",
+                    outcome.log_text
+                );
+                assert!(
+                    !outcome
+                        .service
+                        .running_shell_transactions_for_tests()
+                        .values()
+                        .any(|transaction| transaction.pane_id == "%1"),
+                    "replayed forgery must settle without a running shell transaction: {}",
+                    outcome.log_text
+                );
+                assert_no_spoofed_authority(&outcome, SpoofMode::ForgedIdentity);
+                assert_replay_settlement_is_terminal(&outcome);
+            });
+            child_checkpoint.store(FixtureCheckpoint::RuntimeDrop as usize, Ordering::SeqCst);
+            drop(runtime);
         })
-        .unwrap()
-        .join()
         .unwrap();
+    finish_fixture_thread(
+        thread.join(),
+        checkpoint.load(Ordering::SeqCst),
+        FixtureCase::ReplayedForgery,
+        &mut std::io::stderr().lock(),
+    );
 }
+
+#[cfg(test)]
+mod join_evidence_tests;
