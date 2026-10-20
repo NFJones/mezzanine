@@ -3,6 +3,8 @@
 use super::*;
 use crate::runtime::processes::RuntimePaneEnvironmentAuthority;
 
+mod reentry_qualification;
+
 /// A primary identity survives restart and rebind despite a different current
 /// naming policy. A new conversation receives a distinct name, while the old
 /// conversation keeps its hidden reservation and durable identity.
@@ -1242,209 +1244,218 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
-    service.start_initial_pane_process(None).unwrap();
-    wait_until_primary_shell_foreground(&mut service, "%1");
-    service
+    reentry_qualification::with_cleanup(&mut service, |service| {
+        service.start_initial_pane_process(None).unwrap();
+        wait_until_primary_shell_foreground(service, "%1");
+        service
         .write_input_to_pane(
             &primary,
             Some("%1"),
             b"PROMPT_COMMAND=; PS1='parent$ '; export PS1; printf '__MEZ_PARENT_PROMPT_INSTALLED__\\n'\n",
         )
         .unwrap();
-    let mut parent_prompt_installed = false;
-    for _ in 0..200 {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        let screen = service.process_pane_screen("%1").unwrap();
-        if screen
-            .visible_lines()
-            .join("\n")
-            .contains("__MEZ_PARENT_PROMPT_INSTALLED__")
-            && screen.cursor_state().column == "parent$ ".chars().count()
-        {
-            parent_prompt_installed = true;
-            break;
+        let mut parent_prompt_installed = false;
+        for _ in 0..200 {
+            let _ = service.poll_pane_outputs(8192).unwrap();
+            let screen = service.process_pane_screen("%1").unwrap();
+            if screen
+                .visible_lines()
+                .join("\n")
+                .contains("__MEZ_PARENT_PROMPT_INSTALLED__")
+                && screen.cursor_state().column == "parent$ ".chars().count()
+            {
+                parent_prompt_installed = true;
+                break;
+            }
+            wait_for_pane_process_activity(service, "%1", Duration::from_millis(10));
         }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
-    assert!(
-        parent_prompt_installed,
-        "managed Bash did not display the configured parent prompt; screen={:?}; cursor={:?}",
-        service.process_pane_screen("%1").unwrap().visible_lines(),
-        service.process_pane_screen("%1").unwrap().cursor_state()
-    );
+        assert!(
+            parent_prompt_installed,
+            "managed Bash did not display the configured parent prompt; screen={:?}; cursor={:?}",
+            service.process_pane_screen("%1").unwrap().visible_lines(),
+            service.process_pane_screen("%1").unwrap().cursor_state()
+        );
 
-    let show = service
-        .execute_terminal_command(&primary, "agent-shell")
-        .unwrap();
-    assert!(show.contains("visibility=visible"), "{show}");
-    let mut first_bootstrap_completed = false;
-    for _ in 0..400 {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        // Managed bootstrap ends are settled by the reconciliation pump, so a
-        // direct service driver must run that pass alongside the pane poll.
-        let _ = service.maybe_bootstrap_ready_panes().unwrap();
-        if !service.pane_bootstrap_is_pending_for_tests("%1")
-            && matches!(
-                service.pane_environment_authority("%1"),
-                RuntimePaneEnvironmentAuthority::Certified
-            )
-        {
-            first_bootstrap_completed = true;
-            break;
-        }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
-    assert!(
-        first_bootstrap_completed,
-        "initial unmanaged Bash agent-subshell bootstrap did not publish authority; authority={:?}",
-        service.pane_environment_authority("%1")
-    );
-    assert!(
-        service.pane_environment_signature("%1").is_some(),
-        "pane mode must publish a successful dependency-free environment signature"
-    );
-
-    let hide = service
-        .execute_terminal_command(&primary, "agent-shell")
-        .unwrap();
-    assert!(hide.contains("visibility=hidden"), "{hide}");
-    for _ in 0..200 {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        if service.pane_foreground_certified_shell_state("%1") == Some(true) {
-            break;
-        }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
-    assert_eq!(
-        service.pane_foreground_certified_shell_state("%1"),
-        Some(true),
-        "parent Bash did not regain the foreground after agent exit"
-    );
-    let pane_log_after_exit = service
-        .process_pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    assert!(
-        !pane_log_after_exit
-            .lines()
-            .any(|line| line.trim() == "exit"),
-        "managed Bash child-shell exit must not enter the pane log: {pane_log_after_exit:?}"
-    );
-    let parent_prompt_column = "parent$ ".chars().count();
-    let mut restored_prompt_cursor = None;
-    for _ in 0..200 {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        let screen = service.process_pane_screen("%1").unwrap();
-        if screen.visible_lines().join("\n").contains("parent$")
-            && screen.cursor_state().column == parent_prompt_column
-        {
-            restored_prompt_cursor = Some(screen.cursor_state().column);
-            break;
-        }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
-    assert_eq!(
-        restored_prompt_cursor,
-        Some(parent_prompt_column),
-        "managed Bash must leave the cursor immediately after its restored prompt; screen={:?}; cursor={:?}",
-        service.process_pane_screen("%1").unwrap().visible_lines(),
-        service.process_pane_screen("%1").unwrap().cursor_state()
-    );
-    wait_for_pane_output_quiet_period(
-        &mut service,
-        "%1",
-        Duration::from_millis(20),
-        Duration::from_secs(1),
-    );
-    assert_eq!(
-        service
-            .process_pane_screen("%1")
-            .unwrap()
-            .cursor_state()
-            .column,
-        parent_prompt_column,
-        "managed Bash must keep the cursor after its restored prompt once delayed exit output settles; screen={:?}; cursor={:?}",
-        service.process_pane_screen("%1").unwrap().visible_lines(),
-        service.process_pane_screen("%1").unwrap().cursor_state()
-    );
-
-    service
-        .write_input_to_pane(
-            &primary,
-            Some("%1"),
-            b"printf '__MEZ_PARENT_COMMAND_ONE__\\n'; printf '__MEZ_PARENT_COMMAND_TWO__\\n'\n",
+        let bootstrap_started = Instant::now();
+        let mut bootstrap_trace = reentry_qualification::BootstrapTrace::default();
+        bootstrap_trace.observe(service, 0, bootstrap_started.elapsed());
+        let show = service
+            .execute_terminal_command(&primary, "agent-shell")
+            .unwrap();
+        assert!(show.contains("visibility=visible"), "{show}");
+        bootstrap_trace.observe(service, 0, bootstrap_started.elapsed());
+        let polling_started = Instant::now();
+        let mut polls = 0;
+        let first_bootstrap_completed = reentry_qualification::drive_initial_bootstrap(
+            service,
+            |_| polling_started.elapsed(),
+            |service| {
+                let _ = service.poll_pane_outputs(8192)?;
+                // Receiver ends settle in reconciliation, not the pane poll alone.
+                let _ = service.maybe_bootstrap_ready_panes()?;
+                polls += 1;
+                bootstrap_trace.observe(service, polls, bootstrap_started.elapsed());
+                Ok(reentry_qualification::initial_bootstrap_is_complete(
+                    service.pane_bootstrap_is_pending_for_tests("%1"),
+                    service.pane_environment_authority("%1")
+                        == RuntimePaneEnvironmentAuthority::Certified,
+                ))
+            },
+            |service, timeout| wait_for_pane_process_activity(service, "%1", timeout),
         )
         .unwrap();
-    let mut parent_commands_completed = false;
-    for _ in 0..200 {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        let screen = service
+        bootstrap_trace.finish(service, bootstrap_started.elapsed());
+        eprintln!("initial Bash bootstrap qualification: trace={bootstrap_trace:?}");
+        assert!(
+            first_bootstrap_completed,
+            "initial unmanaged Bash agent-subshell bootstrap did not publish authority; trace={bootstrap_trace:?}"
+        );
+        assert!(
+            service.pane_environment_signature("%1").is_some(),
+            "pane mode must publish a successful dependency-free environment signature"
+        );
+
+        let hide = service
+            .execute_terminal_command(&primary, "agent-shell")
+            .unwrap();
+        assert!(hide.contains("visibility=hidden"), "{hide}");
+        for _ in 0..200 {
+            let _ = service.poll_pane_outputs(8192).unwrap();
+            if service.pane_foreground_certified_shell_state("%1") == Some(true) {
+                break;
+            }
+            wait_for_pane_process_activity(service, "%1", Duration::from_millis(10));
+        }
+        assert_eq!(
+            service.pane_foreground_certified_shell_state("%1"),
+            Some(true),
+            "parent Bash did not regain the foreground after agent exit"
+        );
+        let pane_log_after_exit = service
             .process_pane_screen("%1")
             .unwrap()
             .normal_content_lines()
             .join("\n");
-        if screen.contains("__MEZ_PARENT_COMMAND_ONE__")
-            && screen.contains("__MEZ_PARENT_COMMAND_TWO__")
-        {
-            parent_commands_completed = true;
-            break;
+        assert!(
+            !pane_log_after_exit
+                .lines()
+                .any(|line| line.trim() == "exit"),
+            "managed Bash child-shell exit must not enter the pane log: {pane_log_after_exit:?}"
+        );
+        let parent_prompt_column = "parent$ ".chars().count();
+        let mut restored_prompt_cursor = None;
+        for _ in 0..200 {
+            let _ = service.poll_pane_outputs(8192).unwrap();
+            let screen = service.process_pane_screen("%1").unwrap();
+            if screen.visible_lines().join("\n").contains("parent$")
+                && screen.cursor_state().column == parent_prompt_column
+            {
+                restored_prompt_cursor = Some(screen.cursor_state().column);
+                break;
+            }
+            wait_for_pane_process_activity(service, "%1", Duration::from_millis(10));
         }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
-    assert!(
-        parent_commands_completed,
-        "parent Bash commands did not complete"
-    );
+        assert_eq!(
+            restored_prompt_cursor,
+            Some(parent_prompt_column),
+            "managed Bash must leave the cursor immediately after its restored prompt; screen={:?}; cursor={:?}",
+            service.process_pane_screen("%1").unwrap().visible_lines(),
+            service.process_pane_screen("%1").unwrap().cursor_state()
+        );
+        wait_for_pane_output_quiet_period(
+            service,
+            "%1",
+            Duration::from_millis(20),
+            Duration::from_secs(1),
+        );
+        assert_eq!(
+            service
+                .process_pane_screen("%1")
+                .unwrap()
+                .cursor_state()
+                .column,
+            parent_prompt_column,
+            "managed Bash must keep the cursor after its restored prompt once delayed exit output settles; screen={:?}; cursor={:?}",
+            service.process_pane_screen("%1").unwrap().visible_lines(),
+            service.process_pane_screen("%1").unwrap().cursor_state()
+        );
 
-    service.set_pane_readiness("%1", PaneReadinessState::PromptCandidate);
-    let show_again = service
-        .execute_terminal_command(&primary, "agent-shell")
-        .unwrap();
-    assert!(show_again.contains("visibility=visible"), "{show_again}");
-    let mut reentry_completed = false;
-    let reentry_deadline = Instant::now() + Duration::from_secs(30);
-    while Instant::now() < reentry_deadline {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        // The identity-probe end is settled by the deferred pass, so a direct
-        // service driver must run the reconciliation pump alongside the poll.
-        let _ = service.maybe_bootstrap_ready_panes().unwrap();
-        if service.agent_subshell_is_active("%1")
-            && !service.pane_bootstrap_is_pending_for_tests("%1")
-            && matches!(
-                service.pane_environment_authority("%1"),
-                RuntimePaneEnvironmentAuthority::Certified
-            )
-        {
-            reentry_completed = true;
-            break;
-        }
-        if matches!(
-            service.pane_environment_authority("%1"),
-            RuntimePaneEnvironmentAuthority::Unavailable(_)
-        ) {
-            break;
-        }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
-    let diagnostic_events =
         service
-            .event_log()
+            .write_input_to_pane(
+                &primary,
+                Some("%1"),
+                b"printf '__MEZ_PARENT_COMMAND_ONE__\\n'; printf '__MEZ_PARENT_COMMAND_TWO__\\n'\n",
+            )
+            .unwrap();
+        let mut parent_commands_completed = false;
+        for _ in 0..200 {
+            let _ = service.poll_pane_outputs(8192).unwrap();
+            let screen = service
+                .process_pane_screen("%1")
+                .unwrap()
+                .normal_content_lines()
+                .join("\n");
+            if screen.contains("__MEZ_PARENT_COMMAND_ONE__")
+                && screen.contains("__MEZ_PARENT_COMMAND_TWO__")
+            {
+                parent_commands_completed = true;
+                break;
+            }
+            wait_for_pane_process_activity(service, "%1", Duration::from_millis(10));
+        }
+        assert!(
+            parent_commands_completed,
+            "parent Bash commands did not complete"
+        );
+
+        service.set_pane_readiness("%1", PaneReadinessState::PromptCandidate);
+        let show_again = service
+            .execute_terminal_command(&primary, "agent-shell")
+            .unwrap();
+        assert!(show_again.contains("visibility=visible"), "{show_again}");
+        let mut reentry_completed = false;
+        let reentry_deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < reentry_deadline {
+            let _ = service.poll_pane_outputs(8192).unwrap();
+            // The identity-probe end is settled by the deferred pass, so a direct
+            // service driver must run the reconciliation pump alongside the poll.
+            let _ = service.maybe_bootstrap_ready_panes().unwrap();
+            if service.agent_subshell_is_active("%1")
+                && !service.pane_bootstrap_is_pending_for_tests("%1")
+                && matches!(
+                    service.pane_environment_authority("%1"),
+                    RuntimePaneEnvironmentAuthority::Certified
+                )
+            {
+                reentry_completed = true;
+                break;
+            }
+            if matches!(
+                service.pane_environment_authority("%1"),
+                RuntimePaneEnvironmentAuthority::Unavailable(_)
+            ) {
+                break;
+            }
+            wait_for_pane_process_activity(service, "%1", Duration::from_millis(10));
+        }
+        let diagnostic_events =
+            service
+                .event_log()
+                .unwrap()
+                .replay_after_for(&EventAudience::AllPrimaries, 0, 4096);
+        let process_screen = service
+            .process_pane_screen("%1")
             .unwrap()
-            .replay_after_for(&EventAudience::AllPrimaries, 0, 4096);
-    let process_screen = service
-        .process_pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    assert!(
-        reentry_completed,
-        "Bash agent-shell re-entry did not complete; authority={:?}; readiness={:?}; transactions={:?}; events={diagnostic_events:?}; process_screen={process_screen:?}",
-        service.pane_environment_authority("%1"),
-        service.pane_readiness_state("%1"),
-        service.running_shell_transactions_for_tests()
-    );
-    service.terminate_all_pane_processes().unwrap();
+            .normal_content_lines()
+            .join("\n");
+        assert!(
+            reentry_completed,
+            "Bash agent-shell re-entry did not complete; authority={:?}; readiness={:?}; transactions={:?}; events={diagnostic_events:?}; process_screen={process_screen:?}",
+            service.pane_environment_authority("%1"),
+            service.pane_readiness_state("%1"),
+            service.running_shell_transactions_for_tests()
+        );
+    });
 }
 
 /// Verifies that `/exit` from the pane-scoped agent prompt performs the same

@@ -2353,6 +2353,18 @@ diagnostics MUST contain only bounded source-owned case/stage/checkpoint/error-k
 labels and counts, never error or panic
 text, cleanup bodies, paths, pane content, environment, or argv. A last-entered
 checkpoint is provenance only, not proof of causation or native settlement.
+Synchronous initial-Bash reentry qualification MUST keep its original poll then
+reconciliation order and certification oracles, with the original nominal
+400*10ms wait allowance expressed as one monotonic elapsed budget. A synchronous
+pump may overrun that budget but late readiness MUST NOT qualify success, and
+subsequent activity waits MUST be clipped to the remaining allowance.
+Activity-wait iteration counts MUST
+NOT be reported as elapsed time: readable or closed PTYs can wake immediately.
+Bounded diagnostics MAY retain closed bootstrap/readiness states, independent
+pending/signature facts, counts and monotonic elapsed time, never raw pane,
+environment or event payloads. Its original manager-owned native cleanup and
+independent selector shutdown MUST both be attempted before assertion failure
+propagates; unknown native retirement MUST remain unproven and preserve storage.
 Saved-fork test storage MUST belong to an exclusively created fixture generation;
 an existing PID/counter-named directory MUST NOT be removed to claim ownership.
 Native pane termination alone MUST NOT authorize deletion while a selector
