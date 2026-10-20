@@ -379,6 +379,154 @@ async fn runtime_completion_progress_no_store_stop_recovers_after_terminal_clear
 }
 
 /// An empty journal is a real worker-observed unavailable source, not permission
+/// Runtime-only progress can lose suffix authority after a real terminal Stop.
+/// With no eligible reconstruction backend, retained source must not keep an
+/// impossible idle retry alive. A genuine later presentation source/backend
+/// transition re-enrolls recovery without changing original no-save policy.
+#[tokio::test]
+async fn runtime_completion_ineligible_progress_refusal_quiesces_then_reactivates() {
+    let mut fixture = CompletionFixture::fetch_with_save_policy(true, false).await;
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .set_log_level(&fixture.turn.pane_id, AgentLogLevel::Debug)
+        .unwrap();
+    let progress = claimed_read_progress(&fixture, "F668_INELIGIBLE_PROGRESS".into());
+    assert!(
+        fixture
+            .service
+            .apply_action_presentation_progress(progress)
+            .unwrap()
+    );
+    fixture
+        .service
+        .hold_agent_presentation_installs_for_tests(true);
+    fixture
+        .service
+        .stop_agent_turn_for_pane(&fixture.turn.pane_id)
+        .unwrap();
+    assert!(
+        !fixture
+            .service
+            .agent_turn_executions()
+            .contains_key(&fixture.turn.turn_id)
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_turn_ledger()
+            .turn(&fixture.turn.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Interrupted
+    );
+    let sources = fixture
+        .service
+        .action_presentation_progress_sources_for_tests(&fixture.turn.pane_id);
+    let mut replacement = fixture
+        .service
+        .agent_pane_screen(&fixture.turn.pane_id)
+        .unwrap()
+        .clone();
+    replacement.feed(b"\r\nF668_INELIGIBLE_REPLACEMENT\r\n");
+    fixture.service.set_agent_pane_screen(
+        fixture.turn.pane_id.clone(),
+        fixture.turn.conversation_id.clone(),
+        replacement.clone(),
+    );
+    fixture
+        .service
+        .hold_agent_presentation_installs_for_tests(false);
+    let refused = retire_exact_progress(&mut fixture, false);
+    assert_eq!((refused.retired, refused.retained), (0, 1));
+    assert!(refused.errors.is_empty());
+    assert_eq!(
+        fixture
+            .service
+            .action_presentation_progress_sources_for_tests(&fixture.turn.pane_id),
+        sources
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_pane_screen(&fixture.turn.pane_id)
+            .unwrap(),
+        &replacement
+    );
+    assert!(
+        !fixture.service.action_progress_retirement_retry_needed(),
+        "ineligible refused suffix must not poll forever"
+    );
+    assert!(
+        fixture
+            .service
+            .idle_cleanup_timer_transition_with_actor_progress(&BTreeSet::new(), false, 79, 500, 25)
+            .side_effects
+            .is_empty()
+    );
+    fixture.service.retry_completion_publications();
+    assert!(
+        fixture
+            .service
+            .presentation
+            .take_agent_presentation_resize_dispatch_effects()
+            .is_empty()
+    );
+
+    let store = AgentTranscriptStore::new(fixture._root.0.join("transcripts"));
+    let mut writer = RuntimeServiceFixture::new()
+        .control_socket(fixture._root.0.join("writer.sock"))
+        .build();
+    writer.set_agent_transcript_store(store.clone());
+    writer
+        .attach_primary("writer", true, Size::new(120, 32).unwrap(), 120)
+        .unwrap();
+    writer
+        .agent_shell_store_mut()
+        .bind_conversation("%1", &fixture.turn.conversation_id, 0)
+        .unwrap();
+    writer
+        .append_agent_status_text_to_terminal_buffer("%1", "F668_ELIGIBLE_SOURCE_ARRIVED")
+        .unwrap();
+    fixture.service.set_agent_transcript_store(store.clone());
+    assert!(fixture.service.action_progress_retirement_retry_needed());
+    assert_idle_cleanup_enrolled(&fixture.service);
+    tokio::time::sleep(std::time::Duration::from_millis(275)).await;
+    fixture.service.retry_completion_publications();
+    fixture
+        .service
+        .presentation
+        .take_agent_presentation_resize_dispatch_effects();
+    let work = fixture
+        .service
+        .take_agent_presentation_resize_work(&fixture.turn.pane_id)
+        .unwrap()
+        .expect("genuine eligible-source transition");
+    let result = RuntimeSessionService::build_agent_presentation_resize(work)
+        .unwrap()
+        .unwrap();
+    assert!(
+        fixture
+            .service
+            .apply_agent_presentation_resize_result(result)
+            .unwrap()
+    );
+    assert_eq!(
+        fixture
+            .service
+            .action_presentation_progress_counts_for_tests(&fixture.turn.pane_id),
+        (0, 0)
+    );
+    assert!(
+        store
+            .inspect(&fixture.turn.conversation_id)
+            .unwrap()
+            .is_empty(),
+        "late presentation backend must not archive original runtime-only model rows"
+    );
+}
+
+/// An empty journal is a real worker-observed unavailable source, not permission
 /// to install a stale candidate or poll the same impossible reconstruction.
 /// The returned disposition must stop idle replay while preserving source and
 /// pixels, then allow a fresh probe after genuine canonical source is published
