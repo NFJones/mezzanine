@@ -389,6 +389,21 @@ async fn run_fixture_supervisor(
     }
 }
 
+/// Coordinates this fixture's existing stop, shutdown and completion futures.
+/// This extraction initially retains the original Shutdown-before-completion
+/// ordering so the inert coordinator-only regression can expose that ordering.
+/// Errors transfer unchanged; actor close remains the caller's subsequent step.
+async fn settle_fixture_supervisor<E>(
+    done: &AtomicBool,
+    _wake: &tokio::sync::Notify,
+    completion: impl std::future::Future<Output = std::result::Result<(), E>>,
+    shutdown: impl std::future::Future<Output = std::result::Result<(), E>>,
+) -> std::result::Result<(), E> {
+    done.store(true, Ordering::SeqCst);
+    shutdown.await?;
+    completion.await
+}
+
 /// Returns the first available shell executable from one candidate list.
 fn available_shell(candidates: &'static [&'static str]) -> Option<&'static str> {
     candidates
@@ -719,19 +734,27 @@ async fn run_foreground_spoof_case_observed(
             fixture_log(&log),
             refusal.map(SpoofRefusal::as_str).unwrap_or("none")
         );
-        worker_done.store(true, Ordering::SeqCst);
-        let mut stop = RuntimeEventBatch::new();
-        stop.push(RuntimeEvent::Shutdown(ShutdownEvent {
-            reason: "owned adversarial fixture ordered teardown".into(),
-            force: false,
-            failed: false,
-        }));
-        client_handle.submit_runtime_events(stop).await?;
-        worker_completion.await.map_err(|error| {
-            MezError::invalid_state(format!(
-                "original supervisor completion notification: {error}"
-            ))
-        })?;
+        settle_fixture_supervisor(
+            &worker_done,
+            &client_handle.event_delivery_notify,
+            async move {
+                worker_completion.await.map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "original supervisor completion notification: {error}"
+                    ))
+                })
+            },
+            async {
+                let mut stop = RuntimeEventBatch::new();
+                stop.push(RuntimeEvent::Shutdown(ShutdownEvent {
+                    reason: "owned adversarial fixture ordered teardown".into(),
+                    force: false,
+                    failed: false,
+                }));
+                client_handle.submit_runtime_events(stop).await.map(|_| ())
+            },
+        )
+        .await?;
         let _ = client_close.close(&client_handle).await.unwrap();
         Ok((
             snapshot,
@@ -1489,3 +1512,6 @@ mod join_evidence_tests;
 
 #[cfg(test)]
 mod supervisor_return_tests;
+
+#[cfg(test)]
+mod coordinator_order_tests;
