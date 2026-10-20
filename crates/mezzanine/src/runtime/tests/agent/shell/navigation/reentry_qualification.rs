@@ -1,7 +1,7 @@
 //! Initial Bash qualification observations and synchronous failure custody.
 //!
-//! This one-consumer fixture helper changes no poll/wait budget or authority
-//! predicate. State transitions are bounded and payload-free; elapsed time is
+//! This one-consumer fixture helper preserves the nominal wait allowance and
+//! authority predicate. State transitions are bounded and payload-free; elapsed time is
 //! measured, never inferred from activity-wait attempts. The original service
 //! stays outside the caught scenario and attempts manager-owned native cleanup
 //! and independent selector shutdown exactly once before propagating failure.
@@ -110,19 +110,28 @@ pub(super) fn initial_bootstrap_is_complete(pending: bool, certified: bool) -> b
 
 /// One-consumer driver shared by live qualification and process-free controls.
 /// The pump owns poll then reconciliation then authority observation; the wait
-/// is activity-driven, not a guaranteed ten-millisecond delay. This extraction
-/// deliberately retains the old attempt guard for the desired-behavior RED.
+/// is activity-driven, not a guaranteed ten-millisecond delay. Preserve the old
+/// nominal 400*10ms allowance as one explicit monotonic elapsed budget instead
+/// of spending an attempt on each immediate wake. No transition renews it.
+/// A pump may itself overrun (it is synchronous); such a late observation must
+/// not qualify success, and no further wait or pump starts after expiry.
 pub(super) fn drive_initial_bootstrap<S>(
     state: &mut S,
-    _elapsed: impl Fn(&S) -> Duration,
+    elapsed: impl Fn(&S) -> Duration,
     mut pump: impl FnMut(&mut S) -> crate::Result<bool>,
     mut wait: impl FnMut(&mut S, Duration),
 ) -> crate::Result<bool> {
-    for _ in 0..400 {
-        if pump(state)? {
+    const BUDGET: Duration = Duration::from_millis(400 * 10);
+    while elapsed(state) < BUDGET {
+        let complete = pump(state)?;
+        let remaining = BUDGET.saturating_sub(elapsed(state));
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        if complete {
             return Ok(true);
         }
-        wait(state, Duration::from_millis(10));
+        wait(state, remaining.min(Duration::from_millis(10)));
     }
     Ok(false)
 }
@@ -440,5 +449,101 @@ fn reentry_qualification_initial_driver_preserves_authority_and_early_stop() {
         )
         .unwrap()
     );
+    assert_eq!(pumps, 1);
+}
+
+/// Permanently Pending remains a failure under one fixed allowance even as
+/// useful pumps consume time. Waits cannot push the driver beyond its budget or
+/// restart it; no synthetic success or retries are used to make this terminate.
+#[test]
+fn reentry_qualification_initial_driver_expires_pending_at_nominal_budget() {
+    let mut clock = Duration::ZERO;
+    let mut pumps = 0;
+    let completed = drive_initial_bootstrap(
+        &mut clock,
+        |clock| *clock,
+        |clock| {
+            pumps += 1;
+            *clock += Duration::from_millis(1);
+            Ok(initial_bootstrap_is_complete(true, true))
+        },
+        |clock, timeout| {
+            assert!(timeout <= Duration::from_millis(10));
+            assert!(*clock + timeout <= Duration::from_secs(4));
+            *clock += timeout;
+        },
+    )
+    .unwrap();
+    assert!(!completed);
+    assert_eq!(clock, Duration::from_secs(4));
+    assert_eq!(pumps, 364);
+}
+
+/// A final activity wait gets only the five milliseconds still available;
+/// readiness must not extend or reset the original allowance after that wake.
+#[test]
+fn reentry_qualification_initial_driver_clips_last_activity_wait() {
+    let mut clock = Duration::from_millis(3995);
+    let mut pumps = 0;
+    let mut waits = Vec::new();
+    let completed = drive_initial_bootstrap(
+        &mut clock,
+        |clock| *clock,
+        |_| {
+            pumps += 1;
+            Ok(false)
+        },
+        |clock, timeout| {
+            waits.push(timeout);
+            *clock += timeout;
+        },
+    )
+    .unwrap();
+    assert!(!completed);
+    assert_eq!(pumps, 1);
+    assert_eq!(waits, [Duration::from_millis(5)]);
+    assert_eq!(clock, Duration::from_secs(4));
+}
+
+/// Synchronous pumps cannot be preempted here. Ready observed at or after the
+/// bound is explicitly rejected without any extra wait, while just-in-budget
+/// ready is accepted. The deadline is not an execution-cancellation claim.
+#[test]
+fn reentry_qualification_initial_driver_rejects_late_pump_success() {
+    for (elapsed_ms, ready) in [(3999, true), (4000, true), (4001, true), (4001, false)] {
+        let mut clock = Duration::ZERO;
+        let mut pumps = 0;
+        let completed = drive_initial_bootstrap(
+            &mut clock,
+            |clock| *clock,
+            |clock| {
+                pumps += 1;
+                *clock = Duration::from_millis(elapsed_ms);
+                Ok(ready)
+            },
+            |_, _| panic!("completed or expired pump must not wait"),
+        )
+        .unwrap();
+        assert_eq!(completed, elapsed_ms < 4000 && ready);
+        assert_eq!(pumps, 1);
+    }
+}
+
+/// A pump error remains its original error and does not spend an activity wait,
+/// qualify success, or replay the poll/reconciliation step to manufacture state.
+#[test]
+fn reentry_qualification_initial_driver_preserves_pump_error() {
+    let mut pumps = 0;
+    let error = drive_initial_bootstrap(
+        &mut pumps,
+        |_| Duration::ZERO,
+        |pumps| {
+            *pumps += 1;
+            Err(crate::MezError::invalid_state("synthetic-pump-error"))
+        },
+        |_, _| panic!("failed pump must not wait"),
+    )
+    .unwrap_err();
+    assert_eq!(error.message(), "synthetic-pump-error");
     assert_eq!(pumps, 1);
 }

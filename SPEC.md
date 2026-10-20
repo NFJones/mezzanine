@@ -2346,8 +2346,12 @@ prevent first-use shell menus without suppressing normal startup or reading user
 profiles. Compound fixture failures MUST retain arbitrary primary panic payloads
 and secondary errors; the ordinary panic hook may already have run and need not
 render arbitrary compound payload fields.
-Synchronous initial-Bash reentry qualification MUST keep its original polling,
-reconciliation and certification oracles. Activity-wait iteration counts MUST
+Synchronous initial-Bash reentry qualification MUST keep its original poll then
+reconciliation order and certification oracles, with the original nominal
+400*10ms wait allowance expressed as one monotonic elapsed budget. A synchronous
+pump may overrun that budget but late readiness MUST NOT qualify success, and
+subsequent activity waits MUST be clipped to the remaining allowance.
+Activity-wait iteration counts MUST
 NOT be reported as elapsed time: readable or closed PTYs can wake immediately.
 Bounded diagnostics MAY retain closed bootstrap/readiness states, independent
 pending/signature facts, counts and monotonic elapsed time, never raw pane,
