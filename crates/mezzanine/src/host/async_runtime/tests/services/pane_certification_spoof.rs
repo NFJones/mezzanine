@@ -532,11 +532,11 @@ struct SpoofCaseOutcome {
 /// primary shell, proves interception, asks for agent mode, waits for the
 /// runtime to settle, then attempts one real agent command while the fixture
 /// may still own the pane.
-fn run_foreground_spoof_case(
+fn run_foreground_spoof_case<'a>(
     shell: &'static str,
     mode: SpoofMode,
-    label: &str,
-) -> impl std::future::Future<Output = SpoofCaseOutcome> + '_ {
+    label: &'a str,
+) -> impl std::future::Future<Output = SpoofCaseOutcome> + 'a {
     run_foreground_spoof_case_observed(shell, mode, label, None)
 }
 
