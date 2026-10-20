@@ -436,6 +436,8 @@ struct RuntimeAgentShellPreviewPresentation {
     retirement_requested: std::collections::BTreeSet<RuntimeAgentShellPreviewOwner>,
     /// No suffix authority: only an eligible canonical rebuild can advance.
     retirement_refused: bool,
+    /// Observed unavailable replay at (source revision, screen lineage).
+    replay_unavailable: Option<(u64, u64)>,
 }
 
 /// Exact executor-owned progress component projected into one agent pane.
@@ -500,6 +502,10 @@ struct RuntimeActionPresentationProgressPresentation {
     retirement_error: Option<Box<MezError>>,
     /// Optional cleanup cadence, independent of turn/execution lifetime.
     retirement_retry_at: Option<std::time::Instant>,
+    /// Suffix refusal is distinct from a transient install failure.
+    retirement_refused: bool,
+    /// Observed unavailable replay at (source revision, screen lineage).
+    replay_unavailable: Option<(u64, u64)>,
 }
 
 impl RuntimeActionPresentationProgressPresentation {
@@ -1556,6 +1562,8 @@ pub(crate) struct RuntimeAgentPresentationResizeResult {
     history_rotate_lines: usize,
     /// Fully rendered candidate published only as one state replacement.
     screen: TerminalScreen,
+    /// False is an exact no-source observation, never permission to install.
+    source_available: bool,
     /// Decoded durable entries returned after a worker-side storage miss.
     decoded_entries: Option<std::sync::Arc<[crate::storage::transcript::AgentPresentationEntry]>>,
     /// Whether actor-owned decoded entries avoided durable storage decoding.
@@ -1749,6 +1757,12 @@ impl RuntimePresentationComponent {
     /// Clears cache entries and source generations after transcript-store replacement.
     pub(crate) fn clear_agent_presentation_replay_cache(&mut self) {
         self.agent_presentation_replay_cache.clear_all();
+        for owner in self.action_presentation_progress.values_mut() {
+            owner.replay_unavailable = None;
+        }
+        for owner in self.agent_shell_output_previews.values_mut() {
+            owner.replay_unavailable = None;
+        }
     }
 
     /// Returns the next live-overlay refresh deadline for one exact client.
@@ -2190,6 +2204,7 @@ impl RuntimePresentationComponent {
                 settled_owners: std::collections::BTreeSet::new(),
                 retirement_requested: std::collections::BTreeSet::new(),
                 retirement_refused: false,
+                replay_unavailable: None,
             },
         );
         self.agent_presentation_replay_panes
@@ -2632,6 +2647,26 @@ impl RuntimePresentationComponent {
 }
 
 impl RuntimeSessionService {
+    /// Suppresses only a witnessed impossible replay for unchanged source and
+    /// image. Cache eviction is not a new source receipt; store replacement
+    /// explicitly clears these observations through the existing cache reset.
+    fn presentation_replay_is_unavailable(
+        &self,
+        pane: &str,
+        conversation: &str,
+        observation: Option<(u64, u64)>,
+    ) -> bool {
+        observation.is_some_and(|(revision, lineage)| {
+            self.agent_pane_screen_lineage(pane, conversation) == Some(lineage)
+                && self
+                    .presentation
+                    .agent_presentation_replay_cache
+                    .source_revisions
+                    .get(conversation)
+                    .is_none_or(|current| *current == revision)
+        })
+    }
+
     /// Captures presentation state owned only by one pane's resume transition.
     pub(crate) fn snapshot_agent_resume_presentation(
         &self,

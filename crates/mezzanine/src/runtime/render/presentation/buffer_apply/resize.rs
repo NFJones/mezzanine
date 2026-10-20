@@ -192,6 +192,7 @@ impl RuntimeSessionService {
                 history_limit: work.history_limit,
                 history_rotate_lines: work.history_rotate_lines,
                 screen: snapshot.as_ref().clone(),
+                source_available: true,
                 decoded_entries: None,
                 decoded_cache_hit: true,
                 snapshot_cache_hit: true,
@@ -268,13 +269,11 @@ impl RuntimeSessionService {
                 .agent_streaming_say_presentations
                 .insert(work.pane_id.clone(), streaming);
         }
-        if !projection.rebuild_agent_presentation_after_resize_from_entries(
+        let source_available = projection.rebuild_agent_presentation_after_resize_from_entries(
             &work.pane_id,
             work.size,
             &entries,
-        )? {
-            return Ok(None);
-        }
+        )?;
         let screen = projection
             .agent_pane_screen(&work.pane_id)
             .cloned()
@@ -292,6 +291,7 @@ impl RuntimeSessionService {
             history_limit: work.history_limit,
             history_rotate_lines: work.history_rotate_lines,
             screen,
+            source_available,
             decoded_entries,
             decoded_cache_hit,
             snapshot_cache_hit: false,
@@ -397,6 +397,45 @@ impl RuntimeSessionService {
             {
                 self.presentation
                     .defer_agent_presentation_resize(&result.pane_id, size);
+            }
+            return Ok(false);
+        }
+        if !result.source_available {
+            let unavailable = Some((result.source_revision, result.captured_lineage));
+            if let Some(owner) = self
+                .presentation
+                .agent_shell_output_previews
+                .get_mut(&result.pane_id)
+            {
+                owner
+                    .snapshot_current
+                    .store(false, std::sync::atomic::Ordering::Release);
+                owner.snapshot_current =
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+                owner.replay_unavailable = unavailable;
+            }
+            if let Some(owner) = self
+                .presentation
+                .action_presentation_progress
+                .get_mut(&result.pane_id)
+            {
+                owner.advance_snapshot_fence();
+                owner.replay_unavailable = unavailable;
+            }
+            // The regular result transport delivers this refusal. No candidate
+            // screen, suffix rebind, durability or cleanup acknowledgment occurs.
+            if self
+                .presentation
+                .pending_agent_presentation_resize_sizes
+                .get(&result.pane_id)
+                == Some(&result.size)
+            {
+                self.presentation
+                    .pending_agent_presentation_resize_sizes
+                    .remove(&result.pane_id);
+                self.presentation
+                    .pending_agent_presentation_resize_dispatches
+                    .remove(&result.pane_id);
             }
             return Ok(false);
         }

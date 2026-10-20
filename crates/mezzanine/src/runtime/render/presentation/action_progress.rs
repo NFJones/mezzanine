@@ -164,6 +164,8 @@ impl RuntimeSessionService {
                 retirement_requested: std::collections::BTreeSet::new(),
                 retirement_error: None,
                 retirement_retry_at: None,
+                retirement_refused: false,
+                replay_unavailable: None,
             },
         };
         let key = RuntimeActionPresentationProgressKey {
@@ -1396,6 +1398,8 @@ impl RuntimeSessionService {
                 .any(|key| !presentation.retirement_requested.contains(key))
             {
                 presentation.advance_snapshot_fence();
+                presentation.retirement_refused = false;
+                presentation.replay_unavailable = None;
             }
             presentation
                 .retirement_requested
@@ -1453,6 +1457,13 @@ impl RuntimeSessionService {
             let Some(mut candidate) =
                 self.clear_installed_action_progress_suffix(pane_id, &presentation)
             else {
+                if let Some(current) = self
+                    .presentation
+                    .action_presentation_progress
+                    .get_mut(pane_id)
+                {
+                    current.retirement_refused = true;
+                }
                 return Ok(0);
             };
             presentation
@@ -1500,6 +1511,8 @@ impl RuntimeSessionService {
         presentation.retirement_requested.clear();
         presentation.retirement_error = None;
         presentation.retirement_retry_at = None;
+        presentation.retirement_refused = false;
+        presentation.replay_unavailable = None;
         if presentation.components.is_empty() && presentation.promoted_components.is_empty() {
             self.presentation.commit_action_progress(pane_id, None);
         } else {
@@ -1517,6 +1530,12 @@ impl RuntimeSessionService {
             .iter()
             .any(|(pane, owner)| {
                 !owner.retirement_requested.is_empty()
+                    && (!owner.retirement_refused
+                        || !self.presentation_replay_is_unavailable(
+                            pane,
+                            &owner.conversation_id,
+                            owner.replay_unavailable,
+                        ))
                     && self
                         .agent_shell_store()
                         .get(pane)
@@ -1537,6 +1556,12 @@ impl RuntimeSessionService {
             .iter()
             .filter(|(pane, owner)| {
                 !owner.retirement_requested.is_empty()
+                    && (!owner.retirement_refused
+                        || !self.presentation_replay_is_unavailable(
+                            pane,
+                            &owner.conversation_id,
+                            owner.replay_unavailable,
+                        ))
                     && owner.retirement_retry_at.is_none_or(|at| now >= at)
                     && self
                         .agent_shell_store()
@@ -1588,7 +1613,11 @@ impl RuntimeSessionService {
         let Some(owner) = self.presentation.action_presentation_progress.get(pane_id) else {
             return;
         };
-        if self.persistence.transcript_store().is_none()
+        if self.presentation_replay_is_unavailable(
+            pane_id,
+            &owner.conversation_id,
+            owner.replay_unavailable,
+        ) || self.persistence.transcript_store().is_none()
             || self
                 .agent_shell_store()
                 .get(pane_id)

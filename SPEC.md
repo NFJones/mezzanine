@@ -4814,6 +4814,12 @@ Canonical source-backed replay MAY discharge retained cleanup only after its
 complete screen transaction commits; a provisional clean screen that can still
 roll back is not a cleanup acknowledgment. A generic screen replacement alone
 MUST NOT discharge the original source or permit stale snapshots to revive it.
+Canonical reconstruction with no eligible replay source MUST return an owned
+unavailable-source disposition rather than silently dropping its worker reply.
+It MUST preserve pending payload and pixels without installing a candidate or
+repeating unchanged impossible reconstruction indefinitely. Observed source,
+image, or explicit repository replacement changes MAY reactivate recovery;
+unavailable-source evidence is not durability or cleanup acceptance.
 
 For runtime-network `fetch_url` and `web_search`, ordinary HTTP body chunks MAY
 produce provisional read-body progress only after actor ingress has claimed the

@@ -377,6 +377,174 @@ async fn runtime_completion_progress_no_store_stop_recovers_after_terminal_clear
     );
 }
 
+/// An empty journal is a real worker-observed unavailable source, not permission
+/// to install a stale candidate or poll the same impossible reconstruction.
+/// The returned disposition must stop idle replay while preserving source and
+/// pixels, then allow a fresh probe after genuine canonical source is published
+/// and the same store path is explicitly reattached through the production API.
+#[test]
+fn runtime_completion_empty_preview_replay_reports_refusal_and_reactivates() {
+    let root = CompletionRoot(temp_root("completion-preview-empty-replay"));
+    let store = AgentTranscriptStore::new(root.0.join("transcripts"));
+    let mut service = RuntimeServiceFixture::new()
+        .control_socket(root.0.join("control.sock"))
+        .build();
+    service.set_agent_transcript_store(store.clone());
+    service
+        .attach_primary("primary", true, Size::new(100, 24).unwrap(), 120)
+        .unwrap();
+    let conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Normal)
+        .unwrap();
+    service.set_agent_pane_screen(
+        "%1",
+        conversation.clone(),
+        TerminalScreen::new(Size::new(100, 24).unwrap(), 120).unwrap(),
+    );
+    let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "display-only-empty".into(),
+        action_id: "display-only".into(),
+        marker: "display-only-empty".into(),
+    };
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner.clone(),
+            1,
+            &["F668_EMPTY_JOURNAL_PREVIEW".into()],
+        )
+        .unwrap();
+    service.hold_agent_presentation_installs_for_tests(true);
+    assert!(
+        service
+            .retire_agent_shell_output_previews_for_turn(&owner.turn_id)
+            .is_err()
+    );
+    service.hold_agent_presentation_installs_for_tests(false);
+    let sources = service.agent_shell_output_previews_for_tests("%1");
+    let mut replacement = service.agent_pane_screen("%1").unwrap().clone();
+    replacement.feed(b"\r\nF668_EMPTY_JOURNAL_REPLACEMENT\r\n");
+    service.set_agent_pane_screen("%1", conversation.clone(), replacement.clone());
+    assert!(
+        service
+            .append_agent_status_text_to_terminal_buffer("%1", "not accepted yet")
+            .is_err()
+    );
+    assert!(
+        store
+            .inspect_presentation(&conversation)
+            .unwrap()
+            .is_empty()
+    );
+    service
+        .presentation
+        .take_agent_presentation_resize_dispatch_effects();
+    let work = service
+        .take_agent_presentation_resize_work("%1")
+        .unwrap()
+        .expect("metadata-eligible real work");
+    let unavailable = RuntimeSessionService::build_agent_presentation_resize(work)
+        .unwrap()
+        .expect("no-source must return an actor-visible disposition");
+    assert!(
+        !service
+            .apply_agent_presentation_resize_result(unavailable)
+            .unwrap()
+    );
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &replacement);
+    assert_eq!(service.agent_shell_output_previews_for_tests("%1"), sources);
+    assert!(!service.shell_preview_retirement_retry_needed());
+    assert!(
+        service
+            .idle_cleanup_timer_transition_with_actor_progress(&BTreeSet::new(), false, 78, 500, 25)
+            .side_effects
+            .is_empty()
+    );
+    service.retry_completion_publications();
+    assert!(
+        service
+            .presentation
+            .take_agent_presentation_resize_dispatch_effects()
+            .is_empty()
+    );
+    assert!(
+        service
+            .append_agent_status_text_to_terminal_buffer("%1", "still not accepted")
+            .is_err()
+    );
+    assert!(
+        service
+            .presentation
+            .take_agent_presentation_resize_dispatch_effects()
+            .is_empty()
+    );
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &replacement);
+
+    // A fixture-owned writer publishes genuine new canonical presentation;
+    // no worker claim, durability acknowledgment or action result is fabricated.
+    let mut writer = RuntimeServiceFixture::new()
+        .control_socket(root.0.join("writer.sock"))
+        .build();
+    writer.set_agent_transcript_store(store.clone());
+    writer
+        .attach_primary("writer", true, Size::new(100, 24).unwrap(), 120)
+        .unwrap();
+    writer
+        .agent_shell_store_mut()
+        .bind_conversation("%1", &conversation, 0)
+        .unwrap();
+    writer
+        .append_agent_status_text_to_terminal_buffer("%1", "F668_SOURCE_NOW_AVAILABLE")
+        .unwrap();
+    assert!(
+        !store
+            .inspect_presentation(&conversation)
+            .unwrap()
+            .is_empty()
+    );
+    service.set_agent_transcript_store(store.clone());
+    assert!(service.shell_preview_retirement_retry_needed());
+    service.retry_completion_publications();
+    service
+        .presentation
+        .take_agent_presentation_resize_dispatch_effects();
+    let work = service
+        .take_agent_presentation_resize_work("%1")
+        .unwrap()
+        .expect("changed source reactivates recovery");
+    let recovered = RuntimeSessionService::build_agent_presentation_resize(work)
+        .unwrap()
+        .unwrap();
+    assert!(
+        service
+            .apply_agent_presentation_resize_result(recovered)
+            .unwrap()
+    );
+    assert!(
+        service
+            .agent_shell_output_previews_for_tests("%1")
+            .is_empty()
+    );
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "F668_AFTER_SOURCE_RECOVERY")
+        .unwrap();
+    let text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(text.contains("F668_SOURCE_NOW_AVAILABLE"), "{text}");
+    assert!(text.contains("F668_AFTER_SOURCE_RECOVERY"), "{text}");
+    assert!(!text.contains("F668_EMPTY_JOURNAL_PREVIEW"), "{text}");
+}
+
 /// A stale cancelled preview cannot prove a suffix, so immediate writes retain
 /// source and leave replacement pixels intact. An eligible production resize
 /// handoff recovers it; runtime-only refusal retains source without spinning an

@@ -447,6 +447,7 @@ impl RuntimeSessionService {
                 settled_owners: std::collections::BTreeSet::new(),
                 retirement_requested: std::collections::BTreeSet::new(),
                 retirement_refused: false,
+                replay_unavailable: None,
             });
         if presentation.settled_owners.contains(&owner)
             || presentation
@@ -579,6 +580,7 @@ impl RuntimeSessionService {
                 .store(false, std::sync::atomic::Ordering::Release);
             owner.snapshot_current = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
             owner.retirement_refused = false;
+            owner.replay_unavailable = None;
         }
     }
 
@@ -683,7 +685,11 @@ impl RuntimeSessionService {
         pane: &str,
         owner: &RuntimeAgentShellPreviewPresentation,
     ) -> bool {
-        self.persistence.transcript_store().is_some()
+        !self.presentation_replay_is_unavailable(
+            pane,
+            &owner.conversation_id,
+            owner.replay_unavailable,
+        ) && self.persistence.transcript_store().is_some()
             && self.find_pane_descriptor(pane).is_some()
             && self.agent_shell_store().get(pane).is_some_and(|session| {
                 session.session_id == owner.conversation_id
