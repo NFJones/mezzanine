@@ -97,7 +97,18 @@ struct NativePauseGuard {
 impl NativePauseGuard {
     /// Creates a private generation before any native startup can acquire work.
     fn new(deadline: Instant) -> Self {
-        let root = temp_root("completion-native-pause");
+        // temp_root already creates/removes its named directory. Native data
+        // needs create-only ownership: never remove a former failed generation
+        // if a PID/name is reused, and never adopt an existing directory.
+        let unique = NEXT_TEMP_ROOT_ID.fetch_add(1, Ordering::Relaxed);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("native fixture naming clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "mez-native-pause-{}-{unique}-{nonce}",
+            std::process::id()
+        ));
         fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
         let mut environment = Vec::new();
         for (key, name) in [
