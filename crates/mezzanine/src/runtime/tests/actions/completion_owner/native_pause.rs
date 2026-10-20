@@ -301,6 +301,16 @@ impl NativePauseGuard {
                 "independent native/writer/manager settlement unproven",
             ));
         }
+        // The last successful wait/descheduling can cross the budget even
+        // when the drain observes zero outstanding children. Recheck the SAME
+        // absolute deadline before deletion/owner-release eligibility.
+        if !cleanup_observed_before_deadline(self.deadline, Instant::now())
+            && !cleanup
+                .iter()
+                .any(|failure| matches!(failure, NativePauseFailure::Deadline))
+        {
+            cleanup.push(NativePauseFailure::Deadline);
+        }
         if case_succeeded && cleanup.is_empty() {
             // The externally held original owner cannot reach final Drop while
             // proof is inspected. Its attached slot clears only through a real
@@ -316,6 +326,13 @@ impl NativePauseGuard {
         }
         cleanup
     }
+}
+
+/// Pure final-budget gate shared with the process-free boundary regression.
+/// Neither argument is a native receipt or replacement clock/token: production
+/// passes the original deadline and the observation AFTER cleanup awaited.
+pub(super) fn cleanup_observed_before_deadline(deadline: Instant, observed_at: Instant) -> bool {
+    observed_at < deadline
 }
 
 /// Preserves the original pause/archive/continuation oracle in synchronous

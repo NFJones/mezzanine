@@ -18,6 +18,28 @@ mod progress_transactions;
 mod scope_retention;
 mod shutdown_retention;
 
+/// Even otherwise successful cleanup observed at/after the original deadline
+/// cannot authorize deletion or owner release. This is only the exact pure
+/// post-await policy gate used by the N guard, with synthetic observations of
+/// one fixed deadline; no NativePauseGuard, root, token, drain or filesystem is
+/// constructed. It does NOT establish actual native wait/retirement evidence.
+#[test]
+fn runtime_completion_native_pause_final_budget_gate_rejects_late_success() {
+    let original = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let delta = std::time::Duration::from_nanos(1);
+    assert!(native_pause::cleanup_observed_before_deadline(
+        original,
+        original - delta
+    ));
+    assert!(!native_pause::cleanup_observed_before_deadline(
+        original, original
+    ));
+    assert!(!native_pause::cleanup_observed_before_deadline(
+        original,
+        original + delta
+    ));
+}
+
 /// Aggregate and later ordinary error rows share immutable ordered ownership.
 /// This is a presentation-only source fixture, not evidence a loop guard fired
 /// or an action executed. Rendering values must not modify actor canonical truth.
