@@ -482,6 +482,10 @@ async fn runtime_completion_ineligible_progress_refusal_quiesces_then_reactivate
         .unwrap();
     writer
         .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    writer
+        .agent_shell_store_mut()
         .bind_conversation("%1", &fixture.turn.conversation_id, 0)
         .unwrap();
     writer
@@ -643,6 +647,10 @@ fn runtime_completion_empty_preview_replay_reports_refusal_and_reactivates() {
     writer.set_agent_transcript_store(store.clone());
     writer
         .attach_primary("writer", true, Size::new(100, 24).unwrap(), 120)
+        .unwrap();
+    writer
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
         .unwrap();
     writer
         .agent_shell_store_mut()
