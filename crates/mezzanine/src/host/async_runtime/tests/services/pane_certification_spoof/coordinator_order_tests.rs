@@ -178,6 +178,28 @@ async fn stop_intent_and_durable_permit_precede_completion_wait() {
     assert!(observed_permit.get());
 }
 
+#[tokio::test(flavor = "current_thread")]
+/// With no stop permit, both the production-default wait and the configured
+/// fixture seam must return the same owned worker error event, not normalize or
+/// drop it. This is an inert wait/custody control, not a native receipt.
+async fn supervisor_wait_preserves_error_event_without_stop() {
+    for configured in [false, true] {
+        let wake = tokio::sync::Notify::new();
+        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let error = Box::new(OwnedError(drops.clone()));
+        let original = error.as_ref() as *const OwnedError;
+        let event = wait_for_fixture_supervisor_event_or_stop(configured.then_some(&wake), async {
+            Some(Err::<(), _>(error))
+        })
+        .await;
+        let returned = event.unwrap().err().unwrap();
+        assert_eq!(returned.as_ref() as *const OwnedError, original);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(returned);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+}
+
 /// Non-Clone coordinator error whose allocation and release stay observable.
 struct OwnedError(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 

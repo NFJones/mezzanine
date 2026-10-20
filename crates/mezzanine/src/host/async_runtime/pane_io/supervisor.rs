@@ -190,15 +190,26 @@ where
     Ok(report)
 }
 
-/// The actual fixture supervisor wait seam. This initial extraction retains the
-/// old event-only wait so deterministic dedicated-wake controls can expose the
-/// missing wake without executing any actor, pane backend, or native process.
+/// Wakes only the fixture's original supervisor, including before registration.
+/// This selects only around its idle event/join wait: spawned workers and their
+/// original native waits stay owned and polled. A wake merely re-enters the loop
+/// to recheck stop intent and drain outcomes; it is not successful settlement.
+/// No dedicated port means exactly the original event-only wait.
 #[cfg(test)]
 pub(crate) async fn wait_for_fixture_supervisor_event_or_stop<T>(
-    _stop_wake: Option<&tokio::sync::Notify>,
+    stop_wake: Option<&tokio::sync::Notify>,
     event: impl std::future::Future<Output = Option<T>>,
 ) -> Option<T> {
-    event.await
+    match stop_wake {
+        Some(stop_wake) => {
+            tokio::select! {
+                biased;
+                _ = stop_wake.notified() => None,
+                event = event => event,
+            }
+        }
+        None => event.await,
+    }
 }
 
 /// Builds the production dynamic pane-process supervisor service.
