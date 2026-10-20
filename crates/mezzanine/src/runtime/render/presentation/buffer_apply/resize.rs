@@ -122,6 +122,11 @@ impl RuntimeSessionService {
                 .action_presentation_progress
                 .get(pane_id)
                 .map(|owner| owner.snapshot_current.clone()),
+            captured_preview: self
+                .presentation
+                .agent_shell_output_previews
+                .get(pane_id)
+                .map(|owner| owner.snapshot_current.clone()),
             source_revision,
             size,
             transcript_store,
@@ -179,6 +184,7 @@ impl RuntimeSessionService {
                 conversation_id: work.conversation_id,
                 captured_lineage: work.captured_lineage,
                 captured_progress: work.captured_progress,
+                captured_preview: work.captured_preview,
                 source_revision: work.source_revision,
                 latest_sequence: work.cached_latest_sequence,
                 size: work.size,
@@ -236,6 +242,8 @@ impl RuntimeSessionService {
             .agent_pane_screen_lineage(&work.pane_id, &work.conversation_id)
             .ok_or_else(|| MezError::invalid_state("resize projection screen lost its lineage"))?;
         if let Some(mut preview) = work.shell_output_previews {
+            preview.snapshot_current =
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
             preview.installed_lineage = projection_lineage;
             projection
                 .presentation
@@ -276,6 +284,7 @@ impl RuntimeSessionService {
             conversation_id: work.conversation_id,
             captured_lineage: work.captured_lineage,
             captured_progress: work.captured_progress,
+            captured_preview: work.captured_preview,
             source_revision: work.source_revision,
             latest_sequence,
             size: work.size,
@@ -358,6 +367,19 @@ impl RuntimeSessionService {
                 }
                 (None, None) => true,
                 _ => false,
+            }
+            && match (
+                self.presentation
+                    .agent_shell_output_previews
+                    .get(&result.pane_id),
+                result.captured_preview.as_ref(),
+            ) {
+                (Some(current), Some(captured)) => {
+                    captured.load(std::sync::atomic::Ordering::Acquire)
+                        && std::sync::Arc::ptr_eq(&current.snapshot_current, captured)
+                }
+                (None, None) => true,
+                _ => false,
             };
         if !current {
             let retry_size = self
@@ -389,8 +411,7 @@ impl RuntimeSessionService {
             return Ok(false);
         };
         self.presentation
-            .agent_shell_output_previews
-            .remove(&result.pane_id);
+            .commit_shell_preview(&result.pane_id, None);
         self.presentation
             .commit_action_progress(&result.pane_id, None);
         self.presentation
@@ -399,8 +420,7 @@ impl RuntimeSessionService {
         if let Some(mut preview) = result.shell_output_previews.take() {
             preview.installed_lineage = installed_lineage;
             self.presentation
-                .agent_shell_output_previews
-                .insert(result.pane_id.clone(), preview);
+                .commit_shell_preview(&result.pane_id, Some(preview));
         }
         if let Some(mut progress) = result.action_presentation_progress.take() {
             progress.installed_lineage = installed_lineage;

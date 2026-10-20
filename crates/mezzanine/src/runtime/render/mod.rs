@@ -416,6 +416,8 @@ struct RuntimeAgentShellPreview {
 /// installed without retaining another complete screen snapshot.
 #[derive(Debug, Clone)]
 struct RuntimeAgentShellPreviewPresentation {
+    /// Source/cleanup freshness only, never execution or painting authority.
+    snapshot_current: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Conversation that owns both retained screen generations.
     conversation_id: String,
     /// Runtime-owned lineage of the exact composite screen currently installed.
@@ -430,6 +432,8 @@ struct RuntimeAgentShellPreviewPresentation {
     previews: std::collections::BTreeMap<RuntimeAgentShellPreviewOwner, RuntimeAgentShellPreview>,
     /// Settled owners whose final tail remains until the next durable pane write.
     settled_owners: std::collections::BTreeSet<RuntimeAgentShellPreviewOwner>,
+    /// Exact cancelled sources still owned until their cleanup screen commits.
+    retirement_requested: std::collections::BTreeSet<RuntimeAgentShellPreviewOwner>,
 }
 
 /// Exact executor-owned progress component projected into one agent pane.
@@ -720,6 +724,8 @@ pub(crate) struct RuntimePresentationComponent {
         std::collections::BTreeMap<String, RuntimeActionPresentationProgressPresentation>,
     /// Fair bounded cleanup traversal; no action or provider scheduling authority.
     action_progress_retirement_cursor: Option<String>,
+    /// Fair bounded traversal of existing cancelled-preview cleanup owners.
+    shell_preview_retirement_cursor: Option<String>,
     /// Final receipt-owned suffix; source and delivery authority stay in the agent.
     pub(in crate::runtime) pending_steering_suffixes:
         std::collections::BTreeMap<String, (String, u64, usize)>,
@@ -1483,6 +1489,8 @@ pub(crate) struct RuntimeAgentPresentationResizeWork {
     captured_lineage: u64,
     /// Original actor progress allocation, including cleanup-intent freshness.
     captured_progress: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Original preview source/cleanup allocation captured by the actor.
+    captured_preview: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Actor-local durable presentation generation captured for cache authority.
     source_revision: u64,
     /// Exact terminal geometry represented by the candidate.
@@ -1530,6 +1538,8 @@ pub(crate) struct RuntimeAgentPresentationResizeResult {
     captured_lineage: u64,
     /// Original actor allocation, not the worker's reconstructed progress owner.
     captured_progress: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Original preview allocation, independent of the worker's private owner.
+    captured_preview: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Actor-local durable presentation generation captured by the work item.
     source_revision: u64,
     /// Latest durable sequence represented by the canonical candidate.
@@ -1627,6 +1637,26 @@ fn presentation_render_invalidation_priority(reason: RenderInvalidationReason) -
 }
 
 impl RuntimePresentationComponent {
+    /// Commits preview custody only after its complete screen install succeeds.
+    fn commit_shell_preview(
+        &mut self,
+        pane_id: &str,
+        mut owner: Option<RuntimeAgentShellPreviewPresentation>,
+    ) {
+        if let Some(previous) = self.agent_shell_output_previews.remove(pane_id) {
+            previous
+                .snapshot_current
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
+        if let Some(owner) = owner.as_mut() {
+            owner.snapshot_current = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        }
+        if let Some(owner) = owner {
+            self.agent_shell_output_previews
+                .insert(pane_id.to_string(), owner);
+        }
+    }
+
     /// Commits exact progress metadata after its screen transaction. Old clones
     /// become unusable even when the committed destination is an empty slot.
     fn commit_action_progress(
@@ -1653,7 +1683,12 @@ impl RuntimePresentationComponent {
     /// committed replacement or ordinary exact cleanup may discharge it.
     pub(crate) fn suspend_agent_presentation_state(&mut self, pane_id: &str) {
         let progress = self.action_presentation_progress.remove(pane_id);
+        let preview = self.agent_shell_output_previews.remove(pane_id);
         self.remove_agent_presentation_state(pane_id);
+        if let Some(preview) = preview {
+            self.agent_shell_output_previews
+                .insert(pane_id.to_string(), preview);
+        }
         if let Some(progress) = progress {
             self.action_presentation_progress
                 .insert(pane_id.to_string(), progress);
@@ -2053,7 +2088,7 @@ impl RuntimePresentationComponent {
         self.external_agent_prompt_edits.remove(pane_id);
         self.agent_prompt_selector_refreshes
             .retain(|(_, candidate), _| candidate != pane_id);
-        self.agent_shell_output_previews.remove(pane_id);
+        self.commit_shell_preview(pane_id, None);
         self.pending_steering_suffixes.remove(pane_id);
         self.presented_steering_receipts
             .retain(|(pane, _, _)| pane != pane_id);
@@ -2117,6 +2152,7 @@ impl RuntimePresentationComponent {
         self.agent_shell_output_previews.insert(
             pane_id.to_string(),
             RuntimeAgentShellPreviewPresentation {
+                snapshot_current: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 conversation_id: conversation_id.to_string(),
                 installed_lineage: 0,
                 baseline_screen: std::sync::Arc::new(baseline_screen),
@@ -2124,6 +2160,7 @@ impl RuntimePresentationComponent {
                 next_order: 0,
                 previews: std::collections::BTreeMap::new(),
                 settled_owners: std::collections::BTreeSet::new(),
+                retirement_requested: std::collections::BTreeSet::new(),
             },
         );
         self.agent_presentation_replay_panes
@@ -2708,6 +2745,27 @@ impl RuntimeSessionService {
         if original_is_current {
             self.presentation.commit_action_progress(pane_id, None);
         }
+        if snapshot
+            .shell_output_previews
+            .as_ref()
+            .is_some_and(|original| {
+                original
+                    .snapshot_current
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    && self
+                        .presentation
+                        .agent_shell_output_previews
+                        .get(pane_id)
+                        .is_some_and(|current| {
+                            std::sync::Arc::ptr_eq(
+                                &original.snapshot_current,
+                                &current.snapshot_current,
+                            )
+                        })
+            })
+        {
+            self.presentation.commit_shell_preview(pane_id, None);
+        }
     }
 
     /// Rebinds only an unchanged original source to the exact screen image the
@@ -2718,6 +2776,36 @@ impl RuntimeSessionService {
         pane_id: &str,
         mut snapshot: RuntimeAgentResumePresentationSnapshot,
     ) {
+        if let Some(original) = snapshot.shell_output_previews.as_mut()
+            && original
+                .snapshot_current
+                .load(std::sync::atomic::Ordering::Acquire)
+            && self
+                .presentation
+                .agent_shell_output_previews
+                .get(pane_id)
+                .is_some_and(|current| {
+                    std::sync::Arc::ptr_eq(&original.snapshot_current, &current.snapshot_current)
+                })
+            && snapshot
+                .header_owner
+                .as_ref()
+                .is_some_and(|(conversation, lineage)| {
+                    conversation == &original.conversation_id
+                        && *lineage == original.installed_lineage
+                })
+            && let Some(lineage) =
+                self.agent_pane_screen_lineage(pane_id, &original.conversation_id)
+        {
+            original.installed_lineage = lineage;
+            if let Some(current) = self
+                .presentation
+                .agent_shell_output_previews
+                .get_mut(pane_id)
+            {
+                current.installed_lineage = lineage;
+            }
+        }
         if let Some(original) = snapshot.action_presentation_progress.as_mut()
             && original.snapshot_is_current()
             && self
@@ -2772,7 +2860,17 @@ impl RuntimeSessionService {
             snapshot.accepted_streaming_headers.clear();
         }
         snapshot.shell_output_previews = snapshot.shell_output_previews.take().filter(|preview| {
-            current_conversation.as_deref() == Some(preview.conversation_id.as_str())
+            preview
+                .snapshot_current
+                .load(std::sync::atomic::Ordering::Acquire)
+                && self
+                    .presentation
+                    .agent_shell_output_previews
+                    .get(pane_id)
+                    .is_some_and(|current| {
+                        std::sync::Arc::ptr_eq(&preview.snapshot_current, &current.snapshot_current)
+                    })
+                && current_conversation.as_deref() == Some(preview.conversation_id.as_str())
                 && current_lineage == Some(preview.installed_lineage)
         });
         snapshot.action_presentation_progress = snapshot
@@ -2836,9 +2934,6 @@ impl RuntimeSessionService {
                 .agent_prompt_inputs
                 .insert(pane_id.to_string(), value.into());
         }
-        self.presentation
-            .agent_shell_output_previews
-            .remove(pane_id);
         if let Some(value) = snapshot.shell_output_previews {
             self.presentation
                 .agent_shell_output_previews

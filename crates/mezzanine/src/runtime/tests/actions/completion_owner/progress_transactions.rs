@@ -6,6 +6,22 @@
 use super::progress_retirement::{claimed_read_progress, retire_exact_progress};
 use super::*;
 
+/// Checks the production adapter transition before any deadline or pump call.
+fn assert_idle_cleanup_enrolled(service: &RuntimeSessionService) {
+    let transition = service.idle_cleanup_timer_transition_with_actor_progress(
+        &BTreeSet::new(),
+        false,
+        77,
+        500,
+        25,
+    );
+    assert_eq!(transition.side_effects.len(), 1);
+    assert!(matches!(
+        &transition.side_effects[0],
+        crate::runtime::RuntimeSideEffect::ScheduleTimer { .. }
+    ));
+}
+
 /// Selects visible read progress locally and creates an actual durable baseline.
 async fn visible_progress_fixture() -> CompletionFixture {
     let mut fixture = CompletionFixture::fetch().await;
@@ -334,6 +350,19 @@ async fn runtime_completion_progress_no_store_stop_recovers_after_terminal_clear
             .flag()
             .load(std::sync::atomic::Ordering::SeqCst)
     );
+    assert!(fixture.service.action_progress_retirement_retry_needed());
+    assert_idle_cleanup_enrolled(&fixture.service);
+    tokio::time::sleep(std::time::Duration::from_millis(275)).await;
+    fixture.service.retry_completion_publications();
+    assert_eq!(
+        fixture
+            .service
+            .action_presentation_progress_counts_for_tests(&fixture.turn.pane_id),
+        (1, 0)
+    );
+    // The failed due attempt must re-enroll immediately, not only after the
+    // next cadence deadline has already passed without an actor wakeup.
+    assert_idle_cleanup_enrolled(&fixture.service);
     fixture
         .service
         .hold_agent_presentation_installs_for_tests(false);
@@ -346,4 +375,92 @@ async fn runtime_completion_progress_no_store_stop_recovers_after_terminal_clear
             .action_presentation_progress_counts_for_tests(&fixture.turn.pane_id),
         (0, 0)
     );
+}
+
+/// Preview-only retirement has no canonical completion group to own its retry.
+/// The inert display owners below are compositor source labels, not fabricated
+/// native execution claims. Failure must preserve both payloads, retain exact
+/// cancellation intent through an old snapshot, and enroll idle recovery.
+/// Either idle cleanup or a durable write removes only the cancelled preview.
+#[test]
+fn runtime_completion_preview_failure_retains_intent_and_unrelated_source() {
+    for via_idle in [true, false] {
+        let mut service = test_runtime_service();
+        service
+            .attach_primary("primary", true, Size::new(100, 24).unwrap(), 120)
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .set_log_level("%1", AgentLogLevel::Normal)
+            .unwrap();
+        service
+            .append_agent_status_text_to_terminal_buffer("%1", "F668_PREVIEW_DURABLE")
+            .unwrap();
+        let owner = |turn: &str| crate::runtime::render::RuntimeAgentShellPreviewOwner {
+            turn_id: turn.into(),
+            action_id: "display-only".into(),
+            marker: format!("display-{turn}"),
+        };
+        let cancelled = owner("cancelled-preview");
+        let survivor = owner("unrelated-preview");
+        service
+            .update_agent_shell_output_preview(
+                "%1",
+                cancelled.clone(),
+                1,
+                &["F668_CANCELLED_PREVIEW".into()],
+            )
+            .unwrap();
+        service
+            .update_agent_shell_output_preview(
+                "%1",
+                survivor.clone(),
+                1,
+                &["F668_SURVIVING_PREVIEW".into()],
+            )
+            .unwrap();
+        let before = service.agent_pane_screen("%1").unwrap().clone();
+        let sources = service.agent_shell_output_previews_for_tests("%1");
+        assert_eq!(sources.len(), 2);
+        let old_snapshot = service.snapshot_agent_resume_presentation("%1");
+        service.hold_agent_presentation_installs_for_tests(true);
+        assert_eq!(
+            service
+                .retire_agent_shell_output_previews_for_turn(&cancelled.turn_id)
+                .unwrap_err()
+                .message(),
+            "injected held pre-install presentation failure"
+        );
+        assert_eq!(service.agent_pane_screen("%1").unwrap(), &before);
+        assert_eq!(service.agent_shell_output_previews_for_tests("%1"), sources);
+        service.restore_agent_resume_presentation("%1", old_snapshot);
+        assert!(service.shell_preview_retirement_retry_needed());
+        assert_idle_cleanup_enrolled(&service);
+        service.retry_completion_publications();
+        assert_idle_cleanup_enrolled(&service);
+        service.hold_agent_presentation_installs_for_tests(false);
+        if via_idle {
+            assert!(service.retry_completion_publications() > 0);
+        } else {
+            service
+                .append_agent_status_text_to_terminal_buffer("%1", "F668_AFTER_CANCELLED_PREVIEW")
+                .unwrap();
+        }
+        let retained = service.agent_shell_output_previews_for_tests("%1");
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].0, survivor);
+        assert!(!service.shell_preview_retirement_retry_needed());
+        let text = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        assert!(!text.contains("F668_CANCELLED_PREVIEW"), "{text}");
+        assert_eq!(text.matches("F668_SURVIVING_PREVIEW").count(), 1, "{text}");
+        assert!(text.contains("F668_PREVIEW_DURABLE"), "{text}");
+    }
 }

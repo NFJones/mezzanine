@@ -488,6 +488,12 @@ impl RuntimeSessionService {
                     MezError::invalid_state("resized agent presentation lineage disappeared")
                 })?;
             if let Some(mut preview) = preview_to_restore {
+                for owner in std::mem::take(&mut preview.retirement_requested) {
+                    preview.previews.remove(&owner);
+                    preview.settled_owners.remove(&owner);
+                }
+                preview.snapshot_current =
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
                 preview.installed_lineage = durable_lineage;
                 preview.baseline_screen = std::sync::Arc::new(durable_screen.clone());
                 self.presentation
@@ -620,7 +626,18 @@ impl RuntimeSessionService {
                     .action_presentation_progress
                     .insert(pane_id.to_string(), progress);
             }
-            if let Some(preview) = previous_preview {
+            if let Some(mut preview) = previous_preview {
+                if preview.conversation_id == session_id
+                    && previous_lineage == Some(preview.installed_lineage)
+                    && let Some(lineage) = self.agent_pane_screen_lineage(pane_id, &session_id)
+                {
+                    preview.installed_lineage = lineage;
+                }
+                preview
+                    .snapshot_current
+                    .store(false, std::sync::atomic::Ordering::Release);
+                preview.snapshot_current =
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
                 self.presentation
                     .agent_shell_output_previews
                     .insert(pane_id.to_string(), preview);
@@ -632,6 +649,11 @@ impl RuntimeSessionService {
             }
             self.restore_steering_presentation_surface(pane_id, previous_steering);
             return Err(error);
+        }
+        if let Some(previous) = previous_preview {
+            previous
+                .snapshot_current
+                .store(false, std::sync::atomic::Ordering::Release);
         }
         if let Some(previous) = previous_progress {
             if previous.conversation_id == session_id {

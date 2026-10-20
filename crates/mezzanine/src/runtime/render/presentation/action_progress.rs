@@ -1509,15 +1509,14 @@ impl RuntimeSessionService {
         Ok(count)
     }
 
-    /// Advertises only due, still-bound presentation work to the existing pump.
+    /// Keeps the idle timer enrolled for bound pending work, even before its
+    /// next attempt deadline. Due checks belong only to the bounded attempt.
     pub(crate) fn action_progress_retirement_retry_needed(&self) -> bool {
-        let now = std::time::Instant::now();
         self.presentation
             .action_presentation_progress
             .iter()
             .any(|(pane, owner)| {
                 !owner.retirement_requested.is_empty()
-                    && owner.retirement_retry_at.is_none_or(|at| now >= at)
                     && self
                         .agent_shell_store()
                         .get(pane)
