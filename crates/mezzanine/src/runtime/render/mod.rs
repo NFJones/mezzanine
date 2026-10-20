@@ -434,6 +434,8 @@ struct RuntimeAgentShellPreviewPresentation {
     settled_owners: std::collections::BTreeSet<RuntimeAgentShellPreviewOwner>,
     /// Exact cancelled sources still owned until their cleanup screen commits.
     retirement_requested: std::collections::BTreeSet<RuntimeAgentShellPreviewOwner>,
+    /// No suffix authority: only an eligible canonical rebuild can advance.
+    retirement_refused: bool,
 }
 
 /// Exact executor-owned progress component projected into one agent pane.
@@ -1678,21 +1680,47 @@ impl RuntimePresentationComponent {
         }
     }
 
-    /// Clears provisional resume state without discharging original progress.
-    /// The operation's rollback still owns the original source; only its final
-    /// committed replacement or ordinary exact cleanup may discharge it.
-    pub(crate) fn suspend_agent_presentation_state(&mut self, pane_id: &str) {
-        let progress = self.action_presentation_progress.remove(pane_id);
-        let preview = self.agent_shell_output_previews.remove(pane_id);
+    /// Moves projection custody into the owning operation's already captured
+    /// snapshot before temporary replay. Original sources are not active on the
+    /// replacement screen and are not discharged by provisional cleanup.
+    pub(crate) fn suspend_agent_presentation_state(
+        &mut self,
+        pane_id: &str,
+        snapshot: &RuntimeAgentResumePresentationSnapshot,
+    ) -> Result<()> {
+        let progress_matches = match (
+            self.action_presentation_progress.get(pane_id),
+            snapshot.action_presentation_progress.as_ref(),
+        ) {
+            (Some(current), Some(original)) => {
+                original.snapshot_is_current()
+                    && std::sync::Arc::ptr_eq(&current.snapshot_current, &original.snapshot_current)
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        let preview_matches = match (
+            self.agent_shell_output_previews.get(pane_id),
+            snapshot.shell_output_previews.as_ref(),
+        ) {
+            (Some(current), Some(original)) => {
+                original
+                    .snapshot_current
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    && std::sync::Arc::ptr_eq(&current.snapshot_current, &original.snapshot_current)
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if !progress_matches || !preview_matches {
+            return Err(MezError::invalid_state(
+                "resume presentation source changed before suspension",
+            ));
+        }
+        self.action_presentation_progress.remove(pane_id);
+        self.agent_shell_output_previews.remove(pane_id);
         self.remove_agent_presentation_state(pane_id);
-        if let Some(preview) = preview {
-            self.agent_shell_output_previews
-                .insert(pane_id.to_string(), preview);
-        }
-        if let Some(progress) = progress {
-            self.action_presentation_progress
-                .insert(pane_id.to_string(), progress);
-        }
+        Ok(())
     }
 
     /// Checks only the projected client's retained waiting pager identity.
@@ -2161,6 +2189,7 @@ impl RuntimePresentationComponent {
                 previews: std::collections::BTreeMap::new(),
                 settled_owners: std::collections::BTreeSet::new(),
                 retirement_requested: std::collections::BTreeSet::new(),
+                retirement_refused: false,
             },
         );
         self.agent_presentation_replay_panes
@@ -2725,46 +2754,35 @@ impl RuntimeSessionService {
         pane_id: &str,
         snapshot: &RuntimeAgentResumePresentationSnapshot,
     ) {
-        let original_is_current =
-            snapshot
+        if let Some(original) = snapshot.action_presentation_progress.as_ref() {
+            if self
+                .presentation
                 .action_presentation_progress
-                .as_ref()
-                .is_some_and(|original| {
-                    original.snapshot_is_current()
-                        && self
-                            .presentation
-                            .action_presentation_progress
-                            .get(pane_id)
-                            .is_some_and(|current| {
-                                std::sync::Arc::ptr_eq(
-                                    &original.snapshot_current,
-                                    &current.snapshot_current,
-                                )
-                            })
-                });
-        if original_is_current {
-            self.presentation.commit_action_progress(pane_id, None);
+                .get(pane_id)
+                .is_some_and(|current| {
+                    std::sync::Arc::ptr_eq(&original.snapshot_current, &current.snapshot_current)
+                })
+            {
+                self.presentation.commit_action_progress(pane_id, None);
+            }
+            original
+                .snapshot_current
+                .store(false, std::sync::atomic::Ordering::Release);
         }
-        if snapshot
-            .shell_output_previews
-            .as_ref()
-            .is_some_and(|original| {
-                original
-                    .snapshot_current
-                    .load(std::sync::atomic::Ordering::Acquire)
-                    && self
-                        .presentation
-                        .agent_shell_output_previews
-                        .get(pane_id)
-                        .is_some_and(|current| {
-                            std::sync::Arc::ptr_eq(
-                                &original.snapshot_current,
-                                &current.snapshot_current,
-                            )
-                        })
-            })
-        {
-            self.presentation.commit_shell_preview(pane_id, None);
+        if let Some(original) = snapshot.shell_output_previews.as_ref() {
+            if self
+                .presentation
+                .agent_shell_output_previews
+                .get(pane_id)
+                .is_some_and(|current| {
+                    std::sync::Arc::ptr_eq(&original.snapshot_current, &current.snapshot_current)
+                })
+            {
+                self.presentation.commit_shell_preview(pane_id, None);
+            }
+            original
+                .snapshot_current
+                .store(false, std::sync::atomic::Ordering::Release);
         }
     }
 
@@ -2780,58 +2798,50 @@ impl RuntimeSessionService {
             && original
                 .snapshot_current
                 .load(std::sync::atomic::Ordering::Acquire)
-            && self
-                .presentation
-                .agent_shell_output_previews
-                .get(pane_id)
-                .is_some_and(|current| {
-                    std::sync::Arc::ptr_eq(&original.snapshot_current, &current.snapshot_current)
-                })
-            && snapshot
+        {
+            if snapshot
                 .header_owner
                 .as_ref()
                 .is_some_and(|(conversation, lineage)| {
                     conversation == &original.conversation_id
                         && *lineage == original.installed_lineage
                 })
-            && let Some(lineage) =
-                self.agent_pane_screen_lineage(pane_id, &original.conversation_id)
-        {
-            original.installed_lineage = lineage;
-            if let Some(current) = self
-                .presentation
-                .agent_shell_output_previews
-                .get_mut(pane_id)
+                && let Some(lineage) =
+                    self.agent_pane_screen_lineage(pane_id, &original.conversation_id)
             {
-                current.installed_lineage = lineage;
+                original.installed_lineage = lineage;
+            }
+            original
+                .snapshot_current
+                .store(false, std::sync::atomic::Ordering::Release);
+            self.presentation
+                .commit_shell_preview(pane_id, Some(original.clone()));
+            if let Some(current) = self.presentation.agent_shell_output_previews.get(pane_id) {
+                *original = current.clone();
             }
         }
         if let Some(original) = snapshot.action_presentation_progress.as_mut()
             && original.snapshot_is_current()
-            && self
-                .presentation
-                .action_presentation_progress
-                .get(pane_id)
-                .is_some_and(|current| {
-                    std::sync::Arc::ptr_eq(&original.snapshot_current, &current.snapshot_current)
-                })
-            && let Some(lineage) =
-                self.agent_pane_screen_lineage(pane_id, &original.conversation_id)
-            && snapshot
+        {
+            if snapshot
                 .header_owner
                 .as_ref()
-                .is_some_and(|(conversation, old_lineage)| {
+                .is_some_and(|(conversation, lineage)| {
                     conversation == &original.conversation_id
-                        && *old_lineage == original.installed_lineage
+                        && *lineage == original.installed_lineage
                 })
-        {
-            original.installed_lineage = lineage;
-            if let Some(current) = self
-                .presentation
-                .action_presentation_progress
-                .get_mut(pane_id)
+                && let Some(lineage) =
+                    self.agent_pane_screen_lineage(pane_id, &original.conversation_id)
             {
-                current.installed_lineage = lineage;
+                original.installed_lineage = lineage;
+            }
+            original
+                .snapshot_current
+                .store(false, std::sync::atomic::Ordering::Release);
+            self.presentation
+                .commit_action_progress(pane_id, Some(original.clone()));
+            if let Some(current) = self.presentation.action_presentation_progress.get(pane_id) {
+                *original = current.clone();
             }
         }
         self.restore_agent_resume_presentation(pane_id, snapshot);

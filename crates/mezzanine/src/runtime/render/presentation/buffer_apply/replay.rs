@@ -492,10 +492,12 @@ impl RuntimeSessionService {
                     preview.previews.remove(&owner);
                     preview.settled_owners.remove(&owner);
                 }
+                preview.retirement_refused = false;
                 preview.snapshot_current =
                     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
                 preview.installed_lineage = durable_lineage;
                 preview.baseline_screen = std::sync::Arc::new(durable_screen.clone());
+                preview.transient_rows = 0;
                 self.presentation
                     .agent_shell_output_previews
                     .insert(pane_id.to_string(), preview);

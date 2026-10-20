@@ -420,7 +420,8 @@ impl RuntimeSessionService {
                         .as_ref()
                         .map(|membership| membership.scope_id()),
                 )?;
-                self.presentation.suspend_agent_presentation_state(&pane_id);
+                self.presentation
+                    .suspend_agent_presentation_state(&pane_id, &previous_presentation)?;
                 self.set_agent_pane_screen(&pane_id, &conversation_id, fresh_screen);
                 self.set_agent_prompt_history_for_pane(&pane_id, prompt_history);
                 if !self.replay_agent_presentation_entries_to_terminal_buffer(

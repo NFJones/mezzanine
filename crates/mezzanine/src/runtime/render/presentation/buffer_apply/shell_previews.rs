@@ -227,6 +227,7 @@ impl RuntimeSessionService {
                 progress_rows,
             ) else {
                 if !presentation.retirement_requested.is_empty() {
+                    self.defer_retained_shell_preview_cleanup(pane_id);
                     return Err(MezError::invalid_state(
                         "shell preview cleanup source is retained",
                     ));
@@ -248,6 +249,7 @@ impl RuntimeSessionService {
             .as_ref()
             .is_some_and(|owner| !owner.retirement_requested.is_empty())
         {
+            self.defer_retained_shell_preview_cleanup(pane_id);
             return Err(MezError::invalid_state(
                 "shell preview cleanup source is retained",
             ));
@@ -444,6 +446,7 @@ impl RuntimeSessionService {
                 previews: std::collections::BTreeMap::new(),
                 settled_owners: std::collections::BTreeSet::new(),
                 retirement_requested: std::collections::BTreeSet::new(),
+                retirement_refused: false,
             });
         if presentation.settled_owners.contains(&owner)
             || presentation
@@ -575,6 +578,7 @@ impl RuntimeSessionService {
                 .snapshot_current
                 .store(false, std::sync::atomic::Ordering::Release);
             owner.snapshot_current = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            owner.retirement_refused = false;
         }
     }
 
@@ -639,6 +643,7 @@ impl RuntimeSessionService {
                     .get(&pane_id)
                     .is_some_and(|session| session.session_id == presentation.conversation_id);
             if !owns_live_screen {
+                self.defer_retained_shell_preview_cleanup(&pane_id);
                 continue;
             }
             for owner in std::mem::take(&mut presentation.retirement_requested) {
@@ -661,6 +666,7 @@ impl RuntimeSessionService {
                 presentation.transient_rows,
                 progress_rows,
             ) else {
+                self.defer_retained_shell_preview_cleanup(&pane_id);
                 continue;
             };
             let conversation_id = presentation.conversation_id.clone();
@@ -671,6 +677,48 @@ impl RuntimeSessionService {
         Ok(retired)
     }
 
+    /// Checks the existing renderer's actual canonical-replay eligibility.
+    fn shell_preview_rebuild_is_eligible(
+        &self,
+        pane: &str,
+        owner: &RuntimeAgentShellPreviewPresentation,
+    ) -> bool {
+        self.persistence.transcript_store().is_some()
+            && self.find_pane_descriptor(pane).is_some()
+            && self.agent_shell_store().get(pane).is_some_and(|session| {
+                session.session_id == owner.conversation_id
+                    && session.visibility == mez_agent::AgentShellVisibility::Visible
+                    && !session.ephemeral
+            })
+            && self
+                .agent_pane_screen_lineage(pane, &owner.conversation_id)
+                .is_some()
+            && self
+                .agent_pane_screen(pane)
+                .is_some_and(|screen| !screen.normal_viewport_detached_from_history())
+    }
+
+    /// Retains the unowned source while handing recovery to the already bounded
+    /// canonical renderer. Ineligible/no-store sources remain explicit refusals,
+    /// not cleanup acknowledgments or endless suffix-only idle attempts.
+    fn defer_retained_shell_preview_cleanup(&mut self, pane: &str) {
+        if let Some(owner) = self.presentation.agent_shell_output_previews.get_mut(pane) {
+            owner.retirement_refused = true;
+        }
+        let eligible = self
+            .presentation
+            .agent_shell_output_previews
+            .get(pane)
+            .is_some_and(|owner| self.shell_preview_rebuild_is_eligible(pane, owner));
+        if eligible && let Some(size) = self.agent_pane_screen(pane).map(TerminalScreen::size) {
+            self.presentation
+                .agent_presentation_projection_cache
+                .remove(pane);
+            self.presentation
+                .defer_agent_presentation_resize(pane, size);
+        }
+    }
+
     /// Keeps existing idle cleanup enrolled for exact bound cancelled sources.
     pub(crate) fn shell_preview_retirement_retry_needed(&self) -> bool {
         self.presentation
@@ -678,6 +726,8 @@ impl RuntimeSessionService {
             .iter()
             .any(|(pane, owner)| {
                 !owner.retirement_requested.is_empty()
+                    && (!owner.retirement_refused
+                        || self.shell_preview_rebuild_is_eligible(pane, owner))
                     && self
                         .agent_shell_store()
                         .get(pane)
@@ -697,6 +747,8 @@ impl RuntimeSessionService {
             .iter()
             .filter(|(pane, owner)| {
                 !owner.retirement_requested.is_empty()
+                    && (!owner.retirement_refused
+                        || self.shell_preview_rebuild_is_eligible(pane, owner))
                     && self
                         .agent_shell_store()
                         .get(pane)

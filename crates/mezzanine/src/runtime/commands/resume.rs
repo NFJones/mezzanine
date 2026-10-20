@@ -828,8 +828,9 @@ impl RuntimeSessionService {
                     &previous_session.session_id,
                 );
             }
+            self.presentation
+                .suspend_agent_presentation_state(pane_id, &previous_presentation)?;
             if let Some(projection) = projection.take() {
-                self.presentation.suspend_agent_presentation_state(pane_id);
                 self.set_agent_pane_screen(
                     pane_id.to_string(),
                     session_id.clone(),

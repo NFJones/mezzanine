@@ -377,6 +377,270 @@ async fn runtime_completion_progress_no_store_stop_recovers_after_terminal_clear
     );
 }
 
+/// A stale cancelled preview cannot prove a suffix, so immediate writes retain
+/// source and leave replacement pixels intact. An eligible production resize
+/// handoff recovers it; runtime-only refusal retains source without spinning an
+/// idle suffix-only retry or inventing authority over those replacement pixels.
+#[tokio::test]
+async fn runtime_completion_stale_preview_uses_canonical_recovery_or_refuses() {
+    for attach_store in [true, false] {
+        let mut fixture = CompletionFixture::fetch_with_save_policy(true, attach_store).await;
+        fixture
+            .service
+            .agent_shell_store_mut()
+            .set_log_level(&fixture.turn.pane_id, AgentLogLevel::Normal)
+            .unwrap();
+        fixture
+            .service
+            .append_agent_status_text_to_terminal_buffer(
+                &fixture.turn.pane_id,
+                "F668_STALE_PREVIEW_BASELINE",
+            )
+            .unwrap();
+        let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+            turn_id: fixture.turn.turn_id.clone(),
+            action_id: fixture.action.id.clone(),
+            marker: fixture.attempt.clone(),
+        };
+        fixture
+            .service
+            .update_agent_shell_output_preview(
+                &fixture.turn.pane_id,
+                owner,
+                1,
+                &["F668_STALE_CANCELLED_PREVIEW".into()],
+            )
+            .unwrap();
+        fixture
+            .service
+            .hold_agent_presentation_installs_for_tests(true);
+        assert!(
+            fixture
+                .service
+                .retire_agent_shell_output_previews_for_turn(&fixture.turn.turn_id)
+                .is_err()
+        );
+        let sources = fixture
+            .service
+            .agent_shell_output_previews_for_tests(&fixture.turn.pane_id);
+        let mut replacement = fixture
+            .service
+            .agent_pane_screen(&fixture.turn.pane_id)
+            .unwrap()
+            .clone();
+        replacement.feed(b"\r\nF668_UNOWNED_REPLACEMENT\r\n");
+        fixture.service.set_agent_pane_screen(
+            fixture.turn.pane_id.clone(),
+            fixture.turn.conversation_id.clone(),
+            replacement.clone(),
+        );
+        fixture
+            .service
+            .hold_agent_presentation_installs_for_tests(false);
+        let error = fixture
+            .service
+            .append_agent_status_text_to_terminal_buffer(
+                &fixture.turn.pane_id,
+                "F668_AFTER_STALE_PREVIEW",
+            )
+            .unwrap_err();
+        assert_eq!(error.message(), "shell preview cleanup source is retained");
+        assert_eq!(
+            fixture
+                .service
+                .agent_pane_screen(&fixture.turn.pane_id)
+                .unwrap(),
+            &replacement
+        );
+        assert_eq!(
+            fixture
+                .service
+                .agent_shell_output_previews_for_tests(&fixture.turn.pane_id),
+            sources
+        );
+        assert_eq!(
+            fixture.service.shell_preview_retirement_retry_needed(),
+            attach_store
+        );
+        if attach_store {
+            assert!(
+                fixture
+                    .service
+                    .presentation
+                    .agent_presentation_resize_is_deferred(&fixture.turn.pane_id)
+            );
+            let work = fixture
+                .service
+                .take_agent_presentation_resize_work(&fixture.turn.pane_id)
+                .unwrap()
+                .expect("eligible canonical recovery owner");
+            let result = RuntimeSessionService::build_agent_presentation_resize(work)
+                .unwrap()
+                .expect("nonempty original durable source");
+            assert!(
+                fixture
+                    .service
+                    .apply_agent_presentation_resize_result(result)
+                    .unwrap()
+            );
+            fixture
+                .service
+                .append_agent_status_text_to_terminal_buffer(
+                    &fixture.turn.pane_id,
+                    "F668_AFTER_STALE_PREVIEW",
+                )
+                .unwrap();
+            let text = fixture
+                .service
+                .agent_pane_screen(&fixture.turn.pane_id)
+                .unwrap()
+                .normal_content_lines()
+                .join("\n");
+            assert!(!text.contains("F668_STALE_CANCELLED_PREVIEW"), "{text}");
+            assert!(text.contains("F668_STALE_PREVIEW_BASELINE"), "{text}");
+            assert!(text.contains("F668_AFTER_STALE_PREVIEW"), "{text}");
+        } else {
+            fixture.service.retry_completion_publications();
+            assert_eq!(
+                fixture
+                    .service
+                    .agent_shell_output_previews_for_tests(&fixture.turn.pane_id),
+                sources
+            );
+            assert_eq!(
+                fixture
+                    .service
+                    .agent_pane_screen(&fixture.turn.pane_id)
+                    .unwrap(),
+                &replacement
+            );
+        }
+    }
+}
+
+/// Preview-only retirement has no canonical completion group to own its retry.
+/// The actual prepared-resume path must replay nonempty saved target source
+/// while original cancelled preview custody is transaction-local, not active
+/// on its temporary screen. A late production failure restores original pixels,
+/// source and retry intent; acceptance retires only the original projection.
+/// Neither branch launches a native process or provider request.
+#[test]
+fn runtime_completion_pending_preview_allows_resume_and_exact_rollback() {
+    for fail_late in [true, false] {
+        let root = CompletionRoot(temp_root("completion-preview-resume"));
+        let store = AgentTranscriptStore::new(root.0.join("transcripts"));
+        let mut service = RuntimeServiceFixture::new()
+            .control_socket(root.0.join("control.sock"))
+            .build();
+        service.set_agent_transcript_store(store.clone());
+        service
+            .attach_primary("primary", true, Size::new(100, 24).unwrap(), 120)
+            .unwrap();
+        let original = service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        service
+            .agent_shell_store_mut()
+            .set_log_level("%1", AgentLogLevel::Normal)
+            .unwrap();
+        service
+            .append_agent_status_text_to_terminal_buffer("%1", "F668_ORIGINAL_RESUME_BASE")
+            .unwrap();
+        let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+            turn_id: "display-only-original".into(),
+            action_id: "display-only".into(),
+            marker: "display-only-original".into(),
+        };
+        service
+            .update_agent_shell_output_preview(
+                "%1",
+                owner.clone(),
+                1,
+                &["F668_ORIGINAL_CANCELLED_PREVIEW".into()],
+            )
+            .unwrap();
+        service.hold_agent_presentation_installs_for_tests(true);
+        assert!(
+            service
+                .retire_agent_shell_output_previews_for_turn(&owner.turn_id)
+                .is_err()
+        );
+        service.hold_agent_presentation_installs_for_tests(false);
+        let before = service.agent_pane_screen("%1").unwrap().clone();
+        let sources = service.agent_shell_output_previews_for_tests("%1");
+        let old_snapshot = service.snapshot_agent_resume_presentation("%1");
+        store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: "f668-resume-target".into(),
+                sequence: 1,
+                created_at_unix_seconds: 10,
+                role: mez_agent::transcript::TranscriptRole::User,
+                turn_id: "saved-target-source".into(),
+                agent_id: "agent-%1".into(),
+                pane_id: "%1".into(),
+                content: "F668_REPLACEMENT_RESUME_SOURCE".into(),
+            })
+            .unwrap();
+        service.checkpoint_agent_session_metadata().unwrap();
+        let prepared =
+            crate::runtime::commands::read_direct_resume(&store, "f668-resume-target", None)
+                .unwrap();
+        assert!(
+            !prepared.entries.is_empty(),
+            "real nonempty target fallback source"
+        );
+        if fail_late {
+            service.fail_next_agent_resume_after_authority_restore_for_tests();
+        }
+        let result = service.execute_agent_shell_resume_command_with_read(
+            "%1",
+            store.clone(),
+            prepared,
+            false,
+        );
+        if fail_late {
+            assert!(
+                result
+                    .unwrap_err()
+                    .message()
+                    .contains("post-authority restoration")
+            );
+            assert_eq!(
+                service.agent_shell_store().get("%1").unwrap().session_id,
+                original
+            );
+            assert_eq!(service.agent_pane_screen("%1").unwrap(), &before);
+            assert_eq!(service.agent_shell_output_previews_for_tests("%1"), sources);
+            assert!(service.shell_preview_retirement_retry_needed());
+            assert!(service.retry_completion_publications() > 0);
+        } else {
+            result.unwrap();
+            assert_eq!(
+                service.agent_shell_store().get("%1").unwrap().session_id,
+                "f668-resume-target"
+            );
+            assert!(
+                service
+                    .agent_pane_screen("%1")
+                    .unwrap()
+                    .normal_content_lines()
+                    .join("\n")
+                    .contains("F668_REPLACEMENT_RESUME_SOURCE")
+            );
+            service.restore_agent_resume_presentation("%1", old_snapshot);
+            assert!(
+                service
+                    .agent_shell_output_previews_for_tests("%1")
+                    .is_empty()
+            );
+            assert!(!service.shell_preview_retirement_retry_needed());
+        }
+    }
+}
+
 /// Preview-only retirement has no canonical completion group to own its retry.
 /// The inert display owners below are compositor source labels, not fabricated
 /// native execution claims. Failure must preserve both payloads, retain exact
