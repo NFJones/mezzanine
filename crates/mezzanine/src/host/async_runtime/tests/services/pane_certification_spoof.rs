@@ -389,19 +389,23 @@ async fn run_fixture_supervisor(
     }
 }
 
-/// Coordinates this fixture's existing stop, shutdown and completion futures.
-/// This extraction initially retains the original Shutdown-before-completion
-/// ordering so the inert coordinator-only regression can expose that ordering.
+/// Stops and drains this fixture's original supervisor before Shutdown, keeping
+/// the actor Running for already-owned output and accounting. This fixture has
+/// one event-notify consumer; notify_one retains a permit before waiter setup.
+/// NativeFixture keeps the original client/supervisor/actor concurrently polled
+/// under its unchanged deadline. Supervisor completion needs neither client
+/// completion nor Shutdown, so awaiting its original notification adds no cycle.
 /// Errors transfer unchanged; actor close remains the caller's subsequent step.
 async fn settle_fixture_supervisor<E>(
     done: &AtomicBool,
-    _wake: &tokio::sync::Notify,
+    wake: &tokio::sync::Notify,
     completion: impl std::future::Future<Output = std::result::Result<(), E>>,
     shutdown: impl std::future::Future<Output = std::result::Result<(), E>>,
 ) -> std::result::Result<(), E> {
     done.store(true, Ordering::SeqCst);
-    shutdown.await?;
-    completion.await
+    wake.notify_one();
+    completion.await?;
+    shutdown.await
 }
 
 /// Returns the first available shell executable from one candidate list.

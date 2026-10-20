@@ -58,3 +58,109 @@ async fn supervisor_completion_precedes_shutdown() {
     assert!(!shutdown_before_drain.get());
     assert!(shutdown_polled.get());
 }
+
+#[tokio::test(flavor = "current_thread")]
+/// With no waiter registered beforehand, completion must observe stop intent
+/// and the retained Notify permit immediately. This tests coordinator ordering
+/// only, not production worker wakeup or a fabricated settlement receipt.
+async fn stop_intent_and_durable_permit_precede_completion_wait() {
+    let done = AtomicBool::new(false);
+    let wake = tokio::sync::Notify::new();
+    let observed_stop = Cell::new(false);
+    let observed_permit = Cell::new(false);
+    let result = settle_fixture_supervisor(
+        &done,
+        &wake,
+        async {
+            observed_stop.set(done.load(Ordering::SeqCst));
+            observed_permit.set(wake.notified().now_or_never().is_some());
+            Ok::<(), ()>(())
+        },
+        async { Ok::<(), ()>(()) },
+    )
+    .await;
+    assert!(result.is_ok());
+    assert!(observed_stop.get());
+    assert!(observed_permit.get());
+}
+
+/// Non-Clone coordinator error whose allocation and release stay observable.
+struct OwnedError(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for OwnedError {
+    /// Records only the final owned release; there is no external cleanup.
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+/// A failed original completion notification must transfer the same error and
+/// skip both Shutdown and the caller's later close step. No notification error
+/// is normalized into healthy completion and no owned error is dropped early.
+async fn failed_completion_preserves_error_and_skips_shutdown_and_close() {
+    let done = AtomicBool::new(false);
+    let wake = tokio::sync::Notify::new();
+    let shutdown_polled = Cell::new(false);
+    let close_polled = Cell::new(false);
+    let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let error = Box::new(OwnedError(drops.clone()));
+    let original = error.as_ref() as *const OwnedError;
+    let result = async {
+        settle_fixture_supervisor(&done, &wake, async { Err::<(), _>(error) }, async {
+            shutdown_polled.set(true);
+            Ok(())
+        })
+        .await?;
+        close_polled.set(true);
+        Ok::<(), Box<OwnedError>>(())
+    }
+    .await;
+    let returned = result.err().unwrap();
+    assert_eq!(returned.as_ref() as *const OwnedError, original);
+    assert!(!shutdown_polled.get());
+    assert!(!close_polled.get());
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(returned);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+/// Shutdown errors remain original errors after successful completion and must
+/// skip the caller's close. The controlled drain marker proves the order, not
+/// actor admission or native retirement; arbitrary reducer errors stay fatal.
+async fn shutdown_error_after_completion_is_not_normalized_or_closed() {
+    let done = AtomicBool::new(false);
+    let wake = tokio::sync::Notify::new();
+    let drained = Cell::new(false);
+    let drained_before_shutdown = Cell::new(false);
+    let close_polled = Cell::new(false);
+    let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let error = Box::new(OwnedError(drops.clone()));
+    let original = error.as_ref() as *const OwnedError;
+    let result = async {
+        settle_fixture_supervisor(
+            &done,
+            &wake,
+            async {
+                drained.set(true);
+                Ok(())
+            },
+            async {
+                drained_before_shutdown.set(drained.get());
+                Err::<(), _>(error)
+            },
+        )
+        .await?;
+        close_polled.set(true);
+        Ok::<(), Box<OwnedError>>(())
+    }
+    .await;
+    let returned = result.err().unwrap();
+    assert_eq!(returned.as_ref() as *const OwnedError, original);
+    assert!(drained_before_shutdown.get());
+    assert!(!close_polled.get());
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(returned);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}

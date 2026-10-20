@@ -2359,6 +2359,11 @@ flag observed when the original outer supervisor returns an error. This single
 owned-result observation MUST NOT change that result or any cleanup decision;
 absent evidence and lifecycle state remain unknown without additional requests
 or waits. It MUST NOT imply the producing operation, causal ordering or native fate.
+Adversarial certification fixtures MUST request cooperative supervisor stop and
+wake their existing single supervisor consumer, then await the original worker
+completion while actor ingress remains Running before submitting Shutdown and
+closing the actor. This coordination MUST preserve reducer errors and the original
+cleanup deadline and force policy; a controlled ordering test is not native proof.
 Synchronous initial-Bash reentry qualification MUST keep its original poll then
 reconciliation order and certification oracles, with the original nominal
 400*10ms wait allowance expressed as one monotonic elapsed budget. A synchronous
