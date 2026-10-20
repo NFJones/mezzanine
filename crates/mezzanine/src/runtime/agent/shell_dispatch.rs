@@ -741,12 +741,18 @@ impl RuntimeSessionService {
                     )?;
                 }
                 self.settle_agent_shell_output_preview(&turn.pane_id, &preview_owner);
-                let _ =
-                    self.retire_action_presentation_progress_for_action(&turn.turn_id, &action.id)?;
+                let retirement =
+                    self.retire_action_presentation_progress_for_action(&turn.turn_id, &action.id);
+                for (_, error) in retirement.errors {
+                    self.note_native_publication_error(key, Err(error));
+                }
             }
             if is_apply_patch_write {
-                let _ =
-                    self.retire_action_presentation_progress_for_action(&turn.turn_id, &action.id)?;
+                let retirement =
+                    self.retire_action_presentation_progress_for_action(&turn.turn_id, &action.id);
+                for (_, error) in retirement.errors {
+                    self.note_native_publication_error(key, Err(error));
+                }
             }
             self.append_agent_trace_turn_event(
                 &turn.pane_id,

@@ -26,7 +26,10 @@ fn claimed_read_progress(
 }
 
 /// Exercises both existing exact retirement owners, without cancelling work.
-fn retire_exact_progress(fixture: &mut CompletionFixture, whole_turn: bool) -> Result<usize> {
+fn retire_exact_progress(
+    fixture: &mut CompletionFixture,
+    whole_turn: bool,
+) -> crate::runtime::render::RuntimeActionProgressRetirement {
     if whole_turn {
         fixture
             .service
@@ -170,6 +173,11 @@ async fn runtime_completion_progress_preinstall_failure_preserves_source_until_i
 #[tokio::test]
 async fn runtime_completion_progress_update_failure_preserves_original_owner() {
     let mut fixture = CompletionFixture::fetch().await;
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .set_log_level(&fixture.turn.pane_id, AgentLogLevel::Debug)
+        .unwrap();
     let mut progress = claimed_read_progress(&fixture, "F668_INITIAL_PROGRESS".into());
     assert!(
         fixture
@@ -186,6 +194,12 @@ async fn runtime_completion_progress_update_failure_preserves_original_owner() {
         .agent_pane_screen(&fixture.turn.pane_id)
         .unwrap()
         .clone();
+    assert!(
+        screen
+            .normal_content_lines()
+            .join("\n")
+            .contains("F668_INITIAL_PROGRESS")
+    );
     let lineage = fixture
         .service
         .agent_pane_screen_lineage(&fixture.turn.pane_id, &fixture.turn.conversation_id);
@@ -206,6 +220,12 @@ async fn runtime_completion_progress_update_failure_preserves_original_owner() {
     assert_eq!(
         fixture
             .service
+            .action_presentation_progress_sources_for_tests(&fixture.turn.pane_id),
+        vec![(1, "F668_INITIAL_PROGRESS".into())]
+    );
+    assert_eq!(
+        fixture
+            .service
             .action_presentation_progress_counts_for_tests(&fixture.turn.pane_id),
         (1, 0)
     );
@@ -216,6 +236,12 @@ async fn runtime_completion_progress_update_failure_preserves_original_owner() {
         original
     );
     assert_eq!(fixture.retained(), canonical);
+    assert!(!fixture.cancellation.flag().load(Ordering::SeqCst));
+    assert!(fixture.service.approved_external_action_attempt_is_current(
+        &fixture.turn.turn_id,
+        &fixture.action.id,
+        &fixture.attempt
+    ));
     fixture
         .service
         .hold_agent_presentation_installs_for_tests(false);
@@ -232,13 +258,81 @@ async fn runtime_completion_progress_update_failure_preserves_original_owner() {
         original
     );
     assert_eq!(fixture.retained(), canonical);
+    assert_eq!(
+        fixture
+            .service
+            .action_presentation_progress_sources_for_tests(&fixture.turn.pane_id),
+        vec![(2, "F668_REPLACEMENT_PROGRESS".into())]
+    );
+    let updated = fixture
+        .service
+        .agent_pane_screen(&fixture.turn.pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(updated.contains("F668_REPLACEMENT_PROGRESS"), "{updated}");
+    assert!(!updated.contains("F668_INITIAL_PROGRESS"), "{updated}");
+}
+
+/// A failed optional cleanup installs no pixels and retains exact source plus
+/// intent. That intent cannot promote the same body or suppress a final result;
+/// a later successful cleanup discharges it once without touching the worker.
+#[tokio::test]
+async fn runtime_completion_progress_retained_cleanup_cannot_promote_or_suppress() {
+    let mut fixture = CompletionFixture::fetch().await;
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .set_log_level(&fixture.turn.pane_id, AgentLogLevel::Debug)
+        .unwrap();
+    let progress = claimed_read_progress(&fixture, fixture.expected.content_text());
+    assert!(
+        fixture
+            .service
+            .apply_action_presentation_progress(progress.clone())
+            .unwrap()
+    );
+    let source = fixture
+        .service
+        .action_presentation_progress_sources_for_tests(&fixture.turn.pane_id);
+    let canonical = fixture.retained();
+    fixture
+        .service
+        .hold_agent_presentation_installs_for_tests(true);
+    let held = retire_exact_progress(&mut fixture, false);
+    assert_eq!((held.retired, held.retained), (0, 1));
+    assert_eq!(held.errors.len(), 1);
+    assert_eq!(
+        held.errors[0].1.message(),
+        "injected held pre-install presentation failure"
+    );
+    assert!(
+        !fixture
+            .service
+            .reconcile_action_presentation_progress(&progress, &fixture.expected)
+            .unwrap()
+    );
+    assert_eq!(
+        fixture
+            .service
+            .action_presentation_progress_sources_for_tests(&fixture.turn.pane_id),
+        source
+    );
+    fixture
+        .service
+        .hold_agent_presentation_installs_for_tests(false);
+    let retired = retire_exact_progress(&mut fixture, false);
+    assert_eq!((retired.retired, retired.retained), (1, 0));
+    assert!(retired.errors.is_empty());
+    assert_eq!(retire_exact_progress(&mut fixture, false).retired, 0);
+    assert_eq!(fixture.retained(), canonical);
+    assert!(!fixture.cancellation.flag().load(Ordering::SeqCst));
 }
 
 /// A supported unrelated screen replacement invalidates the old progress
-/// lineage without first clearing its source. Exact action/turn retirement must
-/// remove that matched metadata once while leaving the replacement untouched.
-/// No intervening progress update is allowed: it would independently clear the
-/// stale owner and mask the contribution's clone/early-continue regression.
+/// lineage without proving the old rows were removed. Exact action/turn cleanup
+/// must report Retained, not a speculative successful removal, preserve source
+/// and intent, and enqueue canonical replay without modifying replacement pixels.
 #[tokio::test]
 async fn runtime_completion_progress_stale_lineage_retires_exact_metadata_once() {
     for whole_turn in [false, true] {
@@ -286,7 +380,7 @@ async fn runtime_completion_progress_stale_lineage_retires_exact_metadata_once()
                     &fixture.turn.turn_id,
                     "not-the-owned-progress-action"
                 )
-                .unwrap(),
+                .retired,
             0
         );
         assert_eq!(
@@ -296,21 +390,31 @@ async fn runtime_completion_progress_stale_lineage_retires_exact_metadata_once()
             original_entries
         );
         assert_screen_unchanged(&fixture, &before, lineage);
-        assert_eq!(retire_exact_progress(&mut fixture, whole_turn).unwrap(), 1);
+        let first = retire_exact_progress(&mut fixture, whole_turn);
+        assert_eq!((first.retired, first.retained), (0, 1));
+        assert!(first.errors.is_empty());
         assert_eq!(
             fixture
                 .service
                 .action_presentation_progress_counts_for_tests(&fixture.turn.pane_id),
-            (0, 0)
+            (1, 0)
         );
+        assert_eq!(
+            fixture
+                .service
+                .action_presentation_progress_entries_for_tests(&fixture.turn.pane_id),
+            original_entries
+        );
+        assert_screen_unchanged(&fixture, &before, lineage);
+        let repeated = retire_exact_progress(&mut fixture, whole_turn);
+        assert_eq!((repeated.retired, repeated.retained), (0, 1));
+        assert!(repeated.errors.is_empty());
         assert!(
             fixture
                 .service
-                .action_presentation_progress_entries_for_tests(&fixture.turn.pane_id)
-                .is_empty()
+                .presentation
+                .agent_presentation_resize_is_deferred(&fixture.turn.pane_id)
         );
-        assert_screen_unchanged(&fixture, &before, lineage);
-        assert_eq!(retire_exact_progress(&mut fixture, whole_turn).unwrap(), 0);
         assert_screen_unchanged(&fixture, &before, lineage);
         assert_eq!(fixture.retained(), canonical);
         assert!(!fixture.cancellation.flag().load(Ordering::SeqCst));

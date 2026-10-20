@@ -305,7 +305,12 @@ impl RuntimeSessionService {
             .retain(|_, pause| pause.turn_id() != Some(turn_id));
         self.agent.skill_discovery_receipts.remove(turn_id);
         self.agent.model_loaded_skills.remove(turn_id);
-        let _ = self.retire_action_presentation_progress_for_turn(turn_id);
+        // Retained optional cleanup owns its own exact source after live
+        // execution disappears; never turn paint refusal into terminal failure.
+        let retirement = self.retire_action_presentation_progress_for_turn(turn_id);
+        for (_, error) in retirement.errors {
+            self.note_completion_optional_error(turn_id, Err(error));
+        }
         self.clear_completed_received_peer_message_presentations_for_turn(turn_id);
         self.clear_settled_outbound_message_actions(turn_id);
         self.clear_settled_provider_log_groups_for_turn(turn_id);

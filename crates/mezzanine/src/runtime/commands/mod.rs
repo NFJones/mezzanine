@@ -835,13 +835,18 @@ impl RuntimeSessionService {
     ) -> Result<usize> {
         self.request_agent_worker_cancellation_for_turn(turn_id);
         let cancelled = self.running_shell_transaction_targets_for_turn(turn_id);
-        self.retire_agent_shell_output_previews_for_turn(turn_id)?;
-        self.retire_action_presentation_progress_for_turn(turn_id)?;
+        let preview = self.retire_agent_shell_output_previews_for_turn(turn_id);
+        self.note_completion_optional_error(turn_id, preview.map(|_| ()));
+        let retirement = self.retire_action_presentation_progress_for_turn(turn_id);
+        for (_, error) in retirement.errors {
+            self.note_completion_optional_error(turn_id, Err(error));
+        }
         if cancelled.is_empty() {
             return Ok(0);
         }
 
         let mut interrupted_panes = BTreeSet::new();
+        let mut interruption_error = None;
         for (marker, pane_id) in &cancelled {
             let native = self.native_shell_marker_has_worker_owner(marker);
             self.cancel_runtime_pane_shell_delivery(pane_id, marker);
@@ -854,12 +859,14 @@ impl RuntimeSessionService {
                 match self.write_runtime_pane_input(pane_id, b"\x03") {
                     Ok(_) => {}
                     Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}
-                    Err(error) => return Err(error),
+                    Err(error) => {
+                        interruption_error.get_or_insert(error);
+                    }
                 }
             }
         }
 
-        Ok(cancelled.len())
+        interruption_error.map_or_else(|| Ok(cancelled.len()), Err)
     }
 
     /// Runs the apply agent shell preference context operation for this subsystem.

@@ -157,6 +157,8 @@ impl RuntimeSessionService {
                 next_order: 0,
                 components: std::collections::BTreeMap::new(),
                 promoted_components: std::collections::BTreeMap::new(),
+                retirement_requested: std::collections::BTreeSet::new(),
+                retirement_error: None,
             },
         };
         let key = RuntimeActionPresentationProgressKey {
@@ -165,7 +167,8 @@ impl RuntimeSessionService {
             execution: progress.execution,
             component: progress.component,
         };
-        if presentation.promoted_components.contains_key(&key)
+        if presentation.retirement_requested.contains(&key)
+            || presentation.promoted_components.contains_key(&key)
             || presentation
                 .components
                 .get(&key)
@@ -294,6 +297,7 @@ impl RuntimeSessionService {
             .presentation
             .action_presentation_progress
             .get(&pane_id)
+            .filter(|owner| !owner.retirement_requested.contains(&key))
             .and_then(|presentation| presentation.components.get(&key))
             .is_some_and(|component| {
                 component.revision == progress.revision
@@ -304,6 +308,7 @@ impl RuntimeSessionService {
             .presentation
             .action_presentation_progress
             .get(&pane_id)
+            .filter(|owner| !owner.retirement_requested.contains(&key))
             .and_then(|presentation| presentation.promoted_components.get(&key))
             .is_some_and(|component| component.source == progress.source);
         if !exact_retained && !exact_promoted {
@@ -371,7 +376,12 @@ impl RuntimeSessionService {
                 .presentation
                 .action_presentation_progress
                 .values()
-                .flat_map(|presentation| presentation.promoted_components.iter())
+                .flat_map(|presentation| {
+                    presentation
+                        .promoted_components
+                        .iter()
+                        .filter(|(key, _)| !presentation.retirement_requested.contains(*key))
+                })
                 .any(|(key, component)| {
                     key.turn_id == turn_id
                         && key.action_id == action_id
@@ -410,7 +420,7 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
         action_id: &str,
-    ) -> Result<usize> {
+    ) -> crate::runtime::render::RuntimeActionProgressRetirement {
         self.retire_action_presentation_progress_matching(|key| {
             key.turn_id == turn_id && key.action_id == action_id
         })
@@ -420,7 +430,7 @@ impl RuntimeSessionService {
     pub(crate) fn retire_action_presentation_progress_for_turn(
         &mut self,
         turn_id: &str,
-    ) -> Result<usize> {
+    ) -> crate::runtime::render::RuntimeActionProgressRetirement {
         self.retire_action_presentation_progress_matching(|key| key.turn_id == turn_id)
     }
 
@@ -439,6 +449,26 @@ impl RuntimeSessionService {
                     .values()
                     .chain(owner.promoted_components.values())
                     .map(|component| component.entry.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Reads retained revisions and payloads without advancing presentation.
+    #[cfg(test)]
+    pub(crate) fn action_presentation_progress_sources_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Vec<(u64, String)> {
+        self.presentation
+            .action_presentation_progress
+            .get(pane_id)
+            .map(|owner| {
+                owner
+                    .components
+                    .values()
+                    .chain(owner.promoted_components.values())
+                    .map(|component| (component.revision, component.source.clone()))
                     .collect()
             })
             .unwrap_or_default()
@@ -473,7 +503,12 @@ impl RuntimeSessionService {
             .presentation
             .action_presentation_progress
             .values()
-            .flat_map(|presentation| presentation.promoted_components.iter())
+            .flat_map(|presentation| {
+                presentation
+                    .promoted_components
+                    .iter()
+                    .filter(|(key, _)| !presentation.retirement_requested.contains(*key))
+            })
             .filter(|(key, _)| {
                 key.turn_id == turn_id
                     && key.action_id == action_id
@@ -506,7 +541,12 @@ impl RuntimeSessionService {
             .presentation
             .action_presentation_progress
             .values()
-            .flat_map(|presentation| presentation.promoted_components.iter())
+            .flat_map(|presentation| {
+                presentation
+                    .promoted_components
+                    .iter()
+                    .filter(|(key, _)| !presentation.retirement_requested.contains(*key))
+            })
             .filter(|(key, _)| {
                 key.turn_id == turn_id
                     && key.action_id == action_id
@@ -719,6 +759,9 @@ impl RuntimeSessionService {
         ordered.sort_by_key(|(_key, component)| component.first_seen_order);
         let mut sections = Vec::new();
         for (key, component) in ordered {
+            if presentation.retirement_requested.contains(key) {
+                continue;
+            }
             let mut entry = component.entry.clone();
             let rendered = match &key.component {
                 ActionPresentationComponentIdentity::ShellOutput
@@ -898,7 +941,9 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
-        if presentation.promoted_components.contains_key(key) {
+        if presentation.retirement_requested.contains(key)
+            || presentation.promoted_components.contains_key(key)
+        {
             self.presentation
                 .action_presentation_progress
                 .insert(pane_id.to_string(), presentation);
@@ -1290,76 +1335,95 @@ impl RuntimeSessionService {
     fn retire_action_presentation_progress_matching(
         &mut self,
         mut matches: impl FnMut(&RuntimeActionPresentationProgressKey) -> bool,
-    ) -> Result<usize> {
+    ) -> crate::runtime::render::RuntimeActionProgressRetirement {
         let pane_ids = self
             .presentation
             .action_presentation_progress
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-        let mut retired = 0usize;
+        let mut report = crate::runtime::render::RuntimeActionProgressRetirement::default();
         for pane_id in pane_ids {
-            let Some(mut presentation) = self
+            let Some(presentation) = self
                 .presentation
                 .action_presentation_progress
-                .get(&pane_id)
-                .cloned()
+                .get_mut(&pane_id)
             else {
                 continue;
             };
-            let component_keys = presentation
+            let selected = presentation
                 .components
                 .keys()
+                .chain(presentation.promoted_components.keys())
                 .filter(|key| matches(key))
                 .cloned()
                 .collect::<Vec<_>>();
-            let promoted_keys = presentation
-                .promoted_components
-                .keys()
-                .filter(|key| matches(key))
-                .cloned()
-                .collect::<Vec<_>>();
-            let removes_visible_components = !component_keys.is_empty();
-            retired = retired
-                .saturating_add(component_keys.len())
-                .saturating_add(promoted_keys.len());
-            if component_keys.is_empty() && promoted_keys.is_empty() {
-                self.presentation
-                    .action_presentation_progress
-                    .insert(pane_id, presentation);
+            if selected.is_empty() {
                 continue;
             }
-            let old_lineage = presentation.installed_lineage;
-            for key in component_keys {
-                presentation.components.remove(&key);
-            }
-            for key in promoted_keys {
-                presentation.promoted_components.remove(&key);
-            }
-            if !removes_visible_components {
-                if !presentation.components.is_empty()
-                    || !presentation.promoted_components.is_empty()
-                {
-                    self.presentation
+            // Intent is canonical before any fallible paint. A clone or a
+            // replacement screen is never an acknowledgment of this request.
+            presentation
+                .retirement_requested
+                .extend(selected.iter().cloned());
+            match self.install_requested_action_progress_retirement(&pane_id) {
+                Ok(retired) => report.retired = report.retired.saturating_add(retired),
+                Err(error) => {
+                    if let Some(owner) = self
+                        .presentation
                         .action_presentation_progress
-                        .insert(pane_id, presentation);
-                } else {
-                    self.presentation
-                        .action_presentation_progress
-                        .remove(&pane_id);
+                        .get_mut(&pane_id)
+                    {
+                        owner.retirement_error = Some(Box::new(error.clone()));
+                    }
+                    report.errors.push((pane_id.clone(), error));
                 }
-                continue;
             }
-            if self.agent_pane_screen_lineage(&pane_id, &presentation.conversation_id)
-                != Some(old_lineage)
-            {
-                continue;
+            if let Some(owner) = self.presentation.action_presentation_progress.get(&pane_id) {
+                report.retained = report.retained.saturating_add(
+                    selected
+                        .iter()
+                        .filter(|key| owner.retirement_requested.contains(*key))
+                        .count(),
+                );
             }
+            self.defer_requested_action_progress_retirement(&pane_id);
+        }
+        report
+    }
+
+    /// Attempts only the optional screen/source transaction of an existing
+    /// request. Refusal retains its source and intent; no turn state is needed.
+    fn install_requested_action_progress_retirement(&mut self, pane_id: &str) -> Result<usize> {
+        let Some(mut presentation) = self
+            .presentation
+            .action_presentation_progress
+            .get(pane_id)
+            .cloned()
+        else {
+            return Ok(0);
+        };
+        let count = presentation.retirement_requested.len();
+        if count == 0 {
+            return Ok(0);
+        }
+        let visible = presentation
+            .components
+            .keys()
+            .any(|key| presentation.retirement_requested.contains(key));
+        let old_lineage = presentation.installed_lineage;
+        if visible {
             let Some(mut candidate) =
-                self.clear_installed_action_progress_suffix(&pane_id, &presentation)
+                self.clear_installed_action_progress_suffix(pane_id, &presentation)
             else {
-                continue;
+                return Ok(0);
             };
+            presentation
+                .components
+                .retain(|key, _| !presentation.retirement_requested.contains(key));
+            presentation
+                .promoted_components
+                .retain(|key, _| !presentation.retirement_requested.contains(key));
             presentation.projected_context = self.action_progress_projection_context(&pane_id)?;
             let remaining = self.render_action_progress_components(&pane_id, &presentation)?;
             presentation.baseline_screen = std::sync::Arc::new(candidate.clone());
@@ -1368,9 +1432,15 @@ impl RuntimeSessionService {
                 &remaining,
                 self.ui_theme(),
             )?;
+            #[cfg(test)]
+            if self.presentation.agent_install_failure_held {
+                return Err(MezError::invalid_state(
+                    "injected held pre-install presentation failure",
+                ));
+            }
             let installed_lineage = self
                 .update_agent_pane_screen_preserving_interaction(
-                    &pane_id,
+                    pane_id,
                     &presentation.conversation_id,
                     candidate,
                 )
@@ -1378,24 +1448,54 @@ impl RuntimeSessionService {
                     MezError::invalid_state("executor progress cleanup conversation changed")
                 })?;
             self.synchronize_action_progress_companion_lineage(
-                &pane_id,
+                pane_id,
                 &presentation.conversation_id,
                 old_lineage,
                 installed_lineage,
             );
-            if presentation.components.is_empty() && presentation.promoted_components.is_empty() {
-                self.presentation
-                    .action_presentation_progress
-                    .remove(&pane_id);
-                continue;
-            }
             presentation.installed_lineage = installed_lineage;
             presentation.transient_rows = transient_rows;
+        } else {
+            presentation
+                .promoted_components
+                .retain(|key, _| !presentation.retirement_requested.contains(key));
+        }
+        presentation.retirement_requested.clear();
+        presentation.retirement_error = None;
+        if presentation.components.is_empty() && presentation.promoted_components.is_empty() {
             self.presentation
                 .action_presentation_progress
-                .insert(pane_id, presentation);
+                .remove(pane_id);
+        } else {
+            self.presentation
+                .action_presentation_progress
+                .insert(pane_id.to_string(), presentation);
         }
-        Ok(retired)
+        Ok(count)
+    }
+
+    /// Reuses the existing coalesced canonical replay worker, never the generic
+    /// screen setter, to recover cleanup whose installed suffix is unproven.
+    fn defer_requested_action_progress_retirement(&mut self, pane_id: &str) {
+        let Some(owner) = self.presentation.action_presentation_progress.get(pane_id) else {
+            return;
+        };
+        if owner.retirement_requested.is_empty()
+            || self.persistence.transcript_store().is_none()
+            || self
+                .agent_shell_store()
+                .get(pane_id)
+                .is_none_or(|session| session.session_id != owner.conversation_id)
+        {
+            return;
+        }
+        if let Some(size) = self.agent_pane_screen(pane_id).map(TerminalScreen::size) {
+            self.presentation
+                .agent_presentation_projection_cache
+                .remove(pane_id);
+            self.presentation
+                .defer_agent_presentation_resize(pane_id, size);
+        }
     }
 
     fn synchronize_action_progress_companion_lineage(

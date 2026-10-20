@@ -4804,6 +4804,17 @@ that matching final replay; a mismatch or failure MUST restore ordinary terminal
 presentation. Terminal action cleanup, cancellation, retry, conversation
 replacement, and pane teardown MUST retire transient executor-progress state.
 
+Progress cleanup MUST distinguish components actually retired from exact source
+and cleanup intent still retained. An unowned suffix, stale screen lineage, or
+failed optional installation MUST NOT be reported as successful retirement.
+Retained cleanup intent MUST NOT promote source or suppress eligible final
+output. Optional paint failures MUST NOT prevent worker delivery cancellation,
+transaction protocol retirement, or interruption of other selected transactions.
+Canonical source-backed replay MAY discharge retained cleanup only after its
+complete screen transaction commits; a provisional clean screen that can still
+roll back is not a cleanup acknowledgment. A generic screen replacement alone
+MUST NOT discharge the original source or permit stale snapshots to revive it.
+
 For runtime-network `fetch_url` and `web_search`, ordinary HTTP body chunks MAY
 produce provisional read-body progress only after actor ingress has claimed the
 approved external action and issued its exact attempt identity. Fetch progress

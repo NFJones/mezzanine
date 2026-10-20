@@ -485,6 +485,23 @@ struct RuntimeActionPresentationProgressPresentation {
         RuntimeActionPresentationProgressKey,
         RuntimeActionPresentationProgressComponent,
     >,
+    /// Exact bounded cleanup intent; these sources cannot promote or suppress.
+    retirement_requested: std::collections::BTreeSet<RuntimeActionPresentationProgressKey>,
+    /// Optional paint failure belongs to this source, never canonical execution.
+    retirement_error: Option<Box<MezError>>,
+}
+
+/// Outcome of optional progress cleanup, including partial committed owners.
+/// Retained sources stay in the existing bounded pane owner; this value grants
+/// neither worker cancellation nor authority over an unowned terminal suffix.
+#[derive(Debug, Default)]
+pub(crate) struct RuntimeActionProgressRetirement {
+    /// Components actually removed from canonical presentation ownership.
+    pub(crate) retired: usize,
+    /// Matching components still owned with explicit cleanup intent.
+    pub(crate) retained: usize,
+    /// Per-pane failures; earlier successful removals are not lost on error.
+    pub(crate) errors: Vec<(String, MezError)>,
 }
 
 /// Released divider-layout outcome awaiting debounce consumption.

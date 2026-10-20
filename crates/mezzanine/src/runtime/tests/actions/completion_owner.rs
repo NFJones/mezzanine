@@ -1332,7 +1332,7 @@ impl Drop for CompletionFixture {
 /// Exact cancellation tokens belong to admitted dispatches, not terminal paint.
 /// Retain the actually claimed external token, install a compositor-owned transient
 /// preview solely as a presentation failure cut, then fail its actual retirement
-/// before any shell transaction can be cleared. The issued token must already
+/// while transaction cancellation continues. The issued token must already
 /// be cancelled while claims/results remain available for truthful classification.
 /// The pending sibling stays unclaimed under normal per-turn serialization.
 /// The preview is synthetic UI state, not native worker or invocation evidence;
@@ -1386,11 +1386,14 @@ async fn runtime_completion_owner_cancels_issued_token_before_preview_retirement
     assert_eq!(previews[0].0.marker, fixture.attempt);
     assert!(!first_flag.load(Ordering::SeqCst));
     fixture.service.fail_agent_presentation_install_for_tests(0);
-    let error = fixture
+    let cancelled = fixture
         .service
         .cancel_live_shell_transactions_for_turn(&fixture.turn.turn_id)
-        .unwrap_err();
-    assert_eq!(error.message(), "injected pre-install presentation failure");
+        .unwrap();
+    assert_eq!(
+        cancelled, 0,
+        "this external-only fixture owns no shell transaction"
+    );
     assert!(first_flag.load(Ordering::SeqCst));
     assert!(fixture.service.approved_external_action_attempt_is_current(
         &fixture.turn.turn_id,
