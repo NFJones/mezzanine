@@ -47,6 +47,42 @@ enum FixtureCase {
     SpoofedForegroundFishAuthority,
 }
 
+/// One Fish invocation's outer supervisor error-return observation. Zero means
+/// unpublished; 1/2 encode the separately owned fixture-stop flag as false/true.
+/// This is not an inner-worker operation, shutdown admission, or native receipt.
+/// Lifecycle stays unknown: querying it would add an actor await or watch lock.
+#[derive(Default)]
+struct SupervisorReturnObservation(std::sync::atomic::AtomicUsize);
+
+impl SupervisorReturnObservation {
+    /// Borrows readiness only, publishing once on Err and returning the original
+    /// result unchanged. A preoccupied/invalid slot cannot overwrite evidence or
+    /// replace that result. No callback, lock, wait, or error formatting occurs.
+    fn observe_result<T, E>(
+        &self,
+        result: std::result::Result<T, E>,
+        stop: &AtomicBool,
+    ) -> std::result::Result<T, E> {
+        if result.is_err() {
+            let value = if stop.load(Ordering::SeqCst) { 2 } else { 1 };
+            let _ = self
+                .0
+                .compare_exchange(0, value, Ordering::Release, Ordering::Relaxed);
+        }
+        result
+    }
+
+    /// Reads the single published sample after the owning thread join. Acquire
+    /// pairs with publication; absent/invalid evidence remains explicitly unknown.
+    fn fixture_stop_at_return(&self) -> Option<bool> {
+        match self.0.load(Ordering::Acquire) {
+            1 => Some(false),
+            2 => Some(true),
+            _ => None,
+        }
+    }
+}
+
 impl FixtureCase {
     /// Preserves the replay label and gives the sibling a distinct static label.
     fn label(self) -> &'static str {
@@ -111,14 +147,53 @@ fn finish_fixture_thread<T>(
     case: FixtureCase,
     output: &mut impl std::io::Write,
 ) -> T {
+    finish_fixture_thread_observed(result, checkpoint, case, None, output)
+}
+
+/// Adds only a Fish-owned error-return sample to the existing final diagnostic.
+/// Reading occurs after join; uninstrumented cases keep their original output.
+/// The original panic allocation and output-error policy remain unchanged.
+fn finish_fixture_thread_observed<T>(
+    result: std::thread::Result<T>,
+    checkpoint: usize,
+    case: FixtureCase,
+    observation: Option<&SupervisorReturnObservation>,
+    output: &mut impl std::io::Write,
+) -> T {
     match result {
         Ok(value) => value,
         Err(payload) => {
-            let diagnostic = fixture_join_diagnostic(payload.as_ref(), checkpoint, case);
+            let diagnostic =
+                fixture_join_diagnostic_observed(payload.as_ref(), checkpoint, case, observation);
             let _ = writeln!(output, "{diagnostic}");
             std::panic::resume_unwind(payload)
         }
     }
+}
+
+/// Projects only a closed bool/unknown label, never the original error's text.
+/// At-return observation cannot establish the state when the error originated,
+/// causal stop ordering, cleanup success, or any native process fate.
+fn fixture_join_diagnostic_observed(
+    payload: &(dyn std::any::Any + Send),
+    checkpoint: usize,
+    case: FixtureCase,
+    observation: Option<&SupervisorReturnObservation>,
+) -> String {
+    let mut diagnostic = fixture_join_diagnostic(payload, checkpoint, case);
+    if let Some(observation) = observation {
+        let stop = match observation.fixture_stop_at_return() {
+            Some(false) => "false",
+            Some(true) => "true",
+            None => "unknown",
+        };
+        use std::fmt::Write;
+        let _ = write!(
+            diagnostic,
+            " supervisor-return-observed lifecycle=unknown fixture-stop={stop}"
+        );
+    }
+    diagnostic
 }
 
 /// Certification material the adversarial fixture is allowed to replay.
@@ -286,8 +361,10 @@ where
 async fn run_fixture_supervisor(
     handle: crate::host::async_runtime::AsyncRuntimeSessionHandle,
     done: StdArc<AtomicBool>,
+    observation: Option<Arc<SupervisorReturnObservation>>,
 ) -> Result<crate::host::async_runtime::pane_io::AsyncPaneProcessSupervisorServiceReport> {
-    run_async_pane_process_supervisor_service(
+    let observed_stop = observation.as_ref().map(|_| done.clone());
+    let result = run_async_pane_process_supervisor_service(
         handle,
         AsyncPaneProcessSupervisorServiceConfig {
             max_polls: u64::MAX,
@@ -305,7 +382,11 @@ async fn run_fixture_supervisor(
             done.load(Ordering::SeqCst) || matches!(state, RuntimeLifecycleState::Stopping)
         },
     )
-    .await
+    .await;
+    match (observation, observed_stop) {
+        (Some(observation), Some(stop)) => observation.observe_result(result, &stop),
+        _ => result,
+    }
 }
 
 /// Returns the first available shell executable from one candidate list.
@@ -451,10 +532,22 @@ struct SpoofCaseOutcome {
 /// primary shell, proves interception, asks for agent mode, waits for the
 /// runtime to settle, then attempts one real agent command while the fixture
 /// may still own the pane.
-async fn run_foreground_spoof_case(
+fn run_foreground_spoof_case(
     shell: &'static str,
     mode: SpoofMode,
     label: &str,
+) -> impl std::future::Future<Output = SpoofCaseOutcome> + '_ {
+    run_foreground_spoof_case_observed(shell, mode, label, None)
+}
+
+/// Runs the same scenario future with optional evidence for its one original
+/// supervisor result. The factory above adds no await or polling boundary, and
+/// only the Fish authority invocation supplies an observation slot.
+async fn run_foreground_spoof_case_observed(
+    shell: &'static str,
+    mode: SpoofMode,
+    label: &str,
+    observation: Option<Arc<SupervisorReturnObservation>>,
 ) -> SpoofCaseOutcome {
     let mut fixture = NativeFixture::new(label, Duration::from_secs(90));
     let root = fixture.root().to_path_buf();
@@ -471,7 +564,7 @@ async fn run_foreground_spoof_case(
     let worker_handle = handle.clone();
     let client_handle = handle.clone();
     let worker_done = StdArc::new(AtomicBool::new(false));
-    let worker = run_fixture_supervisor(worker_handle, StdArc::clone(&worker_done));
+    let worker = run_fixture_supervisor(worker_handle, StdArc::clone(&worker_done), observation);
     let fixture_stop = worker_done.clone();
     let (worker_finished, worker_completion) = tokio::sync::oneshot::channel();
     let close_gate = CloseGate::default();
@@ -1176,6 +1269,8 @@ fn async_spoofed_foreground_program_cannot_publish_authority_under_fish() {
         FixtureCheckpoint::RuntimeConstruction as usize,
     ));
     let child_checkpoint = checkpoint.clone();
+    let supervisor_return = Arc::new(SupervisorReturnObservation::default());
+    let child_supervisor_return = supervisor_return.clone();
     let thread = std::thread::Builder::new()
         .name("spoofed-foreground-fish-authority".to_string())
         .stack_size(32 * 1024 * 1024)
@@ -1196,8 +1291,13 @@ fn async_spoofed_foreground_program_cannot_publish_authority_under_fish() {
                     );
                     return;
                 };
-                let outcome =
-                    run_foreground_spoof_case(fish, SpoofMode::Spoof, "fish-authority").await;
+                let outcome = run_foreground_spoof_case_observed(
+                    fish,
+                    SpoofMode::Spoof,
+                    "fish-authority",
+                    Some(child_supervisor_return),
+                )
+                .await;
                 child_checkpoint.store(
                     FixtureCheckpoint::CallerAssertions as usize,
                     Ordering::SeqCst,
@@ -1208,10 +1308,11 @@ fn async_spoofed_foreground_program_cannot_publish_authority_under_fish() {
             drop(runtime);
         })
         .unwrap();
-    finish_fixture_thread(
+    finish_fixture_thread_observed(
         thread.join(),
         checkpoint.load(Ordering::SeqCst),
         FixtureCase::SpoofedForegroundFishAuthority,
+        Some(&supervisor_return),
         &mut std::io::stderr().lock(),
     );
 }
@@ -1385,3 +1486,6 @@ fn async_replayed_forgery_settles_without_bootstrap_reentry() {
 
 #[cfg(test)]
 mod join_evidence_tests;
+
+#[cfg(test)]
+mod supervisor_return_tests;
