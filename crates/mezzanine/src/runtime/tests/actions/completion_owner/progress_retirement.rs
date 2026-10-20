@@ -11,7 +11,7 @@ use mez_agent::{
 };
 
 /// Builds progress for the exact actually claimed attempt, not a fake marker.
-fn claimed_read_progress(
+pub(super) fn claimed_read_progress(
     fixture: &CompletionFixture,
     source: String,
 ) -> ActionPresentationProgress {
@@ -26,7 +26,7 @@ fn claimed_read_progress(
 }
 
 /// Exercises both existing exact retirement owners, without cancelling work.
-fn retire_exact_progress(
+pub(super) fn retire_exact_progress(
     fixture: &mut CompletionFixture,
     whole_turn: bool,
 ) -> crate::runtime::render::RuntimeActionProgressRetirement {

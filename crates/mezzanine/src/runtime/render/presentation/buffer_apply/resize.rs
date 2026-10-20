@@ -117,6 +117,11 @@ impl RuntimeSessionService {
             pane_id: pane_id.to_string(),
             conversation_id,
             captured_lineage,
+            captured_progress: self
+                .presentation
+                .action_presentation_progress
+                .get(pane_id)
+                .map(|owner| owner.snapshot_current.clone()),
             source_revision,
             size,
             transcript_store,
@@ -173,6 +178,7 @@ impl RuntimeSessionService {
                 pane_id: work.pane_id,
                 conversation_id: work.conversation_id,
                 captured_lineage: work.captured_lineage,
+                captured_progress: work.captured_progress,
                 source_revision: work.source_revision,
                 latest_sequence: work.cached_latest_sequence,
                 size: work.size,
@@ -237,6 +243,10 @@ impl RuntimeSessionService {
                 .insert(work.pane_id.clone(), preview);
         }
         if let Some(mut progress) = work.action_presentation_progress {
+            // Pure worker reconstruction must never invalidate the actor's
+            // captured allocation; actor freshness is checked at acceptance.
+            progress.snapshot_current =
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
             progress.installed_lineage = projection_lineage;
             projection
                 .presentation
@@ -265,6 +275,7 @@ impl RuntimeSessionService {
             pane_id: work.pane_id.clone(),
             conversation_id: work.conversation_id,
             captured_lineage: work.captured_lineage,
+            captured_progress: work.captured_progress,
             source_revision: work.source_revision,
             latest_sequence,
             size: work.size,
@@ -321,6 +332,20 @@ impl RuntimeSessionService {
             && current_source_revision == result.source_revision
             && match (
                 self.presentation
+                    .action_presentation_progress
+                    .get(&result.pane_id),
+                result.captured_progress.as_ref(),
+            ) {
+                (Some(current), Some(captured)) => {
+                    current.snapshot_is_current()
+                        && captured.load(std::sync::atomic::Ordering::Acquire)
+                        && std::sync::Arc::ptr_eq(&current.snapshot_current, captured)
+                }
+                (None, None) => true,
+                _ => false,
+            }
+            && match (
+                self.presentation
                     .agent_streaming_say_presentations
                     .get(&result.pane_id),
                 result.streaming_say_presentation.as_ref(),
@@ -367,8 +392,7 @@ impl RuntimeSessionService {
             .agent_shell_output_previews
             .remove(&result.pane_id);
         self.presentation
-            .action_presentation_progress
-            .remove(&result.pane_id);
+            .commit_action_progress(&result.pane_id, None);
         self.presentation
             .agent_streaming_say_presentations
             .remove(&result.pane_id);
@@ -381,8 +405,7 @@ impl RuntimeSessionService {
         if let Some(mut progress) = result.action_presentation_progress.take() {
             progress.installed_lineage = installed_lineage;
             self.presentation
-                .action_presentation_progress
-                .insert(result.pane_id.clone(), progress);
+                .commit_action_progress(&result.pane_id, Some(progress));
         }
         if let Some(mut streaming) = result.streaming_say_presentation.take() {
             streaming.installed_lineage = installed_lineage;

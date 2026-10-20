@@ -445,6 +445,13 @@ impl RuntimeSessionService {
         let previous_screen = self.agent_pane_screen(pane_id).cloned();
         let previous_lineage = self.agent_pane_screen_lineage(pane_id, &session_id);
         let previous_steering = self.snapshot_steering_presentation_surface(pane_id);
+        // Move into this synchronous transaction, not into a provisional
+        // screen setter. Failure restores the exact original source/intent.
+        let previous_progress = self
+            .presentation
+            .action_presentation_progress
+            .remove(pane_id);
+        let mut rebuilt_progress = None;
         let previous_preview = self
             .presentation
             .agent_shell_output_previews
@@ -526,6 +533,66 @@ impl RuntimeSessionService {
                 self.apply_agent_streaming_say_projection_outcome(projection)?
                     .require_accepted("resized streaming presentation projection was rejected")?;
             }
+            if let Some(mut progress) = previous_progress
+                .as_ref()
+                .filter(|progress| progress.conversation_id == session_id)
+                .cloned()
+            {
+                // The complete durable/provider/preview rebuild is a genuine
+                // progress-free baseline; old transient row counts are NOT
+                // rebound to it. Requested sources are pruned only on commit.
+                let baseline = self
+                    .agent_screen_without_pending_steering(pane_id, &session_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("progress replay baseline disappeared")
+                    })?;
+                progress.baseline_screen = std::sync::Arc::new(baseline.clone());
+                progress.projected_context = self.action_progress_projection_context(pane_id)?;
+                let sections = self.render_action_progress_components(pane_id, &progress)?;
+                let mut candidate = baseline;
+                let (_, rows) = Self::append_action_progress_sections_to_screen(
+                    &mut candidate,
+                    &sections,
+                    self.ui_theme(),
+                )?;
+                #[cfg(test)]
+                if self.presentation.agent_install_failure_held {
+                    return Err(MezError::invalid_state(
+                        "injected held pre-install presentation failure",
+                    ));
+                }
+                let before = self
+                    .agent_pane_screen_lineage(pane_id, &session_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("progress replay lineage disappeared")
+                    })?;
+                let installed = self
+                    .update_agent_pane_screen_preserving_interaction(
+                        pane_id,
+                        &session_id,
+                        candidate,
+                    )
+                    .ok_or_else(|| {
+                        MezError::invalid_state("progress replay conversation changed")
+                    })?;
+                self.synchronize_action_progress_companion_lineage(
+                    pane_id,
+                    &session_id,
+                    before,
+                    installed,
+                );
+                progress.installed_lineage = installed;
+                progress.transient_rows = rows;
+                progress
+                    .components
+                    .retain(|key, _| !progress.retirement_requested.contains(key));
+                progress
+                    .promoted_components
+                    .retain(|key, _| !progress.retirement_requested.contains(key));
+                progress.retirement_requested.clear();
+                progress.retirement_error = None;
+                rebuilt_progress = Some(progress);
+            }
             Ok(())
         })();
         if let Err(error) = rebuild_result {
@@ -540,6 +607,19 @@ impl RuntimeSessionService {
             } else {
                 self.remove_agent_pane_screen(pane_id);
             }
+            if let Some(mut progress) = previous_progress {
+                // Only a previously owned suffix follows the exact restored
+                // image. A previously stale owner remains stale after rollback.
+                if progress.conversation_id == session_id
+                    && previous_lineage == Some(progress.installed_lineage)
+                    && let Some(lineage) = self.agent_pane_screen_lineage(pane_id, &session_id)
+                {
+                    progress.installed_lineage = lineage;
+                }
+                self.presentation
+                    .action_presentation_progress
+                    .insert(pane_id.to_string(), progress);
+            }
             if let Some(preview) = previous_preview {
                 self.presentation
                     .agent_shell_output_previews
@@ -552,6 +632,23 @@ impl RuntimeSessionService {
             }
             self.restore_steering_presentation_surface(pane_id, previous_steering);
             return Err(error);
+        }
+        if let Some(previous) = previous_progress {
+            if previous.conversation_id == session_id {
+                previous
+                    .snapshot_current
+                    .store(false, std::sync::atomic::Ordering::Release);
+                let retained = rebuilt_progress.filter(|progress| {
+                    !progress.components.is_empty() || !progress.promoted_components.is_empty()
+                });
+                self.presentation.commit_action_progress(pane_id, retained);
+            } else {
+                // A clean image for another conversation cannot retire this
+                // source or adopt its suffix. Actual rebind owns that decision.
+                self.presentation
+                    .action_presentation_progress
+                    .insert(pane_id.to_string(), previous);
+            }
         }
         self.presentation
             .agent_presentation_projection_cache

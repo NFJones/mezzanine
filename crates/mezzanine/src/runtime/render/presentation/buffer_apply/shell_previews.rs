@@ -320,7 +320,7 @@ impl RuntimeSessionService {
             pane_id,
             installed_lineage,
             progress_presentation,
-        );
+        )?;
         Ok(())
     }
 
@@ -507,7 +507,7 @@ impl RuntimeSessionService {
             pane_id,
             installed_lineage,
             progress_presentation,
-        );
+        )?;
         Ok(())
     }
 
@@ -560,7 +560,8 @@ impl RuntimeSessionService {
             let Some(mut presentation) = self
                 .presentation
                 .agent_shell_output_previews
-                .remove(&pane_id)
+                .get(&pane_id)
+                .cloned()
             else {
                 continue;
             };
@@ -570,7 +571,7 @@ impl RuntimeSessionService {
                 .filter(|owner| owner.turn_id == turn_id)
                 .cloned()
                 .collect::<Vec<_>>();
-            retired = retired.saturating_add(owners.len());
+            let selected_count = owners.len();
             let owns_live_screen = self
                 .agent_pane_screen_lineage(&pane_id, &presentation.conversation_id)
                 == Some(presentation.installed_lineage);
@@ -602,6 +603,7 @@ impl RuntimeSessionService {
             let conversation_id = presentation.conversation_id.clone();
             let retained = (!presentation.previews.is_empty()).then_some(presentation);
             self.install_agent_shell_preview_write(&pane_id, &conversation_id, baseline, retained)?;
+            retired = retired.saturating_add(selected_count);
         }
         Ok(retired)
     }

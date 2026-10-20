@@ -470,6 +470,9 @@ struct RuntimeActionPresentationProjectionContext {
 /// replacement from rolling back unrelated pane content.
 #[derive(Debug, Clone)]
 struct RuntimeActionPresentationProgressPresentation {
+    /// Observational freshness only: mutation/discharge invalidates old clones.
+    /// This never authorizes painting, execution, cancellation or cleanup.
+    snapshot_current: std::sync::Arc<std::sync::atomic::AtomicBool>,
     conversation_id: String,
     installed_lineage: u64,
     baseline_screen: std::sync::Arc<TerminalScreen>,
@@ -489,6 +492,23 @@ struct RuntimeActionPresentationProgressPresentation {
     retirement_requested: std::collections::BTreeSet<RuntimeActionPresentationProgressKey>,
     /// Optional paint failure belongs to this source, never canonical execution.
     retirement_error: Option<Box<MezError>>,
+    /// Optional cleanup cadence, independent of turn/execution lifetime.
+    retirement_retry_at: Option<std::time::Instant>,
+}
+
+impl RuntimeActionPresentationProgressPresentation {
+    /// Invalidates snapshots before canonical source or cleanup intent changes.
+    fn advance_snapshot_fence(&mut self) {
+        self.snapshot_current
+            .store(false, std::sync::atomic::Ordering::Release);
+        self.snapshot_current = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    }
+
+    /// Rejects a superseded/discharged clone even when its pane slot is absent.
+    fn snapshot_is_current(&self) -> bool {
+        self.snapshot_current
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
 }
 
 /// Outcome of optional progress cleanup, including partial committed owners.
@@ -698,6 +718,8 @@ pub(crate) struct RuntimePresentationComponent {
     /// Executor-owned action progress, separate from provider and shell-preview state.
     action_presentation_progress:
         std::collections::BTreeMap<String, RuntimeActionPresentationProgressPresentation>,
+    /// Fair bounded cleanup traversal; no action or provider scheduling authority.
+    action_progress_retirement_cursor: Option<String>,
     /// Final receipt-owned suffix; source and delivery authority stay in the agent.
     pub(in crate::runtime) pending_steering_suffixes:
         std::collections::BTreeMap<String, (String, u64, usize)>,
@@ -1459,6 +1481,8 @@ pub(crate) struct RuntimeAgentPresentationResizeWork {
     conversation_id: String,
     /// Exact resized screen lineage that the candidate may replace.
     captured_lineage: u64,
+    /// Original actor progress allocation, including cleanup-intent freshness.
+    captured_progress: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Actor-local durable presentation generation captured for cache authority.
     source_revision: u64,
     /// Exact terminal geometry represented by the candidate.
@@ -1504,6 +1528,8 @@ pub(crate) struct RuntimeAgentPresentationResizeResult {
     conversation_id: String,
     /// Exact resized screen lineage that the candidate may replace.
     captured_lineage: u64,
+    /// Original actor allocation, not the worker's reconstructed progress owner.
+    captured_progress: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Actor-local durable presentation generation captured by the work item.
     source_revision: u64,
     /// Latest durable sequence represented by the canonical candidate.
@@ -1601,6 +1627,39 @@ fn presentation_render_invalidation_priority(reason: RenderInvalidationReason) -
 }
 
 impl RuntimePresentationComponent {
+    /// Commits exact progress metadata after its screen transaction. Old clones
+    /// become unusable even when the committed destination is an empty slot.
+    fn commit_action_progress(
+        &mut self,
+        pane_id: &str,
+        mut owner: Option<RuntimeActionPresentationProgressPresentation>,
+    ) {
+        if let Some(previous) = self.action_presentation_progress.remove(pane_id) {
+            previous
+                .snapshot_current
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
+        if let Some(owner) = owner.as_mut() {
+            owner.snapshot_current = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        }
+        if let Some(owner) = owner {
+            self.action_presentation_progress
+                .insert(pane_id.to_string(), owner);
+        }
+    }
+
+    /// Clears provisional resume state without discharging original progress.
+    /// The operation's rollback still owns the original source; only its final
+    /// committed replacement or ordinary exact cleanup may discharge it.
+    pub(crate) fn suspend_agent_presentation_state(&mut self, pane_id: &str) {
+        let progress = self.action_presentation_progress.remove(pane_id);
+        self.remove_agent_presentation_state(pane_id);
+        if let Some(progress) = progress {
+            self.action_presentation_progress
+                .insert(pane_id.to_string(), progress);
+        }
+    }
+
     /// Checks only the projected client's retained waiting pager identity.
     pub(crate) fn terminal_status_overlay_is_current(&self, generation: u32) -> bool {
         self.primary_display_overlay.is_some()
@@ -1998,7 +2057,7 @@ impl RuntimePresentationComponent {
         self.pending_steering_suffixes.remove(pane_id);
         self.presented_steering_receipts
             .retain(|(pane, _, _)| pane != pane_id);
-        self.action_presentation_progress.remove(pane_id);
+        self.commit_action_progress(pane_id, None);
         self.agent_streaming_say_presentations.remove(pane_id);
         self.agent_pending_final_say_previews.remove(pane_id);
         self.agent_promoted_streaming_say_actions
@@ -2431,6 +2490,7 @@ impl RuntimePresentationComponent {
             let mut baseline = progress.baseline_screen.as_ref().clone();
             baseline.set_log_frame_settings(policy.clone(), rendition);
             baseline.resize(size)?;
+            progress.advance_snapshot_fence();
             progress.baseline_screen = std::sync::Arc::new(baseline);
             progress.installed_lineage = resized_lineage;
             progress.projected_context.size = size;
@@ -2620,6 +2680,75 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Discharges only the unchanged original progress projection after the
+    /// owning resume/hydration operation accepts its complete replacement.
+    /// Canonical execution and completion-group ownership are not changed.
+    pub(crate) fn commit_agent_resume_progress_replacement(
+        &mut self,
+        pane_id: &str,
+        snapshot: &RuntimeAgentResumePresentationSnapshot,
+    ) {
+        let original_is_current =
+            snapshot
+                .action_presentation_progress
+                .as_ref()
+                .is_some_and(|original| {
+                    original.snapshot_is_current()
+                        && self
+                            .presentation
+                            .action_presentation_progress
+                            .get(pane_id)
+                            .is_some_and(|current| {
+                                std::sync::Arc::ptr_eq(
+                                    &original.snapshot_current,
+                                    &current.snapshot_current,
+                                )
+                            })
+                });
+        if original_is_current {
+            self.presentation.commit_action_progress(pane_id, None);
+        }
+    }
+
+    /// Rebinds only an unchanged original source to the exact screen image the
+    /// owning resume/hydration transaction just restored. Generic setters and
+    /// stale snapshot restoration never acquire this rollback association.
+    pub(crate) fn restore_agent_resume_presentation_after_screen_rollback(
+        &mut self,
+        pane_id: &str,
+        mut snapshot: RuntimeAgentResumePresentationSnapshot,
+    ) {
+        if let Some(original) = snapshot.action_presentation_progress.as_mut()
+            && original.snapshot_is_current()
+            && self
+                .presentation
+                .action_presentation_progress
+                .get(pane_id)
+                .is_some_and(|current| {
+                    std::sync::Arc::ptr_eq(&original.snapshot_current, &current.snapshot_current)
+                })
+            && let Some(lineage) =
+                self.agent_pane_screen_lineage(pane_id, &original.conversation_id)
+            && snapshot
+                .header_owner
+                .as_ref()
+                .is_some_and(|(conversation, old_lineage)| {
+                    conversation == &original.conversation_id
+                        && *old_lineage == original.installed_lineage
+                })
+        {
+            original.installed_lineage = lineage;
+            if let Some(current) = self
+                .presentation
+                .action_presentation_progress
+                .get_mut(pane_id)
+            {
+                current.installed_lineage = lineage;
+            }
+        }
+        self.restore_agent_resume_presentation(pane_id, snapshot);
+    }
+
     /// Restores one pane's exact presentation state after resume failure.
     pub(crate) fn restore_agent_resume_presentation(
         &mut self,
@@ -2650,7 +2779,18 @@ impl RuntimeSessionService {
             .action_presentation_progress
             .take()
             .filter(|progress| {
-                current_conversation.as_deref() == Some(progress.conversation_id.as_str())
+                progress.snapshot_is_current()
+                    && self
+                        .presentation
+                        .action_presentation_progress
+                        .get(pane_id)
+                        .is_some_and(|current| {
+                            std::sync::Arc::ptr_eq(
+                                &progress.snapshot_current,
+                                &current.snapshot_current,
+                            )
+                        })
+                    && current_conversation.as_deref() == Some(progress.conversation_id.as_str())
                     && current_lineage == Some(progress.installed_lineage)
             });
         snapshot.streaming_say_presentation =
@@ -2704,10 +2844,9 @@ impl RuntimeSessionService {
                 .agent_shell_output_previews
                 .insert(pane_id.to_string(), value);
         }
-        self.presentation
-            .action_presentation_progress
-            .remove(pane_id);
         if let Some(value) = snapshot.action_presentation_progress {
+            // Missing/rejected snapshots do not delete a newer owner, and an
+            // empty canonical slot is never permission to resurrect old source.
             self.presentation
                 .action_presentation_progress
                 .insert(pane_id.to_string(), value);

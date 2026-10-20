@@ -420,7 +420,7 @@ impl RuntimeSessionService {
                         .as_ref()
                         .map(|membership| membership.scope_id()),
                 )?;
-                self.presentation.remove_agent_presentation_state(&pane_id);
+                self.presentation.suspend_agent_presentation_state(&pane_id);
                 self.set_agent_pane_screen(&pane_id, &conversation_id, fresh_screen);
                 self.set_agent_prompt_history_for_pane(&pane_id, prompt_history);
                 if !self.replay_agent_presentation_entries_to_terminal_buffer(
@@ -540,7 +540,10 @@ impl RuntimeSessionService {
                 } else {
                     self.remove_agent_pane_screen(&pane_id);
                 }
-                self.restore_agent_resume_presentation(&pane_id, previous_presentation);
+                self.restore_agent_resume_presentation_after_screen_rollback(
+                    &pane_id,
+                    previous_presentation,
+                );
                 self.persistence
                     .replace_pane_transcript_refs(&pane_id, previous_transcript_refs);
                 if let Some(path) = previous_working_directory {
@@ -550,6 +553,7 @@ impl RuntimeSessionService {
                 }
                 return Err(error);
             }
+            self.commit_agent_resume_progress_replacement(&pane_id, &previous_presentation);
             self.restore_pane_model_profile_identity(
                 &pane_id,
                 metadata.pane_model_profile.as_deref(),
