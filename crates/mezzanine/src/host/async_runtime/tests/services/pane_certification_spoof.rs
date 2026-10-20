@@ -34,8 +34,167 @@
 //! published for either. Both regressions also require the settlement to leave no
 //! pending bootstrap and to publish no shell, environment, or path authority.
 
-use super::super::native_fixture::{CloseGate, JoinControl, NativeFixture};
+use std::sync::Arc;
+
+use super::super::native_fixture::{CloseGate, FixtureFailure, JoinControl, NativeFixture};
 use super::super::*;
+
+/// The three observed evidence-losing join boundaries, never caller-provided text.
+#[derive(Clone, Copy)]
+enum FixtureCase {
+    ReplayedForgery,
+    SpoofedForegroundAuthority,
+    SpoofedForegroundFishAuthority,
+}
+
+/// One Fish invocation's outer supervisor error-return observation. Zero means
+/// unpublished; 1/2 encode the separately owned fixture-stop flag as false/true.
+/// This is not an inner-worker operation, shutdown admission, or native receipt.
+/// Lifecycle stays unknown: querying it would add an actor await or watch lock.
+#[derive(Default)]
+struct SupervisorReturnObservation(std::sync::atomic::AtomicUsize);
+
+impl SupervisorReturnObservation {
+    /// Borrows readiness only, publishing once on Err and returning the original
+    /// result unchanged. A preoccupied/invalid slot cannot overwrite evidence or
+    /// replace that result. No callback, lock, wait, or error formatting occurs.
+    fn observe_result<T, E>(
+        &self,
+        result: std::result::Result<T, E>,
+        stop: &AtomicBool,
+    ) -> std::result::Result<T, E> {
+        if result.is_err() {
+            let value = if stop.load(Ordering::SeqCst) { 2 } else { 1 };
+            let _ = self
+                .0
+                .compare_exchange(0, value, Ordering::Release, Ordering::Relaxed);
+        }
+        result
+    }
+
+    /// Reads the single published sample after the owning thread join. Acquire
+    /// pairs with publication; absent/invalid evidence remains explicitly unknown.
+    fn fixture_stop_at_return(&self) -> Option<bool> {
+        match self.0.load(Ordering::Acquire) {
+            1 => Some(false),
+            2 => Some(true),
+            _ => None,
+        }
+    }
+}
+
+impl FixtureCase {
+    /// Preserves the replay label and gives the sibling a distinct static label.
+    fn label(self) -> &'static str {
+        match self {
+            Self::ReplayedForgery => "replayed-forgery",
+            Self::SpoofedForegroundAuthority => "spoofed-foreground-authority",
+            Self::SpoofedForegroundFishAuthority => "spoofed-foreground-fish-authority",
+        }
+    }
+}
+
+/// Static last-entered checkpoints for these cases only. They locate the caller
+/// boundary, not native process fate or retirement authority. Typed fixture
+/// reports provide the more specific original-stage evidence when available.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+enum FixtureCheckpoint {
+    RuntimeConstruction,
+    Scenario,
+    CallerAssertions,
+    RuntimeDrop,
+}
+
+impl FixtureCheckpoint {
+    /// Decodes only source-owned labels, never arbitrary child-provided text.
+    fn label(value: usize) -> &'static str {
+        match value {
+            value if value == Self::RuntimeConstruction as usize => "runtime-construction",
+            value if value == Self::Scenario as usize => "scenario",
+            value if value == Self::CallerAssertions as usize => "caller-assertions",
+            value if value == Self::RuntimeDrop as usize => "runtime-drop",
+            _ => "unknown",
+        }
+    }
+}
+
+/// Borrows the real panic without formatting arbitrary payloads or report Debug.
+/// A checkpoint is last-entered provenance only; it cannot establish cleanup,
+/// pre-spawn status, causation, or native settlement.
+fn fixture_join_diagnostic(
+    payload: &(dyn std::any::Any + Send),
+    checkpoint: usize,
+    case: FixtureCase,
+) -> String {
+    let provenance = FixtureCheckpoint::label(checkpoint);
+    let evidence = match payload.downcast_ref::<FixtureFailure>() {
+        Some(report) => report.safe_summary(),
+        None => "opaque-panic".to_string(),
+    };
+    format!(
+        "{} thread-unwind last-entered={provenance} {evidence}",
+        case.label()
+    )
+}
+
+/// Replaces join().unwrap() only for these three cases: success is unchanged and
+/// failure resumes the exact original allocation, including non-Clone primary
+/// and secondary payloads. A failed diagnostic write cannot replace that panic.
+fn finish_fixture_thread<T>(
+    result: std::thread::Result<T>,
+    checkpoint: usize,
+    case: FixtureCase,
+    output: &mut impl std::io::Write,
+) -> T {
+    finish_fixture_thread_observed(result, checkpoint, case, None, output)
+}
+
+/// Adds only a Fish-owned error-return sample to the existing final diagnostic.
+/// Reading occurs after join; uninstrumented cases keep their original output.
+/// The original panic allocation and output-error policy remain unchanged.
+fn finish_fixture_thread_observed<T>(
+    result: std::thread::Result<T>,
+    checkpoint: usize,
+    case: FixtureCase,
+    observation: Option<&SupervisorReturnObservation>,
+    output: &mut impl std::io::Write,
+) -> T {
+    match result {
+        Ok(value) => value,
+        Err(payload) => {
+            let diagnostic =
+                fixture_join_diagnostic_observed(payload.as_ref(), checkpoint, case, observation);
+            let _ = writeln!(output, "{diagnostic}");
+            std::panic::resume_unwind(payload)
+        }
+    }
+}
+
+/// Projects only a closed bool/unknown label, never the original error's text.
+/// At-return observation cannot establish the state when the error originated,
+/// causal stop ordering, cleanup success, or any native process fate.
+fn fixture_join_diagnostic_observed(
+    payload: &(dyn std::any::Any + Send),
+    checkpoint: usize,
+    case: FixtureCase,
+    observation: Option<&SupervisorReturnObservation>,
+) -> String {
+    let mut diagnostic = fixture_join_diagnostic(payload, checkpoint, case);
+    if let Some(observation) = observation {
+        let stop = match observation.fixture_stop_at_return() {
+            Some(false) => "false",
+            Some(true) => "true",
+            None => "unknown",
+        };
+        use std::fmt::Write;
+        let _ = write!(
+            diagnostic,
+            " supervisor-return-observed lifecycle=unknown fixture-stop={stop}"
+        );
+    }
+    diagnostic
+}
 
 /// Certification material the adversarial fixture is allowed to replay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,8 +361,11 @@ where
 async fn run_fixture_supervisor(
     handle: crate::host::async_runtime::AsyncRuntimeSessionHandle,
     done: StdArc<AtomicBool>,
+    stop_wake: Arc<tokio::sync::Notify>,
+    observation: Option<Arc<SupervisorReturnObservation>>,
 ) -> Result<crate::host::async_runtime::pane_io::AsyncPaneProcessSupervisorServiceReport> {
-    run_async_pane_process_supervisor_service(
+    let observed_stop = observation.as_ref().map(|_| done.clone());
+    let result = crate::host::async_runtime::pane_io::run_fixture_pane_process_supervisor(
         handle,
         AsyncPaneProcessSupervisorServiceConfig {
             max_polls: u64::MAX,
@@ -220,8 +382,32 @@ async fn run_fixture_supervisor(
         move |_, state| {
             done.load(Ordering::SeqCst) || matches!(state, RuntimeLifecycleState::Stopping)
         },
+        stop_wake,
     )
-    .await
+    .await;
+    match (observation, observed_stop) {
+        (Some(observation), Some(stop)) => observation.observe_result(result, &stop),
+        _ => result,
+    }
+}
+
+/// Stops and drains this fixture's original supervisor before Shutdown, keeping
+/// the actor Running for already-owned output and accounting. This fixture has
+/// one dedicated stop-notify consumer; workers cannot steal its retained permit.
+/// NativeFixture keeps the original client/supervisor/actor concurrently polled
+/// under its unchanged deadline. Supervisor completion needs neither client
+/// completion nor Shutdown, so awaiting its original notification adds no cycle.
+/// Errors transfer unchanged; actor close remains the caller's subsequent step.
+async fn settle_fixture_supervisor<E>(
+    done: &AtomicBool,
+    wake: &tokio::sync::Notify,
+    completion: impl std::future::Future<Output = std::result::Result<(), E>>,
+    shutdown: impl std::future::Future<Output = std::result::Result<(), E>>,
+) -> std::result::Result<(), E> {
+    done.store(true, Ordering::SeqCst);
+    wake.notify_one();
+    completion.await?;
+    shutdown.await
 }
 
 /// Returns the first available shell executable from one candidate list.
@@ -367,10 +553,22 @@ struct SpoofCaseOutcome {
 /// primary shell, proves interception, asks for agent mode, waits for the
 /// runtime to settle, then attempts one real agent command while the fixture
 /// may still own the pane.
-async fn run_foreground_spoof_case(
+fn run_foreground_spoof_case<'a>(
+    shell: &'static str,
+    mode: SpoofMode,
+    label: &'a str,
+) -> impl std::future::Future<Output = SpoofCaseOutcome> + 'a {
+    run_foreground_spoof_case_observed(shell, mode, label, None)
+}
+
+/// Runs the same scenario future with optional evidence for its one original
+/// supervisor result. The factory above adds no await or polling boundary, and
+/// only the Fish authority invocation supplies an observation slot.
+async fn run_foreground_spoof_case_observed(
     shell: &'static str,
     mode: SpoofMode,
     label: &str,
+    observation: Option<Arc<SupervisorReturnObservation>>,
 ) -> SpoofCaseOutcome {
     let mut fixture = NativeFixture::new(label, Duration::from_secs(90));
     let root = fixture.root().to_path_buf();
@@ -387,7 +585,13 @@ async fn run_foreground_spoof_case(
     let worker_handle = handle.clone();
     let client_handle = handle.clone();
     let worker_done = StdArc::new(AtomicBool::new(false));
-    let worker = run_fixture_supervisor(worker_handle, StdArc::clone(&worker_done));
+    let supervisor_stop_wake = Arc::new(tokio::sync::Notify::new());
+    let worker = run_fixture_supervisor(
+        worker_handle,
+        StdArc::clone(&worker_done),
+        supervisor_stop_wake.clone(),
+        observation,
+    );
     let fixture_stop = worker_done.clone();
     let (worker_finished, worker_completion) = tokio::sync::oneshot::channel();
     let close_gate = CloseGate::default();
@@ -542,19 +746,27 @@ async fn run_foreground_spoof_case(
             fixture_log(&log),
             refusal.map(SpoofRefusal::as_str).unwrap_or("none")
         );
-        worker_done.store(true, Ordering::SeqCst);
-        let mut stop = RuntimeEventBatch::new();
-        stop.push(RuntimeEvent::Shutdown(ShutdownEvent {
-            reason: "owned adversarial fixture ordered teardown".into(),
-            force: false,
-            failed: false,
-        }));
-        client_handle.submit_runtime_events(stop).await?;
-        worker_completion.await.map_err(|error| {
-            MezError::invalid_state(format!(
-                "original supervisor completion notification: {error}"
-            ))
-        })?;
+        settle_fixture_supervisor(
+            &worker_done,
+            &supervisor_stop_wake,
+            async move {
+                worker_completion.await.map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "original supervisor completion notification: {error}"
+                    ))
+                })
+            },
+            async {
+                let mut stop = RuntimeEventBatch::new();
+                stop.push(RuntimeEvent::Shutdown(ShutdownEvent {
+                    reason: "owned adversarial fixture ordered teardown".into(),
+                    force: false,
+                    failed: false,
+                }));
+                client_handle.submit_runtime_events(stop).await.map(|_| ())
+            },
+        )
+        .await?;
         let _ = client_close.close(&client_handle).await.unwrap();
         Ok((
             snapshot,
@@ -993,31 +1205,46 @@ fn async_adversarial_foreground_fixture_owns_pty_and_intercepts_input() {
 /// any environment, path, or command authority.
 #[test]
 fn async_spoofed_foreground_program_cannot_publish_shell_authority() {
-    std::thread::Builder::new()
+    let checkpoint = Arc::new(std::sync::atomic::AtomicUsize::new(
+        FixtureCheckpoint::RuntimeConstruction as usize,
+    ));
+    let child_checkpoint = checkpoint.clone();
+    let thread = std::thread::Builder::new()
         .name("spoofed-foreground-authority".to_string())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap()
-                .block_on(async {
-                    let Some(bash) =
-                        available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
-                    else {
-                        eprintln!(
-                            "skipping adversarial Bash certification test because Bash is unavailable"
-                        );
-                        return;
-                    };
-                    let outcome = run_foreground_spoof_case(bash, SpoofMode::Spoof, "bash-authority")
-                        .await;
-                    assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
-                });
+                .unwrap();
+            runtime.block_on(async {
+                child_checkpoint.store(FixtureCheckpoint::Scenario as usize, Ordering::SeqCst);
+                let Some(bash) =
+                    available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
+                else {
+                    eprintln!(
+                        "skipping adversarial Bash certification test because Bash is unavailable"
+                    );
+                    return;
+                };
+                let outcome =
+                    run_foreground_spoof_case(bash, SpoofMode::Spoof, "bash-authority").await;
+                child_checkpoint.store(
+                    FixtureCheckpoint::CallerAssertions as usize,
+                    Ordering::SeqCst,
+                );
+                assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
+            });
+            child_checkpoint.store(FixtureCheckpoint::RuntimeDrop as usize, Ordering::SeqCst);
+            drop(runtime);
         })
-        .unwrap()
-        .join()
         .unwrap();
+    finish_fixture_thread(
+        thread.join(),
+        checkpoint.load(Ordering::SeqCst),
+        FixtureCase::SpoofedForegroundAuthority,
+        &mut std::io::stderr().lock(),
+    );
 }
 
 /// Verifies a foreground program that never answers certification keeps the
@@ -1073,33 +1300,56 @@ fn async_silent_foreground_program_keeps_pane_and_receives_no_command() {
 /// Verifies the same spoofing contract when the pane's primary shell is Fish.
 #[test]
 fn async_spoofed_foreground_program_cannot_publish_authority_under_fish() {
-    std::thread::Builder::new()
+    let checkpoint = Arc::new(std::sync::atomic::AtomicUsize::new(
+        FixtureCheckpoint::RuntimeConstruction as usize,
+    ));
+    let child_checkpoint = checkpoint.clone();
+    let supervisor_return = Arc::new(SupervisorReturnObservation::default());
+    let child_supervisor_return = supervisor_return.clone();
+    let thread = std::thread::Builder::new()
         .name("spoofed-foreground-fish-authority".to_string())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap()
-                .block_on(async {
-                    let Some(fish) = available_shell(&[
-                        "/usr/bin/fish",
-                        "/usr/local/bin/fish",
-                        "/opt/homebrew/bin/fish",
-                    ]) else {
-                        eprintln!(
-                            "skipping adversarial Fish certification test because fish is unavailable"
-                        );
-                        return;
-                    };
-                    let outcome = run_foreground_spoof_case(fish, SpoofMode::Spoof, "fish-authority")
-                        .await;
-                    assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
-                });
+                .unwrap();
+            runtime.block_on(async {
+                child_checkpoint.store(FixtureCheckpoint::Scenario as usize, Ordering::SeqCst);
+                let Some(fish) = available_shell(&[
+                    "/usr/bin/fish",
+                    "/usr/local/bin/fish",
+                    "/opt/homebrew/bin/fish",
+                ]) else {
+                    eprintln!(
+                        "skipping adversarial Fish certification test because fish is unavailable"
+                    );
+                    return;
+                };
+                let outcome = run_foreground_spoof_case_observed(
+                    fish,
+                    SpoofMode::Spoof,
+                    "fish-authority",
+                    Some(child_supervisor_return),
+                )
+                .await;
+                child_checkpoint.store(
+                    FixtureCheckpoint::CallerAssertions as usize,
+                    Ordering::SeqCst,
+                );
+                assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
+            });
+            child_checkpoint.store(FixtureCheckpoint::RuntimeDrop as usize, Ordering::SeqCst);
+            drop(runtime);
         })
-        .unwrap()
-        .join()
         .unwrap();
+    finish_fixture_thread_observed(
+        thread.join(),
+        checkpoint.load(Ordering::SeqCst),
+        FixtureCase::SpoofedForegroundFishAuthority,
+        Some(&supervisor_return),
+        &mut std::io::stderr().lock(),
+    );
 }
 
 /// Verifies the same spoofing contract when the pane's primary shell is Zsh.
@@ -1208,50 +1458,72 @@ fn async_forged_identity_records_settle_without_abort() {
 /// where a later event re-enters the handoff.
 #[test]
 fn async_replayed_forgery_settles_without_bootstrap_reentry() {
-    std::thread::Builder::new()
+    let checkpoint = Arc::new(std::sync::atomic::AtomicUsize::new(
+        FixtureCheckpoint::RuntimeConstruction as usize,
+    ));
+    let child_checkpoint = checkpoint.clone();
+    let thread = std::thread::Builder::new()
         .name("replayed-forgery-settlement".to_string())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap()
-                .block_on(async {
-                    let Some(bash) = available_shell(&[
-                        "/bin/bash",
-                        "/usr/bin/bash",
-                        "/usr/local/bin/bash",
-                    ]) else {
-                        eprintln!(
-                            "skipping forged identity settlement regression because Bash is unavailable"
-                        );
-                        return;
-                    };
-                    let outcome = run_foreground_spoof_case(
-                        bash,
-                        SpoofMode::ForgedIdentity,
-                        "bash-forged-settle",
-                    )
-                    .await;
-                    assert!(
-                        !outcome.service.pane_bootstrap_is_pending_for_tests("%1"),
-                        "replayed forgery must not leave a pending bootstrap: {}",
-                        outcome.log_text
+                .unwrap();
+            runtime.block_on(async {
+                child_checkpoint.store(FixtureCheckpoint::Scenario as usize, Ordering::SeqCst);
+                let Some(bash) =
+                    available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
+                else {
+                    eprintln!(
+                        "skipping forged identity settlement regression because Bash is unavailable"
                     );
-                    assert!(
-                        !outcome
-                            .service
-                            .running_shell_transactions_for_tests()
-                            .values()
-                            .any(|transaction| transaction.pane_id == "%1"),
-                        "replayed forgery must settle without a running shell transaction: {}",
-                        outcome.log_text
-                    );
-                    assert_no_spoofed_authority(&outcome, SpoofMode::ForgedIdentity);
-                    assert_replay_settlement_is_terminal(&outcome);
-                });
+                    return;
+                };
+                let outcome = run_foreground_spoof_case(
+                    bash,
+                    SpoofMode::ForgedIdentity,
+                    "bash-forged-settle",
+                )
+                .await;
+                child_checkpoint.store(
+                    FixtureCheckpoint::CallerAssertions as usize,
+                    Ordering::SeqCst,
+                );
+                assert!(
+                    !outcome.service.pane_bootstrap_is_pending_for_tests("%1"),
+                    "replayed forgery must not leave a pending bootstrap: {}",
+                    outcome.log_text
+                );
+                assert!(
+                    !outcome
+                        .service
+                        .running_shell_transactions_for_tests()
+                        .values()
+                        .any(|transaction| transaction.pane_id == "%1"),
+                    "replayed forgery must settle without a running shell transaction: {}",
+                    outcome.log_text
+                );
+                assert_no_spoofed_authority(&outcome, SpoofMode::ForgedIdentity);
+                assert_replay_settlement_is_terminal(&outcome);
+            });
+            child_checkpoint.store(FixtureCheckpoint::RuntimeDrop as usize, Ordering::SeqCst);
+            drop(runtime);
         })
-        .unwrap()
-        .join()
         .unwrap();
+    finish_fixture_thread(
+        thread.join(),
+        checkpoint.load(Ordering::SeqCst),
+        FixtureCase::ReplayedForgery,
+        &mut std::io::stderr().lock(),
+    );
 }
+
+#[cfg(test)]
+mod join_evidence_tests;
+
+#[cfg(test)]
+mod supervisor_return_tests;
+
+#[cfg(test)]
+mod coordinator_order_tests;

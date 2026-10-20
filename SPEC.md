@@ -2346,6 +2346,39 @@ prevent first-use shell menus without suppressing normal startup or reading user
 profiles. Compound fixture failures MUST retain arbitrary primary panic payloads
 and secondary errors; the ordinary panic hook may already have run and need not
 render arbitrary compound payload fields.
+The replayed-forgery, spoofed-foreground-authority and spoofed-foreground-Fish-authority
+fixtures' final spawned-thread joins MUST resume the original panic allocation,
+including its non-Clone compound
+evidence, rather than replace it with an opaque join error. Their best-effort
+diagnostics MUST contain only bounded source-owned case/stage/checkpoint/error-kind
+labels and counts, never error or panic
+text, cleanup bodies, paths, pane content, environment, or argv. A last-entered
+checkpoint is provenance only, not proof of causation or native settlement.
+Only the Fish authority case MAY additionally report its existing fixture-stop
+flag observed when the original outer supervisor returns an error. This single
+owned-result observation MUST NOT change that result or any cleanup decision;
+absent evidence and lifecycle state remain unknown without additional requests
+or waits. It MUST NOT imply the producing operation, causal ordering or native fate.
+Adversarial certification fixtures MUST request cooperative supervisor stop and
+wake only their original supervisor through a dedicated per-fixture stop port,
+not the shared event Notify consumed by pane workers. The private test-only port
+MUST retain a pre-registration wake without changing the production default wait.
+Fixtures MUST then await original worker completion while actor ingress remains
+Running before submitting Shutdown and
+closing the actor. This coordination MUST preserve reducer errors and the original
+cleanup deadline and force policy; a controlled ordering test is not native proof.
+Synchronous initial-Bash reentry qualification MUST keep its original poll then
+reconciliation order and certification oracles, with the original nominal
+400*10ms wait allowance expressed as one monotonic elapsed budget. A synchronous
+pump may overrun that budget but late readiness MUST NOT qualify success, and
+subsequent activity waits MUST be clipped to the remaining allowance.
+Activity-wait iteration counts MUST
+NOT be reported as elapsed time: readable or closed PTYs can wake immediately.
+Bounded diagnostics MAY retain closed bootstrap/readiness states, independent
+pending/signature facts, counts and monotonic elapsed time, never raw pane,
+environment or event payloads. Its original manager-owned native cleanup and
+independent selector shutdown MUST both be attempted before assertion failure
+propagates; unknown native retirement MUST remain unproven and preserve storage.
 Saved-fork test storage MUST belong to an exclusively created fixture generation;
 an existing PID/counter-named directory MUST NOT be removed to claim ownership.
 Native pane termination alone MUST NOT authorize deletion while a selector
