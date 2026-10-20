@@ -547,7 +547,10 @@ async fn runtime_completion_ineligible_progress_refusal_quiesces_then_reactivate
 /// and the same store path is explicitly reattached through the production API.
 #[test]
 fn runtime_completion_empty_preview_replay_reports_refusal_and_reactivates() {
-    let root = CompletionRoot(temp_root("completion-preview-empty-replay"));
+    let root = CompletionRoot(
+        temp_root("completion-preview-empty-replay"),
+        CompletionRootCleanup::RemoveOwned,
+    );
     let store = AgentTranscriptStore::new(root.0.join("transcripts"));
     let mut service = RuntimeServiceFixture::new()
         .control_socket(root.0.join("control.sock"))
@@ -862,7 +865,10 @@ async fn runtime_completion_stale_preview_uses_canonical_recovery_or_refuses() {
 #[test]
 fn runtime_completion_pending_preview_allows_resume_and_exact_rollback() {
     for fail_late in [true, false] {
-        let root = CompletionRoot(temp_root("completion-preview-resume"));
+        let root = CompletionRoot(
+            temp_root("completion-preview-resume"),
+            CompletionRootCleanup::RemoveOwned,
+        );
         let store = AgentTranscriptStore::new(root.0.join("transcripts"));
         let mut service = RuntimeServiceFixture::new()
             .control_socket(root.0.join("control.sock"))

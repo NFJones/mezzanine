@@ -320,7 +320,10 @@ async fn runtime_completion_pane_helper_error_preserves_lexical_outer() {
 #[test]
 fn runtime_completion_pane_close_no_group_settles_or_reports_committed_helper_error() {
     for fail_helper in [false, true] {
-        let root = CompletionRoot(temp_root("pane-retention-no-group"));
+        let root = CompletionRoot(
+            temp_root("pane-retention-no-group"),
+            CompletionRootCleanup::RemoveOwned,
+        );
         let mut service = RuntimeServiceFixture::new()
             .control_socket(root.0.join("control.sock"))
             .build();

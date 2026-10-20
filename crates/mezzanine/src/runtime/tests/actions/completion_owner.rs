@@ -3,12 +3,15 @@
 //! Initial external coverage uses the legal actor completion/claim boundary
 //! already exercised by network tests. The terminal payload is synthetic: this
 //! does NOT establish real HTTP/MCP execution counts or worker scheduling. No
-//! dispatch transport, provider, live session agent or user state is exercised.
-//! Publication retries operate only on the retained immutable source.
+//! dispatch transport, provider, live user agent or user state is exercised.
+//! Publication retries operate only on the retained immutable source. The
+//! separately gated native_pause submodule owns a real generated fixture root;
+//! its native execution/retirement evidence is not supplied by inert cases.
 
 use super::*;
 use mez_agent::{ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution};
 
+mod native_pause;
 mod pane_retention;
 mod progress_retirement;
 mod progress_transactions;
@@ -726,164 +729,6 @@ async fn runtime_completion_owner_ordinary_claim_cannot_skip_custody_gates() {
     }
 }
 
-/// Exact human resume may continue a settled failure without relabelling it or
-/// reissuing its effect. Unissued siblings become Cancelled, and both those
-/// facts plus new guidance must be archived at the original store before the
-/// shared scheduler admits provider continuation. A live repository replacement
-/// cannot receive these RAW rows. This uses synthetic external completion only.
-#[tokio::test]
-async fn runtime_completion_owner_paused_outcome_resumes_with_original_archive_evidence() {
-    for (failed, held) in [(false, false), (true, false), (false, true), (true, true)] {
-        let mut fixture = CompletionFixture::fetch().await;
-        let original = fixture
-            .service
-            .persistence
-            .cloned_transcript_store()
-            .unwrap();
-        if failed && held {
-            let progress = mez_agent::ActionPresentationProgress::new(
-                &fixture.turn.turn_id,
-                &fixture.action.id,
-                mez_agent::ActionPresentationExecutionIdentity::Attempt(fixture.attempt.clone()),
-                1,
-                mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody,
-                "provisional failed fetch bytes",
-            );
-            assert!(
-                fixture
-                    .service
-                    .apply_action_presentation_progress(progress)
-                    .unwrap()
-            );
-        }
-        let target = fixture
-            .service
-            .capture_agent_lifecycle_target(&fixture.primary, "%1")
-            .unwrap();
-        let generation = fixture
-            .service
-            .pause_agent_lifecycle_target(&fixture.primary, &target)
-            .unwrap();
-        fixture
-            .service
-            .hold_agent_presentation_installs_for_tests(held);
-        let mut outcome = fixture.outcome();
-        if failed {
-            outcome.result = Ok(ActionResult::failed(
-                &fixture.turn,
-                &fixture.action,
-                ActionStatus::Failed,
-                "fixture_paused_failure",
-                "actual failed result remains failed",
-            )
-            .unwrap());
-        }
-        assert!(
-            fixture
-                .service
-                .complete_approved_external_action(outcome)
-                .unwrap()
-        );
-        fixture.service.reconcile_human_pauses().unwrap();
-        assert_eq!(
-            fixture.service.agent_human_pause_status("%1"),
-            Some("paused")
-        );
-        assert!(
-            !fixture
-                .service
-                .agent_provider_task_is_pending(&fixture.turn.turn_id)
-        );
-        let replacement = AgentTranscriptStore::new(fixture._root.0.join("resume-replacement"));
-        fixture
-            .service
-            .set_agent_transcript_store(replacement.clone());
-        let target = fixture
-            .service
-            .capture_agent_lifecycle_target(&fixture.primary, "%1")
-            .unwrap();
-        assert!(
-            fixture
-                .service
-                .resume_agent_lifecycle_target(&fixture.primary, &target, generation)
-                .unwrap()
-        );
-        if held {
-            assert!(
-                !fixture
-                    .service
-                    .agent_provider_task_is_pending(&fixture.turn.turn_id)
-            );
-            assert!(
-                fixture
-                    .service
-                    .completion_publication_retry_needed_for_turn(&fixture.turn.turn_id)
-            );
-            assert_eq!(fixture.service.retry_completion_publications(), 0);
-            assert_eq!(fixture.service.retry_completion_publications(), 0);
-            fixture
-                .service
-                .hold_agent_presentation_installs_for_tests(false);
-            assert_eq!(fixture.service.retry_completion_publications(), 1);
-            assert_eq!(fixture.service.retry_completion_publications(), 0);
-        }
-        assert!(
-            fixture
-                .service
-                .agent_provider_task_is_pending(&fixture.turn.turn_id)
-        );
-        let execution = fixture.retained();
-        assert_eq!(
-            execution.action_results[0].status,
-            if failed {
-                ActionStatus::Failed
-            } else {
-                ActionStatus::Succeeded
-            }
-        );
-        assert_eq!(execution.action_results[1].status, ActionStatus::Cancelled);
-        let rows = original.inspect(&fixture.turn.conversation_id).unwrap();
-        assert_eq!(
-            rows.iter()
-                .filter(|row| row.content.contains("action result pending-sibling"))
-                .count(),
-            1
-        );
-        assert!(rows.iter().any(|row| {
-            row.content
-                .contains("Continue your retained task from its current state")
-        }));
-        if failed {
-            assert!(
-                rows.iter()
-                    .any(|row| row.content.contains("actual failed result remains failed"))
-            );
-        }
-        assert!(
-            !replacement
-                .transcript_path(&fixture.turn.conversation_id)
-                .unwrap()
-                .exists()
-        );
-        let agent = AgentId::opaque(fixture.turn.agent_id.clone()).unwrap();
-        assert!(
-            fixture
-                .service
-                .ready_agent_provider_turn(&agent, &fixture.turn.turn_id)
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            !fixture
-                .service
-                .admit_completion_provider_continuation(&fixture.turn.turn_id)
-                .unwrap(),
-            "readiness and repeat admission cannot insert another continuation"
-        );
-        fixture.service.ensure_completion_admission_open().unwrap();
-    }
-}
-
 /// Original body, entry, occurrence, transaction and rendering flavor survive
 /// repeated preinstall errors in the SAME RESULT queue. This is a presentation
 /// ownership oracle for native activity/shell-view source shapes, not evidence
@@ -1186,13 +1031,23 @@ async fn runtime_completion_owner_rebind_rejects_old_attempt_and_duplicate() {
     assert!(!rows.contains("F668_EXACT_COMPLETED_BODY"), "{rows}");
 }
 
-/// Owns the generated directory even if fixture construction fails or panics.
-struct CompletionRoot(PathBuf);
+/// Selects the actual storage owner, not permission for native cleanup.
+enum CompletionRootCleanup {
+    /// Model-only fixtures remove their exclusively generated directory.
+    RemoveOwned,
+    /// The outer N guard retains storage until all independent proofs settle.
+    PreserveForNativeOwner,
+}
+
+/// Keeps constructor unwind from deleting externally preserved native data.
+struct CompletionRoot(PathBuf, CompletionRootCleanup);
 
 impl Drop for CompletionRoot {
     /// Removes only the unique root created by the existing test helper.
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        if matches!(self.1, CompletionRootCleanup::RemoveOwned) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
     }
 }
 
@@ -1227,7 +1082,10 @@ impl CompletionFixture {
 
     /// Captures original repository policy before the actual worker claim.
     async fn fetch_with_save_policy(final_turn: bool, attach_store: bool) -> Self {
-        let root = CompletionRoot(temp_root("completed-result-owner"));
+        let root = CompletionRoot(
+            temp_root("completed-result-owner"),
+            CompletionRootCleanup::RemoveOwned,
+        );
         fs::create_dir(root.0.join("transcripts")).unwrap();
         let mut service = RuntimeServiceFixture::new()
             .control_socket(root.0.join("control.sock"))
@@ -1239,6 +1097,20 @@ impl CompletionFixture {
         let primary = service
             .attach_primary("primary", true, Size::new(120, 32).unwrap(), 120)
             .unwrap();
+        // Keep the nested large admission future off the outer fixture frame;
+        // this is not a peak-stack or stack-free-construction claim.
+        Box::pin(Self::admit_prepared(service, primary, root, final_turn)).await
+    }
+
+    /// Reuses the original real request/header/context/claim predecessor after
+    /// its caller has established service, storage and any genuine native root.
+    /// This does not create native ownership or relax admission/cleanup guards.
+    async fn admit_prepared(
+        mut service: RuntimeSessionService,
+        primary: mez_core::ids::ClientId,
+        root: CompletionRoot,
+        final_turn: bool,
+    ) -> Self {
         service
             .agent_shell_store_mut()
             .enter_or_resume("%1")
@@ -1415,7 +1287,9 @@ impl CompletionFixture {
 impl Drop for CompletionFixture {
     /// Cancels/releases only resources of this generated runtime on every exit.
     fn drop(&mut self) {
-        let _ = self.service.terminate_all_pane_processes();
+        if matches!(self._root.1, CompletionRootCleanup::RemoveOwned) {
+            let _ = self.service.terminate_all_pane_processes();
+        }
     }
 }
 

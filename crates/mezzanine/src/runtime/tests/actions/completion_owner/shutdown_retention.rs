@@ -228,7 +228,10 @@ async fn runtime_completion_shutdown_refusal_keeps_original_and_outer_error() {
 /// This qualifies None-at-entry only, not healthy retained-group shutdown.
 #[test]
 fn runtime_completion_shutdown_without_group_remains_ordinary() {
-    let root = CompletionRoot(temp_root("shutdown-no-completion-group"));
+    let root = CompletionRoot(
+        temp_root("shutdown-no-completion-group"),
+        CompletionRootCleanup::RemoveOwned,
+    );
     let mut service = RuntimeServiceFixture::new()
         .control_socket(root.0.join("control.sock"))
         .build();
