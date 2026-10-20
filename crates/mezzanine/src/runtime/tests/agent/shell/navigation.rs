@@ -1284,24 +1284,26 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
             .unwrap();
         assert!(show.contains("visibility=visible"), "{show}");
         bootstrap_trace.observe(service, 0, bootstrap_started.elapsed());
-        let mut first_bootstrap_completed = false;
-        for poll in 1..=400 {
-            let _ = service.poll_pane_outputs(8192).unwrap();
-            // Managed bootstrap ends are settled by the reconciliation pump, so a
-            // direct service driver must run that pass alongside the pane poll.
-            let _ = service.maybe_bootstrap_ready_panes().unwrap();
-            bootstrap_trace.observe(service, poll, bootstrap_started.elapsed());
-            if !service.pane_bootstrap_is_pending_for_tests("%1")
-                && matches!(
-                    service.pane_environment_authority("%1"),
-                    RuntimePaneEnvironmentAuthority::Certified
-                )
-            {
-                first_bootstrap_completed = true;
-                break;
-            }
-            wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-        }
+        let polling_started = Instant::now();
+        let mut polls = 0;
+        let first_bootstrap_completed = reentry_qualification::drive_initial_bootstrap(
+            service,
+            |_| polling_started.elapsed(),
+            |service| {
+                let _ = service.poll_pane_outputs(8192)?;
+                // Receiver ends settle in reconciliation, not the pane poll alone.
+                let _ = service.maybe_bootstrap_ready_panes()?;
+                polls += 1;
+                bootstrap_trace.observe(service, polls, bootstrap_started.elapsed());
+                Ok(reentry_qualification::initial_bootstrap_is_complete(
+                    service.pane_bootstrap_is_pending_for_tests("%1"),
+                    service.pane_environment_authority("%1")
+                        == RuntimePaneEnvironmentAuthority::Certified,
+                ))
+            },
+            |service, timeout| wait_for_pane_process_activity(service, "%1", timeout),
+        )
+        .unwrap();
         bootstrap_trace.finish(service, bootstrap_started.elapsed());
         eprintln!("initial Bash bootstrap qualification: trace={bootstrap_trace:?}");
         assert!(

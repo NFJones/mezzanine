@@ -102,6 +102,31 @@ impl BootstrapTrace {
     }
 }
 
+/// Preserves the live initial-entry authority predicate at the driver boundary.
+/// A signature's separate successful-publication assertion remains in the test.
+pub(super) fn initial_bootstrap_is_complete(pending: bool, certified: bool) -> bool {
+    !pending && certified
+}
+
+/// One-consumer driver shared by live qualification and process-free controls.
+/// The pump owns poll then reconciliation then authority observation; the wait
+/// is activity-driven, not a guaranteed ten-millisecond delay. This extraction
+/// deliberately retains the old attempt guard for the desired-behavior RED.
+pub(super) fn drive_initial_bootstrap<S>(
+    state: &mut S,
+    _elapsed: impl Fn(&S) -> Duration,
+    mut pump: impl FnMut(&mut S) -> crate::Result<bool>,
+    mut wait: impl FnMut(&mut S, Duration),
+) -> crate::Result<bool> {
+    for _ in 0..400 {
+        if pump(state)? {
+            return Ok(true);
+        }
+        wait(state, Duration::from_millis(10));
+    }
+    Ok(false)
+}
+
 /// Actual failures remain owned, but Debug output must never reflect arbitrary
 /// panic payloads or error messages (which may carry private source or paths).
 enum CleanupFailure {
@@ -352,4 +377,68 @@ fn reentry_qualification_unknown_native_disposition_remains_failure() {
             matches!(failure.cleanup[0], CleanupFailure::UnprovenNative { outstanding: count, failed: sticky } if count == outstanding && sticky == failed)
         );
     }
+}
+
+/// Immediate activity wakes can consume 400 attempts in microseconds. The same
+/// live driver must permit a later certified result inside the original nominal
+/// 400*10ms allowance, without changing either pump order or authority predicate.
+/// This is a scheduling counterexample, not attribution of the saved failure.
+#[test]
+fn reentry_qualification_initial_driver_uses_nominal_elapsed_budget() {
+    #[derive(Default)]
+    struct Driver {
+        elapsed: Duration,
+        polls: usize,
+        reconciliations: usize,
+        waits: usize,
+    }
+    let mut state = Driver::default();
+    let completed = drive_initial_bootstrap(
+        &mut state,
+        |state| state.elapsed,
+        |state| {
+            state.polls += 1;
+            state.reconciliations += 1;
+            state.elapsed += Duration::from_micros(1);
+            Ok(initial_bootstrap_is_complete(
+                state.polls <= 400,
+                state.polls > 400,
+            ))
+        },
+        |state, timeout| {
+            assert!(timeout <= Duration::from_millis(10));
+            state.waits += 1; // Ready fd: no minimum elapsed delay.
+        },
+    )
+    .unwrap();
+    assert!(
+        completed,
+        "initial driver exhausted attempts inside nominal elapsed allowance"
+    );
+    assert_eq!(state.polls, 401);
+    assert_eq!(state.reconciliations, 401);
+    assert_eq!(state.waits, 400);
+    assert!(state.elapsed < Duration::from_secs(4));
+}
+
+/// Ready-first admission does not add a wait, and Certified cannot replace
+/// the independent requirement that bootstrap Pending was actually cleared.
+#[test]
+fn reentry_qualification_initial_driver_preserves_authority_and_early_stop() {
+    assert!(!initial_bootstrap_is_complete(true, true));
+    assert!(!initial_bootstrap_is_complete(false, false));
+    let mut pumps = 0;
+    assert!(
+        drive_initial_bootstrap(
+            &mut pumps,
+            |_| Duration::ZERO,
+            |pumps| {
+                *pumps += 1;
+                Ok(initial_bootstrap_is_complete(false, true))
+            },
+            |_, _| panic!("ready initial bootstrap must not wait")
+        )
+        .unwrap()
+    );
+    assert_eq!(pumps, 1);
 }
