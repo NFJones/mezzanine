@@ -2346,8 +2346,9 @@ prevent first-use shell menus without suppressing normal startup or reading user
 profiles. Compound fixture failures MUST retain arbitrary primary panic payloads
 and secondary errors; the ordinary panic hook may already have run and need not
 render arbitrary compound payload fields.
-The replayed-forgery and spoofed-foreground-authority fixtures' final spawned-thread
-joins MUST resume the original panic allocation, including its non-Clone compound
+The replayed-forgery, spoofed-foreground-authority and spoofed-foreground-Fish-authority
+fixtures' final spawned-thread joins MUST resume the original panic allocation,
+including its non-Clone compound
 evidence, rather than replace it with an opaque join error. Their best-effort
 diagnostics MUST contain only bounded source-owned case/stage/checkpoint/error-kind
 labels and counts, never error or panic

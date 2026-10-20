@@ -1,4 +1,4 @@
-//! Process-free regressions for the two cases' shared final join boundary.
+//! Process-free regressions for the three cases' shared final join boundary.
 //!
 //! Fabricated thread results exercise the real consumer without creating a
 //! runtime, thread, fixture, storage, process, signal, or retirement authority.
@@ -12,11 +12,15 @@ use crate::host::async_runtime::tests::native_fixture::{Failure, Stage};
 
 /// Explicit expected labels catch accidental case aliasing, including replay's
 /// original diagnostic spelling. Every ownership test uses fresh data per case.
-const CASES: [(FixtureCase, &str); 2] = [
+const CASES: [(FixtureCase, &str); 3] = [
     (FixtureCase::ReplayedForgery, "replayed-forgery"),
     (
         FixtureCase::SpoofedForegroundAuthority,
         "spoofed-foreground-authority",
+    ),
+    (
+        FixtureCase::SpoofedForegroundFishAuthority,
+        "spoofed-foreground-fish-authority",
     ),
 ];
 
@@ -42,7 +46,7 @@ fn identity(payload: &(dyn std::any::Any + Send)) -> *const () {
 }
 
 #[test]
-/// The old unwrap consumer replaces and drops arbitrary panic data. Both cases
+/// The old unwrap consumer replaces and drops arbitrary panic data. All cases
 /// must unwind with the same allocation, retaining it until the ultimate owner
 /// drops it once, and must never reflect its private text.
 fn opaque_join_panic_retains_identity_and_single_drop() {
@@ -79,7 +83,7 @@ fn opaque_join_panic_retains_identity_and_single_drop() {
 }
 
 #[test]
-/// The actual FixtureFailure Any type crosses both boundaries without nesting
+/// The actual FixtureFailure Any type crosses all boundaries without nesting
 /// or reconstruction. Primary/secondary allocations, ordered stages, marked
 /// typed errors, cleanup bodies, pending count and root remain unpublished.
 fn compound_join_panic_preserves_all_evidence_without_reflection() {
@@ -168,7 +172,7 @@ fn compound_join_panic_preserves_all_evidence_without_reflection() {
 }
 
 #[test]
-/// Every failure tag and stage is source-owned diagnostic data. For both cases
+/// Every failure tag and stage is source-owned diagnostic data. For all cases
 /// an oversized report proves capped output and omission counts while the
 /// underlying report remains intact; case labels are asserted independently.
 fn safe_report_distinguishes_kinds_and_bounds_output() {
@@ -207,7 +211,7 @@ fn safe_report_distinguishes_kinds_and_bounds_output() {
 }
 
 #[test]
-/// Both cases distinguish runtime construction, scenario, caller assertions and
+/// All cases distinguish runtime construction, scenario, caller assertions and
 /// runtime destruction; neither string panic content nor invalid checkpoints
 /// can become reflected labels. The replay label remains unchanged.
 fn opaque_diagnostic_uses_only_static_checkpoints() {
@@ -267,7 +271,7 @@ fn failed_diagnostic_write_does_not_replace_original_panic() {
 
 #[test]
 /// Successful non-Clone outputs transfer once without diagnostics or synthetic
-/// failure for either case. Their fresh values remain owned until normal drop.
+/// failure for every case. Their fresh values remain owned until normal drop.
 fn successful_join_preserves_value_without_diagnostic() {
     for (case, _) in CASES {
         let drops = Arc::new(AtomicUsize::new(0));

@@ -39,11 +39,12 @@ use std::sync::Arc;
 use super::super::native_fixture::{CloseGate, FixtureFailure, JoinControl, NativeFixture};
 use super::super::*;
 
-/// The two observed evidence-losing join boundaries, never caller-provided text.
+/// The three observed evidence-losing join boundaries, never caller-provided text.
 #[derive(Clone, Copy)]
 enum FixtureCase {
     ReplayedForgery,
     SpoofedForegroundAuthority,
+    SpoofedForegroundFishAuthority,
 }
 
 impl FixtureCase {
@@ -52,6 +53,7 @@ impl FixtureCase {
         match self {
             Self::ReplayedForgery => "replayed-forgery",
             Self::SpoofedForegroundAuthority => "spoofed-foreground-authority",
+            Self::SpoofedForegroundFishAuthority => "spoofed-foreground-fish-authority",
         }
     }
 }
@@ -100,7 +102,7 @@ fn fixture_join_diagnostic(
     )
 }
 
-/// Replaces join().unwrap() only for these two cases: success is unchanged and
+/// Replaces join().unwrap() only for these three cases: success is unchanged and
 /// failure resumes the exact original allocation, including non-Clone primary
 /// and secondary payloads. A failed diagnostic write cannot replace that panic.
 fn finish_fixture_thread<T>(
@@ -1170,33 +1172,48 @@ fn async_silent_foreground_program_keeps_pane_and_receives_no_command() {
 /// Verifies the same spoofing contract when the pane's primary shell is Fish.
 #[test]
 fn async_spoofed_foreground_program_cannot_publish_authority_under_fish() {
-    std::thread::Builder::new()
+    let checkpoint = Arc::new(std::sync::atomic::AtomicUsize::new(
+        FixtureCheckpoint::RuntimeConstruction as usize,
+    ));
+    let child_checkpoint = checkpoint.clone();
+    let thread = std::thread::Builder::new()
         .name("spoofed-foreground-fish-authority".to_string())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap()
-                .block_on(async {
-                    let Some(fish) = available_shell(&[
-                        "/usr/bin/fish",
-                        "/usr/local/bin/fish",
-                        "/opt/homebrew/bin/fish",
-                    ]) else {
-                        eprintln!(
-                            "skipping adversarial Fish certification test because fish is unavailable"
-                        );
-                        return;
-                    };
-                    let outcome = run_foreground_spoof_case(fish, SpoofMode::Spoof, "fish-authority")
-                        .await;
-                    assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
-                });
+                .unwrap();
+            runtime.block_on(async {
+                child_checkpoint.store(FixtureCheckpoint::Scenario as usize, Ordering::SeqCst);
+                let Some(fish) = available_shell(&[
+                    "/usr/bin/fish",
+                    "/usr/local/bin/fish",
+                    "/opt/homebrew/bin/fish",
+                ]) else {
+                    eprintln!(
+                        "skipping adversarial Fish certification test because fish is unavailable"
+                    );
+                    return;
+                };
+                let outcome =
+                    run_foreground_spoof_case(fish, SpoofMode::Spoof, "fish-authority").await;
+                child_checkpoint.store(
+                    FixtureCheckpoint::CallerAssertions as usize,
+                    Ordering::SeqCst,
+                );
+                assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
+            });
+            child_checkpoint.store(FixtureCheckpoint::RuntimeDrop as usize, Ordering::SeqCst);
+            drop(runtime);
         })
-        .unwrap()
-        .join()
         .unwrap();
+    finish_fixture_thread(
+        thread.join(),
+        checkpoint.load(Ordering::SeqCst),
+        FixtureCase::SpoofedForegroundFishAuthority,
+        &mut std::io::stderr().lock(),
+    );
 }
 
 /// Verifies the same spoofing contract when the pane's primary shell is Zsh.
