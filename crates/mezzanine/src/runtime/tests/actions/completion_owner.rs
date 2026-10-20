@@ -1022,19 +1022,107 @@ async fn runtime_completion_owner_rejects_foreign_result_agent_without_losing_ra
     assert_eq!(repeated.message(), first.message());
 }
 
-/// A real shell-store rebind can precede higher-level ledger reconciliation.
-/// The legacy Running-result predicate is not enough: old exact attempt output
-/// must be rejected before capture, its matching claim retired, and replacement
-/// conversation/presentation left untouched. This boundary test intentionally
-/// keeps the original ledger Running; it does not simulate a native process.
+/// A synthetic lower-store phase boundary must not grant old completion paint.
+/// Ordinary binding correctly rejects an active turn. The existing exact-turn
+/// lower-store restoration API can model a changed conversation while genuine
+/// shell/ledger/action/claim ownership remains Running; wrong-turn restoration
+/// must also reject without mutation. This negative input is NOT a qualified
+/// runtime/controller restoration, native capability, or handoff receipt.
+/// The old exact attempt must reject before capture, retire only its matching
+/// claim and leave the changed conversation and original pixels untouched.
+/// Actual qualified lifecycle/controller restoration remains separate coverage.
 #[tokio::test]
 async fn runtime_completion_owner_rebind_rejects_old_attempt_and_duplicate() {
     let mut fixture = CompletionFixture::fetch().await;
-    fixture
+    let original = fixture
+        .service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        original.running_turn_id.as_deref(),
+        Some(fixture.turn.turn_id.as_str())
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_turn_ledger()
+            .turn(&fixture.turn.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    assert_eq!(
+        fixture.retained().action_results[0].status,
+        ActionStatus::Running
+    );
+    assert!(fixture.service.approved_external_action_attempt_is_current(
+        &fixture.turn.turn_id,
+        &fixture.action.id,
+        &fixture.attempt
+    ));
+    assert!(
+        fixture
+            .service
+            .tracked_runtime_pane_process_ids()
+            .is_empty()
+    );
+    let rejected = fixture
         .service
         .agent_shell_store_mut()
         .bind_conversation("%1", "replacement-completion-fixture", 0)
+        .unwrap_err();
+    assert!(
+        rejected
+            .to_string()
+            .contains("cannot switch conversations while an agent turn is running")
+    );
+    assert_eq!(
+        fixture.service.agent_shell_store().get("%1").unwrap(),
+        &original
+    );
+    let rejected = fixture
+        .service
+        .agent_shell_store_mut()
+        .restore_conversation_for_running_turn_with_lineage(
+            "%1",
+            "unowned-completion-turn",
+            "replacement-completion-fixture",
+            0,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        rejected
+            .to_string()
+            .contains("cannot restore a running conversation for a different turn")
+    );
+    assert_eq!(
+        fixture.service.agent_shell_store().get("%1").unwrap(),
+        &original
+    );
+    let pixels = fixture.service.agent_pane_screen("%1").unwrap().clone();
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .restore_conversation_for_running_turn_with_lineage(
+            "%1",
+            &fixture.turn.turn_id,
+            "replacement-completion-fixture",
+            0,
+            None,
+        )
         .unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .running_turn_id,
+        original.running_turn_id
+    );
     assert_eq!(
         fixture
             .service
@@ -1088,6 +1176,7 @@ async fn runtime_completion_owner_rebind_rejects_old_attempt_and_duplicate() {
             )
             .is_none()
     );
+    assert_eq!(fixture.service.agent_pane_screen("%1").unwrap(), &pixels);
     let rows = fixture
         .service
         .agent_pane_screen("%1")
