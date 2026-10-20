@@ -1472,8 +1472,8 @@ impl RuntimeSessionService {
             presentation
                 .promoted_components
                 .retain(|key, _| !presentation.retirement_requested.contains(key));
-            presentation.projected_context = self.action_progress_projection_context(&pane_id)?;
-            let remaining = self.render_action_progress_components(&pane_id, &presentation)?;
+            presentation.projected_context = self.action_progress_projection_context(pane_id)?;
+            let remaining = self.render_action_progress_components(pane_id, &presentation)?;
             presentation.baseline_screen = std::sync::Arc::new(candidate.clone());
             let (_ansi_text, transient_rows) = Self::append_action_progress_sections_to_screen(
                 &mut candidate,
