@@ -138,7 +138,8 @@ impl RuntimeSessionService {
         let mut presentation = match self
             .presentation
             .action_presentation_progress
-            .remove(&pane_id)
+            .get(&pane_id)
+            .cloned()
         {
             Some(presentation)
                 if presentation.conversation_id == conversation_id
@@ -240,6 +241,12 @@ impl RuntimeSessionService {
             &sections,
             self.ui_theme(),
         )?;
+        #[cfg(test)]
+        if self.presentation.agent_install_failure_held {
+            return Err(MezError::invalid_state(
+                "injected held pre-install presentation failure",
+            ));
+        }
         let installed_lineage = self
             .update_agent_pane_screen_preserving_interaction(&pane_id, &conversation_id, candidate)
             .ok_or_else(|| MezError::invalid_state("executor progress conversation changed"))?;
@@ -527,7 +534,8 @@ impl RuntimeSessionService {
         let Some(mut presentation) = self
             .presentation
             .action_presentation_progress
-            .remove(pane_id)
+            .get(pane_id)
+            .cloned()
         else {
             return Ok((baseline, None));
         };

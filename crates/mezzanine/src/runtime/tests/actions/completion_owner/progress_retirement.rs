@@ -163,6 +163,77 @@ async fn runtime_completion_progress_preinstall_failure_preserves_source_until_i
     assert_eq!(fixture.retained(), canonical);
 }
 
+/// Updating a live component must not consume its prior source before the
+/// replacement screen is installed. A rejected update preserves the original
+/// provenance, pixels and canonical execution; retry uses the same component
+/// identity rather than admitting another worker or a replacement observation.
+#[tokio::test]
+async fn runtime_completion_progress_update_failure_preserves_original_owner() {
+    let mut fixture = CompletionFixture::fetch().await;
+    let mut progress = claimed_read_progress(&fixture, "F668_INITIAL_PROGRESS".into());
+    assert!(
+        fixture
+            .service
+            .apply_action_presentation_progress(progress.clone())
+            .unwrap()
+    );
+    let original = fixture
+        .service
+        .action_presentation_progress_entries_for_tests(&fixture.turn.pane_id);
+    let canonical = fixture.retained();
+    let screen = fixture
+        .service
+        .agent_pane_screen(&fixture.turn.pane_id)
+        .unwrap()
+        .clone();
+    let lineage = fixture
+        .service
+        .agent_pane_screen_lineage(&fixture.turn.pane_id, &fixture.turn.conversation_id);
+    fixture
+        .service
+        .hold_agent_presentation_installs_for_tests(true);
+    progress.revision += 1;
+    progress.source = "F668_REPLACEMENT_PROGRESS".into();
+    assert_eq!(
+        fixture
+            .service
+            .apply_action_presentation_progress(progress.clone())
+            .unwrap_err()
+            .message(),
+        "injected held pre-install presentation failure"
+    );
+    assert_screen_unchanged(&fixture, &screen, lineage);
+    assert_eq!(
+        fixture
+            .service
+            .action_presentation_progress_counts_for_tests(&fixture.turn.pane_id),
+        (1, 0)
+    );
+    assert_eq!(
+        fixture
+            .service
+            .action_presentation_progress_entries_for_tests(&fixture.turn.pane_id),
+        original
+    );
+    assert_eq!(fixture.retained(), canonical);
+    fixture
+        .service
+        .hold_agent_presentation_installs_for_tests(false);
+    assert!(
+        fixture
+            .service
+            .apply_action_presentation_progress(progress)
+            .unwrap()
+    );
+    assert_eq!(
+        fixture
+            .service
+            .action_presentation_progress_entries_for_tests(&fixture.turn.pane_id),
+        original
+    );
+    assert_eq!(fixture.retained(), canonical);
+}
+
 /// A supported unrelated screen replacement invalidates the old progress
 /// lineage without first clearing its source. Exact action/turn retirement must
 /// remove that matched metadata once while leaving the replacement untouched.
