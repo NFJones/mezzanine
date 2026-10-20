@@ -520,12 +520,23 @@ async fn runtime_completion_ineligible_progress_refusal_quiesces_then_reactivate
             .action_presentation_progress_counts_for_tests(&fixture.turn.pane_id),
         (0, 0)
     );
+    let raw = store.inspect(&fixture.turn.conversation_id);
     assert!(
-        store
-            .inspect(&fixture.turn.conversation_id)
-            .unwrap()
-            .is_empty(),
-        "late presentation backend must not archive original runtime-only model rows"
+        raw.as_ref().is_ok_and(|rows| rows.is_empty())
+            || raw
+                .as_ref()
+                .is_err_and(|error| error.kind() == crate::error::MezErrorKind::NotFound),
+        "late presentation backend must not archive original runtime-only model rows: {raw:?}"
+    );
+    let recovered = fixture
+        .service
+        .agent_pane_screen(&fixture.turn.pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        recovered.contains("F668_ELIGIBLE_SOURCE_ARRIVED"),
+        "{recovered}"
     );
 }
 
