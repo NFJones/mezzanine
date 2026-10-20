@@ -1267,7 +1267,7 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
                 parent_prompt_installed = true;
                 break;
             }
-            wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+            wait_for_pane_process_activity(service, "%1", Duration::from_millis(10));
         }
         assert!(
             parent_prompt_installed,
@@ -1324,7 +1324,7 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
             if service.pane_foreground_certified_shell_state("%1") == Some(true) {
                 break;
             }
-            wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+            wait_for_pane_process_activity(service, "%1", Duration::from_millis(10));
         }
         assert_eq!(
             service.pane_foreground_certified_shell_state("%1"),
@@ -1353,7 +1353,7 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
                 restored_prompt_cursor = Some(screen.cursor_state().column);
                 break;
             }
-            wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+            wait_for_pane_process_activity(service, "%1", Duration::from_millis(10));
         }
         assert_eq!(
             restored_prompt_cursor,
@@ -1401,7 +1401,7 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
                 parent_commands_completed = true;
                 break;
             }
-            wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+            wait_for_pane_process_activity(service, "%1", Duration::from_millis(10));
         }
         assert!(
             parent_commands_completed,
@@ -1436,7 +1436,7 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
             ) {
                 break;
             }
-            wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+            wait_for_pane_process_activity(service, "%1", Duration::from_millis(10));
         }
         let diagnostic_events =
             service
