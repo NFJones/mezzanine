@@ -10,6 +10,100 @@ use std::cell::Cell;
 use futures_util::FutureExt;
 
 use super::*;
+use crate::host::async_runtime::pane_io::wait_for_fixture_supervisor_event_or_stop;
+
+#[tokio::test(flavor = "current_thread")]
+/// The actual coordinator notifies before the original supervisor registers its
+/// dedicated wait. The actual supervisor wait seam must consume that retained
+/// permit. A controlled event fallback always releases the future before asserts.
+async fn dedicated_supervisor_stop_survives_pre_registration() {
+    let done = AtomicBool::new(false);
+    let dedicated = tokio::sync::Notify::new();
+    let used_stop = Cell::new(false);
+    let (release, event) = tokio::sync::oneshot::channel();
+    let mut coordinator = Box::pin(settle_fixture_supervisor(
+        &done,
+        &dedicated,
+        async {
+            let outcome = wait_for_fixture_supervisor_event_or_stop(Some(&dedicated), async {
+                let _ = event.await;
+                Some(())
+            })
+            .await;
+            used_stop.set(outcome.is_none());
+            Ok::<(), ()>(())
+        },
+        async { Ok::<(), ()>(()) },
+    ));
+    let early = coordinator.as_mut().now_or_never();
+    let completed_without_event = early.is_some();
+    let _ = release.send(());
+    let result = match early {
+        Some(result) => result,
+        None => coordinator.await,
+    };
+    assert!(result.is_ok());
+    assert!(done.load(Ordering::SeqCst));
+    assert!(
+        completed_without_event,
+        "original supervisor missed its pre-registered stop permit"
+    );
+    assert!(used_stop.get());
+}
+
+#[tokio::test(flavor = "current_thread")]
+/// A worker registered first consumes the shared event wake. The actual fixture
+/// coordinator must still wake the original supervisor through its dedicated
+/// wait seam, without relying on any second event or a synthetic timeout.
+async fn dedicated_supervisor_stop_ignores_competing_worker_wake() {
+    let done = AtomicBool::new(false);
+    let shared = tokio::sync::Notify::new();
+    let dedicated = tokio::sync::Notify::new();
+    let used_stop = Cell::new(false);
+    let mut competing_worker = Box::pin(shared.notified());
+    let worker_registered = competing_worker.as_mut().now_or_never().is_none();
+    let mut supervisor = Box::pin(wait_for_fixture_supervisor_event_or_stop(
+        Some(&dedicated),
+        async {
+            shared.notified().await;
+            Some(())
+        },
+    ));
+    let supervisor_registered = supervisor.as_mut().now_or_never().is_none();
+    shared.notify_one();
+    let worker_consumed_shared = competing_worker.as_mut().now_or_never().is_some();
+    let after_shared = supervisor.as_mut().now_or_never();
+    let supervisor_still_waiting = after_shared.is_none();
+    let mut coordinator = Box::pin(settle_fixture_supervisor(
+        &done,
+        &dedicated,
+        async {
+            let outcome = match after_shared {
+                Some(outcome) => outcome,
+                None => supervisor.await,
+            };
+            used_stop.set(outcome.is_none());
+            Ok::<(), ()>(())
+        },
+        async { Ok::<(), ()>(()) },
+    ));
+    let early = coordinator.as_mut().now_or_never();
+    let completed_without_more_events = early.is_some();
+    shared.notify_waiters();
+    let result = match early {
+        Some(result) => result,
+        None => coordinator.await,
+    };
+    assert!(result.is_ok());
+    assert!(worker_registered && supervisor_registered);
+    assert!(worker_consumed_shared);
+    assert!(supervisor_still_waiting);
+    assert!(
+        completed_without_more_events,
+        "competing worker stole the original supervisor stop wake"
+    );
+    assert!(used_stop.get());
+}
 
 #[tokio::test(flavor = "current_thread")]
 /// The actual helper must not poll Shutdown before its original completion

@@ -361,10 +361,11 @@ where
 async fn run_fixture_supervisor(
     handle: crate::host::async_runtime::AsyncRuntimeSessionHandle,
     done: StdArc<AtomicBool>,
+    stop_wake: Arc<tokio::sync::Notify>,
     observation: Option<Arc<SupervisorReturnObservation>>,
 ) -> Result<crate::host::async_runtime::pane_io::AsyncPaneProcessSupervisorServiceReport> {
     let observed_stop = observation.as_ref().map(|_| done.clone());
-    let result = run_async_pane_process_supervisor_service(
+    let result = crate::host::async_runtime::pane_io::run_fixture_pane_process_supervisor(
         handle,
         AsyncPaneProcessSupervisorServiceConfig {
             max_polls: u64::MAX,
@@ -381,6 +382,7 @@ async fn run_fixture_supervisor(
         move |_, state| {
             done.load(Ordering::SeqCst) || matches!(state, RuntimeLifecycleState::Stopping)
         },
+        stop_wake,
     )
     .await;
     match (observation, observed_stop) {
@@ -391,7 +393,7 @@ async fn run_fixture_supervisor(
 
 /// Stops and drains this fixture's original supervisor before Shutdown, keeping
 /// the actor Running for already-owned output and accounting. This fixture has
-/// one event-notify consumer; notify_one retains a permit before waiter setup.
+/// one dedicated stop-notify consumer; workers cannot steal its retained permit.
 /// NativeFixture keeps the original client/supervisor/actor concurrently polled
 /// under its unchanged deadline. Supervisor completion needs neither client
 /// completion nor Shutdown, so awaiting its original notification adds no cycle.
@@ -583,7 +585,13 @@ async fn run_foreground_spoof_case_observed(
     let worker_handle = handle.clone();
     let client_handle = handle.clone();
     let worker_done = StdArc::new(AtomicBool::new(false));
-    let worker = run_fixture_supervisor(worker_handle, StdArc::clone(&worker_done), observation);
+    let supervisor_stop_wake = Arc::new(tokio::sync::Notify::new());
+    let worker = run_fixture_supervisor(
+        worker_handle,
+        StdArc::clone(&worker_done),
+        supervisor_stop_wake.clone(),
+        observation,
+    );
     let fixture_stop = worker_done.clone();
     let (worker_finished, worker_completion) = tokio::sync::oneshot::channel();
     let close_gate = CloseGate::default();
@@ -740,7 +748,7 @@ async fn run_foreground_spoof_case_observed(
         );
         settle_fixture_supervisor(
             &worker_done,
-            &client_handle.event_delivery_notify,
+            &supervisor_stop_wake,
             async move {
                 worker_completion.await.map_err(|error| {
                     MezError::invalid_state(format!(
