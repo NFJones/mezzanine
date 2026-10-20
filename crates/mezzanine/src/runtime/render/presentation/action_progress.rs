@@ -1522,6 +1522,32 @@ impl RuntimeSessionService {
         Ok(count)
     }
 
+    /// Checks whether the existing canonical renderer can advance this refused
+    /// source. Safely owned suffix cleanup does not require a replay backend.
+    fn action_progress_rebuild_is_eligible(
+        &self,
+        pane: &str,
+        owner: &RuntimeActionPresentationProgressPresentation,
+    ) -> bool {
+        !self.presentation_replay_is_unavailable(
+            pane,
+            &owner.conversation_id,
+            owner.replay_unavailable,
+        ) && self.persistence.transcript_store().is_some()
+            && self.find_pane_descriptor(pane).is_some()
+            && self.agent_shell_store().get(pane).is_some_and(|session| {
+                session.session_id == owner.conversation_id
+                    && session.visibility == AgentShellVisibility::Visible
+                    && !session.ephemeral
+            })
+            && self
+                .agent_pane_screen_lineage(pane, &owner.conversation_id)
+                .is_some()
+            && self
+                .agent_pane_screen(pane)
+                .is_some_and(|screen| !screen.normal_viewport_detached_from_history())
+    }
+
     /// Keeps the idle timer enrolled for bound pending work, even before its
     /// next attempt deadline. Due checks belong only to the bounded attempt.
     pub(crate) fn action_progress_retirement_retry_needed(&self) -> bool {
@@ -1531,11 +1557,7 @@ impl RuntimeSessionService {
             .any(|(pane, owner)| {
                 !owner.retirement_requested.is_empty()
                     && (!owner.retirement_refused
-                        || !self.presentation_replay_is_unavailable(
-                            pane,
-                            &owner.conversation_id,
-                            owner.replay_unavailable,
-                        ))
+                        || self.action_progress_rebuild_is_eligible(pane, owner))
                     && self
                         .agent_shell_store()
                         .get(pane)
@@ -1557,11 +1579,7 @@ impl RuntimeSessionService {
             .filter(|(pane, owner)| {
                 !owner.retirement_requested.is_empty()
                     && (!owner.retirement_refused
-                        || !self.presentation_replay_is_unavailable(
-                            pane,
-                            &owner.conversation_id,
-                            owner.replay_unavailable,
-                        ))
+                        || self.action_progress_rebuild_is_eligible(pane, owner))
                     && owner.retirement_retry_at.is_none_or(|at| now >= at)
                     && self
                         .agent_shell_store()
@@ -1613,16 +1631,7 @@ impl RuntimeSessionService {
         let Some(owner) = self.presentation.action_presentation_progress.get(pane_id) else {
             return;
         };
-        if self.presentation_replay_is_unavailable(
-            pane_id,
-            &owner.conversation_id,
-            owner.replay_unavailable,
-        ) || self.persistence.transcript_store().is_none()
-            || self
-                .agent_shell_store()
-                .get(pane_id)
-                .is_none_or(|session| session.session_id != owner.conversation_id)
-        {
+        if !self.action_progress_rebuild_is_eligible(pane_id, owner) {
             return;
         }
         if let Some(size) = self.agent_pane_screen(pane_id).map(TerminalScreen::size) {

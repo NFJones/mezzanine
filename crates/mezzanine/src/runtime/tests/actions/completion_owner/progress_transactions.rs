@@ -378,7 +378,6 @@ async fn runtime_completion_progress_no_store_stop_recovers_after_terminal_clear
     );
 }
 
-/// An empty journal is a real worker-observed unavailable source, not permission
 /// Runtime-only progress can lose suffix authority after a real terminal Stop.
 /// With no eligible reconstruction backend, retained source must not keep an
 /// impossible idle retry alive. A genuine later presentation source/backend
