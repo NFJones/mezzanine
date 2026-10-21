@@ -3184,10 +3184,10 @@ mod tests {
     fn read_pid_witness(path: &Path) -> i32 {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Ok(text) = fs::read_to_string(path) {
-                if let Ok(pid) = text.trim().parse::<i32>() {
-                    return pid;
-                }
+            if let Ok(text) = fs::read_to_string(path)
+                && let Ok(pid) = text.trim().parse::<i32>()
+            {
+                return pid;
             }
             assert!(
                 Instant::now() < deadline,
