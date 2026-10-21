@@ -1403,7 +1403,8 @@ fn posix_payload_released_before_receiver_readiness_never_completes_transaction(
     match posix_shell_script_buffer() {
         PosixScriptBuffer::ReadAhead => {
             assert!(
-                stderr.contains("Mezzanine shell transaction command payload ended before sentinel"),
+                stderr
+                    .contains("Mezzanine shell transaction command payload ended before sentinel"),
                 "status={:?} stdout={stdout:?} stderr={stderr:?}",
                 output.status
             );
