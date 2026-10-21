@@ -103,6 +103,9 @@ async fn network_search_nonanchors_and_unqualified_empty_shapes_are_not_results(
         "<select><option><a class=\"result__a\" href=\"https://example.test/\">Fake</a></option></select>",
         "<frameset><a class=\"result__a\" href=\"https://example.test/\">Fake</a></frameset>",
         "<frameset></frameset><a class=\"result__a\" href=\"https://example.test/\">Fake</a>",
+        "<svg><defs><a class=\"result__a\" href=\"https://example.test/\">Fake</a></defs></svg>",
+        "<object data=\"data:text/html,embedded\" type=\"text/html\"><a class=\"result__a\" href=\"https://example.test/\">Fake</a></object>",
+        "<video><a class=\"result__a\" href=\"https://example.test/\">Fake</a></video>",
         "<xmp><a class=\"result__a\" href=\"https://example.test/\">Fake</a></xmp>",
         "<iframe><a class=\"result__a\" href=\"https://example.test/\">Fake</a></iframe>",
         "<noframes><a class=\"result__a\" href=\"https://example.test/\">Fake</a></noframes>",
@@ -228,6 +231,27 @@ async fn network_search_count_limits_do_not_hide_pending_or_incomplete_results()
             );
         }
     }
+}
+
+/// An unquoted href keeps a trailing slash as value data instead of becoming
+/// self-closing syntax. The complete closed anchor remains usable and the
+/// original URL is preserved without HTML repair or a false rejection.
+#[tokio::test]
+async fn network_search_unquoted_trailing_slash_href_remains_a_result() {
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: Default::default(),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: "<a class=result__a href=https://example.test/a/>Unquoted</a>".into(),
+        },
+    };
+    let result = execute_network_action_with_transport_async(&turn(), &search(), &transport)
+        .await
+        .unwrap();
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    assert_eq!(result.content_text().lines().next(), Some("1. Unquoted"));
+    assert!(result.content_text().contains("https://example.test/a/"));
 }
 
 /// Actual closed anchors with exact class tokens retain legacy title/link

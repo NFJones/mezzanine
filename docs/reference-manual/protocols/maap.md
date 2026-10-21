@@ -292,6 +292,9 @@ unrecognized pages fail honestly rather than fabricate a successful no-results
 answer. No automatic retry, provider switch, fallback or challenge solving is
 performed. Complete cleaned progress entries are provisional and are removed on
 final failure; exact attempt/revision and sibling-correction rules are unchanged.
+Unsupported frameset, select, foreign-content and fallback container markup is
+rejected for the whole response, even when result-shaped anchors appear outside
+it, rather than approximating browser insertion modes.
 
 Future strict contracts are separate: checked HTTP(S) links without userinfo,
 explicit snippet/extractive/generated provenance, optional observed dates and

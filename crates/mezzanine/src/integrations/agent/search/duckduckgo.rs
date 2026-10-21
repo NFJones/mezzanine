@@ -3,6 +3,7 @@
 //! Only real closed anchor tags with an exact result class and same-tag href
 //! supply hits. Comments/raw script/style text cannot manufacture results, and
 //! malformed or unfinished anchors cannot borrow another tag's attributes.
+//! Foreign-content and fallback containers are unsupported, not parsed.
 //! Final validation scans the whole retained body, even after the output count
 //! is satisfied; progress may retain an earlier complete prefix provisionally.
 //! This is not a general HTML repair engine or challenge detector. Unknown
@@ -77,6 +78,9 @@ fn scan(body: &str, max_results: usize) -> Scan {
         // insertion modes can ignore anchor tokens entirely, so both are
         // unsupported as well: a frameset document never renders result links,
         // and content after its closing tag remains in the ignored mode.
+        // Foreign-content (SVG/MathML) and fallback containers (object, video,
+        // audio, canvas, applet) render conditionally or never render their
+        // descendant anchors in the HTML sense, so they fail the same way.
         if !tag.closing
             && [
                 "template",
@@ -88,6 +92,13 @@ fn scan(body: &str, max_results: usize) -> Scan {
                 "noembed",
                 "noframes",
                 "plaintext",
+                "svg",
+                "math",
+                "object",
+                "video",
+                "audio",
+                "canvas",
+                "applet",
             ]
             .iter()
             .any(|name| tag.name.eq_ignore_ascii_case(name))
@@ -213,12 +224,23 @@ fn read_tag(body: &str, start: usize) -> Option<Tag<'_>> {
     if closing {
         inner = &inner[1..];
     }
-    let self_closing = inner.ends_with('/');
+    // A trailing slash is self-closing syntax only at a token boundary: after
+    // whitespace or a complete quoted value. In an unquoted attribute value it
+    // is value data, so href=https://example.test/ keeps its final slash.
+    let mut self_closing = false;
+    if let Some(rest) = inner.strip_suffix('/') {
+        // U+0027 is the alternative single-quote attribute delimiter.
+        let after_quote = rest
+            .as_bytes()
+            .last()
+            .is_some_and(|byte| matches!(*byte, b'"' | 0x27));
+        if rest.is_empty() || rest.ends_with(is_html_space) || after_quote {
+            self_closing = true;
+            inner = rest.trim_end_matches(is_html_space);
+        }
+    }
     if closing && self_closing {
         return None;
-    }
-    if self_closing {
-        inner = inner[..inner.len() - 1].trim_end_matches(is_html_space);
     }
     let name_end = inner.find(is_html_space).unwrap_or(inner.len());
     let name = &inner[..name_end];

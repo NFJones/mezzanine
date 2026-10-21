@@ -10878,8 +10878,10 @@ anchors, unknown/error/nonresult pages, malformed or incomplete result anchors,
 and truncated bodies MUST NOT become successful empty searches. Result anchors
 MUST be actual closed anchor tags with exact result class tokens and same-tag
 attributes; comment/script/raw-text markup cannot manufacture hits. Unsupported
-frameset and select insertion contexts MUST fail as unrecognized rather than
-project anchors that those modes never render as results. Recognition
+frameset, select, SVG/MathML foreign-content and object/video/audio/canvas
+fallback contexts MUST fail as unrecognized rather than project anchors those
+modes never render as results; this conservative whole-response rejection is
+disclosed rather than silently approximated. Recognition
 MUST inspect beyond the requested result count, including a zero output count.
 Explicit nonresult-form shapes MAY disqualify a mixed page, without claiming
 exhaustive challenge detection or interpreting its remote cause.
