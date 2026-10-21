@@ -371,6 +371,288 @@ fn snapshot_repository_selects_latest_snapshot_by_session() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies equal creation stamps fall back to the snapshot id so durable
+/// selection stays deterministic for snapshots published inside one second.
+///
+/// The stored winners and a repository rebuilt from manifests alone must agree;
+/// otherwise a recovered index could answer with a different snapshot than the
+/// manifest scan it replaces.
+#[test]
+fn snapshot_repository_tie_breaks_equal_creation_stamps_by_id() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-equal-stamps-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repo = SnapshotRepository::new(root.clone());
+    let mut one_pane = manifest();
+    one_pane.state.id = "snap-a".to_string();
+    one_pane.state.created_at = "2026-04-30T00:00:00Z".to_string();
+    one_pane.state.pane_count = 1;
+    one_pane.state.storage_ref = "snap-a.payload".to_string();
+    let mut two_panes = manifest();
+    two_panes.state.id = "snap-z".to_string();
+    two_panes.state.created_at = "2026-04-30T00:00:00Z".to_string();
+    two_panes.state.pane_count = 2;
+    two_panes.state.storage_ref = "snap-z.payload".to_string();
+
+    repo.write(&one_pane).unwrap();
+    repo.write(&two_panes).unwrap();
+
+    assert_eq!(repo.latest(None).unwrap().unwrap().id, "snap-z");
+    assert_eq!(repo.latest(Some("$1")).unwrap().unwrap().id, "snap-z");
+    let winners = super::sqlite::read(&root)
+        .unwrap()
+        .expect("the write path stores the winners");
+    assert_eq!(winners.latest_all.as_deref(), Some("snap-z"));
+    assert_eq!(
+        winners.latest_by_session.get("$1").map(String::as_str),
+        Some("snap-z")
+    );
+
+    let rebuilt_root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-equal-stamps-rebuilt-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&rebuilt_root);
+    one_pane.write_to_dir(&rebuilt_root).unwrap();
+    two_panes.write_to_dir(&rebuilt_root).unwrap();
+    let rebuilt = SnapshotRepository::new(rebuilt_root.clone());
+    assert_eq!(
+        rebuilt.latest(Some("$1")).unwrap().unwrap().id,
+        "snap-z",
+        "a rebuilt index makes the same tie-break choice as the manifest scan"
+    );
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(rebuilt_root);
+}
+
+/// Verifies a newer creation stamp outranks the snapshot id.
+///
+/// Ids are only a tie-breaker: ordering by id first would make the selected
+/// snapshot depend on its name rather than on when it was created.
+#[test]
+fn snapshot_repository_prefers_the_newer_creation_stamp_over_id_order() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-stamp-primary-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repo = SnapshotRepository::new(root.clone());
+    let mut older = manifest();
+    older.state.id = "snap-z".to_string();
+    older.state.created_at = "2026-04-30T00:00:00Z".to_string();
+    older.state.pane_count = 1;
+    older.state.storage_ref = "snap-z.payload".to_string();
+    let mut newer = manifest();
+    newer.state.id = "snap-a".to_string();
+    newer.state.created_at = "2026-04-30T00:00:01Z".to_string();
+    newer.state.pane_count = 2;
+    newer.state.window_count = 1;
+    newer.state.storage_ref = "snap-a.payload".to_string();
+
+    repo.write(&older).unwrap();
+    repo.write(&newer).unwrap();
+
+    assert_eq!(repo.latest(None).unwrap().unwrap().id, "snap-a");
+    assert_eq!(repo.latest(Some("$1")).unwrap().unwrap().id, "snap-a");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies the exact session filter ignores a newer snapshot from another
+/// session while the unfiltered lookup still reports the global winner.
+#[test]
+fn snapshot_repository_latest_filter_stays_exact_for_unrelated_sessions() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-session-filter-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repo = SnapshotRepository::new(root.clone());
+    let mut matching = manifest();
+    matching.state.id = "snap-session".to_string();
+    matching.state.created_at = "2026-04-30T00:00:00Z".to_string();
+    matching.state.storage_ref = "snap-session.payload".to_string();
+    let mut unrelated = manifest();
+    unrelated.state.id = "snap-unrelated".to_string();
+    unrelated.state.session_id = "$other".to_string();
+    unrelated.state.created_at = "2026-04-30T00:00:05Z".to_string();
+    unrelated.state.storage_ref = "snap-unrelated.payload".to_string();
+
+    repo.write(&matching).unwrap();
+    repo.write(&unrelated).unwrap();
+
+    assert_eq!(
+        repo.latest(Some("$1")).unwrap().unwrap().id,
+        "snap-session",
+        "a newer unrelated session must not win the exact-session lookup"
+    );
+    assert_eq!(
+        repo.latest(Some("$other")).unwrap().unwrap().id,
+        "snap-unrelated"
+    );
+    assert_eq!(repo.latest(None).unwrap().unwrap().id, "snap-unrelated");
+    assert!(repo.latest(Some("$missing")).unwrap().is_none());
+    let winners = super::sqlite::read(&root)
+        .unwrap()
+        .expect("the write path stores the winners");
+    assert_eq!(winners.latest_all.as_deref(), Some("snap-unrelated"));
+    assert_eq!(
+        winners.latest_by_session.get("$1").map(String::as_str),
+        Some("snap-session")
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies the persisted creation stamp decodes only the shape this module
+/// writes, so ordering never guesses from a foreign or truncated value.
+#[test]
+fn snapshot_creation_stamp_decodes_one_fixed_shape() {
+    use super::encoding::{
+        MAX_CREATION_SECONDS, unix_seconds_from_rfc3339, unix_seconds_to_rfc3339,
+    };
+
+    assert_eq!(unix_seconds_from_rfc3339("1970-01-01T00:00:00Z"), Some(0));
+    assert_eq!(
+        unix_seconds_from_rfc3339("2026-04-30T00:00:00Z"),
+        Some(1_777_507_200)
+    );
+    for seconds in [0, 1, 1_777_507_200, 8_000_000_000] {
+        assert_eq!(
+            unix_seconds_from_rfc3339(&unix_seconds_to_rfc3339(seconds)),
+            Some(seconds),
+            "stamp {seconds} must round-trip"
+        );
+    }
+    assert_eq!(
+        unix_seconds_from_rfc3339("9999-12-31T23:59:59Z"),
+        Some(MAX_CREATION_SECONDS),
+        "the written shape ends at a four-digit year"
+    );
+    for valid in ["2024-02-29T00:00:00Z", "2000-02-29T12:34:56Z"] {
+        let seconds = unix_seconds_from_rfc3339(valid).expect("valid calendar date");
+        assert_eq!(unix_seconds_to_rfc3339(seconds), valid);
+    }
+    for invalid in [
+        "",
+        "2026-04-30T00:00:00",
+        "2026-04-30T00:00:00+00:00",
+        "2026-04-30 00:00:00Z",
+        "2026-13-30T00:00:00Z",
+        "2026-04-30T24:00:00Z",
+        "2026-02-29T00:00:00Z",
+        "2026-02-30T00:00:00Z",
+        "2026-04-31T00:00:00Z",
+        "1900-02-29T00:00:00Z",
+        "1969-12-31T23:59:59Z",
+    ] {
+        assert_eq!(
+            unix_seconds_from_rfc3339(invalid),
+            None,
+            "{invalid} is not a stamp this store writes"
+        );
+    }
+}
+
+/// Verifies a repeated or regressed wall-clock reading still yields a strictly
+/// newer creation stamp, which is what keeps the newest snapshot selected.
+#[test]
+fn snapshot_creation_stamp_advances_past_repeated_and_regressed_clocks() {
+    use super::encoding::{MAX_CREATION_SECONDS, advance_creation_seconds};
+
+    assert_eq!(advance_creation_seconds(10, None), 10);
+    assert_eq!(advance_creation_seconds(10, Some(9)), 10);
+    assert_eq!(advance_creation_seconds(10, Some(10)), 11);
+    assert_eq!(advance_creation_seconds(10, Some(99)), 100);
+    assert_eq!(
+        advance_creation_seconds(u64::MAX, Some(u64::MAX)),
+        MAX_CREATION_SECONDS,
+        "an extreme stamp stays inside the written shape instead of wrapping or growing a digit"
+    );
+    assert_eq!(
+        advance_creation_seconds(MAX_CREATION_SECONDS, Some(MAX_CREATION_SECONDS)),
+        MAX_CREATION_SECONDS,
+        "no newer stamp exists at the end of the representable domain"
+    );
+}
+
+/// Verifies asynchronous creation repairs a stale winner before choosing its
+/// creation stamp.
+///
+/// An interrupted delete leaves the winners table naming a snapshot whose
+/// manifest and row are already gone. If creation trusted that entry it would
+/// fall back to the raw clock and, with a regressed reading, publish a snapshot
+/// older than the surviving winner. Both creation paths must repair the index
+/// first so the new save stays the latest one.
+#[tokio::test]
+async fn snapshot_repository_async_creation_repairs_a_stale_winner_first() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-async-stale-stamp-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    )
+    .unwrap();
+    let frame_state = SnapshotFrameState::default();
+    let survivor = SnapshotRepository::new(root.clone())
+        .with_creation_seconds(1_800_000_100)
+        .create_from_session_with_context_async(
+            "snap-survivor",
+            None,
+            &session,
+            SnapshotCreationContext::new(&[], &[], &frame_state, &[]),
+        )
+        .await
+        .unwrap();
+    let doomed = SnapshotRepository::new(root.clone())
+        .with_creation_seconds(1_800_000_050)
+        .create_from_session_with_context_async(
+            "snap-doomed",
+            None,
+            &session,
+            SnapshotCreationContext::new(&[], &[], &frame_state, &[]),
+        )
+        .await
+        .unwrap();
+    assert!(doomed.created_at > survivor.created_at);
+
+    fs::remove_file(root.join("snap-doomed.manifest")).unwrap();
+    super::sqlite::remove_metadata_row(&root, "snap-doomed").unwrap();
+    assert_eq!(
+        super::sqlite::read(&root)
+            .unwrap()
+            .expect("the winners still name the interrupted deletion")
+            .latest_all
+            .as_deref(),
+        Some("snap-doomed")
+    );
+
+    let created = SnapshotRepository::new(root.clone())
+        .with_creation_seconds(1_800_000_000)
+        .create_from_session_with_context_async(
+            "snap-new",
+            None,
+            &session,
+            SnapshotCreationContext::new(&[], &[], &frame_state, &[]),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        created.created_at > survivor.created_at,
+        "the new save must outrank the surviving winner the stale index hid"
+    );
+    let latest = SnapshotRepository::new(root.clone())
+        .latest(None)
+        .unwrap()
+        .expect("the store still holds snapshots");
+    assert_eq!(latest.id, "snap-new");
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies an ordinary snapshot write consults only indexed winners instead
 /// of parsing unrelated manifests after the latest index has been established.
 #[test]

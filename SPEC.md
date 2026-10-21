@@ -14114,6 +14114,19 @@ be one of `info`, `warning`, or `error`. It MAY include `path`, `line`,
 enough restore metadata, including restart-required pane ids, to describe
 recovery limitations without loading the snapshot payload.
 
+Latest-snapshot selection MUST order candidates by `created_at` and then by
+`id`, so equal creation times resolve deterministically instead of depending on
+scan order. A session filter MUST select only snapshots whose `session_id` is
+exactly the requested session and MUST NOT fall back to another session's
+winner. A repository MUST stamp a newly created snapshot strictly newer than the
+snapshot it currently selects, so a repeated or regressed host clock cannot
+leave the previous snapshot as the latest one. That stamp is the repository's
+logical creation time: it MAY run ahead of wall time after a burst of saves, it
+is shared by every session in the repository, and it ends at
+`9999-12-31T23:59:59Z`. Creators that publish concurrently without
+serialization MAY share a stamp; those snapshots are ordered by the documented
+id tie-break.
+
 `McpServerState` MUST include `id`, `version`, `name`, `state`, `configured`,
 `blacklisted`, `transport`, `tools`, `last_checked_at`, and `diagnostics`.
 `state` MUST be one of `enabled`, `disabled`, `starting`, `available`,
