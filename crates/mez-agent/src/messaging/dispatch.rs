@@ -2,6 +2,9 @@
 //!
 //! Dispatch translates JSON protocol bodies into message-service operations and
 //! emits JSON responses suitable for framed transport replies.
+//! Direct agent selectors preserve registered opaque IDs verbatim. Parsing an
+//! address neither registers an identity nor resolves a label: authenticated
+//! sender, exact recipient lookup, availability and audience remain service-owned.
 
 use mez_core::ids::{AgentId, StableId};
 
@@ -547,11 +550,10 @@ fn delivery_status_name(status: DeliveryStatus) -> &'static str {
     }
 }
 
-/// Runs the parse recipient operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Parses exactly one raw selector after its existing string/type checks.
+/// Direct agent IDs use the registered/restored opaque grammar; pane and window
+/// IDs retain their numeric selectors. This boundary never resolves display
+/// labels or changes registration, authentication, availability or audience.
 fn parse_recipient(body: &str) -> Result<Recipient> {
     let value = serde_json::from_str::<serde_json::Value>(body)
         .map_err(|_| MessageError::invalid_args("recipient must be a JSON object"))?;
@@ -570,7 +572,7 @@ fn parse_recipient(body: &str) -> Result<Recipient> {
     }
     if let Some(agent_id) = recipient_string_field(object, "agent_id")? {
         selectors.push(
-            StableId::parse('a', agent_id)
+            AgentId::opaque(agent_id)
                 .map(Recipient::Agent)
                 .ok_or_else(|| MessageError::invalid_args("recipient agent_id is invalid"))?,
         );
@@ -739,6 +741,8 @@ fn validate_message_label(field: &str, value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{MessageConnection, MessageService, dispatch_mmp_body};
+
+    mod native_recipients;
 
     /// Discover defaults to the authenticated requester's project membership
     /// and widens only when the caller explicitly requests session scope.
