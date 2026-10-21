@@ -744,12 +744,19 @@ fn runtime_issue_add_dependency_failure_retries_without_duplicates() {
     // never clear pending work or invent a claim just to reach those checks.
     let queue_before = service.completion_provider_queue_flags_for_tests("turn-1");
     let budget_before = service.failure_feedback_attempt_total_for_tests();
+    // append_agent_trace_turn_event humanizes BEFORE retaining the hidden log.
+    // Match that stored boundary, not the producer's raw underscore spelling.
+    let queued_marker = "provider_task queued".replace('_', " ");
     let queued_trace_before = service
         .agent_pane_trace_log_text("%1")
         .unwrap_or_default()
         .lines()
-        .filter(|line| line.contains("provider task queued"))
+        .filter(|line| line.contains(queued_marker.as_str()))
         .count();
+    assert!(
+        queued_trace_before > 0,
+        "the actual initial scheduler insertion must make this trace matcher observable"
+    );
     let failed_result = service.execute_agent_turn_with_provider(
         "turn-1",
         &RuntimeBatchProvider {
@@ -777,7 +784,7 @@ fn runtime_issue_add_dependency_failure_retries_without_duplicates() {
             .agent_pane_trace_log_text("%1")
             .unwrap_or_default()
             .lines()
-            .filter(|line| line.contains("provider task queued"))
+            .filter(|line| line.contains(queued_marker.as_str()))
             .count(),
         queued_trace_before,
         "retained feedback must not fabricate a queued trace"
@@ -835,6 +842,16 @@ fn runtime_issue_add_dependency_failure_retries_without_duplicates() {
     assert_eq!(
         service.completion_provider_queue_flags_for_tests("turn-1"),
         queue_after
+    );
+    assert_eq!(
+        service
+            .agent_pane_trace_log_text("%1")
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains(queued_marker.as_str()))
+            .count(),
+        queued_trace_before,
+        "the repeated Running observation also cannot claim another queue insertion"
     );
     // Foreign metadata is negative input, not a fabricated admitted callback or
     // conversation restoration. Rejection must precede budget/context changes.
