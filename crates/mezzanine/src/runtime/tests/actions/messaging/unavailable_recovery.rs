@@ -11,6 +11,7 @@
 //! cancellation boundaries stay in force.
 
 use super::*;
+use crate::integrations::agent::provider::ModelProvider;
 use mez_agent::{AgentAction, AgentActionPayload, SayStatus, turn_state_from_action_results};
 
 /// One registered local recipient plus a running turn at `%1`.
