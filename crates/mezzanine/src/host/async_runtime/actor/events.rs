@@ -284,6 +284,10 @@ impl AsyncRuntimeSessionActor {
             })?;
             report.side_effects = report.side_effects.saturating_add(1);
         }
+        // Even an empty batch can create its first display obligation. Publish
+        // only a watch wake after all mandatory work; the timer worker's typed
+        // drain separately admits a timer using then-current receipt ownership.
+        self.notify_steering_presentation_retry_idle_wake();
         self.metrics.runtime_event_batches = self.metrics.runtime_event_batches.saturating_add(1);
         self.metrics.runtime_events_accepted = self
             .metrics

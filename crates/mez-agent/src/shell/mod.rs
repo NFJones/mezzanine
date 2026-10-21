@@ -243,14 +243,45 @@ mod tests {
 
     /// Streams one transaction wrapper and payload through a POSIX shell.
     fn run_sh_transaction(input: &ShellTransactionInput, suffix: &str) -> Output {
+        run_sh_transaction_with_prelude(input, "", suffix)
+    }
+
+    /// Streams one transaction wrapper and payload through a POSIX shell after
+    /// writing a parent-shell prelude before the wrapper.
+    ///
+    /// The prelude must land before the wrapper because it establishes the
+    /// parent-shell options whose survival the transaction is meant to prove.
+    fn run_sh_transaction_with_prelude(
+        input: &ShellTransactionInput,
+        prelude: &str,
+        suffix: &str,
+    ) -> Output {
         let mut command = Command::new("/bin/sh");
-        run_command_transaction_stdin(&mut command, input, suffix)
+        run_command_transaction_stdin_with_prelude(&mut command, input, prelude, suffix)
     }
 
     /// Streams one transaction to a spawned shell process in protocol order.
     fn run_command_transaction_stdin(
         command: &mut Command,
         input: &ShellTransactionInput,
+        suffix: &str,
+    ) -> Output {
+        run_command_transaction_stdin_with_prelude(command, input, "", suffix)
+    }
+
+    /// Streams one transaction to a spawned shell process in protocol order
+    /// after writing a parent-shell prelude.
+    ///
+    /// Protocol order means the payload is withheld until the wrapper publishes
+    /// its transaction start marker. Script read-ahead in `/bin/sh` consumes
+    /// piped stdin records that are already available when the parser reaches
+    /// the wrapper, so a wall-clock delay instead of this readiness event can
+    /// deposit payload bytes in the shell's own script buffer, where the
+    /// receiver can never read them.
+    fn run_command_transaction_stdin_with_prelude(
+        command: &mut Command,
+        input: &ShellTransactionInput,
+        prelude: &str,
         suffix: &str,
     ) -> Output {
         let mut child = command
@@ -299,6 +330,11 @@ mod tests {
             .stdin
             .as_mut()
             .expect("the child stdin should be piped");
+        if !prelude.is_empty() {
+            stdin
+                .write_all(prelude.as_bytes())
+                .expect("the transaction prelude should be written");
+        }
         stdin
             .write_all(input.wrapper.as_bytes())
             .expect("the transaction wrapper should be written");

@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, Semaphore, oneshot};
 
+mod steering_display_retry;
+
 /// Cohesive raw connection state must retain the exact notifier already shared
 /// with handles, not allocate a private wake source or wake only one waiter.
 /// Both idle listeners are registered before actor notification; one metric

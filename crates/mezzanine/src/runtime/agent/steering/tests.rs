@@ -305,8 +305,10 @@ fn steering_receipts_promotion_failure_retries_only_display_once() {
         .admit(7, &BTreeSet::from([sequence]));
     service.fail_agent_presentation_install_for_tests(0);
     service.request_steering_presentation("%1");
+    // Model the scheduled retry deadline rather than bypassing paced recovery
+    // with a fresh explicit request or depending on elapsed fixture wall time.
+    service.make_steering_presentation_retries_due_for_tests();
     service.drain_transcript_persistence_transition();
-    service.request_steering_presentation("%1");
     let text = service
         .agent_pane_screen("%1")
         .unwrap()
