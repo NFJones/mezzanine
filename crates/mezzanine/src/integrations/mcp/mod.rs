@@ -75,6 +75,7 @@ pub use config_commands::{
     McpConfigCommand, McpConfigTransport, mcp_config_command_report, mcp_config_setting_from_user,
     persist_mcp_config_command,
 };
+pub(crate) use stdio::combine_mcp_discovery_retirement_error;
 pub use stdio::{McpStdioConnection, spawn_stdio_mcp_connection};
 #[cfg(test)]
 pub use stdio::{discover_stdio_mcp_server, discover_stdio_mcp_server_into_registry};

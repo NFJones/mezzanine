@@ -12,7 +12,7 @@ use super::{
     current_unix_seconds, discover_streamable_http_mcp_server_with_auth_token, json_escape,
     spawn_stdio_mcp_connection,
 };
-use crate::integrations::mcp::McpToolDiscoveryDeadline;
+use crate::integrations::mcp::{McpToolDiscoveryDeadline, combine_mcp_discovery_retirement_error};
 use crate::runtime::{
     RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,
     RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess, RuntimeMcpTransport,
@@ -72,35 +72,55 @@ impl RuntimeSessionService {
                     async {
                         let mut connection =
                             spawn_stdio_mcp_connection(&plan, &environment).await?;
-                        let initialize = connection
-                            .initialize("mezzanine", env!("CARGO_PKG_VERSION"), plan.timeout_ms)
-                            .await?;
-                        connection.send_initialized_notification().await?;
-                        let mut tools = Vec::new();
-                        if initialize.supports_tools {
-                            let mut cursor = None;
-                            let mut pagination = mez_agent::mcp::McpToolListPagination::default();
-                            let mut budget = mez_agent::mcp::McpToolDiscoveryBudget::default();
-                            let deadline = McpToolDiscoveryDeadline::new(plan.timeout_ms);
-                            loop {
-                                let timeout_ms = deadline.remaining_timeout_ms(&plan.server_id)?;
-                                let (response, response_bytes) = connection
-                                    .list_tools_page(cursor.as_deref(), timeout_ms)
-                                    .await?;
-                                budget.accept_page(
-                                    &plan.server_id,
-                                    response_bytes,
-                                    &response.tools,
-                                )?;
-                                tools.extend(response.tools);
-                                let Some(next_cursor) =
-                                    pagination.advance(&plan.server_id, response.next_cursor)?
-                                else {
-                                    break;
-                                };
-                                cursor = Some(next_cursor);
+                        let discovery = async {
+                            let initialize = connection
+                                .initialize("mezzanine", env!("CARGO_PKG_VERSION"), plan.timeout_ms)
+                                .await?;
+                            connection.send_initialized_notification().await?;
+                            let mut tools = Vec::new();
+                            if initialize.supports_tools {
+                                let mut cursor = None;
+                                let mut pagination =
+                                    mez_agent::mcp::McpToolListPagination::default();
+                                let mut budget = mez_agent::mcp::McpToolDiscoveryBudget::default();
+                                let deadline = McpToolDiscoveryDeadline::new(plan.timeout_ms);
+                                loop {
+                                    let timeout_ms =
+                                        deadline.remaining_timeout_ms(&plan.server_id)?;
+                                    let (response, response_bytes) = connection
+                                        .list_tools_page(cursor.as_deref(), timeout_ms)
+                                        .await?;
+                                    budget.accept_page(
+                                        &plan.server_id,
+                                        response_bytes,
+                                        &response.tools,
+                                    )?;
+                                    tools.extend(response.tools);
+                                    let Some(next_cursor) = pagination
+                                        .advance(&plan.server_id, response.next_cursor)?
+                                    else {
+                                        break;
+                                    };
+                                    cursor = Some(next_cursor);
+                                }
                             }
+                            Ok::<_, MezError>((initialize, tools))
                         }
+                        .await;
+                        let (initialize, tools) = match discovery {
+                            Ok(discovered) => discovered,
+                            Err(error) => {
+                                return Err(match connection.retire().await {
+                                    Ok(()) => error,
+                                    Err(retirement_error) => {
+                                        combine_mcp_discovery_retirement_error(
+                                            error,
+                                            retirement_error,
+                                        )
+                                    }
+                                });
+                            }
+                        };
                         Ok(RuntimeMcpDiscoverySuccess {
                             tools,
                             instructions: initialize.instructions,
@@ -657,37 +677,60 @@ impl RuntimeSessionService {
         match &plan.transport {
             McpStartupTransportPlan::Stdio { .. } => {
                 let mut connection = spawn_stdio_mcp_connection(&plan, environment).await?;
-                let initialize = connection
-                    .initialize("mezzanine", env!("CARGO_PKG_VERSION"), plan.timeout_ms)
-                    .await?;
-                connection.send_initialized_notification().await?;
-                let mut tools = Vec::new();
-                if initialize.supports_tools {
-                    let mut cursor = None;
-                    let mut pagination = mez_agent::mcp::McpToolListPagination::default();
-                    let mut budget = mez_agent::mcp::McpToolDiscoveryBudget::default();
-                    let deadline = McpToolDiscoveryDeadline::new(plan.timeout_ms);
-                    loop {
-                        let timeout_ms = deadline.remaining_timeout_ms(&plan.server_id)?;
-                        let (response, response_bytes) = connection
-                            .list_tools_page(cursor.as_deref(), timeout_ms)
-                            .await?;
-                        budget.accept_page(&plan.server_id, response_bytes, &response.tools)?;
-                        tools.extend(response.tools);
-                        let Some(next_cursor) =
-                            pagination.advance(&plan.server_id, response.next_cursor)?
-                        else {
-                            break;
-                        };
-                        cursor = Some(next_cursor);
+                let discovery = async {
+                    let initialize = connection
+                        .initialize("mezzanine", env!("CARGO_PKG_VERSION"), plan.timeout_ms)
+                        .await?;
+                    connection.send_initialized_notification().await?;
+                    let mut tools = Vec::new();
+                    if initialize.supports_tools {
+                        let mut cursor = None;
+                        let mut pagination = mez_agent::mcp::McpToolListPagination::default();
+                        let mut budget = mez_agent::mcp::McpToolDiscoveryBudget::default();
+                        let deadline = McpToolDiscoveryDeadline::new(plan.timeout_ms);
+                        loop {
+                            let timeout_ms = deadline.remaining_timeout_ms(&plan.server_id)?;
+                            let (response, response_bytes) = connection
+                                .list_tools_page(cursor.as_deref(), timeout_ms)
+                                .await?;
+                            budget.accept_page(&plan.server_id, response_bytes, &response.tools)?;
+                            tools.extend(response.tools);
+                            let Some(next_cursor) =
+                                pagination.advance(&plan.server_id, response.next_cursor)?
+                            else {
+                                break;
+                            };
+                            cursor = Some(next_cursor);
+                        }
                     }
+                    Ok::<_, MezError>((initialize, tools))
                 }
-                registry.mark_available_from_discovery(
+                .await;
+                let (initialize, tools) = match discovery {
+                    Ok(discovered) => discovered,
+                    Err(error) => {
+                        return Err(match connection.retire().await {
+                            Ok(()) => error,
+                            Err(retirement_error) => {
+                                combine_mcp_discovery_retirement_error(error, retirement_error)
+                            }
+                        });
+                    }
+                };
+                if let Err(error) = registry.mark_available_from_discovery(
                     server_id,
                     tools,
                     initialize.instructions.as_deref(),
                     checked_at,
-                )?;
+                ) {
+                    let error: MezError = error.into();
+                    return Err(match connection.retire().await {
+                        Ok(()) => error,
+                        Err(retirement_error) => {
+                            combine_mcp_discovery_retirement_error(error, retirement_error)
+                        }
+                    });
+                }
                 self.integration
                     .mcp_transports_mut()
                     .insert_stdio(server_id.to_string(), connection);
