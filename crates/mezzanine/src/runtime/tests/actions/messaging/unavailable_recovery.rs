@@ -158,7 +158,11 @@ impl ModelProvider for CompatibilityProvider {
     }
 }
 
-/// Counts one action-result block in canonical active chronology.
+/// Counts one action-result block in the active turn context.
+///
+/// This is a pre-terminal fixture assertion only: normal terminal lifecycle
+/// removes the active context, so post-completion evidence must be checked
+/// through persistence or an owner-level fixture instead.
 fn action_result_block_count(service: &RuntimeSessionService, action_id: &str) -> usize {
     service
         .agent_turn_contexts()
@@ -221,26 +225,21 @@ fn result_for<'a>(
 #[test]
 fn runtime_unavailable_recipient_corrects_past_unstarted_local_sibling() {
     let (mut service, target) = mixed_batch_fixture();
-    let execution = execute_sync(
-        &mut service,
-        batch_response(
-            "deepseek",
-            vec![
-                send_action("msg-missing", "agent:agent-nowhere", "handoff"),
-                list_agents_action("discover-1"),
-                final_say_action("say-final", "finished"),
-            ],
-        ),
+    let actions = vec![
+        send_action("msg-missing", "agent:agent-nowhere", "handoff"),
+        list_agents_action("discover-1"),
+        final_say_action("say-final", "finished"),
+    ];
+    assert!(
+        !mez_agent::maap::batch_requests_terminal_completion(&actions),
+        "a mixed final say must not infer terminal intent"
     );
+    let execution = execute_sync(&mut service, batch_response("deepseek", actions));
     assert_eq!(
         execution.terminal_state,
         AgentTurnState::Running,
         "results={:?}",
         result_diagnostics(&execution)
-    );
-    assert!(
-        !execution.final_turn,
-        "a mixed final say does not make the batch terminal"
     );
     let failed = result_for(&execution, "msg-missing");
     assert_eq!(failed.status, ActionStatus::Failed);
@@ -390,13 +389,6 @@ fn runtime_unavailable_recipient_correction_preserves_successful_sibling() {
         "successful sibling must not be replayed by correction"
     );
     assert_eq!(messages[0].payload, "accepted handoff");
-    for action_id in ["msg-target", "msg-missing", "discover-1"] {
-        assert_eq!(
-            action_result_block_count(&service, action_id),
-            1,
-            "{action_id} must not be duplicated by correction"
-        );
-    }
 }
 
 /// Inline async apply must queue the same bounded continuation and complete
@@ -542,6 +534,15 @@ fn runtime_active_external_sibling_keeps_correction_unavailable() {
     let mut execution =
         constructed_execution(&turn, vec![missing, spawn, discovery, say], results, false);
     append_test_execution_assistant_context(&mut service, &turn, &execution);
+    service
+        .commit_settled_action_results_context(
+            &turn.turn_id,
+            &[
+                execution.action_results[0].clone(),
+                execution.action_results[3].clone(),
+            ],
+        )
+        .unwrap();
     let queued = service
         .queue_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
         .unwrap();
@@ -666,13 +667,54 @@ fn runtime_unavailable_recipient_mixed_batch_correction_budget_is_stable() {
             .code,
         "action_abandoned_not_started"
     );
-    for action_id in ["msg-missing-1", "discover-1", "msg-missing-2", "discover-2"] {
-        assert_eq!(
-            action_result_block_count(&service, action_id),
-            1,
-            "{action_id} must be committed exactly once across exhausted attempts"
-        );
-    }
+    assert!(service.pending_agent_provider_tasks().is_empty());
+}
+
+/// Settlement commits a truthful abandonment even when bounded correction is
+/// exhausted, and repeating settlement/feedback does not duplicate evidence.
+#[test]
+fn runtime_settlement_commits_abandonment_before_budget_exhaustion() {
+    let (mut service, turn) = open_turn_for_constructed_execution();
+    service.set_agent_action_failure_retry_limit(0);
+    let missing = send_action("msg-custody", "agent:agent-nowhere", "handoff");
+    let discovery = list_agents_action("discover-custody");
+    let say = final_say_action("say-custody", "finished");
+    let failed = mez_agent::ActionResult::failed(
+        &turn,
+        &missing,
+        ActionStatus::Failed,
+        "message_recipient_unavailable",
+        "message recipient is not registered or available",
+    )
+    .unwrap();
+    let succeeded =
+        mez_agent::ActionResult::succeeded(&turn, &say, vec!["finished".to_string()], None);
+    let running = mez_agent::ActionResult::running(&turn, &discovery, Vec::new(), None);
+    let mut execution = constructed_execution(
+        &turn,
+        vec![missing, discovery, say],
+        vec![failed.clone(), running, succeeded.clone()],
+        false,
+    );
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
+    service
+        .commit_settled_action_results_context(&turn.turn_id, &[failed, succeeded])
+        .unwrap();
+    let queued = service
+        .queue_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
+        .unwrap();
+    assert!(!queued, "zero retry limit exhausts correction");
+    assert_eq!(
+        result_for(&execution, "discover-custody").status,
+        ActionStatus::Cancelled
+    );
+    assert_eq!(action_result_block_count(&service, "msg-custody"), 1);
+    assert_eq!(action_result_block_count(&service, "discover-custody"), 1);
+    let queued_again = service
+        .queue_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
+        .unwrap();
+    assert!(!queued_again);
+    assert_eq!(action_result_block_count(&service, "discover-custody"), 1);
     assert!(service.pending_agent_provider_tasks().is_empty());
 }
 
