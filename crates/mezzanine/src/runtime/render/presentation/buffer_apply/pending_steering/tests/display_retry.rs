@@ -82,6 +82,19 @@ impl Fixture {
             retry.next_attempt_at = std::time::Instant::now();
         }
     }
+
+    /// Pushes retained deadlines safely past unrelated fixture work without
+    /// sleeping or depending on production backoff duration or wall-clock margin.
+    fn defer_due(&mut self) {
+        for retry in self
+            .service
+            .presentation
+            .steering_presentation_retries
+            .values_mut()
+        {
+            retry.next_attempt_at = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        }
+    }
 }
 
 impl Drop for Fixture {
@@ -413,7 +426,8 @@ fn steering_display_retry_bounds_receipt_backlog_per_owner() {
         1
     );
     // The initial request already queued one persistence effect per installed
-    // receipt. Drain and assert exactly that prefix before advancing the deadline.
+    // receipt. Freeze recovery well past this drain so only the prefix appears.
+    fixture.defer_due();
     let prefix = fixture.service.drain_transcript_persistence_transition();
     assert_eq!(
         persisted_ids(prefix.side_effects),
