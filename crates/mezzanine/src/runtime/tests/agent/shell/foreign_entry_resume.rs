@@ -104,6 +104,59 @@ fn runtime_agent_entry_resumes_identity_probe_for_exact_owner_foreground() {
     process.terminate(Duration::from_millis(100)).unwrap();
 }
 
+/// Verifies a contrary readiness state is never overwritten by the entry wake.
+///
+/// An interactive-blocked pane has real evidence that an application owns the
+/// terminal. Even a foreground observation for the boundary's own process
+/// group must not convert that evidence into a prompt candidate, because the
+/// boundary's wake exists only to supply the missing first prompt observation
+/// and never to outvote a password, full-screen, interactive-blocked, busy, or
+/// ready state.
+#[test]
+fn runtime_agent_entry_never_overrides_contrary_readiness_state() {
+    let mut service = test_runtime_service();
+    service.disable_legacy_managed_startup_for_tests();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = "%1".to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let primary_process_group_id = service.pane_primary_process_group_id(&pane_id, primary_pid);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+    service.set_pane_readiness(&pane_id, PaneReadinessState::InteractiveBlocked);
+
+    service
+        .apply_pane_foreground_process_event(&pane_id, "cat", primary_process_group_id, None)
+        .unwrap();
+
+    assert_eq!(
+        service.pane_readiness_state(&pane_id),
+        PaneReadinessState::InteractiveBlocked,
+        "the entry wake must never overwrite contrary readiness evidence"
+    );
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("awaiting-prompt")
+    );
+    let transition = service.drain_pane_io_transition();
+    let writes = pane_input_effects(&transition.side_effects);
+    assert!(
+        writes.is_empty(),
+        "an interactive-blocked pane must never receive shell input: {writes:?}"
+    );
+    process.terminate(Duration::from_millis(100)).unwrap();
+}
+
 /// Verifies a foreign foreground group never releases a display-first entry
 /// boundary's identity probe.
 ///

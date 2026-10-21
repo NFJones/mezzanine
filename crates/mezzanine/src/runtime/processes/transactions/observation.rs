@@ -729,10 +729,12 @@ impl RuntimeSessionService {
     /// foreground-process observation. The boundary is then created from the
     /// primary process group with readiness Unknown, and the only later wake is
     /// a foreground observation for the same ownership. This predicate accepts
-    /// exactly that observation: matching awaiting phase, process group, live
-    /// primary process, interaction generation, unsettled identity epoch, and a
-    /// visible non-native agent shell. A foreign group, a stale generation, or a
-    /// hidden or native shell never matches.
+    /// exactly that observation: the boundary has not observed any process group
+    /// yet, readiness is still its initial Unknown, and the awaiting phase,
+    /// process group, live primary process, interaction generation, unsettled
+    /// identity epoch, visible agent shell, and non-native mode all match. A
+    /// foreign group, a stale generation, a hidden or native shell, an already
+    /// observed boundary, or any contrary readiness state never matches.
     pub(crate) fn agent_entry_boundary_matches_foreground(
         &self,
         pane_id: &str,
@@ -744,6 +746,8 @@ impl RuntimeSessionService {
         boundary.phase == RuntimeForeignShellBootstrapPhase::AwaitingPrompt
             && boundary.process_group_id == process_group_id
             && self.primary_pid_for_live_pane_process(pane_id) == Some(boundary.primary_process_id)
+            && !boundary.process_group_observed
+            && self.pane_readiness_state(pane_id) == PaneReadinessState::Unknown
             && self
                 .process
                 .pane_shell_interaction_generations
@@ -771,9 +775,12 @@ impl RuntimeSessionService {
     /// When entry precedes the worker's first foreground observation, no other
     /// prompt evidence can arrive while the shell sits idle at its displayed
     /// prompt, so this exact owner observation is recorded through the ordinary
-    /// passive-readiness owner. Ownership, identity, generation, readiness, and
-    /// admission predicates are unchanged; this only supplies the observation
-    /// they already require.
+    /// passive-readiness owner. The boundary must still be at its initial
+    /// Unknown readiness with no process-group observation, so a password,
+    /// full-screen, interactive-blocked, busy, or ready state is never
+    /// overwritten and ownership, identity, generation, and admission
+    /// predicates are unchanged; this only supplies the observation they
+    /// already require.
     pub(crate) fn promote_entry_prompt_candidate_for_foreground(
         &mut self,
         pane_id: &str,
