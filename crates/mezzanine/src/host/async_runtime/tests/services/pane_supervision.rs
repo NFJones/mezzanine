@@ -1150,7 +1150,14 @@ async fn stopping_admission_settles_process_exit_for_current_generation() {
         force: false,
         failed: false,
     }));
-    assert_eq!(handle.submit_runtime_events(shutdown).await.unwrap().applied, 1);
+    assert_eq!(
+        handle
+            .submit_runtime_events(shutdown)
+            .await
+            .unwrap()
+            .applied,
+        1
+    );
 
     let mut exit = RuntimeEventBatch::new();
     exit.push(RuntimeEvent::PaneProcess {

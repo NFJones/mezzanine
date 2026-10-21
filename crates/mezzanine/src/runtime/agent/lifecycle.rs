@@ -11,6 +11,7 @@ use super::{
     runtime_agent_finished_footer_line, runtime_agent_pane_id, runtime_agent_turn_state_name,
     runtime_pane_by_id, runtime_unrecovered_failure_reason,
 };
+use crate::runtime::RuntimeLifecycleState;
 
 /// Product-owned pane terminal cause, independent of display diagnostic text.
 #[derive(Clone, Copy, PartialEq, Eq)]

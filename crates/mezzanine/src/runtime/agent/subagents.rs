@@ -2248,7 +2248,8 @@ impl RuntimeSessionService {
             r#"{{"pane_id":"{}","force":true}}"#,
             json_escape(&turn.pane_id)
         );
-        if let Err(error) = self.dispatch_runtime_pane_close_for_pane_settlement(&primary, &params) {
+        if let Err(error) = self.dispatch_runtime_pane_close_for_pane_settlement(&primary, &params)
+        {
             // A refused or failed close must not consume the pending obligation:
             // keep the marker so the exact pane close can be retried.
             self.agent

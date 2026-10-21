@@ -1593,9 +1593,7 @@ fn running_lifecycle_starts_ready_queued_sibling_turn() {
     let primary = service
         .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
         .unwrap();
-    service
-        .start_initial_pane_process(Some("cat"))
-        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
     service
         .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat"))
         .unwrap();
@@ -1618,7 +1616,10 @@ fn running_lifecycle_starts_ready_queued_sibling_turn() {
     );
 
     let started = service.start_ready_agent_turns().unwrap();
-    assert_eq!(started, 1, "the ready sibling must be startable while running");
+    assert_eq!(
+        started, 1,
+        "the ready sibling must be startable while running"
+    );
     assert_eq!(
         ledger_turn_state(&service, "turn-sibling"),
         AgentTurnState::Running
@@ -1633,9 +1634,7 @@ fn stopping_exit_settlement_does_not_start_ready_queued_sibling_turn() {
     let primary = service
         .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
         .unwrap();
-    let start = service
-        .start_initial_pane_process(Some("cat"))
-        .unwrap();
+    let start = service.start_initial_pane_process(Some("cat")).unwrap();
     service
         .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat"))
         .unwrap();
