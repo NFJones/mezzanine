@@ -755,6 +755,7 @@ fn historical_safe_error_codes_pin_full_producer_set() {
         "network_action_no_progress",
         "network_http_error",
         "network_request_failed",
+        "network_search_unusable_response",
         "not_found",
         "not_implemented",
         "notfound",
