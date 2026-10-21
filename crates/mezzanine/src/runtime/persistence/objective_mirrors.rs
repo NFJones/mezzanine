@@ -275,6 +275,15 @@ impl ObjectiveMirrorQueue {
             };
             receipt
         };
+        // One physical attempt is reported exactly once, even when a newer
+        // desired revision or a deletion has already superseded its receipt.
+        // The freshness gates below are allowed to reject confirmation, retry
+        // and UI refresh, but a filesystem failure/cancelled job must stay
+        // visible as bounded content-free diagnostics.
+        if let MirrorResult::Failed(reason) = &receipt.result {
+            self.status.failed = self.status.failed.saturating_add(1);
+            self.status.last_failure = Some(*reason);
+        }
         let entry = self.entries.get_mut(&receipt.key)?;
         if entry.in_flight != Some(receipt.revision) {
             return None;
@@ -327,8 +336,8 @@ impl ObjectiveMirrorQueue {
                     entry.eligible_at = Instant::now() + OBJECTIVE_MIRROR_BUSY_DELAY;
                 }
                 entry.confirmed = false;
-                self.status.failed = self.status.failed.saturating_add(1);
-                self.status.last_failure = Some(reason);
+                // This failure was already counted when its receipt was
+                // consumed; only retry/confirmation depends on freshness.
                 None
             }
         }
@@ -893,6 +902,49 @@ mod tests {
         assert!(queue.publish(store.clone(), "same", Some("private objective sentinel")));
         settle(&mut queue);
         assert!(store.session_objective_mirror("same").unwrap().is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A physical failure stays visible exactly once when a newer desired
+    /// revision supersedes its receipt before collection. Freshness gating may
+    /// reject the stale result, but it must not hide the I/O degradation behind
+    /// a successful newest value or suppress the bounded diagnostic contract.
+    #[test]
+    fn objective_mirror_superseded_io_failure_remains_visible() {
+        let (_, root) = store();
+        let blocked = root.join("blocked");
+        std::fs::write(&blocked, b"not a directory").unwrap();
+        let store = AgentTranscriptStore::new(blocked.clone());
+        let mut queue = ObjectiveMirrorQueue::default();
+        assert!(queue.publish(store.clone(), "same", Some("stale private objective")));
+        let stale = queue.claim().unwrap();
+        // The newer publication arrives while the failing write is in flight.
+        assert!(queue.publish(store.clone(), "same", Some("newer objective")));
+        stale.execute();
+        assert!(
+            queue.collect().is_none(),
+            "stale receipt cannot confirm newer work"
+        );
+        assert_eq!(queue.status.failed, 1);
+        assert_eq!(queue.status.last_failure, Some(MirrorFailure::Io));
+        assert_eq!(queue.status.confirmed, 0);
+        assert!(!format!("{:?}", queue.status).contains("private objective"));
+        assert!(!format!("{:?}", queue.status).contains(&root.display().to_string()));
+        // Repairing the same captured store lets the newer value converge
+        // without a second publication or a second failure count.
+        std::fs::remove_file(&blocked).unwrap();
+        std::fs::create_dir(&blocked).unwrap();
+        settle(&mut queue);
+        assert_eq!(queue.status.confirmed, 1);
+        assert_eq!(queue.status.failed, 1, "one physical failure, counted once");
+        assert_eq!(
+            store
+                .session_objective_mirror("same")
+                .unwrap()
+                .unwrap()
+                .objective,
+            "newer objective"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

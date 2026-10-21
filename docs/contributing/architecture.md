@@ -84,6 +84,24 @@ presentation state, not independently mutable stores. Captured response identity
 source revision, geometry, policy, and installed-screen lineage remain explicit
 handoffs; a provisional display row is not evidence of action execution.
 
+Optional display caches such as the published agent objective use a separate
+nonessential ownership boundary. `runtime/persistence/objective_mirrors.rs`
+keeps the actor-side coalescing queue of bounded newest values, revision
+tokens, clone-local deletion fences, and content-free status;
+`storage/transcript/store.rs` retains unchanged suppression, recovery, atomic
+write, and finite nonblocking lock admission; and
+`host/async_runtime/side_effects.rs` polls the lane from the existing
+persistence service without awaiting it inside essential settlement. At most one
+detached blocking job owns physical I/O, and its unconsumed exact receipt keeps
+that slot until the actor collects it, so a dropped task handle never releases
+capacity or lets a stale result confirm newer work. Selector and browser refresh
+remain actor-owned acknowledgements rather than worker-side state mutation. See
+`SPEC.md` and `docs/operations/cache-status-and-diagnostics.md` for the
+normative behavior and its explicit scope limits: the deletion fence is local to
+clones of one store handle, conversation deletion and cache pruning keep their
+preexisting synchronous latency, and filesystem latency itself is never
+described as bounded.
+
 ## Ownership and tests
 
 Follow the closest owner rather than forwarding contracts through
