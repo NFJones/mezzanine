@@ -485,9 +485,10 @@ fn assert_paused_outcome(
             .service
             .hold_agent_presentation_installs_for_tests(false);
         if failed {
-            // One released pass installs the retained outcome, resumes exactly
-            // the retained continuation and composes away the superseded
-            // provisional cleanup; the same pass cannot advance twice.
+            // One released pass installs the retained outcome and resumes
+            // exactly the retained continuation; the same pass cannot advance
+            // twice. Cleanup intent stays owned because a durable write is not
+            // suffix proof, so no discharge is claimed here.
             assert!(
                 fixture.service.retry_completion_publications() >= 1,
                 "the released install must publish the retained outcome"
