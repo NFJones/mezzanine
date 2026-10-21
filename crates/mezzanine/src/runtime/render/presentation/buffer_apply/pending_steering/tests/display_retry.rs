@@ -381,6 +381,21 @@ fn steering_display_retry_bounds_receipt_backlog_per_owner() {
         .service
         .restore_steering_recovery("%1", &fixture.conversation, &receipts)
         .unwrap();
+    /// Extracts ordered steering persistence identities without dispatching them.
+    fn persisted_ids(effects: Vec<crate::runtime::RuntimeSideEffect>) -> Vec<String> {
+        effects
+            .into_iter()
+            .map(|effect| {
+                let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation {
+                    entry, ..
+                } = effect
+                else {
+                    panic!("display recovery emitted a non-steering effect");
+                };
+                entry.presentation.as_ref().unwrap().id.clone()
+            })
+            .collect()
+    }
     fixture.service.request_steering_presentation("%1");
     assert_eq!(
         fixture
@@ -397,25 +412,32 @@ fn steering_display_retry_bounds_receipt_backlog_per_owner() {
             .len(),
         1
     );
+    // The initial request already queued one persistence effect per installed
+    // receipt. Drain and assert exactly that prefix before advancing the deadline.
+    let prefix = fixture.service.drain_transcript_persistence_transition();
+    assert_eq!(
+        persisted_ids(prefix.side_effects),
+        receipts[..STEERING_DISPLAY_RECEIPTS_PER_DRAIN]
+            .iter()
+            .map(|receipt| receipt.id.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        STEERING_DISPLAY_RECEIPTS_PER_DRAIN
+    );
     fixture.make_due();
-    let recovered = fixture.service.drain_transcript_persistence_transition();
-    let ids = recovered
-        .side_effects
-        .into_iter()
-        .map(|effect| {
-            let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { entry, .. } =
-                effect
-            else {
-                panic!("display recovery emitted a non-steering effect");
-            };
-            entry.presentation.as_ref().unwrap().id.clone()
-        })
-        .collect::<Vec<_>>();
-    let expected = receipts[STEERING_DISPLAY_RECEIPTS_PER_DRAIN..]
-        .iter()
-        .map(|receipt| receipt.id.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(ids, expected);
+    let tail = fixture.service.drain_transcript_persistence_transition();
+    assert_eq!(
+        persisted_ids(tail.side_effects),
+        receipts[STEERING_DISPLAY_RECEIPTS_PER_DRAIN..]
+            .iter()
+            .map(|receipt| receipt.id.clone())
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         fixture
             .text()
@@ -437,6 +459,13 @@ fn steering_display_retry_bounds_receipt_backlog_per_owner() {
             .presented_steering_receipts
             .len(),
         total
+    );
+    assert!(
+        fixture
+            .service
+            .drain_transcript_persistence_transition()
+            .side_effects
+            .is_empty()
     );
     assert!(fixture.service.agent_turn_ledger().turns().is_empty());
 }

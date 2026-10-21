@@ -486,8 +486,9 @@ impl AsyncRuntimeSessionActor {
             return;
         }
         let Some(generation) = self.timers.last_idle_cleanup_generation.checked_add(1) else {
-            // The obligation stays retained in service state, so a later drain
-            // can still enroll when generation space exists.
+            // Exhausted generation space cannot be recovered at runtime. The
+            // retained service obligation stays owned, and no drained batch is
+            // failed, replayed or silently acknowledged by this optional path.
             return;
         };
         let generation = generation.max(async_runtime_current_unix_millis());

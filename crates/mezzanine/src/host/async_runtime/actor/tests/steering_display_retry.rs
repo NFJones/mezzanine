@@ -414,9 +414,20 @@ async fn steering_display_retry_idle_fences_stale_callbacks_and_terminal_lifecyc
 async fn steering_display_retry_exhausted_generation_cannot_fail_timer_drain() {
     let mut fixture = Fixture::new(1);
     fixture.fail_initial_display();
+    let mandatory = RuntimeTimerKey::new(RuntimeTimerKind::SavedSessionRetention, "saved", 3);
+    fixture
+        .actor
+        .queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+            key: mandatory.clone(),
+            delay_ms: 5,
+        }])
+        .unwrap();
     fixture.actor.timers.last_idle_cleanup_generation = u64::MAX;
     let drained = fixture.actor.drain_timer_side_effects(32).unwrap();
-    assert!(drained.is_empty());
+    assert!(matches!(
+        drained.as_slice(),
+        [RuntimeSideEffect::ScheduleTimer { key, .. }] if key == &mandatory
+    ));
     assert!(
         fixture
             .actor

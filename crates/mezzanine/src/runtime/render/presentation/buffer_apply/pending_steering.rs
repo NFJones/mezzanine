@@ -133,8 +133,12 @@ impl RuntimeSessionService {
         {
             return;
         }
-        let attempted_at = std::time::Instant::now();
-        match self.reconcile_steering_presentation(pane, STEERING_DISPLAY_RECEIPTS_PER_DRAIN) {
+        let outcome =
+            self.reconcile_steering_presentation(pane, STEERING_DISPLAY_RECEIPTS_PER_DRAIN);
+        // Pacing starts when the attempt finishes, so a slow initial pass cannot
+        // return already due and let the next ordinary drain retry without a gap.
+        let retained_at = std::time::Instant::now();
+        match outcome {
             Ok(SteeringReconcileOutcome::Complete) => {}
             Ok(SteeringReconcileOutcome::BudgetExhausted) => {
                 // Bounded progress installed a prefix. Keep the tail owned and
@@ -142,7 +146,7 @@ impl RuntimeSessionService {
                 self.presentation.steering_presentation_retries.insert(
                     key.clone(),
                     crate::runtime::render::RuntimeSteeringPresentationRetry {
-                        next_attempt_at: attempted_at + STEERING_DISPLAY_RETRY_DELAY,
+                        next_attempt_at: retained_at + STEERING_DISPLAY_RETRY_DELAY,
                         backoff: 0,
                         diagnostic_emitted: false,
                     },
@@ -152,7 +156,7 @@ impl RuntimeSessionService {
                 self.presentation.steering_presentation_retries.insert(
                     key.clone(),
                     crate::runtime::render::RuntimeSteeringPresentationRetry {
-                        next_attempt_at: attempted_at + STEERING_DISPLAY_RETRY_DELAY,
+                        next_attempt_at: retained_at + STEERING_DISPLAY_RETRY_DELAY,
                         backoff: 0,
                         diagnostic_emitted: false,
                     },
