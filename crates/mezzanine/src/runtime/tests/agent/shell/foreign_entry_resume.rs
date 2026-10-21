@@ -41,7 +41,12 @@ fn runtime_agent_entry_resumes_identity_probe_for_exact_owner_foreground() {
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     assert!(shown.contains("visibility=visible"), "{shown}");
-    service.drain_pane_io_transition();
+    let entry_transition = service.drain_pane_io_transition();
+    let entry_writes = pane_input_effects(&entry_transition.side_effects);
+    assert!(
+        entry_writes.is_empty(),
+        "entry before its foreground observation must not write shell input: {entry_writes:?}"
+    );
 
     assert_eq!(
         service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
@@ -56,13 +61,6 @@ fn runtime_agent_entry_resumes_identity_probe_for_exact_owner_foreground() {
     );
     let generation = service.pane_shell_interaction_generation_for_tests(&pane_id);
     assert_eq!(generation, Some(1));
-    let before_foreground_transition = service.drain_pane_io_transition();
-    let before_foreground = pane_input_effects(&before_foreground_transition.side_effects);
-    assert!(
-        before_foreground.is_empty(),
-        "entry without its foreground observation must not write shell input: {before_foreground:?}"
-    );
-
     service
         .apply_pane_foreground_process_event(&pane_id, "cat", primary_process_group_id, None)
         .unwrap();

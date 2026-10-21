@@ -726,10 +726,12 @@ impl RuntimeSessionService {
     /// observation is still awaiting its first owner observation.
     ///
     /// The boundary records, at creation, whether a process group had already
-    /// been observed. A boundary that never had one may only be released by the
-    /// observation that proves its own process and interaction epoch still own
-    /// the PTY, and it must not let an unrelated foreground event overwrite
-    /// known contrary readiness evidence while it waits.
+    /// been observed; that flag is creation provenance, not first-event proof,
+    /// and the phase transition is what bounds a successful repair to one probe.
+    /// Such a boundary may only be released by the observation that proves its
+    /// own process and interaction epoch still own the PTY, and it must not let
+    /// an unrelated foreground event overwrite known contrary readiness evidence
+    /// while it waits.
     pub(crate) fn agent_entry_awaits_first_foreground_observation(&self, pane_id: &str) -> bool {
         self.process
             .pane_foreign_shell_boundaries
@@ -747,8 +749,8 @@ impl RuntimeSessionService {
     /// foreground-process observation. The boundary is then created from the
     /// primary process group with readiness Unknown, and the only later wake is
     /// a foreground observation for the same ownership. This predicate accepts
-    /// exactly that observation: the boundary has not observed any process group
-    /// yet, readiness is still its initial Unknown, and the awaiting phase,
+    /// exactly that observation: the boundary was created without a process-group
+    /// observation, readiness is still its initial Unknown, and the awaiting phase,
     /// process group, live primary process, interaction generation, unsettled
     /// identity epoch, visible agent shell, and non-native mode all match. A
     /// foreign group, a stale generation, a hidden or native shell, an already

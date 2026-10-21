@@ -199,10 +199,10 @@ impl RuntimeSessionService {
         let primary_shell_returned = primary_shell_owns_foreground
             && !self.dependency_free_foreign_loader_owns_process_group(&pane_id, process_group_id)
             && self.clear_uncertified_foreign_shell_boundary(&pane_id);
-        // A display-first entry boundary is waiting for its first foreground
-        // observation. That exact owner observation is also the epoch's first
-        // prompt evidence, so record it before resuming: the unchanged
-        // readiness admission predicate then releases one identity probe.
+        // An entry boundary created before any foreground observation is
+        // available has not been released yet. Its exact owner observation is
+        // also the epoch's first prompt evidence, so record it before resuming:
+        // the unchanged readiness admission predicate then releases one probe.
         self.promote_entry_prompt_candidate_for_foreground(&pane_id, process_group_id)?;
         let resumed_agent_entry =
             self.resume_agent_entry_discovery_for_foreground(&pane_id, process_group_id)?;
@@ -222,8 +222,8 @@ impl RuntimeSessionService {
                 let _ = self.enter_agent_subshell_if_needed(&pane_id)?;
             }
         }
-        // While an entry boundary still awaits its first owner observation, a
-        // generic foreground event must not recover a contrary readiness state:
+        // While such an entry boundary remains unreleased, a generic foreground
+        // event must not recover a contrary readiness state:
         // the readiness owner converts password, full-screen, and
         // interactive-blocked evidence into a prompt candidate whenever the
         // primary group is foreground, which would bypass the exact-owner guard
