@@ -230,7 +230,10 @@ pub(super) async fn enroll_producer(fixture: &mut Fixture) -> serde_json::Value 
             .complete_external_enrollment(work, observed, &fixture.connection),
     )
     .unwrap();
-    assert!(response.get("error").is_none());
+    assert!(
+        response.get("error").is_none(),
+        "producer admission unexpectedly failed: {response}"
+    );
     response
 }
 

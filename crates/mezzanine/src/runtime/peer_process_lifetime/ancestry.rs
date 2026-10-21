@@ -9,12 +9,16 @@
 //! macOS admission. Pending work and live registrations share one explicit finite
 //! descriptor budget, with RAII release on failed capture, retirement and drop.
 
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+#[cfg(any(target_os = "linux", test))]
+use std::time::Duration;
 #[cfg(target_os = "linux")]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[cfg(target_os = "linux")]
 use super::parent;
@@ -34,6 +38,11 @@ const CAPTURE_BUDGET: Duration = Duration::from_millis(100);
 #[derive(Debug, Default)]
 pub(crate) struct UnixAncestryBudget {
     reserved: AtomicUsize,
+    /// Test-only per-instance capture budget in microseconds; zero uses the
+    /// production 100 ms policy so other fixtures and production stay strict.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    capture_budget_us: AtomicU64,
 }
 
 impl UnixAncestryBudget {
@@ -75,6 +84,30 @@ impl UnixAncestryBudget {
     #[cfg(test)]
     pub(crate) fn reserved(&self) -> usize {
         self.reserved.load(Ordering::SeqCst)
+    }
+
+    /// Overrides only this test-owned budget instance; production and every
+    /// other budget keep the fixed capture deadline.
+    #[cfg(test)]
+    pub(crate) fn set_capture_budget_for_tests(&self, budget: Duration) {
+        self.capture_budget_us.store(
+            u64::try_from(budget.as_micros()).unwrap_or(u64::MAX),
+            Ordering::SeqCst,
+        );
+    }
+
+    /// Returns the production capture deadline unless this test instance opted
+    /// into a finite override.
+    #[cfg(target_os = "linux")]
+    fn active_capture_budget(&self) -> Duration {
+        #[cfg(test)]
+        {
+            let micros = self.capture_budget_us.load(Ordering::SeqCst);
+            if micros > 0 {
+                return Duration::from_micros(micros);
+            }
+        }
+        CAPTURE_BUDGET
     }
 
     /// Deterministic full-capacity injection exercises admission cleanup without
@@ -208,12 +241,13 @@ fn capture_retained_ancestry(
     budget: &Arc<UnixAncestryBudget>,
 ) -> io::Result<UnixAncestryWitness> {
     let started = Instant::now();
+    let capture_budget = budget.active_capture_budget();
     let origin = observe()?;
     if origin.process_id == root.process_id {
         return Err(unavailable());
     }
     let chain = mez_mux::process::process_ancestry(origin, root).map_err(|_| unavailable())?;
-    if started.elapsed() >= CAPTURE_BUDGET {
+    if started.elapsed() >= capture_budget {
         return Err(unavailable());
     }
     let count = chain
@@ -232,14 +266,14 @@ fn capture_retained_ancestry(
             identity: origin,
             lifetime: retained.lifetime.try_clone()?,
         };
-        if started.elapsed() >= CAPTURE_BUDGET {
+        if started.elapsed() >= capture_budget {
             return Err(unavailable());
         }
         duplicate.reobserve()?;
-        if started.elapsed() >= CAPTURE_BUDGET {
+        if started.elapsed() >= capture_budget {
             return Err(unavailable());
         }
-        if observe()? != origin || started.elapsed() >= CAPTURE_BUDGET {
+        if observe()? != origin || started.elapsed() >= capture_budget {
             return Err(unavailable());
         }
         Some(duplicate)
@@ -259,7 +293,7 @@ fn capture_retained_ancestry(
             parent::parent_uid,
             parent::open_parent,
             super::require_live_origin,
-            || started.elapsed() >= CAPTURE_BUDGET,
+            || started.elapsed() >= capture_budget,
         )?;
         if identity != *expected {
             return Err(unavailable());
@@ -274,11 +308,11 @@ fn capture_retained_ancestry(
     // then the original socket fence checks the producer once more.
     for retained in parents.iter().rev() {
         retained.reobserve()?;
-        if started.elapsed() >= CAPTURE_BUDGET {
+        if started.elapsed() >= capture_budget {
             return Err(unavailable());
         }
     }
-    if observe()? != origin || started.elapsed() >= CAPTURE_BUDGET {
+    if observe()? != origin || started.elapsed() >= capture_budget {
         return Err(unavailable());
     }
     if let Some(retained) = &source {
@@ -289,7 +323,7 @@ fn capture_retained_ancestry(
         parents,
         _reservation: reservation,
     };
-    if !witness.is_live() || started.elapsed() >= CAPTURE_BUDGET {
+    if !witness.is_live() || started.elapsed() >= capture_budget {
         return Err(unavailable());
     }
     Ok(witness)
@@ -401,6 +435,43 @@ mod tests {
         drop(reservations);
         assert_eq!(budget.reserved(), 0);
         drop(budget.reserve(MAX_RETAINED_ANCESTORS).unwrap());
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    /// Test overrides are instance-local; production and every other budget
+    /// instance retain the fixed 100 ms capture deadline.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn unix_ancestry_capture_budget_override_is_instance_local() {
+        let budget = Arc::new(UnixAncestryBudget::default());
+        assert_eq!(budget.active_capture_budget(), CAPTURE_BUDGET);
+        budget.set_capture_budget_for_tests(Duration::from_secs(10));
+        assert_eq!(budget.active_capture_budget(), Duration::from_secs(10));
+        let other = Arc::new(UnixAncestryBudget::default());
+        assert_eq!(other.active_capture_budget(), CAPTURE_BUDGET);
+        assert_eq!(other.reserved(), 0);
+    }
+
+    /// A strict per-instance budget still rejects a real native capture and
+    /// releases its reservation; this is not a synthetic witness.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn unix_ancestry_strict_capture_budget_rejects_real_capture() {
+        let identity =
+            mez_mux::process::process_parent_identity_for_pid(std::process::id()).unwrap();
+        let root =
+            mez_mux::process::process_parent_identity_for_pid(identity.parent_process_id).unwrap();
+        let uid = parent::parent_uid(identity.process_id).unwrap();
+        let source = UnixParentProcess {
+            uid,
+            identity,
+            lifetime: parent::open_parent(identity.process_id).unwrap(),
+        };
+        let budget = Arc::new(UnixAncestryBudget::default());
+        budget.set_capture_budget_for_tests(Duration::from_micros(1));
+        let result =
+            capture_retained_ancestry(uid, || source.reobserve(), Some(&source), root, &budget);
+        assert!(result.is_err());
         assert_eq!(budget.reserved(), 0);
     }
 }

@@ -533,6 +533,13 @@ async fn external_curated_admission_namespace_capacity_survives_binding_gc() {
     let Some(mut fixture) = fixture("hold").await else {
         return;
     };
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .enrollments
+        .ancestry_budget
+        .set_capture_budget_for_tests(std::time::Duration::from_secs(10));
     let (_socket, connection) = child(&mut fixture).await;
     let run_started = std::time::Instant::now();
     for (accepted, index) in (0..super::super::super::external_agents::MAX_BINDINGS).enumerate() {
