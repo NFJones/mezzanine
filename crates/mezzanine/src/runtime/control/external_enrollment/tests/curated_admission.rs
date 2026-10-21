@@ -535,8 +535,7 @@ async fn external_curated_admission_namespace_capacity_survives_binding_gc() {
     };
     let (_socket, connection) = child(&mut fixture).await;
     let run_started = std::time::Instant::now();
-    let mut accepted = 0usize;
-    for index in 0..super::super::super::external_agents::MAX_BINDINGS {
+    for (accepted, index) in (0..super::super::super::external_agents::MAX_BINDINGS).enumerate() {
         let mut request = curated_request();
         let mut params: serde_json::Value =
             serde_json::from_str(request.params.as_deref().unwrap()).unwrap();
@@ -581,7 +580,6 @@ async fn external_curated_admission_namespace_capacity_survives_binding_gc() {
                 run_started.elapsed().as_micros(),
             );
         }
-        accepted += 1;
         fixture
             .service
             .control
