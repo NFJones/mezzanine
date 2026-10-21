@@ -909,12 +909,32 @@ fn run_native_lifecycle_guidance(malformed: bool, cancelled: bool) {
         "{}",
         feedback.content
     );
+    // The plain ActionResult projection above is display evidence, not the
+    // durable execution block: both forms are stored and the plain entry
+    // precedes the block. Select the block by parsing rather than by entry
+    // order, and require exactly one matching durable event.
+    let lifecycle_blocks = entries
+        .iter()
+        .filter_map(|entry| {
+            match mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content) {
+                Some(mez_agent::TranscriptContextEvent::ExecutionBlock { content, .. })
+                    if content.contains("sandbox_lifecycle") =>
+                {
+                    Some(content)
+                }
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lifecycle_blocks.len(),
+        1,
+        "exactly one durable lifecycle execution block must be retained"
+    );
     assert!(
-        matches!(mez_agent::TranscriptContextEvent::from_transcript_content(&feedback.content),
-            Some(mez_agent::TranscriptContextEvent::ExecutionBlock { content, .. })
-                if content.contains("\"automatic_replay\":false")),
+        lifecycle_blocks[0].contains("\"automatic_replay\":false"),
         "{}",
-        feedback.content
+        lifecycle_blocks[0]
     );
     assert_eq!(fs::read(&counter).unwrap(), b"x");
     assert!(
