@@ -321,7 +321,12 @@ impl RuntimeSessionService {
         }
         if key.component.is_confirmed() {
             if exact_retained {
-                let _ = self.promote_confirmed_action_presentation_progress(progress)?;
+                // Promotion is the only proof that this exact confirmed body is
+                // installed. A refused promotion leaves the body unproven, so it
+                // cannot acknowledge the terminal result by itself.
+                if !self.promote_confirmed_action_presentation_progress(progress)? {
+                    return Ok(false);
+                }
             }
             return Ok(result.status == ActionStatus::Succeeded
                 && result.content_text() == progress.source);
@@ -335,10 +340,22 @@ impl RuntimeSessionService {
             && !result.is_error
             && result.content_text() == progress.source
         {
-            self.promote_action_progress_component(&pane_id, &key, progress)?;
-            return Ok(true);
+            if self.promote_action_progress_component(&pane_id, &key, progress)? {
+                return Ok(true);
+            }
+            // Refused promotion never installed this exact source. Retain the
+            // superseded provisional as bounded cleanup intent and let the
+            // canonical RESULT publish instead of acknowledging absent content.
+            self.retain_superseded_action_presentation_progress(&pane_id, &key);
+            return Ok(false);
         }
-        self.rollback_action_progress_component(&pane_id, &key, progress)?;
+        // The terminal body supersedes the retained provisional source. Record
+        // that decision before any fallible rollback so replay cannot redraw the
+        // superseded rows when physical cleanup still has to be retried.
+        self.retain_superseded_action_presentation_progress(&pane_id, &key);
+        if self.rollback_action_progress_component(&pane_id, &key, progress)? {
+            self.discharge_superseded_action_presentation_progress(&pane_id, &key);
+        }
         Ok(false)
     }
 
@@ -1360,6 +1377,66 @@ impl RuntimeSessionService {
         self.presentation
             .commit_action_progress(pane_id, Some(presentation));
         Ok(true)
+    }
+
+    /// Records the exact superseded source as cleanup intent before any
+    /// fallible presentation work.
+    ///
+    /// The decision that a retained component no longer owns its screen rows is
+    /// canonical before preparation, so replay, resize acceptance or an old
+    /// captured snapshot cannot turn superseded provisional rows back into live
+    /// progress merely because physical cleanup is still unproven. Recording the
+    /// intent never repeats worker, hook, audit or effect work; the retained
+    /// source is removed only after an actual successful install.
+    fn retain_superseded_action_presentation_progress(
+        &mut self,
+        pane_id: &str,
+        key: &RuntimeActionPresentationProgressKey,
+    ) {
+        let Some(owner) = self
+            .presentation
+            .action_presentation_progress
+            .get_mut(pane_id)
+        else {
+            return;
+        };
+        if !owner.components.contains_key(key) && !owner.promoted_components.contains_key(key) {
+            return;
+        }
+        if !owner.retirement_requested.contains(key) {
+            owner.advance_snapshot_fence();
+            owner.retirement_refused = false;
+            owner.replay_unavailable = None;
+        }
+        owner.retirement_requested.insert(key.clone());
+        owner.retirement_retry_at =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(250));
+        self.defer_requested_action_progress_retirement(pane_id);
+    }
+
+    /// Clears cleanup intent only once the exact source is physically gone.
+    fn discharge_superseded_action_presentation_progress(
+        &mut self,
+        pane_id: &str,
+        key: &RuntimeActionPresentationProgressKey,
+    ) {
+        let Some(owner) = self
+            .presentation
+            .action_presentation_progress
+            .get_mut(pane_id)
+        else {
+            return;
+        };
+        if owner.components.contains_key(key) || owner.promoted_components.contains_key(key) {
+            return;
+        }
+        owner.retirement_requested.remove(key);
+        if owner.retirement_requested.is_empty() {
+            owner.retirement_error = None;
+            owner.retirement_retry_at = None;
+            owner.retirement_refused = false;
+            owner.replay_unavailable = None;
+        }
     }
 
     fn retire_action_presentation_progress_matching(

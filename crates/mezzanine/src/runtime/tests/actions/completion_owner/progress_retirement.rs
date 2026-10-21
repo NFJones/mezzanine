@@ -140,9 +140,31 @@ async fn runtime_completion_progress_preinstall_failure_preserves_source_until_i
             .action_presentation_progress_entries_for_tests(&fixture.turn.pane_id),
         source
     );
+    assert!(
+        fixture
+            .service
+            .action_progress_retirement_retry_needed(),
+        "the superseded provisional cleanup decision must precede fallible rollout"
+    );
     fixture
         .service
         .hold_agent_presentation_installs_for_tests(false);
+    // A clean canonical replay must not redraw the superseded provisional rows:
+    // the terminal reconciliation decision was already canonical.
+    fixture
+        .service
+        .rebuild_agent_presentation_after_resize(&fixture.turn.pane_id, before.size())
+        .unwrap();
+    let replayed = fixture
+        .service
+        .agent_pane_screen(&fixture.turn.pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !replayed.contains("provisional read differs from terminal result"),
+        "superseded provisional source must not survive a clean replay: {replayed}"
+    );
     assert!(
         !fixture
             .service

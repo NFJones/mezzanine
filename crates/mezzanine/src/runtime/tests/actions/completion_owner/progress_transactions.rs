@@ -1069,3 +1069,82 @@ fn runtime_completion_preview_failure_retains_intent_and_unrelated_source() {
         assert!(text.contains("F668_PREVIEW_DURABLE"), "{text}");
     }
 }
+
+/// A refused progress promotion cannot acknowledge the canonical terminal body.
+///
+/// The retained provisional source equals the terminal body, but its screen
+/// lineage was replaced through the supported setter, so promotion cannot prove
+/// those exact rows are installed. Reconciliation must not claim success: it
+/// keeps bounded cleanup intent for the superseded provisional and lets the
+/// canonical RESULT publish instead of silently dropping the completed outcome.
+#[tokio::test]
+async fn runtime_completion_refused_promotion_cannot_acknowledge_terminal_body() {
+    let mut fixture = visible_progress_fixture().await;
+    let body = fixture.expected.content_text();
+    let progress = claimed_read_progress(&fixture, body.clone());
+    assert!(
+        fixture
+            .service
+            .apply_action_presentation_progress(progress.clone())
+            .unwrap()
+    );
+    let mut replacement = fixture
+        .service
+        .agent_pane_screen(&fixture.turn.pane_id)
+        .unwrap()
+        .clone();
+    replacement.feed(b"\r\nF668_REFUSED_PROMOTION_REPLACEMENT\r\n");
+    fixture.service.set_agent_pane_screen(
+        fixture.turn.pane_id.clone(),
+        fixture.turn.conversation_id.clone(),
+        replacement,
+    );
+    let before = fixture
+        .service
+        .agent_pane_screen(&fixture.turn.pane_id)
+        .unwrap()
+        .clone();
+    let canonical = fixture.retained();
+    assert!(
+        !fixture
+            .service
+            .reconcile_action_presentation_progress(&progress, &fixture.expected)
+            .unwrap(),
+        "a refused promotion cannot acknowledge exactly equal terminal content"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .action_presentation_progress_counts_for_tests(&fixture.turn.pane_id),
+        (1, 0)
+    );
+    assert!(
+        fixture
+            .service
+            .action_progress_retirement_retry_needed(),
+        "the superseded provisional must retain its cleanup decision"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_pane_screen(&fixture.turn.pane_id)
+            .unwrap()
+            .normal_content_lines(),
+        before.normal_content_lines()
+    );
+    assert_eq!(fixture.retained(), canonical);
+    assert!(
+        fixture
+            .service
+            .complete_approved_external_action(fixture.outcome())
+            .unwrap()
+    );
+    assert_eq!(fixture.retained().action_results[0], fixture.expected);
+    assert!(
+        !fixture
+            .service
+            .complete_approved_external_action(fixture.outcome())
+            .unwrap(),
+        "a duplicate completion stays inert after the retained result publishes"
+    );
+}
