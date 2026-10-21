@@ -210,6 +210,9 @@ fn raw_native_ids_do_not_weaken_selector_validation() {
         b"/fixture/raw-native-session-foreign",
     ));
     let foreign = service.ensure_agent_identity(foreign, 10).unwrap();
+    service
+        .subscribe_from_retained_start(&foreign.agent_id)
+        .unwrap();
     let before = service.snapshot_state();
     let invalid = vec![
         serde_json::json!(null),
