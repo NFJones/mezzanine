@@ -1,5 +1,6 @@
 //! Asynchronous provider result application for runtime completion events.
 
+use super::super::completion::CompletionSettlementDisposition;
 use super::super::outcome::RuntimeTerminalActionObservations;
 use super::super::{
     AgentTurnExecution, AgentTurnRecord, AgentTurnState, EventKind, ModelProfile,
@@ -448,7 +449,9 @@ impl RuntimeSessionService {
                 execution,
                 actions_executed_before_persistence,
                 entries,
-                false,
+                // Only declined terminal work may enter bookkeeping. Retained
+                // group/archive duties are owned by their separate settlement.
+                CompletionSettlementDisposition::Declined,
             );
         }
         let batch = execution.response.action_batch.clone().ok_or_else(|| {
@@ -624,7 +627,7 @@ impl RuntimeSessionService {
                 )
             })?;
         self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
-        let failure_feedback_queued = self.queue_agent_failure_feedback_for_correction(
+        let failure_feedback = self.settle_agent_failure_feedback_for_correction(
             turn,
             &mut execution,
             "provider_execution_failed_action",
@@ -632,8 +635,8 @@ impl RuntimeSessionService {
         self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         let actions_executed =
             shell_actions_dispatched.saturating_add(actions_executed_before_shell);
-        let needs_bookkeeping =
-            !failure_feedback_queued && execution.terminal_state != AgentTurnState::Running;
+        let needs_bookkeeping = failure_feedback == CompletionSettlementDisposition::Declined
+            && execution.terminal_state != AgentTurnState::Running;
         if needs_bookkeeping
             && self.persistence.provider_settlement_uses_adapter()
             && self
@@ -667,7 +670,7 @@ impl RuntimeSessionService {
             execution,
             actions_executed,
             persisted_transcript_entries,
-            failure_feedback_queued,
+            failure_feedback,
         )
     }
 
@@ -681,11 +684,19 @@ impl RuntimeSessionService {
         execution: AgentTurnExecution,
         actions_executed: usize,
         persisted_transcript_entries: usize,
-        failure_feedback_queued: bool,
+        failure_feedback: CompletionSettlementDisposition,
     ) -> Result<AgentTurnExecution> {
         let turn_id = turn.turn_id.as_str();
-        if failure_feedback_queued {
+        if failure_feedback == CompletionSettlementDisposition::Queued {
             self.agent_turn_executions_mut().remove(turn_id);
+        } else if failure_feedback == CompletionSettlementDisposition::Retained {
+            // Group/backing custody belongs to the exact original settlement,
+            // which may differ from the newer current execution-map group.
+            // Only no-group coalescence stores the current Running execution.
+            if !self.completion_owns_transcript_policy(turn_id) {
+                self.agent_turn_executions_mut()
+                    .insert(turn_id.to_string(), execution.clone());
+            }
         } else if execution.terminal_state == AgentTurnState::Blocked {
             self.queue_blocked_approvals_for_execution(turn, &execution)?;
             self.agent_turn_executions_mut()
@@ -831,29 +842,57 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
+        let reported_state = if failure_feedback == CompletionSettlementDisposition::Retained {
+            self.agent_turn_ledger()
+                .turn(turn_id)
+                .filter(|current| {
+                    current.agent_id == turn.agent_id
+                        && current.pane_id == turn.pane_id
+                        && current.conversation_id == turn.conversation_id
+                        && (!self.completion_owns_transcript_policy(turn_id)
+                            || self.completion_settlement_binding_current(turn_id))
+                        && self
+                            .agent_shell_store()
+                            .get(&turn.pane_id)
+                            .is_some_and(|session| {
+                                session.session_id == turn.conversation_id
+                                    && session.running_turn_id.as_deref() == Some(turn_id)
+                            })
+                })
+                .ok_or_else(|| {
+                    super::super::MezError::invalid_state(
+                        "retained provider turn no longer owns lifecycle reporting",
+                    )
+                })?
+                .state
+        } else {
+            execution.terminal_state
+        };
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
                 r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"{}","provider":"{}","action_results":{},"shell_actions_dispatched":{},"transcript_entries":{}}}"#,
                 json_escape(&turn.pane_id),
                 json_escape(turn_id),
-                runtime_agent_turn_state_name(execution.terminal_state),
+                runtime_agent_turn_state_name(reported_state),
                 json_escape(provider_id),
                 execution.action_results.len(),
                 actions_executed,
                 persisted_transcript_entries
             ),
         )?;
-        self.set_agent_prompt_display_lines_if_pane_present(
-            &turn.pane_id,
-            runtime_agent_execution_prompt_display_lines(
-                turn_id,
-                provider_id,
-                &execution,
-                actions_executed,
-                persisted_transcript_entries,
-            ),
-        )?;
+        if failure_feedback != CompletionSettlementDisposition::Retained {
+            self.set_agent_prompt_display_lines_if_pane_present(
+                &turn.pane_id,
+                runtime_agent_execution_prompt_display_lines(
+                    turn_id,
+                    provider_id,
+                    &execution,
+                    actions_executed,
+                    persisted_transcript_entries,
+                ),
+            )?;
+        }
         Ok(execution)
     }
 }

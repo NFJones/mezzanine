@@ -714,6 +714,9 @@ fn runtime_issue_query_freshness_skips_duplicates_and_resets_after_mutation() {
 
 /// Verifies a rejected dependency produces bounded correction feedback and a
 /// later corrected `issue_add` creates exactly one issue.
+/// The preexisting turn-keyed pending intent must read current feedback without
+/// a new insertion ACK. The same mutated Running observation is budget/context
+/// inert; this is not stale Failed-copy or whole-provider-application replay.
 #[test]
 fn runtime_issue_add_dependency_failure_retries_without_duplicates() {
     let mut service = test_runtime_service();
@@ -740,6 +743,13 @@ fn runtime_issue_add_dependency_failure_retries_without_duplicates() {
     // original result/unwrap and every canonical/mutation/correction oracle;
     // never clear pending work or invent a claim just to reach those checks.
     let queue_before = service.completion_provider_queue_flags_for_tests("turn-1");
+    let budget_before = service.failure_feedback_attempt_total_for_tests();
+    let queued_trace_before = service
+        .agent_pane_trace_log_text("%1")
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("provider task queued"))
+        .count();
     let failed_result = service.execute_agent_turn_with_provider(
         "turn-1",
         &RuntimeBatchProvider {
@@ -754,6 +764,24 @@ fn runtime_issue_add_dependency_failure_retries_without_duplicates() {
     let queue_after = service.completion_provider_queue_flags_for_tests("turn-1");
     eprintln!("completion_queue_flags: before={queue_before:?} after={queue_after:?}");
     let failed = failed_result.unwrap();
+    assert_eq!(
+        queue_after, queue_before,
+        "coalescence is not new queue ownership"
+    );
+    assert_eq!(
+        service.failure_feedback_attempt_total_for_tests(),
+        budget_before + 1
+    );
+    assert_eq!(
+        service
+            .agent_pane_trace_log_text("%1")
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains("provider task queued"))
+            .count(),
+        queued_trace_before,
+        "retained feedback must not fabricate a queued trace"
+    );
     assert_eq!(failed.terminal_state, AgentTurnState::Running);
     let failure = &failed.action_results[0];
     assert_eq!(failure.status, ActionStatus::Failed);
@@ -781,19 +809,92 @@ fn runtime_issue_add_dependency_failure_retries_without_duplicates() {
             .unwrap();
     assert!(store.query_issues(&query).unwrap().is_empty());
 
+    let context_before_repeat =
+        canonical_event_oracle(&runtime_prepared_context_for_turn(&service, "turn-1"));
+    let budget_before_repeat = service.failure_feedback_attempt_total_for_tests();
+    let turn = service.agent_turn_ledger().turn("turn-1").unwrap().clone();
+    let mut observed_again = failed.clone();
+    assert!(
+        !service
+            .queue_agent_failure_feedback_for_correction(
+                &turn,
+                &mut observed_again,
+                "repeat_same_running_feedback_observation",
+            )
+            .unwrap(),
+        "same Running observation cannot claim another insertion"
+    );
+    assert_eq!(
+        service.failure_feedback_attempt_total_for_tests(),
+        budget_before_repeat
+    );
+    assert_eq!(
+        canonical_event_oracle(&runtime_prepared_context_for_turn(&service, "turn-1")),
+        context_before_repeat
+    );
+    assert_eq!(
+        service.completion_provider_queue_flags_for_tests("turn-1"),
+        queue_after
+    );
+    // Foreign metadata is negative input, not a fabricated admitted callback or
+    // conversation restoration. Rejection must precede budget/context changes.
+    for wrong_identity in ["agent", "conversation"] {
+        let mut foreign_turn = turn.clone();
+        if wrong_identity == "agent" {
+            foreign_turn.agent_id.push_str("-foreign");
+        } else {
+            foreign_turn.conversation_id.push_str("-foreign");
+        }
+        let mut foreign_failed = failed.clone();
+        foreign_failed.terminal_state = AgentTurnState::Failed;
+        assert!(
+            service
+                .settle_agent_failure_feedback_for_correction(
+                    &foreign_turn,
+                    &mut foreign_failed,
+                    "foreign_feedback_destination_negative_input",
+                )
+                .is_err()
+        );
+        assert_eq!(
+            service.failure_feedback_attempt_total_for_tests(),
+            budget_before_repeat
+        );
+        assert_eq!(
+            canonical_event_oracle(&runtime_prepared_context_for_turn(&service, "turn-1")),
+            context_before_repeat
+        );
+        assert_eq!(
+            service.completion_provider_queue_flags_for_tests("turn-1"),
+            queue_after
+        );
+    }
+    let correction_provider = RuntimeRecordingProvider {
+        provider: "runtime-batch",
+        response: runtime_issue_response(runtime_issue_add_batch_with_dependencies(
+            "issue-add-corrected",
+            title,
+            Vec::new(),
+        )),
+        last_request: RefCell::new(None),
+    };
     let corrected = service
-        .poll_agent_provider_tasks_with_provider(
-            &RuntimeBatchProvider {
-                response: runtime_issue_response(runtime_issue_add_batch_with_dependencies(
-                    "issue-add-corrected",
-                    title,
-                    Vec::new(),
-                )),
-            },
-            1,
-        )
+        .poll_agent_provider_tasks_with_provider(&correction_provider, 1)
         .unwrap()
         .remove(0);
+    let next_request = correction_provider.last_request.borrow().clone().unwrap();
+    assert_eq!(
+        next_request
+            .messages
+            .iter()
+            .filter(|message| {
+                message.source == ContextSourceKind::ActionResult
+                    && message.content.contains("missing-dependency")
+            })
+            .count(),
+        1,
+        "the existing scheduling intent must read the committed failure once"
+    );
     assert_eq!(corrected.action_results[0].status, ActionStatus::Succeeded);
     let records = store.query_issues(&query).unwrap();
     assert_eq!(records.len(), 1, "{records:?}");

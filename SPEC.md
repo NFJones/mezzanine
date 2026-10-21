@@ -10880,6 +10880,17 @@ and MUST preserve real native, external, dependency and human-pause barriers.
 Shared settlement MUST distinguish retained source/intent from actual queued
 continuation and an ordinary declined correction decision. Retained paint MUST
 NOT consume correction budget, commit context again, or terminalize the task.
+An already-pending ordinary turn may retain newly committed failure feedback
+only under its exact current turn/agent/conversation and open admission guards;
+pending is a late-bound scheduling intent, not a frozen request or claim lease.
+Coalescence MUST NOT report a new insertion or queued acknowledgment. Both
+synchronous and asynchronous callers MUST preserve the three-way disposition
+through terminal bookkeeping and lifecycle reporting. Retained failed execution
+evidence MUST remain unchanged; reporting uses the same current ledger owner
+and MUST NOT overwrite a replacement execution or prompt. Actual provider
+claim, policy, preparation and generation-qualified lease admission remain
+authoritative. A Running observation is not a new correction attempt; this
+does not license replay of a stale Failed copy or of audit/hooks/application.
 Required failure audit MUST retain exact group/failure-qualified entered and
 accepted ownership; ambiguous append failure MUST remain unproven without replay.
 Missing configured audit/profile MUST remain explicit not-required policy, not a

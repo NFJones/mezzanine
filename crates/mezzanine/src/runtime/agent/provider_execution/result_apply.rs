@@ -2,6 +2,8 @@
 
 use super::super::RuntimeSessionService;
 #[cfg(test)]
+use super::super::completion::CompletionSettlementDisposition;
+#[cfg(test)]
 use super::super::outcome::RuntimeTerminalActionObservations;
 #[cfg(test)]
 use super::super::{
@@ -205,15 +207,24 @@ impl RuntimeSessionService {
                 )
             })?;
         self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
-        let failure_feedback_queued = self.queue_agent_failure_feedback_for_correction(
+        let failure_feedback = self.settle_agent_failure_feedback_for_correction(
             turn,
             &mut execution,
             "provider_execution_failed_action",
         )?;
         self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         let mut persisted_transcript_entries = 0usize;
-        if failure_feedback_queued {
+        if failure_feedback == CompletionSettlementDisposition::Queued {
             self.agent_turn_executions_mut().remove(turn_id);
+        } else if failure_feedback == CompletionSettlementDisposition::Retained {
+            // A group already retains its exact original source/backing. Never
+            // overwrite a newer current-map group with that retained execution.
+            // The no-group coalesced destination owns the current Running
+            // execution and late-bound canonical feedback instead.
+            if !self.completion_owns_transcript_policy(turn_id) {
+                self.agent_turn_executions_mut()
+                    .insert(turn_id.to_string(), execution.clone());
+            }
         } else if execution.terminal_state == AgentTurnState::Blocked {
             persisted_transcript_entries =
                 self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
@@ -363,13 +374,39 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
+        let reported_state = if failure_feedback == CompletionSettlementDisposition::Retained {
+            self.agent_turn_ledger()
+                .turn(turn_id)
+                .filter(|current| {
+                    current.agent_id == turn.agent_id
+                        && current.pane_id == turn.pane_id
+                        && current.conversation_id == turn.conversation_id
+                        && (!self.completion_owns_transcript_policy(turn_id)
+                            || self.completion_settlement_binding_current(turn_id))
+                        && self
+                            .agent_shell_store()
+                            .get(&turn.pane_id)
+                            .is_some_and(|session| {
+                                session.session_id == turn.conversation_id
+                                    && session.running_turn_id.as_deref() == Some(turn_id)
+                            })
+                })
+                .ok_or_else(|| {
+                    super::super::MezError::invalid_state(
+                        "retained provider turn no longer owns lifecycle reporting",
+                    )
+                })?
+                .state
+        } else {
+            execution.terminal_state
+        };
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
                 r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"{}","provider":"{}","action_results":{},"shell_actions_dispatched":{},"transcript_entries":{}}}"#,
                 json_escape(&turn.pane_id),
                 json_escape(turn_id),
-                runtime_agent_turn_state_name(execution.terminal_state),
+                runtime_agent_turn_state_name(reported_state),
                 json_escape(provider_id),
                 execution.action_results.len(),
                 shell_actions_dispatched
@@ -383,23 +420,25 @@ impl RuntimeSessionService {
                 persisted_transcript_entries
             ),
         )?;
-        self.set_agent_prompt_display_lines_if_pane_present(
-            &turn.pane_id,
-            runtime_agent_execution_prompt_display_lines(
-                turn_id,
-                provider_id,
-                &execution,
-                shell_actions_dispatched
-                    .saturating_add(mcp_actions_executed)
-                    .saturating_add(skill_actions_executed)
-                    .saturating_add(network_actions_executed)
-                    .saturating_add(message_actions_executed)
-                    .saturating_add(spawn_actions_executed)
-                    .saturating_add(config_actions_executed)
-                    .saturating_add(memory_actions_executed),
-                persisted_transcript_entries,
-            ),
-        )?;
+        if failure_feedback != CompletionSettlementDisposition::Retained {
+            self.set_agent_prompt_display_lines_if_pane_present(
+                &turn.pane_id,
+                runtime_agent_execution_prompt_display_lines(
+                    turn_id,
+                    provider_id,
+                    &execution,
+                    shell_actions_dispatched
+                        .saturating_add(mcp_actions_executed)
+                        .saturating_add(skill_actions_executed)
+                        .saturating_add(network_actions_executed)
+                        .saturating_add(message_actions_executed)
+                        .saturating_add(spawn_actions_executed)
+                        .saturating_add(config_actions_executed)
+                        .saturating_add(memory_actions_executed),
+                    persisted_transcript_entries,
+                ),
+            )?;
+        }
         Ok(execution)
     }
 }
