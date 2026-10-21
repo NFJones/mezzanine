@@ -12,6 +12,14 @@
 //! Trusted lifecycle closure comes exclusively from actual read(0), carried in
 //! the joined capture. Cancellation, channel disconnect, read failure and panic
 //! cannot certify EOF, even when a reader has sent a completion notification.
+//!
+//! Child custody begins immediately after the OS confirms the direct child,
+//! before pipe extraction or fallible reader setup: the exact owned process
+//! group is killed and reaped on every startup failure or unwind, staged
+//! launch files are removed by RAII ownership, and reader threads are created
+//! through the fallible builder API. Partial startup preserves the first
+//! failure, settles readers without requiring descendant EOF, and reports any
+//! unproven cleanup instead of claiming that native effects never began.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -22,7 +30,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
@@ -59,6 +67,9 @@ const SPAWNED_CHILD_STATUS_CAPTURE_LIMIT: usize = 64 * 1024;
 const SPAWNED_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// Grace period for draining bytes already buffered when the direct child exits.
 const SPAWNED_CHILD_READER_SHUTDOWN_GRACE: Duration = Duration::from_millis(100);
+/// Bounded window for reaping the exact direct child after process-group
+/// termination; descendant behavior never extends this custody bound.
+const SPAWNED_CHILD_CUSTODY_REAP_BOUND: Duration = Duration::from_secs(2);
 /// Maximum cumulative output retained for transient native-shell progress.
 const SPAWNED_CHILD_PROGRESS_PREVIEW_LIMIT: usize = 256 * 1024;
 
@@ -192,10 +203,199 @@ struct SpawnedChildPipeReader {
 
 /// Spawned process plus its optional runtime-owned lifecycle-status reader.
 struct SpawnedChild {
-    /// Running direct child process.
-    child: Child,
+    /// Exact direct-child custody established immediately after spawn.
+    guard: SpawnedChildGuard,
     /// Read end of the descriptor selected by `ShellChildLaunch::status_fd`.
     status_reader: Option<OwnedFd>,
+}
+
+/// Owns the exact native child incarnation from the moment the OS confirms
+/// creation until collection proves the direct child was reaped.
+///
+/// The process-group id comes only from the owned child record created by
+/// `Command::process_group(0)`; it is never guessed, and signaling is skipped
+/// once the child is known reaped so a reused numeric id cannot be targeted.
+/// `Drop` is the last-resort bounded kill/reap for error and unwinding paths.
+struct SpawnedChildGuard {
+    /// Direct child whose pipes are extracted only after custody is captured.
+    child: Child,
+    /// Exact process-group id, equal to the direct child pid by construction.
+    process_group: i32,
+    /// True once an exact wait proved the direct child was reaped.
+    reaped: bool,
+    /// Test-only slot that publishes custody witnesses after settlement.
+    #[cfg(test)]
+    witness: Option<Arc<Mutex<Option<SpawnedChildCustodyWitness>>>>,
+    /// Test-only immutable custody facts captured immediately after spawn.
+    #[cfg(test)]
+    witness_record: Option<SpawnedChildCustodyWitness>,
+}
+
+impl SpawnedChildGuard {
+    /// Captures custody immediately after `Command::spawn` succeeds.
+    fn new(child: Child) -> Self {
+        // `process_group(0)` makes the direct child the leader of its own
+        // process group, so the group id equals the pid reported by the owned
+        // child record. Operating-system pids stay below `i32::MAX`.
+        Self {
+            process_group: child.id() as i32,
+            child,
+            reaped: false,
+            #[cfg(test)]
+            witness: None,
+            #[cfg(test)]
+            witness_record: None,
+        }
+    }
+
+    /// Borrows the owned direct child for pipe extraction and wait polling.
+    fn child_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
+
+    /// Returns the exact process-group id of the owned direct child.
+    const fn process_group(&self) -> i32 {
+        self.process_group
+    }
+
+    /// Records that an exact wait already reaped the direct child.
+    fn mark_reaped(&mut self) {
+        self.reaped = true;
+    }
+
+    /// Kills the exact owned process group and reaps the direct child within a
+    /// bounded window.
+    ///
+    /// Returns the observed status only when both the group signal and the
+    /// direct reap are proven. A failed signal still reaps the owned direct
+    /// child but reports the unproven group termination; a failed reap leaves
+    /// `reaped` false so `Drop` retries once. Native effects stay unresolved in
+    /// either failure case, and no guessed id is ever signaled.
+    fn terminate_and_reap(&mut self) -> Result<ExitStatus> {
+        let kill = kill_process_group(self.process_group());
+        let reaped = self.await_bounded_reap();
+        match (reaped, kill) {
+            (Ok(status), Ok(())) => Ok(status),
+            (Ok(_status), Err(kill_error)) => Err(MezError::invalid_state(format!(
+                "spawned shell execution reaped its direct child but could not prove process-group termination: {}",
+                kill_error.message()
+            ))),
+            (Err(reap_error), Ok(())) => Err(reap_error),
+            (Err(reap_error), Err(kill_error)) => Err(MezError::invalid_state(format!(
+                "{}; {}",
+                kill_error.message(),
+                reap_error.message()
+            ))),
+        }
+    }
+
+    /// Polls the owned child until it is reaped or the custody window expires.
+    fn await_bounded_reap(&mut self) -> Result<ExitStatus> {
+        let deadline = Instant::now() + SPAWNED_CHILD_CUSTODY_REAP_BOUND;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => {
+                    self.reaped = true;
+                    return Ok(status);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(MezError::invalid_state(format!(
+                        "spawned shell execution could not observe its child while reaping: {error}"
+                    )));
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(MezError::invalid_state(format!(
+                    "spawned shell execution could not reap its direct child within {:?}; native effects remain unresolved",
+                    SPAWNED_CHILD_CUSTODY_REAP_BOUND
+                )));
+            }
+            std::thread::sleep(SPAWNED_CHILD_POLL_INTERVAL);
+        }
+    }
+
+    /// Attaches the test-only custody witness slot and records exact spawn
+    /// evidence before any pipe extraction or reader creation occurs.
+    #[cfg(test)]
+    fn attach_custody_witness(
+        &mut self,
+        slot: Arc<Mutex<Option<SpawnedChildCustodyWitness>>>,
+        materialized: &MaterializedShellLaunch,
+    ) {
+        self.witness_record = Some(SpawnedChildCustodyWitness {
+            pid: self.process_group,
+            process_group: self.process_group,
+            artifact_directory: materialized.directory.clone(),
+            artifact_count: materialized.artifacts.len(),
+            artifact_directory_present_at_spawn: materialized.directory.exists(),
+            reaped: false,
+        });
+        self.witness = Some(slot);
+    }
+
+    /// Publishes the final exact-custody outcome to the test slot.
+    #[cfg(test)]
+    fn publish_custody_witness(&self) {
+        let (Some(slot), Some(record)) = (self.witness.as_ref(), self.witness_record.as_ref())
+        else {
+            return;
+        };
+        let mut record = record.clone();
+        record.reaped = self.reaped;
+        if let Ok(mut slot) = slot.lock() {
+            *slot = Some(record);
+        }
+    }
+}
+
+impl Drop for SpawnedChildGuard {
+    /// Last-resort bounded custody: never signal a guessed or already reaped
+    /// id and never leave an unreaped direct child on an unwind path.
+    fn drop(&mut self) {
+        if !self.reaped {
+            let _ = self.terminate_and_reap();
+        }
+        #[cfg(test)]
+        self.publish_custody_witness();
+    }
+}
+
+/// Capture readers created for one spawned child.
+struct SpawnedChildReaders {
+    /// Standard-output reader.
+    stdout: SpawnedChildPipeReader,
+    /// Standard-error reader.
+    stderr: SpawnedChildPipeReader,
+    /// Optional trusted lifecycle-status reader.
+    status: Option<SpawnedChildPipeReader>,
+}
+
+impl SpawnedChildReaders {
+    /// Requests shutdown of every reader without waiting for pipe EOF.
+    fn cancel_all(&self) {
+        cancel_pending_reader(&self.stdout);
+        cancel_pending_reader(&self.stderr);
+        if let Some(status) = self.status.as_ref() {
+            cancel_pending_reader(status);
+        }
+    }
+
+    /// Converts the set into a settleable list in stream order.
+    fn into_vec(self) -> Vec<SpawnedChildPipeReader> {
+        [Some(self.stdout), Some(self.stderr), self.status]
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+
+    /// Cancels and joins every reader after a failure, reporting only readers
+    /// that did not settle cleanly.
+    fn settle(self) -> Vec<String> {
+        let readers = self.into_vec();
+        cancel_output_readers(&readers);
+        join_output_readers(readers)
+    }
 }
 
 /// Owner-only command and artifact files prepared for one native launch.
@@ -212,6 +412,15 @@ impl MaterializedShellLaunch {
     /// Removes every launch file through its private owner directory.
     fn cleanup(&self) {
         let _ = fs::remove_dir_all(&self.directory);
+    }
+}
+
+impl Drop for MaterializedShellLaunch {
+    /// Removes launch files even when execution fails or unwinds so staging
+    /// artifacts cannot outlive the launch that owns them. Cleanup is
+    /// idempotent because the directory may already have been removed.
+    fn drop(&mut self) {
+        self.cleanup();
     }
 }
 
@@ -239,6 +448,33 @@ fn materialized_artifact_path<'a>(
         .ok_or_else(|| MezError::invalid_state("typed child launch artifact was not materialized"))
 }
 
+/// Deterministic cfg(test) rejection of one reader-creation position.
+#[cfg(test)]
+struct ReaderCreationFailure {
+    /// Stream whose reader creation must fail before thread creation.
+    stream: SpawnedChildPipe,
+    /// Fixture path that proves the launched child reached its command.
+    readiness_witness: PathBuf,
+}
+
+/// Exact custody facts captured immediately after spawn and after settlement.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+struct SpawnedChildCustodyWitness {
+    /// Direct child pid reported by the owned OS child record.
+    pid: i32,
+    /// Exact process group id used for signaling.
+    process_group: i32,
+    /// Materialized launch directory that owns the staging artifacts.
+    artifact_directory: PathBuf,
+    /// Number of materialized artifacts present at spawn.
+    artifact_count: usize,
+    /// Whether the staging directory existed immediately after spawn.
+    artifact_directory_present_at_spawn: bool,
+    /// Whether the guard proved the direct child was reaped.
+    reaped: bool,
+}
+
 /// Executes one shell transaction in a freshly spawned shell process.
 pub(crate) struct SpawnedShellExecutor {
     /// Inferred shell path, environment, and working directory.
@@ -249,6 +485,12 @@ pub(crate) struct SpawnedShellExecutor {
     launches: NativeLaunchLedger,
     /// Semantic purpose selected by the actor, not command-string heuristics.
     launch_reason: NativeLaunchReason,
+    /// Deterministic cfg(test) reader-creation rejection at one stream position.
+    #[cfg(test)]
+    reader_creation_failure: Option<ReaderCreationFailure>,
+    /// Test-only slot for exact child and staging-artifact custody witnesses.
+    #[cfg(test)]
+    custody_witness: Option<Arc<Mutex<Option<SpawnedChildCustodyWitness>>>>,
 }
 
 impl SpawnedShellExecutor {
@@ -260,6 +502,10 @@ impl SpawnedShellExecutor {
             interrupted: Arc::new(AtomicBool::new(false)),
             launches: NativeLaunchLedger::new(false),
             launch_reason: NativeLaunchReason::ShellCommand,
+            #[cfg(test)]
+            reader_creation_failure: None,
+            #[cfg(test)]
+            custody_witness: None,
         }
     }
 
@@ -270,6 +516,10 @@ impl SpawnedShellExecutor {
             interrupted,
             launches: NativeLaunchLedger::new(false),
             launch_reason: NativeLaunchReason::StatusProvider,
+            #[cfg(test)]
+            reader_creation_failure: None,
+            #[cfg(test)]
+            custody_witness: None,
         }
     }
 
@@ -279,6 +529,31 @@ impl SpawnedShellExecutor {
         SpawnedShellInterrupt {
             flag: Arc::clone(&self.interrupted),
         }
+    }
+
+    /// Enables the exact custody witness for subsequent executions and returns
+    /// the slot that receives the spawn and settlement evidence.
+    #[cfg(test)]
+    fn observe_custody(&mut self) -> Arc<Mutex<Option<SpawnedChildCustodyWitness>>> {
+        let slot = Arc::new(Mutex::new(None));
+        self.custody_witness = Some(Arc::clone(&slot));
+        slot
+    }
+
+    /// Rejects reader creation at one stream position after the fixture proves
+    /// its launched child is already running. No OS resource is exhausted.
+    #[cfg(test)]
+    fn fail_reader_creation_at(&mut self, stream: SpawnedChildPipe, readiness_witness: PathBuf) {
+        self.reader_creation_failure = Some(ReaderCreationFailure {
+            stream,
+            readiness_witness,
+        });
+    }
+
+    /// Clears deterministic reader-creation rejection before a recovery run.
+    #[cfg(test)]
+    fn clear_reader_creation_failure(&mut self) {
+        self.reader_creation_failure = None;
     }
 
     /// Line prefix appended to materialized apply-patch sidecar records.
@@ -466,15 +741,29 @@ impl SpawnedShellExecutor {
                 MezError::invalid_state(format!("spawned shell execution failed to start: {error}"))
             })
         })?;
+        // Custody starts before any pipe extraction or fallible reader setup:
+        // the exact child record and its own process group are owned from here.
+        let guard = SpawnedChildGuard::new(child);
+        #[cfg(test)]
+        let mut guard = guard;
+        #[cfg(test)]
+        if let Some(slot) = self.custody_witness.clone() {
+            guard.attach_custody_witness(slot, materialized);
+        }
         drop(status_writer);
         Ok(SpawnedChild {
-            child,
+            guard,
             status_reader,
         })
     }
 
     /// Waits for the child, enforcing the deadline and interruption flag,
     /// then joins the capture readers into normalized shell output.
+    ///
+    /// Child custody is established before any pipe extraction. Every startup
+    /// or collection failure settles the readers created so far and the exact
+    /// process group; the first failure is preserved and any unproven cleanup
+    /// is reported as unresolved native effects rather than as success.
     fn collect(
         &self,
         spawned: SpawnedChild,
@@ -484,42 +773,19 @@ impl SpawnedShellExecutor {
         sandbox_backend: Option<crate::runtime::SandboxBackend>,
     ) -> Result<ShellExecutionOutput> {
         let SpawnedChild {
-            mut child,
+            mut guard,
             status_reader,
         } = spawned;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            MezError::invalid_state("spawned shell execution lost its stdout pipe")
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            MezError::invalid_state("spawned shell execution lost its stderr pipe")
-        })?;
         let stream_budget =
             (output_budget / 2).clamp(MIN_STREAM_CAPTURE_BUDGET, SPAWNED_CHILD_CAPTURE_HARD_CAP);
         let (done_tx, done_rx) = mpsc::channel();
-        let mut stdout_reader = spawn_output_reader(
-            SpawnedChildPipe::Stdout,
-            stdout,
+        let mut readers = self.start_spawned_child_readers(
+            &mut guard,
+            status_reader,
             stream_budget,
-            done_tx.clone(),
-            progress.clone(),
-        );
-        let mut stderr_reader = spawn_output_reader(
-            SpawnedChildPipe::Stderr,
-            stderr,
-            stream_budget,
-            done_tx.clone(),
+            done_tx,
             progress,
-        );
-        let mut status_reader = status_reader.map(|reader| {
-            spawn_output_reader(
-                SpawnedChildPipe::Status,
-                std::fs::File::from(reader),
-                SPAWNED_CHILD_STATUS_CAPTURE_LIMIT,
-                done_tx,
-                None,
-            )
-        });
-        let pid = child.id() as i32;
+        )?;
         let timeout_ms = timeout_ms.unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_MS).max(1);
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let mut exit_status = None;
@@ -528,43 +794,49 @@ impl SpawnedShellExecutor {
         loop {
             if self.interrupted.load(Ordering::SeqCst) {
                 interrupted = true;
-                kill_process_group(pid);
                 break;
             }
             if Instant::now() >= deadline {
                 timed_out = true;
-                kill_process_group(pid);
                 break;
             }
-            match child.try_wait() {
+            let wait = guard.child_mut().try_wait();
+            match wait {
                 Ok(Some(status)) => {
+                    guard.mark_reaped();
                     exit_status = Some(status);
                     break;
                 }
                 Ok(None) => std::thread::sleep(SPAWNED_CHILD_POLL_INTERVAL),
                 Err(error) => {
-                    return Err(MezError::invalid_state(format!(
+                    let primary = MezError::invalid_state(format!(
                         "spawned shell execution wait failed: {error}"
-                    )));
+                    ));
+                    return Err(self.abort_spawned_child(&mut guard, readers.into_vec(), primary));
                 }
             }
         }
-        if exit_status.is_none() {
-            exit_status = Some(child.wait().map_err(|error| {
-                MezError::invalid_state(format!("spawned shell execution reap failed: {error}"))
-            })?);
-        }
-        let status = exit_status.ok_or_else(|| {
-            MezError::invalid_state("spawned shell execution observed no exit status")
-        })?;
+        let status = if let Some(status) = exit_status {
+            status
+        } else {
+            // Timeout or interruption: kill the exact owned process group and
+            // reap within a bounded window. Reader cancellation stays after the
+            // bounded drain so buffered output is not discarded early.
+            match guard.terminate_and_reap() {
+                Ok(status) => status,
+                Err(primary) => {
+                    return Err(self.settle_failed_spawned_child(readers, primary));
+                }
+            }
+        };
         drain_reader_completions(
             &done_rx,
-            &mut stdout_reader,
-            &mut stderr_reader,
-            status_reader.as_mut(),
+            &mut readers.stdout,
+            &mut readers.stderr,
+            readers.status.as_mut(),
         );
         let drain_deadline = Instant::now() + SPAWNED_CHILD_READER_SHUTDOWN_GRACE;
-        while readers_are_pending(&stdout_reader, &stderr_reader, status_reader.as_ref()) {
+        while readers_are_pending(&readers.stdout, &readers.stderr, readers.status.as_ref()) {
             let now = Instant::now();
             if now >= drain_deadline {
                 break;
@@ -574,18 +846,19 @@ impl SpawnedShellExecutor {
             wait_for_reader_completion(
                 &done_rx,
                 wait,
-                &mut stdout_reader,
-                &mut stderr_reader,
-                status_reader.as_mut(),
+                &mut readers.stdout,
+                &mut readers.stderr,
+                readers.status.as_mut(),
             );
         }
-        cancel_pending_reader(&stdout_reader);
-        cancel_pending_reader(&stderr_reader);
-        if let Some(reader) = status_reader.as_ref() {
-            cancel_pending_reader(reader);
-        }
-        let stdout_capture = join_output_reader(stdout_reader)?;
-        let stderr_capture = join_output_reader(stderr_reader)?;
+        readers.cancel_all();
+        // Join every reader before propagating the first failure so a failed
+        // sibling join cannot detach a later owner.
+        let stdout_capture = join_output_reader(readers.stdout);
+        let stderr_capture = join_output_reader(readers.stderr);
+        let status_capture = readers.status.map(join_output_reader);
+        let stdout_capture = stdout_capture?;
+        let stderr_capture = stderr_capture?;
         let output = ShellExecutionOutput {
             exit_code: if timed_out || interrupted {
                 None
@@ -604,16 +877,181 @@ impl SpawnedShellExecutor {
                 ..ShellTransportDiagnostics::default()
             },
         };
-        if let Some(status_reader) = status_reader {
+        if let Some(status_capture) = status_capture {
             let backend = sandbox_backend.unwrap_or(crate::runtime::SandboxBackend::Bubblewrap);
-            join_and_validate_spawned_child_status(
-                status_reader,
+            let status_capture = status_capture.map_err(|_| {
+                spawned_lifecycle_error(
+                    backend,
+                    crate::security::sandbox::SandboxLifecycleFailureClass::Transport,
+                    None,
+                    &output,
+                    stderr_capture.dropped,
+                )
+            })?;
+            validate_spawned_child_status(
                 backend,
+                &status_capture.bytes,
+                status_capture.dropped,
+                status_capture.termination == PipeReadTermination::Eof,
                 &output,
                 stderr_capture.dropped,
             )?;
         }
         Ok(output)
+    }
+
+    /// Extracts the typed pipes and starts their bounded capture readers.
+    ///
+    /// Each reader is created through a fallible OS thread spawn. If any reader
+    /// cannot start, every earlier reader and the exact child process group are
+    /// settled before the first failure is returned.
+    fn start_spawned_child_readers(
+        &self,
+        guard: &mut SpawnedChildGuard,
+        status_reader: Option<OwnedFd>,
+        stream_budget: usize,
+        done_tx: mpsc::Sender<SpawnedChildPipe>,
+        progress: Option<SpawnedChildProgressReporter>,
+    ) -> Result<SpawnedChildReaders> {
+        #[cfg(test)]
+        if let Some(failure) = self.reader_creation_failure.as_ref() {
+            await_injected_reader_failure_readiness(&failure.readiness_witness);
+        }
+        let stdout = guard.child_mut().stdout.take();
+        let Some(stdout) = stdout else {
+            return Err(self.abort_spawned_child(
+                guard,
+                Vec::new(),
+                MezError::invalid_state("spawned shell execution lost its stdout pipe"),
+            ));
+        };
+        let stderr = guard.child_mut().stderr.take();
+        let Some(stderr) = stderr else {
+            return Err(self.abort_spawned_child(
+                guard,
+                Vec::new(),
+                MezError::invalid_state("spawned shell execution lost its stderr pipe"),
+            ));
+        };
+        let mut created: [Option<SpawnedChildPipeReader>; 3] = [None, None, None];
+        match self.start_output_reader(
+            SpawnedChildPipe::Stdout,
+            stdout,
+            stream_budget,
+            done_tx.clone(),
+            progress.clone(),
+        ) {
+            Ok(reader) => created[0] = Some(reader),
+            Err(primary) => {
+                return Err(self.abort_spawned_child(
+                    guard,
+                    created.into_iter().flatten().collect(),
+                    primary,
+                ));
+            }
+        }
+        match self.start_output_reader(
+            SpawnedChildPipe::Stderr,
+            stderr,
+            stream_budget,
+            done_tx.clone(),
+            progress,
+        ) {
+            Ok(reader) => created[1] = Some(reader),
+            Err(primary) => {
+                return Err(self.abort_spawned_child(
+                    guard,
+                    created.into_iter().flatten().collect(),
+                    primary,
+                ));
+            }
+        }
+        if let Some(reader) = status_reader {
+            match self.start_output_reader(
+                SpawnedChildPipe::Status,
+                std::fs::File::from(reader),
+                SPAWNED_CHILD_STATUS_CAPTURE_LIMIT,
+                done_tx,
+                None,
+            ) {
+                Ok(reader) => created[2] = Some(reader),
+                Err(primary) => {
+                    return Err(self.abort_spawned_child(
+                        guard,
+                        created.into_iter().flatten().collect(),
+                        primary,
+                    ));
+                }
+            }
+        }
+        match (created[0].take(), created[1].take(), created[2].take()) {
+            (Some(stdout), Some(stderr), status) => Ok(SpawnedChildReaders {
+                stdout,
+                stderr,
+                status,
+            }),
+            (stdout, stderr, status) => Err(self.abort_spawned_child(
+                guard,
+                [stdout, stderr, status].into_iter().flatten().collect(),
+                MezError::invalid_state(
+                    "spawned shell execution produced an incomplete capture reader set",
+                ),
+            )),
+        }
+    }
+
+    /// Starts one capture reader unless an injected cfg(test) fault rejects
+    /// this position before any OS thread is created.
+    fn start_output_reader<R>(
+        &self,
+        stream: SpawnedChildPipe,
+        reader: R,
+        budget: usize,
+        done: mpsc::Sender<SpawnedChildPipe>,
+        progress: Option<SpawnedChildProgressReporter>,
+    ) -> Result<SpawnedChildPipeReader>
+    where
+        R: Read + AsFd + Send + 'static,
+    {
+        #[cfg(test)]
+        if self
+            .reader_creation_failure
+            .as_ref()
+            .is_some_and(|failure| failure.stream == stream)
+        {
+            return Err(MezError::invalid_state(format!(
+                "spawned shell execution could not start its {} reader: injected test failure",
+                stream.label()
+            )));
+        }
+        spawn_output_reader(stream, reader, budget, done, progress)
+    }
+
+    /// Settles created readers and exact child custody after a startup failure,
+    /// preserving the first failure and appending any unproven cleanup.
+    fn abort_spawned_child(
+        &self,
+        guard: &mut SpawnedChildGuard,
+        created: Vec<SpawnedChildPipeReader>,
+        primary: MezError,
+    ) -> MezError {
+        cancel_output_readers(&created);
+        let custody = guard.terminate_and_reap();
+        let mut cleanup_failures = join_output_readers(created);
+        if let Err(error) = custody {
+            cleanup_failures.push(format!("native child custody: {}", error.message()));
+        }
+        compose_spawned_child_failure(primary, cleanup_failures)
+    }
+
+    /// Settles readers after custody termination could not be proven. The
+    /// guard's `Drop` makes one bounded retry without signaling a guessed id.
+    fn settle_failed_spawned_child(
+        &self,
+        readers: SpawnedChildReaders,
+        primary: MezError,
+    ) -> MezError {
+        compose_spawned_child_failure(primary, readers.settle())
     }
 }
 
@@ -884,29 +1322,59 @@ impl SpawnedShellInterrupt {
     }
 }
 
-/// Spawns one cancelable nonblocking pipe reader.
+/// Spawns one cancelable nonblocking pipe reader through the fallible thread
+/// builder so creation failure returns a typed error instead of unwinding.
 fn spawn_output_reader<R>(
     stream: SpawnedChildPipe,
     reader: R,
     budget: usize,
     done: mpsc::Sender<SpawnedChildPipe>,
     progress: Option<SpawnedChildProgressReporter>,
-) -> SpawnedChildPipeReader
+) -> Result<SpawnedChildPipeReader>
 where
     R: Read + AsFd + Send + 'static,
 {
     let (cancel, cancellation) = mpsc::channel();
-    let handle = std::thread::spawn(move || {
-        let result = drain_output_stream(stream, reader, budget, cancellation, progress);
-        let _ = done.send(stream);
-        result
-    });
-    SpawnedChildPipeReader {
+    let label = stream.label();
+    let handle = std::thread::Builder::new()
+        .name(format!("mez-spawned-shell-{label}-reader"))
+        .spawn(move || {
+            let result = drain_output_stream(stream, reader, budget, cancellation, progress);
+            let _ = done.send(stream);
+            result
+        })
+        .map_err(|error| {
+            MezError::invalid_state(format!(
+                "spawned shell execution could not start its {label} reader: {error}"
+            ))
+        })?;
+    Ok(SpawnedChildPipeReader {
         stream,
         cancel,
         handle,
         completed: false,
+    })
+}
+
+/// Waits a bounded period for the launched fixture to signal readiness before
+/// an injected reader-creation failure. A timeout is not turned into success;
+/// the rejection still runs deterministically and tests assert exact custody.
+#[cfg(test)]
+fn await_injected_reader_failure_readiness(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !readiness_witness_present(path) {
+        if Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(SPAWNED_CHILD_POLL_INTERVAL);
     }
+}
+
+/// Reports whether the fixture readiness witness exists with at least one pid
+/// byte, so injection never races the child's own command startup.
+#[cfg(test)]
+fn readiness_witness_present(path: &Path) -> bool {
+    fs::read_to_string(path).is_ok_and(|text| !text.trim().is_empty())
 }
 
 /// Enables nonblocking reads so cancellation never depends on pipe EOF.
@@ -1063,9 +1531,59 @@ fn join_output_reader(reader: SpawnedChildPipeReader) -> Result<CapturedPipeOutp
     })?
 }
 
+/// Requests nonblocking shutdown of every already-created reader.
+fn cancel_output_readers(readers: &[SpawnedChildPipeReader]) {
+    for reader in readers {
+        cancel_pending_reader(reader);
+    }
+}
+
+/// Joins every already-canceled reader without requiring descendant pipe EOF,
+/// returning bounded diagnostics only for readers that did not settle cleanly.
+fn join_output_readers(readers: Vec<SpawnedChildPipeReader>) -> Vec<String> {
+    let mut failures = Vec::new();
+    for reader in readers {
+        let stream = reader.stream;
+        match reader.handle.join() {
+            Ok(Ok(_capture)) => {}
+            Ok(Err(error)) => failures.push(format!(
+                "{} reader failed while settling: {}",
+                stream.label(),
+                error.message()
+            )),
+            Err(_) => failures.push(format!("{} reader panicked while settling", stream.label())),
+        }
+    }
+    failures
+}
+
+/// Preserves the first failure while appending bounded cleanup evidence.
+/// Cleanup failures are reported as unresolved native effects, and no message
+/// authorizes replaying the command.
+fn compose_spawned_child_failure(primary: MezError, cleanup_failures: Vec<String>) -> MezError {
+    if cleanup_failures.is_empty() {
+        return MezError::new(
+            primary.kind(),
+            format!(
+                "{}; the exact child process group and capture readers were settled, but native effects may already have occurred and the command must not be replayed",
+                primary.message()
+            ),
+        );
+    }
+    MezError::new(
+        primary.kind(),
+        format!(
+            "{}; cleanup was not fully proven ({}); native effects may be unresolved and the command must not be replayed",
+            primary.message(),
+            cleanup_failures.join("; ")
+        ),
+    )
+}
+
 /// Joins trusted status capture and validates only its reader-owned EOF proof.
 /// Notification timing cannot certify or discard closure; read errors and
 /// panics map to uncertain Transport evidence without parsed record presence.
+#[cfg(test)]
 fn join_and_validate_spawned_child_status(
     status_reader: SpawnedChildPipeReader,
     backend: crate::runtime::SandboxBackend,
@@ -1190,16 +1708,31 @@ fn sanitize_spawned_lifecycle_diagnostic(text: &str) -> String {
     lines.join("\n")
 }
 
-/// Kills the entire process group led by `pid` so command children are
-/// reaped with the shell instead of being orphaned.
-fn kill_process_group(pid: i32) {
-    if pid > 0 {
-        // SAFETY: a negative pid targets the process group led by `pid`. The
-        // child was spawned with `process_group(0)`, making it the leader.
-        unsafe {
-            libc::kill(-pid, libc::SIGKILL);
-        }
+/// Kills the entire process group led by `process_group` so command children
+/// are reaped with the shell instead of being orphaned.
+///
+/// The caller passes only an exact process-group id derived from an owned,
+/// unreaped child record. A missing group (`ESRCH`) means no live member
+/// remains, which is a terminal observation rather than a cleanup failure.
+fn kill_process_group(process_group: i32) -> Result<()> {
+    if process_group <= 0 {
+        return Err(MezError::invalid_state(format!(
+            "refusing to signal invalid process group {process_group}"
+        )));
     }
+    // SAFETY: a negative pid targets the process group led by `process_group`.
+    // The child was spawned with `process_group(0)`, making it the leader.
+    let result = unsafe { libc::kill(-process_group, libc::SIGKILL) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    Err(MezError::invalid_state(format!(
+        "spawned shell execution could not terminate its process group: {error}"
+    )))
 }
 
 #[cfg(test)]
@@ -2072,7 +2605,8 @@ mod tests {
             4096,
             done_tx,
             None,
-        );
+        )
+        .unwrap();
         cancel_pending_reader(&reader);
         let completion = done_rx.recv_timeout(Duration::from_secs(5));
         // Always release the writer before a failing assertion so a defective
@@ -2428,5 +2962,212 @@ mod tests {
             output.stdout
         );
         assert!(output.stdout.contains("AQID"), "stdout={}", output.stdout);
+    }
+
+    /// Creates one private fixture directory for deterministic reader-creation
+    /// failure regressions and returns it with its readiness witness and
+    /// delayed-mutation marker paths.
+    fn reader_failure_fixture(label: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let directory =
+            std::env::temp_dir().join(format!("mez-reader-failure-{}-{label}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        let mut builder = fs::DirBuilder::new();
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(&directory).unwrap();
+        let readiness = directory.join("readiness");
+        let marker = directory.join("delayed-mutation");
+        (directory, readiness, marker)
+    }
+
+    /// Builds one typed child launch that records its exact pid before running
+    /// a quiet command. A materialized artifact keeps staging custody observable.
+    fn reader_setup_request(
+        readiness: &Path,
+        marker: &Path,
+        survive_setup: bool,
+    ) -> ShellExecutionRequest {
+        let script = if survive_setup {
+            "printf '%s' \"$$\" > \"$1\"; sleep 30; : > \"$2\""
+        } else {
+            "printf '%s' \"$$\" > \"$1\""
+        };
+        let artifact_id = ShellLaunchArtifactId::new("profile").unwrap();
+        let mut transaction_request = request("true", Some(30_000));
+        transaction_request.transaction = transaction_request.transaction.with_child_launch(
+            ShellChildLaunch::new_with_artifacts(
+                "/bin/sh",
+                vec![
+                    ShellChildArgument::Literal("-c".to_string()),
+                    ShellChildArgument::Literal(script.to_string()),
+                    ShellChildArgument::Literal("sh".to_string()),
+                    ShellChildArgument::Literal(readiness.to_string_lossy().into_owned()),
+                    ShellChildArgument::Literal(marker.to_string_lossy().into_owned()),
+                ],
+                vec![ShellLaunchArtifact::new(artifact_id, b"profile".to_vec(), 0o400).unwrap()],
+            )
+            .unwrap()
+            .with_status_fd(crate::security::sandbox::SANDBOX_STATUS_FD)
+            .unwrap(),
+        );
+        transaction_request
+    }
+
+    /// Reads the exact pid written by the fixture, tolerating only an
+    /// incomplete readiness write rather than assuming file order.
+    fn read_pid_witness(path: &Path) -> i32 {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(text) = fs::read_to_string(path) {
+                if let Ok(pid) = text.trim().parse::<i32>() {
+                    return pid;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "readiness witness was not written: {}",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// A reader that cannot start must never leave its already-launched child,
+    /// process group, staged artifacts or earlier readers behind. Each
+    /// deterministic injected position is rejected before real thread creation
+    /// after the fixture proves the child is running and quiet; the delayed
+    /// mutation then proves the child could not continue after the failure.
+    #[test]
+    fn spawned_executor_settles_child_custody_when_reader_creation_fails() {
+        for (stream, position) in [
+            (SpawnedChildPipe::Stdout, 1),
+            (SpawnedChildPipe::Stderr, 2),
+            (SpawnedChildPipe::Status, 3),
+        ] {
+            let (fixture, readiness, marker) =
+                reader_failure_fixture(&format!("position-{position}"));
+            let mut executor = SpawnedShellExecutor::new(test_context());
+            let witness_slot = executor.observe_custody();
+            executor.fail_reader_creation_at(stream, readiness.clone());
+            let error = executor
+                .execute_shell(&reader_setup_request(&readiness, &marker, true))
+                .unwrap_err();
+            assert!(
+                error
+                    .message()
+                    .contains(&format!("could not start its {} reader", stream.label())),
+                "position {position}: {error:?}"
+            );
+            assert!(
+                error.message().contains("must not be replayed"),
+                "position {position}: {error:?}"
+            );
+            let witness = witness_slot.lock().unwrap().clone().unwrap_or_else(|| {
+                panic!("position {position}: custody witness was not published")
+            });
+            assert!(witness.pid > 0, "position {position}");
+            assert_eq!(witness.process_group, witness.pid, "position {position}");
+            assert!(
+                witness.artifact_directory_present_at_spawn,
+                "position {position}: staging directory was not owned at spawn"
+            );
+            assert_eq!(witness.artifact_count, 1, "position {position}");
+            assert!(
+                witness.reaped,
+                "position {position}: direct child was not reaped"
+            );
+            assert!(
+                !witness.artifact_directory.exists(),
+                "position {position}: staging artifacts survived"
+            );
+            assert_eq!(
+                read_pid_witness(&readiness),
+                witness.pid,
+                "position {position}: readiness pid is not the owned child"
+            );
+            assert!(
+                !marker.exists(),
+                "position {position}: delayed mutation executed"
+            );
+            let counts = executor.launches.snapshot().unwrap();
+            assert_eq!(counts.len(), 1, "position {position}");
+            assert_eq!(counts[0].attempted, 1, "position {position}");
+            assert_eq!(counts[0].launched, 1, "position {position}");
+            executor.clear_reader_creation_failure();
+            let recovered = executor
+                .execute_shell(&request("printf reader-failure-recovered", Some(5_000)))
+                .unwrap();
+            assert_eq!(
+                recovered.stdout, "reader-failure-recovered",
+                "position {position}"
+            );
+            let _ = fs::remove_dir_all(&fixture);
+        }
+    }
+
+    /// A child that exits while readers are being set up must still be reaped
+    /// and its staged artifacts removed, without inventing reader completion.
+    #[test]
+    fn spawned_executor_settles_child_that_exits_during_reader_startup() {
+        let (fixture, readiness, marker) = reader_failure_fixture("child-exits");
+        let mut executor = SpawnedShellExecutor::new(test_context());
+        let witness_slot = executor.observe_custody();
+        executor.fail_reader_creation_at(SpawnedChildPipe::Stderr, readiness.clone());
+        let error = executor
+            .execute_shell(&reader_setup_request(&readiness, &marker, false))
+            .unwrap_err();
+        assert!(
+            error
+                .message()
+                .contains("could not start its stderr reader"),
+            "{error:?}"
+        );
+        let witness = witness_slot.lock().unwrap().clone().unwrap();
+        assert!(witness.reaped, "exited child was not reaped");
+        assert!(!witness.artifact_directory.exists());
+        assert_eq!(read_pid_witness(&readiness), witness.pid);
+        assert!(!marker.exists());
+        let _ = fs::remove_dir_all(&fixture);
+    }
+
+    /// A reaped direct child must still report an unproven process group when
+    /// the exact owned group cannot be signaled. The test-only invalid id makes
+    /// signaling refuse instead of targeting any guessed process, and the owned
+    /// direct child is still reaped so the fixture cannot leak.
+    #[test]
+    fn spawned_child_guard_reports_unproven_group_termination() {
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg("exit 0");
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = command.spawn().unwrap();
+        let mut guard = SpawnedChildGuard::new(child);
+        assert!(guard.process_group() > 0);
+        guard.process_group = 0;
+        let error = guard.terminate_and_reap().unwrap_err();
+        assert!(error.message().contains("process group"), "{error:?}");
+        assert!(guard.reaped, "owned direct child was not reaped");
+        drop(guard);
+    }
+
+    /// Cleanup diagnostics must not replace the first failure or imply replay,
+    /// and unresolved cleanup must remain explicit in the action error.
+    #[test]
+    fn spawned_child_failure_composition_preserves_first_failure() {
+        let error =
+            compose_spawned_child_failure(MezError::invalid_state("first failure"), Vec::new());
+        assert!(error.message().starts_with("first failure"));
+        assert!(error.message().contains("must not be replayed"));
+        assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+
+        let error = compose_spawned_child_failure(
+            MezError::invalid_state("first failure"),
+            vec!["status reader panicked while settling".to_string()],
+        );
+        assert!(error.message().starts_with("first failure"));
+        assert!(error.message().contains("status reader panicked"));
+        assert!(error.message().contains("may be unresolved"));
     }
 }
