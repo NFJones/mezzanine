@@ -1119,6 +1119,12 @@ impl RuntimeSessionService {
     /// Agent ids are opaque MMP identities. When the id follows the runtime
     /// `agent-%pane` convention, the identity is enriched with pane and window
     /// metadata so discovery can connect the agent to its terminal surface.
+    /// Generic `agent`/empty-or-basic-harness inputs are refresh defaults only
+    /// for an established matching actor-owned pane registration. Its role and
+    /// exact populated capabilities outlive conversation/parent authority.
+    /// Every candidate still crosses immutable lower reconciliation; explicit
+    /// creation metadata, foreign harnesses and conflicting bindings cannot use
+    /// lineage or directory presence as an exemption from those checks.
     pub(crate) fn ensure_runtime_message_identity(
         &mut self,
         agent_id: &str,
@@ -1129,33 +1135,83 @@ impl RuntimeSessionService {
     ) -> Result<SenderIdentity> {
         let agent_id = AgentId::opaque(agent_id.to_string())
             .ok_or_else(|| MezError::invalid_args("agent id is invalid for MMP"))?;
-        if self.subagent_lineage(agent_id.as_str()).is_some()
-            && let Some(identity) = self
+        let native_pane_id = pane_id_from_runtime_agent_id(agent_id.as_str());
+        if let (Some(native), Some(explicit)) = (&native_pane_id, &pane_id)
+            && native != explicit
+        {
+            return Err(MezError::conflict(
+                "runtime agent identity has a conflicting pane argument",
+            ));
+        }
+        let pane_id = pane_id.or_else(|| native_pane_id.clone());
+        let project_scope = pane_id
+            .as_ref()
+            .and_then(|pane_id| self.runtime_message_project_scope(pane_id));
+        let descriptor = pane_id
+            .as_ref()
+            .and_then(|pane_id| self.find_pane_descriptor(pane_id.as_str()));
+        let window_id = descriptor
+            .as_ref()
+            .map(|descriptor| descriptor.window_id.clone());
+        // This is metadata selection, not external authentication or kernel
+        // generation proof. Legal pane-mode entry can precede process startup;
+        // turn/resume/native-source owners retain their existing exact fences.
+        let actor_owned_native = descriptor.as_ref().is_some_and(|descriptor| {
+            native_pane_id.as_ref() == Some(&descriptor.pane_id)
+                && pane_id.as_ref() == Some(&descriptor.pane_id)
+                && agent_id.as_str() == format!("agent-{}", descriptor.pane_id)
+                && self
+                    .agent_shell_store()
+                    .get(descriptor.pane_id.as_str())
+                    .is_some_and(|session| session.pane_id == descriptor.pane_id.as_str())
+        });
+        let generic_refresh =
+            role == "agent" && (capabilities.is_empty() || capabilities == ["agent-harness"]);
+        let mut incoming_role = Some(role.to_string());
+        let mut incoming_capabilities = capabilities
+            .iter()
+            .map(|capability| (*capability).to_string())
+            .collect::<Vec<_>>();
+        if generic_refresh
+            && actor_owned_native
+            && let Some(existing) = self
                 .control
                 .message_service()
                 .registered_identity(&agent_id)
         {
-            return Ok(identity.clone());
+            let runtime_harness = existing
+                .capabilities
+                .iter()
+                .any(|cap| cap == "agent-harness");
+            let foreign_harness = existing
+                .capabilities
+                .iter()
+                .any(|cap| cap == "external-harness");
+            if foreign_harness {
+                return Err(MezError::conflict(
+                    "runtime agent identity has conflicting harness metadata",
+                ));
+            }
+            // A missing native qualifier is not an invalid routing vector.
+            // Without positive qualification do not normalize anything: the
+            // original candidate still crosses ordinary lower reconciliation.
+            if runtime_harness
+                && !foreign_harness
+                && existing.pane_id == pane_id
+                && existing.window_id == window_id
+            {
+                incoming_role = existing.role.clone().or(incoming_role);
+                incoming_capabilities = existing.capabilities.clone();
+            }
         }
-        let pane_id = pane_id.or_else(|| pane_id_from_runtime_agent_id(agent_id.as_str()));
-        let project_scope = pane_id
-            .as_ref()
-            .and_then(|pane_id| self.runtime_message_project_scope(pane_id));
-        let window_id = pane_id
-            .as_ref()
-            .and_then(|pane_id| self.find_pane_descriptor(pane_id.as_str()))
-            .map(|descriptor| descriptor.window_id);
         Ok(self.control.message_service_mut().ensure_agent_identity(
             SenderIdentity {
                 agent_id,
                 project_scope,
                 pane_id,
                 window_id,
-                role: Some(role.to_string()),
-                capabilities: capabilities
-                    .iter()
-                    .map(|capability| (*capability).to_string())
-                    .collect(),
+                role: incoming_role,
+                capabilities: incoming_capabilities,
                 objective: None,
             },
             now_ms,
