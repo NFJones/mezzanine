@@ -10,7 +10,10 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
+use std::process::ExitStatus;
+use std::sync::atomic::AtomicBool;
 use tokio_util::codec::Framed;
 
 const CONTENT_TYPE: &str = "application/vnd.mezzanine.outbound+json";
@@ -80,6 +83,74 @@ impl Drop for FakeBroker {
         drop(self.listener.take());
         let _ = std::fs::remove_file(self.root.join("outbound.sock"));
         let _ = std::fs::remove_dir(&self.root);
+    }
+}
+
+/// Fixture launcher that reports a launch attempt as an unexpected readiness
+/// failure. Connected readiness fixtures must never consult it, and it never
+/// observes or signals a child.
+struct UnexpectedLaunch<'a> {
+    launches: &'a AtomicUsize,
+}
+
+impl StartupLauncher for UnexpectedLaunch<'_> {
+    fn launch(&mut self, _election: &StartupElection) -> Result<()> {
+        self.launches.fetch_add(1, Ordering::SeqCst);
+        Err(MezError::invalid_state("unexpected fixture launch"))
+    }
+
+    fn observe_exit(&mut self) -> Result<Option<ExitStatus>> {
+        Ok(None)
+    }
+}
+
+/// Launcher that publishes a pre-bound fixture socket only after startup's first
+/// readiness probe observed absence, and reports an already-exited exact child.
+/// The rename is a synchronous fixture publication, not a network or process act.
+struct StagedPublicationLauncher {
+    launches: Arc<AtomicUsize>,
+    observations: Arc<AtomicUsize>,
+    pending: PathBuf,
+    published: PathBuf,
+    launched: bool,
+}
+
+impl StartupLauncher for StagedPublicationLauncher {
+    fn launch(&mut self, election: &StartupElection) -> Result<()> {
+        election.validate()?;
+        std::fs::rename(&self.pending, &self.published)?;
+        self.launched = true;
+        self.launches.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn observe_exit(&mut self) -> Result<Option<ExitStatus>> {
+        self.observations.fetch_add(1, Ordering::SeqCst);
+        Ok(self.launched.then_some(ExitStatus::from_raw(1 << 8)))
+    }
+}
+
+/// Launcher whose exact child becomes observably exited only once the fixture
+/// peer has admitted the first readiness hello, proving a pending handshake is
+/// settled rather than cancelled and reconnected.
+struct ExitDuringHandshakeLauncher {
+    observations: Arc<AtomicUsize>,
+    observable: Arc<AtomicBool>,
+    launches: Arc<AtomicUsize>,
+}
+
+impl StartupLauncher for ExitDuringHandshakeLauncher {
+    fn launch(&mut self, _election: &StartupElection) -> Result<()> {
+        self.launches.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn observe_exit(&mut self) -> Result<Option<ExitStatus>> {
+        self.observations.fetch_add(1, Ordering::SeqCst);
+        Ok(self
+            .observable
+            .load(Ordering::SeqCst)
+            .then_some(ExitStatus::from_raw(1 << 8)))
     }
 }
 
@@ -194,12 +265,12 @@ async fn outbound_wire_epoch_incompatible_readiness_never_launches_or_sends_setu
             }
         };
         let client = async {
-            connect_with_launcher(&fixture.root, Duration::from_secs(2), |_| {
-                launches.fetch_add(1, Ordering::SeqCst);
-                Err(MezError::invalid_state("unexpected fixture launch"))
-            })
-            .await
-            .err()
+            let mut launcher = UnexpectedLaunch {
+                launches: &launches,
+            };
+            connect_with_launcher(&fixture.root, Duration::from_secs(2), &mut launcher)
+                .await
+                .err()
         };
         let (error, ()) =
             tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
@@ -255,15 +326,15 @@ async fn outbound_wire_epoch_malformed_framing_has_terminal_owner_guidance() {
                 "malformed readiness must emit no setup"
             );
         };
-        let client = connect_with_launcher(&fixture.root, Duration::from_secs(2), |_| {
-            launches.fetch_add(1, Ordering::SeqCst);
-            Err(MezError::invalid_state("unexpected fixture launch"))
-        });
+        let mut launcher = UnexpectedLaunch {
+            launches: &launches,
+        };
+        let client = connect_with_launcher(&fixture.root, Duration::from_secs(2), &mut launcher);
         let (result, ()) =
             tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
                 .await
                 .unwrap();
-        let error = result.err().expect("malformed frame must reject readiness");
+        let error = startup_error(result);
         assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
         assert!(error.io_kind().is_none());
         assert!(error.message().contains("owner"));
@@ -337,4 +408,197 @@ async fn outbound_wire_epoch_current_concurrent_reuse_preserves_siblings() {
     .await
     .unwrap();
     fixture.finish();
+}
+
+/// Readiness/exit race: an exact child that already failed must not invalidate a
+/// broker that authenticates through the bounded post-exit recheck. Startup
+/// observes the failed child first, then accepts the authenticated broker without
+/// launching a replacement. No application operation follows the readiness reply.
+#[tokio::test]
+async fn outbound_wire_epoch_authenticated_broker_outranks_failed_child() {
+    let fixture = FakeBroker::new();
+    let peer = async {
+        let mut peer = fixture.accept().await;
+        let request = peer.next().await.unwrap().unwrap();
+        assert_eq!(request.content_type, CONTENT_TYPE);
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            reply(CURRENT, 1).to_string(),
+        ))
+        .await
+        .unwrap();
+        assert!(peer.next().await.is_none());
+    };
+    let launches = Arc::new(AtomicUsize::new(0));
+    let observations = Arc::new(AtomicUsize::new(0));
+    let client = async {
+        let mut launcher = ExitingLauncher {
+            launches: launches.clone(),
+            observations: observations.clone(),
+            launched: true,
+            status_raw: 1 << 8,
+        };
+        let client = connect_with_launcher(&fixture.root, Duration::from_secs(2), &mut launcher)
+            .await
+            .unwrap();
+        client.handle().unwrap();
+    };
+    tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
+        .await
+        .unwrap();
+    assert!(
+        observations.load(Ordering::SeqCst) >= 1,
+        "the exited exact child must be observed before the readiness recheck"
+    );
+    assert_eq!(
+        launches.load(Ordering::SeqCst),
+        0,
+        "a ready broker must not be replaced by another launch"
+    );
+    fixture.finish();
+}
+
+/// Staged publication control: the first readiness probe observes absence, the
+/// launcher then publishes a pre-bound fixture socket and reports an exited exact
+/// child, and only the bounded post-exit recheck may authenticate it. This proves
+/// the recheck path rather than an exit observed before any probe.
+#[tokio::test]
+async fn outbound_startup_exit_recheck_accepts_broker_published_after_absence() {
+    let root =
+        std::env::temp_dir().join(format!("mez-start-stage-{:032x}", rand::random::<u128>()));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let pending = root.join("outbound.pending");
+    let published = root.join("outbound.sock");
+    let listener = tokio::net::UnixListener::bind(&pending).unwrap();
+    std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let peer = async {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut peer = Framed::new(stream, ProtocolFrameCodec::new(4096).unwrap());
+        let request = peer.next().await.unwrap().unwrap();
+        assert_eq!(request.content_type, CONTENT_TYPE);
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            reply(CURRENT, 11).to_string(),
+        ))
+        .await
+        .unwrap();
+        assert!(peer.next().await.is_none());
+    };
+    let launches = Arc::new(AtomicUsize::new(0));
+    let observations = Arc::new(AtomicUsize::new(0));
+    let client = async {
+        let mut launcher = StagedPublicationLauncher {
+            launches: launches.clone(),
+            observations: observations.clone(),
+            pending,
+            published,
+            launched: false,
+        };
+        let client = connect_with_launcher(&root, Duration::from_secs(2), &mut launcher)
+            .await
+            .unwrap();
+        client.handle().unwrap();
+    };
+    tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
+        .await
+        .unwrap();
+    assert_eq!(
+        launches.load(Ordering::SeqCst),
+        1,
+        "exactly one publication launch may occur"
+    );
+    assert!(
+        observations.load(Ordering::SeqCst) >= 2,
+        "the exact child must be observed before and after publication"
+    );
+    assert!(!root.join("outbound.pending").exists());
+    // The fixture owns this disposable root; election state intentionally remains
+    // on disk after unlocking, so remove only this fixture's root recursively.
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// An exit observed while the first readiness handshake is still pending must
+/// settle that exact exchange rather than cancel it and reconnect. The fixture
+/// peer gates its hello reply until observation has happened, asserts a single
+/// accept and no second connection, and covers authenticated success plus
+/// terminal rejection of the same stream.
+#[tokio::test]
+async fn outbound_startup_exit_settles_pending_readiness_handshake() {
+    for terminal in [false, true] {
+        let fixture = FakeBroker::new();
+        let observations = Arc::new(AtomicUsize::new(0));
+        let observable = Arc::new(AtomicBool::new(false));
+        let launches = Arc::new(AtomicUsize::new(0));
+        let peer_observable = observable.clone();
+        let peer_observations = observations.clone();
+        let peer = async {
+            let mut peer = fixture.accept().await;
+            let request = peer.next().await.unwrap().unwrap();
+            assert_eq!(request.content_type, CONTENT_TYPE);
+            let before = peer_observations.load(Ordering::SeqCst);
+            peer_observable.store(true, Ordering::SeqCst);
+            for _ in 0..1000 {
+                if peer_observations.load(Ordering::SeqCst) > before {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+            let body = if terminal {
+                reply("mez-outbound/1", 1).to_string()
+            } else {
+                reply(CURRENT, 31).to_string()
+            };
+            peer.send(ProtocolFrame::new(CONTENT_TYPE, body))
+                .await
+                .unwrap();
+            assert!(peer.next().await.is_none());
+        };
+        let client = async {
+            let mut launcher = ExitDuringHandshakeLauncher {
+                observations: observations.clone(),
+                observable: observable.clone(),
+                launches: launches.clone(),
+            };
+            match connect_with_launcher(&fixture.root, Duration::from_secs(2), &mut launcher).await
+            {
+                Ok(client) => {
+                    client.handle().unwrap();
+                    drop(client);
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        };
+        let (result, ()) =
+            tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
+                .await
+                .unwrap();
+        if terminal {
+            let error = startup_error(result);
+            assert!(error.io_kind().is_none());
+            assert!(error.message().contains("owner"));
+        } else {
+            result.expect("authenticated first reply must win the exit race");
+        }
+        assert!(
+            observations.load(Ordering::SeqCst) > 1,
+            "the exit must be observed while the handshake is pending"
+        );
+        assert_eq!(
+            launches.load(Ordering::SeqCst),
+            0,
+            "a settled handshake must not trigger a replacement launch"
+        );
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                fixture.listener.as_ref().unwrap().accept()
+            )
+            .await
+            .is_err(),
+            "the settled handshake must not be replaced by a second connection"
+        );
+        fixture.finish();
+    }
 }
