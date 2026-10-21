@@ -262,11 +262,11 @@ async fn network_search_void_self_closing_markup_remains_recognized() {
     let cases = [
         (
             "<a class=\"result__a\" href=\"https://example.test/a\">A<br/>B</a>",
-            "AB",
+            "1. AB",
         ),
         (
             "<a class=\"result__a\" href=\"https://example.test/a\">Real</a><hr/>",
-            "Real",
+            "1. Real",
         ),
     ];
     for (body, title) in cases {
