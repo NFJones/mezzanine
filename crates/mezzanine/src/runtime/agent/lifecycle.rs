@@ -94,6 +94,34 @@ impl RuntimeSessionService {
         state: AgentTurnState,
     ) -> Result<AgentShellSession> {
         self.require_live()?;
+        self.finish_agent_turn_at_admission(pane_id, turn_id, state)
+    }
+
+    /// Finishes one already-owned turn while its exact pane generation settles.
+    ///
+    /// Pane shutdown and unexpected process exit select the turn they fail from
+    /// the ledger for a pane they still own, so those paths must keep settling
+    /// it while the lifecycle is stopping. They use settlement admission; public
+    /// turn finishing keeps the strict live gate. Every obligation of the shared
+    /// body still runs unchanged, so the turn is failed, its subagent and
+    /// steering obligations settle, and nothing is marked complete without them.
+    pub(crate) fn finish_agent_turn_for_pane_settlement(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        state: AgentTurnState,
+    ) -> Result<AgentShellSession> {
+        self.require_pane_settlement_admissible()?;
+        self.finish_agent_turn_at_admission(pane_id, turn_id, state)
+    }
+
+    /// Runs the shared turn-finishing body after its caller chose admission.
+    fn finish_agent_turn_at_admission(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        state: AgentTurnState,
+    ) -> Result<AgentShellSession> {
         runtime_pane_by_id(&self.session, pane_id)?;
         let running_turn = self
             .agent_shell_store()
@@ -833,7 +861,11 @@ impl RuntimeSessionService {
                 .and_then(|session| session.running_turn_id.as_deref())
                 == Some(turn.turn_id.as_str());
             if pane_present && running_in_shell {
-                self.finish_agent_turn(&turn.pane_id, &turn.turn_id, AgentTurnState::Failed)?;
+                self.finish_agent_turn_for_pane_settlement(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    AgentTurnState::Failed,
+                )?;
             } else {
                 self.emit_subagent_task_result_for_state(&turn, AgentTurnState::Failed)?;
                 self.integration

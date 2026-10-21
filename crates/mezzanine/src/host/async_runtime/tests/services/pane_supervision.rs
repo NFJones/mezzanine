@@ -909,6 +909,18 @@ async fn owned_pane_worker_settles_output_after_stopping_admission() {
         RuntimeLifecycleState::Stopping
     );
 
+    // An unscoped settlement for a pane that does not exist is inert. Unscoped
+    // producers carry no generation, so the reducer's own pane lookup decides;
+    // the settlement boundary is lifecycle plus pane identity, never a global
+    // acceptance of anonymous events.
+    let mut missing = RuntimeEventBatch::new();
+    missing.push(RuntimeEvent::Pane(PaneEvent::Output {
+        pane_id: "%missing-pane".to_string(),
+        bytes: b"missing pane".to_vec(),
+    }));
+    let missing_report = handle.submit_runtime_events(missing).await.unwrap();
+    assert_eq!((missing_report.accepted, missing_report.applied), (1, 0));
+
     // New work is still refused while stopping; only settlement is admitted.
     let refused = handle
         .write_input_to_pane(primary, "%1", b"must not be admitted".to_vec())
@@ -1106,4 +1118,59 @@ async fn owned_pane_worker_terminal_first_poll_retires_without_failure() {
     handle.shutdown().await.unwrap();
     let mut actor_exit = actor_task.await.unwrap();
     actor_exit.service.terminate_all_pane_processes().unwrap();
+}
+
+/// A process exit that arrives while the lifecycle is stopping still settles
+/// through the real exit reducer for its exact pane generation instead of
+/// becoming a stopping error.
+#[tokio::test]
+async fn stopping_admission_settles_process_exit_for_current_generation() {
+    let mut service = test_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let actor_task = tokio::spawn(actor.run());
+    let (instance, mut process) = handle
+        .take_running_pane_process_instances_for_adapter(1)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    let primary_pid = process.primary_pid();
+
+    let mut shutdown = RuntimeEventBatch::new();
+    shutdown.push(RuntimeEvent::Shutdown(ShutdownEvent {
+        reason: "exit settlement crossing".to_string(),
+        force: false,
+        failed: false,
+    }));
+    assert_eq!(handle.submit_runtime_events(shutdown).await.unwrap().applied, 1);
+
+    let mut exit = RuntimeEventBatch::new();
+    exit.push(RuntimeEvent::PaneProcess {
+        instance: instance.clone(),
+        event: PaneProcessEvent::Process(ProcessEvent::Exited {
+            pane_id: instance.pane_id.clone(),
+            primary_pid: Some(primary_pid),
+            exit_code: Some(0),
+            signal: None,
+        }),
+    });
+    let report = handle.submit_runtime_events(exit).await.unwrap();
+    assert_eq!(
+        (report.accepted, report.applied),
+        (1, 1),
+        "a current-generation exit must settle while stopping"
+    );
+
+    let _ = process.terminate(Duration::from_millis(50));
+    handle.shutdown().await.unwrap();
+    let mut actor_exit = actor_task.await.unwrap();
+    let _ = actor_exit.service.terminate_all_pane_processes();
 }

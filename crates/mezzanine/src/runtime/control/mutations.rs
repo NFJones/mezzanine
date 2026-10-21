@@ -1347,8 +1347,8 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Admits settlement of pane work that the exact claimed generation
-    /// already performed.
+    /// Admits settlement of pane work whose generation a pane worker already
+    /// claimed.
     ///
     /// Admission of new work stops with the lifecycle, but a pane worker that
     /// claimed its generation while `Running` still owns the completions of the
@@ -1356,9 +1356,13 @@ impl RuntimeSessionService {
     /// performed. `Stopping` therefore admits that settlement so output, write
     /// acknowledgements, write failures, and process exits are accounted
     /// exactly once instead of being discarded or converted into a lifecycle
-    /// error that the owning worker would report as its own failure. Stale and
-    /// replacement generations stay rejected by the identity fences, and
-    /// `Killed` or `Failed` lifecycles keep strict live admission.
+    /// error that the owning worker would report as its own failure.
+    ///
+    /// This guard decides lifecycle admission only and takes no instance, so it
+    /// does not by itself prove generation identity: exact-generation fencing
+    /// for scoped worker events stays in the actor's instance check before
+    /// dispatch, and unscoped settlement behaves exactly as it does while
+    /// `Running`. `Killed` and `Failed` lifecycles keep strict live admission.
     pub(crate) fn require_pane_settlement_admissible(&self) -> Result<()> {
         match self.session.lifecycle_state() {
             RuntimeLifecycleState::Running

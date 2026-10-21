@@ -1374,3 +1374,110 @@ fn stopping_lifecycle_admits_owned_pane_settlement_without_dropping_accounting()
         "new pane input must stay refused while stopping: {refused}"
     );
 }
+
+/// An unexpected process exit that arrives while the lifecycle is stopping must
+/// still fail the already-owned active shell-backed turn for its exact pane
+/// generation instead of stopping on the turn finalizer's live admission gate.
+///
+/// Nonforced shutdown does not pre-settle active turns, so this exit is their
+/// only settlement. The turn is selected from the ledger for a pane the service
+/// still owns: it must become failed, its running shell transaction must be
+/// cancelled, and the pane must retire without any resurrection.
+#[test]
+fn stopping_lifecycle_settles_process_exit_for_active_shell_turn() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let start = service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .start_agent_turn(mez_agent::AgentTurnRecord {
+            turn_id: "turn-active-exit".to_string(),
+            conversation_id: "conversation-active-exit".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 200,
+            deadline_at_unix_millis: 0,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            cooperation_mode: None,
+            state: mez_agent::AgentTurnState::Queued,
+            initial_capability: None,
+        })
+        .unwrap();
+    service.running_shell_transactions_mut_for_tests().insert(
+        "marker-active-exit".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-active-exit".to_string(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "active-exit-action".to_string(),
+            },
+            pane_id: "%1".to_string(),
+            command: "printf active\n".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+
+    let transition = service
+        .apply_shutdown_transition(crate::runtime::ShutdownEvent {
+            reason: "active-turn exit settlement".to_string(),
+            force: false,
+            failed: false,
+        })
+        .unwrap();
+    assert!(transition.applied);
+    assert_eq!(service.lifecycle_state(), RuntimeLifecycleState::Stopping);
+
+    // The backend-failure diagnostic that retire_failed_pane_process queues
+    // immediately before its exit also settles while stopping.
+    assert!(
+        service
+            .apply_pane_process_failure_event("%1", "injected backend read failure")
+            .unwrap()
+    );
+
+    let update = service
+        .apply_pane_process_exit_event(
+            "%1",
+            start.primary_pid,
+            mez_mux::process::PaneExitStatus {
+                code: Some(0),
+                signal: None,
+                success: true,
+            },
+        )
+        .unwrap()
+        .expect("the current-generation exit must settle while stopping");
+    assert_eq!(update.pane_id, "%1");
+
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-active-exit")
+        .expect("the active turn must remain in the ledger");
+    assert_eq!(
+        turn.state,
+        AgentTurnState::Failed,
+        "an unexpected exit must fail the owned turn, not leave it running"
+    );
+    assert!(
+        service.running_shell_transactions_for_tests().is_empty(),
+        "the failed turn's running shell transaction must be cancelled"
+    );
+    assert!(
+        service.find_pane_descriptor("%1").is_none(),
+        "the exited pane must retire"
+    );
+}
