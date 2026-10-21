@@ -77,8 +77,9 @@ fn take_exact_child(
 
 /// Concurrent startup callers must elect exactly one real broker child and
 /// obtain distinct authenticated frontend handles. Disposal must not kill the
-/// shared owner; the fixture signals and reaps only its retained child. This is
-/// startup qualification, not simultaneous interactive session creation.
+/// shared owner; the fixture's bounded exact-child guards signal and reap only
+/// the children it spawned, including on early return. This is startup
+/// qualification, not simultaneous interactive session creation.
 #[tokio::test]
 #[ignore = "requires explicit MEZ_BROKER_EXECUTABLE for actual process qualification"]
 async fn outbound_launcher_concurrent_callers_elect_one_actual_child() {
@@ -112,21 +113,24 @@ async fn outbound_launcher_concurrent_callers_elect_one_actual_child() {
             .and_then(|first| second.handle().map(|second| first != second)),
         _ => Ok(false),
     };
-    let children = usize::from(first_child.is_some()) + usize::from(second_child.is_some());
+    let forced_reaps = Arc::new(AtomicUsize::new(0));
+    let mut first_guard = take_exact_child(&mut first_child, &forced_reaps);
+    let mut second_guard = take_exact_child(&mut second_child, &forced_reaps);
+    let children = usize::from(first_guard.is_some()) + usize::from(second_guard.is_some());
     drop(first);
     drop(second);
     let mut shutdowns = Vec::new();
-    for child in [&mut first_child, &mut second_child].into_iter().flatten() {
-        let shutdown = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            child.shutdown_for_tests(),
-        )
-        .await;
-        if child.try_wait().unwrap().is_none() {
-            tokio::time::timeout(std::time::Duration::from_secs(5), child.terminate())
-                .await
-                .unwrap()
-                .unwrap();
+    for child in [&mut first_guard, &mut second_guard].into_iter().flatten() {
+        let shutdown =
+            tokio::time::timeout(std::time::Duration::from_secs(10), child.shutdown()).await;
+        if child.child_mut().try_wait().unwrap().is_none() {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                child.child_mut().terminate(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
         }
         shutdowns.push(shutdown);
     }
@@ -143,6 +147,11 @@ async fn outbound_launcher_concurrent_callers_elect_one_actual_child() {
             .into_iter()
             .all(|result| result.is_ok_and(|result| result.is_ok_and(|status| status.success())))
     );
+    assert_eq!(
+        forced_reaps.load(Ordering::SeqCst),
+        0,
+        "graceful teardown, not the unwind guard, must reap the exact child"
+    );
     let paths = env.config_paths().unwrap();
     assert!(!paths.root().join("outbound.sock").exists());
     drop(crate::security::remote::RemoteClientIdentity::load_or_create(paths.root()).unwrap());
@@ -152,7 +161,7 @@ async fn outbound_launcher_concurrent_callers_elect_one_actual_child() {
 /// Explicit released-binary fixture: the caller supplies a freshly built trusted
 /// executable. Two authenticated readiness clients reuse one launched broker;
 /// disposing them does not kill it. The test deliberately signals and reaps its
-/// exact child, falling back to explicit termination on failure. No remote
+/// exact child through the bounded guard, including on early return. No remote
 /// sessions or provider work occur, and ordinary CLI routing is not qualified.
 #[tokio::test]
 #[ignore = "requires explicit MEZ_BROKER_EXECUTABLE for actual process qualification"]
@@ -163,15 +172,18 @@ async fn outbound_launcher_actual_broker_retains_child_and_reuses_readiness() {
     assert!(executable.is_absolute());
     let (home, env, election) = fixture();
     drop(election);
-    let mut child = None;
+    let forced_reaps = Arc::new(AtomicUsize::new(0));
     let qualified = async {
+        let mut child_slot = None;
         let first = connect_owned(
             &executable,
             &env,
             std::time::Duration::from_secs(10),
-            &mut child,
+            &mut child_slot,
         )
         .await?;
+        let mut guarded = take_exact_child(&mut child_slot, &forced_reaps)
+            .expect("elected caller retains its exact child");
         let mut sibling_child = None;
         let second = connect_owned(
             Path::new("/nonexistent/unused-broker"),
@@ -180,43 +192,31 @@ async fn outbound_launcher_actual_broker_retains_child_and_reuses_readiness() {
             &mut sibling_child,
         )
         .await?;
+        let sibling_guard = take_exact_child(&mut sibling_child, &forced_reaps);
         assert!(
-            sibling_child.is_none(),
+            sibling_guard.is_none(),
             "ready owner must not launch a sibling endpoint"
         );
         assert_ne!(first.handle()?, second.handle()?);
         drop(first);
         drop(second);
-        let launched = child.as_mut().expect("elected caller retains child");
-        assert!(launched.try_wait()?.is_none());
-        let pid = launched
-            .child
-            .id()
-            .and_then(|id| i32::try_from(id).ok())
-            .and_then(rustix::process::Pid::from_raw)
-            .expect("owned live child PID");
-        rustix::process::kill_process(pid, rustix::process::Signal::TERM)
-            .map_err(std::io::Error::from)?;
-        let status = tokio::time::timeout(std::time::Duration::from_secs(10), launched.wait())
+        assert!(guarded.child_mut().try_wait()?.is_none());
+        let status = tokio::time::timeout(std::time::Duration::from_secs(10), guarded.shutdown())
             .await
             .map_err(|_| MezError::invalid_state("fixture graceful broker shutdown timed out"))??;
         assert!(status.success());
         Ok::<(), MezError>(())
     }
     .await;
-    if let Some(launched) = child.as_mut()
-        && launched.try_wait().unwrap().is_none()
-    {
-        tokio::time::timeout(std::time::Duration::from_secs(5), launched.terminate())
-            .await
-            .expect("fixture child cleanup must finish")
-            .unwrap();
-    }
     qualified.unwrap();
+    assert_eq!(
+        forced_reaps.load(Ordering::SeqCst),
+        0,
+        "graceful shutdown, not the unwind guard, must reap the exact child"
+    );
     let paths = env.config_paths().unwrap();
     assert!(!paths.root().join("outbound.sock").exists());
     drop(crate::security::remote::RemoteClientIdentity::load_or_create(paths.root()).unwrap());
-    drop(child);
     std::fs::remove_dir_all(home).unwrap();
 }
 
