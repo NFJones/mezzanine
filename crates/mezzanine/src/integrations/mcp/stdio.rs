@@ -491,7 +491,15 @@ pub async fn discover_stdio_mcp_server(
     match (discovery, connection.retire().await) {
         (Ok(discovery), Ok(())) => Ok(discovery),
         (Ok(_), Err(retirement_error)) => Err(retirement_error),
-        (Err(error), _) => Err(error),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(retirement_error)) => Err(MezError::new(
+            error.kind(),
+            format!(
+                "{}; transport retirement also reported cleanup uncertainty: {}",
+                error.message(),
+                retirement_error.message()
+            ),
+        )),
     }
 }
 
@@ -500,6 +508,7 @@ pub async fn discover_stdio_mcp_server(
 /// The caller retains ownership and retires the connection exactly once after
 /// the exchange, so every paginated `tools/list` page runs against the same
 /// transport and reader tasks remain owned for the whole handshake.
+#[cfg(test)]
 async fn discover_stdio_mcp_server_with_connection(
     connection: &mut McpStdioConnection,
     plan: &McpStartupPlan,
