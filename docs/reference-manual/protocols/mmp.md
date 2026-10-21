@@ -118,6 +118,15 @@ capabilities; those are registration metadata. The response is:
 The request ID is optional; without it `message_id` is null. A heartbeat also
 returns this ack shape and updates liveness time without changing status.
 
+For native pane agents, registered role and populated capabilities describe the
+stable native registration, not the currently resumed conversation kind. An
+independently resumed root conversation can therefore have discovery kind
+`primary` while its original role remains `worker` or `explorer`. Trusted generic
+runtime refresh preserves that exact routing metadata only for the matching
+actor-owned pane/session; explicit creation conflicts and project/pane/window
+checks remain strict. These labels grant no parent, cleanup, scope or approval
+authority. Resume neither clears the directory/cursors nor creates another ID.
+
 ## Message types
 
 | Type | Direction and meaning |
