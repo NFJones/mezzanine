@@ -226,6 +226,14 @@ struct SpawnedChildGuard {
     /// Test-only one-shot reap failure for truthful-uncertainty coverage.
     #[cfg(test)]
     fail_next_reap: bool,
+    /// Test-only witness that the direct child was already reaped before the
+    /// injected reader-creation failure was raised.
+    #[cfg(test)]
+    pre_rejection_reap: bool,
+    /// Test-only count of exact process-group signal attempts, used to prove
+    /// that a proven reap path never signals a reusable numeric id.
+    #[cfg(test)]
+    signal_attempts: u32,
     /// Test-only slot that publishes custody witnesses after settlement.
     #[cfg(test)]
     witness: Option<Arc<Mutex<Option<SpawnedChildCustodyWitness>>>>,
@@ -246,6 +254,10 @@ impl SpawnedChildGuard {
             reaped: false,
             #[cfg(test)]
             fail_next_reap: false,
+            #[cfg(test)]
+            pre_rejection_reap: false,
+            #[cfg(test)]
+            signal_attempts: 0,
             #[cfg(test)]
             witness: None,
             #[cfg(test)]
@@ -290,6 +302,10 @@ impl SpawnedChildGuard {
     /// `reaped` false so `Drop` retries once. Native effects stay unresolved in
     /// either failure case, and no guessed id is ever signaled.
     fn terminate_and_reap(&mut self) -> Result<ExitStatus> {
+        #[cfg(test)]
+        {
+            self.signal_attempts = self.signal_attempts.saturating_add(1);
+        }
         let kill = kill_process_group(self.process_group());
         let reaped = self.await_bounded_reap();
         match (reaped, kill) {
@@ -353,6 +369,8 @@ impl SpawnedChildGuard {
             artifact_count: materialized.artifacts.len(),
             artifact_directory_present_at_spawn: materialized.directory.exists(),
             reaped: false,
+            pre_rejection_reap: false,
+            signal_attempts: 0,
         });
         self.witness = Some(slot);
     }
@@ -366,6 +384,8 @@ impl SpawnedChildGuard {
         };
         let mut record = record.clone();
         record.reaped = self.reaped;
+        record.pre_rejection_reap = self.pre_rejection_reap;
+        record.signal_attempts = self.signal_attempts;
         if let Ok(mut slot) = slot.lock() {
             *slot = Some(record);
         }
@@ -503,6 +523,10 @@ struct SpawnedChildCustodyWitness {
     artifact_directory_present_at_spawn: bool,
     /// Whether the guard proved the direct child was reaped.
     reaped: bool,
+    /// Whether the direct child was reaped before the injected reader failure.
+    pre_rejection_reap: bool,
+    /// Number of exact process-group signal attempts made by the guard.
+    signal_attempts: u32,
 }
 
 /// Executes one shell transaction in a freshly spawned shell process.
@@ -521,6 +545,10 @@ pub(crate) struct SpawnedShellExecutor {
     /// Test-only slot for exact child and staging-artifact custody witnesses.
     #[cfg(test)]
     custody_witness: Option<Arc<Mutex<Option<SpawnedChildCustodyWitness>>>>,
+    /// Test-only one-shot reap failure armed at timeout cleanup, for coverage
+    /// of the timeout/interruption collection branch rather than startup abort.
+    #[cfg(test)]
+    timeout_reap_failure: bool,
 }
 
 impl SpawnedShellExecutor {
@@ -536,6 +564,8 @@ impl SpawnedShellExecutor {
             reader_creation_failure: None,
             #[cfg(test)]
             custody_witness: None,
+            #[cfg(test)]
+            timeout_reap_failure: false,
         }
     }
 
@@ -550,6 +580,8 @@ impl SpawnedShellExecutor {
             reader_creation_failure: None,
             #[cfg(test)]
             custody_witness: None,
+            #[cfg(test)]
+            timeout_reap_failure: false,
         }
     }
 
@@ -592,6 +624,13 @@ impl SpawnedShellExecutor {
     #[cfg(test)]
     fn clear_reader_creation_failure(&mut self) {
         self.reader_creation_failure = None;
+    }
+
+    /// Arms one cfg(test) reap failure at timeout/interruption cleanup so the
+    /// collection branch's independent custody reporting is exercised.
+    #[cfg(test)]
+    fn inject_timeout_reap_failure(&mut self) {
+        self.timeout_reap_failure = true;
     }
 
     /// Line prefix appended to materialized apply-patch sidecar records.
@@ -860,6 +899,10 @@ impl SpawnedShellExecutor {
             // Timeout or interruption: kill the exact owned process group and
             // reap within a bounded window. Reader cancellation stays after the
             // bounded drain so buffered output is not discarded early.
+            #[cfg(test)]
+            if self.timeout_reap_failure {
+                guard.inject_reap_failure();
+            }
             match guard.terminate_and_reap() {
                 Ok(status) => status,
                 Err(primary) => {
@@ -961,8 +1004,12 @@ impl SpawnedShellExecutor {
         #[cfg(test)]
         if let Some(failure) = self.reader_creation_failure.as_ref() {
             await_injected_reader_failure_readiness(&failure.readiness_witness);
-            if failure.await_child_exit {
-                await_injected_child_exit(guard);
+            if failure.await_child_exit && !await_injected_child_exit(guard) {
+                return Err(self.abort_spawned_child(
+                    guard,
+                    Vec::new(),
+                    MezError::invalid_state("injected child-exit precondition was not observed"),
+                ));
             }
             if failure.fail_first_reap {
                 guard.inject_reap_failure();
@@ -1430,19 +1477,20 @@ fn readiness_witness_present(path: &Path) -> bool {
 /// already-exited startup path is exercised without racing child startup. The
 /// reaped flag also prevents any later group signal to a reusable numeric id.
 #[cfg(test)]
-fn await_injected_child_exit(guard: &mut SpawnedChildGuard) {
+fn await_injected_child_exit(guard: &mut SpawnedChildGuard) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match guard.child_mut().try_wait() {
             Ok(Some(_status)) => {
+                guard.pre_rejection_reap = true;
                 guard.mark_reaped();
-                return;
+                return true;
             }
             Ok(None) => {}
-            Err(_) => return,
+            Err(_) => return false,
         }
         if Instant::now() >= deadline {
-            return;
+            return false;
         }
         std::thread::sleep(SPAWNED_CHILD_POLL_INTERVAL);
     }
@@ -3048,7 +3096,7 @@ mod tests {
     /// Creates one private fixture directory for deterministic reader-creation
     /// failure regressions and returns it with its readiness witness and
     /// delayed-mutation marker paths.
-    fn reader_failure_fixture(label: &str) -> (PathBuf, PathBuf, PathBuf) {
+    fn reader_failure_fixture(label: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
         let directory =
             std::env::temp_dir().join(format!("mez-reader-failure-{}-{label}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
@@ -3071,6 +3119,21 @@ mod tests {
     ) -> ShellExecutionRequest {
         reader_setup_request(
             "printf '%s' \"$$\" > \"$1\"; /bin/sh -c 'printf \"%s\" \"$$\" > \"$1\"; sleep 0.2; : > \"$2\"' /bin/sh \"$2\" \"$3\" & wait",
+            readiness,
+            descendant_readiness,
+            marker,
+        )
+    }
+
+    /// Builds a quiet descendant fixture whose delayed mutation outlives the
+    /// collection timeout, so a survivor would still be detected afterwards.
+    fn timeout_reader_setup_request(
+        readiness: &Path,
+        descendant_readiness: &Path,
+        marker: &Path,
+    ) -> ShellExecutionRequest {
+        reader_setup_request(
+            "printf '%s' \"$$\" > \"$1\"; /bin/sh -c 'printf \"%s\" \"$$\" > \"$1\"; sleep 1; : > \"$2\"' /bin/sh \"$2\" \"$3\" & wait",
             readiness,
             descendant_readiness,
             marker,
@@ -3250,6 +3313,14 @@ mod tests {
         );
         let witness = witness_slot.lock().unwrap().clone().unwrap();
         assert!(witness.reaped, "exited child was not reaped");
+        assert!(
+            witness.pre_rejection_reap,
+            "direct child was not reaped before the injected rejection"
+        );
+        assert_eq!(
+            witness.signal_attempts, 0,
+            "group was signaled after an exact reap"
+        );
         assert!(!witness.artifact_directory.exists());
         assert_eq!(read_pid_witness(&readiness), witness.pid);
         assert!(!marker.exists());
@@ -3294,10 +3365,56 @@ mod tests {
             "{error:?}"
         );
         assert!(!error.message().contains("were settled"), "{error:?}");
+        assert!(
+            !error.message().contains("reader failed while settling"),
+            "{error:?}"
+        );
+        assert!(!error.message().contains("reader panicked"), "{error:?}");
         let witness = witness_slot.lock().unwrap().clone().unwrap();
         assert!(witness.reaped, "Drop retry did not reap the direct child");
         assert!(!witness.artifact_directory.exists());
         assert_eq!(read_pid_witness(&readiness), witness.pid);
+        assert_no_delayed_mutation(&marker);
+        let _ = fs::remove_dir_all(&fixture);
+    }
+
+    /// A timeout whose custody reap cannot be proven must not be rendered as
+    /// settled cleanup even though every reader was created and joined cleanly.
+    /// The guard's `Drop` retries once and reaps; the returned error retains
+    /// the unresolved custody fact, and the descendant delay outliving the
+    /// timeout proves a surviving descendant would be detected.
+    #[test]
+    fn spawned_executor_reports_unproven_timeout_custody_without_claiming_settlement() {
+        let (fixture, readiness, descendant_readiness, marker) =
+            reader_failure_fixture("timeout-reap-unproven");
+        let mut executor = SpawnedShellExecutor::new(test_context());
+        let witness_slot = executor.observe_custody();
+        executor.inject_timeout_reap_failure();
+        let mut setup_request =
+            timeout_reader_setup_request(&readiness, &descendant_readiness, &marker);
+        setup_request.timeout_ms = Some(300);
+        let error = executor.execute_shell(&setup_request).unwrap_err();
+        assert!(
+            error.message().contains("injected reap failure"),
+            "{error:?}"
+        );
+        assert!(
+            error.message().contains("cleanup was not fully proven"),
+            "{error:?}"
+        );
+        assert!(!error.message().contains("were settled"), "{error:?}");
+        assert!(
+            !error.message().contains("reader failed while settling"),
+            "{error:?}"
+        );
+        assert!(!error.message().contains("reader panicked"), "{error:?}");
+        let witness = witness_slot.lock().unwrap().clone().unwrap();
+        assert!(witness.reaped, "Drop retry did not reap the direct child");
+        assert!(!witness.artifact_directory.exists());
+        assert_eq!(read_pid_witness(&readiness), witness.pid);
+        let descendant_pid = read_pid_witness(&descendant_readiness);
+        assert!(descendant_pid > 0);
+        assert_ne!(descendant_pid, witness.pid);
         assert_no_delayed_mutation(&marker);
         let _ = fs::remove_dir_all(&fixture);
     }
