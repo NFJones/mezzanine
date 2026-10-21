@@ -114,6 +114,19 @@ fn runtime_agent_entry_resumes_identity_probe_for_exact_owner_foreground() {
 /// ready state.
 #[test]
 fn runtime_agent_entry_never_overrides_contrary_readiness_state() {
+    for readiness in [
+        PaneReadinessState::InteractiveBlocked,
+        PaneReadinessState::PasswordPrompt,
+        PaneReadinessState::FullScreen,
+        PaneReadinessState::Busy,
+    ] {
+        assert_contrary_readiness_survives_repeated_owner_observation(readiness);
+    }
+}
+
+/// Asserts one contrary readiness state survives repeated owner foreground
+/// observations with no shell input and no identity transaction.
+fn assert_contrary_readiness_survives_repeated_owner_observation(readiness: PaneReadinessState) {
     let mut service = test_runtime_service();
     service.disable_legacy_managed_startup_for_tests();
     let primary = service
@@ -133,26 +146,42 @@ fn runtime_agent_entry_never_overrides_contrary_readiness_state() {
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     service.drain_pane_io_transition();
-    service.set_pane_readiness(&pane_id, PaneReadinessState::InteractiveBlocked);
+    service.set_pane_readiness(&pane_id, readiness);
 
-    service
-        .apply_pane_foreground_process_event(&pane_id, "cat", primary_process_group_id, None)
-        .unwrap();
+    for attempt in 0..2 {
+        service
+            .apply_pane_foreground_process_event(&pane_id, "cat", primary_process_group_id, None)
+            .unwrap();
 
+        assert_eq!(
+            service.pane_readiness_state(&pane_id),
+            readiness,
+            "attempt {attempt}: the entry wake must never overwrite contrary readiness evidence"
+        );
+        assert_eq!(
+            service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+            Some("awaiting-prompt"),
+            "attempt {attempt}"
+        );
+        let transition = service.drain_pane_io_transition();
+        let writes = pane_input_effects(&transition.side_effects);
+        assert!(
+            writes.is_empty(),
+            "attempt {attempt}: a {readiness:?} pane must never receive shell input: {writes:?}"
+        );
+    }
     assert_eq!(
-        service.pane_readiness_state(&pane_id),
-        PaneReadinessState::InteractiveBlocked,
-        "the entry wake must never overwrite contrary readiness evidence"
-    );
-    assert_eq!(
-        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
-        Some("awaiting-prompt")
-    );
-    let transition = service.drain_pane_io_transition();
-    let writes = pane_input_effects(&transition.side_effects);
-    assert!(
-        writes.is_empty(),
-        "an interactive-blocked pane must never receive shell input: {writes:?}"
+        service
+            .running_shell_transactions_for_tests()
+            .iter()
+            .filter(|(_, transaction)| {
+                matches!(
+                    transaction.kind,
+                    RunningShellTransactionKind::ShellIdentityProbe { .. }
+                )
+            })
+            .count(),
+        0
     );
     process.terminate(Duration::from_millis(100)).unwrap();
 }

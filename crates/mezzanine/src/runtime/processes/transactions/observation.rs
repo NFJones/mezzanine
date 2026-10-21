@@ -722,6 +722,24 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Reports whether an agent-entry boundary created before any foreground
+    /// observation is still awaiting its first owner observation.
+    ///
+    /// The boundary records, at creation, whether a process group had already
+    /// been observed. A boundary that never had one may only be released by the
+    /// observation that proves its own process and interaction epoch still own
+    /// the PTY, and it must not let an unrelated foreground event overwrite
+    /// known contrary readiness evidence while it waits.
+    pub(crate) fn agent_entry_awaits_first_foreground_observation(&self, pane_id: &str) -> bool {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.phase == RuntimeForeignShellBootstrapPhase::AwaitingPrompt
+                    && !boundary.process_group_observed
+            })
+    }
+
     /// Reports whether an awaiting agent-entry boundary is exactly owned by one
     /// foreground observation.
     ///
@@ -740,13 +758,14 @@ impl RuntimeSessionService {
         pane_id: &str,
         process_group_id: u32,
     ) -> bool {
+        if !self.agent_entry_awaits_first_foreground_observation(pane_id) {
+            return false;
+        }
         let Some(boundary) = self.process.pane_foreign_shell_boundaries.get(pane_id) else {
             return false;
         };
-        boundary.phase == RuntimeForeignShellBootstrapPhase::AwaitingPrompt
-            && boundary.process_group_id == process_group_id
+        boundary.process_group_id == process_group_id
             && self.primary_pid_for_live_pane_process(pane_id) == Some(boundary.primary_process_id)
-            && !boundary.process_group_observed
             && self.pane_readiness_state(pane_id) == PaneReadinessState::Unknown
             && self
                 .process

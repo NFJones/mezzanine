@@ -203,8 +203,7 @@ impl RuntimeSessionService {
         // observation. That exact owner observation is also the epoch's first
         // prompt evidence, so record it before resuming: the unchanged
         // readiness admission predicate then releases one identity probe.
-        let entry_prompt_candidate =
-            self.promote_entry_prompt_candidate_for_foreground(&pane_id, process_group_id)?;
+        self.promote_entry_prompt_candidate_for_foreground(&pane_id, process_group_id)?;
         let resumed_agent_entry =
             self.resume_agent_entry_discovery_for_foreground(&pane_id, process_group_id)?;
         if primary_shell_returned {
@@ -223,13 +222,20 @@ impl RuntimeSessionService {
                 let _ = self.enter_agent_subshell_if_needed(&pane_id)?;
             }
         }
-        let awaiting_initial_prompt = !entry_prompt_candidate
-            && !resumed_agent_entry
-            && self
-                .process
-                .pane_bootstrap_pending
-                .contains(pane_id.as_str())
-            && self.pane_readiness_state(&pane_id) == PaneReadinessState::Unknown;
+        // While an entry boundary still awaits its first owner observation, a
+        // generic foreground event must not recover a contrary readiness state:
+        // the readiness owner converts password, full-screen, and
+        // interactive-blocked evidence into a prompt candidate whenever the
+        // primary group is foreground, which would bypass the exact-owner guard
+        // and could admit an identity probe. The awaiting boundary is released
+        // only by its own owner observation.
+        let awaiting_initial_prompt = !resumed_agent_entry
+            && (self.agent_entry_awaits_first_foreground_observation(&pane_id)
+                || (self
+                    .process
+                    .pane_bootstrap_pending
+                    .contains(pane_id.as_str())
+                    && self.pane_readiness_state(&pane_id) == PaneReadinessState::Unknown));
         let certified_shell_regained_foreground = primary_shell_returned
             || previous_foreground_process_group.is_some()
                 && previous_foreground_certified_shell == Some(false)
