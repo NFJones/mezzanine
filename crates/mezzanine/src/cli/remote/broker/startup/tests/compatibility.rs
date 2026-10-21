@@ -83,6 +83,24 @@ impl Drop for FakeBroker {
     }
 }
 
+/// Fixture launcher that reports a launch attempt as an unexpected readiness
+/// failure. Connected readiness fixtures must never consult it, and it never
+/// observes or signals a child.
+struct UnexpectedLaunch<'a> {
+    launches: &'a AtomicUsize,
+}
+
+impl StartupLauncher for UnexpectedLaunch<'_> {
+    fn launch(&mut self, _election: &StartupElection) -> Result<()> {
+        self.launches.fetch_add(1, Ordering::SeqCst);
+        Err(MezError::invalid_state("unexpected fixture launch"))
+    }
+
+    fn observe_exit(&mut self) -> Result<Option<ExitStatus>> {
+        Ok(None)
+    }
+}
+
 /// Builds an inert, exact-shaped readiness reply, without remote credentials.
 fn reply(protocol: &str, generation: u64) -> Value {
     json!({"protocol":protocol,"handle":{"owner":"00000000000000000000000000000001","generation":generation}})
@@ -194,12 +212,12 @@ async fn outbound_wire_epoch_incompatible_readiness_never_launches_or_sends_setu
             }
         };
         let client = async {
-            connect_with_launcher(&fixture.root, Duration::from_secs(2), |_| {
-                launches.fetch_add(1, Ordering::SeqCst);
-                Err(MezError::invalid_state("unexpected fixture launch"))
-            })
-            .await
-            .err()
+            let mut launcher = UnexpectedLaunch {
+                launches: &launches,
+            };
+            connect_with_launcher(&fixture.root, Duration::from_secs(2), &mut launcher)
+                .await
+                .err()
         };
         let (error, ()) =
             tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
@@ -255,10 +273,10 @@ async fn outbound_wire_epoch_malformed_framing_has_terminal_owner_guidance() {
                 "malformed readiness must emit no setup"
             );
         };
-        let client = connect_with_launcher(&fixture.root, Duration::from_secs(2), |_| {
-            launches.fetch_add(1, Ordering::SeqCst);
-            Err(MezError::invalid_state("unexpected fixture launch"))
-        });
+        let mut launcher = UnexpectedLaunch {
+            launches: &launches,
+        };
+        let client = connect_with_launcher(&fixture.root, Duration::from_secs(2), &mut launcher);
         let (result, ()) =
             tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
                 .await
@@ -336,5 +354,55 @@ async fn outbound_wire_epoch_current_concurrent_reuse_preserves_siblings() {
     })
     .await
     .unwrap();
+    fixture.finish();
+}
+
+/// Readiness/exit race: an exact child that already failed must not invalidate a
+/// broker that authenticates. Startup probes authenticated readiness before it
+/// consults child liveness, so neither the failed classification nor another
+/// launch is reached while that broker answers. No application operation follows
+/// the readiness reply.
+#[tokio::test]
+async fn outbound_wire_epoch_authenticated_broker_outranks_failed_child() {
+    let fixture = FakeBroker::new();
+    let peer = async {
+        let mut peer = fixture.accept().await;
+        let request = peer.next().await.unwrap().unwrap();
+        assert_eq!(request.content_type, CONTENT_TYPE);
+        peer.send(ProtocolFrame::new(
+            CONTENT_TYPE,
+            reply(CURRENT, 1).to_string(),
+        ))
+        .await
+        .unwrap();
+        assert!(peer.next().await.is_none());
+    };
+    let launches = Arc::new(AtomicUsize::new(0));
+    let observations = Arc::new(AtomicUsize::new(0));
+    let client = async {
+        let mut launcher = ExitingLauncher {
+            launches: launches.clone(),
+            observations: observations.clone(),
+            launched: false,
+            status_raw: 1 << 8,
+        };
+        let client = connect_with_launcher(&fixture.root, Duration::from_secs(2), &mut launcher)
+            .await
+            .unwrap();
+        client.handle().unwrap();
+    };
+    tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
+        .await
+        .unwrap();
+    assert_eq!(
+        observations.load(Ordering::SeqCst),
+        0,
+        "authenticated readiness must be probed before child exit observation"
+    );
+    assert_eq!(
+        launches.load(Ordering::SeqCst),
+        0,
+        "a ready broker must not be replaced by another launch"
+    );
     fixture.finish();
 }

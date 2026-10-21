@@ -6183,6 +6183,16 @@ concrete terminal guard. Signals MUST retire only that frontend and attempt boun
 terminal restoration. Initial missing/refused discovery for profiles with configured
 route availability MAY invoke elected startup using the running executable and caller-retained
 child evidence. Startup failure MUST NOT authorize direct fallback or replacement.
+Elected startup MUST observe the caller's exact spawned child exit beside
+authenticated readiness under the same absolute deadline. An exited child MUST be
+classified promptly as a failed/nonzero exit or as a successful no-publication
+exit, distinctly from a live-but-not-ready timeout, election contention,
+readiness protocol rejection and launcher spawn failure, retaining the exact
+child handle and bounded status evidence for the caller. An authenticated broker
+MUST remain authoritative in a readiness/exit race. Observation MUST NOT signal,
+adopt, replace or terminate a discovered, sibling or unknown process, MUST NOT
+delete discovery, lock or key entries, MUST NOT extend the deadline, and MUST NOT
+retry application creation or input.
 Frontend exit MUST NOT kill the potentially shared child; exited children MAY be
 reaped by exact handle, while live-child disposal retains the documented best-effort
 reaping limitation. Unqualified routes retain direct eligibility before startup.

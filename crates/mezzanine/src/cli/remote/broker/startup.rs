@@ -6,8 +6,17 @@
 //! never reasons to replace an existing owner. One election guard survives the
 //! launch/readiness sequence and is revalidated before every startup effect.
 //! The endpoint's independent exclusive lifetime lock remains mandatory.
+//!
+//! Authenticated readiness negotiation runs beside exact launched-child exit
+//! observation under the one existing absolute deadline. An exited child is
+//! reported promptly and distinctly rather than as a generic readiness timeout,
+//! yet a broker that authenticates during the readiness/exit race stays
+//! authoritative. Observation reaps only the caller's exact spawned child; no
+//! discovered, sibling or unknown process is signaled, adopted or replaced, and
+//! no discovery, lock or key entry is deleted to bypass contention.
 
 use std::path::Path;
+use std::process::ExitStatus;
 use std::time::Duration;
 
 use super::election::StartupElection;
@@ -16,16 +25,17 @@ use crate::host::outbound_frontend::client::OutboundFrontendClient;
 
 /// Returns one retained authenticated frontend, invoking at most one launcher.
 /// The root must already be provisioned privately by the policy-aware caller.
-/// A total async deadline bounds election contention and readiness negotiation;
-/// synchronous filesystem/launcher calls remain subject to host I/O availability.
-/// Launch failure or timeout never retries application work or unlinks ownership.
-pub(super) async fn connect_with_launcher<F>(
+/// A total async deadline bounds election contention, readiness negotiation and
+/// exact-child exit observation; synchronous filesystem/launcher calls remain
+/// subject to host I/O availability. Launch failure, observed child exit or
+/// timeout never retries application work or unlinks ownership.
+pub(super) async fn connect_with_launcher<L>(
     config_root: &Path,
     budget: Duration,
-    launch: F,
+    launcher: &mut L,
 ) -> Result<OutboundFrontendClient>
 where
-    F: FnOnce(&StartupElection) -> Result<()>,
+    L: StartupLauncher + ?Sized,
 {
     if !(Duration::from_millis(100)..=Duration::from_secs(120)).contains(&budget) {
         return Err(MezError::invalid_args(
@@ -34,7 +44,6 @@ where
     }
     let deadline = tokio::time::Instant::now() + budget;
     let mut elected = None;
-    let mut launch = Some(launch);
     loop {
         if let Some(guard) = &elected {
             let guard: &StartupElection = guard;
@@ -42,28 +51,28 @@ where
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining < Duration::from_millis(100) {
-            return Err(MezError::invalid_state(
-                "outbound broker did not become ready before timeout",
-            ));
+            return Err(readiness_timeout_error());
         }
-        match OutboundFrontendClient::connect(
-            config_root,
-            remaining.min(Duration::from_millis(500)),
-        )
-        .await
-        {
-            Ok(client) => {
+        if let Some(client) = probe_readiness(config_root, deadline).await? {
+            if let Some(guard) = &elected {
+                guard.validate()?;
+            }
+            return Ok(client);
+        }
+        // Discovery is missing or refused, so no live broker answered this
+        // probe. Inspect only this caller's exact child before electing another
+        // owner; a running child stays unobserved until it actually exits.
+        if let Some(status) = launcher.observe_exit()? {
+            // Readiness/exit race: a separately owned broker may authenticate
+            // after this child failed to publish. That authenticated broker is
+            // authoritative and must not be invalidated by the failed child.
+            if let Some(client) = probe_readiness(config_root, deadline).await? {
                 if let Some(guard) = &elected {
                     guard.validate()?;
                 }
                 return Ok(client);
             }
-            Err(error)
-                if matches!(
-                    error.io_kind(),
-                    Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
-                ) => {}
-            Err(error) => return Err(error),
+            return Err(child_exit_error(status));
         }
         if elected.is_none()
             && let Some(guard) = StartupElection::acquire(config_root)?
@@ -73,38 +82,98 @@ where
             guard.validate()?;
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining < Duration::from_millis(100) {
-                return Err(MezError::invalid_state(
-                    "outbound broker did not become ready before timeout",
-                ));
+                return Err(readiness_timeout_error());
             }
-            match OutboundFrontendClient::connect(
-                config_root,
-                remaining.min(Duration::from_millis(500)),
-            )
-            .await
-            {
-                Ok(client) => {
-                    guard.validate()?;
-                    return Ok(client);
-                }
-                Err(error)
-                    if matches!(
-                        error.io_kind(),
-                        Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
-                    ) => {}
-                Err(error) => return Err(error),
+            if let Some(client) = probe_readiness(config_root, deadline).await? {
+                guard.validate()?;
+                return Ok(client);
             }
             guard.validate()?;
-            let launcher = launch.take().ok_or_else(|| {
-                MezError::invalid_state("outbound startup launcher already consumed")
-            })?;
-            launcher(&guard)?;
+            launcher.launch(&guard)?;
             elected = Some(guard);
         }
         tokio::time::sleep_until(
             (tokio::time::Instant::now() + Duration::from_millis(20)).min(deadline),
         )
         .await;
+    }
+}
+
+/// Launcher-side capability consumed by bounded startup orchestration.
+///
+/// Implementations launch at most one exact child under a validated election and
+/// observe only that caller-owned child through a nonblocking exact handle. They
+/// never discover, signal, adopt or replace another process, and a synchronous
+/// launch failure propagates as its original error without retry or fallback.
+pub(super) trait StartupLauncher {
+    /// Invokes this startup attempt's single launch under a valid election.
+    fn launch(&mut self, election: &StartupElection) -> Result<()>;
+
+    /// Returns the exact launched child's status once it has exited, reaping only
+    /// that child. `None` means no child was launched or it is still running.
+    fn observe_exit(&mut self) -> Result<Option<ExitStatus>>;
+}
+
+/// Runs one bounded authenticated readiness probe.
+///
+/// `Ok(None)` reports missing or refused discovery, the only outcomes that may
+/// elect startup or inspect an exact child. A ready client or any connected
+/// failure propagates unchanged so permission, protocol and negotiation errors
+/// stay terminal and keep their original classification. The probe never creates
+/// discovery state and never exceeds the caller's absolute deadline.
+async fn probe_readiness(
+    config_root: &Path,
+    deadline: tokio::time::Instant,
+) -> Result<Option<OutboundFrontendClient>> {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if remaining < Duration::from_millis(100) {
+        return Ok(None);
+    }
+    match OutboundFrontendClient::connect(config_root, remaining.min(Duration::from_millis(500)))
+        .await
+    {
+        Ok(client) => Ok(Some(client)),
+        Err(error)
+            if matches!(
+                error.io_kind(),
+                Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Reports a live-or-absent startup that exhausted the retained deadline.
+///
+/// This stays distinct from an observed child exit: the caller's exact child may
+/// still be running and may still become ready, so no ownership inference,
+/// termination or retry is attached to this classification.
+fn readiness_timeout_error() -> MezError {
+    MezError::invalid_state("outbound broker did not become ready before timeout")
+}
+
+/// Classifies one observed exact-child exit without reading diagnostics or
+/// reflecting broker output.
+///
+/// Only the bounded exit status and the static "before local readiness" stage are
+/// reported. The retained endpoint identity may still belong to another live
+/// owner, so the message points at owner inspection rather than lock or key
+/// deletion, and the caller keeps the exact child evidence for its own disposal.
+fn child_exit_error(status: ExitStatus) -> MezError {
+    if status.success() {
+        MezError::invalid_state(format!(
+            "outbound broker child exited successfully before local readiness ({status}); \
+             an existing broker may still own the endpoint identity, so inspect the retained \
+             owner and diagnostics instead of deleting lock or key files"
+        ))
+    } else {
+        MezError::invalid_state(format!(
+            "outbound broker child exited before local readiness ({status}); \
+             an existing broker may still own the endpoint identity, so inspect the retained \
+             owner and diagnostics instead of deleting lock or key files"
+        ))
     }
 }
 

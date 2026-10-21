@@ -4,7 +4,7 @@
 //! work. Command construction is inspected separately from actual child reaping.
 
 use super::*;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 
 /// Concurrent startup callers must elect exactly one real broker child and
 /// obtain distinct authenticated frontend handles. Disposal must not kill the
@@ -151,32 +151,40 @@ async fn outbound_launcher_actual_broker_retains_child_and_reuses_readiness() {
     std::fs::remove_dir_all(home).unwrap();
 }
 
-/// An exited launcher with no published socket must remain caller-owned after
-/// readiness timeout. The caller reaps it explicitly, and a second startup
-/// attempt cannot silently replace the retained process evidence.
+/// An exited launcher with no published socket must be classified promptly and
+/// distinctly instead of disguised as an exhausted readiness deadline. The
+/// caller retains and reaps only its own exact child, and a second startup
+/// attempt cannot silently replace that retained process evidence.
 #[tokio::test]
 async fn outbound_launcher_owned_startup_retains_failed_child() {
     let (home, env, election) = fixture();
     drop(election);
     let mut child = None;
-    let result = connect_owned(
+    let started = tokio::time::Instant::now();
+    let error = connect_owned(
         Path::new("/bin/true"),
         &env,
-        std::time::Duration::from_millis(200),
+        std::time::Duration::from_secs(10),
         &mut child,
     )
-    .await;
-    assert!(result.is_err());
+    .await
+    .err()
+    .expect("a clean no-publication exit cannot report readiness");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "exited child must be reported before the retained deadline"
+    );
+    assert!(
+        error
+            .message()
+            .contains("exited successfully before local readiness"),
+        "clean no-publication exit needs its own classification: {error}"
+    );
+    assert!(!error.message().contains("before timeout"));
     let launched = child
         .as_mut()
         .expect("spawned child must survive readiness failure");
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_secs(5), launched.wait())
-            .await
-            .unwrap()
-            .unwrap()
-            .success()
-    );
+    assert!(launched.try_wait().unwrap().unwrap().success());
     assert!(
         connect_owned(
             Path::new("/bin/true"),
@@ -286,5 +294,164 @@ async fn outbound_launcher_reaps_its_exact_child() {
     );
     drop(launched);
     drop(election);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+/// A real immediately failing child must be classified before the retained
+/// deadline with its exact non-success status instead of a readiness timeout.
+/// The caller reaps only its own handle, and startup classification creates,
+/// replaces or deletes no discovery, lock or key entry.
+#[tokio::test]
+async fn outbound_launcher_reports_immediate_nonzero_child_exit() {
+    let (home, env, election) = fixture();
+    drop(election);
+    let mut child = None;
+    let started = tokio::time::Instant::now();
+    let error = connect_owned(
+        Path::new("/bin/false"),
+        &env,
+        std::time::Duration::from_secs(10),
+        &mut child,
+    )
+    .await
+    .err()
+    .expect("a nonzero child exit cannot report readiness");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "nonzero child exit must be reported promptly"
+    );
+    assert!(error.message().contains("exited before local readiness"));
+    assert!(!error.message().contains("before timeout"));
+    let status = child
+        .as_mut()
+        .expect("failed child remains caller-owned")
+        .try_wait()
+        .unwrap()
+        .expect("failed child status must be reaped");
+    assert!(!status.success());
+    assert_eq!(status.code(), Some(1));
+    let paths = env.config_paths().unwrap();
+    assert!(!paths.root().join("outbound.sock").exists());
+    drop(child);
+    drop(StartupElection::acquire(paths.root()).unwrap().unwrap());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+/// Real synthetic disposable-root control for a stranded owner: one actual
+/// broker publishes, only this fixture's socket pathname is unlinked while the
+/// retained endpoint identity lock stays held, and a replacement launch must be
+/// reported as an exact-child exit promptly. The original owner and sibling
+/// evidence stay alive until this test explicitly reaps only its own child; a
+/// same-identity replacement then publishes normally. No user broker,
+/// credentials or network/provider work participate.
+#[tokio::test]
+#[ignore = "requires explicit MEZ_BROKER_EXECUTABLE for actual process qualification"]
+async fn outbound_launcher_reports_replacement_exit_after_fixture_socket_unlink() {
+    let executable = std::path::PathBuf::from(
+        std::env::var_os("MEZ_BROKER_EXECUTABLE").expect("explicit broker executable required"),
+    );
+    assert!(executable.is_absolute());
+    let (home, env, election) = fixture();
+    drop(election);
+    let mut owner = None;
+    let first = connect_owned(
+        &executable,
+        &env,
+        std::time::Duration::from_secs(10),
+        &mut owner,
+    )
+    .await
+    .expect("fixture owner must publish readiness");
+    let paths = env.config_paths().unwrap();
+    let socket = paths.root().join("outbound.sock");
+    let observed = std::fs::symlink_metadata(&socket).unwrap();
+    assert!(paths.root().join("remote/client/endpoint.lock").exists());
+    drop(first);
+    let current = std::fs::symlink_metadata(&socket).unwrap();
+    assert_eq!(
+        (current.dev(), current.ino()),
+        (observed.dev(), observed.ino()),
+        "only this fixture's exact publication may be unlinked"
+    );
+    std::fs::remove_file(&socket).unwrap();
+    assert!(
+        owner
+            .as_mut()
+            .expect("elected owner child")
+            .try_wait()
+            .unwrap()
+            .is_none(),
+        "socket unlink must not stop the retained owner"
+    );
+    let mut replacement = None;
+    let started = tokio::time::Instant::now();
+    let error = connect_owned(
+        &executable,
+        &env,
+        std::time::Duration::from_secs(10),
+        &mut replacement,
+    )
+    .await
+    .err()
+    .expect("replacement cannot publish over the retained identity owner");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "replacement exit must be classified rather than waited out"
+    );
+    assert!(
+        error.message().contains("exited before local readiness"),
+        "replacement exit needs the exact-child classification: {error}"
+    );
+    let failed = replacement
+        .as_mut()
+        .expect("replacement child remains caller-owned")
+        .try_wait()
+        .unwrap()
+        .expect("replacement child status must be reaped");
+    assert!(!failed.success());
+    assert!(
+        owner
+            .as_mut()
+            .expect("elected owner child")
+            .try_wait()
+            .unwrap()
+            .is_none(),
+        "replacement failure must not disturb the original owner"
+    );
+    let stopped = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        owner
+            .as_mut()
+            .expect("elected owner child")
+            .shutdown_for_tests(),
+    )
+    .await
+    .expect("fixture owner shutdown must finish")
+    .expect("fixture owner shutdown must succeed");
+    assert!(stopped.success());
+    drop(replacement);
+    let mut reused = None;
+    let fresh = connect_owned(
+        &executable,
+        &env,
+        std::time::Duration::from_secs(20),
+        &mut reused,
+    )
+    .await
+    .expect("released identity must publish a fresh owner");
+    fresh.handle().unwrap();
+    drop(fresh);
+    let shutdown = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        reused
+            .as_mut()
+            .expect("fresh owner child")
+            .shutdown_for_tests(),
+    )
+    .await
+    .expect("fresh owner shutdown must finish")
+    .expect("fresh owner shutdown must succeed");
+    assert!(shutdown.success());
+    drop((reused, owner));
     std::fs::remove_dir_all(home).unwrap();
 }

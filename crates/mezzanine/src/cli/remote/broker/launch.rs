@@ -7,6 +7,9 @@
 //! caller-owned for startup observation and reaping; dropping a frontend or
 //! launch handle must not terminate a broker shared by sibling frontends.
 //! Failed readiness does not prove this child owns a published listener.
+//! Startup observes this exact child's exit beside authenticated readiness and
+//! reports a prompt exit classification, but the retained child is never killed
+//! and no discovered owner or sibling is inferred from it.
 
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
@@ -14,6 +17,7 @@ use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 
 use super::election::StartupElection;
+use super::startup::StartupLauncher;
 use crate::cli::CliEnv;
 use crate::error::{MezError, Result};
 
@@ -22,6 +26,8 @@ const DIAGNOSTIC_NAME: &str = "outbound.diagnostics.log";
 /// Connects through protected election/readiness with an explicitly selected
 /// executable. The caller retains any spawned child even when readiness fails
 /// or this future is cancelled; no socket observation authorizes killing it.
+/// An exit by that exact child is classified promptly instead of waiting out the
+/// readiness deadline, and cancellation keeps the child in the caller's slot.
 /// This is not ordinary attach/new activation or a background reaper.
 pub(in crate::cli) async fn connect_owned(
     executable: &Path,
@@ -44,16 +50,45 @@ pub(in crate::cli) async fn connect_owned(
         return Err(MezError::forbidden("Iroh outbound transport is disabled"));
     }
     paths.ensure_default_config()?;
-    super::startup::connect_with_launcher(paths.root(), budget, |election| {
-        if child.is_some() {
+    let mut coordinator = OwnedStartup {
+        executable,
+        env,
+        child,
+    };
+    super::startup::connect_with_launcher(paths.root(), budget, &mut coordinator).await
+}
+
+/// Borrowed startup coordination over the caller's retained child slot.
+///
+/// The caller owns the slot across success, failure and cancellation, while this
+/// adapter launches at most once and observes only that exact retained child. It
+/// never rediscovers a socket owner, signals a sibling, replaces a retained child
+/// or reads diagnostic contents.
+struct OwnedStartup<'a> {
+    executable: &'a Path,
+    env: &'a CliEnv,
+    child: &'a mut Option<LaunchedBroker>,
+}
+
+impl StartupLauncher for OwnedStartup<'_> {
+    /// Spawns only this caller's explicit executable after election validation.
+    fn launch(&mut self, election: &StartupElection) -> Result<()> {
+        if self.child.is_some() {
             return Err(MezError::conflict(
                 "outbound startup child already retained; inspect it before retrying",
             ));
         }
-        *child = Some(LaunchedBroker::spawn(executable, env, election)?);
+        *self.child = Some(LaunchedBroker::spawn(self.executable, self.env, election)?);
         Ok(())
-    })
-    .await
+    }
+
+    /// Reaps only this caller's exact spawned child when it has already exited.
+    fn observe_exit(&mut self) -> Result<Option<ExitStatus>> {
+        match self.child.as_mut() {
+            Some(child) => child.try_wait(),
+            None => Ok(None),
+        }
+    }
 }
 
 /// One exact spawned child. Drop does not kill it; Tokio's best-effort reaper

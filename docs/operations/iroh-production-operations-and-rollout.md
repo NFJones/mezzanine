@@ -78,6 +78,39 @@ An EOF alone does not prove mixed versions. The historical unchanged `/1` hello
 could pass readiness and later reject `if_view_identity`; that schema mechanism
 does not determine the cause of an incident without broker/version evidence.
 
+## Recover a stranded endpoint identity owner
+
+An outbound broker holds an exclusive endpoint identity lock under `remote/client/`
+that is independent of discovery. Removing a socket path or the `outbound.*`
+entries neither releases that lock nor stops the original listener, so a
+replacement broker can exit without publishing. Startup reports that exact
+child's exit promptly and distinguishes a failed or no-publication exit from a
+live-but-not-ready timeout, an election conflict and a readiness rejection. It
+never kills or replaces a broker on its own.
+
+When the reported failure is an exact-child exit, or discovery is missing while
+an identity owner may still exist:
+
+1. Stop the frontend operation. Do not retry session creation, pairing, terminal
+   input or management work that may already have applied effects.
+2. Read the bounded exit classification and the private diagnostics relative to
+   your configuration root (`outbound.diagnostics.log`). Diagnostics are local
+   evidence, not a peer or credential channel.
+3. Identify the exact process that owns the endpoint identity lock from evidence
+   your deployment retains: the launcher, service manager or terminal session
+   that started the broker. A socket path, a sole matching process name or a lock
+   timestamp is not lifecycle authority.
+4. Before stopping it, reconcile sibling frontends and uncertain remote work. A
+   frontend exit does not prove the shared broker is unused; only the identified
+   lifecycle owner may drain or retire its exact broker using the established
+   shutdown and observation procedure.
+5. After completed retirement, let startup publish again with the same identity.
+   Never delete `endpoint.lock`, `endpoint.key`, discovery sockets or the
+   configuration root to bypass contention; never blanket-terminate processes;
+   never rotate identity, widen permissions, extend a global deadline or replay
+   creation/input automatically. If ownership cannot be established, preserve
+   evidence and escalate to the deployment owner.
+
 ## Choose one explicit network policy
 
 Use primary-user configuration and restart the daemon after changes. Project
