@@ -239,6 +239,14 @@ pub struct SnapshotRepository {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) root: PathBuf,
+    /// Test-only wall-clock reading used for newly created snapshots.
+    ///
+    /// The creation stamp is still advanced to stay strictly newer than the
+    /// current winner, so a fixture can request a repeated or regressed clock
+    /// reading and exercise the ordering contract without sleeping on the host
+    /// clock. Production repositories leave this unset.
+    #[cfg(test)]
+    pub(super) creation_seconds_override: Option<u64>,
 }
 
 /// Carries Session Snapshot Payload state for this subsystem.

@@ -705,14 +705,27 @@ async fn openai_stream_request_accepts_json_completion_without_progress() {
     assert_eq!(body["stream"], true);
 }
 
-#[tokio::test]
-/// Verifies provider streaming forwards an ordered `say` event backlog larger
-/// than the former bounded progress channel without dropping source text.
+/// Total provider budget for the fake streaming-backlog fixtures.
 ///
-/// Each source character arrives in its own SSE event. The collected deltas
-/// must reconstruct the exact validated action text and include both lifecycle
-/// events even when more than 32 provider fragments are queued.
-async fn openai_provider_stream_forwards_lossless_say_event_backlog() {
+/// The shared total deadline is a wall-clock end-to-end budget and includes
+/// every awaited progress observer. These fixtures emit one SSE delta per MAAP
+/// character (236 deltas plus a terminal event), so more than 32 progress
+/// events must cross the bounded channel with repeated consumer scheduling.
+/// A 10 ms budget turns that scheduling into a false failure; keep a finite
+/// budget sized for scheduling because these tests assert lossless ordering,
+/// not deadline timing.
+const STREAMING_BACKLOG_TEST_TIMEOUT_MS: u64 = 10_000;
+
+/// Explicit short budget for the production-deadline negative control.
+const DESCHEDULED_BACKLOG_TIMEOUT_MS: u64 = 10;
+
+/// Builds the request and SSE body for the lossless streamed `say` backlog.
+///
+/// Each MAAP character is emitted as its own one-character delta, so the
+/// fixture produces more progress events than the bounded channel can hold and
+/// exercises ordered backpressure instead of a single burst. Returns the
+/// request, the exact action text, and the stream body.
+fn streaming_say_backlog_fixture() -> (ModelRequest, String, String) {
     let request = assemble_model_request(
         &ModelProfile {
             provider: "openai".to_string(),
@@ -768,36 +781,17 @@ async fn openai_provider_stream_forwards_lossless_say_event_backlog() {
             "response": {"id": "resp_1", "model": "gpt-test"},
         })
     ));
-    let transport = AsyncFakeProviderHttpTransport {
-        requests: std::sync::Mutex::new(Vec::new()),
-        response: ProviderHttpResponse {
-            status_code: 200,
-            headers: Default::default(),
-            body,
-        },
-    };
-    let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
-        "test-key",
-        "https://example.test/responses",
-        10,
-        std::collections::BTreeMap::new(),
-        true,
-        transport,
-    )
-    .unwrap();
-    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+    (request, text, body)
+}
 
-    let provider_task = tokio::spawn(async move {
-        provider
-            .send_request_async_with_progress(&request, Some(sender))
-            .await
-    });
-    let mut events = Vec::new();
-    while let Some(event) = receiver.recv().await {
-        events.push(event);
-    }
-    let response = provider_task.await.unwrap().unwrap();
-
+/// Asserts the streamed backlog preserved every lifecycle barrier, the exact
+/// rationale and `say` text, and the validated action payload.
+fn assert_streaming_say_backlog_events(
+    events: &[mez_agent::StreamingSayEvent],
+    response: mez_agent::ModelResponse,
+    text: &str,
+) {
+    assert!(events.len() > 32, "events={}", events.len());
     assert!(matches!(
         events.first(),
         Some(mez_agent::StreamingSayEvent::RationaleStarted)
@@ -833,14 +827,155 @@ async fn openai_provider_stream_forwards_lossless_say_event_backlog() {
         })
         .collect::<String>();
     assert_eq!(streamed_rationale, "stream the requested answer");
-    assert!(events.len() > 32, "events={}", events.len());
     let batch = response.action_batch.unwrap();
     match &batch.actions[0].payload {
         AgentActionPayload::Say {
             text: validated, ..
-        } => assert_eq!(validated, &text),
+        } => assert_eq!(validated.as_str(), text),
         payload => panic!("unexpected payload: {payload:?}"),
     }
+}
+
+#[tokio::test]
+/// Verifies provider streaming forwards an ordered `say` event backlog larger
+/// than the former bounded progress channel without dropping source text.
+///
+/// Each source character arrives in its own SSE event. The collected deltas
+/// must reconstruct the exact validated action text and include both lifecycle
+/// events even when more than 32 provider fragments are queued.
+async fn openai_provider_stream_forwards_lossless_say_event_backlog() {
+    let (request, text, body) = streaming_say_backlog_fixture();
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body,
+        },
+    };
+    let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "test-key",
+        "https://example.test/responses",
+        STREAMING_BACKLOG_TEST_TIMEOUT_MS,
+        std::collections::BTreeMap::new(),
+        true,
+        transport,
+    )
+    .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+
+    let provider_task = tokio::spawn(async move {
+        provider
+            .send_request_async_with_progress(&request, Some(sender))
+            .await
+    });
+    let mut events = Vec::new();
+    while let Some(event) = receiver.recv().await {
+        events.push(event);
+    }
+    let response = provider_task.await.unwrap().unwrap();
+
+    assert_streaming_say_backlog_events(&events, response, &text);
+}
+
+#[tokio::test(flavor = "current_thread")]
+/// Verifies the streamed `say` backlog stays lossless and ordered when the
+/// progress consumer is descheduled beyond the former 10 ms fake-transport
+/// budget.
+///
+/// The total deadline is wall-clock and includes every awaited progress
+/// observer, so a 10 ms budget turns ordinary scheduling into a false failure.
+/// This deterministic 25 ms consumer delay reproduces the loaded full-suite
+/// condition without machine load and guards the fixture-local budget against
+/// regressing below ordinary scheduling latency.
+async fn openai_provider_stream_backlog_survives_descheduled_progress_consumer() {
+    let (request, text, body) = streaming_say_backlog_fixture();
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body,
+        },
+    };
+    let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "test-key",
+        "https://example.test/responses",
+        STREAMING_BACKLOG_TEST_TIMEOUT_MS,
+        std::collections::BTreeMap::new(),
+        true,
+        transport,
+    )
+    .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+    let provider_task = tokio::spawn(async move {
+        provider
+            .send_request_async_with_progress(&request, Some(sender))
+            .await
+    });
+    let first_event = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+        .await
+        .expect("backlog fixture should emit progress")
+        .expect("backlog fixture should keep its progress channel open");
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    let mut events = vec![first_event];
+    while let Some(event) = receiver.recv().await {
+        events.push(event);
+    }
+    let response = provider_task.await.unwrap().unwrap();
+    assert_streaming_say_backlog_events(&events, response, &text);
+}
+
+#[tokio::test(flavor = "current_thread")]
+/// Verifies an explicitly short total deadline still fails with a typed
+/// `phase=total` provider timeout when the progress consumer is descheduled.
+///
+/// This is the production-deadline negative control for the backlog fixture:
+/// the absolute budget includes awaited observers by contract, so the
+/// deliberately stalled consumer must exhaust it with a typed timeout. The
+/// positive fixtures use a separate finite budget and do not weaken or bypass
+/// this path.
+async fn openai_provider_stream_backlog_consumer_descheduling_exhausts_total_deadline() {
+    let (request, _text, body) = streaming_say_backlog_fixture();
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body,
+        },
+    };
+    let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "test-key",
+        "https://example.test/responses",
+        DESCHEDULED_BACKLOG_TIMEOUT_MS,
+        std::collections::BTreeMap::new(),
+        true,
+        transport,
+    )
+    .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+    let provider_task = tokio::spawn(async move {
+        provider
+            .send_request_async_with_progress(&request, Some(sender))
+            .await
+    });
+    let _first_event = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+        .await
+        .expect("backlog fixture should emit progress")
+        .expect("backlog fixture should keep its progress channel open");
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    while receiver.recv().await.is_some() {}
+    let error = provider_task.await.unwrap().unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    let failure: serde_json::Value = serde_json::from_str(
+        error
+            .provider_failure_json()
+            .expect("descheduled backlog must report a typed provider failure"),
+    )
+    .unwrap();
+    assert_eq!(failure["error"]["code"], "provider_http_timeout");
+    assert_eq!(failure["error"]["timeout_phase"], "total");
 }
 
 #[test]

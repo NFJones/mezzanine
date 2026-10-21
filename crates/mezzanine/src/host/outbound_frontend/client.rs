@@ -194,6 +194,24 @@ impl OutboundFrontendClient {
         self.discovery.validate()?;
         Ok(&self.handle)
     }
+
+    /// Test-only one-shot idle retained-stream observation.
+    ///
+    /// It attempts one nonblocking read on the already-admitted local stream
+    /// without revalidating discovery, so fixtures can distinguish a retained
+    /// connection with no currently readable EOF/data from a merely inert handle
+    /// after a socket pathname is removed. A readable byte would be consumed and
+    /// not decoded; this is not an application-level health check. No discovery
+    /// entry is created or replaced.
+    #[cfg(test)]
+    pub(crate) fn retained_stream_open_for_tests(&self) -> bool {
+        let mut byte = [0u8; 1];
+        match self.stream.get_ref().try_read(&mut byte) {
+            Ok(0) => false,
+            Ok(_) => true,
+            Err(error) => error.kind() == std::io::ErrorKind::WouldBlock,
+        }
+    }
 }
 
 /// Preserves the phase boundary used by startup and direct-fallback callers.

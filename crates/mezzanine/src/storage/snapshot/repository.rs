@@ -13,9 +13,10 @@ use crate::error::{MezError, Result};
 use mez_mux::session::Session;
 
 use super::encoding::{
-    current_rfc3339_utc, has_manifest_control_character, reconcile_publication_temporaries,
-    sync_directory, sync_directory_async, validate_snapshot_id, write_private_new_atomic,
-    write_private_new_atomic_async,
+    advance_creation_seconds, current_unix_seconds_utc, has_manifest_control_character,
+    reconcile_publication_temporaries, sync_directory, sync_directory_async,
+    unix_seconds_from_rfc3339, unix_seconds_to_rfc3339, validate_snapshot_id,
+    write_private_new_atomic, write_private_new_atomic_async,
 };
 use super::types::{
     SessionSnapshotPayload, SnapshotCreationContext, SnapshotKind, SnapshotManifest,
@@ -52,7 +53,22 @@ impl SnapshotRepository {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            #[cfg(test)]
+            creation_seconds_override: None,
+        }
+    }
+
+    /// Returns a repository whose snapshots are created at `seconds`.
+    ///
+    /// Focused tests pin the wall-clock reading here so a fixture can cover a
+    /// repeated or regressed clock without sleeping. The published creation
+    /// stamp still advances past the current winner.
+    #[cfg(test)]
+    pub(crate) fn with_creation_seconds(mut self, seconds: u64) -> Self {
+        self.creation_seconds_override = Some(seconds);
+        self
     }
 
     /// Runs the root operation for this subsystem.
@@ -96,6 +112,70 @@ impl SnapshotRepository {
             .await?;
         self.write_latest_indexes_async(&manifest.state).await?;
         Ok(path)
+    }
+
+    /// Returns the creation timestamp for one newly published snapshot.
+    ///
+    /// `created_at` is the primary latest-selection key, so it has to move
+    /// forward for every published snapshot even when the wall clock repeats a
+    /// second or steps backwards. The stamp starts from the wall-clock reading
+    /// and is raised to one second past the current winner whenever that reading
+    /// is not strictly newer, which keeps selection creation-ordered instead of
+    /// depending on an unsteady clock. The stamp is the repository's logical
+    /// creation clock: it can run ahead of wall time after a burst of saves, and
+    /// it is shared by every session in the root. Creation is not serialized
+    /// across concurrent creators, so two racing saves may share a stamp and are
+    /// then ordered by the documented id tie-break.
+    ///
+    /// The current winner must be readable: falling back to the wall clock after
+    /// an unreadable index would publish a snapshot that reports success while
+    /// sorting behind an older save. A store that cannot answer its current
+    /// winner therefore fails the creation instead of silently regressing the
+    /// latest selection. A winner whose persisted stamp is not in the written
+    /// shape cannot be compared and falls back to the wall-clock reading; that is
+    /// a deliberate legacy exception, so such a store keeps its lexical ordering
+    /// and the new save makes no newest-save claim against it.
+    fn creation_created_at(&self) -> Result<String> {
+        let previous = self
+            .latest(None)?
+            .and_then(|state| unix_seconds_from_rfc3339(&state.created_at));
+        Ok(unix_seconds_to_rfc3339(advance_creation_seconds(
+            self.creation_wall_clock_seconds(),
+            previous,
+        )))
+    }
+
+    /// Async counterpart to [`Self::creation_created_at`].
+    ///
+    /// The current winner is read through the async index path so a snapshot the
+    /// runtime creates does not block on synchronous SQLite work, and a stale
+    /// winner is repaired before the stamp is chosen exactly like the synchronous
+    /// lookup. An unreadable winner fails the creation for the same reason the
+    /// synchronous path does: publishing a stamp that cannot be compared with the
+    /// current winner would silently regress latest selection.
+    async fn creation_created_at_async(&self) -> Result<String> {
+        let previous = self
+            .latest_async(None)
+            .await?
+            .and_then(|state| unix_seconds_from_rfc3339(&state.created_at));
+        Ok(unix_seconds_to_rfc3339(advance_creation_seconds(
+            self.creation_wall_clock_seconds(),
+            previous,
+        )))
+    }
+
+    /// Returns the wall-clock reading used for the next creation stamp.
+    ///
+    /// Focused tests replace the reading so a fixture can publish snapshots at
+    /// chosen instants without sleeping or depending on the host clock.
+    fn creation_wall_clock_seconds(&self) -> u64 {
+        #[cfg(test)]
+        {
+            if let Some(seconds) = self.creation_seconds_override {
+                return seconds;
+            }
+        }
+        current_unix_seconds_utc()
     }
 
     /// Runs the write payload operation for this subsystem.
@@ -534,7 +614,7 @@ impl SnapshotRepository {
                 version: 1,
                 session_id: payload.session_id.clone(),
                 name,
-                created_at: current_rfc3339_utc(),
+                created_at: self.creation_created_at()?,
                 kind: SnapshotKind::Manual,
                 restorable: true,
                 window_count: plan.window_count,
@@ -601,7 +681,7 @@ impl SnapshotRepository {
                 version: 1,
                 session_id: payload.session_id.clone(),
                 name,
-                created_at: current_rfc3339_utc(),
+                created_at: self.creation_created_at_async().await?,
                 kind: SnapshotKind::Manual,
                 restorable: true,
                 window_count: plan.window_count,
@@ -857,6 +937,65 @@ impl SnapshotRepository {
             Some(session_id) => index.latest_by_session.get(session_id).cloned(),
             None => index.latest_all,
         })
+    }
+
+    /// Async counterpart to [`Self::read_latest_index`].
+    async fn read_latest_index_async(&self, session_id: Option<&str>) -> Result<Option<String>> {
+        let Some(index) = self.read_latest_index_state_async().await? else {
+            return Ok(None);
+        };
+        Ok(match session_id {
+            Some(session_id) => index.latest_by_session.get(session_id).cloned(),
+            None => index.latest_all,
+        })
+    }
+
+    /// Async counterpart to [`Self::latest_from_index`].
+    ///
+    /// A winner whose manifest or row disappeared between publication and this
+    /// lookup rebuilds the index once and retries, so an interrupted deletion
+    /// cannot make creation compare against a snapshot that no longer exists.
+    async fn latest_from_index_async(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<Option<SnapshotState>> {
+        let Some(snapshot_id) = self.read_latest_index_async(session_id).await? else {
+            return Ok(None);
+        };
+        let state = match self.indexed_winner_state_async(&snapshot_id).await {
+            Ok(state) => state,
+            Err(_) => {
+                self.rebuild_latest_indexes_async().await?;
+                let Some(snapshot_id) = self.read_latest_index_async(session_id).await? else {
+                    return Ok(None);
+                };
+                self.indexed_winner_state_async(&snapshot_id).await?
+            }
+        };
+        if session_id.is_none_or(|session_id| state.session_id == session_id) {
+            Ok(Some(state))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Returns the latest snapshot through asynchronous repository reads.
+    ///
+    /// This is the async counterpart of [`SnapshotRepository::latest`]: the
+    /// stored winner answers first and a full manifest listing covers a store
+    /// whose index is absent or carries no entry for the requested filter.
+    async fn latest_async(&self, session_id: Option<&str>) -> Result<Option<SnapshotState>> {
+        if let Some(snapshot) = self.latest_from_index_async(session_id).await? {
+            return Ok(Some(snapshot));
+        }
+        Ok(self
+            .list_async()
+            .await?
+            .into_iter()
+            .filter(|snapshot| {
+                session_id.is_none_or(|session_id| snapshot.session_id == session_id)
+            })
+            .max_by(Self::compare_latest_snapshots))
     }
 
     /// Reads the complete latest-index state, rebuilding an empty index once.

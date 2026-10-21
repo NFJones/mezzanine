@@ -320,39 +320,189 @@ fn snapshot_resume_can_serve_restored_session_over_control_socket() {
 
 /// Verifies snapshot resume latest selects newest matching snapshot.
 ///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
+/// The two snapshots carry distinct creation instants so the assertion depends
+/// on the durable creation order rather than on how much host-clock time passed
+/// between two back-to-back saves.
 #[test]
 fn snapshot_resume_latest_selects_newest_matching_snapshot() {
-    let (env, home) = test_env("snapshot-resume-latest");
-    let repository =
-        SnapshotRepository::new(home.join(".config").join("mezzanine").join("snapshots"));
+    let fixture = resume_latest_fixture("snapshot-resume-latest", 1_800_000_000, 1_800_000_001);
+
+    let output = resume_latest_output(fixture.env, &fixture.session_id);
+    assert!(output.contains(r#""restored":true"#));
+    assert!(output.contains(r#""session_id":"$1""#));
+    assert!(output.contains(r#""pane_count":2"#));
+
+    let selected = selected_snapshot(&fixture.snapshots_root, &fixture.session_id);
+    assert_eq!(selected.id, "snap-z");
+    assert_eq!(selected.pane_count, 2);
+    assert!(fixture.two_panes.created_at > fixture.one_pane.created_at);
+
+    let _ = fs::remove_dir_all(fixture.home);
+}
+
+/// Verifies a snapshot saved inside the same wall-clock second still becomes the
+/// latest snapshot.
+///
+/// Back-to-back saves frequently share a second, so selection must follow
+/// creation order instead of leaving the older snapshot in the latest slot until
+/// the clock happens to advance.
+#[test]
+fn snapshot_resume_latest_keeps_creation_order_within_one_wall_clock_second() {
+    let fixture = resume_latest_fixture(
+        "snapshot-resume-latest-one-second",
+        1_800_000_000,
+        1_800_000_000,
+    );
+
+    let output = resume_latest_output(fixture.env, &fixture.session_id);
+    assert!(output.contains(r#""pane_count":2"#));
+
+    let selected = selected_snapshot(&fixture.snapshots_root, &fixture.session_id);
+    assert_eq!(selected.id, "snap-z");
+    assert_eq!(selected.pane_count, 2);
+    assert!(fixture.two_panes.created_at > fixture.one_pane.created_at);
+
+    let _ = fs::remove_dir_all(fixture.home);
+}
+
+/// Verifies creation order outranks the snapshot id for saves inside one second.
+///
+/// The ids here run opposite to creation order, so a selection that falls back
+/// to id order reports the older one-pane save. Latest selection must follow the
+/// store's creation stamp instead of the snapshot name.
+#[test]
+fn snapshot_resume_latest_uses_creation_order_over_snapshot_id_within_one_second() {
+    let fixture = resume_latest_fixture_with_ids(
+        "snapshot-resume-latest-reversed-ids",
+        1_800_000_000,
+        "snap-z",
+        1_800_000_000,
+        "snap-a",
+    );
+
+    let output = resume_latest_output(fixture.env, &fixture.session_id);
+    assert!(output.contains(r#""pane_count":2"#));
+
+    let selected = selected_snapshot(&fixture.snapshots_root, &fixture.session_id);
+    assert_eq!(selected.id, "snap-a");
+    assert_eq!(selected.pane_count, 2);
+    assert!(fixture.two_panes.created_at > fixture.one_pane.created_at);
+
+    let _ = fs::remove_dir_all(fixture.home);
+}
+
+/// Verifies resume latest keeps creation order when the host clock regresses.
+///
+/// Latest selection orders by the persisted creation stamp. A clock that reads
+/// earlier for the second save used to leave the older one-pane snapshot as the
+/// winner, so resume-latest restored the wrong topology; the store now advances
+/// the stamp so the newest snapshot always wins.
+#[test]
+fn snapshot_resume_latest_keeps_creation_order_when_the_wall_clock_regresses() {
+    let fixture = resume_latest_fixture(
+        "snapshot-resume-latest-clock-regressed",
+        1_800_000_100,
+        1_800_000_000,
+    );
+
+    let output = resume_latest_output(fixture.env, &fixture.session_id);
+    assert!(output.contains(r#""restored":true"#));
+    assert!(output.contains(r#""pane_count":2"#));
+
+    let selected = selected_snapshot(&fixture.snapshots_root, &fixture.session_id);
+    assert_eq!(selected.id, "snap-z");
+    assert_eq!(selected.pane_count, 2);
+    assert!(fixture.two_panes.created_at > fixture.one_pane.created_at);
+
+    let _ = fs::remove_dir_all(fixture.home);
+}
+
+/// Deterministic inputs and persisted states for the resume-latest fixture.
+struct ResumeLatestFixture {
+    env: CliEnv,
+    home: PathBuf,
+    session_id: String,
+    snapshots_root: PathBuf,
+    one_pane: SnapshotState,
+    two_panes: SnapshotState,
+}
+
+/// Builds one session with a one-pane snapshot and a two-pane snapshot.
+///
+/// The two creation instants are supplied by the caller so every ordering
+/// assertion depends on the store's creation order instead of on the host clock.
+/// Returns the CLI environment, home directory, exact session id, snapshot store
+/// root, and both persisted states in creation order.
+fn resume_latest_fixture(
+    name: &str,
+    first_seconds: u64,
+    second_seconds: u64,
+) -> ResumeLatestFixture {
+    resume_latest_fixture_with_ids(name, first_seconds, "snap-a", second_seconds, "snap-z")
+}
+
+/// Builds the same fixture with caller-chosen snapshot ids.
+///
+/// The ids are explicit so a regression can publish saves whose id order does not
+/// match creation order while both still carry the caller's creation instants.
+fn resume_latest_fixture_with_ids(
+    name: &str,
+    first_seconds: u64,
+    first_id: &str,
+    second_seconds: u64,
+    second_id: &str,
+) -> ResumeLatestFixture {
+    let (env, home) = test_env(name);
+    let snapshots_root = home.join(".config").join("mezzanine").join("snapshots");
     let mut session = Session::new_default(
         resolve_shell(Some(OsString::from("/bin/sh"))).unwrap(),
         Size::new(80, 24).unwrap(),
     )
     .unwrap();
-    repository
-        .create_from_session("snap-a", Some("old".to_string()), &session)
+    let session_id = session.id.to_string();
+    let one_pane = SnapshotRepository::new(snapshots_root.clone())
+        .with_creation_seconds(first_seconds)
+        .create_from_session(first_id, Some("old".to_string()), &session)
         .unwrap();
     let primary = session.attach_primary("primary", true).unwrap();
     session
         .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();
-    repository
-        .create_from_session("snap-z", Some("new".to_string()), &session)
+    let two_panes = SnapshotRepository::new(snapshots_root.clone())
+        .with_creation_seconds(second_seconds)
+        .create_from_session(second_id, Some("new".to_string()), &session)
         .unwrap();
+    assert_eq!(one_pane.pane_count, 1);
+    assert_eq!(two_panes.pane_count, 2);
+    ResumeLatestFixture {
+        env,
+        home,
+        session_id,
+        snapshots_root,
+        one_pane,
+        two_panes,
+    }
+}
+
+/// Returns the snapshot the durable store selects for one exact session.
+fn selected_snapshot(snapshots_root: &Path, session_id: &str) -> SnapshotState {
+    SnapshotRepository::new(snapshots_root.to_path_buf())
+        .latest(Some(session_id))
+        .unwrap()
+        .expect("the fixture publishes matching snapshots")
+}
+
+/// Runs `mez snapshot resume-latest --session-id` and returns its JSON output.
+fn resume_latest_output(env: CliEnv, session_id: &str) -> String {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-
     run_with(
         vec![
             "mez".to_string(),
             "snapshot".to_string(),
             "resume-latest".to_string(),
             "--session-id".to_string(),
-            session.id.to_string(),
+            session_id.to_string(),
         ],
         env,
         false,
@@ -360,12 +510,6 @@ fn snapshot_resume_latest_selects_newest_matching_snapshot() {
         &mut stderr,
     )
     .unwrap();
-
-    let output = String::from_utf8(stdout).unwrap();
-    assert!(output.contains(r#""restored":true"#));
-    assert!(output.contains(r#""session_id":"$1""#));
-    assert!(output.contains(r#""pane_count":2"#));
     assert!(stderr.is_empty());
-
-    let _ = fs::remove_dir_all(home);
+    String::from_utf8(stdout).unwrap()
 }
