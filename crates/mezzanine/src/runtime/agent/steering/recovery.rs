@@ -52,6 +52,12 @@ impl RuntimeSessionService {
         self.agent.steering_recovery_dirty
     }
 
+    /// Retains a dirty checkpoint in inert display tests without publishing IO.
+    #[cfg(test)]
+    pub(crate) fn mark_steering_recovery_dirty_for_tests(&mut self) {
+        self.agent.steering_recovery_dirty = true;
+    }
+
     /// Marks the captured receipt snapshot accepted by the persistence owner.
     pub(crate) fn mark_steering_recovery_published(&mut self) {
         self.agent.steering_recovery_dirty = false;

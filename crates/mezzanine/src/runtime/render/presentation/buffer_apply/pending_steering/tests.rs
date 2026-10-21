@@ -5,6 +5,8 @@
 
 use super::*;
 
+mod display_retry;
+
 /// Pending suffix cleanup must remove every physical row it owns even when
 /// the normal two-cell gutter cannot fit. A durable predecessor must remain.
 #[test]
