@@ -722,6 +722,70 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Reports whether an awaiting agent-entry boundary is exactly owned by one
+    /// foreground observation.
+    ///
+    /// Explicit agent entry may run before the pane worker delivers its first
+    /// foreground-process observation. The boundary is then created from the
+    /// primary process group with readiness Unknown, and the only later wake is
+    /// a foreground observation for the same ownership. This predicate accepts
+    /// exactly that observation: matching awaiting phase, process group, live
+    /// primary process, interaction generation, unsettled identity epoch, and a
+    /// visible non-native agent shell. A foreign group, a stale generation, or a
+    /// hidden or native shell never matches.
+    pub(crate) fn agent_entry_boundary_matches_foreground(
+        &self,
+        pane_id: &str,
+        process_group_id: u32,
+    ) -> bool {
+        let Some(boundary) = self.process.pane_foreign_shell_boundaries.get(pane_id) else {
+            return false;
+        };
+        boundary.phase == RuntimeForeignShellBootstrapPhase::AwaitingPrompt
+            && boundary.process_group_id == process_group_id
+            && self.primary_pid_for_live_pane_process(pane_id) == Some(boundary.primary_process_id)
+            && self
+                .process
+                .pane_shell_interaction_generations
+                .get(pane_id)
+                .copied()
+                == Some(boundary.interaction_generation)
+            && self
+                .settled_pane_shell_identity_unknown(pane_id, Some(boundary.interaction_generation))
+                .is_none()
+            && self
+                .agent_shell_store()
+                .get(pane_id)
+                .is_some_and(|session| {
+                    session.visibility == mez_agent::AgentShellVisibility::Visible
+                })
+            && self.effective_agent_shell_mode_for_pane(pane_id)
+                != crate::runtime::config::ShellMode::Native
+    }
+
+    /// Records the first passive prompt evidence of an entry epoch from its exact
+    /// owner foreground observation.
+    ///
+    /// Entry is the user's prompt-authority assertion, but the boundary still
+    /// admits its identity probe only once readiness reports a prompt candidate.
+    /// When entry precedes the worker's first foreground observation, no other
+    /// prompt evidence can arrive while the shell sits idle at its displayed
+    /// prompt, so this exact owner observation is recorded through the ordinary
+    /// passive-readiness owner. Ownership, identity, generation, readiness, and
+    /// admission predicates are unchanged; this only supplies the observation
+    /// they already require.
+    pub(crate) fn promote_entry_prompt_candidate_for_foreground(
+        &mut self,
+        pane_id: &str,
+        process_group_id: u32,
+    ) -> Result<bool> {
+        if !self.agent_entry_boundary_matches_foreground(pane_id, process_group_id) {
+            return Ok(false);
+        }
+        self.observe_passive_shell_prompt_candidate(pane_id, "entry-foreground-process-event")?;
+        Ok(true)
+    }
+
     /// Starts a foreign boundary from the current worker or PTY foreground observation.
     #[allow(dead_code)]
     pub(crate) fn begin_uncertified_foreign_shell_boundary_for_current_foreground(
