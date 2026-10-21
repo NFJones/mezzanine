@@ -70,8 +70,27 @@ async fn claim_fixture_call(
 /// Cancels a real blocked stdio tools/call after its effect barrier, then runs
 /// a distinct new call through a freshly discovered transport. The old call
 /// must occur exactly once and retain unknown-effect/no-replay evidence.
-#[tokio::test]
-async fn runtime_mcp_inflight_cancellation_allows_distinct_new_call() {
+#[test]
+fn runtime_mcp_inflight_cancellation_allows_distinct_new_call() {
+    let mut body = heap_pinned_inflight_cancellation_case();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed building the Runtime")
+        .block_on(body.as_mut());
+}
+
+/// Constructs and heap-pins the original future without polling its body.
+/// Keep this allocation frame out of the test wrapper's persistent stack.
+#[inline(never)]
+fn heap_pinned_inflight_cancellation_case()
+-> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
+    Box::pin(inflight_cancellation_case())
+}
+
+/// Runs the original native cancellation/reconnection body without changing
+/// its actions, assertions, deadlines, polling, or cleanup ownership.
+async fn inflight_cancellation_case() {
     let root = temp_root("mcp-inflight-cancellation");
     fs::create_dir_all(&root).unwrap();
     let calls = root.join("calls");
