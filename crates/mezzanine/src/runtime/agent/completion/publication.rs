@@ -153,6 +153,12 @@ impl RuntimeSessionService {
                     }
                 }
             }
+            // Terminal outcome lines are canonical display source, exactly like
+            // the native path's publication step. Presenting them here keeps the
+            // existing ordered barrier honest: a failed sibling's outcome must be
+            // acknowledged before a later sibling's components may install, and
+            // it never re-executes the completed action or re-runs required gates.
+            self.present_agent_action_outcomes_to_terminal_buffer(&owner.pane_id, &execution)?;
             self.flush_ordered_provider_headers(&owner.pane_id, &execution)?;
             Ok(!self.completion_ordered_publication_pending(&owner))
         })();
