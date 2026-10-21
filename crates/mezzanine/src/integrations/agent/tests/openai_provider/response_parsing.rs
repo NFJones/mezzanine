@@ -878,7 +878,7 @@ async fn openai_provider_stream_forwards_lossless_say_event_backlog() {
     assert_streaming_say_backlog_events(&events, response, &text);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 /// Verifies the streamed `say` backlog stays lossless and ordered when the
 /// progress consumer is descheduled beyond the former 10 ms fake-transport
 /// budget.
@@ -913,8 +913,15 @@ async fn openai_provider_stream_backlog_survives_descheduled_progress_consumer()
             .send_request_async_with_progress(&request, Some(sender))
             .await
     });
+    let first_event = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        receiver.recv(),
+    )
+    .await
+    .expect("backlog fixture should emit progress")
+    .expect("backlog fixture should keep its progress channel open");
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    let mut events = Vec::new();
+    let mut events = vec![first_event];
     while let Some(event) = receiver.recv().await {
         events.push(event);
     }
@@ -922,7 +929,7 @@ async fn openai_provider_stream_backlog_survives_descheduled_progress_consumer()
     assert_streaming_say_backlog_events(&events, response, &text);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 /// Verifies an explicitly short total deadline still fails with a typed
 /// `phase=total` provider timeout when the progress consumer is descheduled.
 ///
@@ -956,6 +963,13 @@ async fn openai_provider_stream_backlog_consumer_descheduling_exhausts_total_dea
             .send_request_async_with_progress(&request, Some(sender))
             .await
     });
+    let _first_event = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        receiver.recv(),
+    )
+    .await
+    .expect("backlog fixture should emit progress")
+    .expect("backlog fixture should keep its progress channel open");
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     while receiver.recv().await.is_some() {}
     let error = provider_task.await.unwrap().unwrap_err();
