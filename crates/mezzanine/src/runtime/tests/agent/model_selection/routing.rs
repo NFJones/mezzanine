@@ -109,7 +109,30 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
                 .complete_native_shell_action(outcome.clone())
                 .unwrap()
         );
-        assert!(service.completion_publication_retry_needed_for_turn(&worker_turn.turn_id));
+        // A headerless ShellCommand owns no generic ordered-result row: its body
+        // belongs to the shell preview/settle owner. Completion must therefore
+        // not fabricate an ordered source, an acknowledgment or a retry
+        // obligation for it, while canonical custody below still commits.
+        assert!(
+            !service.completion_publication_retry_needed_for_turn(&worker_turn.turn_id),
+            "a headerless shell result must not create a phantom publication obligation"
+        );
+        let turn_has_ordered_result = |service: &crate::runtime::RuntimeSessionService| {
+            service
+                .presentation
+                .agent_queued_provider_results
+                .keys()
+                .any(|key| key.1 == worker_turn.turn_id)
+                || service
+                    .presentation
+                    .agent_published_provider_results
+                    .iter()
+                    .any(|(key, _)| key.1 == worker_turn.turn_id)
+        };
+        assert!(
+            !turn_has_ordered_result(&service),
+            "no ordered RESULT source may be created or acknowledged for a headerless shell result"
+        );
         // Measured operands: entry and exit both saw the same inherited pending
         // routed task, so completion must not change that observed membership.
         assert_eq!(
@@ -117,21 +140,6 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
             pending_before_completion,
             "native completion must not change an inherited routed continuation"
         );
-        service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::Ready);
-        // Narrowed claim: for an already-pending task this only proves duplicate
-        // queue refusal, so it cannot witness the publication barrier.
-        assert_eq!(
-            service
-                .queue_ready_provider_continuation_for_pane(&worker_turn.pane_id)
-                .unwrap(),
-            0,
-            "a duplicate routed queue cannot be inserted by manual readiness"
-        );
-        // Direct barrier evidence: the test-only flags expose the real
-        // publication readiness predicate, which cannot be ready while the
-        // retained RESULT is uninstalled. A queue/admission boolean cannot
-        // witness this because the already-pending routed task independently
-        // refuses reuse.
         let publication_ready = |service: &crate::runtime::RuntimeSessionService| {
             service
                 .completion_provider_queue_flags_for_tests(&worker_turn.turn_id)
@@ -141,38 +149,12 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
                 .expect("publication readiness flag is exposed for tests")
         };
         assert!(
-            !publication_ready(&service),
-            "held publication cannot be ready for continuation"
-        );
-        let retained_entry = service
-            .presentation
-            .agent_queued_provider_results
-            .values()
-            .next()
-            .unwrap()
-            .3
-            .clone();
-        assert_eq!(service.retry_completion_publications(), 0);
-        assert_eq!(service.retry_completion_publications(), 0);
-        assert_eq!(
-            service
-                .presentation
-                .agent_queued_provider_results
-                .values()
-                .next()
-                .unwrap()
-                .3
-                .id,
-            retained_entry.id
-        );
-        assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
-        service.hold_agent_presentation_installs_for_tests(false);
-        assert_eq!(service.retry_completion_publications(), 1);
-        assert_eq!(service.retry_completion_publications(), 0);
-        assert!(
             publication_ready(&service),
-            "a completed publication becomes ready for continuation"
+            "with no ordered obligation the publication gate is already ready"
         );
+        assert_eq!(service.retry_completion_publications(), 0);
+        service.hold_agent_presentation_installs_for_tests(false);
+        assert_eq!(service.retry_completion_publications(), 0);
         assert!(!service.complete_native_shell_action(outcome).unwrap());
         assert!(
             service
@@ -200,12 +182,18 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
         );
         assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
         service.ensure_completion_admission_open().unwrap();
-        let rows = service
-            .agent_pane_screen(&worker_turn.pane_id)
-            .unwrap()
-            .normal_content_lines()
-            .join("\n");
-        assert_eq!(rows.matches(body.trim()).count(), 1, "{level:?}: {rows}");
+        // Canonical execution owns the exact body above; no generic ordered row
+        // is claimed on screen for a headerless shell result.
+        assert_eq!(
+            service
+                .presentation
+                .agent_published_provider_results
+                .iter()
+                .filter(|(key, _)| key.1 == worker_turn.turn_id)
+                .count(),
+            0,
+            "no ordered RESULT row may be claimed for a headerless shell result"
+        );
         service.terminate_all_pane_processes().unwrap();
     }
 }

@@ -290,12 +290,27 @@ impl RuntimeSessionService {
                         .and_then(|batch| batch.actions.iter().find(|action| action.id == key.1))
                         .cloned()
                 {
-                    self.queue_ordered_provider_result(
-                        &owner.pane_id,
-                        &execution,
+                    // Only retain a source that this ordered renderer can
+                    // actually install. Appended diff previews and actions with
+                    // an execution display header own a result row; headerless
+                    // payloads such as ShellCommand are presented by their own
+                    // preview/settle owner and must not create a phantom source
+                    // whose empty append would still be acknowledged.
+                    let renderer_owns_row = matches!(
+                        action.payload,
+                        mez_agent::AgentActionPayload::ApplyPatch { .. }
+                    ) || crate::runtime::render::presentation::agent_action_execution_display_header(
                         &action,
-                        &result,
-                    )?;
+                    )
+                    .is_some();
+                    if renderer_owns_row {
+                        self.queue_ordered_provider_result(
+                            &owner.pane_id,
+                            &execution,
+                            &action,
+                            &result,
+                        )?;
+                    }
                 }
             }
             self.present_agent_action_outcomes_to_terminal_buffer(
