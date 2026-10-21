@@ -736,19 +736,24 @@ fn runtime_issue_add_dependency_failure_retries_without_duplicates() {
     assert!(start.contains(r#""state":"running""#), "{start}");
 
     let title = "Retry dependency validation once";
-    let failed = service
-        .execute_agent_turn_with_provider(
-            "turn-1",
-            &RuntimeBatchProvider {
-                response: runtime_issue_response(runtime_issue_add_batch_with_dependencies(
-                    "issue-add-missing",
-                    title,
-                    vec!["missing-dependency".to_string()],
-                )),
-            },
-            runtime_model_profile("runtime-batch", "test"),
-        )
-        .unwrap();
+    // Read-only, bounded diagnosis of the actual queue refusal. Keep the
+    // original result/unwrap and every canonical/mutation/correction oracle;
+    // never clear pending work or invent a claim just to reach those checks.
+    let queue_before = service.completion_provider_queue_flags_for_tests("turn-1");
+    let failed_result = service.execute_agent_turn_with_provider(
+        "turn-1",
+        &RuntimeBatchProvider {
+            response: runtime_issue_response(runtime_issue_add_batch_with_dependencies(
+                "issue-add-missing",
+                title,
+                vec!["missing-dependency".to_string()],
+            )),
+        },
+        runtime_model_profile("runtime-batch", "test"),
+    );
+    let queue_after = service.completion_provider_queue_flags_for_tests("turn-1");
+    eprintln!("completion_queue_flags: before={queue_before:?} after={queue_after:?}");
+    let failed = failed_result.unwrap();
     assert_eq!(failed.terminal_state, AgentTurnState::Running);
     let failure = &failed.action_results[0];
     assert_eq!(failure.status, ActionStatus::Failed);

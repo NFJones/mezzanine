@@ -1253,6 +1253,63 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Observes only the existing queue's boolean refusal/duplicate predicates.
+    /// This bounded test diagnostic cannot clear, claim, admit or acknowledge
+    /// anything; it exposes no IDs, source payloads, errors or environment data.
+    #[cfg(test)]
+    pub(crate) fn completion_provider_queue_flags_for_tests(
+        &self,
+        turn_id: &str,
+    ) -> [(&'static str, bool); 12] {
+        let group = self.agent.completion_settlements.groups.get(turn_id);
+        [
+            ("pending", self.agent_provider_task_is_pending(turn_id)),
+            ("claimed", self.agent_provider_task_is_claimed(turn_id)),
+            ("group", group.is_some()),
+            (
+                "critical_failure",
+                self.agent.completion_settlements.critical_failure.is_some(),
+            ),
+            (
+                "publication_ready",
+                self.completion_group_publication_ready(turn_id),
+            ),
+            (
+                "original_archive",
+                group.is_some_and(|group| {
+                    matches!(
+                        &group.transcript,
+                        CompletionTranscriptTarget::Original { .. }
+                    )
+                }),
+            ),
+            (
+                "archive_handoff_owned",
+                self.completion_archive_handoff_owned(turn_id),
+            ),
+            (
+                "pending_settlement",
+                group.is_some_and(|group| group.pending_settlement.is_some()),
+            ),
+            (
+                "settlement_publication_pending",
+                self.completion_settlement_publication_pending(turn_id),
+            ),
+            (
+                "primary_failure",
+                group.is_some_and(|group| group.primary_failure.is_some()),
+            ),
+            (
+                "paint_revoked",
+                group.is_some_and(|group| group.paint_revoked),
+            ),
+            (
+                "continuation_entered",
+                group.is_some_and(|group| group.continuation == CompletionMilestone::Entered),
+            ),
+        ]
+    }
+
     /// Defers NEW dispatch inside a terminal task-result/scheduler boundary;
     /// entered milestones are not success and are not paint-recovery work.
     pub(crate) fn completion_finalization_holds_new_work(&self) -> bool {
