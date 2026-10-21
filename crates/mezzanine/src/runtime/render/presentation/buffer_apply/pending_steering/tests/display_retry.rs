@@ -358,6 +358,89 @@ fn steering_display_retry_partial_prefix_preserves_equal_text_order() {
     assert!(fixture.service.agent_turn_ledger().turns().is_empty());
 }
 
+/// More settled receipts than one drain's installation budget must not install
+/// the whole backlog at once or drop the tail. The first pass installs exactly
+/// the budget and keeps the obligation owned; a later due pass installs the rest
+/// in acceptance order without repeating an installed prefix.
+#[test]
+fn steering_display_retry_bounds_receipt_backlog_per_owner() {
+    let mut fixture = Fixture::new();
+    let total = STEERING_DISPLAY_RECEIPTS_PER_DRAIN + 2;
+    let mut receipts = Vec::new();
+    for index in 0..total {
+        let mut receipt = fixture.receipt.clone();
+        receipt.id = format!("bounded-display-occurrence-{index:02}");
+        receipt.acceptance_order = u64::try_from(index).unwrap() + 1;
+        receipt.occurrence = mez_core::presentation::PresentationOccurrence::new(
+            Some(1234 + i64::try_from(index).unwrap()),
+            mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
+        );
+        receipts.push(receipt);
+    }
+    fixture
+        .service
+        .restore_steering_recovery("%1", &fixture.conversation, &receipts)
+        .unwrap();
+    fixture.service.request_steering_presentation("%1");
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        STEERING_DISPLAY_RECEIPTS_PER_DRAIN
+    );
+    assert_eq!(
+        fixture
+            .service
+            .presentation
+            .steering_presentation_retries
+            .len(),
+        1
+    );
+    fixture.make_due();
+    let recovered = fixture.service.drain_transcript_persistence_transition();
+    let ids = recovered
+        .side_effects
+        .into_iter()
+        .map(|effect| {
+            let crate::runtime::RuntimeSideEffect::PersistSteeringPresentation { entry, .. } =
+                effect
+            else {
+                panic!("display recovery emitted a non-steering effect");
+            };
+            entry.presentation.as_ref().unwrap().id.clone()
+        })
+        .collect::<Vec<_>>();
+    let expected = receipts[STEERING_DISPLAY_RECEIPTS_PER_DRAIN..]
+        .iter()
+        .map(|receipt| receipt.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, expected);
+    assert_eq!(
+        fixture
+            .text()
+            .matches("user> original accepted source")
+            .count(),
+        total
+    );
+    assert!(
+        fixture
+            .service
+            .presentation
+            .steering_presentation_retries
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .service
+            .presentation
+            .presented_steering_receipts
+            .len(),
+        total
+    );
+    assert!(fixture.service.agent_turn_ledger().turns().is_empty());
+}
+
 /// A checkpoint publication can ask for all panes again in the same drain. A
 /// failed due attempt must remain paced rather than receiving an immediate hidden
 /// second attempt; checkpoint ownership and display recovery remain independent.

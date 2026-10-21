@@ -63,6 +63,8 @@ pub(super) struct RuntimeSteeringPresentationRetry {
     pub(super) next_attempt_at: std::time::Instant,
     /// Saturating backoff exponent, not a remaining lifetime attempt budget.
     pub(super) backoff: u8,
+    /// Whether the bounded source-free unavailability event reached its sink.
+    pub(super) diagnostic_emitted: bool,
 }
 
 mod streaming_projection_outcome;

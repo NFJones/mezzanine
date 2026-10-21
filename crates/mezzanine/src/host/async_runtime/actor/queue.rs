@@ -467,10 +467,12 @@ impl AsyncRuntimeSessionActor {
     /// progress retries enrollment. Never mix this optional timer into a taken
     /// persistence batch or bypass capacity. The serialized preflight has no
     /// await, and successful tracking prevents recursive/duplicate enrollment.
-    /// Unexpected enqueue errors propagate rather than masquerading as pressure.
-    pub(super) fn queue_steering_presentation_retry_idle_wake(&mut self) -> Result<()> {
+    /// Enrollment is best effort: an exhausted generation or rejected enqueue
+    /// leaves every already-taken mandatory batch intact and the retained display
+    /// obligation owned for the next real capacity-progress drain.
+    pub(super) fn queue_steering_presentation_retry_idle_wake(&mut self) {
         if !self.steering_presentation_retry_idle_wake_needed() {
-            return Ok(());
+            return;
         }
         // Match normal queue admission's conservative nonpersistence occupancy.
         // Even if coalescing could free space, defer optional work instead of
@@ -481,18 +483,18 @@ impl AsyncRuntimeSessionActor {
             .saturating_add(self.side_effect_routes.non_persistence_len())
             >= self.side_effect_buffer
         {
-            return Ok(());
+            return;
         }
-        let generation = self
-            .timers
-            .last_idle_cleanup_generation
-            .checked_add(1)
-            .ok_or_else(|| MezError::invalid_state("steering display idle generation exhausted"))?
-            .max(async_runtime_current_unix_millis());
-        self.queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+        let Some(generation) = self.timers.last_idle_cleanup_generation.checked_add(1) else {
+            // The obligation stays retained in service state, so a later drain
+            // can still enroll when generation space exists.
+            return;
+        };
+        let generation = generation.max(async_runtime_current_unix_millis());
+        let _ = self.queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
             key: RuntimeTimerKey::new(RuntimeTimerKind::IdleCleanup, "session", generation),
             delay_ms: DEFAULT_SHELL_RECOVERY_INTERVAL_MS,
-        }])
+        }]);
     }
 
     /// Enqueues one runtime side effect, preserving priority pane input order.

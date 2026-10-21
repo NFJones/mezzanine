@@ -17,6 +17,20 @@ use mez_agent::transcript::SteeringRecoveryStatus;
 const STEERING_DISPLAY_RETRIES_PER_DRAIN: usize = 8;
 /// Initial pacing also prevents hot unrelated ingress from spinning on failure.
 const STEERING_DISPLAY_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+/// Bounds settled-source installations per owner per ordinary drain.
+const STEERING_DISPLAY_RECEIPTS_PER_DRAIN: usize = 8;
+
+/// Whether one bounded reconciliation pass installed every eligible source.
+///
+/// A budget-exhausted pass is progress, not failure: the caller keeps the exact
+/// pane/conversation obligation owned so the uninstalled tail stays paced for a
+/// later ordinary drain instead of being dropped or reported as complete.
+pub(crate) enum SteeringReconcileOutcome {
+    /// No eligible settled source was left uninstalled by this pass.
+    Complete,
+    /// Another eligible settled source existed beyond the installation budget.
+    BudgetExhausted,
+}
 
 /// Associates every display row with one exact accepted occurrence source.
 /// Source selection emits the group once and preserves CRLF and trailing bytes;
@@ -119,22 +133,68 @@ impl RuntimeSessionService {
         {
             return;
         }
-        if self.reconcile_steering_presentation(pane).is_err() {
-            self.presentation.steering_presentation_retries.insert(
-                key.clone(),
-                crate::runtime::render::RuntimeSteeringPresentationRetry {
-                    next_attempt_at: std::time::Instant::now() + STEERING_DISPLAY_RETRY_DELAY,
-                    backoff: 0,
-                },
-            );
-            // Never include accepted source or arbitrary renderer errors in
-            // this bounded diagnostic. One event covers the retained episode.
-            let _ = self.append_lifecycle_event(crate::runtime::EventKind::Diagnostic,
+        let attempted_at = std::time::Instant::now();
+        match self.reconcile_steering_presentation(pane, STEERING_DISPLAY_RECEIPTS_PER_DRAIN) {
+            Ok(SteeringReconcileOutcome::Complete) => {}
+            Ok(SteeringReconcileOutcome::BudgetExhausted) => {
+                // Bounded progress installed a prefix. Keep the tail owned and
+                // paced rather than issuing a second attempt in this drain.
+                self.presentation.steering_presentation_retries.insert(
+                    key.clone(),
+                    crate::runtime::render::RuntimeSteeringPresentationRetry {
+                        next_attempt_at: attempted_at + STEERING_DISPLAY_RETRY_DELAY,
+                        backoff: 0,
+                        diagnostic_emitted: false,
+                    },
+                );
+            }
+            Err(_) => {
+                self.presentation.steering_presentation_retries.insert(
+                    key.clone(),
+                    crate::runtime::render::RuntimeSteeringPresentationRetry {
+                        next_attempt_at: attempted_at + STEERING_DISPLAY_RETRY_DELAY,
+                        backoff: 0,
+                        diagnostic_emitted: false,
+                    },
+                );
+                self.record_steering_display_unavailable(pane, &key.1);
+            }
+        }
+    }
+
+    /// Records one bounded, source-free unavailability event per retained episode.
+    ///
+    /// A failed append leaves the diagnostic pending so the next paced attempt
+    /// retries it once; successful emission disables further attempts. Authored
+    /// display source and renderer errors never enter this payload, and this path
+    /// cannot acknowledge input, provider work or settled effects.
+    fn record_steering_display_unavailable(&mut self, pane: &str, conversation: &str) {
+        let key = (pane.to_string(), conversation.to_string());
+        let already_emitted = match self.presentation.steering_presentation_retries.get(&key) {
+            Some(retry) => retry.diagnostic_emitted,
+            None => return,
+        };
+        if already_emitted {
+            return;
+        }
+        let emitted = self
+            .append_lifecycle_event(
+                crate::runtime::EventKind::Diagnostic,
                 serde_json::json!({
                     "diagnostic": "steering display unavailable; receipt retained for paced display-only retry",
                     "pane_id": pane,
-                    "conversation_id": key.1,
-                }).to_string());
+                    "conversation_id": conversation,
+                })
+                .to_string(),
+            )
+            .is_ok();
+        if emitted
+            && let Some(retry) = self
+                .presentation
+                .steering_presentation_retries
+                .get_mut(&key)
+        {
+            retry.diagnostic_emitted = true;
         }
     }
 
@@ -180,21 +240,38 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         for key in due {
             self.presentation.steering_presentation_retry_cursor = key.clone();
-            if self.reconcile_steering_presentation(&key.0).is_ok() {
-                self.presentation.steering_presentation_retries.remove(&key);
-                let effects = self.render_effects_for_clients_projecting_pane(
-                    &key.0,
-                    crate::runtime::RenderInvalidationReason::FullRedraw,
-                );
-                self.presentation.defer_render_effects(effects);
-            } else if let Some(retry) = self
-                .presentation
-                .steering_presentation_retries
-                .get_mut(&key)
+            match self.reconcile_steering_presentation(&key.0, STEERING_DISPLAY_RECEIPTS_PER_DRAIN)
             {
-                retry.backoff = retry.backoff.saturating_add(1).min(5);
-                retry.next_attempt_at =
-                    now + STEERING_DISPLAY_RETRY_DELAY * (1u32 << retry.backoff);
+                Ok(SteeringReconcileOutcome::Complete) => {
+                    self.presentation.steering_presentation_retries.remove(&key);
+                }
+                Ok(SteeringReconcileOutcome::BudgetExhausted) => {
+                    // Keep the installed-prefix tail owned and due again on the
+                    // next ordinary drain without inflating failure backoff.
+                    let progressed_at = std::time::Instant::now();
+                    if let Some(retry) = self
+                        .presentation
+                        .steering_presentation_retries
+                        .get_mut(&key)
+                    {
+                        retry.next_attempt_at = progressed_at + STEERING_DISPLAY_RETRY_DELAY;
+                    }
+                }
+                Err(_) => {
+                    // Capture the deadline after the attempt so a slow batch
+                    // cannot consume the next backoff window before returning.
+                    let failed_at = std::time::Instant::now();
+                    if let Some(retry) = self
+                        .presentation
+                        .steering_presentation_retries
+                        .get_mut(&key)
+                    {
+                        retry.backoff = retry.backoff.saturating_add(1).min(5);
+                        retry.next_attempt_at =
+                            failed_at + STEERING_DISPLAY_RETRY_DELAY * (1u32 << retry.backoff);
+                    }
+                    self.record_steering_display_unavailable(&key.0, &key.1);
+                }
             }
         }
     }
@@ -348,7 +425,13 @@ impl RuntimeSessionService {
 
     /// Reconciles receipt status without acknowledging input or replaying effects.
     /// Successful installations are occurrence-fenced; failed installs can retry.
-    pub(crate) fn reconcile_steering_presentation(&mut self, pane: &str) -> Result<()> {
+    /// At most `max_installs` settled sources are installed so one drain cannot do
+    /// unbounded rendering work; observed surplus is reported, never dropped.
+    pub(crate) fn reconcile_steering_presentation(
+        &mut self,
+        pane: &str,
+        max_installs: usize,
+    ) -> Result<SteeringReconcileOutcome> {
         let conversation = self
             .agent_shell_store()
             .get(pane)
@@ -356,6 +439,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("steering presentation owner unavailable"))?;
         let receipts = self.steering_presentation_receipts(pane)?;
         self.refresh_pending_steering_suffix(pane)?;
+        let mut installed = 0usize;
         for receipt in receipts
             .into_iter()
             .filter(|receipt| receipt.status != SteeringRecoveryStatus::Pending)
@@ -364,6 +448,9 @@ impl RuntimeSessionService {
             if self.presentation.presented_steering_receipts.contains(&key) {
                 continue;
             }
+            if installed >= max_installs {
+                return Ok(SteeringReconcileOutcome::BudgetExhausted);
+            }
             let source = crate::storage::transcript::steering::Source {
                 version: 1,
                 conversation_id: conversation.clone(),
@@ -371,6 +458,7 @@ impl RuntimeSessionService {
             };
             self.append_settled_steering_source(pane, &source)?;
             self.presentation.presented_steering_receipts.insert(key);
+            installed = installed.saturating_add(1);
             // A later receipt may fail in this same pass. Already installed
             // prefixes must become observable without waiting for whole-pass
             // success; the existing per-client queue coalesces these effects.
@@ -380,7 +468,7 @@ impl RuntimeSessionService {
             );
             self.presentation.defer_render_effects(effects);
         }
-        Ok(())
+        Ok(SteeringReconcileOutcome::Complete)
     }
 
     /// Clones the current composite with only its exact pending suffix removed.

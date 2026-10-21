@@ -178,10 +178,7 @@ async fn steering_display_retry_optional_wake_preserves_full_queue_durable_admis
         matches!(released.as_slice(), [RuntimeSideEffect::ScheduleTimer { key, .. }] if key == &filler)
     );
     for _ in 0..3 {
-        fixture
-            .actor
-            .queue_steering_presentation_retry_idle_wake()
-            .unwrap();
+        fixture.actor.queue_steering_presentation_retry_idle_wake();
     }
     let key = fixture.take_idle();
     assert!(
@@ -358,10 +355,7 @@ async fn steering_display_retry_indefinite_idle_callbacks_eventually_install_onc
 async fn steering_display_retry_idle_fences_stale_callbacks_and_terminal_lifecycle() {
     let mut fixture = Fixture::new(2);
     fixture.fail_initial_display();
-    fixture
-        .actor
-        .queue_steering_presentation_retry_idle_wake()
-        .unwrap();
+    fixture.actor.queue_steering_presentation_retry_idle_wake();
     let key = fixture.take_idle();
     let stale = RuntimeTimerKey::new(
         key.kind,
@@ -401,10 +395,7 @@ async fn steering_display_retry_idle_fences_stale_callbacks_and_terminal_lifecyc
         let mut stopped = Fixture::new(1);
         stopped.fail_initial_display();
         stopped.actor.service.set_lifecycle_state_for_tests(state);
-        stopped
-            .actor
-            .queue_steering_presentation_retry_idle_wake()
-            .unwrap();
+        stopped.actor.queue_steering_presentation_retry_idle_wake();
         assert!(stopped.actor.timers.idle_cleanup.is_none());
         assert!(
             stopped
@@ -414,4 +405,23 @@ async fn steering_display_retry_idle_fences_stale_callbacks_and_terminal_lifecyc
                 .is_empty()
         );
     }
+}
+
+/// Exhausted idle generations must not turn optional display enrollment into a
+/// drained timer error. The drain still succeeds, enrolls nothing, and leaves the
+/// retained display obligation owned so later capacity progress can retry.
+#[tokio::test(flavor = "current_thread")]
+async fn steering_display_retry_exhausted_generation_cannot_fail_timer_drain() {
+    let mut fixture = Fixture::new(1);
+    fixture.fail_initial_display();
+    fixture.actor.timers.last_idle_cleanup_generation = u64::MAX;
+    let drained = fixture.actor.drain_timer_side_effects(32).unwrap();
+    assert!(drained.is_empty());
+    assert!(
+        fixture
+            .actor
+            .service
+            .steering_presentation_retry_timer_needed()
+    );
+    assert!(fixture.actor.timers.idle_cleanup.is_none());
 }

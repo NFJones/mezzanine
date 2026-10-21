@@ -3,7 +3,8 @@
 //! Real drain progress is also the existing capacity wake boundary for retained
 //! work. Steering DISPLAY recovery may separately enroll one bounded idle wake
 //! here, but never reruns a service drain, input, provider or settled action.
-//! Unexpected enrollment invariants propagate through these typed drain results.
+//! Optional enrollment can never discard an already-taken mandatory batch; a
+//! rejected wake keeps the retained display obligation owned for later progress.
 
 use super::coalesce::{
     async_runtime_current_unix_millis, pane_io_side_effect_targets_instance,
@@ -59,7 +60,7 @@ impl AsyncRuntimeSessionActor {
         // owns those exact dispatches; retry after real drain progress without
         // requiring an unrelated runtime event.
         if drained > 0 {
-            self.queue_steering_presentation_retry_idle_wake()?;
+            self.queue_steering_presentation_retry_idle_wake();
             let _ = self.queue_pending_deferred_agent_command_side_effects();
         }
         self.metrics.runtime_side_effects_drained = self
@@ -211,7 +212,7 @@ impl AsyncRuntimeSessionActor {
         // event/request completion, including when its lane was initially empty.
         // Inner enqueues only notify: optional work cannot steal capacity from
         // a later mandatory effect in the same event/service drain.
-        self.queue_steering_presentation_retry_idle_wake()?;
+        self.queue_steering_presentation_retry_idle_wake();
         let drained = self.side_effect_routes.drain_timers(limit);
         self.record_side_effect_drain(drained.len())?;
         Ok(drained)
