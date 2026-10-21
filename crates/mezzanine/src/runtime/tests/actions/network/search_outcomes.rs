@@ -468,6 +468,6 @@ fn ddg_fixture_cleanup_native_error_is_not_erased_by_zero_owner_counts() {
     let Some(FixtureCleanupFailure::Native(error)) = cleanup.next() else {
         panic!("native error evidence missing")
     };
-    assert_eq!(error.to_string(), "PRIVATE_CLEANUP_CANARY");
+    assert_eq!(error.to_string(), "InvalidState: PRIVATE_CLEANUP_CANARY");
     assert!(cleanup.next().is_none());
 }
