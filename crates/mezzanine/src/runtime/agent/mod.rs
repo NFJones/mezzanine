@@ -5082,7 +5082,9 @@ impl RuntimeSessionService {
     }
 }
 use mez_agent::outcome::{
-    ActionPresentationInput, action_error_suffix as runtime_agent_action_error_suffix,
+    ActionPresentationInput,
+    RUNTIME_ACTION_ABANDONED_NOT_STARTED as runtime_action_abandoned_not_started_code,
+    action_error_suffix as runtime_agent_action_error_suffix,
     action_has_runtime_visible_effect as runtime_agent_action_has_runtime_visible_effect,
     action_outcome_line,
     action_rejects_duplicate_success as runtime_agent_action_rejects_duplicate_success,
@@ -5090,9 +5092,11 @@ use mez_agent::outcome::{
     action_summary, action_terminal_preview as runtime_agent_terminal_preview,
     batch_rationale_repeats_visible_text as runtime_agent_batch_rationale_repeats_visible_batch_text,
     batch_visible_action_texts as runtime_agent_batch_visible_action_texts,
-    runtime_action_result_has_error_code, runtime_action_result_is_feedback_candidate,
+    runtime_action_feedback_admission_reason, runtime_action_result_has_error_code,
+    runtime_action_result_is_abandoned_unstarted, runtime_action_result_is_feedback_candidate,
     runtime_action_result_is_terminal_failure, runtime_action_status_name,
-    runtime_action_type_is_shell_backed, runtime_execution_can_feed_failure_to_model,
+    runtime_action_type_is_local_unstarted_sibling, runtime_action_type_is_shell_backed,
+    runtime_execution_can_feed_failure_to_model,
     runtime_execution_uses_unbounded_apply_patch_recovery, runtime_failure_feedback_attempt_keys,
     runtime_failure_feedback_status_line, runtime_loop_guard_failure_label,
     runtime_loop_guard_failure_summary_line, runtime_provider_audit_error_message,

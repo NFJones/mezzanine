@@ -10,7 +10,9 @@ use super::{
     AgentTurnExecution, AgentTurnRecord, AgentTurnState, BlockedApprovalRequest, ContextSourceKind,
     MezError, ProviderApiCompatibility, Result, RuntimeSessionService, action_outcome_line,
     action_summary, current_unix_seconds, local_action_plan, network_action_plan,
-    runtime_action_result_is_feedback_candidate, runtime_action_type_is_shell_backed,
+    runtime_action_abandoned_not_started_code, runtime_action_feedback_admission_reason,
+    runtime_action_result_is_abandoned_unstarted, runtime_action_result_is_feedback_candidate,
+    runtime_action_type_is_local_unstarted_sibling, runtime_action_type_is_shell_backed,
     runtime_agent_terminal_preview, runtime_agent_turn_duration_display,
     runtime_agent_turn_state_name, runtime_execution_can_feed_failure_to_model,
     runtime_execution_uses_unbounded_apply_patch_recovery, runtime_failure_feedback_attempt_keys,
@@ -140,7 +142,16 @@ impl RuntimeSessionService {
         execution: &mut AgentTurnExecution,
         reason: &str,
     ) -> Result<bool> {
+        Self::settle_unstarted_local_action_siblings(execution)?;
         if !self.execution_can_feed_failure_to_model(&turn.turn_id, execution) {
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                &format!(
+                    "failure feedback unavailable reason={}",
+                    runtime_action_feedback_admission_reason(execution)
+                ),
+            )?;
             return Ok(false);
         }
         let attempt_limit = self.agent_action_failure_retry_limit();
@@ -234,13 +245,84 @@ impl RuntimeSessionService {
         }
         execution.action_results.iter().all(|result| {
             if result.is_error {
-                return runtime_action_result_is_feedback_candidate(result);
+                return runtime_action_result_is_feedback_candidate(result)
+                    || runtime_action_result_is_abandoned_unstarted(result);
             }
             if matches!(result.status, ActionStatus::Succeeded) {
                 return true;
             }
             self.action_result_is_inactive_pending_shell_sibling(turn_id, result)
+                || Self::action_result_is_inactive_unstarted_local_sibling(result)
         })
+    }
+
+    /// Returns true for a synchronous local sibling that its executor never
+    /// started.
+    ///
+    /// Discovery, local registry, memory, issue and validated-config executors
+    /// settle synchronously and only skip while the execution is not Running
+    /// after an earlier failure. A surviving `Running` placeholder for one of
+    /// those types therefore has no external work in flight and may be
+    /// abandoned so the bounded failed-action correction can run.
+    fn action_result_is_inactive_unstarted_local_sibling(result: &ActionResult) -> bool {
+        result.status == ActionStatus::Running
+            && !result.is_error
+            && runtime_action_type_is_local_unstarted_sibling(result.action_type)
+    }
+
+    /// Settles planned local siblings whose executors never started.
+    ///
+    /// Executor families refuse to begin after an earlier family failed, so a
+    /// discovery, registry, memory, issue or validated-config placeholder can
+    /// remain `Running` without any work, event, owner or side effect. Replace
+    /// only those unstarted placeholders with one truthful terminal
+    /// abandonment result so canonical chronology and the native provider
+    /// tool-result group carry a complete disposition. Active external,
+    /// subagent, approval, cancellation and shell ownership is untouched.
+    fn settle_unstarted_local_action_siblings(execution: &mut AgentTurnExecution) -> Result<()> {
+        if execution.terminal_state != AgentTurnState::Failed
+            || !execution
+                .action_results
+                .iter()
+                .any(runtime_action_result_is_feedback_candidate)
+        {
+            return Ok(());
+        }
+        for result in &mut execution.action_results {
+            if result.status != ActionStatus::Running
+                || result.is_error
+                || !runtime_action_type_is_local_unstarted_sibling(result.action_type)
+            {
+                continue;
+            }
+            result.status = ActionStatus::Cancelled;
+            result.is_error = true;
+            result.content = vec![mez_agent::ActionContentBlock::text(
+                "action was not started because an earlier action in the same batch failed",
+            )];
+            result.error = Some(mez_agent::ActionError {
+                code: runtime_action_abandoned_not_started_code.to_string(),
+                message:
+                    "action was not started because an earlier action in the same batch failed"
+                        .to_string(),
+                data_json: Some(
+                    serde_json::json!({
+                        "state": "not_started",
+                        "automatic_replay": false
+                    })
+                    .to_string(),
+                ),
+            });
+            result.structured_content_json = Some(
+                serde_json::json!({
+                    "state": "not_started",
+                    "code": runtime_action_abandoned_not_started_code,
+                    "automatic_replay": false
+                })
+                .to_string(),
+            );
+        }
+        Ok(())
     }
 
     /// Returns true when a running shell-backed sibling has not reached the
@@ -508,6 +590,19 @@ pub(super) fn runtime_agent_execution_failure_json(
                 .action_results
                 .iter()
                 .filter(|result| result.is_error)
+                .count()
+        },
+        "action_feedback": {
+            "admission": runtime_action_feedback_admission_reason(execution),
+            "candidate_count": execution
+                .action_results
+                .iter()
+                .filter(|result| runtime_action_result_is_feedback_candidate(result))
+                .count(),
+            "abandoned_unstarted_count": execution
+                .action_results
+                .iter()
+                .filter(|result| runtime_action_result_is_abandoned_unstarted(result))
                 .count()
         }
     });

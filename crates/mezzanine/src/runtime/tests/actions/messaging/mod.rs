@@ -23,3 +23,4 @@ mod presentation;
 mod receive_commit;
 mod snapshot_recovery;
 mod turn_lifecycle;
+mod unavailable_recovery;

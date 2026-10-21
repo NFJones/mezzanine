@@ -11600,12 +11600,17 @@ a provider continuation; corrected close and changed-course completion both use
 the normal turn lifecycle in synchronous and asynchronous execution.
 Different action IDs MUST NOT reset the stable rejection correction budget.
 When one model-correctable action fails before later shell-backed sibling
-actions have reached the pane shell, those inactive unsent siblings MUST NOT
-make recovery unavailable. Mezzanine SHOULD abandon the unsent sibling actions,
-feed back the settled failed action result, and queue the corrective provider
-continuation. Active sibling work that has reached an external process,
-subagent, approval, or other runtime boundary MAY still block correction until
-that work settles or is explicitly cancelled.
+actions have reached the pane shell, or before a synchronous local sibling
+family (agent discovery, MCP discovery, persistent memory, issue bookkeeping or
+validated configuration) has started, those inactive unsent siblings MUST NOT
+make recovery unavailable. Mezzanine SHOULD record exactly one truthful
+terminal not-started disposition for each abandoned sibling in canonical
+chronology and the provider tool-result group, without fabricating success or
+dispatching the abandoned action, then feed back the settled failed action
+result and queue the corrective provider continuation. Active sibling work that
+has reached an external process, subagent, approval, network or MCP transport,
+persistent child, persistence phase, or other runtime boundary MAY still block
+correction until that work settles or is explicitly cancelled.
 Async runtime event handling MUST emit the provider-dispatch side effect for a
 newly queued corrective continuation promptly after applying the failed action
 event, rather than relying solely on a later provider-poll timer.
@@ -11615,7 +11620,10 @@ given a correction opportunity. When recovery is unavailable, the diagnostic
 SHOULD include the reason, such as pending or blocked sibling action results, a
 non-correctable policy/user/runtime boundary, missing model-correctable action
 evidence, or a correction budget that remained unused because no correction
-continuation was queued.
+continuation was queued. Malformed-MAAP repair counters MUST NOT be presented as
+the action-feedback admission reason; admission eligibility, abandoned
+not-started siblings and exhausted bounded correction attempts remain distinct
+facts.
 When the failed action is a filesystem mutation, the recovery prompt MUST tell
 the model that no successful mutation has occurred from the failed action
 result and MUST prohibit success claims until a later mutation action succeeds

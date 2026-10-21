@@ -676,6 +676,95 @@ pub fn runtime_action_type_is_shell_backed(action_type: &str) -> bool {
     matches!(action_type, "shell_command" | "apply_patch")
 }
 
+/// Returns true for synchronous local actions that own no external work once
+/// their executor phase has finished.
+///
+/// These actions read discovery, local registries, persistent memory, issue
+/// bookkeeping or validated configuration. A still-`Running` result of one of
+/// these types after the local executors ran is an unstarted planned sibling,
+/// not active external, subagent, approval or process work, so it must not make
+/// bounded failed-action correction unavailable merely because an earlier
+/// action in the same batch failed. Runtime, network, subagent, close/wait and
+/// approval-gated work remain outside this predicate.
+pub fn runtime_action_type_is_local_unstarted_sibling(action_type: &str) -> bool {
+    matches!(
+        action_type,
+        "list_agents"
+            | "mcp_server_search"
+            | "mcp_server_get"
+            | "memory_search"
+            | "memory_store"
+            | "issue_add"
+            | "issue_update"
+            | "issue_query"
+            | "issue_delete"
+            | "config_change"
+    )
+}
+
+/// Stable error code for one planned local sibling that never started because
+/// an earlier action in the same batch failed.
+pub const RUNTIME_ACTION_ABANDONED_NOT_STARTED: &str = "action_abandoned_not_started";
+
+/// Returns true for one truthful terminal abandonment of a never-started local
+/// sibling.
+///
+/// The result is an error only so the action has a complete, non-success
+/// disposition: no effect occurred, no external work is owned, and the model
+/// must not treat it as executed. It is not a correction candidate itself; it
+/// is a safe sibling that may accompany one genuine model-correctable failure.
+pub fn runtime_action_result_is_abandoned_unstarted(result: &ActionResult) -> bool {
+    result.status == ActionStatus::Cancelled
+        && result.is_error
+        && runtime_action_type_is_local_unstarted_sibling(result.action_type)
+        && result
+            .error
+            .as_ref()
+            .is_some_and(|error| error.code == RUNTIME_ACTION_ABANDONED_NOT_STARTED)
+}
+
+/// Returns one bounded reason why a failed execution cannot enter action-failure
+/// correction from its result states alone.
+///
+/// `admission_eligible` means the result shape permits correction; a remaining
+/// refusal is budget or dispatch state owned by the runtime, not a sibling
+/// safety gate. This distinguishes admission-unavailable diagnostics from
+/// exhausted bounded correction without reusing malformed-MAAP repair counters.
+pub fn runtime_action_feedback_admission_reason(execution: &AgentTurnExecution) -> &'static str {
+    if execution.terminal_state != AgentTurnState::Failed {
+        return "execution_not_failed";
+    }
+    if execution
+        .action_results
+        .iter()
+        .any(|result| result.status == ActionStatus::Blocked)
+    {
+        return "blocked_sibling_action_result";
+    }
+    if execution
+        .action_results
+        .iter()
+        .any(|result| result.status == ActionStatus::Running)
+    {
+        return "pending_or_owned_sibling_action_result";
+    }
+    if !execution
+        .action_results
+        .iter()
+        .any(runtime_action_result_is_feedback_candidate)
+    {
+        return "no_model_correctable_failed_action";
+    }
+    if execution.action_results.iter().any(|result| {
+        result.is_error
+            && !runtime_action_result_is_feedback_candidate(result)
+            && !runtime_action_result_is_abandoned_unstarted(result)
+    }) {
+        return "non_correctable_sibling_action_result";
+    }
+    "admission_eligible"
+}
+
 /// Returns true when an error represents a policy or user boundary rather than
 /// evidence the model can use to correct its own action.
 pub fn runtime_error_code_is_non_correctable(error_code: &str) -> bool {
@@ -716,6 +805,7 @@ pub fn runtime_execution_can_feed_failure_to_model(execution: &AgentTurnExecutio
         && execution.action_results.iter().all(|result| {
             !result.is_error
                 || runtime_action_result_is_feedback_candidate(result)
+                || runtime_action_result_is_abandoned_unstarted(result)
                 || result.status == ActionStatus::Succeeded
         })
 }
@@ -1678,6 +1768,108 @@ mod tests {
         )
         .unwrap();
         assert!(!runtime_action_result_is_feedback_candidate(&result));
+    }
+
+    /// Only the truthful not-started disposition is accepted as one abandoned
+    /// local sibling, and abandonment never becomes a correction candidate by
+    /// itself. Shell-backed or incorrectly coded results remain ineligible.
+    #[test]
+    fn abandoned_unstarted_local_sibling_is_complete_but_not_correctable() {
+        let discovery = AgentAction {
+            id: "discover".to_string(),
+            payload: AgentActionPayload::ListAgents {
+                agent_type: None,
+                scope: None,
+            },
+        };
+        let abandoned = ActionResult::failed(
+            &turn(),
+            &discovery,
+            ActionStatus::Cancelled,
+            RUNTIME_ACTION_ABANDONED_NOT_STARTED,
+            "action was not started because an earlier action in the same batch failed",
+        )
+        .unwrap();
+        assert!(runtime_action_result_is_abandoned_unstarted(&abandoned));
+        assert!(!runtime_action_result_is_feedback_candidate(&abandoned));
+        let mut wrong_code = abandoned.clone();
+        wrong_code.error.as_mut().unwrap().code = "cancelled".to_string();
+        assert!(!runtime_action_result_is_abandoned_unstarted(&wrong_code));
+        let shell = ActionResult::failed(
+            &turn(),
+            &shell_action(),
+            ActionStatus::Cancelled,
+            RUNTIME_ACTION_ABANDONED_NOT_STARTED,
+            "not started",
+        )
+        .unwrap();
+        assert!(!runtime_action_result_is_abandoned_unstarted(&shell));
+    }
+
+    /// Pure admission accepts a settled local abandonment beside one genuine
+    /// correctable failure, but rejects the raw Running placeholder so the
+    /// runtime must first record the truthful terminal disposition.
+    #[test]
+    fn pure_feedback_admission_requires_abandonment_settlement() {
+        let send = AgentAction {
+            id: "msg".to_string(),
+            payload: AgentActionPayload::SendMessage {
+                recipient: "agent:absent".to_string(),
+                scope: Some("session".to_string()),
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "handoff".to_string(),
+                correlation_id: None,
+            },
+        };
+        let say = AgentAction {
+            id: "say".to_string(),
+            payload: AgentActionPayload::Say {
+                status: SayStatus::Final,
+                text: "finished".to_string(),
+                content_type: AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+        };
+        let discovery = AgentAction {
+            id: "discover".to_string(),
+            payload: AgentActionPayload::ListAgents {
+                agent_type: None,
+                scope: None,
+            },
+        };
+        let failed = ActionResult::failed(
+            &turn(),
+            &send,
+            ActionStatus::Failed,
+            "message_recipient_unavailable",
+            "message recipient is not registered or available",
+        )
+        .unwrap();
+        let abandoned = ActionResult::failed(
+            &turn(),
+            &discovery,
+            ActionStatus::Cancelled,
+            RUNTIME_ACTION_ABANDONED_NOT_STARTED,
+            "not started",
+        )
+        .unwrap();
+        let succeeded =
+            ActionResult::succeeded(&turn(), &say, vec!["finished".to_string()], None).unwrap();
+        let running = ActionResult::running(&turn(), &discovery, Vec::new(), None).unwrap();
+        let mut execution = execution();
+        execution.action_results = vec![failed, abandoned, succeeded];
+        execution.terminal_state = AgentTurnState::Failed;
+        execution.final_turn = false;
+        assert!(runtime_execution_can_feed_failure_to_model(&execution));
+        assert_eq!(
+            runtime_action_feedback_admission_reason(&execution),
+            "admission_eligible"
+        );
+        execution.action_results[1] = running;
+        assert!(!runtime_execution_can_feed_failure_to_model(&execution));
+        assert_eq!(
+            runtime_action_feedback_admission_reason(&execution),
+            "pending_or_owned_sibling_action_result"
+        );
     }
 
     /// Verifies model-authored network failures remain eligible for feedback.
