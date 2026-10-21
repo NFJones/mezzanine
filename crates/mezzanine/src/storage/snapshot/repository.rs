@@ -126,16 +126,21 @@ impl SnapshotRepository {
     /// it is shared by every session in the root. Creation is not serialized
     /// across concurrent creators, so two racing saves may share a stamp and are
     /// then ordered by the documented id tie-break.
-    fn creation_created_at(&self) -> String {
+    ///
+    /// The current winner must be readable: falling back to the wall clock after
+    /// an unreadable index would publish a snapshot that reports success while
+    /// sorting behind an older save. A store that cannot answer its current
+    /// winner therefore fails the creation instead of silently regressing the
+    /// latest selection. A winner whose persisted stamp is not in the written
+    /// shape cannot be compared and falls back to the wall-clock reading.
+    fn creation_created_at(&self) -> Result<String> {
         let previous = self
-            .latest(None)
-            .ok()
-            .flatten()
+            .latest(None)?
             .and_then(|state| unix_seconds_from_rfc3339(&state.created_at));
-        unix_seconds_to_rfc3339(advance_creation_seconds(
+        Ok(unix_seconds_to_rfc3339(advance_creation_seconds(
             self.creation_wall_clock_seconds(),
             previous,
-        ))
+        )))
     }
 
     /// Async counterpart to [`Self::creation_created_at`].
@@ -143,20 +148,18 @@ impl SnapshotRepository {
     /// The current winner is read through the async index path so a snapshot the
     /// runtime creates does not block on synchronous SQLite work, and a stale
     /// winner is repaired before the stamp is chosen exactly like the synchronous
-    /// lookup. A winner that is still unreadable after that repair cannot be
-    /// trusted for ordering, so the stamp falls back to wall time; the store
-    /// keeps working and the derived index heals on its next read.
-    async fn creation_created_at_async(&self) -> String {
+    /// lookup. An unreadable winner fails the creation for the same reason the
+    /// synchronous path does: publishing a stamp that cannot be compared with the
+    /// current winner would silently regress latest selection.
+    async fn creation_created_at_async(&self) -> Result<String> {
         let previous = self
             .latest_async(None)
-            .await
-            .ok()
-            .flatten()
+            .await?
             .and_then(|state| unix_seconds_from_rfc3339(&state.created_at));
-        unix_seconds_to_rfc3339(advance_creation_seconds(
+        Ok(unix_seconds_to_rfc3339(advance_creation_seconds(
             self.creation_wall_clock_seconds(),
             previous,
-        ))
+        )))
     }
 
     /// Returns the wall-clock reading used for the next creation stamp.
@@ -609,7 +612,7 @@ impl SnapshotRepository {
                 version: 1,
                 session_id: payload.session_id.clone(),
                 name,
-                created_at: self.creation_created_at(),
+                created_at: self.creation_created_at()?,
                 kind: SnapshotKind::Manual,
                 restorable: true,
                 window_count: plan.window_count,
@@ -676,7 +679,7 @@ impl SnapshotRepository {
                 version: 1,
                 session_id: payload.session_id.clone(),
                 name,
-                created_at: self.creation_created_at_async().await,
+                created_at: self.creation_created_at_async().await?,
                 kind: SnapshotKind::Manual,
                 restorable: true,
                 window_count: plan.window_count,

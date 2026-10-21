@@ -111,11 +111,13 @@ and `mez snapshot inspect <snapshot-id>` inspects one. `mez snapshot resume
 working directories without starting a daemon; `resume-latest` selects the
 newest matching snapshot, ordered by creation time and then by snapshot id. The
 exact `--session-id` filter never falls back to another session, and the store
-advances each new snapshot's creation time past the selected one, so a repeated
-or regressed host clock still leaves the newest save as the latest one. That
-creation time is the store's own logical clock: it is shared by every session in
-the snapshot repository and can run ahead of wall time after a burst of saves,
-and concurrent saves published at the same stamp are ordered by snapshot id. Add
+advances a new snapshot's creation time past the one it currently selects, so a
+repeated or regressed host clock still leaves the newest save as the latest one.
+That creation time is the store's own logical clock: it is shared by every
+session in the snapshot repository and can run ahead of wall time after a burst
+of saves, and concurrent saves published at the same stamp are ordered by
+snapshot id. Creating a snapshot fails rather than guess when the store cannot
+read its current selection. Add
 `--serve` to either resume command to run the
 restored model as a live foreground daemon.
 

@@ -653,6 +653,54 @@ async fn snapshot_repository_async_creation_repairs_a_stale_winner_first() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies creation fails closed when the store cannot answer its current
+/// winner.
+///
+/// Falling back to the raw wall clock here would publish a snapshot that reports
+/// success while sorting behind the winner the broken index hid, so the creation
+/// must be refused and leave no manifest, payload, or metadata behind.
+#[test]
+fn snapshot_repository_creation_fails_when_the_current_winner_is_unreadable() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-unreadable-winner-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    )
+    .unwrap();
+    SnapshotRepository::new(root.clone())
+        .with_creation_seconds(1_800_000_000)
+        .create_from_session("snap-first", None, &session)
+        .unwrap();
+    fs::write(
+        super::sqlite::database_path(&root),
+        b"not a snapshot database",
+    )
+    .unwrap();
+    let entries_before = fs::read_dir(&root).unwrap().count();
+
+    let error = SnapshotRepository::new(root.clone())
+        .with_creation_seconds(1_800_000_000)
+        .create_from_session("snap-second", None, &session)
+        .unwrap_err();
+
+    assert!(
+        !error.to_string().is_empty(),
+        "the refusal carries a diagnostic"
+    );
+    assert!(!root.join("snap-second.manifest").exists());
+    assert!(!root.join("snap-second.payload").exists());
+    assert_eq!(
+        fs::read_dir(&root).unwrap().count(),
+        entries_before,
+        "a refused creation leaves the store untouched"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies an ordinary snapshot write consults only indexed winners instead
 /// of parsing unrelated manifests after the latest index has been established.
 #[test]
