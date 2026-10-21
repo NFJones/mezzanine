@@ -73,11 +73,13 @@ fn scan(body: &str, max_results: usize) -> Scan {
         cursor = tag.end;
         // These contexts have nested or environment-dependent HTML semantics.
         // Fail unsupported pages rather than approximate them and expose inert
-        // anchors after a premature closing delimiter.
+        // anchors after a premature closing delimiter. Select insertion mode
+        // can ignore anchor tokens entirely, so it is unsupported as well.
         if !tag.closing
             && [
                 "template",
                 "noscript",
+                "select",
                 "xmp",
                 "iframe",
                 "noembed",

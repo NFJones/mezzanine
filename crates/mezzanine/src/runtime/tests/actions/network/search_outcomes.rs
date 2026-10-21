@@ -3,9 +3,14 @@
 //! The adapter uses an offline response fixture. The runtime supplies actual
 //! action/attempt ownership, provisional rendering, sibling settlement, and
 //! model correction; response HTML supplies no authority or runtime identity.
+//! The original service remains outside the caught scenario, so assertion
+//! panics cannot bypass independent native/selector cleanup and owner checks.
 
 use super::*;
 use crate::integrations::http::AsyncProviderHttpTransport;
+use futures_util::FutureExt;
+use std::any::Any;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 /// Supplies one pending response with a complete-looking provisional anchor.
 struct PendingSearchResponse;
@@ -39,11 +44,29 @@ impl AsyncProviderHttpTransport for PendingSearchResponse {
 #[tokio::test]
 async fn runtime_unusable_ddg_result_retires_progress_and_preserves_sibling_correction() {
     let mut service = test_runtime_service();
+    let primary = AssertUnwindSafe(ddg_settlement_scenario(&mut service))
+        .catch_unwind()
+        .await;
+    let cleanup = settle_fixture(
+        &mut service,
+        |service| service.terminate_all_pane_processes().map(|_| ()),
+        |service| service.clear_agent_prompt_inputs(),
+        |service| {
+            let owner = service.pane_processes().retirement_owner();
+            (owner.outstanding(), owner.has_cleanup_failure())
+        },
+    );
+    finish_fixture(primary, cleanup);
+}
+
+/// Exercises only real producer/claim/progress/completion interfaces. The caller
+/// retains the original manager across every setup and assertion failure.
+async fn ddg_settlement_scenario(service: &mut RuntimeSessionService) {
     service
         .attach_primary("primary", true, Size::new(100, 24).unwrap(), 120)
         .unwrap();
     service.start_initial_pane_process(Some("cat")).unwrap();
-    mark_test_pane_ready(&mut service, "%1");
+    mark_test_pane_ready(service, "%1");
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -268,5 +291,183 @@ async fn runtime_unusable_ddg_result_retires_progress_and_preserves_sibling_corr
             1
         );
     }
-    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Retains actual secondary evidence without exposing arbitrary error/panic
+/// text. No reported PID, fresh lease, or replacement cleanup owner is created.
+enum FixtureCleanupFailure {
+    Native(crate::MezError),
+    Panic(&'static str, Box<dyn Any + Send>),
+    UnprovenNative { outstanding: usize, failed: bool },
+}
+
+impl std::fmt::Debug for FixtureCleanupFailure {
+    /// Prints closed stage/count facts only, never retained payload contents.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Native(_) => formatter.write_str("NativeError"),
+            Self::Panic(stage, _) => formatter.debug_tuple("Panic").field(stage).finish(),
+            Self::UnprovenNative {
+                outstanding,
+                failed,
+            } => formatter
+                .debug_struct("UnprovenNative")
+                .field("outstanding", outstanding)
+                .field("failed", failed)
+                .finish(),
+        }
+    }
+}
+
+/// Owns the unchanged primary panic together with every secondary cleanup
+/// failure; a later failure cannot overwrite an earlier native outcome.
+struct FixtureFailure {
+    primary: Option<Box<dyn Any + Send>>,
+    cleanup: Vec<FixtureCleanupFailure>,
+}
+
+/// Attempts both existing cleanup owners exactly once, independently of panic
+/// or error, then checks the original retirement owner without native probing.
+fn settle_fixture<S>(
+    state: &mut S,
+    native: impl FnOnce(&mut S) -> crate::Result<()>,
+    selectors: impl FnOnce(&mut S),
+    owner: impl FnOnce(&S) -> (usize, bool),
+) -> Vec<FixtureCleanupFailure> {
+    let mut failures = Vec::new();
+    match catch_unwind(AssertUnwindSafe(|| native(state))) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => failures.push(FixtureCleanupFailure::Native(error)),
+        Err(payload) => failures.push(FixtureCleanupFailure::Panic("native", payload)),
+    }
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| selectors(state))) {
+        failures.push(FixtureCleanupFailure::Panic("selectors", payload));
+    }
+    match catch_unwind(AssertUnwindSafe(|| owner(state))) {
+        Ok((0, false)) => {}
+        Ok((outstanding, failed)) => {
+            failures.push(FixtureCleanupFailure::UnprovenNative {
+                outstanding,
+                failed,
+            });
+        }
+        Err(payload) => failures.push(FixtureCleanupFailure::Panic("owner", payload)),
+    }
+    failures
+}
+
+/// Resumes the identical primary on successful cleanup. Compound failure owns
+/// both primary and secondary payloads instead of fabricating a healthy exit.
+fn finish_fixture<T>(primary: std::thread::Result<T>, cleanup: Vec<FixtureCleanupFailure>) -> T {
+    if cleanup.is_empty() {
+        return primary.unwrap_or_else(|payload| resume_unwind(payload));
+    }
+    eprintln!(
+        "DDG fixture cleanup: primary_failed={} secondary={cleanup:?}",
+        primary.is_err()
+    );
+    resume_unwind(Box::new(FixtureFailure {
+        primary: primary.err(),
+        cleanup,
+    }));
+}
+
+/// Process-free success and primary-panic controls protect cleanup ordering and
+/// identical primary payload custody without spawning a shell or provider.
+#[test]
+fn ddg_fixture_cleanup_success_preserves_primary_and_runs_both_owners() {
+    let mut stages = Vec::new();
+    let cleanup = settle_fixture(
+        &mut stages,
+        |stages| {
+            stages.push("native");
+            Ok(())
+        },
+        |stages| stages.push("selectors"),
+        |stages| {
+            assert_eq!(stages, &["native", "selectors"]);
+            (0, false)
+        },
+    );
+    assert!(cleanup.is_empty());
+    assert_eq!(finish_fixture(Ok(7), cleanup), 7);
+    let original = Box::new(42_u32) as Box<dyn Any + Send>;
+    let primary = catch_unwind(AssertUnwindSafe(|| {
+        finish_fixture::<()>(Err(original), vec![])
+    }))
+    .unwrap_err();
+    assert_eq!(*primary.downcast::<u32>().unwrap(), 42);
+}
+
+/// Process-free injected panics prove selector cleanup and owner inspection
+/// still run after native failure, with every primary/secondary payload held.
+#[test]
+fn ddg_fixture_cleanup_compound_failure_retains_original_evidence() {
+    let mut stages = Vec::new();
+    let cleanup = settle_fixture(
+        &mut stages,
+        |stages| {
+            stages.push("native");
+            std::panic::panic_any(11_u32)
+        },
+        |stages| {
+            stages.push("selectors");
+            std::panic::panic_any(12_u32)
+        },
+        |stages| {
+            assert_eq!(stages, &["native", "selectors"]);
+            (1, true)
+        },
+    );
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        finish_fixture::<()>(Err(Box::new(10_u32)), cleanup);
+    }))
+    .unwrap_err()
+    .downcast::<FixtureFailure>()
+    .unwrap();
+    assert_eq!(*failure.primary.unwrap().downcast::<u32>().unwrap(), 10);
+    let mut cleanup = failure.cleanup.into_iter();
+    let Some(FixtureCleanupFailure::Panic("native", native)) = cleanup.next() else {
+        panic!("native evidence missing")
+    };
+    assert_eq!(*native.downcast::<u32>().unwrap(), 11);
+    let Some(FixtureCleanupFailure::Panic("selectors", selectors)) = cleanup.next() else {
+        panic!("selector evidence missing")
+    };
+    assert_eq!(*selectors.downcast::<u32>().unwrap(), 12);
+    assert!(matches!(
+        cleanup.next(),
+        Some(FixtureCleanupFailure::UnprovenNative {
+            outstanding: 1,
+            failed: true
+        })
+    ));
+    assert!(cleanup.next().is_none());
+}
+
+/// A returned native error remains a failure even when the original owner's
+/// counts are zero. Selector cleanup still runs, and safe diagnostics cannot
+/// leak the retained error's synthetic private-message canary.
+#[test]
+fn ddg_fixture_cleanup_native_error_is_not_erased_by_zero_owner_counts() {
+    let mut selectors_ran = false;
+    let cleanup = settle_fixture(
+        &mut selectors_ran,
+        |_| Err(crate::MezError::invalid_state("PRIVATE_CLEANUP_CANARY")),
+        |ran| *ran = true,
+        |_| (0, false),
+    );
+    assert!(selectors_ran);
+    assert_eq!(format!("{cleanup:?}"), "[NativeError]");
+    let failure = catch_unwind(AssertUnwindSafe(|| finish_fixture(Ok(()), cleanup)))
+        .unwrap_err()
+        .downcast::<FixtureFailure>()
+        .unwrap();
+    assert!(failure.primary.is_none());
+    let mut cleanup = failure.cleanup.into_iter();
+    let Some(FixtureCleanupFailure::Native(error)) = cleanup.next() else {
+        panic!("native error evidence missing")
+    };
+    assert_eq!(error.to_string(), "PRIVATE_CLEANUP_CANARY");
+    assert!(cleanup.next().is_none());
 }

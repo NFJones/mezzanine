@@ -100,6 +100,7 @@ async fn network_search_nonanchors_and_unqualified_empty_shapes_are_not_results(
         "<textarea><a class=\"result__a\" href=\"https://example.test/\">Fake</a></textarea>",
         "<title><a class=\"result__a\" href=\"https://example.test/\">Fake</a></title>",
         "<template><template></template><a class=\"result__a\" href=\"https://example.test/\">Fake</a></template>",
+        "<select><option><a class=\"result__a\" href=\"https://example.test/\">Fake</a></option></select>",
         "<xmp><a class=\"result__a\" href=\"https://example.test/\">Fake</a></xmp>",
         "<iframe><a class=\"result__a\" href=\"https://example.test/\">Fake</a></iframe>",
         "<noframes><a class=\"result__a\" href=\"https://example.test/\">Fake</a></noframes>",
@@ -164,6 +165,11 @@ async fn network_search_count_limits_do_not_hide_pending_or_incomplete_results()
             (200, HttpCompletion::Truncated, complete.to_string()),
             (200, HttpCompletion::HeadersOnly, complete.to_string()),
             (200, HttpCompletion::StreamDecoded, complete.to_string()),
+            (
+                200,
+                HttpCompletion::Complete,
+                format!("{complete}<select><option>unsupported suffix</option></select>"),
+            ),
             (
                 200,
                 HttpCompletion::Complete,
