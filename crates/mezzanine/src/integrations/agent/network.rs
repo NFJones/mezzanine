@@ -225,10 +225,34 @@ async fn execute_web_search_action<T: AsyncProviderHttpTransport>(
                 serde_json::json!({ "url": url, "status_code": status_code, "body_bytes": body_bytes }),
             );
         }
+        Err(super::search::SearchExchangeError::Unusable {
+            status_code,
+            body_bytes,
+            returned_bytes,
+            html_truncated,
+            outcome,
+        }) => {
+            return network_action_failure(
+                turn,
+                action,
+                "network_search_unusable_response",
+                "web search provider did not supply usable completed results; use an available source or report this limitation rather than treating it as zero results",
+                serde_json::json!({
+                    "url": url,
+                    "status_code": status_code,
+                    "body_bytes": body_bytes,
+                    "returned_bytes": returned_bytes,
+                    "html_truncated": html_truncated,
+                    "outcome": outcome,
+                    "hint": "no automatic retry, fallback, or provider switch was performed"
+                }),
+            );
+        }
     };
     let results = response.result.render_text();
     let mut content = if results.trim().is_empty() {
-        "No web results were found.".to_string()
+        // A zero output cap is not evidence of a provider's empty search.
+        "No web result entries were requested (max_results = 0).".to_string()
     } else {
         results
     };
@@ -245,6 +269,8 @@ async fn execute_web_search_action<T: AsyncProviderHttpTransport>(
             "body_bytes": response.body_bytes,
             "returned_bytes": response.returned_bytes,
             "html_truncated": response.result.truncated,
+            "outcome": "completed_results",
+            "returned_results": response.result.hits.len(),
             "max_results": response.result.effective_count,
             "recency_days": request.recency_days
         }),

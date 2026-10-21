@@ -10988,9 +10988,37 @@ numbered title/link output, default ten/hard fifty results (including requested
 zero), 1MiB transport cap, 256KiB final-content projection and 30s total deadline.
 Progress MUST contain only complete cleaned anchors from valid UTF-8 prefixes.
 Legacy recency is not transmitted and MUST be labeled best-effort, not verified
-source-date filtering. Legacy successful-empty/202, malformed/incomplete-anchor,
-permissive nonblank-href and truncation-notice-outside-cap behavior is explicitly
-preserved by extraction, not evidence of strict future semantics.
+source-date filtering. Permissive nonblank-href and truncation-notice accounting
+remain compatibility behavior, not strict future citation validation.
+
+DuckDuckGo success MUST require HTTP 200, locally complete nontruncated body
+retention, and a recognized completed result shape. HTTP 202 is pending or
+otherwise uncompleted, NOT proof of CAPTCHA, blocking, or zero hits. Missing
+anchors, unknown/error/nonresult pages, malformed or incomplete result anchors,
+and truncated bodies MUST NOT become successful empty searches. Result anchors
+MUST be actual closed anchor tags with exact result class tokens and same-tag
+attributes; comment/script/raw-text markup cannot manufacture hits. Unsupported
+frameset, select, SVG/MathML foreign-content and object/video/audio/canvas
+fallback contexts MUST fail as unrecognized rather than project anchors those
+modes never render as results; this conservative whole-response rejection is
+disclosed rather than silently approximated. Recognition
+MUST inspect beyond the requested result count, including a zero output count.
+Explicit nonresult-form shapes MAY disqualify a mixed page, without claiming
+exhaustive challenge detection or interpreting its remote cause.
+
+No genuine completed-empty DDG response format is currently qualified. Zero-hit
+pages MUST therefore return an honest bounded unrecognized-response failure,
+even when the provider may genuinely have no hits, rather than fabricate
+`No web results were found.` A recognized response with requested zero MUST
+disclose that no entries were requested, not claim the provider found none.
+Unusable responses MUST settle `network_search_unusable_response` with safe
+HTTP status, retained/returned byte counts and truncation/outcome metadata, never
+raw HTML or unverified remote diagnostics. Guidance MUST explain that the
+provider did not supply usable completed results and suggest an available source
+or reporting the limitation. No implicit retry, fallback, backend switch or
+challenge solving/evasion is authorized. Provisional complete-entry progress
+MUST be retired on final failure using existing exact attempt/revision fences;
+still-running siblings retain ownership and correction sees their results once.
 
 Strict future search contracts MUST preserve ordered HTTP(S) citations without
 userinfo, never clip citation URLs, and label actual excerpts as snippet,
