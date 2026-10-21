@@ -98,24 +98,43 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
             )),
         };
         service.hold_agent_presentation_installs_for_tests(true);
+        let pending_before_completion =
+            service.agent_provider_task_is_pending(&worker_turn.turn_id);
+        assert!(
+            pending_before_completion,
+            "the routed loop pre-queues its next iteration before completion"
+        );
         assert!(
             service
                 .complete_native_shell_action(outcome.clone())
                 .unwrap()
         );
         assert!(service.completion_publication_retry_needed_for_turn(&worker_turn.turn_id));
-        // Measured operands: the routed loop pre-queues its next iteration, so
-        // this worker provider task is already pending at completion entry and
-        // is unchanged by it. The custody claim at this boundary is that manual
-        // readiness cannot overtake the retained publication, asserted below.
-        assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
+        // Measured operands: entry and exit both saw the same inherited pending
+        // routed task, so native completion itself must not enqueue anything.
+        assert_eq!(
+            service.agent_provider_task_is_pending(&worker_turn.turn_id),
+            pending_before_completion,
+            "native completion must not change an inherited routed continuation"
+        );
         service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::Ready);
+        // Narrowed claim: for an already-pending task this only proves duplicate
+        // queue refusal, so it cannot witness the publication barrier.
         assert_eq!(
             service
                 .queue_ready_provider_continuation_for_pane(&worker_turn.pane_id)
                 .unwrap(),
             0,
-            "manual readiness cannot overtake a retained publication obligation"
+            "a duplicate routed queue cannot be inserted by manual readiness"
+        );
+        // Non-vacuous barrier control: completion admission itself is asked to
+        // continue while publication is held, so it must consult the retained
+        // publication gate rather than short-circuit on the queued task.
+        assert!(
+            !service
+                .admit_completion_provider_continuation(&worker_turn.turn_id)
+                .unwrap(),
+            "held publication must refuse completion admission"
         );
         let retained_entry = service
             .presentation
