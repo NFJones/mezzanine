@@ -580,6 +580,8 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             presentation_lock_barrier: Arc::new(Mutex::new(None)),
             #[cfg(test)]
+            receipt_enumeration_barrier: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             active_metadata_fault: Arc::new(AtomicU8::new(0)),
@@ -626,6 +628,7 @@ impl AgentTranscriptStore {
             fail_fork_cleanup: Arc::new(AtomicBool::new(false)),
             archive_recovery_read_barrier: Arc::new(Mutex::new(None)),
             presentation_lock_barrier: Arc::new(Mutex::new(None)),
+            receipt_enumeration_barrier: Arc::new(Mutex::new(None)),
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
             fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
             active_metadata_fault: Arc::new(AtomicU8::new(0)),

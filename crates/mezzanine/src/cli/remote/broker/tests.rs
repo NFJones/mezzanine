@@ -122,7 +122,7 @@ async fn cancellation_with_profile_lock(release_after_cancel: bool) {
         let mime = "application/vnd.mezzanine.outbound+json";
         let mut client = Framed::new(stream, ProtocolFrameCodec::new(4096).unwrap());
         client
-            .send(ProtocolFrame::new(mime, r#"{"protocol":"mez-outbound/1"}"#))
+            .send(ProtocolFrame::new(mime, r#"{"protocol":"mez-outbound/2"}"#))
             .await
             .unwrap();
         let hello = client.next().await.unwrap().unwrap();
@@ -187,7 +187,7 @@ async fn outbound_broker_foreground_cancellation_releases_publication_and_identi
         client
             .send(ProtocolFrame::new(
                 "application/vnd.mezzanine.outbound+json",
-                r#"{"protocol":"mez-outbound/1"}"#,
+                r#"{"protocol":"mez-outbound/2"}"#,
             ))
             .await
             .unwrap();

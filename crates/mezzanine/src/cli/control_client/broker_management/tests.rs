@@ -25,7 +25,7 @@ async fn hello(
     stream
         .send(ProtocolFrame::new(
             "application/vnd.mezzanine.outbound+json",
-            serde_json::json!({"protocol":"mez-outbound/1","handle":handle}).to_string(),
+            serde_json::json!({"protocol":"mez-outbound/2","handle":handle}).to_string(),
         ))
         .await
         .unwrap();

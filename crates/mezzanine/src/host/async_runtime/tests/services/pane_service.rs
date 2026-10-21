@@ -3,6 +3,10 @@
 use super::super::native_fixture::{CloseGate, JoinControl, NativeFixture};
 use super::super::*;
 
+mod zsh_teardown;
+
+use zsh_teardown::settle_zsh_supervisor;
+
 /// Verifies that the combined pane process service defers large input
 /// remainders after one bounded write.
 ///
@@ -2325,7 +2329,10 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
     let pane_worker_handle = handle.clone();
     let client_handle = handle.clone();
     let pane_worker_done = StdArc::new(AtomicBool::new(false));
-    // Coarse test-only phases: acceptance, stop admitted, worker settled, actor
+    let supervisor_stop_wake = StdArc::new(tokio::sync::Notify::new());
+    let worker_stop_wake = supervisor_stop_wake.clone();
+    let worker_done = pane_worker_done.clone();
+    // Coarse test-only phases: acceptance, stop requested, worker settled, actor
     // closing, actor closed. They diagnose ordering, never native authority.
     let phase = StdArc::new(std::sync::atomic::AtomicU8::new(0));
     let worker_phase = phase.clone();
@@ -2341,7 +2348,7 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
     let close_gate = CloseGate::default();
     let client_close = close_gate.clone();
     let pane_worker = async move {
-        let result = run_async_pane_process_supervisor_service(
+        let result = crate::host::async_runtime::pane_io::run_fixture_pane_process_supervisor(
             pane_worker_handle.clone(),
             AsyncPaneProcessSupervisorServiceConfig {
                 max_polls: u64::MAX,
@@ -2355,9 +2362,13 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
                     foreground_metadata_interval: Duration::from_millis(10),
                 },
             },
-            // Intent is diagnostic only; watched lifecycle is the durable
-            // stopping condition, not a shared-notification/atomic-flag race.
-            |_, state| matches!(state, RuntimeLifecycleState::Stopping),
+            // Only this original supervisor consumes its dedicated stop port.
+            // Keep the actor Running until already-owned events are drained.
+            |_, state| {
+                worker_done.load(Ordering::SeqCst)
+                    || matches!(state, RuntimeLifecycleState::Stopping)
+            },
+            worker_stop_wake,
         )
         .await;
         let diagnostics = (
@@ -2477,17 +2488,21 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
         // cleanup can erase transactions or invalidate environment authority.
         let before_stop = client_handle.pane_certification_snapshot("%1").await;
         client_phase.store(1, Ordering::SeqCst);
-        pane_worker_done.store(true, Ordering::SeqCst);
-        let mut batch = RuntimeEventBatch::new();
-        batch.push(RuntimeEvent::Shutdown(ShutdownEvent {
-            reason: "owned unmanaged-Zsh fixture ordered teardown".to_string(),
-            force: false,
-            failed: false,
-        }));
-        // Existing watched lifecycle admission wakes BOTH supervisor and worker
-        // reliably. It does not execute the separate actor Shutdown request.
-        let stop_admission = client_handle.submit_runtime_events(batch).await;
-        let settled = worker_completion.await;
+        let (settled, stop_admission) = settle_zsh_supervisor(
+            &pane_worker_done,
+            &supervisor_stop_wake,
+            worker_completion,
+            async {
+                let mut batch = RuntimeEventBatch::new();
+                batch.push(RuntimeEvent::Shutdown(ShutdownEvent {
+                    reason: "owned unmanaged-Zsh fixture ordered teardown".to_string(),
+                    force: false,
+                    failed: false,
+                }));
+                client_handle.submit_runtime_events(batch).await
+            },
+        )
+        .await;
         client_phase.store(2, Ordering::SeqCst);
         let actor_before_close = client_handle.lifecycle_state().await;
         let native_before_close = (
@@ -2545,9 +2560,11 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
     });
     // Retirement cannot replace any captured pre-fallback acceptance receipt.
     fixture.retire(&mut joined).await;
-    let (observed, report, _actor_exit) = joined
-        .finish(&fixture)
-        .unwrap_or_else(|failure| std::panic::resume_unwind(failure));
+    let (observed, report, _actor_exit) = joined.finish(&fixture).unwrap_or_else(|failure| {
+        let summary = format!("owned unmanaged-Zsh {}\n", failure.safe_summary());
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), summary.as_bytes());
+        std::panic::resume_unwind(failure)
+    });
     if sentinel_present {
         std::fs::remove_file(sentinel).unwrap();
     }
@@ -2578,9 +2595,9 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
         .expect("same pane supervisor must retain its diagnostic receipt");
     assert_eq!(
         diagnostics,
-        (1, true, RuntimeLifecycleState::Stopping, false, 0, 0, false)
+        (1, true, RuntimeLifecycleState::Running, false, 0, 0, false)
     );
-    assert_eq!(report.terminal_state, RuntimeLifecycleState::Stopping);
+    assert_eq!(report.terminal_state, RuntimeLifecycleState::Running);
     assert_eq!(actor_before_close.unwrap(), RuntimeLifecycleState::Stopping);
     assert_eq!(
         native_before_close,

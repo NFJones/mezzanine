@@ -6074,7 +6074,16 @@ Frontend discovery MUST revalidate the retained native configuration-root object
 and private-directory policy without recreating a missing pathname. Replacement
 or relocation MUST withhold discovery for the old endpoint owner.
 Local frontend admission MUST authenticate kernel Unix peer UID before decoding
-a bounded `mez-outbound/1` hello. Handshake and retained frontend capacity MUST
+a bounded `mez-outbound/2` hello. The numeric suffix is an exact whole-contract
+epoch for the complete local request/response schema and semantics, independent
+of product version and remote Iroh protocol/codec negotiation. Epoch 2 requires
+the current conditional-view contract, including `if_view_identity` and strict
+unchanged-view replies. Any evolution that can break a strict consumer, including
+emission of a newly optional field, MUST bump the epoch before use. Both peers
+MUST require the exact supported epoch before handle allocation, profile setup,
+pairing, session creation or terminal effects. Missing contract evidence and old
+or future epochs MUST fail closed; there is no old-epoch implementation, downgrade
+or optional-feature fallback. Handshake and retained frontend capacity MUST
 be finite, with a total admission deadline. Unknown hello fields and unsupported
 versions MUST reject; handles MUST bind an owner incarnation and nonreused
 generation without exporting endpoint or device credentials. Admission alone
@@ -6513,6 +6522,14 @@ Internal broker readiness MUST authenticate the kernel Unix peer before hello
 exchange, bound negotiation, and revalidate retained private root/socket identity.
 Readiness MUST retain the admitted stream and exact inert handle; socket existence
 alone is insufficient. Failed discovery MUST NOT create, replace or launch state.
+Installing a new executable MUST NOT be treated as proof that an already-running
+broker implements its local wire epoch. Connected hello mismatch, malformed
+readiness or EOF MUST remain terminal and content-free, with owner-aware upgrade
+and coordinated retirement guidance. EOF alone MUST NOT be diagnosed as proof of
+mixed versions. Recovery MUST NOT automatically fall back, replay any operation,
+unlink discovery/locks, restart, kill or replace a potentially shared broker.
+Explicit operator retirement MUST account for live sibling attachments and the
+exact lifecycle owner; absent lifecycle evidence withholds takeover authority.
 Internal startup composition MAY invoke one caller-supplied launcher only after
 missing/refused discovery and protected election. It MUST reprobe after election,
 retain and revalidate the guard through readiness, and bound asynchronous retries
@@ -12812,7 +12829,21 @@ The baseline command capabilities are:
   reconcile retained receipts before validating checkpointed history. An
   absent receipt MUST NOT acknowledge uncommitted rows; a late duplicate
   settlement is harmless only if the complete exact batch is already present
-  in valid committed history. A transcript append admitted into the actor's
+  in valid committed history. Receipt admission and fork fences MUST route
+  canonical filename identities before opening files and read only receipts
+  for conversations whose exact append locks they own. Another conversation's
+  concurrent receipt retirement MUST NOT reject valid admission or strand
+  unrelated ordered persistence work. Recognized foreign receipts, including
+  their damage, belong to their own locked admission or global recovery;
+  unknown/noncanonical names MUST fail closed rather than imply foreign
+  ownership. Selected receipts MUST still pass regular-file, identity, row,
+  digest, sequence and conflict checks, with no blanket missing-file exception.
+  Global recovery MUST discover identities then re-enumerate under each exact
+  conversation lock: retirement before lock acquisition is benign, while a
+  selected-path read failure is not. Recovery's rolling snapshot MUST retain
+  all-conversation conflict/gap preflight before any replay; a newly discovered
+  conversation MAY wait for a subsequent recovery. Canonically named staging
+  files are not accepted receipts. A transcript append admitted into the actor's
   ordered persistence lane MUST remain unavailable to its worker until its
   exact append receipt is synced off actor ownership. A producer reply that
   acknowledges that append MUST wait for receipt admission; a rejected receipt

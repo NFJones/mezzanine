@@ -354,6 +354,10 @@ pub struct AgentTranscriptStore {
     /// One-shot fixture handshake immediately before presentation ownership acquisition.
     #[cfg(test)]
     pub(super) presentation_lock_barrier: Arc<Mutex<Option<ArchiveRecoveryReadBarrier>>>,
+    /// One-shot receipt enumeration handshake shared only by this store's clones.
+    #[cfg(test)]
+    pub(super) receipt_enumeration_barrier:
+        Arc<Mutex<Option<super::receipts::ReceiptEnumerationBarrier>>>,
     /// Test-only one-shot failure immediately before replacing session metadata.
     #[cfg(test)]
     pub(super) fail_agent_session_metadata_write: Arc<AtomicBool>,
