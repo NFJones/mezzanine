@@ -1482,8 +1482,11 @@ fn stopping_lifecycle_settles_process_exit_for_active_shell_turn() {
     );
 }
 
-/// Queues one ready agent turn for a pane and returns its identifier.
-fn queue_ready_agent_turn(
+/// Starts one active shell-backed turn for a pane and returns its identifier.
+///
+/// The shell session owns this running turn, which is exactly the ownership the
+/// pane-exit settlement path must finish.
+fn start_active_parent_turn(
     service: &mut RuntimeSessionService,
     pane_id: &str,
     turn_id: &str,
@@ -1515,6 +1518,62 @@ fn queue_ready_agent_turn(
     turn_id.to_string()
 }
 
+/// Queues one genuinely startable sibling turn through real scheduler admission.
+///
+/// The pane has a shell session but owns no running turn: only the ledger entry
+/// and the scheduler work make it startable, so a green result cannot come from
+/// an already-bound shell session.
+fn queue_ready_scheduled_turn(
+    service: &mut RuntimeSessionService,
+    pane_id: &str,
+    turn_id: &str,
+) -> String {
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume(pane_id)
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .agent_turn_ledger_mut()
+        .queue_turn(mez_agent::AgentTurnRecord {
+            turn_id: turn_id.to_string(),
+            conversation_id: conversation_id.clone(),
+            agent_id: format!("agent-{pane_id}"),
+            pane_id: pane_id.to_string(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 200,
+            deadline_at_unix_millis: 0,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            cooperation_mode: None,
+            state: mez_agent::AgentTurnState::Queued,
+            initial_capability: None,
+        })
+        .unwrap();
+    service
+        .agent_scheduler_mut()
+        .enqueue(ScheduledWork {
+            turn_id: turn_id.to_string(),
+            conversation_id,
+            agent_id: format!("agent-{pane_id}"),
+            pane_id: Some(pane_id.to_string()),
+            kind: ScheduledWorkKind::ShellCapable,
+        })
+        .unwrap();
+    mark_test_pane_ready(service, pane_id);
+    turn_id.to_string()
+}
+
+/// Reports whether the scheduler still owns one queued turn.
+fn scheduler_owns_queued_turn(service: &RuntimeSessionService, turn_id: &str) -> bool {
+    service
+        .agent_scheduler()
+        .queued_turns()
+        .any(|work| work.turn_id == turn_id)
+}
+
 /// Returns the retained ledger state for one turn.
 fn ledger_turn_state(service: &RuntimeSessionService, turn_id: &str) -> AgentTurnState {
     service
@@ -1540,7 +1599,23 @@ fn running_lifecycle_starts_ready_queued_sibling_turn() {
     service
         .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat"))
         .unwrap();
-    queue_ready_agent_turn(&mut service, "%2", "turn-sibling");
+    queue_ready_scheduled_turn(&mut service, "%2", "turn-sibling");
+    assert!(
+        scheduler_owns_queued_turn(&service, "turn-sibling"),
+        "the scheduler must own the queued sibling before the control runs"
+    );
+    assert_eq!(
+        ledger_turn_state(&service, "turn-sibling"),
+        AgentTurnState::Queued
+    );
+    assert!(
+        service
+            .agent_shell_store()
+            .get("%2")
+            .and_then(|session| session.running_turn_id.as_deref())
+            .is_none(),
+        "the sibling shell session must not own a running turn yet"
+    );
 
     let started = service.start_ready_agent_turns().unwrap();
     assert_eq!(started, 1, "the ready sibling must be startable while running");
@@ -1564,8 +1639,24 @@ fn stopping_exit_settlement_does_not_start_ready_queued_sibling_turn() {
     service
         .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat"))
         .unwrap();
-    queue_ready_agent_turn(&mut service, "%1", "turn-parent");
-    queue_ready_agent_turn(&mut service, "%2", "turn-sibling");
+    start_active_parent_turn(&mut service, "%1", "turn-parent");
+    queue_ready_scheduled_turn(&mut service, "%2", "turn-sibling");
+    assert!(
+        scheduler_owns_queued_turn(&service, "turn-sibling"),
+        "the scheduler must own the ready sibling before shutdown"
+    );
+    assert_eq!(
+        ledger_turn_state(&service, "turn-sibling"),
+        AgentTurnState::Queued
+    );
+    assert!(
+        service
+            .agent_shell_store()
+            .get("%2")
+            .and_then(|session| session.running_turn_id.as_deref())
+            .is_none(),
+        "the sibling shell session must not own a running turn before shutdown"
+    );
 
     let transition = service
         .apply_shutdown_transition(crate::runtime::ShutdownEvent {
@@ -1598,6 +1689,10 @@ fn stopping_exit_settlement_does_not_start_ready_queued_sibling_turn() {
         ledger_turn_state(&service, "turn-sibling"),
         AgentTurnState::Queued,
         "stopping settlement must not start a ready sibling turn"
+    );
+    assert!(
+        scheduler_owns_queued_turn(&service, "turn-sibling"),
+        "settlement must preserve sibling scheduler custody instead of cancelling it"
     );
     assert!(
         service
