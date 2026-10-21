@@ -11,9 +11,25 @@ use mez_agent::AutoSizingRoutingSelection;
 
 mod cleanup;
 
+/// Reports whether any parsed JSON string node equals the needle exactly.
+/// Substring containment in an unrelated field is not evidence of identity.
+fn json_has_exact_string(value: &serde_json::Value, needle: &str) -> bool {
+    match value {
+        serde_json::Value::String(candidate) => candidate == needle,
+        serde_json::Value::Array(items) => {
+            items.iter().any(|item| json_has_exact_string(item, needle))
+        }
+        serde_json::Value::Object(entries) => entries
+            .values()
+            .any(|entry| json_has_exact_string(entry, needle)),
+        _ => false,
+    }
+}
+
 /// A real routed native claim under the fixture's explicit ask/policy-only
 /// policy must retain a synthetic terminal outcome before optional installation
-/// fails. Debug exercises activity RESULT, Verbose the shell-view raw body.
+/// fails. Debug proves no generic ordered RESULT is fabricated for a headerless
+/// result; Verbose proves the shell-view raw body owner is retained.
 /// No approval bypass, sandbox capability fabrication, command execution or
 /// launch-count inference is used: only claim-derived delivery identity and
 /// returned bytes are synthetic. This is not platform sandbox execution proof.
@@ -127,32 +143,98 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
                 service.completion_publication_retry_needed_for_turn(&worker_turn.turn_id),
                 "verbose shell-view must retain its raw native publication obligation"
             );
-            let retained_key = service
-                .presentation
-                .agent_queued_provider_results
-                .keys()
-                .find(|key| key.1 == worker_turn.turn_id)
-                .cloned()
-                .expect("verbose shell-view retains the original raw RESULT");
-            let retained_owner = service
-                .presentation
-                .agent_queued_provider_results
-                .get(&retained_key)
-                .map(|(action, _, text, entry, transaction, _)| {
-                    (
-                        action.id.clone(),
-                        text.clone(),
-                        entry.id.clone(),
-                        transaction.clone(),
-                    )
+            let expected_pane = worker_turn.pane_id.clone();
+            let expected_turn = worker_turn.turn_id.clone();
+            let expected_conversation = worker_turn.conversation_id.clone();
+            let expected_ordinal = execution
+                .response
+                .action_batch
+                .as_ref()
+                .and_then(|batch| {
+                    batch
+                        .actions
+                        .iter()
+                        .position(|candidate| candidate.id == action.id)
                 })
-                .expect("retained raw owner");
-            assert_eq!(retained_owner.0, action.id);
-            assert!(retained_owner.1.contains(body.trim()));
+                .expect("native action ordinal");
+            let expected_group = service
+                .presentation
+                .agent_provider_log_orders
+                .keys()
+                .find(|(pane, turn, conversation, _)| {
+                    pane == &expected_pane
+                        && turn == &expected_turn
+                        && conversation == &expected_conversation
+                })
+                .map(|(_, _, _, group)| group.clone())
+                .expect("native provider log order");
+            let expected_text = body.to_string();
+            let retained_key = (
+                expected_pane,
+                expected_turn,
+                expected_conversation,
+                expected_group,
+                expected_ordinal,
+            );
+            let tuple_of = |service: &crate::runtime::RuntimeSessionService| {
+                service
+                    .presentation
+                    .agent_queued_provider_results
+                    .get(&retained_key)
+                    .map(
+                        |(retained_action, retained_result, text, entry, transaction, raw)| {
+                            (
+                                retained_action.id.clone(),
+                                retained_result.action_id.clone(),
+                                retained_result.status,
+                                retained_result.content_text(),
+                                text.clone(),
+                                entry.id.clone(),
+                                transaction.clone(),
+                                *raw,
+                            )
+                        },
+                    )
+                    .expect("verbose shell-view retains the independently expected raw RESULT")
+            };
+            let retained_tuple = tuple_of(&service);
+            assert_eq!(retained_tuple.0, action.id);
+            assert_eq!(retained_tuple.1, action.id);
+            assert_eq!(retained_tuple.2, ActionStatus::Succeeded);
+            assert_eq!(retained_tuple.3, expected_text);
+            assert_eq!(retained_tuple.4, expected_text);
             assert_eq!(
-                retained_owner.3.as_deref(),
+                retained_tuple.6.as_deref(),
                 Some(dispatch.marker.as_str()),
                 "the original marker transaction owns the retained source"
+            );
+            assert!(
+                retained_tuple.7,
+                "verbose shell-view retains the raw diagnostic owner"
+            );
+            let held_execution = service
+                .agent_turn_executions()
+                .get(&worker_turn.turn_id)
+                .cloned()
+                .expect("canonical execution is retained while held");
+            let held_result = held_execution
+                .action_results
+                .iter()
+                .find(|result| result.action_id == action.id)
+                .cloned()
+                .expect("canonical native result is retained while held");
+            assert_eq!(held_result.status, ActionStatus::Succeeded);
+            assert_eq!(held_result.content_text(), expected_text);
+            let structured: serde_json::Value = serde_json::from_str(
+                held_result
+                    .structured_content_json
+                    .as_deref()
+                    .expect("canonical native structured content"),
+            )
+            .expect("canonical native structured content is JSON");
+            assert!(
+                json_has_exact_string(&structured, &dispatch.marker),
+                "the canonical structured payload carries the exact dispatch marker"
             );
             assert!(
                 service
@@ -165,15 +247,26 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
             assert!(!publication_ready(&service));
             assert_eq!(service.retry_completion_publications(), 0);
             assert_eq!(service.retry_completion_publications(), 0);
-            let unchanged_owner = service
-                .presentation
-                .agent_queued_provider_results
-                .get(&retained_key)
-                .map(|(_, _, text, entry, transaction, _)| {
-                    (text.clone(), entry.id.clone(), transaction.clone())
-                })
-                .expect("retained owner survives held retries");
-            assert_eq!(unchanged_owner.1, retained_owner.2);
+            assert_eq!(
+                tuple_of(&service),
+                retained_tuple,
+                "every retained owner field is immutable across held retries"
+            );
+            assert_eq!(
+                service
+                    .agent_turn_executions()
+                    .get(&worker_turn.turn_id)
+                    .and_then(|execution| {
+                        execution
+                            .action_results
+                            .iter()
+                            .find(|result| result.action_id == action.id)
+                            .cloned()
+                    })
+                    .expect("canonical result survives held retries"),
+                held_result,
+                "held publication retries must not mutate canonical custody"
+            );
             let held_rows = service
                 .agent_pane_screen(&worker_turn.pane_id)
                 .unwrap()
@@ -200,8 +293,23 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
                 service
                     .presentation
                     .agent_published_provider_results
-                    .contains(&(retained_key.clone(), retained_owner.1.clone())),
+                    .contains(&(retained_key.clone(), expected_text.clone())),
                 "the exact raw owner is acknowledged once installed"
+            );
+            assert_eq!(
+                service
+                    .agent_turn_executions()
+                    .get(&worker_turn.turn_id)
+                    .and_then(|execution| {
+                        execution
+                            .action_results
+                            .iter()
+                            .find(|result| result.action_id == action.id)
+                            .cloned()
+                    })
+                    .expect("canonical result survives release"),
+                held_result,
+                "publication must not mutate canonical custody"
             );
         } else {
             // Debug carries no shell-view raw owner, and a headerless result has
