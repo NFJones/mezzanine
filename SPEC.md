@@ -12797,7 +12797,21 @@ The baseline command capabilities are:
   reconcile retained receipts before validating checkpointed history. An
   absent receipt MUST NOT acknowledge uncommitted rows; a late duplicate
   settlement is harmless only if the complete exact batch is already present
-  in valid committed history. A transcript append admitted into the actor's
+  in valid committed history. Receipt admission and fork fences MUST route
+  canonical filename identities before opening files and read only receipts
+  for conversations whose exact append locks they own. Another conversation's
+  concurrent receipt retirement MUST NOT reject valid admission or strand
+  unrelated ordered persistence work. Recognized foreign receipts, including
+  their damage, belong to their own locked admission or global recovery;
+  unknown/noncanonical names MUST fail closed rather than imply foreign
+  ownership. Selected receipts MUST still pass regular-file, identity, row,
+  digest, sequence and conflict checks, with no blanket missing-file exception.
+  Global recovery MUST discover identities then re-enumerate under each exact
+  conversation lock: retirement before lock acquisition is benign, while a
+  selected-path read failure is not. Recovery's rolling snapshot MUST retain
+  all-conversation conflict/gap preflight before any replay; a newly discovered
+  conversation MAY wait for a subsequent recovery. Canonically named staging
+  files are not accepted receipts. A transcript append admitted into the actor's
   ordered persistence lane MUST remain unavailable to its worker until its
   exact append receipt is synced off actor ownership. A producer reply that
   acknowledges that append MUST wait for receipt admission; a rejected receipt

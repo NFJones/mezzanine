@@ -8,6 +8,8 @@ mod failure_countdowns;
 mod fork_epoch;
 /// Immutable presentation occurrence encoding and fork provenance.
 mod occurrence;
+/// Exact-conversation receipt admission and retirement race coverage.
+mod receipt_admission;
 /// Content edits cannot invalidate an authoritative selective compaction summary.
 mod selective_edit_fence;
 
