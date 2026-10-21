@@ -107,6 +107,18 @@ for the distinction between disk edits and live reload. There is no
 `mez mcp retry` CLI subcommand;
 passive model metadata lookup does not start a transport or clear a blacklist.
 
+### Local transport lifetime
+
+Each stdio connection owns its protocol reader and stderr drain for exactly the
+connection lifetime. Retiring or dropping a connection cancels both readers
+immediately, even if a descendant process still holds the inherited stdout or
+stderr writers open; cleanup never waits for that descendant to exit and never
+signals it by guessed process identity. Only the directly spawned server process
+is killed, and an explicit retirement reports bounded cleanup uncertainty
+instead of claiming a clean release. Closing a transport does not retry or
+replay a tool call whose outcome is unknown; inspect the external service before
+retrying a mutation.
+
 ## Use an integration for a task
 
 Mention the configured server at the start of your task, for example:

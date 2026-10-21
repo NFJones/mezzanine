@@ -14338,6 +14338,15 @@ Model-authored arguments that fail a valid snapshot MUST surface as bounded repa
 Local stdio MCP subprocesses MUST be runtime-owned resources for the Mez
 session, not parent-agent-owned resources, and MUST be terminated when the
 session is killed, force-shutdown, or otherwise leaves the live runtime.
+Each stdio connection MUST retain and cancel its own stdout protocol-reader and
+stderr-drain tasks. Explicit retirement, partial startup failure, and connection
+drop MUST cancel both readers without waiting for child or descendant EOF, and
+`Drop` MUST NOT create another cleanup task. Cancellation MUST close the reader
+descriptors and MUST NOT signal descendants by guessed PID or process group.
+Asynchronous retirement SHOULD observe bounded reader-task and direct-child
+settlement and MUST report an expired bound as cleanup uncertainty. Cancelling a
+transport MUST NOT replay a possibly executed MCP tool call or clear live
+approval or schema state.
 
 MCP tool calls MUST be subject to the same permission and audit model as other
 agent actions.
