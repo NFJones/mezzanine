@@ -3,6 +3,8 @@
 use super::super::*;
 use tokio::net::{UnixListener, UnixStream};
 
+mod native_recipients;
+
 /// Verifies async message connection dispatches hello.
 ///
 /// This regression scenario documents the behavior being protected so a
