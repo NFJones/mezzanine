@@ -13550,6 +13550,15 @@ spoof another agent, pane, window, role, or capability set.
 
 The `recipient` object MUST identify one of: a specific agent, a pane, a
 window, a session, a role, a capability query, or a group.
+Its direct `agent_id` selector MUST accept the exact nonblank, control-free
+registered identity advertised by discovery, including generated IDs such as
+`a1` and opaque native IDs such as `agent-%1`. The spelling MUST be preserved;
+it MUST NOT be trimmed, case-folded, interpreted as a pane or display label, or
+used to register a new identity. Recipient availability and trusted audience
+membership MUST still be checked by exact registered identity. Missing, retired
+and audience-ineligible direct targets MUST retain the same unavailable result.
+Numeric pane/window selector grammar, independent-selector rejection, sender
+authentication and transport frame limits MUST remain unchanged.
 
 Receivers MUST preserve unknown envelope fields when forwarding messages unless
 policy requires removal.

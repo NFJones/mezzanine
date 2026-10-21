@@ -1974,3 +1974,50 @@ fn runtime_cleanup_ownerless_generation_exhaustion_fails_before_child_allocation
         (None, u64::MAX)
     );
 }
+
+/// Descendant cleanup that a parent exit already owns must settle while the
+/// lifecycle is stopping instead of failing on the public pane-close gate.
+///
+/// The child is a real delegated session with its own native pane and the parent
+/// conversation proof plus attached-primary authorization are unchanged, so this
+/// covers the internal cleanup route rather than manufacturing lineage.
+#[test]
+fn runtime_stopping_exit_settles_retained_child_pane_close() {
+    let mut fixture = CleanupFixture::without_parent_process();
+    let child = fixture.spawn("agent-%1");
+    let child_native = fixture.native_identity(&child);
+    assert!(fixture.present(&child));
+
+    let transition = fixture
+        .service
+        .apply_shutdown_transition(crate::runtime::ShutdownEvent {
+            reason: "stopping descendant settlement".to_string(),
+            force: false,
+            failed: false,
+        })
+        .unwrap();
+    assert!(transition.applied);
+    assert_eq!(
+        fixture.service.lifecycle_state(),
+        RuntimeLifecycleState::Stopping
+    );
+
+    let closed = fixture
+        .service
+        .close_subagent_descendants_for_parent_agent("agent-%1", "stopping parent exit")
+        .unwrap();
+    assert_eq!(
+        closed, 1,
+        "the retained child must close during stopping settlement"
+    );
+    assert!(!fixture.present(&child));
+    assert_ne!(
+        mez_mux::process::process_start_token_for_pid(child_native.0),
+        Some(child_native.1),
+        "the child native process must be retired, not adopted"
+    );
+    assert!(
+        fixture.service.find_pane_descriptor("%1").is_some(),
+        "descendant cleanup must not close the parent pane"
+    );
+}

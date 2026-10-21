@@ -162,7 +162,7 @@ impl RuntimeSessionService {
         process_group_id: u32,
         current_working_directory: Option<String>,
     ) -> Result<bool> {
-        self.require_live()?;
+        self.require_pane_settlement_admissible()?;
         let pane_id = pane_id.into();
         let Some(primary_pid) = self.primary_pid_for_live_pane_process(&pane_id) else {
             return Ok(false);
