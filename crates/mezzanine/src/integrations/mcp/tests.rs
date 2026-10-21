@@ -16,6 +16,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Builds one bounded schema generation fixture for MCP transport tests.
 fn mcp_schema_generation() -> String {
@@ -162,6 +164,135 @@ fn stdio_reader_rejects_oversized_protocol_messages() {
 
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
     assert!(error.message().contains("larger than the configured limit"));
+}
+
+/// Verifies `Drop` closes reader descriptors while a descendant keeps the
+/// inherited stdout writer open and emits no complete protocol message.
+///
+/// This is the deterministic regression witness for detached stdio reader
+/// tasks. The synthetic server's descendant probes its inherited stdout with
+/// non-newline bytes, so the protocol reader never produces a message that
+/// could notice a dropped receiver. The descendant records reader-end closure
+/// only after the client destroys the reader, which proves descriptor cleanup
+/// without depending on descendant EOF or signalling any process.
+#[tokio::test]
+async fn stdio_drop_closes_readers_while_descendant_holds_pipe() {
+    let fixture = StdioInheritedPipeFixture::new("drop");
+    let plan = fixture.plan(stdio_inherited_pipe_script(), false);
+    let connection = spawn_stdio_mcp_connection(&plan, &BTreeMap::new())
+        .await
+        .unwrap();
+    fixture.wait_for_descendant().await;
+    assert!(
+        !fixture.reader_closed(),
+        "fixture observed reader closure before the connection retired"
+    );
+
+    drop(connection);
+
+    fixture.wait_for_reader_closure().await;
+    fixture.cleanup();
+}
+
+/// Verifies explicit retirement cancels readers and settles within a bounded
+/// budget even though inherited writers remain open and produce no EOF.
+///
+/// The retirement call must observe reader-task destruction itself instead of
+/// waiting for the descendant to exit.
+#[tokio::test]
+async fn stdio_retire_cancels_readers_without_descendant_eof() {
+    let fixture = StdioInheritedPipeFixture::new("retire");
+    let plan = fixture.plan(stdio_inherited_pipe_script(), false);
+    let connection = spawn_stdio_mcp_connection(&plan, &BTreeMap::new())
+        .await
+        .unwrap();
+    fixture.wait_for_descendant().await;
+
+    let retirement = tokio::time::timeout(Duration::from_secs(5), connection.retire()).await;
+    match retirement {
+        Ok(result) => result.unwrap(),
+        Err(_) => panic!("MCP stdio retirement hung while a descendant held the writers"),
+    }
+
+    fixture.wait_for_reader_closure().await;
+    fixture.cleanup();
+}
+
+/// Verifies repeated connect/retire cycles release each cycle's reader
+/// descriptors instead of accumulating detached reader tasks.
+#[tokio::test]
+async fn stdio_repeated_retire_cycles_close_every_reader() {
+    let fixture = StdioInheritedPipeFixture::new("cycles");
+    for cycle in 0..4 {
+        fixture.reset_gates();
+        let plan = fixture.plan(stdio_inherited_pipe_script(), false);
+        let connection = spawn_stdio_mcp_connection(&plan, &BTreeMap::new())
+            .await
+            .unwrap();
+        fixture.wait_for_descendant().await;
+        tokio::time::timeout(Duration::from_secs(5), connection.retire())
+            .await
+            .unwrap_or_else(|_| panic!("MCP stdio retirement hung during cycle {cycle}"))
+            .unwrap();
+        fixture.wait_for_reader_closure().await;
+    }
+    fixture.cleanup();
+}
+
+/// Verifies a failed handshake retires the connection and cancels both readers
+/// while a descendant still holds the inherited stdout/stderr writers.
+///
+/// This is the partial-startup-failure control: discovery reports the server's
+/// own handshake error, and cleanup must not depend on the descendant exiting.
+#[tokio::test]
+async fn stdio_handshake_failure_retires_readers_with_inherited_writers() {
+    let fixture = StdioInheritedPipeFixture::new("handshake");
+    let plan = fixture.plan(stdio_inherited_pipe_handshake_script(), true);
+    let error = discover_stdio_mcp_server(&plan, &BTreeMap::new(), "mez", "test")
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(error.message().contains("handshake refused"));
+
+    fixture.wait_for_reader_closure().await;
+    fixture.cleanup();
+}
+
+/// Verifies a healthy connection still initializes, discovers tools, and
+/// retires cleanly, so reader ownership does not disturb normal transport use.
+#[tokio::test]
+async fn stdio_retire_after_successful_exchange_is_clean() {
+    let mut registry = McpRegistry::default();
+    registry
+        .add_server(McpServerConfig::stdio(
+            "fixture",
+            "fixture",
+            "/bin/sh",
+            vec![
+                "-c".to_string(),
+                stdio_fixture_script(false, false).to_string(),
+            ],
+        ))
+        .unwrap();
+    let plan = registry
+        .startup_plan("fixture", &BTreeMap::new(), 1)
+        .unwrap();
+    let mut connection = spawn_stdio_mcp_connection(&plan, &BTreeMap::new())
+        .await
+        .unwrap();
+    connection
+        .initialize("mez", "test", plan.timeout_ms)
+        .await
+        .unwrap();
+    connection.send_initialized_notification().await.unwrap();
+    let tools = connection.list_tools(None, plan.timeout_ms).await.unwrap();
+
+    assert_eq!(tools.tools.len(), 1);
+    tokio::time::timeout(Duration::from_secs(5), connection.retire())
+        .await
+        .expect("healthy MCP stdio retirement stayed bounded")
+        .unwrap();
 }
 
 /// Verifies stdio spawn passes only declared environment.
@@ -805,6 +936,166 @@ async fn streamable_http_matching_sse_result_settles_before_eof() {
 
     assert!(!response.is_error);
     assert!(response.content_json.contains("early"));
+}
+
+/// Synthetic stdio server whose descendant keeps inherited pipe writers open.
+///
+/// The direct child stays alive and emits no protocol output of its own. A
+/// descendant inherits the stdout/stderr writers and probes stdout with single
+/// non-newline bytes, so the protocol reader accumulates an incomplete message
+/// and never emits one. When the client destroys the reader, the probe fails
+/// with `EPIPE` (the descendant ignores `SIGPIPE`) and the descendant records
+/// the closure in the marker file. The marker therefore witnesses reader
+/// descriptor destruction without descendant EOF or process signalling.
+struct StdioInheritedPipeFixture {
+    root: PathBuf,
+    marker: PathBuf,
+    ready: PathBuf,
+    response_sent: PathBuf,
+}
+
+impl StdioInheritedPipeFixture {
+    /// Creates one isolated fixture directory with its observation gates.
+    fn new(label: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "mez-mcp-stdio-lifetime-{}-{label}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        Self {
+            marker: root.join("reader-closed"),
+            ready: root.join("descendant-ready"),
+            response_sent: root.join("response-sent"),
+            root,
+        }
+    }
+
+    /// Builds a startup plan for the probe-only or handshake-refusal script.
+    fn plan(&self, script: &'static str, sent_gate: bool) -> mez_agent::mcp::McpStartupPlan {
+        let mut args = vec![
+            "-c".to_string(),
+            script.to_string(),
+            "fixture".to_string(),
+            self.marker.to_string_lossy().into_owned(),
+            self.ready.to_string_lossy().into_owned(),
+        ];
+        if sent_gate {
+            args.push(self.response_sent.to_string_lossy().into_owned());
+        }
+        let mut registry = McpRegistry::default();
+        registry
+            .add_server(McpServerConfig::stdio(
+                "fixture", "fixture", "/bin/sh", args,
+            ))
+            .unwrap();
+        registry
+            .startup_plan("fixture", &BTreeMap::new(), 1)
+            .unwrap()
+    }
+
+    /// Removes per-cycle observation gates before a new connection starts.
+    fn reset_gates(&self) {
+        let _ = fs::remove_file(&self.marker);
+        let _ = fs::remove_file(&self.ready);
+        let _ = fs::remove_file(&self.response_sent);
+    }
+
+    /// Returns whether the descendant has already observed reader closure.
+    fn reader_closed(&self) -> bool {
+        self.marker.exists()
+    }
+
+    /// Waits until the descendant confirms that it inherited the writers.
+    async fn wait_for_descendant(&self) {
+        self.wait_for(
+            &self.ready,
+            "the inherited-pipe descendant never reported readiness",
+        )
+        .await;
+    }
+
+    /// Waits until the descendant observes client reader-descriptor closure.
+    async fn wait_for_reader_closure(&self) {
+        self.wait_for(
+            &self.marker,
+            "MCP stdio reader descriptors stayed open while a descendant held the writers",
+        )
+        .await;
+    }
+
+    /// Polls one observation gate under a bounded deadline.
+    async fn wait_for(&self, path: &Path, failure: &str) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            if path.exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("{failure}");
+    }
+
+    /// Removes the fixture directory; the descendant exits after observing EPIPE.
+    fn cleanup(&self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Probe-only synthetic server whose descendant holds inherited writers open.
+///
+/// Arguments: `$1` reader-closure marker, `$2` descendant-ready gate.
+fn stdio_inherited_pipe_script() -> &'static str {
+    r#"marker=$1
+ready=$2
+trap '' PIPE
+(
+  trap '' PIPE
+  : > "$ready"
+  while :; do
+    if ! printf ' '; then
+      : > "$marker"
+      exit 0
+    fi
+    sleep 0.02
+  done
+) &
+while IFS= read -r line; do
+  :
+done"#
+}
+
+/// Synthetic server that refuses the handshake while a descendant holds the
+/// inherited writers open.
+///
+/// Arguments: `$1` reader-closure marker, `$2` descendant-ready gate, `$3`
+/// response-sent gate. The descendant probes only after the parent wrote the
+/// refusal, so probe bytes cannot corrupt the JSON-RPC response line.
+fn stdio_inherited_pipe_handshake_script() -> &'static str {
+    r#"marker=$1
+ready=$2
+sent=$3
+trap '' PIPE
+(
+  trap '' PIPE
+  : > "$ready"
+  while [ ! -e "$sent" ]; do sleep 0.02; done
+  while :; do
+    if ! printf ' '; then
+      : > "$marker"
+      exit 0
+    fi
+    sleep 0.02
+  done
+) &
+while IFS= read -r line; do
+  case "$line" in
+    *initialize*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"handshake refused"}}'
+      : > "$sent"
+      ;;
+  esac
+done"#
 }
 
 /// Runs the stdio fixture script operation for this subsystem.
