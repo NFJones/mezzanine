@@ -2,10 +2,10 @@
 
 use super::{
     McpToolAuditCallContext, call_stdio_mcp_tool_with_audit, call_streamable_http_mcp_tool,
-    call_streamable_http_mcp_tool_with_audit, discover_stdio_mcp_server,
-    discover_stdio_mcp_server_into_registry, discover_streamable_http_mcp_server_into_registry,
-    execute_streamable_http_exchange, initialize_streamable_http_mcp_server,
-    read_bounded_protocol_line, spawn_stdio_mcp_connection,
+    call_streamable_http_mcp_tool_with_audit, combine_mcp_discovery_retirement_error,
+    discover_stdio_mcp_server, discover_stdio_mcp_server_into_registry,
+    discover_streamable_http_mcp_server_into_registry, execute_streamable_http_exchange,
+    initialize_streamable_http_mcp_server, read_bounded_protocol_line, spawn_stdio_mcp_connection,
 };
 use crate::security::auth::MCP_TEST_LONG_ACCESS_TOKEN;
 use mez_agent::mcp::{
@@ -16,6 +16,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Builds one bounded schema generation fixture for MCP transport tests.
 fn mcp_schema_generation() -> String {
@@ -162,6 +164,160 @@ fn stdio_reader_rejects_oversized_protocol_messages() {
 
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
     assert!(error.message().contains("larger than the configured limit"));
+}
+
+/// Verifies a combined discovery/retirement failure preserves the primary error
+/// kind and message while explicitly naming cleanup uncertainty.
+///
+/// Discovery diagnostics must stay authoritative even when bounded retirement
+/// also fails, so an operator can still identify the handshake, protocol or
+/// schema cause instead of receiving only local cleanup detail.
+#[test]
+fn stdio_combined_discovery_retirement_error_preserves_primary_failure() {
+    let primary = crate::error::MezError::new(
+        crate::error::MezErrorKind::InvalidState,
+        "handshake refused",
+    );
+    let retirement = crate::error::MezError::new(
+        crate::error::MezErrorKind::Io,
+        "stdout reader did not settle",
+    );
+
+    let combined = combine_mcp_discovery_retirement_error(primary, retirement);
+
+    assert_eq!(combined.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(combined.message().contains("handshake refused"));
+    assert!(combined.message().contains("stdout reader did not settle"));
+    assert!(combined.message().contains("cleanup uncertainty"));
+}
+
+/// Verifies `Drop` closes reader descriptors while a descendant keeps the
+/// inherited stdout writer open and emits no complete protocol message.
+///
+/// This is the deterministic regression witness for detached stdio reader
+/// tasks. The synthetic server's descendant probes its inherited stdout with
+/// non-newline bytes, so the protocol reader never produces a message that
+/// could notice a dropped receiver. The descendant records reader-end closure
+/// only after the client destroys the reader, which proves descriptor cleanup
+/// without depending on descendant EOF or signalling any process.
+#[tokio::test]
+async fn stdio_drop_closes_readers_while_descendant_holds_pipe() {
+    let fixture = StdioInheritedPipeFixture::new("drop");
+    let plan = fixture.plan(stdio_inherited_pipe_script());
+    let connection = spawn_stdio_mcp_connection(&plan, &BTreeMap::new())
+        .await
+        .unwrap();
+    fixture.wait_for_descendants().await;
+    assert!(
+        !fixture.has_stdout_closure() && !fixture.has_stderr_closure(),
+        "fixture observed reader closure before the connection retired"
+    );
+
+    drop(connection);
+
+    fixture.wait_for_reader_closure().await;
+    fixture.cleanup();
+}
+
+/// Verifies explicit retirement cancels readers and settles within a bounded
+/// budget even though inherited writers remain open and produce no EOF.
+///
+/// The retirement call must observe reader-task destruction itself instead of
+/// waiting for the descendant to exit.
+#[tokio::test]
+async fn stdio_retire_cancels_readers_without_descendant_eof() {
+    let fixture = StdioInheritedPipeFixture::new("retire");
+    let plan = fixture.plan(stdio_inherited_pipe_script());
+    let connection = spawn_stdio_mcp_connection(&plan, &BTreeMap::new())
+        .await
+        .unwrap();
+    fixture.wait_for_descendants().await;
+
+    let retirement = tokio::time::timeout(Duration::from_secs(5), connection.retire()).await;
+    match retirement {
+        Ok(result) => result.unwrap(),
+        Err(_) => panic!("MCP stdio retirement hung while a descendant held the writers"),
+    }
+
+    fixture.wait_for_reader_closure().await;
+    fixture.cleanup();
+}
+
+/// Verifies repeated connect/retire cycles release each cycle's reader
+/// descriptors instead of accumulating detached reader tasks.
+#[tokio::test]
+async fn stdio_repeated_retire_cycles_close_every_reader() {
+    let fixture = StdioInheritedPipeFixture::new("cycles");
+    for cycle in 0..4 {
+        fixture.reset_gates();
+        let plan = fixture.plan(stdio_inherited_pipe_script());
+        let connection = spawn_stdio_mcp_connection(&plan, &BTreeMap::new())
+            .await
+            .unwrap();
+        fixture.wait_for_descendants().await;
+        tokio::time::timeout(Duration::from_secs(5), connection.retire())
+            .await
+            .unwrap_or_else(|_| panic!("MCP stdio retirement hung during cycle {cycle}"))
+            .unwrap();
+        fixture.wait_for_reader_closure().await;
+    }
+    fixture.cleanup();
+}
+
+/// Verifies a failed handshake retires the connection and cancels both readers
+/// while a descendant still holds the inherited stdout/stderr writers.
+///
+/// This is the partial-startup-failure control: discovery reports the server's
+/// own handshake error, and cleanup must not depend on the descendant exiting.
+#[tokio::test]
+async fn stdio_handshake_failure_retires_readers_with_inherited_writers() {
+    let fixture = StdioInheritedPipeFixture::new("handshake");
+    let plan = fixture.plan(stdio_inherited_pipe_handshake_script());
+    let error = discover_stdio_mcp_server(&plan, &BTreeMap::new(), "mez", "test")
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(error.message().contains("handshake refused"));
+
+    fixture.wait_for_reader_closure().await;
+    fixture.cleanup();
+}
+
+/// Verifies a healthy connection still initializes, discovers tools, and
+/// retires cleanly, so reader ownership does not disturb normal transport use.
+#[tokio::test]
+async fn stdio_retire_after_successful_exchange_is_clean() {
+    let mut registry = McpRegistry::default();
+    registry
+        .add_server(McpServerConfig::stdio(
+            "fixture",
+            "fixture",
+            "/bin/sh",
+            vec![
+                "-c".to_string(),
+                stdio_fixture_script(false, false).to_string(),
+            ],
+        ))
+        .unwrap();
+    let plan = registry
+        .startup_plan("fixture", &BTreeMap::new(), 1)
+        .unwrap();
+    let mut connection = spawn_stdio_mcp_connection(&plan, &BTreeMap::new())
+        .await
+        .unwrap();
+    connection
+        .initialize("mez", "test", plan.timeout_ms)
+        .await
+        .unwrap();
+    connection.send_initialized_notification().await.unwrap();
+    let tools = connection.list_tools(None, plan.timeout_ms).await.unwrap();
+
+    assert_eq!(tools.tools.len(), 1);
+    tokio::time::timeout(Duration::from_secs(5), connection.retire())
+        .await
+        .expect("healthy MCP stdio retirement stayed bounded")
+        .unwrap();
 }
 
 /// Verifies stdio spawn passes only declared environment.
@@ -805,6 +961,223 @@ async fn streamable_http_matching_sse_result_settles_before_eof() {
 
     assert!(!response.is_error);
     assert!(response.content_json.contains("early"));
+}
+
+/// Synthetic stdio server whose descendants keep inherited pipe writers open.
+///
+/// The direct child stays alive and emits no protocol output of its own. Two
+/// descendants inherit the stdout and stderr writers independently and probe
+/// their own descriptor with single non-newline bytes, so the protocol reader
+/// accumulates an incomplete message and never emits one. When the client
+/// destroys a reader, that descendant's probe fails with `EPIPE` (the
+/// descendant ignores `SIGPIPE`) and it records the closure in its own marker
+/// file. Each marker is therefore an independent witness for one reader
+/// descriptor, without descendant EOF or process signalling.
+struct StdioInheritedPipeFixture {
+    root: PathBuf,
+    stdout_closed: PathBuf,
+    stderr_closed: PathBuf,
+    stdout_ready: PathBuf,
+    stderr_ready: PathBuf,
+    response_sent: PathBuf,
+}
+
+impl StdioInheritedPipeFixture {
+    /// Creates one isolated fixture directory with its observation gates.
+    fn new(label: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "mez-mcp-stdio-lifetime-{}-{label}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        Self {
+            stdout_closed: root.join("stdout-closed"),
+            stderr_closed: root.join("stderr-closed"),
+            stdout_ready: root.join("stdout-ready"),
+            stderr_ready: root.join("stderr-ready"),
+            response_sent: root.join("response-sent"),
+            root,
+        }
+    }
+
+    /// Builds a startup plan for the probe-only or handshake-refusal script.
+    fn plan(&self, script: &'static str) -> mez_agent::mcp::McpStartupPlan {
+        let args = vec![
+            "-c".to_string(),
+            script.to_string(),
+            "fixture".to_string(),
+            self.root.to_string_lossy().into_owned(),
+        ];
+        let mut registry = McpRegistry::default();
+        registry
+            .add_server(McpServerConfig::stdio(
+                "fixture", "fixture", "/bin/sh", args,
+            ))
+            .unwrap();
+        registry
+            .startup_plan("fixture", &BTreeMap::new(), 1)
+            .unwrap()
+    }
+
+    /// Removes per-cycle observation gates before a new connection starts.
+    fn reset_gates(&self) {
+        for path in [
+            &self.stdout_closed,
+            &self.stderr_closed,
+            &self.stdout_ready,
+            &self.stderr_ready,
+            &self.response_sent,
+        ] {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    /// Returns whether a descendant has observed stdout reader closure.
+    fn has_stdout_closure(&self) -> bool {
+        self.stdout_closed.exists()
+    }
+
+    /// Returns whether a descendant has observed stderr reader closure.
+    fn has_stderr_closure(&self) -> bool {
+        self.stderr_closed.exists()
+    }
+
+    /// Waits until both descendants confirm they inherited their writers.
+    async fn wait_for_descendants(&self) {
+        self.wait_for(
+            &self.stdout_ready,
+            "the stdout inherited-pipe descendant never reported readiness",
+        )
+        .await;
+        self.wait_for(
+            &self.stderr_ready,
+            "the stderr inherited-pipe descendant never reported readiness",
+        )
+        .await;
+    }
+
+    /// Waits until both readers are independently observed as destroyed.
+    async fn wait_for_reader_closure(&self) {
+        self.wait_for(
+            &self.stdout_closed,
+            "MCP stdio stdout reader descriptor stayed open while a descendant held the writer",
+        )
+        .await;
+        self.wait_for(
+            &self.stderr_closed,
+            "MCP stdio stderr reader descriptor stayed open while a descendant held the writer",
+        )
+        .await;
+    }
+
+    /// Polls one observation gate under a bounded deadline.
+    async fn wait_for(&self, path: &Path, failure: &str) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            if path.exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("{failure}");
+    }
+
+    /// Removes the fixture directory; the descendant exits after observing EPIPE.
+    fn cleanup(&self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Probe-only synthetic server whose descendants hold inherited writers open.
+///
+/// Argument: `$1` fixture root directory. Both probe loops are bounded so a
+/// failed test cannot leave an unbounded sleeping orphan.
+fn stdio_inherited_pipe_script() -> &'static str {
+    r#"root=$1
+trap '' PIPE
+(
+  trap '' PIPE
+  : > "$root/stdout-ready"
+  i=0
+  while [ "$i" -lt 2000 ]; do
+    if ! printf ' '; then
+      : > "$root/stdout-closed"
+      exit 0
+    fi
+    i=$((i+1))
+    sleep 0.02
+  done
+) &
+(
+  trap '' PIPE
+  : > "$root/stderr-ready"
+  i=0
+  while [ "$i" -lt 2000 ]; do
+    if ! printf ' ' >&2; then
+      : > "$root/stderr-closed"
+      exit 0
+    fi
+    i=$((i+1))
+    sleep 0.02
+  done
+) &
+while IFS= read -r line; do
+  :
+done"#
+}
+
+/// Synthetic server that refuses the handshake while descendants hold the
+/// inherited writers open.
+///
+/// Argument: `$1` fixture root directory. The refusal is published as an
+/// unterminated JSON object, then the response-sent gate, then the terminating
+/// newline. The client can therefore retire and kill the direct child only
+/// after every descendant gate is already published, and any stdout probe bytes
+/// are only trailing whitespace for the valid response.
+fn stdio_inherited_pipe_handshake_script() -> &'static str {
+    r#"root=$1
+trap '' PIPE
+(
+  trap '' PIPE
+  : > "$root/stdout-ready"
+  i=0
+  while [ ! -e "$root/response-sent" ] && [ "$i" -lt 500 ]; do
+    i=$((i+1))
+    sleep 0.02
+  done
+  i=0
+  while [ "$i" -lt 2000 ]; do
+    if ! printf ' '; then
+      : > "$root/stdout-closed"
+      exit 0
+    fi
+    i=$((i+1))
+    sleep 0.02
+  done
+) &
+(
+  trap '' PIPE
+  : > "$root/stderr-ready"
+  i=0
+  while [ "$i" -lt 2000 ]; do
+    if ! printf ' ' >&2; then
+      : > "$root/stderr-closed"
+      exit 0
+    fi
+    i=$((i+1))
+    sleep 0.02
+  done
+) &
+while IFS= read -r line; do
+  case "$line" in
+    *initialize*)
+      printf '%s' '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"handshake refused"}}'
+      : > "$root/response-sent"
+      printf '\n'
+      ;;
+  esac
+done"#
 }
 
 /// Runs the stdio fixture script operation for this subsystem.
