@@ -299,10 +299,9 @@ impl RuntimeSessionService {
                     let renderer_owns_row = matches!(
                         action.payload,
                         mez_agent::AgentActionPayload::ApplyPatch { .. }
-                    ) || crate::runtime::render::presentation::agent_action_execution_display_header(
-                        &action,
                     )
-                    .is_some();
+                        || crate::runtime::render::agent_action_execution_display_header(&action)
+                            .is_some();
                     if renderer_owns_row {
                         self.queue_ordered_provider_result(
                             &owner.pane_id,
