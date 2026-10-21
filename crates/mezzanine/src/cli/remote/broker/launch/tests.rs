@@ -5,6 +5,75 @@
 
 use super::*;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Bounded exact-child cleanup owner for the opt-in native fixture.
+///
+/// It is established immediately after each elected spawn so an early return or
+/// assertion failure cannot leak this test's own broker. Normal paths shut down
+/// and reap gracefully; on unwind this guard requests termination of only its
+/// retained exact child and reaps it with a bounded synchronous wait. It never
+/// discovers, groups, guesses or signals any other process, and unresolved
+/// bounded reaping stays an unreaped exact child rather than a guessed PID act.
+struct ExactFixtureChild {
+    child: LaunchedBroker,
+    forced_reaps: Arc<AtomicUsize>,
+}
+
+impl ExactFixtureChild {
+    /// Takes ownership of the exact child this fixture just spawned.
+    fn new(child: LaunchedBroker, forced_reaps: Arc<AtomicUsize>) -> Self {
+        Self {
+            child,
+            forced_reaps,
+        }
+    }
+
+    /// Observes this exact child without transferring ownership.
+    fn child_mut(&mut self) -> &mut LaunchedBroker {
+        &mut self.child
+    }
+
+    /// Requests graceful shutdown of only this exact child, then reaps it.
+    async fn shutdown(&mut self) -> Result<ExitStatus> {
+        self.child.shutdown_for_tests().await
+    }
+}
+
+impl Drop for ExactFixtureChild {
+    /// Fallback cleanup for early return or panic: terminate and boundedly reap
+    /// only this exact retained child. No socket lookup, process group, sibling
+    /// inference or unknown-PID signal participates.
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        if self.child.start_kill_for_tests().is_err() {
+            return;
+        }
+        for _ in 0..200 {
+            match self.child.try_wait() {
+                Ok(Some(_)) => {
+                    self.forced_reaps.fetch_add(1, Ordering::SeqCst);
+                    return;
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                Err(_) => return,
+            }
+        }
+        eprintln!("exact fixture child reap unresolved within the bounded guard wait");
+    }
+}
+
+/// Takes a startup slot's exact child, if any, into the bounded cleanup owner.
+fn take_exact_child(
+    slot: &mut Option<LaunchedBroker>,
+    forced_reaps: &Arc<AtomicUsize>,
+) -> Option<ExactFixtureChild> {
+    slot.take()
+        .map(|child| ExactFixtureChild::new(child, forced_reaps.clone()))
+}
 
 /// Concurrent startup callers must elect exactly one real broker child and
 /// obtain distinct authenticated frontend handles. Disposal must not kill the
@@ -353,15 +422,17 @@ async fn outbound_launcher_reports_replacement_exit_after_fixture_socket_unlink(
     assert!(executable.is_absolute());
     let (home, env, election) = fixture();
     drop(election);
-    let mut owner = None;
-    let first = connect_owned(
+    let forced_reaps = Arc::new(AtomicUsize::new(0));
+    let mut owner_slot = None;
+    let first_result = connect_owned(
         &executable,
         &env,
         std::time::Duration::from_secs(10),
-        &mut owner,
+        &mut owner_slot,
     )
-    .await
-    .expect("fixture owner must publish readiness");
+    .await;
+    let mut owner = take_exact_child(&mut owner_slot, &forced_reaps);
+    let first = first_result.expect("fixture owner must publish readiness");
     let paths = env.config_paths().unwrap();
     let socket = paths.root().join("outbound.sock");
     let observed = std::fs::symlink_metadata(&socket).unwrap();
@@ -378,22 +449,25 @@ async fn outbound_launcher_reports_replacement_exit_after_fixture_socket_unlink(
         owner
             .as_mut()
             .expect("elected owner child")
+            .child_mut()
             .try_wait()
             .unwrap()
             .is_none(),
         "socket unlink must not stop the retained owner"
     );
-    let mut replacement = None;
+    let mut replacement_slot = None;
     let started = tokio::time::Instant::now();
-    let error = connect_owned(
+    let replacement_result = connect_owned(
         &executable,
         &env,
         std::time::Duration::from_secs(10),
-        &mut replacement,
+        &mut replacement_slot,
     )
-    .await
-    .err()
-    .expect("replacement cannot publish over the retained identity owner");
+    .await;
+    let mut replacement = take_exact_child(&mut replacement_slot, &forced_reaps);
+    let error = replacement_result
+        .err()
+        .expect("replacement cannot publish over the retained identity owner");
     assert!(
         started.elapsed() < std::time::Duration::from_secs(5),
         "replacement exit must be classified rather than waited out"
@@ -405,6 +479,7 @@ async fn outbound_launcher_reports_replacement_exit_after_fixture_socket_unlink(
     let failed = replacement
         .as_mut()
         .expect("replacement child remains caller-owned")
+        .child_mut()
         .try_wait()
         .unwrap()
         .expect("replacement child status must be reaped");
@@ -413,6 +488,7 @@ async fn outbound_launcher_reports_replacement_exit_after_fixture_socket_unlink(
         owner
             .as_mut()
             .expect("elected owner child")
+            .child_mut()
             .try_wait()
             .unwrap()
             .is_none(),
@@ -420,38 +496,68 @@ async fn outbound_launcher_reports_replacement_exit_after_fixture_socket_unlink(
     );
     let stopped = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        owner
-            .as_mut()
-            .expect("elected owner child")
-            .shutdown_for_tests(),
+        owner.as_mut().expect("elected owner child").shutdown(),
     )
     .await
     .expect("fixture owner shutdown must finish")
     .expect("fixture owner shutdown must succeed");
     assert!(stopped.success());
     drop(replacement);
-    let mut reused = None;
-    let fresh = connect_owned(
+    let mut reused_slot = None;
+    let fresh_result = connect_owned(
         &executable,
         &env,
         std::time::Duration::from_secs(20),
-        &mut reused,
+        &mut reused_slot,
     )
-    .await
-    .expect("released identity must publish a fresh owner");
+    .await;
+    let mut reused = take_exact_child(&mut reused_slot, &forced_reaps);
+    let fresh = fresh_result.expect("released identity must publish a fresh owner");
     fresh.handle().unwrap();
     drop(fresh);
     let shutdown = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        reused
-            .as_mut()
-            .expect("fresh owner child")
-            .shutdown_for_tests(),
+        reused.as_mut().expect("fresh owner child").shutdown(),
     )
     .await
     .expect("fresh owner shutdown must finish")
     .expect("fresh owner shutdown must succeed");
     assert!(shutdown.success());
+    assert_eq!(
+        forced_reaps.load(Ordering::SeqCst),
+        0,
+        "graceful teardown, not the unwind guard, must reap the exact children"
+    );
     drop((reused, owner));
+    assert!(!paths.root().join("outbound.sock").exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+/// Deliberate early-return control: the bounded exact-child guard must terminate
+/// and reap only the child this fixture spawned, without discovery, process
+/// groups or guessed PIDs. This is the unwind/early-return cleanup owner used by
+/// the opt-in native fixture, so an assertion failure there cannot leak its
+/// retained broker while sibling test children stay untouched.
+#[tokio::test]
+async fn outbound_launcher_exact_fixture_guard_reaps_on_early_return() {
+    let (home, env, election) = fixture();
+    let script = home.join("fixture-live-child");
+    std::fs::write(&script, b"#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let forced_reaps = Arc::new(AtomicUsize::new(0));
+    {
+        let child = LaunchedBroker::spawn(&script, &env, &election).unwrap();
+        let mut guard = ExactFixtureChild::new(child, forced_reaps.clone());
+        assert!(
+            guard.child_mut().try_wait().unwrap().is_none(),
+            "fixture child must be live before the deliberate early return"
+        );
+    }
+    assert_eq!(
+        forced_reaps.load(Ordering::SeqCst),
+        1,
+        "the bounded guard must reap exactly this retained child"
+    );
+    drop(election);
     std::fs::remove_dir_all(home).unwrap();
 }

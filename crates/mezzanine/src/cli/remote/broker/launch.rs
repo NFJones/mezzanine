@@ -138,6 +138,14 @@ impl LaunchedBroker {
         self.terminate().await
     }
 
+    /// Requests termination of only this test's exact retained child without
+    /// awaiting, so a bounded synchronous fixture guard can reap it on unwind.
+    /// This is not a discovery-derived signal and never targets another process.
+    #[cfg(test)]
+    pub(in crate::cli) fn start_kill_for_tests(&mut self) -> Result<()> {
+        self.child.start_kill().map_err(Into::into)
+    }
+
     /// Requests graceful shutdown of only this test's retained live child, then
     /// reaps it. Callers bound the wait and retain forced cleanup on failure;
     /// no socket lookup or inferred discovery ownership supplies signal authority.
