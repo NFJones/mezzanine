@@ -816,6 +816,16 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     crate::error::MezError::invalid_state("accepted result source is unavailable")
                 })?;
+            // Queueing into an already-published header installs immediately.
+            // That install is the same acknowledgment boundary as the ordered
+            // drain, so a held install must fail before acknowledging and leave
+            // the exact source queued for publication retry.
+            #[cfg(test)]
+            if self.presentation.agent_install_failure_held {
+                return Err(crate::error::MezError::invalid_state(
+                    "injected held pre-install presentation failure",
+                ));
+            }
             let entry_id = entry.id.clone();
             self.with_presentation_entry(pane_id, entry, |service| {
                 if accepted_raw {
