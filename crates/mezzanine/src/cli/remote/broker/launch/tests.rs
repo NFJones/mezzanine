@@ -423,6 +423,20 @@ async fn outbound_launcher_reports_replacement_exit_after_fixture_socket_unlink(
     let (home, env, election) = fixture();
     drop(election);
     let forced_reaps = Arc::new(AtomicUsize::new(0));
+    let paths = env.config_paths().unwrap();
+    let socket = paths.root().join("outbound.sock");
+    // The retained identity lock is the longest named path this fixture creates,
+    // so bounding it also bounds the publication socket and diagnostics file.
+    let longest_bytes = paths
+        .root()
+        .join("remote/client/endpoint.lock")
+        .as_os_str()
+        .to_string_lossy()
+        .len();
+    assert!(
+        longest_bytes <= 104,
+        "disposable fixture root must stay inside the Unix bound: {longest_bytes} bytes"
+    );
     let mut owner_slot = None;
     let first_result = connect_owned(
         &executable,
@@ -433,8 +447,6 @@ async fn outbound_launcher_reports_replacement_exit_after_fixture_socket_unlink(
     .await;
     let mut owner = take_exact_child(&mut owner_slot, &forced_reaps);
     let first = first_result.expect("fixture owner must publish readiness");
-    let paths = env.config_paths().unwrap();
-    let socket = paths.root().join("outbound.sock");
     let observed = std::fs::symlink_metadata(&socket).unwrap();
     assert!(paths.root().join("remote/client/endpoint.lock").exists());
     drop(first);
