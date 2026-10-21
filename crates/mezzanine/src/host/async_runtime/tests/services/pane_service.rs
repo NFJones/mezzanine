@@ -2403,19 +2403,35 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
                 .managed_shell_process_screen_text("%1")
                 .await
                 .unwrap();
-            if screen
-                .lines()
-                .zip(screen.lines().skip(1))
-                .any(|(output, prompt)| {
-                    output == "__MEZ_UNMANAGED_ZSH_ROUND_TRIP__"
-                        && prompt == "__MEZ_UNMANAGED_ZSH_READY__>"
-                })
-            {
+            let rendered_prompt =
+                screen
+                    .lines()
+                    .zip(screen.lines().skip(1))
+                    .any(|(output, prompt)| {
+                        output == "__MEZ_UNMANAGED_ZSH_ROUND_TRIP__"
+                            && prompt == "__MEZ_UNMANAGED_ZSH_READY__>"
+                    });
+            // Agent entry treats prompt readiness as its admission boundary, so
+            // the fixture must wait for the runtime's own readiness observation
+            // rather than for rendered prompt text alone. The pane worker's
+            // periodic foreground observation of the primary shell is the
+            // existing product-observable source; waiting for it keeps entry
+            // order-independent without new input or weaker guards.
+            let snapshot = client_handle
+                .pane_certification_snapshot("%1")
+                .await
+                .unwrap();
+            let readiness_observed = matches!(
+                snapshot.readiness,
+                mez_agent::PaneReadinessState::Ready
+                    | mez_agent::PaneReadinessState::PromptCandidate
+            );
+            if rendered_prompt && readiness_observed {
                 break;
             }
             assert!(
                 tokio::time::Instant::now() < prompt_deadline,
-                "unmanaged primary Zsh did not reach its initial prompt: {screen:?}"
+                "unmanaged primary Zsh did not reach prompt readiness: rendered={rendered_prompt} snapshot={snapshot:?} screen={screen:?}"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
