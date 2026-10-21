@@ -74,15 +74,37 @@ fn assert_screen_unchanged(
 #[tokio::test]
 async fn runtime_completion_progress_preinstall_failure_preserves_source_until_install() {
     let mut fixture = CompletionFixture::fetch().await;
-    let progress = claimed_read_progress(
-        &fixture,
-        "provisional read differs from terminal result".into(),
-    );
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .set_log_level(&fixture.turn.pane_id, AgentLogLevel::Debug)
+        .unwrap();
+    // Seed genuine durable semantic source so the later resize replay is an
+    // actual rebuild rather than an ineligible no-op.
+    fixture
+        .service
+        .append_agent_status_text_to_terminal_buffer(
+            &fixture.turn.pane_id,
+            "F668_DURABLE_PREINSTALL_TAIL",
+        )
+        .unwrap();
+    let provisional = "provisional read differs from terminal result";
+    let progress = claimed_read_progress(&fixture, provisional.into());
     assert!(
         fixture
             .service
             .apply_action_presentation_progress(progress.clone())
             .unwrap()
+    );
+    let visible = fixture
+        .service
+        .agent_pane_screen(&fixture.turn.pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        visible.contains(provisional),
+        "the provisional source must be visibly installed before the fault: {visible}"
     );
     assert_eq!(
         fixture
@@ -93,30 +115,7 @@ async fn runtime_completion_progress_preinstall_failure_preserves_source_until_i
     let source = fixture
         .service
         .action_presentation_progress_entries_for_tests(&fixture.turn.pane_id);
-    fixture
-        .service
-        .hold_agent_presentation_installs_for_tests(true);
-    let outcome = fixture.outcome();
-    assert!(
-        fixture
-            .service
-            .complete_approved_external_action(outcome)
-            .unwrap()
-    );
-    assert_eq!(
-        fixture
-            .service
-            .action_presentation_progress_counts_for_tests(&fixture.turn.pane_id),
-        (1, 0)
-    );
-    assert_eq!(
-        fixture
-            .service
-            .action_presentation_progress_entries_for_tests(&fixture.turn.pane_id),
-        source
-    );
     let canonical = fixture.retained();
-    assert_eq!(canonical.action_results[0], fixture.expected);
     let before = fixture
         .service
         .agent_pane_screen(&fixture.turn.pane_id)
@@ -125,6 +124,9 @@ async fn runtime_completion_progress_preinstall_failure_preserves_source_until_i
     let lineage = fixture
         .service
         .agent_pane_screen_lineage(&fixture.turn.pane_id, &fixture.turn.conversation_id);
+    fixture
+        .service
+        .hold_agent_presentation_installs_for_tests(true);
     let error = fixture
         .service
         .reconcile_action_presentation_progress(&progress, &fixture.expected)
@@ -141,20 +143,37 @@ async fn runtime_completion_progress_preinstall_failure_preserves_source_until_i
         source
     );
     assert!(
-        fixture
-            .service
-            .action_progress_retirement_retry_needed(),
+        fixture.service.action_progress_retirement_retry_needed(),
         "the superseded provisional cleanup decision must precede fallible rollout"
     );
+    // The canonical decision makes the repeat inert instead of re-entering the
+    // held installation fault, and it must not consume the retained source.
+    assert!(
+        !fixture
+            .service
+            .reconcile_action_presentation_progress(&progress, &fixture.expected)
+            .unwrap()
+    );
+    assert_screen_unchanged(&fixture, &before, lineage);
+    assert_eq!(
+        fixture
+            .service
+            .action_presentation_progress_entries_for_tests(&fixture.turn.pane_id),
+        source
+    );
+    assert_eq!(fixture.retained(), canonical);
     fixture
         .service
         .hold_agent_presentation_installs_for_tests(false);
-    // A clean canonical replay must not redraw the superseded provisional rows:
-    // the terminal reconciliation decision was already canonical.
-    fixture
-        .service
-        .rebuild_agent_presentation_after_resize(&fixture.turn.pane_id, before.size())
-        .unwrap();
+    // A clean canonical replay must actually run and must not redraw the
+    // superseded provisional rows: their cleanup decision was already canonical.
+    assert!(
+        fixture
+            .service
+            .rebuild_agent_presentation_after_resize(&fixture.turn.pane_id, before.size())
+            .unwrap(),
+        "the replay must accept the genuine canonical source"
+    );
     let replayed = fixture
         .service
         .agent_pane_screen(&fixture.turn.pane_id)
@@ -162,14 +181,12 @@ async fn runtime_completion_progress_preinstall_failure_preserves_source_until_i
         .normal_content_lines()
         .join("\n");
     assert!(
-        !replayed.contains("provisional read differs from terminal result"),
+        !replayed.contains(provisional),
         "superseded provisional source must not survive a clean replay: {replayed}"
     );
     assert!(
-        !fixture
-            .service
-            .reconcile_action_presentation_progress(&progress, &fixture.expected)
-            .unwrap()
+        replayed.contains("F668_DURABLE_PREINSTALL_TAIL"),
+        "the genuine durable tail must survive the clean replay: {replayed}"
     );
     assert_eq!(
         fixture
@@ -178,14 +195,31 @@ async fn runtime_completion_progress_preinstall_failure_preserves_source_until_i
         (0, 0)
     );
     assert_eq!(fixture.retained(), canonical);
-    let duplicate = fixture.outcome();
+    assert!(
+        fixture
+            .service
+            .complete_approved_external_action(fixture.outcome())
+            .unwrap()
+    );
+    let settled = fixture.retained();
+    assert_eq!(settled.action_results[0], fixture.expected);
+    let published = fixture
+        .service
+        .agent_pane_screen(&fixture.turn.pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        published.contains(fixture.expected.content_text().as_str()),
+        "the canonical RESULT must be installed after cleanup: {published}"
+    );
     assert!(
         !fixture
             .service
-            .complete_approved_external_action(duplicate)
+            .complete_approved_external_action(fixture.outcome())
             .unwrap()
     );
-    assert_eq!(fixture.retained(), canonical);
+    assert_eq!(fixture.retained(), settled);
 }
 
 /// Updating a live component must not consume its prior source before the

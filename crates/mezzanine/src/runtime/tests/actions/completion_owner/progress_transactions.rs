@@ -1119,9 +1119,7 @@ async fn runtime_completion_refused_promotion_cannot_acknowledge_terminal_body()
         (1, 0)
     );
     assert!(
-        fixture
-            .service
-            .action_progress_retirement_retry_needed(),
+        fixture.service.action_progress_retirement_retry_needed(),
         "the superseded provisional must retain its cleanup decision"
     );
     assert_eq!(
@@ -1140,6 +1138,16 @@ async fn runtime_completion_refused_promotion_cannot_acknowledge_terminal_body()
             .unwrap()
     );
     assert_eq!(fixture.retained().action_results[0], fixture.expected);
+    let published = fixture
+        .service
+        .agent_pane_screen(&fixture.turn.pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        published.contains(body.as_str()),
+        "the canonical RESULT must be installed after refused promotion: {published}"
+    );
     assert!(
         !fixture
             .service
