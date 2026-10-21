@@ -13304,6 +13304,22 @@ owner has no sender floor. Reservation MUST derive from retained mail without
 reviving registrations, extending sender floors, or adding unbounded identity
 history. New owners MUST NOT acquire another recipient's retained direct mail.
 
+#### Native pane registration continuity
+
+Native pane MMP registration role and populated capability vectors MUST remain
+stable routing/discovery metadata across supported saved-conversation bindings.
+They MUST NOT be rederived from current ROOT/subagent kind, historical lineage,
+or a generic refresh default. A supported independent ROOT resume on the same
+native pane MUST admit real work while retaining its original registration role
+and exact populated capabilities; current kind and parent/scope/cleanup authority
+remain separate live-owner facts. Trusted generic refresh MAY retain that
+metadata only for the matching actor-owned current pane/session registration,
+and MUST still reconcile actual project/pane/window metadata atomically. Sparse
+enrichment and explicit non-generic creation conflicts MUST retain their strict
+lower identity rules. This boundary MUST NOT authenticate external sources,
+relax native UID/generation/conversation guards, clear delivery state, allocate a
+replacement ID, or grant authority from role/capability labels.
+
 ### 12.3 Framing
 
 Messages MUST be UTF-8 JSON values framed with an ASCII header block followed

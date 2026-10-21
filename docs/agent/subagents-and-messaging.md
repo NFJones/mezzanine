@@ -159,6 +159,15 @@ default view lists primary agents in the same trusted project; use
 widens discovery across projects but grants no authority. Discovery is bounded,
 so a truncated result is not a complete census.
 
+An agent's MMP role and populated capability labels stay fixed for its native
+registration. They are routing/discovery metadata, separate from current
+conversation kind and delegation ownership. Resuming an independent saved root
+conversation in a former worker pane keeps the same native agent ID and role,
+but discovery can correctly classify it as `primary`; the old labels do not
+restore parent, filesystem, MCP, approval or cleanup rights. Generic runtime
+refresh does not replace these labels with `agent`, clear mail/cursors, or mint
+a new identity. Explicit conflicting registration metadata still fails closed.
+
 An unavailable persistent-child close can offer bounded same-turn correction;
 the rejected result does not mean the child was closed. Rediscover children with
 `agent_type: "subagent"` or `"all"`, verify current parent-conversation ownership,
