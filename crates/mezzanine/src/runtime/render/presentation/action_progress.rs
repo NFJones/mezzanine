@@ -607,6 +607,35 @@ impl RuntimeSessionService {
             self.defer_stale_action_progress_projection(pane_id);
             return Ok((baseline, None));
         }
+        let mut baseline = baseline;
+        if !presentation.retirement_requested.is_empty() {
+            // A durable write can install a baseline that still contains the
+            // retired transient rows. Discharging cleanup over that baseline
+            // would erase the obligation while keeping the stale pixels, so
+            // acquire a genuinely progress-free baseline under exact suffix
+            // proof or refuse and retain the bounded retirement obligation.
+            let stripped = if presentation.transient_rows == 0 {
+                true
+            } else {
+                let suffix = baseline.capture_transient_suffix(presentation.transient_rows, true);
+                suffix.is_some_and(|suffix| baseline.clear_transient_suffix(suffix))
+            };
+            if !stripped {
+                self.defer_stale_action_progress_projection(pane_id);
+                return Ok((baseline, None));
+            }
+            presentation
+                .components
+                .retain(|key, _| !presentation.retirement_requested.contains(key));
+            presentation
+                .promoted_components
+                .retain(|key, _| !presentation.retirement_requested.contains(key));
+            presentation.retirement_requested.clear();
+            presentation.retirement_error = None;
+            presentation.retirement_retry_at = None;
+            presentation.retirement_refused = false;
+            presentation.replay_unavailable = None;
+        }
         presentation.baseline_screen = std::sync::Arc::new(baseline.clone());
         presentation.projected_context = self.action_progress_projection_context(pane_id)?;
         let sections = self.render_action_progress_components(pane_id, &presentation)?;

@@ -259,8 +259,29 @@ impl RuntimeSessionService {
                 // the external path: retain the immutable ordered source before
                 // the fallible install. The pending gate below, not this queueing,
                 // is the acknowledgment; nothing here replays the native action.
+                // An existing native projection source (marker transaction and
+                // shell-view raw mode) or an installed acknowledgment is the
+                // original immutable owner: drain that tuple instead of proposing
+                // different provenance for the same ordered key.
+                let ordered_key = (
+                    owner.pane_id.clone(),
+                    owner.turn_id.clone(),
+                    owner.conversation_id.clone(),
+                    owner.group.clone(),
+                    owner.ordinal,
+                );
+                let already_owned = self
+                    .presentation
+                    .agent_queued_provider_results
+                    .contains_key(&ordered_key)
+                    || self
+                        .presentation
+                        .agent_published_provider_results
+                        .keys()
+                        .any(|(owned, _)| *owned == ordered_key);
                 if !result.is_error
                     && !suppressed
+                    && !already_owned
                     && self.agent_verbose_enabled(&owner.pane_id)
                     && let Some(action) = execution
                         .response
