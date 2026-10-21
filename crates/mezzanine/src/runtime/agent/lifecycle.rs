@@ -971,9 +971,12 @@ impl RuntimeSessionService {
                     json_escape(&pane_id_string)
                 );
                 if let Some(primary_client_id) = &primary_client_id {
-                    self.dispatch_runtime_pane_close(primary_client_id, &params)?;
+                    self.dispatch_runtime_pane_close_for_pane_settlement(
+                        primary_client_id,
+                        &params,
+                    )?;
                 } else {
-                    self.close_runtime_owned_subagent_pane(&pane_id_string)?;
+                    self.close_runtime_owned_subagent_pane_for_pane_settlement(&pane_id_string)?;
                 }
                 closed = closed.saturating_add(1);
                 self.append_lifecycle_event(

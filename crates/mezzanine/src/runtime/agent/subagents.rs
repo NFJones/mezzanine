@@ -2239,13 +2239,18 @@ impl RuntimeSessionService {
         let Some(primary) = self.session.layout_owner_client_id().cloned() else {
             return Ok(());
         };
-        self.dispatch_runtime_pane_close(
-            &primary,
-            &format!(
-                r#"{{"pane_id":"{}","force":true}}"#,
-                json_escape(&turn.pane_id)
-            ),
-        )?;
+        let params = format!(
+            r#"{{"pane_id":"{}","force":true}}"#,
+            json_escape(&turn.pane_id)
+        );
+        if let Err(error) = self.dispatch_runtime_pane_close_for_pane_settlement(&primary, &params) {
+            // A refused or failed close must not consume the pending obligation:
+            // keep the marker so the exact pane close can be retried.
+            self.agent
+                .pending_terminal_subagent_pane_closes
+                .insert(turn.pane_id.clone());
+            return Err(error);
+        }
         let live_windows = self
             .session
             .windows()

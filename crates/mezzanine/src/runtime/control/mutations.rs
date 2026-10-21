@@ -575,6 +575,30 @@ impl RuntimeSessionService {
         params: &str,
     ) -> Result<String> {
         self.require_live()?;
+        self.dispatch_runtime_pane_close_at_admission(primary_client_id, params)
+    }
+
+    /// Closes an exactly authorized client pane while owned cleanup settles.
+    ///
+    /// Internal descendant and pending-close settlement already proved the exact
+    /// pane and conversation it owns. They still need the attached-primary
+    /// authorization below, but they must not fail because the lifecycle stopped
+    /// accepting new work; public close dispatch keeps strict live admission.
+    pub(crate) fn dispatch_runtime_pane_close_for_pane_settlement(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        params: &str,
+    ) -> Result<String> {
+        self.require_pane_settlement_admissible()?;
+        self.dispatch_runtime_pane_close_at_admission(primary_client_id, params)
+    }
+
+    /// Runs the shared authorized close after its caller chose admission.
+    fn dispatch_runtime_pane_close_at_admission(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        params: &str,
+    ) -> Result<String> {
         if !self.session.is_attached_primary(primary_client_id) {
             return Err(MezError::forbidden(
                 "operation requires an attached primary client",
@@ -588,6 +612,23 @@ impl RuntimeSessionService {
     /// here must validate the exact live delegation before invoking this path.
     pub(crate) fn close_runtime_owned_subagent_pane(&mut self, pane_id: &str) -> Result<String> {
         self.require_live()?;
+        self.close_runtime_owned_subagent_pane_at_admission(pane_id)
+    }
+
+    /// Closes an internally proven session-owned pane while cleanup settles.
+    ///
+    /// Callers must still validate the exact live delegation before invoking
+    /// this path; only the lifecycle gate differs from the public route.
+    pub(crate) fn close_runtime_owned_subagent_pane_for_pane_settlement(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<String> {
+        self.require_pane_settlement_admissible()?;
+        self.close_runtime_owned_subagent_pane_at_admission(pane_id)
+    }
+
+    /// Runs the shared session-owned close after its caller chose admission.
+    fn close_runtime_owned_subagent_pane_at_admission(&mut self, pane_id: &str) -> Result<String> {
         let params = format!(r#"{{"pane_id":"{}","force":true}}"#, json_escape(pane_id));
         self.close_runtime_pane_with_owner(None, &params)
     }
