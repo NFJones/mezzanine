@@ -455,7 +455,8 @@ impl SearchResult {
 }
 
 /// Content-free failure taxonomy for strict future adapters. DDG action bridge
-/// retains its existing network_request_failed/network_http_error projection.
+/// uses network_request_failed/network_http_error plus a bounded product-owned
+/// unusable-response projection; these strict future variants do not route DDG.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchError {
     /// Invalid request or logical identity.
