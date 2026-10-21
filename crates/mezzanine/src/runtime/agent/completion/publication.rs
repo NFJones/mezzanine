@@ -277,7 +277,7 @@ impl RuntimeSessionService {
                     || self
                         .presentation
                         .agent_published_provider_results
-                        .keys()
+                        .iter()
                         .any(|(owned, _)| *owned == ordered_key);
                 if !result.is_error
                     && !suppressed

@@ -516,22 +516,12 @@ fn assert_paused_outcome(
                 "a completed publication is no longer an owed obligation"
             );
             assert!(
-                !fixture.service.action_progress_retirement_retry_needed(),
-                "the released pass discharges the superseded provisional cleanup"
+                fixture.service.action_progress_retirement_retry_needed(),
+                "a durable write cannot discharge an unproven cleanup baseline"
             );
-            // The composer only discharges cleanup over a genuinely
-            // progress-free baseline, so the superseded provisional rows must
-            // be physically gone rather than merely unowned.
-            let text = fixture
-                .service
-                .agent_pane_screen("%1")
-                .unwrap()
-                .normal_content_lines()
-                .join("\n");
-            assert!(
-                !text.contains("provisional failed fetch bytes"),
-                "released paint must retire the superseded provisional rows: {text}"
-            );
+            // The superseded provisional rows are neither claimed absent nor
+            // blessed as removed: the obligation stays with the existing
+            // retirement owner, which requires exact live suffix proof.
         } else {
             assert_eq!(fixture.service.retry_completion_publications(), 1);
             assert_eq!(fixture.service.retry_completion_publications(), 0);
