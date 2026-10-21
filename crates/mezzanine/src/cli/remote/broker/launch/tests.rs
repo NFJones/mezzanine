@@ -9,6 +9,17 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Extracts the error from one failed startup attempt.
+///
+/// The retained client deliberately has no `Debug` implementation, so tests use
+/// this instead of `Result::expect_err`.
+fn startup_error<T>(result: Result<T>) -> MezError {
+    match result {
+        Ok(_) => panic!("startup unexpectedly reported readiness"),
+        Err(error) => error,
+    }
+}
+
 /// Bounded exact-child cleanup ownership for the native fixtures.
 ///
 /// It owns the caller slot from before startup is awaited, so a returned error,
@@ -252,15 +263,15 @@ async fn outbound_launcher_owned_startup_retains_failed_child() {
     drop(election);
     let mut child = None;
     let started = tokio::time::Instant::now();
-    let error = connect_owned(
-        Path::new("/bin/true"),
-        &env,
-        std::time::Duration::from_secs(10),
-        &mut child,
-    )
-    .await
-    .err()
-    .expect("a clean no-publication exit cannot report readiness");
+    let error = startup_error(
+        connect_owned(
+            Path::new("/bin/true"),
+            &env,
+            std::time::Duration::from_secs(10),
+            &mut child,
+        )
+        .await,
+    );
     assert!(
         started.elapsed() < std::time::Duration::from_secs(5),
         "exited child must be reported before the retained deadline"
@@ -398,15 +409,15 @@ async fn outbound_launcher_reports_immediate_nonzero_child_exit() {
     drop(election);
     let mut child = None;
     let started = tokio::time::Instant::now();
-    let error = connect_owned(
-        Path::new("/bin/false"),
-        &env,
-        std::time::Duration::from_secs(10),
-        &mut child,
-    )
-    .await
-    .err()
-    .expect("a nonzero child exit cannot report readiness");
+    let error = startup_error(
+        connect_owned(
+            Path::new("/bin/false"),
+            &env,
+            std::time::Duration::from_secs(10),
+            &mut child,
+        )
+        .await,
+    );
     assert!(
         started.elapsed() < std::time::Duration::from_secs(5),
         "nonzero child exit must be reported promptly"
@@ -504,15 +515,15 @@ async fn outbound_launcher_reports_replacement_exit_after_fixture_socket_unlink(
     );
     let mut replacement = ExactFixtureChild::empty(forced_reaps.clone());
     let started = tokio::time::Instant::now();
-    let error = connect_owned(
-        &executable,
-        &env,
-        std::time::Duration::from_secs(10),
-        replacement.slot_mut(),
-    )
-    .await
-    .err()
-    .expect("replacement cannot publish over the retained identity owner");
+    let error = startup_error(
+        connect_owned(
+            &executable,
+            &env,
+            std::time::Duration::from_secs(10),
+            replacement.slot_mut(),
+        )
+        .await,
+    );
     assert!(
         started.elapsed() < std::time::Duration::from_secs(5),
         "replacement exit must be classified rather than waited out"
@@ -619,15 +630,15 @@ async fn outbound_launcher_retained_live_child_blocks_relaunch() {
     let child = LaunchedBroker::spawn(&script, &env, &election).unwrap();
     let mut guard = ExactFixtureChild::holding(child, forced_reaps.clone());
     drop(election);
-    let error = connect_owned(
-        Path::new("/bin/true"),
-        &env,
-        std::time::Duration::from_secs(2),
-        guard.slot_mut(),
-    )
-    .await
-    .err()
-    .expect("a retained live child must block another launch");
+    let error = startup_error(
+        connect_owned(
+            Path::new("/bin/true"),
+            &env,
+            std::time::Duration::from_secs(2),
+            guard.slot_mut(),
+        )
+        .await,
+    );
     assert!(
         error.message().contains("already retained"),
         "retained-child conflict needed: {error}"

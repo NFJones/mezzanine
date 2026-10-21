@@ -14,6 +14,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod compatibility;
 
+/// Extracts the error from one failed startup attempt.
+///
+/// The retained client deliberately has no `Debug` implementation, so tests use
+/// this instead of `Result::expect_err`.
+fn startup_error<T>(result: Result<T>) -> MezError {
+    match result {
+        Ok(_) => panic!("startup unexpectedly reported readiness"),
+        Err(error) => error,
+    }
+}
+
 /// Adapts one launch-only closure to the startup port.
 ///
 /// Fixtures that never spawn or observe a real child use this adapter to keep
@@ -161,10 +172,8 @@ async fn outbound_startup_composition_failure_and_timeout_release_election() {
             count.fetch_add(1, Ordering::SeqCst);
             Err(MezError::invalid_state("fixture launch failure"))
         });
-        let failed = connect_with_launcher(&root, Duration::from_secs(1), &mut failing)
-            .await
-            .err()
-            .unwrap();
+        let failed =
+            startup_error(connect_with_launcher(&root, Duration::from_secs(1), &mut failing).await);
         assert_eq!(failed.message(), "fixture launch failure");
     }
     assert_eq!(count.load(Ordering::SeqCst), 1);
@@ -177,10 +186,9 @@ async fn outbound_startup_composition_failure_and_timeout_release_election() {
             count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         });
-        let timed_out = connect_with_launcher(&root, Duration::from_millis(200), &mut unready)
-            .await
-            .err()
-            .unwrap();
+        let timed_out = startup_error(
+            connect_with_launcher(&root, Duration::from_millis(200), &mut unready).await,
+        );
         assert!(timed_out.message().contains("timeout"));
         assert!(
             !timed_out.message().contains("exited"),
@@ -239,10 +247,8 @@ async fn outbound_startup_nonzero_child_exit_is_reported_before_deadline() {
         status_raw: 1 << 8,
     };
     let started = tokio::time::Instant::now();
-    let error = connect_with_launcher(&root, Duration::from_secs(10), &mut launcher)
-        .await
-        .err()
-        .expect("an exited child cannot report readiness");
+    let error =
+        startup_error(connect_with_launcher(&root, Duration::from_secs(10), &mut launcher).await);
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "exact-child exit must be reported promptly, not after the deadline"
@@ -275,10 +281,8 @@ async fn outbound_startup_clean_child_exit_without_publication_is_distinct() {
         status_raw: 0,
     };
     let started = tokio::time::Instant::now();
-    let error = connect_with_launcher(&root, Duration::from_secs(10), &mut launcher)
-        .await
-        .err()
-        .expect("a clean no-publication exit cannot report readiness");
+    let error =
+        startup_error(connect_with_launcher(&root, Duration::from_secs(10), &mut launcher).await);
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "clean no-publication exit must be reported promptly"
@@ -310,10 +314,9 @@ async fn outbound_startup_exited_child_is_reported_at_deadline_edge() {
         launched: true,
         status_raw: 1 << 8,
     };
-    let error = connect_with_launcher(&root, Duration::from_millis(100), &mut launcher)
-        .await
-        .err()
-        .expect("an exited child cannot report readiness");
+    let error = startup_error(
+        connect_with_launcher(&root, Duration::from_millis(100), &mut launcher).await,
+    );
     assert!(error.message().contains("exited before local readiness"));
     assert!(
         !error.message().contains("before timeout"),
@@ -338,10 +341,9 @@ async fn outbound_startup_election_contention_is_distinct_from_readiness_timeout
             launches.fetch_add(1, Ordering::SeqCst);
             Ok(())
         });
-        let error = connect_with_launcher(&root, Duration::from_millis(250), &mut launcher)
-            .await
-            .err()
-            .expect("a held election cannot start a broker");
+        let error = startup_error(
+            connect_with_launcher(&root, Duration::from_millis(250), &mut launcher).await,
+        );
         assert!(
             error.message().contains("election remained held"),
             "held election needs its own classification: {error}"

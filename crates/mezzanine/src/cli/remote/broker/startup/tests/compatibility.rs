@@ -334,7 +334,7 @@ async fn outbound_wire_epoch_malformed_framing_has_terminal_owner_guidance() {
             tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
                 .await
                 .unwrap();
-        let error = result.err().expect("malformed frame must reject readiness");
+        let error = startup_error(result);
         assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
         assert!(error.io_kind().is_none());
         assert!(error.message().contains("owner"));
@@ -575,9 +575,7 @@ async fn outbound_startup_exit_settles_pending_readiness_handshake() {
                 .await
                 .unwrap();
         if terminal {
-            let error = result
-                .err()
-                .expect("an incompatible first reply must reject readiness");
+            let error = startup_error(result);
             assert!(error.io_kind().is_none());
             assert!(error.message().contains("owner"));
         } else {
