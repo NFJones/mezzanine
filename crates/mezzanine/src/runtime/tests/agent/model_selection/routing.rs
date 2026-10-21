@@ -104,7 +104,11 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
                 .unwrap()
         );
         assert!(service.completion_publication_retry_needed_for_turn(&worker_turn.turn_id));
-        assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
+        // Measured operands: the routed loop pre-queues its next iteration, so
+        // this worker provider task is already pending at completion entry and
+        // is unchanged by it. The custody claim at this boundary is that manual
+        // readiness cannot overtake the retained publication, asserted below.
+        assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
         service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::Ready);
         assert_eq!(
             service
@@ -134,7 +138,7 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
                 .id,
             retained_entry.id
         );
-        assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
+        assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
         service.hold_agent_presentation_installs_for_tests(false);
         assert_eq!(service.retry_completion_publications(), 1);
         assert_eq!(service.retry_completion_publications(), 0);
