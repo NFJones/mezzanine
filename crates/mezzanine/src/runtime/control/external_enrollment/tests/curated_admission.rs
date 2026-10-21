@@ -534,27 +534,54 @@ async fn external_curated_admission_namespace_capacity_survives_binding_gc() {
         return;
     };
     let (_socket, connection) = child(&mut fixture).await;
+    let run_started = std::time::Instant::now();
+    let mut accepted = 0usize;
     for index in 0..super::super::super::external_agents::MAX_BINDINGS {
         let mut request = curated_request();
         let mut params: serde_json::Value =
             serde_json::from_str(request.params.as_deref().unwrap()).unwrap();
         params["external_session_id"] = format!("session-{index}").into();
         request.params = Some(params.to_string());
+        let prepare_started = std::time::Instant::now();
         let work = fixture
             .service
             .prepare_external_enrollment(&request, &connection)
             .unwrap();
+        let prepare_elapsed = prepare_started.elapsed();
+        let ancestry_before = work.ancestry_budget.reserved();
         let native = work.clone();
+        let observe_started = std::time::Instant::now();
         let observed = tokio::task::spawn_blocking(move || native.observe())
             .await
             .unwrap();
-        let reply: serde_json::Value = serde_json::from_str(
-            &fixture
-                .service
-                .complete_external_enrollment(work, observed, &connection),
-        )
-        .unwrap();
-        assert!(reply.get("error").is_none());
+        let observe_elapsed = observe_started.elapsed();
+        let observed_class = observed
+            .as_ref()
+            .err()
+            .map(|error| format!("{:?}:{}", error.kind(), error.message()));
+        let origin_live = connection
+            .unix_origin()
+            .is_some_and(|origin| origin.is_live() && origin.writer_confirmed());
+        let complete_started = std::time::Instant::now();
+        let reply_text = fixture
+            .service
+            .complete_external_enrollment(work, observed, &connection);
+        let complete_elapsed = complete_started.elapsed();
+        let reply: serde_json::Value = serde_json::from_str(&reply_text).unwrap();
+        if reply.get("error").is_some() {
+            let registry = fixture.service.control.external_agents();
+            panic!(
+                "CURATED_BACKLOG_FAILURE index={index} accepted_entries={accepted} bindings={} pending={} ancestry_before={ancestry_before} ancestry_after={} prepare_us={} observe_us={} complete_us={} total_us={} origin_live={origin_live} observed={observed_class:?} reply={reply}",
+                registry.bindings.len(),
+                registry.enrollments.pending.len(),
+                registry.enrollments.ancestry_budget.reserved(),
+                prepare_elapsed.as_micros(),
+                observe_elapsed.as_micros(),
+                complete_elapsed.as_micros(),
+                run_started.elapsed().as_micros(),
+            );
+        }
+        accepted += 1;
         fixture
             .service
             .control
@@ -587,6 +614,10 @@ async fn external_curated_admission_namespace_capacity_survives_binding_gc() {
     let generation = fixture.service.control.external_agent_generation();
     let reply = enroll(&mut fixture, &connection).await;
     assert!(reply.get("error").is_some());
+    assert_eq!(
+        reply["error"]["message"], "curated namespace capacity unavailable",
+        "curated overflow must reject only at namespace capacity, not a timing/native branch: {reply}"
+    );
     assert_eq!(
         fixture.service.control.external_agent_generation(),
         generation
