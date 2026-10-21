@@ -209,6 +209,7 @@ const HISTORICAL_SAFE_ERROR_CODES: &[&str] = &[
     "network_action_no_progress",
     "network_http_error",
     "network_request_failed",
+    "network_search_unusable_response",
     "not_found",
     "not_implemented",
     "notfound",
