@@ -109,7 +109,7 @@ fn raw_direct_ids_preserve_generated_generic_and_native_addresses() {
     assert_eq!(next.agent_id.as_str(), "a3");
 }
 
-/// Missing, retired, foreign-project, case/whitespace variants, role labels and
+/// Missing, retired, foreign-project, case/whitespace variants, role labels, pane-shaped and
 /// long opaque addresses share the public unavailable result and create no
 /// registration, receipt, sequence or cursor. A sibling sharing native pane and
 /// role metadata cannot receive an exact direct-agent message by resemblance.
@@ -141,6 +141,7 @@ fn raw_opaque_lookup_is_exact_unavailable_and_side_effect_free() {
         "agent-%1 ",
         " agent-%1",
         "agent-%01",
+        "%1",
         "native-fixture",
         "a18446744073709551616",
         long.as_str(),
@@ -201,6 +202,14 @@ fn raw_opaque_lookup_is_exact_unavailable_and_side_effect_free() {
 #[test]
 fn raw_native_ids_do_not_weaken_selector_validation() {
     let (mut service, mut connection, native) = native_raw_fixture();
+    let mut foreign = native.clone();
+    foreign.agent_id = AgentId::opaque("agent-session-foreign").unwrap();
+    foreign.pane_id = None;
+    foreign.window_id = None;
+    foreign.project_scope = Some(ProjectScopeId::from_canonical_root_bytes(
+        b"/fixture/raw-native-session-foreign",
+    ));
+    let foreign = service.ensure_agent_identity(foreign, 10).unwrap();
     let before = service.snapshot_state();
     let invalid = vec![
         serde_json::json!(null),
@@ -236,6 +245,37 @@ fn raw_native_ids_do_not_weaken_selector_validation() {
     let response = dispatch_value(&mut service, &mut connection, &body);
     assert_eq!(response["status"], "accepted");
     assert_eq!(response["queued_recipients"], 1);
+
+    // A false selector must not widen the default project audience: the same
+    // exact foreign-project ID stays unavailable without an explicit session
+    // scope, while the explicit widening control below delivers once.
+    let before_foreign = service.snapshot_state();
+    let body = raw_envelope(
+        &connection,
+        "false-session-foreign",
+        serde_json::json!({"agent_id": foreign.agent_id.as_str(), "session": false}),
+    );
+    let response = dispatch_value(&mut service, &mut connection, &body);
+    assert_eq!(response["type"], "error");
+    assert_eq!(response["error"]["code"], "undeliverable", "{response}");
+    assert_eq!(service.snapshot_state(), before_foreign);
+    let mut body = raw_envelope(
+        &connection,
+        "explicit-session-foreign",
+        serde_json::json!({"agent_id": foreign.agent_id.as_str()}),
+    );
+    body["scope"] = serde_json::json!("session");
+    let response = dispatch_value(&mut service, &mut connection, &body);
+    assert_eq!(response["status"], "accepted", "{response}");
+    assert_eq!(response["queued_recipients"], 1);
+    assert_eq!(
+        service
+            .receive_subscribed(&foreign.agent_id, 31, 10)
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
 }
 
 /// Sender identity and project authority still come from the registered

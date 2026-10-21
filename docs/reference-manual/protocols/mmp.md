@@ -198,7 +198,7 @@ Generated IDs such as `a1` and opaque native IDs such as `agent-%1` are both
 direct addresses. The parser does not trim or reinterpret them as pane IDs,
 roles or display labels, and addressing an ID never registers it. Exact current
 registration, availability and audience checks still apply; missing, retired
-and cross-project targets remain indistinguishably unavailable. Pane/window
+and audience-ineligible targets remain indistinguishably unavailable. Pane/window
 selector grammar, sender binding and framing limits are unchanged.
 
 For a raw client registered by `hello`, project discovery shows only self
