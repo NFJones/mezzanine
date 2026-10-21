@@ -11,7 +11,13 @@
 //! observation under the one existing absolute deadline. An exited child is
 //! reported promptly and distinctly rather than as a generic readiness timeout,
 //! yet a broker that authenticates during the readiness/exit race stays
-//! authoritative. Observation reaps only the caller's exact spawned child; no
+//! authoritative. Observation also stays active during an in-flight readiness
+//! probe and precedes any deadline-exhaustion classification, and a startup
+//! election held by another launcher is reported as contention rather than as an
+//! unready child. An observed exit settles an already-connected readiness probe
+//! instead of cancelling it and reconnecting; only a probe that settled as
+//! missing or refused discovery takes one bounded post-exit recheck. Observation
+//! reaps only the caller's exact spawned child; no
 //! discovered, sibling or unknown process is signaled, adopted or replaced, and
 //! no discovery, lock or key entry is deleted to bypass contention.
 
@@ -44,53 +50,83 @@ where
     }
     let deadline = tokio::time::Instant::now() + budget;
     let mut elected = None;
+    let mut election_contended = false;
     loop {
         if let Some(guard) = &elected {
             let guard: &StartupElection = guard;
             guard.validate()?;
         }
+        // Observe the exact child before classifying the deadline: an exit that
+        // happened during the last sleep or negotiation must still be reported
+        // as an exit instead of as a generic readiness timeout.
+        if let Some(status) = launcher.observe_exit()? {
+            return exit_outcome(config_root, deadline, &elected, status).await;
+        }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining < Duration::from_millis(100) {
-            return Err(readiness_timeout_error());
+            return Err(startup_timeout_error(elected.is_some(), election_contended));
         }
-        if let Some(client) = probe_readiness(config_root, deadline).await? {
-            if let Some(guard) = &elected {
-                guard.validate()?;
+        // Authenticated readiness and exact-child exit observation run beside
+        // each other under the one absolute deadline. An exit never cancels a
+        // possibly connected handshake: the same probe is settled first, so its
+        // authenticated success or terminal failure keeps precedence and no
+        // blind reconnect occurs. Only a probe that actually settled as missing
+        // or refused discovery may take the single bounded post-exit recheck.
+        let mut readiness = Box::pin(probe_readiness(config_root, deadline));
+        let mut exit_status = None;
+        let mut observing = true;
+        loop {
+            tokio::select! {
+                biased;
+                settled = readiness.as_mut() => {
+                    match settled? {
+                        Some(client) => {
+                            if let Some(guard) = &elected {
+                                guard.validate()?;
+                            }
+                            return Ok(client);
+                        }
+                        None => {
+                            if let Some(status) = exit_status {
+                                return exit_outcome(config_root, deadline, &elected, status).await;
+                            }
+                            break;
+                        }
+                    }
+                },
+                status = observe_exit_until(launcher, deadline), if observing && exit_status.is_none() => {
+                    match status? {
+                        Some(status) => exit_status = Some(status),
+                        None => observing = false,
+                    }
+                },
             }
-            return Ok(client);
         }
-        // Discovery is missing or refused, so no live broker answered this
-        // probe. Inspect only this caller's exact child before electing another
-        // owner; a running child stays unobserved until it actually exits.
-        if let Some(status) = launcher.observe_exit()? {
-            // Readiness/exit race: a separately owned broker may authenticate
-            // after this child failed to publish. That authenticated broker is
-            // authoritative and must not be invalidated by the failed child.
-            if let Some(client) = probe_readiness(config_root, deadline).await? {
-                if let Some(guard) = &elected {
-                    guard.validate()?;
-                }
-                return Ok(client);
-            }
-            return Err(child_exit_error(status));
-        }
-        if elected.is_none()
-            && let Some(guard) = StartupElection::acquire(config_root)?
-        {
-            // Reprobe after election: another owner may have published
-            // between the first observation and lock acquisition.
-            guard.validate()?;
+        if elected.is_none() {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining < Duration::from_millis(100) {
-                return Err(readiness_timeout_error());
+                return Err(startup_timeout_error(false, election_contended));
             }
-            if let Some(client) = probe_readiness(config_root, deadline).await? {
-                guard.validate()?;
-                return Ok(client);
+            match StartupElection::acquire(config_root)? {
+                Some(guard) => {
+                    // Reprobe after election: another owner may have published
+                    // between the first observation and lock acquisition.
+                    guard.validate()?;
+                    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    if remaining < Duration::from_millis(100) {
+                        return Err(readiness_timeout_error());
+                    }
+                    if let Some(client) = probe_readiness(config_root, deadline).await? {
+                        guard.validate()?;
+                        return Ok(client);
+                    }
+                    guard.validate()?;
+                    launcher.launch(&guard)?;
+                    elected = Some(guard);
+                    election_contended = false;
+                }
+                None => election_contended = true,
             }
-            guard.validate()?;
-            launcher.launch(&guard)?;
-            elected = Some(guard);
         }
         tokio::time::sleep_until(
             (tokio::time::Instant::now() + Duration::from_millis(20)).min(deadline),
@@ -112,6 +148,55 @@ pub(super) trait StartupLauncher {
     /// Returns the exact launched child's status once it has exited, reaping only
     /// that child. `None` means no child was launched or it is still running.
     fn observe_exit(&mut self) -> Result<Option<ExitStatus>>;
+}
+
+/// Polls the exact child's exit beside one in-flight readiness negotiation.
+///
+/// It yields `Some(status)` as soon as the caller's exact child exits and `None`
+/// only when the absolute deadline passes without an exit. It never awaits,
+/// signals or discovers a process other than the retained exact child and never
+/// extends the caller's deadline.
+async fn observe_exit_until<L>(
+    launcher: &mut L,
+    deadline: tokio::time::Instant,
+) -> Result<Option<ExitStatus>>
+where
+    L: StartupLauncher + ?Sized,
+{
+    loop {
+        if let Some(status) = launcher.observe_exit()? {
+            return Ok(Some(status));
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        tokio::time::sleep_until(
+            (tokio::time::Instant::now() + Duration::from_millis(10)).min(deadline),
+        )
+        .await;
+    }
+}
+
+/// Resolves one observed exact-child exit against authenticated readiness.
+///
+/// A broker that authenticates wins the readiness/exit race: the failed child is
+/// not authoritative, no launch is attempted and no application work is replayed.
+/// Otherwise the bounded exit classification is returned. The single recheck
+/// stays inside the caller's absolute deadline and never unlinks ownership.
+async fn exit_outcome(
+    config_root: &Path,
+    deadline: tokio::time::Instant,
+    elected: &Option<StartupElection>,
+    status: ExitStatus,
+) -> Result<OutboundFrontendClient> {
+    if let Some(client) = probe_readiness(config_root, deadline).await? {
+        if let Some(guard) = elected {
+            guard.validate()?;
+        }
+        return Ok(client);
+    }
+    Err(child_exit_error(status))
 }
 
 /// Runs one bounded authenticated readiness probe.
@@ -152,6 +237,21 @@ async fn probe_readiness(
 /// termination or retry is attached to this classification.
 fn readiness_timeout_error() -> MezError {
     MezError::invalid_state("outbound broker did not become ready before timeout")
+}
+
+/// Classifies an exhausted startup deadline without conflating stages.
+///
+/// A launched attempt reports live-but-not-ready readiness; an attempt that never
+/// acquired election because another launcher held it reports contention. Neither
+/// classification authorizes stealing, unlinking or extending ownership.
+fn startup_timeout_error(launched: bool, contended: bool) -> MezError {
+    if !launched && contended {
+        MezError::invalid_state(
+            "outbound startup election remained held by another process before timeout",
+        )
+    } else {
+        readiness_timeout_error()
+    }
 }
 
 /// Classifies one observed exact-child exit without reading diagnostics or

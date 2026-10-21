@@ -295,6 +295,67 @@ async fn outbound_startup_clean_child_exit_without_publication_is_distinct() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// Deadline-edge control: an exact child that already exited must still be
+/// classified as an exit when the remaining budget is below the probe threshold.
+/// Observation precedes deadline classification, so the central defect cannot
+/// reappear at the end of a short attempt.
+#[tokio::test]
+async fn outbound_startup_exited_child_is_reported_at_deadline_edge() {
+    let root = std::env::temp_dir().join(format!("mez-start-edge-{:032x}", rand::random::<u128>()));
+    let launches = Arc::new(AtomicUsize::new(0));
+    let observations = Arc::new(AtomicUsize::new(0));
+    let mut launcher = ExitingLauncher {
+        launches: launches.clone(),
+        observations: observations.clone(),
+        launched: true,
+        status_raw: 1 << 8,
+    };
+    let error = connect_with_launcher(&root, Duration::from_millis(100), &mut launcher)
+        .await
+        .err()
+        .expect("an exited child cannot report readiness");
+    assert!(error.message().contains("exited before local readiness"));
+    assert!(
+        !error.message().contains("before timeout"),
+        "deadline edge must not mask an observed exit: {error}"
+    );
+    assert_eq!(launches.load(Ordering::SeqCst), 0);
+    assert!(observations.load(Ordering::SeqCst) >= 1);
+    assert!(!root.join("outbound.startup.lock").exists());
+}
+
+/// A startup election held by another launcher is a distinct contention outcome,
+/// not a silent live-but-not-ready timeout. No launcher runs, and the held lock is
+/// preserved rather than stolen or unlinked.
+#[tokio::test]
+async fn outbound_startup_election_contention_is_distinct_from_readiness_timeout() {
+    let root =
+        std::env::temp_dir().join(format!("mez-start-contend-{:032x}", rand::random::<u128>()));
+    let held = StartupElection::acquire(&root).unwrap().unwrap();
+    let launches = AtomicUsize::new(0);
+    {
+        let mut launcher = LaunchOnly::new(|_: &StartupElection| -> Result<()> {
+            launches.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        let error = connect_with_launcher(&root, Duration::from_millis(250), &mut launcher)
+            .await
+            .err()
+            .expect("a held election cannot start a broker");
+        assert!(
+            error.message().contains("election remained held"),
+            "held election needs its own classification: {error}"
+        );
+        assert!(!error.message().contains("did not become ready"));
+        assert!(!error.message().contains("exited"));
+    }
+    assert_eq!(launches.load(Ordering::SeqCst), 0);
+    assert!(root.join("outbound.startup.lock").exists());
+    drop(held);
+    drop(StartupElection::acquire(&root).unwrap().unwrap());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Dropping startup while its child is still unready must not kill, relaunch or
 /// replace ownership. Cancellation releases only the short-lived election guard,
 /// leaving discovery and identity state untouched for the owner's own disposal.

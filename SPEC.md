@@ -6189,7 +6189,15 @@ classified promptly as a failed/nonzero exit or as a successful no-publication
 exit, distinctly from a live-but-not-ready timeout, election contention,
 readiness protocol rejection and launcher spawn failure, retaining the exact
 child handle and bounded status evidence for the caller. An authenticated broker
-MUST remain authoritative in a readiness/exit race. Observation MUST NOT signal,
+MUST remain authoritative in a readiness/exit race. Observation MUST remain
+active during an in-flight bounded readiness negotiation and MUST precede any
+deadline-exhaustion classification, so an exit during the final interval is still
+reported as an exit. An observed exit MUST settle an already-connected readiness
+probe before classifying the exit, and startup MUST NOT cancel that handshake and
+immediately reconnect merely because a child exited; only a probe that actually
+settled as missing or refused discovery MAY take one bounded post-exit recheck.
+A startup election held by another launcher MUST be reported
+as contention rather than as an unready child. Observation MUST NOT signal,
 adopt, replace or terminate a discovered, sibling or unknown process, MUST NOT
 delete discovery, lock or key entries, MUST NOT extend the deadline, and MUST NOT
 retry application creation or input.

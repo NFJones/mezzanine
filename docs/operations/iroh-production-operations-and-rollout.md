@@ -88,6 +88,10 @@ child's exit promptly and distinguishes a failed or no-publication exit from a
 live-but-not-ready timeout, an election conflict and a readiness rejection. It
 never kills or replaces a broker on its own.
 
+A startup election held by another launcher is reported as contention, not as an
+unready child. Wait for or reconcile that launcher; never delete
+`outbound.startup.lock` to force an attempt.
+
 When the reported failure is an exact-child exit, or discovery is missing while
 an identity owner may still exist:
 
