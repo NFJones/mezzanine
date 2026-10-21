@@ -223,6 +223,9 @@ struct SpawnedChildGuard {
     process_group: i32,
     /// True once an exact wait proved the direct child was reaped.
     reaped: bool,
+    /// Test-only one-shot reap failure for truthful-uncertainty coverage.
+    #[cfg(test)]
+    fail_next_reap: bool,
     /// Test-only slot that publishes custody witnesses after settlement.
     #[cfg(test)]
     witness: Option<Arc<Mutex<Option<SpawnedChildCustodyWitness>>>>,
@@ -241,6 +244,8 @@ impl SpawnedChildGuard {
             process_group: child.id() as i32,
             child,
             reaped: false,
+            #[cfg(test)]
+            fail_next_reap: false,
             #[cfg(test)]
             witness: None,
             #[cfg(test)]
@@ -261,6 +266,19 @@ impl SpawnedChildGuard {
     /// Records that an exact wait already reaped the direct child.
     fn mark_reaped(&mut self) {
         self.reaped = true;
+    }
+
+    /// Reports whether an exact wait already reaped the direct child, after
+    /// which no process-group signal may be sent.
+    const fn is_reaped(&self) -> bool {
+        self.reaped
+    }
+
+    /// Arms one cfg(test) reap failure so collection can prove it reports
+    /// unproven custody without claiming settlement. `Drop` still retries.
+    #[cfg(test)]
+    fn inject_reap_failure(&mut self) {
+        self.fail_next_reap = true;
     }
 
     /// Kills the exact owned process group and reaps the direct child within a
@@ -291,6 +309,11 @@ impl SpawnedChildGuard {
 
     /// Polls the owned child until it is reaped or the custody window expires.
     fn await_bounded_reap(&mut self) -> Result<ExitStatus> {
+        #[cfg(test)]
+        if self.fail_next_reap {
+            self.fail_next_reap = false;
+            return Err(MezError::invalid_state("injected reap failure"));
+        }
         let deadline = Instant::now() + SPAWNED_CHILD_CUSTODY_REAP_BOUND;
         loop {
             match self.child.try_wait() {
@@ -455,6 +478,13 @@ struct ReaderCreationFailure {
     stream: SpawnedChildPipe,
     /// Fixture path that proves the launched child reached its command.
     readiness_witness: PathBuf,
+    /// Whether the fixture's direct child must exit and be reaped before the
+    /// rejection, so the already-exited startup path is exercised
+    /// deterministically instead of racing child startup.
+    await_child_exit: bool,
+    /// Whether the first custody reap attempt must fail without signaling,
+    /// exercising truthful uncertainty while `Drop` retries normally.
+    fail_first_reap: bool,
 }
 
 /// Exact custody facts captured immediately after spawn and after settlement.
@@ -543,10 +573,18 @@ impl SpawnedShellExecutor {
     /// Rejects reader creation at one stream position after the fixture proves
     /// its launched child is already running. No OS resource is exhausted.
     #[cfg(test)]
-    fn fail_reader_creation_at(&mut self, stream: SpawnedChildPipe, readiness_witness: PathBuf) {
+    fn fail_reader_creation_at(
+        &mut self,
+        stream: SpawnedChildPipe,
+        readiness_witness: PathBuf,
+        await_child_exit: bool,
+        fail_first_reap: bool,
+    ) {
         self.reader_creation_failure = Some(ReaderCreationFailure {
             stream,
             readiness_witness,
+            await_child_exit,
+            fail_first_reap,
         });
     }
 
@@ -825,7 +863,14 @@ impl SpawnedShellExecutor {
             match guard.terminate_and_reap() {
                 Ok(status) => status,
                 Err(primary) => {
-                    return Err(self.settle_failed_spawned_child(readers, primary));
+                    let reader_failures = readers.settle();
+                    return Err(compose_spawned_child_failure(
+                        primary,
+                        reader_failures,
+                        Some(
+                            "the exact child process group could not be proven settled".to_string(),
+                        ),
+                    ));
                 }
             }
         };
@@ -916,6 +961,12 @@ impl SpawnedShellExecutor {
         #[cfg(test)]
         if let Some(failure) = self.reader_creation_failure.as_ref() {
             await_injected_reader_failure_readiness(&failure.readiness_witness);
+            if failure.await_child_exit {
+                await_injected_child_exit(guard);
+            }
+            if failure.fail_first_reap {
+                guard.inject_reap_failure();
+            }
         }
         let stdout = guard.child_mut().stdout.take();
         let Some(stdout) = stdout else {
@@ -1036,22 +1087,19 @@ impl SpawnedShellExecutor {
         primary: MezError,
     ) -> MezError {
         cancel_output_readers(&created);
-        let custody = guard.terminate_and_reap();
-        let mut cleanup_failures = join_output_readers(created);
-        if let Err(error) = custody {
-            cleanup_failures.push(format!("native child custody: {}", error.message()));
-        }
-        compose_spawned_child_failure(primary, cleanup_failures)
-    }
-
-    /// Settles readers after custody termination could not be proven. The
-    /// guard's `Drop` makes one bounded retry without signaling a guessed id.
-    fn settle_failed_spawned_child(
-        &self,
-        readers: SpawnedChildReaders,
-        primary: MezError,
-    ) -> MezError {
-        compose_spawned_child_failure(primary, readers.settle())
+        // Never signal the group after an exact reap: the numeric id may be
+        // reused. When the direct child is already reaped there is no live
+        // group member this owner can address.
+        let custody = if guard.is_reaped() {
+            Ok(())
+        } else {
+            guard.terminate_and_reap().map(|_status| ())
+        };
+        let reader_failures = join_output_readers(created);
+        let custody_failure = custody
+            .err()
+            .map(|error| format!("native child custody: {}", error.message()));
+        compose_spawned_child_failure(primary, reader_failures, custody_failure)
     }
 }
 
@@ -1377,6 +1425,29 @@ fn readiness_witness_present(path: &Path) -> bool {
     fs::read_to_string(path).is_ok_and(|text| !text.trim().is_empty())
 }
 
+/// Waits a bounded period for the injected fixture's direct child to exit and
+/// be reaped before the reader-creation failure is raised, so the
+/// already-exited startup path is exercised without racing child startup. The
+/// reaped flag also prevents any later group signal to a reusable numeric id.
+#[cfg(test)]
+fn await_injected_child_exit(guard: &mut SpawnedChildGuard) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match guard.child_mut().try_wait() {
+            Ok(Some(_status)) => {
+                guard.mark_reaped();
+                return;
+            }
+            Ok(None) => {}
+            Err(_) => return,
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(SPAWNED_CHILD_POLL_INTERVAL);
+    }
+}
+
 /// Enables nonblocking reads so cancellation never depends on pipe EOF.
 fn configure_output_reader_nonblocking(stream: SpawnedChildPipe, reader: &impl AsFd) -> Result<()> {
     let flags = rustix::fs::fcntl_getfl(reader.as_fd()).map_err(|error| {
@@ -1558,9 +1629,19 @@ fn join_output_readers(readers: Vec<SpawnedChildPipeReader>) -> Vec<String> {
 }
 
 /// Preserves the first failure while appending bounded cleanup evidence.
-/// Cleanup failures are reported as unresolved native effects, and no message
-/// authorizes replaying the command.
-fn compose_spawned_child_failure(primary: MezError, cleanup_failures: Vec<String>) -> MezError {
+///
+/// Custody and reader settlement are distinct: an unproven kill or reap is
+/// never rendered as a settled cleanup claim. Cleanup failures are reported as
+/// unresolved native effects, and no message authorizes replaying the command.
+fn compose_spawned_child_failure(
+    primary: MezError,
+    reader_failures: Vec<String>,
+    custody_failure: Option<String>,
+) -> MezError {
+    let mut cleanup_failures = reader_failures;
+    if let Some(custody_failure) = custody_failure {
+        cleanup_failures.push(custody_failure);
+    }
     if cleanup_failures.is_empty() {
         return MezError::new(
             primary.kind(),
@@ -2975,22 +3056,42 @@ mod tests {
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
         builder.create(&directory).unwrap();
         let readiness = directory.join("readiness");
+        let descendant_readiness = directory.join("descendant-readiness");
         let marker = directory.join("delayed-mutation");
-        (directory, readiness, marker)
+        (directory, readiness, descendant_readiness, marker)
     }
 
-    /// Builds one typed child launch that records its exact pid before running
-    /// a quiet command. A materialized artifact keeps staging custody observable.
-    fn reader_setup_request(
+    /// Builds one typed child launch whose direct shell starts a descendant
+    /// that witnesses its own readiness before owning the delayed mutation.
+    /// The direct shell waits, so both processes remain in the exact group.
+    fn quiet_reader_setup_request(
         readiness: &Path,
+        descendant_readiness: &Path,
         marker: &Path,
-        survive_setup: bool,
     ) -> ShellExecutionRequest {
-        let script = if survive_setup {
-            "printf '%s' \"$$\" > \"$1\"; sleep 30; : > \"$2\""
-        } else {
-            "printf '%s' \"$$\" > \"$1\""
-        };
+        reader_setup_request(
+            "printf '%s' \"$$\" > \"$1\"; /bin/sh -c 'printf \"%s\" \"$$\" > \"$1\"; sleep 0.2; : > \"$2\"' /bin/sh \"$2\" \"$3\" & wait",
+            readiness,
+            descendant_readiness,
+            marker,
+        )
+    }
+
+    /// Builds one typed child launch whose direct shell writes its pid and
+    /// exits immediately, for the already-exited startup path.
+    fn exiting_reader_setup_request(readiness: &Path, marker: &Path) -> ShellExecutionRequest {
+        reader_setup_request("printf '%s' \"$$\" > \"$1\"", readiness, readiness, marker)
+    }
+
+    /// Builds one typed child launch around one fixture script. `$1` is the
+    /// direct-pid witness, `$2` the descendant-pid witness, `$3` the marker.
+    /// A materialized artifact keeps staging custody observable.
+    fn reader_setup_request(
+        script: &str,
+        readiness: &Path,
+        descendant_readiness: &Path,
+        marker: &Path,
+    ) -> ShellExecutionRequest {
         let artifact_id = ShellLaunchArtifactId::new("profile").unwrap();
         let mut transaction_request = request("true", Some(30_000));
         transaction_request.transaction = transaction_request.transaction.with_child_launch(
@@ -3001,6 +3102,9 @@ mod tests {
                     ShellChildArgument::Literal(script.to_string()),
                     ShellChildArgument::Literal("sh".to_string()),
                     ShellChildArgument::Literal(readiness.to_string_lossy().into_owned()),
+                    ShellChildArgument::Literal(
+                        descendant_readiness.to_string_lossy().into_owned(),
+                    ),
                     ShellChildArgument::Literal(marker.to_string_lossy().into_owned()),
                 ],
                 vec![ShellLaunchArtifact::new(artifact_id, b"profile".to_vec(), 0o400).unwrap()],
@@ -3031,6 +3135,21 @@ mod tests {
         }
     }
 
+    /// Observes a descendant-owned delayed mutation for a bounded window that
+    /// exceeds its delay, so a surviving descendant is detected rather than
+    /// assumed absent immediately after cleanup.
+    fn assert_no_delayed_mutation(marker: &Path) {
+        let deadline = Instant::now() + Duration::from_millis(1_500);
+        while Instant::now() < deadline {
+            assert!(
+                !marker.exists(),
+                "delayed mutation executed: {}",
+                marker.display()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// A reader that cannot start must never leave its already-launched child,
     /// process group, staged artifacts or earlier readers behind. Each
     /// deterministic injected position is rejected before real thread creation
@@ -3043,13 +3162,17 @@ mod tests {
             (SpawnedChildPipe::Stderr, 2),
             (SpawnedChildPipe::Status, 3),
         ] {
-            let (fixture, readiness, marker) =
+            let (fixture, readiness, descendant_readiness, marker) =
                 reader_failure_fixture(&format!("position-{position}"));
             let mut executor = SpawnedShellExecutor::new(test_context());
             let witness_slot = executor.observe_custody();
-            executor.fail_reader_creation_at(stream, readiness.clone());
+            executor.fail_reader_creation_at(stream, descendant_readiness.clone(), false, false);
             let error = executor
-                .execute_shell(&reader_setup_request(&readiness, &marker, true))
+                .execute_shell(&quiet_reader_setup_request(
+                    &readiness,
+                    &descendant_readiness,
+                    &marker,
+                ))
                 .unwrap_err();
             assert!(
                 error
@@ -3084,10 +3207,13 @@ mod tests {
                 witness.pid,
                 "position {position}: readiness pid is not the owned child"
             );
-            assert!(
-                !marker.exists(),
-                "position {position}: delayed mutation executed"
+            let descendant_pid = read_pid_witness(&descendant_readiness);
+            assert!(descendant_pid > 0, "position {position}");
+            assert_ne!(
+                descendant_pid, witness.pid,
+                "position {position}: descendant witness is the direct child"
             );
+            assert_no_delayed_mutation(&marker);
             let counts = executor.launches.snapshot().unwrap();
             assert_eq!(counts.len(), 1, "position {position}");
             assert_eq!(counts[0].attempted, 1, "position {position}");
@@ -3108,12 +3234,13 @@ mod tests {
     /// and its staged artifacts removed, without inventing reader completion.
     #[test]
     fn spawned_executor_settles_child_that_exits_during_reader_startup() {
-        let (fixture, readiness, marker) = reader_failure_fixture("child-exits");
+        let (fixture, readiness, _descendant_readiness, marker) =
+            reader_failure_fixture("child-exits");
         let mut executor = SpawnedShellExecutor::new(test_context());
         let witness_slot = executor.observe_custody();
-        executor.fail_reader_creation_at(SpawnedChildPipe::Stderr, readiness.clone());
+        executor.fail_reader_creation_at(SpawnedChildPipe::Stderr, readiness.clone(), true, false);
         let error = executor
-            .execute_shell(&reader_setup_request(&readiness, &marker, false))
+            .execute_shell(&exiting_reader_setup_request(&readiness, &marker))
             .unwrap_err();
         assert!(
             error
@@ -3126,6 +3253,52 @@ mod tests {
         assert!(!witness.artifact_directory.exists());
         assert_eq!(read_pid_witness(&readiness), witness.pid);
         assert!(!marker.exists());
+        let _ = fs::remove_dir_all(&fixture);
+    }
+
+    /// A reap that cannot be proven must never be rendered as settled custody,
+    /// even when every reader created before the injected failure joins
+    /// cleanly. The guard's `Drop` retries once and proves reaping, while the
+    /// returned error retains the unresolved custody fact.
+    #[test]
+    fn spawned_executor_reports_unproven_reap_without_claiming_settlement() {
+        let (fixture, readiness, descendant_readiness, marker) =
+            reader_failure_fixture("reap-unproven");
+        let mut executor = SpawnedShellExecutor::new(test_context());
+        let witness_slot = executor.observe_custody();
+        executor.fail_reader_creation_at(
+            SpawnedChildPipe::Status,
+            descendant_readiness.clone(),
+            false,
+            true,
+        );
+        let error = executor
+            .execute_shell(&quiet_reader_setup_request(
+                &readiness,
+                &descendant_readiness,
+                &marker,
+            ))
+            .unwrap_err();
+        assert!(
+            error
+                .message()
+                .contains("could not start its status reader"),
+            "{error:?}"
+        );
+        assert!(
+            error.message().contains("injected reap failure"),
+            "{error:?}"
+        );
+        assert!(
+            error.message().contains("cleanup was not fully proven"),
+            "{error:?}"
+        );
+        assert!(!error.message().contains("were settled"), "{error:?}");
+        let witness = witness_slot.lock().unwrap().clone().unwrap();
+        assert!(witness.reaped, "Drop retry did not reap the direct child");
+        assert!(!witness.artifact_directory.exists());
+        assert_eq!(read_pid_witness(&readiness), witness.pid);
+        assert_no_delayed_mutation(&marker);
         let _ = fs::remove_dir_all(&fixture);
     }
 
@@ -3156,8 +3329,11 @@ mod tests {
     /// and unresolved cleanup must remain explicit in the action error.
     #[test]
     fn spawned_child_failure_composition_preserves_first_failure() {
-        let error =
-            compose_spawned_child_failure(MezError::invalid_state("first failure"), Vec::new());
+        let error = compose_spawned_child_failure(
+            MezError::invalid_state("first failure"),
+            Vec::new(),
+            None,
+        );
         assert!(error.message().starts_with("first failure"));
         assert!(error.message().contains("must not be replayed"));
         assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
@@ -3165,9 +3341,24 @@ mod tests {
         let error = compose_spawned_child_failure(
             MezError::invalid_state("first failure"),
             vec!["status reader panicked while settling".to_string()],
+            None,
         );
         assert!(error.message().starts_with("first failure"));
         assert!(error.message().contains("status reader panicked"));
+        assert!(error.message().contains("may be unresolved"));
+
+        let error = compose_spawned_child_failure(
+            MezError::invalid_state("first failure"),
+            Vec::new(),
+            Some("native child custody: could not prove process-group termination".to_string()),
+        );
+        assert!(error.message().starts_with("first failure"));
+        assert!(
+            error
+                .message()
+                .contains("could not prove process-group termination")
+        );
+        assert!(!error.message().contains("were settled"));
         assert!(error.message().contains("may be unresolved"));
     }
 }
