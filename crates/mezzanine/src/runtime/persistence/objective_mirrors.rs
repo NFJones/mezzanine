@@ -921,7 +921,10 @@ mod tests {
         // The newer publication arrives while the failing write is in flight.
         assert!(queue.publish(store.clone(), "same", Some("newer objective")));
         stale.execute();
-        assert!(queue.collect().is_none(), "stale receipt cannot confirm newer work");
+        assert!(
+            queue.collect().is_none(),
+            "stale receipt cannot confirm newer work"
+        );
         assert_eq!(queue.status.failed, 1);
         assert_eq!(queue.status.last_failure, Some(MirrorFailure::Io));
         assert_eq!(queue.status.confirmed, 0);
