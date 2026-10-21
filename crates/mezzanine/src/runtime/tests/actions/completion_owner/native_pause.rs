@@ -450,13 +450,47 @@ fn assert_paused_outcome(
                 .service
                 .completion_publication_retry_needed_for_turn(&fixture.turn.turn_id)
         );
-        assert_eq!(fixture.service.retry_completion_publications(), 0);
-        assert_eq!(fixture.service.retry_completion_publications(), 0);
+        if failed {
+            // A canonical failed publication must not wait on optional paint.
+            // The retained provisional cleanup keeps its own recovery owner and
+            // is retired only after an actual successful install.
+            assert_eq!(fixture.service.retry_completion_publications(), 1);
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+            assert!(
+                fixture.service.action_progress_retirement_retry_needed(),
+                "the superseded provisional must stay owned while paint is held"
+            );
+        } else {
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+        }
         fixture
             .service
             .hold_agent_presentation_installs_for_tests(false);
-        assert_eq!(fixture.service.retry_completion_publications(), 1);
-        assert_eq!(fixture.service.retry_completion_publications(), 0);
+        if failed {
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+            // Cleanup keeps a bounded retry deadline rather than spinning, so
+            // the immediate attempt defers and the obligation stays owned.
+            assert_eq!(fixture.service.retry_action_progress_retirements(), 0);
+            assert!(fixture.service.action_progress_retirement_retry_needed());
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert_eq!(fixture.service.retry_action_progress_retirements(), 1);
+            assert_eq!(fixture.service.retry_action_progress_retirements(), 0);
+            let text = fixture
+                .service
+                .agent_pane_screen("%1")
+                .unwrap()
+                .normal_content_lines()
+                .join("\n");
+            assert!(
+                !text.contains("provisional failed fetch bytes"),
+                "released paint must retire the superseded provisional: {text}"
+            );
+        } else {
+            assert_eq!(fixture.service.retry_completion_publications(), 1);
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+        }
     }
     assert!(
         fixture
