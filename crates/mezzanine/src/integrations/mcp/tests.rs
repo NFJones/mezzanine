@@ -178,12 +178,16 @@ fn stdio_combined_discovery_retirement_error_preserves_primary_failure() {
         crate::error::MezErrorKind::InvalidState,
         "handshake refused",
     );
-    let retirement = crate::error::MezError::invalid_state("stdout reader did not settle");
+    let retirement = crate::error::MezError::new(
+        crate::error::MezErrorKind::Io,
+        "stdout reader did not settle",
+    );
 
     let combined = combine_mcp_discovery_retirement_error(primary, retirement);
 
     assert_eq!(combined.kind(), crate::error::MezErrorKind::InvalidState);
     assert!(combined.message().contains("handshake refused"));
+    assert!(combined.message().contains("stdout reader did not settle"));
     assert!(combined.message().contains("cleanup uncertainty"));
 }
 
