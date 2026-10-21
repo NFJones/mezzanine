@@ -14127,7 +14127,12 @@ is shared by every session in the repository, and it ends at
 publish a snapshot on a raw wall-clock stamp; it MUST fail instead. Creation is
 not serialized across concurrent writers, so racing saves MAY share a stamp and
 are then ordered by the documented id tie-break; the strict guarantee covers a
-creation that observed the winner it advances past.
+creation that observed the winner it advances past. Two deliberate exceptions
+remain: a selected snapshot whose persisted `created_at` is outside the fixed
+written shape cannot be compared, so that store keeps lexical selection and a
+new save makes no newest-save claim against it; and at
+`9999-12-31T23:59:59Z` no newer stamp is representable, so creation saturates
+there and ordering falls back to `id`.
 
 `McpServerState` MUST include `id`, `version`, `name`, `state`, `configured`,
 `blacklisted`, `transport`, `tools`, `last_checked_at`, and `diagnostics`.

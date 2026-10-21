@@ -132,7 +132,9 @@ impl SnapshotRepository {
     /// sorting behind an older save. A store that cannot answer its current
     /// winner therefore fails the creation instead of silently regressing the
     /// latest selection. A winner whose persisted stamp is not in the written
-    /// shape cannot be compared and falls back to the wall-clock reading.
+    /// shape cannot be compared and falls back to the wall-clock reading; that is
+    /// a deliberate legacy exception, so such a store keeps its lexical ordering
+    /// and the new save makes no newest-save claim against it.
     fn creation_created_at(&self) -> Result<String> {
         let previous = self
             .latest(None)?

@@ -701,6 +701,143 @@ fn snapshot_repository_creation_fails_when_the_current_winner_is_unreadable() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies creation makes no newest-save claim against a winner whose stored
+/// creation time is outside the fixed written shape.
+///
+/// Such a stamp cannot be decoded, so the store keeps its lexical ordering and a
+/// new save is stamped from the wall clock. This deliberate legacy exception is
+/// documented in the specification; it is not an ordering guarantee.
+#[test]
+fn snapshot_repository_creation_leaves_a_foreign_winner_stamp_uncompared() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-foreign-winner-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repository = SnapshotRepository::new(root.clone());
+    let mut foreign = manifest();
+    foreign.state.id = "snap-foreign".to_string();
+    foreign.state.created_at = "9998-01-01T00:00:00+00:00".to_string();
+    foreign.state.storage_ref = "snap-foreign.payload".to_string();
+    repository.write(&foreign).unwrap();
+    let session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    )
+    .unwrap();
+
+    let created = SnapshotRepository::new(root.clone())
+        .with_creation_seconds(1_800_000_000)
+        .create_from_session("snap-native", None, &session)
+        .unwrap();
+
+    assert_eq!(
+        created.created_at,
+        super::encoding::unix_seconds_to_rfc3339(1_800_000_000),
+        "an uncomparable winner stamp is not advanced past"
+    );
+    assert_eq!(
+        SnapshotRepository::new(root.clone())
+            .latest(None)
+            .unwrap()
+            .unwrap()
+            .id,
+        "snap-foreign",
+        "the store keeps its lexical ordering for an unsupported stamp"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies creation saturates at the last representable stamp, where ordering
+/// falls back to the snapshot id.
+#[test]
+fn snapshot_repository_creation_saturates_at_the_stamp_domain_end() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-stamp-domain-end-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repository = SnapshotRepository::new(root.clone());
+    let mut earlier = manifest();
+    earlier.state.id = "snap-z".to_string();
+    earlier.state.created_at = "9999-12-31T23:59:59Z".to_string();
+    earlier.state.storage_ref = "snap-z.payload".to_string();
+    repository.write(&earlier).unwrap();
+    let session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    )
+    .unwrap();
+
+    let created = SnapshotRepository::new(root.clone())
+        .with_creation_seconds(1_800_000_000)
+        .create_from_session("snap-a", None, &session)
+        .unwrap();
+
+    assert_eq!(
+        created.created_at, "9999-12-31T23:59:59Z",
+        "no newer stamp is representable at the domain end"
+    );
+    assert_eq!(
+        SnapshotRepository::new(root.clone())
+            .latest(None)
+            .unwrap()
+            .unwrap()
+            .id,
+        "snap-z",
+        "the id tie-break decides when the stamp cannot advance"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies asynchronous creation also fails closed when the store cannot answer
+/// its current winner.
+#[tokio::test]
+async fn snapshot_repository_async_creation_fails_when_the_current_winner_is_unreadable() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-async-unreadable-winner-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    )
+    .unwrap();
+    let frame_state = SnapshotFrameState::default();
+    SnapshotRepository::new(root.clone())
+        .with_creation_seconds(1_800_000_000)
+        .create_from_session_with_context_async(
+            "snap-async-first",
+            None,
+            &session,
+            SnapshotCreationContext::new(&[], &[], &frame_state, &[]),
+        )
+        .await
+        .unwrap();
+    fs::write(
+        super::sqlite::database_path(&root),
+        b"not a snapshot database",
+    )
+    .unwrap();
+
+    let error = SnapshotRepository::new(root.clone())
+        .with_creation_seconds(1_800_000_000)
+        .create_from_session_with_context_async(
+            "snap-async-second",
+            None,
+            &session,
+            SnapshotCreationContext::new(&[], &[], &frame_state, &[]),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(!error.to_string().is_empty());
+    assert!(!root.join("snap-async-second.manifest").exists());
+    assert!(!root.join("snap-async-second.payload").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies an ordinary snapshot write consults only indexed winners instead
 /// of parsing unrelated manifests after the latest index has been established.
 #[test]
