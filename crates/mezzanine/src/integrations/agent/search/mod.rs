@@ -4,8 +4,11 @@
 //! exchange and adapter decoding, never retries, caches, hidden fetches or paid
 //! routing. Dropping its future drops the owned HTTP future. Progress is only
 //! cleaned presentation data; actor attempt/revision authority remains outside.
-//! Strict future normalization is separate from the legacy DDG compatibility
-//! path. No alternate client, SDK, plugin registry or runtime is introduced.
+//! DDG success requires a locally complete bounded HTTP 200 exchange and a
+//! supported result shape, not merely missing anchors. Unknown/zero-hit pages
+//! fail honestly; no genuine completed-empty format is qualified here. Strict
+//! future normalization remains separate. No alternate client, SDK, plugin
+//! registry or runtime is introduced.
 
 use super::AsyncProviderHttpTransport;
 use crate::integrations::http::HttpCompletion;
@@ -17,7 +20,7 @@ mod duckduckgo;
 #[cfg(test)]
 mod normalization_tests;
 
-/// Retained legacy exchange facts used by the unchanged MAAP result envelope.
+/// Retained completed-result facts used by the MAAP action envelope.
 pub(super) struct SearchExchange {
     /// Typed ordered hits and provenance facts, not a duplicate text corpus.
     pub result: SearchResult,
@@ -29,12 +32,21 @@ pub(super) struct SearchExchange {
     pub returned_bytes: usize,
 }
 
-/// Transport/status failures retaining the bridge's historical error shape.
+/// Transport/status and content-free response-classification failures.
 pub(super) enum SearchExchangeError {
     /// Existing HTTP transport failure, including its explicit timeout kind.
     Transport(ProviderHttpError),
     /// Non-2xx status and retained body length; no raw-body publication.
     Http { status_code: u16, body_bytes: usize },
+    /// A response did not supply supported completed results. Facts are bounded
+    /// local observations, never raw HTML, inferred blocking or remote causes.
+    Unusable {
+        status_code: u16,
+        body_bytes: usize,
+        returned_bytes: usize,
+        html_truncated: bool,
+        outcome: &'static str,
+    },
 }
 
 /// Executes exactly one unauthenticated legacy DDG GET using ordinary HTTP
@@ -58,7 +70,8 @@ pub(super) async fn execute_legacy_ddg<T: AsyncProviderHttpTransport>(
     let mut observed = Vec::new();
     let mut published = String::new();
     let mut on_chunk = |chunk: Vec<u8>| {
-        observed.extend_from_slice(&chunk);
+        let remaining = limits.transport_bytes().saturating_sub(observed.len());
+        observed.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
         let source = legacy_progress_source(&observed, request, limits.results());
         if !source.is_empty() && source != published {
             published.clone_from(&source);
@@ -80,19 +93,35 @@ pub(super) async fn execute_legacy_ddg<T: AsyncProviderHttpTransport>(
     }
     let (body, truncated) =
         super::network::truncate_text_to_bytes(&response.body, limits.transport_bytes());
+    let html_truncated = truncated || transport_truncated;
+    let unusable = |outcome| SearchExchangeError::Unusable {
+        status_code: response.status_code,
+        body_bytes: response.body.len(),
+        returned_bytes: body.len(),
+        html_truncated,
+        outcome,
+    };
+    if response.status_code == 202 {
+        return Err(unusable("pending"));
+    }
+    if response.status_code != 200 {
+        return Err(unusable("unsupported_success_status"));
+    }
+    if html_truncated || exchange.completion != HttpCompletion::Complete {
+        return Err(unusable("incomplete"));
+    }
+    let hits = duckduckgo::completed_results(&body, limits.results())
+        .ok_or_else(|| unusable("unrecognized"))?;
     Ok(SearchExchange {
-        result: SearchResult::legacy_ddg(
-            request,
-            duckduckgo::decode(&body, limits.results()),
-            truncated || transport_truncated,
-        ),
+        result: SearchResult::legacy_ddg(request, hits, false),
         status_code: response.status_code,
         body_bytes: response.body.len(),
         returned_bytes: body.len(),
     })
 }
 
-/// Withholds invalid UTF-8 and incomplete scalars/anchors exactly as before.
+/// Withholds invalid UTF-8 and incomplete scalars/anchors. Only structurally
+/// recognized complete entries may form provisional presentation snapshots.
 fn legacy_progress_source(bytes: &[u8], request: &SearchRequest, limit: usize) -> String {
     let valid = match std::str::from_utf8(bytes) {
         Ok(value) => value,

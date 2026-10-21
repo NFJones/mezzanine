@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod search_outcomes;
+
 /// Verifies runtime-owned URL actions render a human-readable execution line
 /// with themed gutter colors in normal mode.
 ///

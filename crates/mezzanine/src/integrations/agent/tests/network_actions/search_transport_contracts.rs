@@ -56,11 +56,11 @@ async fn network_search_utf8_progress_preserves_legacy_prefix_rules() {
 
 #[tokio::test]
 /// An HTTP transport's explicit truncation survives even when the retained body
-/// is short. Non-2xx status mapping and transport interruption remain legacy
-/// failures without publishing raw HTML or converting failures into no-results.
+/// is short and now fails completed-result classification. Non-2xx status and
+/// transport interruption remain distinct failures without raw HTML/no-results.
 async fn network_search_completion_and_failure_envelopes_stay_legacy() {
     for (status, failure, expected) in [
-        (200, None, None),
+        (200, None, Some("network_search_unusable_response")),
         (402, None, Some("network_http_error")),
         (429, None, Some("network_http_error")),
         (
@@ -94,7 +94,7 @@ async fn network_search_completion_and_failure_envelopes_stay_legacy() {
         assert_eq!(result.error.as_ref().map(|e| e.code.as_str()), expected);
         let data: serde_json::Value =
             serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
-        if expected.is_none() {
+        if expected == Some("network_search_unusable_response") {
             assert_eq!(data["response"]["html_truncated"], true);
         }
         assert!(!result.content_text().contains("<html>"));
@@ -130,5 +130,10 @@ async fn network_search_body_cap_split_scalar_remains_utf8_safe() {
         1024 * 1024 - 1 + "\n[mez: output truncated at 1048576 bytes]".len()
     );
     assert_eq!(data["response"]["html_truncated"], true);
-    assert_eq!(result.content_text(), "No web results were found.");
+    assert_eq!(result.status, ActionStatus::Failed);
+    assert_eq!(
+        result.error.as_ref().unwrap().code,
+        "network_search_unusable_response"
+    );
+    assert!(!result.content_text().contains("No web results were found."));
 }
