@@ -1301,73 +1301,87 @@ fn posix_wrapper_preserves_parent_shell_with_errexit_enabled() {
     assert!(stdout.contains("PARENT_SHELL_ALIVE"), "{stdout:?}");
 }
 
-/// Returns whether this platform's `/bin/sh` consumes piped stdin records into
-/// its script read-ahead instead of leaving them for the `read` builtin.
-///
-/// `/bin/sh` reads its script from the same standard input it exposes to
-/// `read`, so a record that is already available when the parser buffers the
-/// next command can be consumed as shell source. Shells that instead drain
-/// their buffer into `read` hand the record to the consuming command.
-fn posix_shell_consumes_script_readahead_records() -> bool {
-    let probe = "read mez_probe\nPAYLOAD_READY_RECORD\nprintf 'PROBE:%s\\n' \"${mez_probe-}\"\n";
-    let output = run_sh_stdin(probe);
-    !String::from_utf8_lossy(&output.stdout).contains("PROBE:PAYLOAD_READY_RECORD")
+/// Observed `/bin/sh` script-buffer behavior relative to the `read` builtin.
+enum PosixScriptBuffer {
+    /// The parser keeps already read records for its own source scan, so a
+    /// receiver's `read` can never observe them as data.
+    ReadAhead,
+    /// The parser hands buffered records to `read`, so concatenated stdin
+    /// records stay available to the consuming command.
+    Drained,
 }
 
-/// Streams one transaction with the payload released immediately after the
-/// wrapper, without any receiver-readiness observation.
+/// Classifies how this platform's `/bin/sh` shares one standard-input stream
+/// between its script parser and the `read` builtin.
 ///
-/// Only the ordering regression uses this. Every other fixture must use the
-/// protocol-order helpers so payload bytes cannot be staged ahead of the
-/// receiver that consumes them.
-fn run_sh_transaction_without_readiness_gate(
+/// The probe is self-validating: a read-ahead shell must report the unconsumed
+/// record as an unknown command, and a draining shell must print the record it
+/// handed to `read`. Anything else is unsupported shell behavior and fails
+/// loudly instead of silently selecting a branch.
+fn posix_shell_script_buffer() -> PosixScriptBuffer {
+    let probe = "read mez_probe\nPAYLOAD_READY_RECORD\nprintf 'PROBE:%s\\n' \"${mez_probe-}\"\n";
+    let output = run_sh_stdin(probe);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stdout.contains("PROBE:PAYLOAD_READY_RECORD") {
+        assert!(
+            !stderr.contains("PAYLOAD_READY_RECORD"),
+            "draining /bin/sh reported the probe record as a command: {stderr:?}"
+        );
+        return PosixScriptBuffer::Drained;
+    }
+    assert!(
+        stderr.contains("PAYLOAD_READY_RECORD"),
+        "unexpected /bin/sh script-buffer behavior: stdout={stdout:?} stderr={stderr:?}"
+    );
+    PosixScriptBuffer::ReadAhead
+}
+
+/// Runs one whole transaction as a pre-filled script for `/bin/sh`.
+///
+/// Every byte exists before the shell starts, so the arrangement states the
+/// ordering hazard itself: payload records are available no later than the
+/// parser's scan of the wrapper, and no writer scheduling can reorder them. The
+/// regular file also keeps the write side from blocking on a reader.
+fn run_sh_transaction_with_prefilled_script(
     input: &ShellTransactionInput,
     prelude: &str,
     suffix: &str,
 ) -> Output {
-    let mut command = Command::new("/bin/sh");
-    let mut child = command
-        .stdin(Stdio::piped())
+    let directory = test_temp_dir("transaction-payload-order");
+    let path = directory.join("script.sh");
+    let mut script = Vec::new();
+    script.extend_from_slice(prelude.as_bytes());
+    script.extend_from_slice(input.wrapper.as_bytes());
+    script.extend_from_slice(input.payload.as_bytes());
+    script.extend_from_slice(suffix.as_bytes());
+    std::fs::write(&path, &script).expect("the transaction script should be written");
+    let script_file = std::fs::File::open(&path).expect("the transaction script should be opened");
+    let output = Command::new("/bin/sh")
+        .stdin(Stdio::from(script_file))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("the shell test process should spawn");
-    let stdin = child
-        .stdin
-        .as_mut()
-        .expect("the shell test process stdin should be piped");
-    stdin
-        .write_all(prelude.as_bytes())
-        .expect("the transaction prelude should be written");
-    stdin
-        .write_all(input.wrapper.as_bytes())
-        .expect("the transaction wrapper should be written");
-    stdin
-        .write_all(input.payload.as_bytes())
-        .expect("the transaction payload should be written");
-    stdin
-        .write_all(suffix.as_bytes())
-        .expect("the transaction suffix should be written");
-    drop(child.stdin.take());
-    child
+        .expect("the shell test process should spawn")
         .wait_with_output()
-        .expect("the shell test process should finish")
+        .expect("the shell test process should finish");
+    std::fs::remove_dir_all(&directory).expect("the shell test temp directory should be removed");
+    output
 }
 
 #[test]
-/// Verifies the transaction receiver fails closed when payload records are
-/// consumed by the shell's own script read-ahead instead of reaching the
-/// receiver.
+/// Verifies payload records that reach `/bin/sh` before its receiver can never
+/// become a completed transaction or an executed command.
 ///
-/// This pins the writer, reader and sentinel stage of the reordered-delivery
-/// defect. A writer that releases payload bytes before the shell enters the
-/// receiver loses them to the parser, so the authenticated sentinel is never
-/// observed. The wrapper must report that failure and must never execute the
-/// command. The bounded prelude delay only models a reader that has not started
-/// yet; the assertions themselves make no wall-clock claim. Shells that drain
-/// their script buffer into `read` have no such hazard, and the same ordering
-/// must then complete normally.
-fn posix_payload_consumed_by_script_readahead_fails_closed_before_sentinel() {
+/// The whole transaction is pre-filled as one script, so payload records are
+/// necessarily available before the receiver reads them and no writer
+/// scheduling can invert the ordering. On a shell whose parser retains those
+/// records the receiver must reach the end of input without the authenticated
+/// sentinel, publish a failure status, and never execute the command. On a
+/// shell that hands buffered records to `read` the same ordering must complete
+/// normally. The assertions cover the sentinel stage and the fail-closed
+/// contract without any wall-clock assumption.
+fn posix_payload_released_before_receiver_readiness_never_completes_transaction() {
     let transaction = ShellTransaction::new(
         marker(),
         "t1",
@@ -1378,30 +1392,41 @@ fn posix_payload_consumed_by_script_readahead_fails_closed_before_sentinel() {
     )
     .unwrap();
     let input = transaction.render_for_classification_input(ShellClassification::PosixSh);
-    let output = run_sh_transaction_without_readiness_gate(
+    let output = run_sh_transaction_with_prefilled_script(
         &input,
-        "set -eu\nsleep 0.2\n",
+        "set -eu\n",
         "printf '%s\\n' PARENT_SHELL_ALIVE\n",
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    if posix_shell_consumes_script_readahead_records() {
-        assert!(
-            stderr.contains("Mezzanine shell transaction command payload ended before sentinel"),
-            "status={:?} stdout={stdout:?} stderr={stderr:?}",
-            output.status
-        );
-        assert!(!stdout.contains("GATE_FREE_COMMAND"), "{stdout:?}");
-        assert!(!stdout.contains("\u{1b}]133;D;0;"), "{stdout:?}");
-        return;
+    match posix_shell_script_buffer() {
+        PosixScriptBuffer::ReadAhead => {
+            assert!(
+                stderr.contains("Mezzanine shell transaction command payload ended before sentinel"),
+                "status={:?} stdout={stdout:?} stderr={stderr:?}",
+                output.status
+            );
+            assert!(
+                stdout.contains("\u{1b}]133;D;1;"),
+                "the wrapper must publish its failure status: {stdout:?}"
+            );
+            assert!(!stdout.contains("\u{1b}]133;D;0;"), "{stdout:?}");
+            assert!(!stdout.contains("GATE_FREE_COMMAND"), "{stdout:?}");
+            assert!(!stdout.contains("PARENT_SHELL_ALIVE"), "{stdout:?}");
+            assert!(!output.status.success(), "{output:?}");
+        }
+        PosixScriptBuffer::Drained => {
+            assert!(
+                output.status.success(),
+                "status={:?} stdout={stdout:?} stderr={stderr:?}",
+                output.status
+            );
+            assert!(stdout.contains("\u{1b}]133;D;0;"), "{stdout:?}");
+            assert!(stdout.contains("GATE_FREE_COMMAND"), "{stdout:?}");
+            assert!(stdout.contains("PARENT_SHELL_ALIVE"), "{stdout:?}");
+        }
     }
-    assert!(
-        output.status.success(),
-        "status={:?} stdout={stdout:?} stderr={stderr:?}",
-        output.status
-    );
-    assert!(stdout.contains("GATE_FREE_COMMAND"), "{stdout:?}");
 }
 
 #[test]
