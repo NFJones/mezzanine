@@ -1306,3 +1306,71 @@ fn runtime_event_fanout_batches_frames_per_connection() {
     assert!(batched.contains(r#""message":"second""#), "{batched}");
     assert!(connections.wakeups(Some(&event_log), 10).is_empty());
 }
+
+/// Pane settlement that an already-claimed pane worker owns stays admissible
+/// after the lifecycle stops accepting new work.
+///
+/// The acknowledgement refreshes its owning shell transaction, a write failure
+/// still fails that transaction through the existing diagnostic path, and new
+/// pane input keeps the lifecycle refusal. This is settlement of owned work,
+/// never a relaxation of new-work admission.
+#[test]
+fn stopping_lifecycle_admits_owned_pane_settlement_without_dropping_accounting() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service.running_shell_transactions_mut_for_tests().insert(
+        "marker-settlement".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-settlement".to_string(),
+            kind: RunningShellTransactionKind::Bootstrap,
+            pane_id: "%1".to_string(),
+            command: "printf settled\n".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    let transition = service
+        .apply_shutdown_transition(crate::runtime::ShutdownEvent {
+            reason: "owned settlement admission".to_string(),
+            force: false,
+            failed: false,
+        })
+        .unwrap();
+    assert!(transition.applied);
+    assert_eq!(service.lifecycle_state(), RuntimeLifecycleState::Stopping);
+
+    // The acknowledgement settles into the still-owned transaction instead of
+    // being refused or replayed.
+    assert!(
+        service.apply_pane_input_written_event("%1", 12).unwrap(),
+        "an owned acknowledgement must settle while stopping"
+    );
+    assert_eq!(service.running_shell_transactions_for_tests().len(), 1);
+
+    // A write failure keeps its diagnostic and transaction-settlement path.
+    assert!(
+        service
+            .apply_pane_write_failure_event("%1", "injected write failure")
+            .unwrap()
+    );
+    assert!(
+        service.running_shell_transactions_for_tests().is_empty(),
+        "a settled write failure must fail its owning transaction"
+    );
+
+    // New work keeps the lifecycle refusal: only settlement is admitted.
+    let refused = service
+        .write_input_to_pane(&primary, Some("%1"), b"new work")
+        .unwrap_err();
+    assert!(
+        refused.message().contains("runtime service is stopping"),
+        "new pane input must stay refused while stopping: {refused}"
+    );
+}

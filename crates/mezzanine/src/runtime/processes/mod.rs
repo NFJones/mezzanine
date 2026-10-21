@@ -3529,7 +3529,7 @@ impl RuntimeSessionService {
         primary_pid: u32,
         exit_status: PaneExitStatus,
     ) -> Result<Option<PaneExitUpdate>> {
-        self.require_live()?;
+        self.require_pane_settlement_admissible()?;
         let pane_id = pane_id.into();
         if self.find_pane_descriptor(&pane_id).is_none() {
             self.process.detached_pane_processes.remove(&pane_id);
@@ -3574,7 +3574,7 @@ impl RuntimeSessionService {
         pane_id: impl Into<String>,
         error: impl Into<String>,
     ) -> Result<bool> {
-        self.require_live()?;
+        self.require_pane_settlement_admissible()?;
         let pane_id = pane_id.into();
         let Some(descriptor) = self.find_pane_descriptor(&pane_id) else {
             return Ok(false);
@@ -4151,7 +4151,7 @@ impl RuntimeSessionService {
         pane_id: impl Into<String>,
         error: impl Into<String>,
     ) -> Result<bool> {
-        self.require_live()?;
+        self.require_pane_settlement_admissible()?;
         let pane_id = pane_id.into();
         let Some(descriptor) = self.find_pane_descriptor(&pane_id) else {
             return Ok(false);
@@ -4182,7 +4182,7 @@ impl RuntimeSessionService {
         pane_id: impl Into<String>,
         bytes: usize,
     ) -> Result<bool> {
-        self.require_live()?;
+        self.require_pane_settlement_admissible()?;
         let pane_id = pane_id.into();
         if self.find_pane_descriptor(&pane_id).is_none() {
             return Ok(false);
@@ -4276,7 +4276,7 @@ impl RuntimeSessionService {
         pane_id: impl Into<String>,
         size: Size,
     ) -> Result<bool> {
-        self.require_live()?;
+        self.require_pane_settlement_admissible()?;
         size.validate()?;
         let pane_id = pane_id.into();
         let Some(descriptor) = self.find_pane_descriptor(&pane_id) else {
@@ -4487,7 +4487,7 @@ impl RuntimeSessionService {
         pane_id: impl Into<String>,
         bytes: Vec<u8>,
     ) -> Result<Option<PaneOutputUpdate>> {
-        self.require_live()?;
+        self.require_pane_settlement_admissible()?;
         if bytes.is_empty() {
             return Ok(None);
         }
