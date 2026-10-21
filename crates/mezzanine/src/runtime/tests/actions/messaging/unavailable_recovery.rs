@@ -140,6 +140,10 @@ impl ModelProvider for AlternateCompatibilityProvider {
         "alternate-compat"
     }
 
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        mez_agent::ProviderApiCompatibility::OpenAiChatCompletions
+    }
+
     fn send_request(&self, request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
         let mut response = self.inner.send_request(request)?;
         response.provider = self.provider_id().to_string();
@@ -305,12 +309,13 @@ fn runtime_unavailable_recipient_correction_covers_all_action_positions() {
 #[test]
 fn runtime_unavailable_recipient_correction_preserves_successful_sibling() {
     let (mut service, target) = mixed_batch_fixture();
+    let success_recipient = format!("agent:{target}");
     let execution = execute_sync(
         &mut service,
         batch_response(
             "deepseek",
             vec![
-                send_action("msg-target", "agent:%2", "accepted handoff"),
+                send_action("msg-target", &success_recipient, "accepted handoff"),
                 send_action("msg-missing", "agent:agent-nowhere", "lost handoff"),
                 list_agents_action("discover-1"),
                 final_say_action("say-final", "finished"),
@@ -324,12 +329,12 @@ fn runtime_unavailable_recipient_correction_preserves_successful_sibling() {
         result_diagnostics(&execution)
     );
     assert_eq!(
-        service
-            .message_service()
-            .receive_for(&target, u64::MAX)
-            .len(),
-        1
+        result_for(&execution, "msg-target").status,
+        ActionStatus::Succeeded
     );
+    let messages = service.message_service().receive_for(&target, u64::MAX);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].payload, "accepted handoff");
     let corrected = service
         .poll_agent_provider_tasks_with_provider(
             &RuntimeBatchProvider {
@@ -340,18 +345,18 @@ fn runtime_unavailable_recipient_correction_preserves_successful_sibling() {
         .unwrap()
         .remove(0);
     assert_eq!(corrected.terminal_state, AgentTurnState::Completed);
+    let messages = service.message_service().receive_for(&target, u64::MAX);
     assert_eq!(
-        service
-            .message_service()
-            .receive_for(&target, u64::MAX)
-            .len(),
+        messages.len(),
         1,
         "successful sibling must not be replayed by correction"
     );
+    assert_eq!(messages[0].payload, "accepted handoff");
 }
 
-/// Async settlement must queue the same bounded continuation for the mixed
-/// batch, without waiting for an unrelated poll timer to rescue the turn.
+/// Inline async apply must queue the same bounded continuation and complete
+/// normally after the model changes course; production actor-deferred dispatch
+/// remains a separate integration gate.
 #[tokio::test]
 async fn runtime_unavailable_recipient_correction_is_async_parity() {
     let (mut service, target) = mixed_batch_fixture();
@@ -384,6 +389,22 @@ async fn runtime_unavailable_recipient_correction_is_async_parity() {
             .iter()
             .any(|task| task.turn_id == "turn-1")
     );
+    assert!(
+        service
+            .message_service()
+            .receive_for(&target, u64::MAX)
+            .is_empty()
+    );
+    let corrected = service
+        .poll_agent_provider_tasks_with_provider(
+            &RuntimeBatchProvider {
+                response: runtime_say_response("turn-1", "changed course", true),
+            },
+            1,
+        )
+        .unwrap()
+        .remove(0);
+    assert_eq!(corrected.terminal_state, AgentTurnState::Completed);
     assert!(
         service
             .message_service()
@@ -424,6 +445,14 @@ fn runtime_unavailable_recipient_correction_is_provider_agnostic() {
             "alternate={alternate}: {:?}",
             result_diagnostics(&execution)
         );
+        assert_eq!(
+            execution.response.provider,
+            if alternate {
+                "alternate-compat"
+            } else {
+                "runtime-batch"
+            }
+        );
         assert!(
             service
                 .pending_agent_provider_tasks()
@@ -440,6 +469,7 @@ fn runtime_active_external_sibling_keeps_correction_unavailable() {
     let (mut service, turn) = open_turn_for_constructed_execution();
     let missing = send_action("msg-missing", "agent:agent-nowhere", "handoff");
     let spawn = runtime_spawn_agent_action("spawn-active", "background child");
+    let discovery = list_agents_action("discover-local");
     let say = final_say_action("say-final", "finished");
     let results = vec![
         mez_agent::ActionResult::failed(
@@ -451,9 +481,11 @@ fn runtime_active_external_sibling_keeps_correction_unavailable() {
         )
         .unwrap(),
         mez_agent::ActionResult::running(&turn, &spawn, Vec::new(), None),
+        mez_agent::ActionResult::running(&turn, &discovery, Vec::new(), None),
         mez_agent::ActionResult::succeeded(&turn, &say, vec!["finished".to_string()], None),
     ];
-    let mut execution = constructed_execution(&turn, vec![missing, spawn, say], results, false);
+    let mut execution =
+        constructed_execution(&turn, vec![missing, spawn, discovery, say], results, false);
     append_test_execution_assistant_context(&mut service, &turn, &execution);
     let queued = service
         .queue_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
@@ -463,6 +495,11 @@ fn runtime_active_external_sibling_keeps_correction_unavailable() {
     assert_eq!(
         result_for(&execution, "spawn-active").status,
         ActionStatus::Running
+    );
+    assert_eq!(
+        result_for(&execution, "discover-local").status,
+        ActionStatus::Cancelled,
+        "unstarted read-only discovery is settled even when correction is blocked"
     );
 }
 
@@ -509,6 +546,14 @@ fn runtime_blocked_and_denied_siblings_keep_correction_unavailable() {
             "denied={denied}: sibling gate must block correction"
         );
         assert!(service.pending_agent_provider_tasks().is_empty());
+        assert_eq!(
+            result_for(&execution, "spawn-sibling").status,
+            if denied {
+                ActionStatus::Denied
+            } else {
+                ActionStatus::Blocked
+            }
+        );
     }
 }
 
@@ -551,6 +596,18 @@ fn runtime_unavailable_recipient_mixed_batch_correction_budget_is_stable() {
         AgentTurnState::Failed,
         "results={:?}",
         result_diagnostics(&repeated)
+    );
+    assert_eq!(
+        result_for(&repeated, "discover-2").status,
+        ActionStatus::Cancelled
+    );
+    assert_eq!(
+        result_for(&repeated, "discover-2")
+            .error
+            .as_ref()
+            .unwrap()
+            .code,
+        "action_abandoned_not_started"
     );
     assert!(service.pending_agent_provider_tasks().is_empty());
 }

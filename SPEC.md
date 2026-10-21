@@ -11600,9 +11600,9 @@ a provider continuation; corrected close and changed-course completion both use
 the normal turn lifecycle in synchronous and asynchronous execution.
 Different action IDs MUST NOT reset the stable rejection correction budget.
 When one model-correctable action fails before later shell-backed sibling
-actions have reached the pane shell, or before a synchronous local sibling
-family (agent discovery, MCP discovery, persistent memory, issue bookkeeping or
-validated configuration) has started, those inactive unsent siblings MUST NOT
+actions have reached the pane shell, or before a bounded read-only discovery
+family (agent discovery and MCP server discovery) has started, those inactive
+unsent siblings MUST NOT
 make recovery unavailable. Mezzanine SHOULD record exactly one truthful
 terminal not-started disposition for each abandoned sibling in canonical
 chronology and the provider tool-result group, without fabricating success or
@@ -11610,7 +11610,10 @@ dispatching the abandoned action, then feed back the settled failed action
 result and queue the corrective provider continuation. Active sibling work that
 has reached an external process, subagent, approval, network or MCP transport,
 persistent child, persistence phase, or other runtime boundary MAY still block
-correction until that work settles or is explicitly cancelled.
+correction until that work settles or is explicitly cancelled. Memory, issue,
+validated-configuration and other mutation or persistence-owning families MUST
+NOT be treated as unstarted from status alone until their owner proves no
+generation-owned work began.
 Async runtime event handling MUST emit the provider-dispatch side effect for a
 newly queued corrective continuation promptly after applying the failed action
 event, rather than relying solely on a later provider-poll timer.

@@ -679,26 +679,18 @@ pub fn runtime_action_type_is_shell_backed(action_type: &str) -> bool {
 /// Returns true for synchronous local actions that own no external work once
 /// their executor phase has finished.
 ///
-/// These actions read discovery, local registries, persistent memory, issue
-/// bookkeeping or validated configuration. A still-`Running` result of one of
-/// these types after the local executors ran is an unstarted planned sibling,
-/// not active external, subagent, approval or process work, so it must not make
-/// bounded failed-action correction unavailable merely because an earlier
-/// action in the same batch failed. Runtime, network, subagent, close/wait and
-/// approval-gated work remain outside this predicate.
+/// These actions are bounded read-only discovery of local agent and MCP
+/// registries. A still-`Running` result of one of these types after its
+/// synchronous executor ran is an unstarted planned sibling, not active
+/// external, subagent, approval, persistence, mutation or process work, so it
+/// must not make bounded failed-action correction unavailable merely because an
+/// earlier action in the same batch failed. Memory, issue, configuration,
+/// runtime, network, subagent, close/wait and approval-gated work remain outside
+/// this predicate until an owner can prove no generation-owned work started.
 pub fn runtime_action_type_is_local_unstarted_sibling(action_type: &str) -> bool {
     matches!(
         action_type,
-        "list_agents"
-            | "mcp_server_search"
-            | "mcp_server_get"
-            | "memory_search"
-            | "memory_store"
-            | "issue_add"
-            | "issue_update"
-            | "issue_query"
-            | "issue_delete"
-            | "config_change"
+        "list_agents" | "mcp_server_search" | "mcp_server_get"
     )
 }
 

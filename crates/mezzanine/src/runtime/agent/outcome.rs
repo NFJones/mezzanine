@@ -142,7 +142,7 @@ impl RuntimeSessionService {
         execution: &mut AgentTurnExecution,
         reason: &str,
     ) -> Result<bool> {
-        Self::settle_unstarted_local_action_siblings(execution)?;
+        self.settle_unstarted_local_action_siblings(turn, execution)?;
         if !self.execution_can_feed_failure_to_model(&turn.turn_id, execution) {
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
@@ -273,21 +273,27 @@ impl RuntimeSessionService {
     /// Settles planned local siblings whose executors never started.
     ///
     /// Executor families refuse to begin after an earlier family failed, so a
-    /// discovery, registry, memory, issue or validated-config placeholder can
-    /// remain `Running` without any work, event, owner or side effect. Replace
-    /// only those unstarted placeholders with one truthful terminal
-    /// abandonment result so canonical chronology and the native provider
-    /// tool-result group carry a complete disposition. Active external,
-    /// subagent, approval, cancellation and shell ownership is untouched.
-    fn settle_unstarted_local_action_siblings(execution: &mut AgentTurnExecution) -> Result<()> {
+    /// read-only discovery placeholder can remain `Running` without any work,
+    /// event, owner or side effect. Replace only those unstarted placeholders
+    /// with one truthful terminal abandonment result and commit them to
+    /// canonical chronology independently of whether bounded correction is
+    /// admitted or has budget left, so the native provider tool-result group
+    /// always carries a complete disposition. Active external, subagent,
+    /// approval, cancellation, persistence and shell ownership is untouched.
+    pub(crate) fn settle_unstarted_local_action_siblings(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &mut AgentTurnExecution,
+    ) -> Result<usize> {
         if execution.terminal_state != AgentTurnState::Failed
             || !execution
                 .action_results
                 .iter()
                 .any(runtime_action_result_is_feedback_candidate)
         {
-            return Ok(());
+            return Ok(0);
         }
+        let mut abandoned = Vec::new();
         for result in &mut execution.action_results {
             if result.status != ActionStatus::Running
                 || result.is_error
@@ -321,8 +327,12 @@ impl RuntimeSessionService {
                 })
                 .to_string(),
             );
+            abandoned.push(result.clone());
         }
-        Ok(())
+        if !abandoned.is_empty() {
+            self.commit_settled_action_results_context(&turn.turn_id, &abandoned)?;
+        }
+        Ok(abandoned.len())
     }
 
     /// Returns true when a running shell-backed sibling has not reached the

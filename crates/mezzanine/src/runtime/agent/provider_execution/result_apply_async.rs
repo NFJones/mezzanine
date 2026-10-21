@@ -607,6 +607,7 @@ impl RuntimeSessionService {
             &execution.action_results,
         )?;
         self.record_runtime_agent_patch_results_for_turn(turn, &execution);
+        self.settle_unstarted_local_action_siblings(turn, &mut execution)?;
         if execution.terminal_state == AgentTurnState::Failed {
             let error = runtime_agent_execution_failure_error(&execution);
             self.append_provider_request_failure_audit(turn, model_profile, provider_id, &error)?;
