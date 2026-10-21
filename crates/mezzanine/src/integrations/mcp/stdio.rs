@@ -468,6 +468,25 @@ pub async fn spawn_stdio_mcp_connection_with_limit(
     Ok(connection)
 }
 
+/// Combines one primary MCP discovery failure with retirement uncertainty.
+///
+/// The primary error kind and message stay authoritative; explicitly observed
+/// local cleanup uncertainty is appended so a handshake or schema failure does
+/// not hide unresolved reader-task or direct-child settlement.
+pub(crate) fn combine_mcp_discovery_retirement_error(
+    primary: MezError,
+    retirement: MezError,
+) -> MezError {
+    MezError::new(
+        primary.kind(),
+        format!(
+            "{}; transport retirement also reported cleanup uncertainty: {}",
+            primary.message(),
+            retirement.message()
+        ),
+    )
+}
+
 /// Runs the discover stdio mcp server operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -492,13 +511,9 @@ pub async fn discover_stdio_mcp_server(
         (Ok(discovery), Ok(())) => Ok(discovery),
         (Ok(_), Err(retirement_error)) => Err(retirement_error),
         (Err(error), Ok(())) => Err(error),
-        (Err(error), Err(retirement_error)) => Err(MezError::new(
-            error.kind(),
-            format!(
-                "{}; transport retirement also reported cleanup uncertainty: {}",
-                error.message(),
-                retirement_error.message()
-            ),
+        (Err(error), Err(retirement_error)) => Err(combine_mcp_discovery_retirement_error(
+            error,
+            retirement_error,
         )),
     }
 }
