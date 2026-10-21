@@ -109,37 +109,6 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
                 .complete_native_shell_action(outcome.clone())
                 .unwrap()
         );
-        // A headerless ShellCommand owns no generic ordered-result row: its body
-        // belongs to the shell preview/settle owner. Completion must therefore
-        // not fabricate an ordered source, an acknowledgment or a retry
-        // obligation for it, while canonical custody below still commits.
-        assert!(
-            !service.completion_publication_retry_needed_for_turn(&worker_turn.turn_id),
-            "a headerless shell result must not create a phantom publication obligation"
-        );
-        let turn_has_ordered_result = |service: &crate::runtime::RuntimeSessionService| {
-            service
-                .presentation
-                .agent_queued_provider_results
-                .keys()
-                .any(|key| key.1 == worker_turn.turn_id)
-                || service
-                    .presentation
-                    .agent_published_provider_results
-                    .iter()
-                    .any(|(key, _)| key.1 == worker_turn.turn_id)
-        };
-        assert!(
-            !turn_has_ordered_result(&service),
-            "no ordered RESULT source may be created or acknowledged for a headerless shell result"
-        );
-        // Measured operands: entry and exit both saw the same inherited pending
-        // routed task, so completion must not change that observed membership.
-        assert_eq!(
-            service.agent_provider_task_is_pending(&worker_turn.turn_id),
-            pending_before_completion,
-            "native completion must not change an inherited routed continuation"
-        );
         let publication_ready = |service: &crate::runtime::RuntimeSessionService| {
             service
                 .completion_provider_queue_flags_for_tests(&worker_turn.turn_id)
@@ -148,13 +117,125 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
                 .map(|(_, ready)| *ready)
                 .expect("publication readiness flag is exposed for tests")
         };
-        assert!(
-            publication_ready(&service),
-            "with no ordered obligation the publication gate is already ready"
+        let verbose_shell_view = matches!(level, mez_agent::AgentLogLevel::Verbose);
+        if verbose_shell_view {
+            // Verbose shell-view retains the exact raw native RESULT tuple from
+            // the original projection (marker transaction, raw diagnostics).
+            // Completion must hold that original owner rather than fabricate a
+            // generic one, and it may only acknowledge an actual install.
+            assert!(
+                service.completion_publication_retry_needed_for_turn(&worker_turn.turn_id),
+                "verbose shell-view must retain its raw native publication obligation"
+            );
+            let retained_key = service
+                .presentation
+                .agent_queued_provider_results
+                .keys()
+                .find(|key| key.1 == worker_turn.turn_id)
+                .cloned()
+                .expect("verbose shell-view retains the original raw RESULT");
+            let retained_owner = service
+                .presentation
+                .agent_queued_provider_results
+                .get(&retained_key)
+                .map(|(action, _, text, entry, transaction, _)| {
+                    (
+                        action.id.clone(),
+                        text.clone(),
+                        entry.id.clone(),
+                        transaction.clone(),
+                    )
+                })
+                .expect("retained raw owner");
+            assert_eq!(retained_owner.0, action.id);
+            assert!(retained_owner.1.contains(body.trim()));
+            assert_eq!(
+                retained_owner.3.as_deref(),
+                Some(dispatch.marker.as_str()),
+                "the original marker transaction owns the retained source"
+            );
+            assert!(
+                service
+                    .presentation
+                    .agent_published_provider_results
+                    .iter()
+                    .all(|(key, _)| key.1 != worker_turn.turn_id),
+                "nothing may be acknowledged while the install is held"
+            );
+            assert!(!publication_ready(&service));
+            assert_eq!(service.retry_completion_publications(), 0);
+            assert_eq!(service.retry_completion_publications(), 0);
+            let unchanged_owner = service
+                .presentation
+                .agent_queued_provider_results
+                .get(&retained_key)
+                .map(|(_, _, text, entry, transaction, _)| {
+                    (text.clone(), entry.id.clone(), transaction.clone())
+                })
+                .expect("retained owner survives held retries");
+            assert_eq!(unchanged_owner.1, retained_owner.2);
+            let held_rows = service
+                .agent_pane_screen(&worker_turn.pane_id)
+                .unwrap()
+                .normal_content_lines()
+                .join("\n");
+            assert_eq!(
+                held_rows.matches(body.trim()).count(),
+                0,
+                "a held install cannot show the body"
+            );
+            service.hold_agent_presentation_installs_for_tests(false);
+            assert_eq!(service.retry_completion_publications(), 1);
+            assert_eq!(service.retry_completion_publications(), 0);
+            assert!(publication_ready(&service));
+            assert!(
+                service
+                    .presentation
+                    .agent_queued_provider_results
+                    .keys()
+                    .all(|key| key.1 != worker_turn.turn_id),
+                "the installed raw source leaves the queue"
+            );
+            assert!(
+                service
+                    .presentation
+                    .agent_published_provider_results
+                    .contains(&(retained_key.clone(), retained_owner.1.clone())),
+                "the exact raw owner is acknowledged once installed"
+            );
+        } else {
+            // Debug carries no shell-view raw owner, and a headerless result has
+            // no generic ordered renderer, so completion must not fabricate an
+            // ordered source, an acknowledgment or a retry obligation.
+            assert!(
+                !service.completion_publication_retry_needed_for_turn(&worker_turn.turn_id),
+                "a headerless shell result must not create a phantom publication obligation"
+            );
+            assert!(
+                service
+                    .presentation
+                    .agent_queued_provider_results
+                    .keys()
+                    .all(|key| key.1 != worker_turn.turn_id)
+                    && service
+                        .presentation
+                        .agent_published_provider_results
+                        .iter()
+                        .all(|(key, _)| key.1 != worker_turn.turn_id),
+                "no ordered RESULT source may be created or acknowledged for a headerless shell result"
+            );
+            assert!(publication_ready(&service));
+            assert_eq!(service.retry_completion_publications(), 0);
+            service.hold_agent_presentation_installs_for_tests(false);
+            assert_eq!(service.retry_completion_publications(), 0);
+        }
+        // Measured operands: entry and exit both saw the same inherited pending
+        // routed task, so completion must not change that observed membership.
+        assert_eq!(
+            service.agent_provider_task_is_pending(&worker_turn.turn_id),
+            pending_before_completion,
+            "native completion must not change an inherited routed continuation"
         );
-        assert_eq!(service.retry_completion_publications(), 0);
-        service.hold_agent_presentation_installs_for_tests(false);
-        assert_eq!(service.retry_completion_publications(), 0);
         assert!(!service.complete_native_shell_action(outcome).unwrap());
         assert!(
             service
@@ -182,17 +263,15 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
         );
         assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
         service.ensure_completion_admission_open().unwrap();
-        // Canonical execution owns the exact body above; no generic ordered row
-        // is claimed on screen for a headerless shell result.
+        let final_rows = service
+            .agent_pane_screen(&worker_turn.pane_id)
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
         assert_eq!(
-            service
-                .presentation
-                .agent_published_provider_results
-                .iter()
-                .filter(|(key, _)| key.1 == worker_turn.turn_id)
-                .count(),
-            0,
-            "no ordered RESULT row may be claimed for a headerless shell result"
+            final_rows.matches(body.trim()).count(),
+            usize::from(verbose_shell_view),
+            "{level:?}: the raw shell-view owner shows one body, Debug shows none: {final_rows}"
         );
         service.terminate_all_pane_processes().unwrap();
     }
