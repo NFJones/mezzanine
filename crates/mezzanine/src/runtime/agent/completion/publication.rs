@@ -247,13 +247,35 @@ impl RuntimeSessionService {
                 .action_results
                 .iter()
                 .find(|result| result.action_id == key.1)
+                .cloned()
             {
-                self.reconcile_action_presentation_progress_for_execution(
+                let suppressed = self.reconcile_action_presentation_progress_for_execution(
                     &key.0,
                     &key.1,
                     &mez_agent::ActionPresentationExecutionIdentity::Attempt(key.2.clone()),
-                    result,
+                    &result,
                 )?;
+                // Native terminal RESULT is canonical display source exactly like
+                // the external path: retain the immutable ordered source before
+                // the fallible install. The pending gate below, not this queueing,
+                // is the acknowledgment; nothing here replays the native action.
+                if !result.is_error
+                    && !suppressed
+                    && self.agent_verbose_enabled(&owner.pane_id)
+                    && let Some(action) = execution
+                        .response
+                        .action_batch
+                        .as_ref()
+                        .and_then(|batch| batch.actions.iter().find(|action| action.id == key.1))
+                        .cloned()
+                {
+                    self.queue_ordered_provider_result(
+                        &owner.pane_id,
+                        &execution,
+                        &action,
+                        &result,
+                    )?;
+                }
             }
             self.present_agent_action_outcomes_to_terminal_buffer(
                 &owner.pane_id,
