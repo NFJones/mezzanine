@@ -1277,28 +1277,18 @@ fn posix_receiver_rejects_corrupt_sidecar_frame_and_releases_parent_input() {
 /// the pane. Users often carry `errexit` or `nounset` from their dotfiles, and
 /// Mez still needs the OSC end marker so the agent state machine can leave
 /// `running` deterministically.
+///
+/// Payload delivery waits for the wrapper's transaction start marker rather
+/// than for elapsed time: `/bin/sh` reads its script from stdin, so payload
+/// records that are already available when the parser reaches the wrapper are
+/// consumed into the shell's own script buffer and never reach the receiver.
 fn posix_wrapper_preserves_parent_shell_with_errexit_enabled() {
     let transaction =
         ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/sh"), "false").unwrap();
     let input = transaction.render_for_classification_input(ShellClassification::PosixSh);
-    let script = "set -eu\n";
+    let prelude = "set -eu\n";
     let suffix = "printf '%s\\n' PARENT_SHELL_ALIVE\n";
-
-    let mut command = Command::new("/bin/sh");
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stdin = child.stdin.as_mut().unwrap();
-    stdin.write_all(script.as_bytes()).unwrap();
-    stdin.write_all(input.wrapper.as_bytes()).unwrap();
-    thread::sleep(Duration::from_millis(50));
-    stdin.write_all(input.payload.as_bytes()).unwrap();
-    stdin.write_all(suffix.as_bytes()).unwrap();
-    drop(child.stdin.take());
-    let output = child.wait_with_output().unwrap();
+    let output = run_sh_transaction_with_prelude(&input, prelude, suffix);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(
@@ -1309,6 +1299,109 @@ fn posix_wrapper_preserves_parent_shell_with_errexit_enabled() {
     );
     assert!(stdout.contains("\u{1b}]133;D;1;"), "{stdout:?}");
     assert!(stdout.contains("PARENT_SHELL_ALIVE"), "{stdout:?}");
+}
+
+/// Returns whether this platform's `/bin/sh` consumes piped stdin records into
+/// its script read-ahead instead of leaving them for the `read` builtin.
+///
+/// `/bin/sh` reads its script from the same standard input it exposes to
+/// `read`, so a record that is already available when the parser buffers the
+/// next command can be consumed as shell source. Shells that instead drain
+/// their buffer into `read` hand the record to the consuming command.
+fn posix_shell_consumes_script_readahead_records() -> bool {
+    let probe = "read mez_probe\nPAYLOAD_READY_RECORD\nprintf 'PROBE:%s\\n' \"${mez_probe-}\"\n";
+    let output = run_sh_stdin(probe);
+    !String::from_utf8_lossy(&output.stdout).contains("PROBE:PAYLOAD_READY_RECORD")
+}
+
+/// Streams one transaction with the payload released immediately after the
+/// wrapper, without any receiver-readiness observation.
+///
+/// Only the ordering regression uses this. Every other fixture must use the
+/// protocol-order helpers so payload bytes cannot be staged ahead of the
+/// receiver that consumes them.
+fn run_sh_transaction_without_readiness_gate(
+    input: &ShellTransactionInput,
+    prelude: &str,
+    suffix: &str,
+) -> Output {
+    let mut command = Command::new("/bin/sh");
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the shell test process should spawn");
+    let stdin = child
+        .stdin
+        .as_mut()
+        .expect("the shell test process stdin should be piped");
+    stdin
+        .write_all(prelude.as_bytes())
+        .expect("the transaction prelude should be written");
+    stdin
+        .write_all(input.wrapper.as_bytes())
+        .expect("the transaction wrapper should be written");
+    stdin
+        .write_all(input.payload.as_bytes())
+        .expect("the transaction payload should be written");
+    stdin
+        .write_all(suffix.as_bytes())
+        .expect("the transaction suffix should be written");
+    drop(child.stdin.take());
+    child
+        .wait_with_output()
+        .expect("the shell test process should finish")
+}
+
+#[test]
+/// Verifies the transaction receiver fails closed when payload records are
+/// consumed by the shell's own script read-ahead instead of reaching the
+/// receiver.
+///
+/// This pins the writer, reader and sentinel stage of the reordered-delivery
+/// defect. A writer that releases payload bytes before the shell enters the
+/// receiver loses them to the parser, so the authenticated sentinel is never
+/// observed. The wrapper must report that failure and must never execute the
+/// command. The bounded prelude delay only models a reader that has not started
+/// yet; the assertions themselves make no wall-clock claim. Shells that drain
+/// their script buffer into `read` have no such hazard, and the same ordering
+/// must then complete normally.
+fn posix_payload_consumed_by_script_readahead_fails_closed_before_sentinel() {
+    let transaction = ShellTransaction::new(
+        marker(),
+        "t1",
+        "a1",
+        "p1",
+        Path::new("/bin/sh"),
+        "printf '%s\\n' GATE_FREE_COMMAND",
+    )
+    .unwrap();
+    let input = transaction.render_for_classification_input(ShellClassification::PosixSh);
+    let output = run_sh_transaction_without_readiness_gate(
+        &input,
+        "set -eu\nsleep 0.2\n",
+        "printf '%s\\n' PARENT_SHELL_ALIVE\n",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if posix_shell_consumes_script_readahead_records() {
+        assert!(
+            stderr.contains("Mezzanine shell transaction command payload ended before sentinel"),
+            "status={:?} stdout={stdout:?} stderr={stderr:?}",
+            output.status
+        );
+        assert!(!stdout.contains("GATE_FREE_COMMAND"), "{stdout:?}");
+        assert!(!stdout.contains("\u{1b}]133;D;0;"), "{stdout:?}");
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "status={:?} stdout={stdout:?} stderr={stderr:?}",
+        output.status
+    );
+    assert!(stdout.contains("GATE_FREE_COMMAND"), "{stdout:?}");
 }
 
 #[test]
