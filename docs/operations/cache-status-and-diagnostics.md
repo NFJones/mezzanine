@@ -208,6 +208,9 @@ Refused/failed counts are not hidden by successful unrelated writes. An identica
 explicit objective refresh can retry a failed cache value. Permanently stalled
 storage can retain one physical job indefinitely without creating more jobs or
 blocking essential persistence and unrelated actor requests.
+A physical failure or cancelled optional job is counted once when its receipt is
+consumed, even if a newer value or a deletion already superseded it; freshness
+gates confirmation, retry, and UI refresh only.
 
 Optional jobs also retain a revocable conversation registration shared by store
 clones. Deletion revokes those registrations and prunes under the index write
