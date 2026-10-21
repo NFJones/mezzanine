@@ -122,8 +122,8 @@ impl UnixAncestryBudget {
         CAPTURE_BUDGET
     }
 
-    /// Forces the next real capture to expire at one known checkpoint, so a
-    /// control does not depend on native syscalls happening to exceed a clock.
+    /// Forces the next real capture to expire once at one known checkpoint, so
+    /// a control does not depend on native syscalls exceeding a clock.
     #[cfg(test)]
     pub(crate) fn force_capture_expiry_at_check_for_tests(&self, check: usize) {
         self.capture_expiry_check.store(check, Ordering::SeqCst);
@@ -141,16 +141,17 @@ impl UnixAncestryBudget {
         )
     }
 
-    /// Evaluates one numbered capture checkpoint, honoring the test-only forced
-    /// checkpoint before the real elapsed budget.
+    /// Evaluates one numbered capture checkpoint, honoring a one-shot test-only
+    /// forced checkpoint before the real elapsed budget.
     #[cfg(target_os = "linux")]
-    fn capture_expired(&self, started: Instant, check: usize, reserved: usize) -> bool {
+    fn capture_expired(&self, started: Instant, _check: usize) -> bool {
         #[cfg(test)]
         {
-            if self.capture_expiry_check.load(Ordering::SeqCst) == check {
-                self.capture_expiry_reached.store(check, Ordering::SeqCst);
+            if self.capture_expiry_check.load(Ordering::SeqCst) == _check {
+                self.capture_expiry_check.store(0, Ordering::SeqCst);
+                self.capture_expiry_reached.store(_check, Ordering::SeqCst);
                 self.capture_expiry_reserved_at
-                    .store(reserved, Ordering::SeqCst);
+                    .store(self.reserved.load(Ordering::SeqCst), Ordering::SeqCst);
                 return true;
             }
         }
@@ -293,7 +294,7 @@ fn capture_retained_ancestry(
         return Err(unavailable());
     }
     let chain = mez_mux::process::process_ancestry(origin, root).map_err(|_| unavailable())?;
-    if budget.capture_expired(started, 1, 0) {
+    if budget.capture_expired(started, 1) {
         return Err(unavailable());
     }
     let count = chain
@@ -312,14 +313,14 @@ fn capture_retained_ancestry(
             identity: origin,
             lifetime: retained.lifetime.try_clone()?,
         };
-        if budget.capture_expired(started, 2, count) {
+        if budget.capture_expired(started, 2) {
             return Err(unavailable());
         }
         duplicate.reobserve()?;
-        if budget.capture_expired(started, 3, count) {
+        if budget.capture_expired(started, 3) {
             return Err(unavailable());
         }
-        if observe()? != origin || budget.capture_expired(started, 4, count) {
+        if observe()? != origin || budget.capture_expired(started, 4) {
             return Err(unavailable());
         }
         Some(duplicate)
@@ -339,7 +340,7 @@ fn capture_retained_ancestry(
             parent::parent_uid,
             parent::open_parent,
             super::require_live_origin,
-            || budget.capture_expired(started, 5, count),
+            || budget.capture_expired(started, 5),
         )?;
         if identity != *expected {
             return Err(unavailable());
@@ -354,11 +355,11 @@ fn capture_retained_ancestry(
     // then the original socket fence checks the producer once more.
     for retained in parents.iter().rev() {
         retained.reobserve()?;
-        if budget.capture_expired(started, 6, count) {
+        if budget.capture_expired(started, 6) {
             return Err(unavailable());
         }
     }
-    if observe()? != origin || budget.capture_expired(started, 7, count) {
+    if observe()? != origin || budget.capture_expired(started, 7) {
         return Err(unavailable());
     }
     if let Some(retained) = &source {
@@ -369,7 +370,7 @@ fn capture_retained_ancestry(
         parents,
         _reservation: reservation,
     };
-    if !witness.is_live() || budget.capture_expired(started, 8, count) {
+    if !witness.is_live() || budget.capture_expired(started, 8) {
         return Err(unavailable());
     }
     Ok(witness)
