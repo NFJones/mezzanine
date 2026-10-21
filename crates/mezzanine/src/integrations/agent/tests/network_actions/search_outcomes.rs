@@ -254,6 +254,39 @@ async fn network_search_unquoted_trailing_slash_href_remains_a_result() {
     assert!(result.content_text().contains("https://example.test/a/"));
 }
 
+/// A self-closing void tag after its tag name is syntax, not a malformed
+/// anchor suffix. Ordinary br/hr markup inside a title or after a completed
+/// result must not invalidate an otherwise recognized completed page.
+#[tokio::test]
+async fn network_search_void_self_closing_markup_remains_recognized() {
+    let cases = [
+        (
+            "<a class=\"result__a\" href=\"https://example.test/a\">A<br/>B</a>",
+            "AB",
+        ),
+        (
+            "<a class=\"result__a\" href=\"https://example.test/a\">Real</a><hr/>",
+            "Real",
+        ),
+    ];
+    for (body, title) in cases {
+        let transport = AsyncFakeProviderHttpTransport {
+            requests: Default::default(),
+            response: ProviderHttpResponse {
+                status_code: 200,
+                headers: Default::default(),
+                body: body.into(),
+            },
+        };
+        let result = execute_network_action_with_transport_async(&turn(), &search(), &transport)
+            .await
+            .unwrap();
+        assert_eq!(result.status, ActionStatus::Succeeded);
+        assert_eq!(result.content_text().lines().next(), Some(title));
+        assert!(result.content_text().contains("https://example.test/a"));
+    }
+}
+
 /// Actual closed anchors with exact class tokens retain legacy title/link
 /// formatting. Attribute order and quote style are HTML syntax, not evidence
 /// for a different provider, and nested title formatting remains cleaned.

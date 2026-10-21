@@ -224,9 +224,9 @@ fn read_tag(body: &str, start: usize) -> Option<Tag<'_>> {
     if closing {
         inner = &inner[1..];
     }
-    // A trailing slash is self-closing syntax only at a token boundary: after
-    // whitespace or a complete quoted value. In an unquoted attribute value it
-    // is value data, so href=https://example.test/ keeps its final slash.
+    // A trailing slash is self-closing syntax only at a token boundary: a bare
+    // tag name, whitespace, or a complete quoted value. In an unquoted attribute
+    // value it is data, so href=https://example.test/ keeps its final slash.
     let mut self_closing = false;
     if let Some(rest) = inner.strip_suffix('/') {
         // U+0027 is the alternative single-quote attribute delimiter.
@@ -234,7 +234,11 @@ fn read_tag(body: &str, start: usize) -> Option<Tag<'_>> {
             .as_bytes()
             .last()
             .is_some_and(|byte| matches!(*byte, b'"' | 0x27));
-        if rest.is_empty() || rest.ends_with(is_html_space) || after_quote {
+        if rest.is_empty()
+            || !rest.contains(is_html_space)
+            || rest.ends_with(is_html_space)
+            || after_quote
+        {
             self_closing = true;
             inner = rest.trim_end_matches(is_html_space);
         }
