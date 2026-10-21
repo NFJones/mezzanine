@@ -1067,6 +1067,16 @@ impl RuntimeSessionService {
                     .cloned()
                 {
                     let entry_id = entry.id.clone();
+                    // The acknowledged boundary is the successful install, so a
+                    // held install must fail first and leave the exact source in
+                    // the queue. Otherwise publication could accept an install
+                    // that never happened and drop its retry obligation.
+                    #[cfg(test)]
+                    if self.presentation.agent_install_failure_held {
+                        return Err(MezError::invalid_state(
+                            "injected held pre-install presentation failure",
+                        ));
+                    }
                     self.with_presentation_entry(pane_id, entry, |service| {
                         if raw_diagnostic {
                             return service.append_agent_pty_diagnostic_bytes_to_terminal_buffer(
