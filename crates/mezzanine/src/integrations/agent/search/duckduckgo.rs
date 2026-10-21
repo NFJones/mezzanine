@@ -73,13 +73,16 @@ fn scan(body: &str, max_results: usize) -> Scan {
         cursor = tag.end;
         // These contexts have nested or environment-dependent HTML semantics.
         // Fail unsupported pages rather than approximate them and expose inert
-        // anchors after a premature closing delimiter. Select insertion mode
-        // can ignore anchor tokens entirely, so it is unsupported as well.
+        // anchors after a premature closing delimiter. Select and frameset
+        // insertion modes can ignore anchor tokens entirely, so both are
+        // unsupported as well: a frameset document never renders result links,
+        // and content after its closing tag remains in the ignored mode.
         if !tag.closing
             && [
                 "template",
                 "noscript",
                 "select",
+                "frameset",
                 "xmp",
                 "iframe",
                 "noembed",
