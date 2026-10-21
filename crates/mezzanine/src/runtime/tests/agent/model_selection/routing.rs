@@ -111,7 +111,7 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
         );
         assert!(service.completion_publication_retry_needed_for_turn(&worker_turn.turn_id));
         // Measured operands: entry and exit both saw the same inherited pending
-        // routed task, so native completion itself must not enqueue anything.
+        // routed task, so completion must not change that observed membership.
         assert_eq!(
             service.agent_provider_task_is_pending(&worker_turn.turn_id),
             pending_before_completion,
@@ -127,14 +127,22 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
             0,
             "a duplicate routed queue cannot be inserted by manual readiness"
         );
-        // Non-vacuous barrier control: completion admission itself is asked to
-        // continue while publication is held, so it must consult the retained
-        // publication gate rather than short-circuit on the queued task.
+        // Direct barrier evidence: the test-only flags expose the real
+        // publication readiness predicate, which cannot be ready while the
+        // retained RESULT is uninstalled. A queue/admission boolean cannot
+        // witness this because the already-pending routed task independently
+        // refuses reuse.
+        let publication_ready = |service: &crate::runtime::RuntimeSessionService| {
+            service
+                .completion_provider_queue_flags_for_tests(&worker_turn.turn_id)
+                .iter()
+                .find(|(name, _)| *name == "publication_ready")
+                .map(|(_, ready)| *ready)
+                .expect("publication readiness flag is exposed for tests")
+        };
         assert!(
-            !service
-                .admit_completion_provider_continuation(&worker_turn.turn_id)
-                .unwrap(),
-            "held publication must refuse completion admission"
+            !publication_ready(&service),
+            "held publication cannot be ready for continuation"
         );
         let retained_entry = service
             .presentation
@@ -161,6 +169,10 @@ fn runtime_routed_native_completion_retains_result_before_optional_install() {
         service.hold_agent_presentation_installs_for_tests(false);
         assert_eq!(service.retry_completion_publications(), 1);
         assert_eq!(service.retry_completion_publications(), 0);
+        assert!(
+            publication_ready(&service),
+            "a completed publication becomes ready for continuation"
+        );
         assert!(!service.complete_native_shell_action(outcome).unwrap());
         assert!(
             service
