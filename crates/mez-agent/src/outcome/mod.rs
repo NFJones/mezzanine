@@ -1844,9 +1844,8 @@ mod tests {
             "not started",
         )
         .unwrap();
-        let succeeded =
-            ActionResult::succeeded(&turn(), &say, vec!["finished".to_string()], None).unwrap();
-        let running = ActionResult::running(&turn(), &discovery, Vec::new(), None).unwrap();
+        let succeeded = ActionResult::succeeded(&turn(), &say, vec!["finished".to_string()], None);
+        let running = ActionResult::running(&turn(), &discovery, Vec::new(), None);
         let mut execution = execution();
         execution.action_results = vec![failed, abandoned, succeeded];
         execution.terminal_state = AgentTurnState::Failed;

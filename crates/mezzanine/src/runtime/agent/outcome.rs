@@ -259,11 +259,13 @@ impl RuntimeSessionService {
     /// Returns true for a synchronous local sibling that its executor never
     /// started.
     ///
-    /// Discovery, local registry, memory, issue and validated-config executors
-    /// settle synchronously and only skip while the execution is not Running
-    /// after an earlier failure. A surviving `Running` placeholder for one of
-    /// those types therefore has no external work in flight and may be
-    /// abandoned so the bounded failed-action correction can run.
+    /// Read-only agent/MCP discovery executors settle synchronously and only
+    /// skip while the execution is not Running after an earlier failure. A
+    /// surviving `Running` placeholder for one of those types therefore has no
+    /// external work in flight and may be abandoned so the bounded
+    /// failed-action correction can run. Memory, issue and validated-config
+    /// families remain outside this assumption until their owner proves no
+    /// generation-owned work started.
     fn action_result_is_inactive_unstarted_local_sibling(result: &ActionResult) -> bool {
         result.status == ActionStatus::Running
             && !result.is_error
@@ -277,8 +279,8 @@ impl RuntimeSessionService {
     /// event, owner or side effect. Replace only those unstarted placeholders
     /// with one truthful terminal abandonment result and commit them to
     /// canonical chronology independently of whether bounded correction is
-    /// admitted or has budget left, so the native provider tool-result group
-    /// always carries a complete disposition. Active external, subagent,
+    /// admitted or has budget left, so abandoned actions in an otherwise
+    /// settled group carry a complete disposition. Active external, subagent,
     /// approval, cancellation, persistence and shell ownership is untouched.
     pub(crate) fn settle_unstarted_local_action_siblings(
         &mut self,

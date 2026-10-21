@@ -91,16 +91,8 @@ fn list_agents_action(id: &str) -> AgentAction {
     }
 }
 
-/// Builds a provider response carrying one mixed action batch.
-fn batch_response(provider: &str, actions: Vec<AgentAction>) -> mez_agent::ModelResponse {
-    // The injected fake provider validates response identity against its own
-    // provider id. Ordinary fixtures use the canonical runtime-batch identity;
-    // only the provider-control case supplies the alternate compatibility id.
-    let provider = if provider == "alternate-compat" {
-        "alternate-compat"
-    } else {
-        "runtime-batch"
-    };
+/// Builds a provider response carrying one exact provider identity.
+fn provider_response(provider: &str, actions: Vec<AgentAction>) -> mez_agent::ModelResponse {
     mez_agent::ModelResponse {
         provider: provider.to_string(),
         model: "test".to_string(),
@@ -114,6 +106,19 @@ fn batch_response(provider: &str, actions: Vec<AgentAction>) -> mez_agent::Model
         }),
         provider_transcript_events: Vec::new(),
     }
+}
+
+/// Builds an ordinary canonical runtime-batch response.
+///
+/// The injected fake provider validates response identity against its own id.
+/// Only the explicit provider-control cases call `provider_response` directly.
+fn batch_response(provider: &str, actions: Vec<AgentAction>) -> mez_agent::ModelResponse {
+    let provider = if provider == "alternate-compat" {
+        "alternate-compat"
+    } else {
+        "runtime-batch"
+    };
+    provider_response(provider, actions)
 }
 
 /// Executes one batch through the synchronous production provider path.
@@ -130,18 +135,20 @@ fn execute_sync(
         .unwrap()
 }
 
-/// Wraps the batch fixture under a distinct provider compatibility identity.
-struct AlternateCompatibilityProvider {
+/// Wraps the batch fixture under an explicit provider compatibility identity.
+struct CompatibilityProvider {
     inner: RuntimeBatchProvider,
+    provider_id: &'static str,
+    api: mez_agent::ProviderApiCompatibility,
 }
 
-impl ModelProvider for AlternateCompatibilityProvider {
+impl ModelProvider for CompatibilityProvider {
     fn provider_id(&self) -> &str {
-        "alternate-compat"
+        self.provider_id
     }
 
     fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
-        mez_agent::ProviderApiCompatibility::OpenAiChatCompletions
+        self.api
     }
 
     fn send_request(&self, request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
@@ -149,6 +156,26 @@ impl ModelProvider for AlternateCompatibilityProvider {
         response.provider = self.provider_id().to_string();
         Ok(response)
     }
+}
+
+/// Counts one action-result block in canonical active chronology.
+fn action_result_block_count(service: &RuntimeSessionService, action_id: &str) -> usize {
+    service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .map(|context| {
+            context
+                .blocks()
+                .iter()
+                .filter(|block| {
+                    block.source == ContextSourceKind::ActionResult
+                        && block
+                            .content
+                            .contains(&format!("action_result {action_id}"))
+                })
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 /// Renders result statuses for failure diagnostics without payload bytes.
@@ -210,6 +237,10 @@ fn runtime_unavailable_recipient_corrects_past_unstarted_local_sibling() {
         AgentTurnState::Running,
         "results={:?}",
         result_diagnostics(&execution)
+    );
+    assert!(
+        !execution.final_turn,
+        "a mixed final say does not make the batch terminal"
     );
     let failed = result_for(&execution, "msg-missing");
     assert_eq!(failed.status, ActionStatus::Failed);
@@ -335,6 +366,13 @@ fn runtime_unavailable_recipient_correction_preserves_successful_sibling() {
     let messages = service.message_service().receive_for(&target, u64::MAX);
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].payload, "accepted handoff");
+    for action_id in ["msg-target", "msg-missing", "discover-1"] {
+        assert_eq!(
+            action_result_block_count(&service, action_id),
+            1,
+            "{action_id} must appear exactly once in canonical chronology"
+        );
+    }
     let corrected = service
         .poll_agent_provider_tasks_with_provider(
             &RuntimeBatchProvider {
@@ -352,6 +390,13 @@ fn runtime_unavailable_recipient_correction_preserves_successful_sibling() {
         "successful sibling must not be replayed by correction"
     );
     assert_eq!(messages[0].payload, "accepted handoff");
+    for action_id in ["msg-target", "msg-missing", "discover-1"] {
+        assert_eq!(
+            action_result_block_count(&service, action_id),
+            1,
+            "{action_id} must not be duplicated by correction"
+        );
+    }
 }
 
 /// Inline async apply must queue the same bounded continuation and complete
@@ -417,23 +462,35 @@ async fn runtime_unavailable_recipient_correction_is_async_parity() {
 /// admission and correction path; the failure is not provider shaping.
 #[test]
 fn runtime_unavailable_recipient_correction_is_provider_agnostic() {
-    for alternate in [false, true] {
+    for control in [
+        None,
+        Some((
+            "deepseek",
+            mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+        )),
+        Some((
+            "alternate-compat",
+            mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+        )),
+    ] {
         let (mut service, _target) = mixed_batch_fixture();
         let actions = vec![
             send_action("msg-missing", "agent:agent-nowhere", "handoff"),
             list_agents_action("discover-1"),
             final_say_action("say-final", "finished"),
         ];
-        let execution = if alternate {
+        let execution = if let Some((provider_id, api)) = control {
             service
                 .execute_agent_turn_with_provider(
                     "turn-1",
-                    &AlternateCompatibilityProvider {
+                    &CompatibilityProvider {
                         inner: RuntimeBatchProvider {
-                            response: batch_response("alternate-compat", actions),
+                            response: provider_response(provider_id, actions),
                         },
+                        provider_id,
+                        api,
                     },
-                    runtime_model_profile("alternate-compat", "test"),
+                    runtime_model_profile(provider_id, "test"),
                 )
                 .unwrap()
         } else {
@@ -442,16 +499,14 @@ fn runtime_unavailable_recipient_correction_is_provider_agnostic() {
         assert_eq!(
             execution.terminal_state,
             AgentTurnState::Running,
-            "alternate={alternate}: {:?}",
+            "control={control:?}: {:?}",
             result_diagnostics(&execution)
         );
         assert_eq!(
             execution.response.provider,
-            if alternate {
-                "alternate-compat"
-            } else {
-                "runtime-batch"
-            }
+            control
+                .map(|(provider_id, _)| provider_id)
+                .unwrap_or("runtime-batch")
         );
         assert!(
             service
@@ -501,6 +556,8 @@ fn runtime_active_external_sibling_keeps_correction_unavailable() {
         ActionStatus::Cancelled,
         "unstarted read-only discovery is settled even when correction is blocked"
     );
+    assert_eq!(action_result_block_count(&service, "discover-local"), 1);
+    assert_eq!(action_result_block_count(&service, "msg-missing"), 1);
 }
 
 /// Approval-blocked and policy-denied siblings retain their existing gates and
@@ -609,6 +666,13 @@ fn runtime_unavailable_recipient_mixed_batch_correction_budget_is_stable() {
             .code,
         "action_abandoned_not_started"
     );
+    for action_id in ["msg-missing-1", "discover-1", "msg-missing-2", "discover-2"] {
+        assert_eq!(
+            action_result_block_count(&service, action_id),
+            1,
+            "{action_id} must be committed exactly once across exhausted attempts"
+        );
+    }
     assert!(service.pending_agent_provider_tasks().is_empty());
 }
 
