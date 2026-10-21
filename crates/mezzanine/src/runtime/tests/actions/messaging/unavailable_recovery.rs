@@ -134,7 +134,7 @@ struct AlternateCompatibilityProvider {
     inner: RuntimeBatchProvider,
 }
 
-impl mez_agent::ModelProvider for AlternateCompatibilityProvider {
+impl ModelProvider for AlternateCompatibilityProvider {
     fn provider_id(&self) -> &str {
         "alternate-compat"
     }
