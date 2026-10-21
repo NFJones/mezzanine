@@ -193,6 +193,13 @@ acceptance; later runtime membership changes do not rewrite queued audiences.
 Multiple independent selectors are rejected. A selector such as
 `{"session":true}` or `{"group":"session"}` does not itself widen audience;
 with omitted scope it still selects only the sender's project peers.
+For `agent_id`, use the exact nonblank, control-free ID returned by discovery.
+Generated IDs such as `a1` and opaque native IDs such as `agent-%1` are both
+direct addresses. The parser does not trim or reinterpret them as pane IDs,
+roles or display labels, and addressing an ID never registers it. Exact current
+registration, availability and audience checks still apply; missing, retired
+and audience-ineligible targets remain indistinguishably unavailable. Pane/window
+selector grammar, sender binding and framing limits are unchanged.
 
 For a raw client registered by `hello`, project discovery shows only self
 when no additional discovery filters exclude self, until the trusted runtime
