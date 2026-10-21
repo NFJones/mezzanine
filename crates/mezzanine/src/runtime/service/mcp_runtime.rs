@@ -723,8 +723,13 @@ impl RuntimeSessionService {
                     initialize.instructions.as_deref(),
                     checked_at,
                 ) {
-                    let _ = connection.retire().await;
-                    return Err(error);
+                    let error: MezError = error.into();
+                    return Err(match connection.retire().await {
+                        Ok(()) => error,
+                        Err(retirement_error) => {
+                            combine_mcp_discovery_retirement_error(error, retirement_error)
+                        }
+                    });
                 }
                 self.integration
                     .mcp_transports_mut()

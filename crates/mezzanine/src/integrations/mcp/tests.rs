@@ -2,10 +2,10 @@
 
 use super::{
     McpToolAuditCallContext, call_stdio_mcp_tool_with_audit, call_streamable_http_mcp_tool,
-    call_streamable_http_mcp_tool_with_audit, discover_stdio_mcp_server,
-    discover_stdio_mcp_server_into_registry, discover_streamable_http_mcp_server_into_registry,
-    execute_streamable_http_exchange, initialize_streamable_http_mcp_server,
-    read_bounded_protocol_line, spawn_stdio_mcp_connection,
+    call_streamable_http_mcp_tool_with_audit, combine_mcp_discovery_retirement_error,
+    discover_stdio_mcp_server, discover_stdio_mcp_server_into_registry,
+    discover_streamable_http_mcp_server_into_registry, execute_streamable_http_exchange,
+    initialize_streamable_http_mcp_server, read_bounded_protocol_line, spawn_stdio_mcp_connection,
 };
 use crate::security::auth::MCP_TEST_LONG_ACCESS_TOKEN;
 use mez_agent::mcp::{
@@ -164,6 +164,27 @@ fn stdio_reader_rejects_oversized_protocol_messages() {
 
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
     assert!(error.message().contains("larger than the configured limit"));
+}
+
+/// Verifies a combined discovery/retirement failure preserves the primary error
+/// kind and message while explicitly naming cleanup uncertainty.
+///
+/// Discovery diagnostics must stay authoritative even when bounded retirement
+/// also fails, so an operator can still identify the handshake, protocol or
+/// schema cause instead of receiving only local cleanup detail.
+#[test]
+fn stdio_combined_discovery_retirement_error_preserves_primary_failure() {
+    let primary = crate::error::MezError::new(
+        crate::error::MezErrorKind::InvalidState,
+        "handshake refused",
+    );
+    let retirement = crate::error::MezError::invalid_state("stdout reader did not settle");
+
+    let combined = combine_mcp_discovery_retirement_error(primary, retirement);
+
+    assert_eq!(combined.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(combined.message().contains("handshake refused"));
+    assert!(combined.message().contains("cleanup uncertainty"));
 }
 
 /// Verifies `Drop` closes reader descriptors while a descendant keeps the
