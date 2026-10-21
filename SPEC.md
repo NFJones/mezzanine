@@ -14132,6 +14132,26 @@ be one of `info`, `warning`, or `error`. It MAY include `path`, `line`,
 enough restore metadata, including restart-required pane ids, to describe
 recovery limitations without loading the snapshot payload.
 
+Latest-snapshot selection MUST order candidates by `created_at` and then by
+`id`, so equal creation times resolve deterministically instead of depending on
+scan order. A session filter MUST select only snapshots whose `session_id` is
+exactly the requested session and MUST NOT fall back to another session's
+winner. A snapshot created after reading the repository's current selection MUST
+be stamped strictly newer than it, so a repeated or regressed host clock cannot
+leave the previous snapshot as the latest one. That stamp is the repository's
+logical creation time: it MAY run ahead of wall time after a burst of saves, it
+is shared by every session in the repository, and it ends at
+`9999-12-31T23:59:59Z`. Creation that cannot read the current selection MUST NOT
+publish a snapshot on a raw wall-clock stamp; it MUST fail instead. Creation is
+not serialized across concurrent writers, so racing saves MAY share a stamp and
+are then ordered by the documented id tie-break; the strict guarantee covers a
+creation that observed the winner it advances past. Two deliberate exceptions
+remain: a selected snapshot whose persisted `created_at` is outside the fixed
+written shape cannot be compared, so that store keeps lexical selection and a
+new save makes no newest-save claim against it; and at
+`9999-12-31T23:59:59Z` no newer stamp is representable, so creation saturates
+there and ordering falls back to `id`.
+
 `McpServerState` MUST include `id`, `version`, `name`, `state`, `configured`,
 `blacklisted`, `transport`, `tools`, `last_checked_at`, and `diagnostics`.
 `state` MUST be one of `enabled`, `disabled`, `starting`, `available`,
