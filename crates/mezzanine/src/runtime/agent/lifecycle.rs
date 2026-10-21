@@ -635,6 +635,19 @@ impl RuntimeSessionService {
         &mut self,
         suppressed_turn_id: Option<&str>,
     ) -> Result<usize> {
+        // Scheduler admission is new work. Once the lifecycle stops accepting
+        // new work, settlement may still finish an owned turn, but it must not
+        // start queued turns or reacquire blocked ones. Those turns keep their
+        // ledger and scheduler custody for teardown instead of being started or
+        // silently cancelled here.
+        if matches!(
+            self.session.lifecycle_state(),
+            RuntimeLifecycleState::Stopping
+                | RuntimeLifecycleState::Killed
+                | RuntimeLifecycleState::Failed
+        ) {
+            return Ok(0);
+        }
         let mut started = 0usize;
         let startup_blocked_panes = self.runtime_agent_surface_blocked_panes();
         while let Some(running) = self.agent.agent_scheduler.start_ready_where(|work| {

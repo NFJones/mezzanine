@@ -2237,6 +2237,11 @@ impl RuntimeSessionService {
             return Ok(());
         }
         let Some(primary) = self.session.layout_owner_client_id().cloned() else {
+            // No attached layout owner can authorize this close. Retain the
+            // pending obligation rather than consuming it without a close.
+            self.agent
+                .pending_terminal_subagent_pane_closes
+                .insert(turn.pane_id.clone());
             return Ok(());
         };
         let params = format!(
