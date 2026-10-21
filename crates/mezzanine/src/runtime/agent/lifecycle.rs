@@ -11,6 +11,7 @@ use super::{
     runtime_agent_finished_footer_line, runtime_agent_pane_id, runtime_agent_turn_state_name,
     runtime_pane_by_id, runtime_unrecovered_failure_reason,
 };
+use crate::runtime::RuntimeLifecycleState;
 
 /// Product-owned pane terminal cause, independent of display diagnostic text.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -94,6 +95,34 @@ impl RuntimeSessionService {
         state: AgentTurnState,
     ) -> Result<AgentShellSession> {
         self.require_live()?;
+        self.finish_agent_turn_at_admission(pane_id, turn_id, state)
+    }
+
+    /// Finishes one already-owned turn while its exact pane generation settles.
+    ///
+    /// Pane shutdown and unexpected process exit select the turn they fail from
+    /// the ledger for a pane they still own, so those paths must keep settling
+    /// it while the lifecycle is stopping. They use settlement admission; public
+    /// turn finishing keeps the strict live gate. Every obligation of the shared
+    /// body still runs unchanged, so the turn is failed, its subagent and
+    /// steering obligations settle, and nothing is marked complete without them.
+    pub(crate) fn finish_agent_turn_for_pane_settlement(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        state: AgentTurnState,
+    ) -> Result<AgentShellSession> {
+        self.require_pane_settlement_admissible()?;
+        self.finish_agent_turn_at_admission(pane_id, turn_id, state)
+    }
+
+    /// Runs the shared turn-finishing body after its caller chose admission.
+    fn finish_agent_turn_at_admission(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        state: AgentTurnState,
+    ) -> Result<AgentShellSession> {
         runtime_pane_by_id(&self.session, pane_id)?;
         let running_turn = self
             .agent_shell_store()
@@ -607,6 +636,19 @@ impl RuntimeSessionService {
         &mut self,
         suppressed_turn_id: Option<&str>,
     ) -> Result<usize> {
+        // Scheduler admission is new work. Once the lifecycle stops accepting
+        // new work, settlement may still finish an owned turn, but it must not
+        // start queued turns or reacquire blocked ones. Those turns keep their
+        // ledger and scheduler custody for teardown instead of being started or
+        // silently cancelled here.
+        if matches!(
+            self.session.lifecycle_state(),
+            RuntimeLifecycleState::Stopping
+                | RuntimeLifecycleState::Killed
+                | RuntimeLifecycleState::Failed
+        ) {
+            return Ok(0);
+        }
         let mut started = 0usize;
         let startup_blocked_panes = self.runtime_agent_surface_blocked_panes();
         while let Some(running) = self.agent.agent_scheduler.start_ready_where(|work| {
@@ -833,7 +875,11 @@ impl RuntimeSessionService {
                 .and_then(|session| session.running_turn_id.as_deref())
                 == Some(turn.turn_id.as_str());
             if pane_present && running_in_shell {
-                self.finish_agent_turn(&turn.pane_id, &turn.turn_id, AgentTurnState::Failed)?;
+                self.finish_agent_turn_for_pane_settlement(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    AgentTurnState::Failed,
+                )?;
             } else {
                 self.emit_subagent_task_result_for_state(&turn, AgentTurnState::Failed)?;
                 self.integration
@@ -939,9 +985,12 @@ impl RuntimeSessionService {
                     json_escape(&pane_id_string)
                 );
                 if let Some(primary_client_id) = &primary_client_id {
-                    self.dispatch_runtime_pane_close(primary_client_id, &params)?;
+                    self.dispatch_runtime_pane_close_for_pane_settlement(
+                        primary_client_id,
+                        &params,
+                    )?;
                 } else {
-                    self.close_runtime_owned_subagent_pane(&pane_id_string)?;
+                    self.close_runtime_owned_subagent_pane_for_pane_settlement(&pane_id_string)?;
                 }
                 closed = closed.saturating_add(1);
                 self.append_lifecycle_event(
