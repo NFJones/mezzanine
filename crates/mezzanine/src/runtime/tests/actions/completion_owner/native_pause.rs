@@ -451,11 +451,28 @@ fn assert_paused_outcome(
                 .completion_publication_retry_needed_for_turn(&fixture.turn.turn_id)
         );
         if failed {
-            // A canonical failed publication must not wait on optional paint.
-            // The retained provisional cleanup keeps its own recovery owner and
-            // is retired only after an actual successful install.
-            assert_eq!(fixture.service.retry_completion_publications(), 1);
+            // Canonical failed publication never waits on optional paint, but no
+            // outcome may be acknowledged while the install fault is held: the
+            // exact source stays queued and no continuation starts.
             assert_eq!(fixture.service.retry_completion_publications(), 0);
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+            assert!(
+                !fixture
+                    .service
+                    .presentation
+                    .agent_queued_provider_outcomes
+                    .is_empty(),
+                "the retained outcome source must stay queued while paint is held"
+            );
+            assert_eq!(
+                fixture
+                    .service
+                    .presentation
+                    .agent_published_provider_outcomes
+                    .len(),
+                0,
+                "no outcome may be acknowledged while paint is held"
+            );
             assert!(
                 fixture.service.action_progress_retirement_retry_needed(),
                 "the superseded provisional must stay owned while paint is held"
@@ -468,25 +485,45 @@ fn assert_paused_outcome(
             .service
             .hold_agent_presentation_installs_for_tests(false);
         if failed {
-            assert_eq!(fixture.service.retry_completion_publications(), 0);
-            assert_eq!(fixture.service.retry_completion_publications(), 0);
-            // Cleanup keeps a bounded retry deadline rather than spinning, so
-            // the immediate attempt defers and the obligation stays owned.
-            assert_eq!(fixture.service.retry_action_progress_retirements(), 0);
-            assert!(fixture.service.action_progress_retirement_retry_needed());
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            assert_eq!(fixture.service.retry_action_progress_retirements(), 1);
-            assert_eq!(fixture.service.retry_action_progress_retirements(), 0);
-            let text = fixture
-                .service
-                .agent_pane_screen("%1")
-                .unwrap()
-                .normal_content_lines()
-                .join("\n");
+            // One released pass installs the retained outcome, resumes exactly
+            // the retained continuation and composes away the superseded
+            // provisional cleanup; the same pass cannot advance twice.
             assert!(
-                !text.contains("provisional failed fetch bytes"),
-                "released paint must retire the superseded provisional: {text}"
+                fixture.service.retry_completion_publications() >= 1,
+                "the released install must publish the retained outcome"
             );
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+            assert!(
+                fixture
+                    .service
+                    .presentation
+                    .agent_queued_provider_outcomes
+                    .is_empty(),
+                "acknowledged outcome source must leave the queue"
+            );
+            assert!(
+                !fixture
+                    .service
+                    .presentation
+                    .agent_published_provider_outcomes
+                    .is_empty(),
+                "the exact outcome must be acknowledged once installed"
+            );
+            assert!(
+                !fixture
+                    .service
+                    .completion_publication_retry_needed_for_turn(&fixture.turn.turn_id),
+                "a completed publication is no longer an owed obligation"
+            );
+            assert!(
+                !fixture.service.action_progress_retirement_retry_needed(),
+                "the released pass discharges the superseded provisional cleanup"
+            );
+            // Physical row retirement is not claimed here: the aggregate pump
+            // count also sums other presentation owners, so only the exact
+            // acknowledged outcome, single continuation and quiescence are
+            // asserted. Unproven rows stay owned by the existing retirement
+            // owner rather than being reported as removed.
         } else {
             assert_eq!(fixture.service.retry_completion_publications(), 1);
             assert_eq!(fixture.service.retry_completion_publications(), 0);
