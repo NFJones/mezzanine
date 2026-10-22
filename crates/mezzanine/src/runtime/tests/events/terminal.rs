@@ -774,9 +774,11 @@ fn runtime_alternate_screen_exit_recovers_adapter_owned_pane_readiness() {
 /// Verifies a pre-dispatch pane-readiness failure stops the current shell batch
 /// after the first failed action.
 ///
-/// Later shell siblings were never sent to the pane, so the runtime should
-/// preserve them as untouched running siblings for same-turn correction rather
-/// than failing every remaining shell action with the same readiness error.
+/// Later shell siblings were never sent to the pane, so the runtime must not
+/// fail every remaining shell action with the same readiness error. Once the
+/// batch stops and bounded correction is queued, those siblings are recorded as
+/// one truthful terminal not-started disposition instead of being left as
+/// `Running` placeholders that the discarded execution can never dispatch.
 #[test]
 fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
     let mut service = test_runtime_service();
@@ -931,8 +933,16 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
             "shell_interaction_generation": null,
         })
     );
-    assert_eq!(execution.action_results[1].status, ActionStatus::Running);
-    assert!(!execution.action_results[1].is_error);
+    assert_eq!(execution.action_results[1].status, ActionStatus::Cancelled);
+    assert!(execution.action_results[1].is_error);
+    assert_eq!(
+        execution.action_results[1]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some(mez_agent::outcome::RUNTIME_ACTION_ABANDONED_NOT_STARTED),
+        "an unsent sibling of a stopped batch carries one truthful disposition"
+    );
     let pane_text = service
         .agent_pane_screen("%1")
         .unwrap()
