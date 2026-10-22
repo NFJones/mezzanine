@@ -1793,23 +1793,35 @@ impl RuntimeSessionService {
             .get(pane_id)
             .map(|session| session.session_id.clone());
         let group = super::provider_execution::provider_log_execution_group_id(execution).ok();
-        if let (Some(conversation_id), Some(group)) = (owner, group) {
-            let key = (
+        let key = match (owner, group) {
+            (Some(conversation_id), Some(group)) => Some((
                 pane_id.to_string(),
                 execution.request.turn_id.clone(),
                 conversation_id,
                 group,
                 usize::MAX,
-            );
-            if !self.presentation.agent_published_provider_outcomes.insert((
-                key,
-                true,
-                dedupe_key.to_string(),
-            )) {
-                return Ok(());
-            }
+            )),
+            _ => None,
+        };
+        let Some(key) = key else {
+            return self.append_agent_error_text_to_terminal_buffer(pane_id, line);
+        };
+        let acknowledged = (key, true, dedupe_key.to_string());
+        if self
+            .presentation
+            .agent_published_provider_outcomes
+            .contains(&acknowledged)
+        {
+            return Ok(());
         }
-        self.append_agent_error_text_to_terminal_buffer(pane_id, line)
+        // Acknowledge only after the row actually installs: a pre-install
+        // presentation failure must leave the summary publishable again instead
+        // of permanently suppressing a warning that was never shown.
+        self.append_agent_error_text_to_terminal_buffer(pane_id, line)?;
+        self.presentation
+            .agent_published_provider_outcomes
+            .insert(acknowledged);
+        Ok(())
     }
 
     /// Presents bounded failure details when the runtime is ending a failed

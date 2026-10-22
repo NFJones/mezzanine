@@ -1005,6 +1005,112 @@ async fn runtime_deferred_external_aggregate_summary_presents_once() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// A pre-install presentation failure must not consume the aggregate summary.
+///
+/// The shared presenter acknowledges an execution-wide summary only after the
+/// row installs. If the first attempt fails before installation, a later
+/// settlement or recovery presentation must publish it instead of silently
+/// suppressing a warning that was never shown.
+#[tokio::test]
+async fn runtime_deferred_external_aggregate_summary_retries_after_install_failure() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"aggregate-retry","method":"agent/shell/command","params":{"idempotency_key":"aggregate-retry","input":"research the docs"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .unwrap()
+        .clone();
+    let action = mez_agent::AgentAction {
+        id: "fetch-retry".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/retry".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let marker = "install-retry-marker";
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "read one source".to_string(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![
+            mez_agent::ActionResult::failed(
+                &turn,
+                &action,
+                ActionStatus::Failed,
+                "network_action_limit_exceeded",
+                marker,
+            )
+            .unwrap(),
+        ],
+        final_turn: true,
+        terminal_state: AgentTurnState::Failed,
+    };
+    service.fail_agent_presentation_install_for_tests(0);
+    assert!(
+        service
+            .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
+            .is_err(),
+        "the injected pre-install failure must surface"
+    );
+    let after_failure = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !after_failure.contains(marker),
+        "a failed install must not leave a visible row: {after_failure}"
+    );
+    service.fail_agent_presentation_install_for_tests(usize::MAX);
+    service
+        .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    service
+        .present_agent_action_outcomes_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    let after_recovery = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        after_recovery.matches(marker).count(),
+        1,
+        "recovery publishes the withheld summary exactly once: {after_recovery}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// A lone deferred fetch failure must install its ordinary pane warning before
 /// the settled result is handed to bounded model correction.
 ///
