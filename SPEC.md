@@ -11345,6 +11345,18 @@ exit. Late or undrained notifications MUST NOT discard actual EOF evidence.
 Cancellation, cancellation-owner disconnect, read failure and reader panic MUST
 NOT establish EOF; retained bytes alone cannot prove closure. The bounded
 post-exit drain period and strict capture/parse limits MUST remain in force.
+Native child and staging custody MUST begin immediately after the OS confirms
+the direct child creation and before any pipe extraction or fallible reader
+setup: the exact owned direct child and its process group MUST be terminated
+and reaped on every startup failure and unwind, materialized launch files MUST
+be removed through RAII ownership on every completion path, and reader
+creation MUST use a fallible thread spawn whose failure is returned rather
+than unwound. A partial startup MUST settle already-created readers through
+bounded cancellation that never waits for descendant pipe EOF, MUST preserve
+the first failure, and MUST report any unproven kill or reap as unresolved
+native effects instead of claiming that the command could not have run. No
+cleanup path may signal a guessed or reused process id, replay the command, or
+change the bounded drain, capture, or child-timeout limits.
 Valid, closed missing-exit evidence MAY enter bounded action-failure feedback
 to the acting model for a narrower diagnostic or sandbox-preserving alternative.
 This guidance MUST consume the existing failure-feedback budget and MUST NOT

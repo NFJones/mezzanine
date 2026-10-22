@@ -62,7 +62,8 @@ fn actual_eof_survives_late_cancel_and_undrained_notification() {
         SPAWNED_CHILD_STATUS_CAPTURE_LIMIT,
         done_tx,
         None,
-    );
+    )
+    .unwrap();
     let observed = observed_rx.recv_timeout(Duration::from_secs(5));
     cancel_pending_reader(&reader);
     // Release before any assertions so even failed synchronization can join.
@@ -184,7 +185,8 @@ fn unclosed_status_remains_transport_after_cancel_disconnect_error_or_panic() {
             SPAWNED_CHILD_STATUS_CAPTURE_LIMIT,
             done_tx,
             None,
-        );
+        )
+        .unwrap();
         let observed = observed_rx.recv_timeout(Duration::from_secs(5));
         // Keep the replacement channel alive, but disconnect the actual
         // cancellation channel held by the production drain in this case.
@@ -277,7 +279,8 @@ fn actual_eof_preserves_status_cap_and_truncation_rejection() {
         SPAWNED_CHILD_STATUS_CAPTURE_LIMIT,
         done_tx,
         None,
-    );
+    )
+    .unwrap();
     let mut writer = std::fs::File::from(writer);
     let payload = vec![b' '; SPAWNED_CHILD_STATUS_CAPTURE_LIMIT + 37];
     writer.write_all(&payload).unwrap();
