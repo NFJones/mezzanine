@@ -541,4 +541,16 @@ fn standalone_pane_close_rejects_omitted_target_without_mutation() {
     );
     assert_eq!(format!("{:?}", session), before);
     assert_eq!(session.active_window().unwrap().panes().len(), 2);
+
+    let malformed = dispatch_control_request(
+        r#"{"jsonrpc":"2.0","id":"malformed-close","method":"pane/close","params":{"target":{"pane_id":17,"pane_index":0},"force":true,"idempotency_key":"malformed-close"}}"#,
+        &mut session,
+        &primary,
+    );
+    assert!(
+        malformed.contains(r#""mezzanine_code":"invalid_params""#),
+        "{malformed}"
+    );
+    assert_eq!(format!("{:?}", session), before);
+    assert_eq!(session.active_window().unwrap().panes().len(), 2);
 }

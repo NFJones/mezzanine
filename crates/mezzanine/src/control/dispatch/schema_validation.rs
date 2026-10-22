@@ -47,6 +47,13 @@ fn validate_pane_close_target_presence(params: &str) -> Result<()> {
     let object = value
         .as_object()
         .ok_or_else(|| MezError::invalid_args("pane/close params must be an object"))?;
+    validate_pane_close_selector_types(object)?;
+    if let Some(target) = object.get("target") {
+        let target = target
+            .as_object()
+            .ok_or_else(|| MezError::invalid_args("pane/close target must be an object"))?;
+        validate_pane_close_selector_types(target)?;
+    }
     if ["target", "pane_id", "pane_title", "pane_index"]
         .iter()
         .any(|selector| object.contains_key(*selector))
@@ -54,6 +61,47 @@ fn validate_pane_close_target_presence(params: &str) -> Result<()> {
         return Ok(());
     }
     Err(MezError::invalid_args("pane/close requires a target"))
+}
+
+/// Rejects malformed selector members before a malformed alternative can be ignored.
+fn validate_pane_close_selector_types(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<()> {
+    for selector in ["pane_id", "pane_title", "title", "window_id"] {
+        if let Some(value) = object.get(selector)
+            && !value.is_string()
+        {
+            return Err(MezError::invalid_args(format!(
+                "pane/close {selector} must be a string"
+            )));
+        }
+    }
+    for selector in ["pane_index", "index"] {
+        if let Some(value) = object.get(selector)
+            && value.as_u64().is_none()
+        {
+            return Err(MezError::invalid_args(format!(
+                "pane/close {selector} must be a non-negative integer"
+            )));
+        }
+    }
+    for selector in ["window", "session"] {
+        if let Some(value) = object.get(selector)
+            && !value.is_object()
+        {
+            return Err(MezError::invalid_args(format!(
+                "pane/close {selector} must be an object"
+            )));
+        }
+    }
+    if let Some(value) = object.get("active")
+        && !value.is_boolean()
+    {
+        return Err(MezError::invalid_args(
+            "pane/close active must be a boolean",
+        ));
+    }
+    Ok(())
 }
 
 /// Runs the reject runtime required creation fields operation for this subsystem.

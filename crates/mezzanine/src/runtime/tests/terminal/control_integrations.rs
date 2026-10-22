@@ -800,12 +800,9 @@ fn two_primary_close_fixture() -> (RuntimeSessionService, ClientId, ClientId, St
 /// Captures the stable display identity of one surviving pane.
 ///
 /// Layout indexes may legitimately shift when a sibling pane is removed, so
-/// sibling preservation is asserted by exact pane identity, title, liveness and
-/// size rather than a positional row number.
-fn pane_display_identity(
-    service: &RuntimeSessionService,
-    pane_id: &str,
-) -> (String, String, bool, Size) {
+/// sibling preservation is asserted by exact pane identity, title and liveness
+/// rather than positional geometry, which legitimately reflows.
+fn pane_display_identity(service: &RuntimeSessionService, pane_id: &str) -> (String, String, bool) {
     let pane = service
         .session
         .windows()
@@ -813,12 +810,7 @@ fn pane_display_identity(
         .flat_map(|window| window.panes())
         .find(|pane| pane.id.as_str() == pane_id)
         .unwrap_or_else(|| panic!("pane {pane_id} must remain present"));
-    (
-        pane.id.to_string(),
-        pane.title.clone(),
-        pane.live,
-        pane.size,
-    )
+    (pane.id.to_string(), pane.title.clone(), pane.live)
 }
 
 /// Asserts one close request is rejected before any session or event effect.
@@ -867,12 +859,18 @@ fn assert_exact_pane_close_event(
             .event_log()
             .unwrap()
             .replay_after_for(&EventAudience::AllPrimaries, cutoff, 8);
-    let close = events
+    let closes: Vec<_> = events
         .iter()
-        .find(|event| {
+        .filter(|event| {
             event.kind == EventKind::PaneChanged && event.payload.contains(r#""state":"closed""#)
         })
-        .unwrap_or_else(|| panic!("admitted close must publish one exact close event: {events:?}"));
+        .collect();
+    assert_eq!(
+        closes.len(),
+        1,
+        "admitted close must publish exactly one close event: {events:?}"
+    );
+    let close = closes[0];
     assert!(
         close.payload.contains(&format!(r#""pane_id":"{pane_id}""#)),
         "close event pane identity must match the admitted target: {}",
@@ -915,6 +913,61 @@ fn runtime_pane_close_rejects_omitted_target_and_preserves_exact_admitted_target
         assert!(service.session.contains_pane(&left));
         assert!(service.session.contains_pane(&right));
     }
+
+    for (request_id, params) in [
+        (
+            "malformed-nested-selector",
+            serde_json::json!({
+                "target": {"pane_id": 17, "pane_index": 0},
+                "force": true,
+                "idempotency_key": "malformed-nested-selector",
+            }),
+        ),
+        (
+            "malformed-top-level-selector",
+            serde_json::json!({
+                "pane_id": 17,
+                "pane_index": 0,
+                "force": true,
+                "idempotency_key": "malformed-top-level-selector",
+            }),
+        ),
+    ] {
+        let (mut service, first, _, left, right) = two_primary_close_fixture();
+        assert_pane_close_rejected(&mut service, &first, request_id, params, "invalid_params");
+        assert!(service.session.contains_pane(&left));
+        assert!(service.session.contains_pane(&right));
+    }
+
+    let (mut service, first, _, left, right) = two_primary_close_fixture();
+    assert_pane_close_rejected(
+        &mut service,
+        &first,
+        "conflicting-selectors",
+        serde_json::json!({
+            "target": {"pane_id": right.clone(), "pane_title": "conflict-title"},
+            "force": true,
+            "idempotency_key": "conflicting-selectors",
+        }),
+        "invalid_params",
+    );
+    assert!(service.session.contains_pane(&left));
+    assert!(service.session.contains_pane(&right));
+
+    let (mut service, first, _, left, right) = two_primary_close_fixture();
+    assert_pane_close_rejected(
+        &mut service,
+        &first,
+        "null-selector",
+        serde_json::json!({
+            "target": null,
+            "force": true,
+            "idempotency_key": "null-selector",
+        }),
+        "invalid_params",
+    );
+    assert!(service.session.contains_pane(&left));
+    assert!(service.session.contains_pane(&right));
 
     // A dead caller-local pane makes the pre-fix divergence visible even
     // without force: cleanup inspects global focus while removal later uses

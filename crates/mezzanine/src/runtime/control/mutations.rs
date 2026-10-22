@@ -652,6 +652,11 @@ impl RuntimeSessionService {
             RenderInvalidationReason::Layout,
         );
         let (_, pane) = runtime_pane_by_id(&self.session, descriptor.pane_id.as_str())?;
+        if !force && pane.live {
+            return Err(MezError::forbidden(
+                "killing a live pane requires an explicit force flag",
+            ));
+        }
         if force || !pane.live {
             self.fail_agent_turns_for_pane_shutdown(
                 &[descriptor.pane_id.to_string()],
