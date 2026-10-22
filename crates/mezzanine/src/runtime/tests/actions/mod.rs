@@ -16,7 +16,6 @@ mod messaging;
 mod native_integrations;
 mod native_lifecycle;
 mod network;
-mod ordered_barrier;
 mod patch;
 mod shell;
 mod shell_protocol;
