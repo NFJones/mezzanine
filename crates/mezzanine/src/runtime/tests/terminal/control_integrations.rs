@@ -1,6 +1,7 @@
 //! Runtime regressions for external harness control integrations.
 
 use super::*;
+use mez_core::ids::ClientId;
 
 /// Hostile combining output must remain bounded at the product output boundary
 /// and leave the serialized runtime able to answer ordinary control requests.
