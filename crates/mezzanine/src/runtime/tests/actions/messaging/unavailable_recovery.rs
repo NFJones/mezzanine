@@ -851,6 +851,48 @@ fn runtime_native_tool_result_completes_only_after_abandonment_settlement() {
     assert!(queued, "settled abandonment must admit bounded correction");
     assert_eq!(native_tool_result_count(&service, "call-native-group"), 1);
     let native = native_tool_result_content(&service, "call-native-group").unwrap();
+    let native_event =
+        mez_agent::ProviderTranscriptEvent::from_transcript_content(&native).unwrap();
+    let mez_agent::ProviderTranscriptEvent::DeepSeekToolResult {
+        tool_call_id,
+        content: native_content,
+    } = &native_event
+    else {
+        panic!("native result must project as a DeepSeek tool result");
+    };
+    assert_eq!(tool_call_id.as_str(), "call-native-group");
+    assert!(native_content.contains("message_recipient_unavailable"));
+    assert!(native_content.contains("action_abandoned_not_started"));
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    let result_event = context
+        .chronology()
+        .iter()
+        .find(|event| {
+            event.block().source == ContextSourceKind::TranscriptTool
+                && event.block().label == "provider tool result call-native-group"
+        })
+        .unwrap();
+    let owner = result_event.provider_owner().unwrap();
+    assert_eq!(owner.provider_id(), "deepseek");
+    assert_eq!(
+        owner.api(),
+        mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions
+    );
+    let group = result_event.execution_group_id().cloned().unwrap();
+    let assistant_event = context
+        .chronology()
+        .iter()
+        .find(|event| {
+            event.block().source == ContextSourceKind::TranscriptTool
+                && event.execution_group_id() == Some(&group)
+                && event.block().content.contains("call-native-group")
+                && !event.block().label.starts_with("provider tool result")
+        })
+        .expect("original native assistant call must share the result group");
+    assert_eq!(
+        assistant_event.provider_owner().unwrap().provider_id(),
+        "deepseek"
+    );
     assert!(native.contains("message_recipient_unavailable"));
     assert!(native.contains("action_abandoned_not_started"));
     assert!(native.contains("finished"));
@@ -863,14 +905,37 @@ fn runtime_native_tool_result_completes_only_after_abandonment_settlement() {
         "repeated full commit must not duplicate the native tool result"
     );
     let prepared = crate::runtime::tests::runtime_prepared_context_for_turn(&service, "turn-1");
-    let corrective = prepared
-        .blocks()
+    let corrective = crate::integrations::agent::context::assemble_model_request(
+        &runtime_model_profile("deepseek", "test"),
+        mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+        &turn,
+        &prepared,
+    )
+    .unwrap();
+    let events = corrective
+        .messages
         .iter()
-        .map(|block| block.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(corrective.contains("message_recipient_unavailable"));
-    assert!(corrective.contains("action_abandoned_not_started"));
+        .filter_map(|message| {
+            mez_agent::ProviderTranscriptEvent::from_transcript_content(&message.content)
+        })
+        .collect::<Vec<_>>();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        mez_agent::ProviderTranscriptEvent::DeepSeekAssistantToolCall { tool_calls, .. }
+            if tool_calls.iter().any(|call| call["id"] == "call-native-group")
+    )));
+    let corrective_result = events
+        .iter()
+        .find_map(|event| match event {
+            mez_agent::ProviderTranscriptEvent::DeepSeekToolResult {
+                tool_call_id,
+                content,
+            } if tool_call_id.as_str() == "call-native-group" => Some(content.clone()),
+            _ => None,
+        })
+        .expect("corrective request must carry the matching DeepSeek tool result");
+    assert!(corrective_result.contains("message_recipient_unavailable"));
+    assert!(corrective_result.contains("action_abandoned_not_started"));
 }
 
 /// Produces a running turn without a provider execution.

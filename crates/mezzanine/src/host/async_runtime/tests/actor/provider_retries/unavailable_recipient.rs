@@ -135,17 +135,25 @@ async fn async_actor_unavailable_recipient_mixed_batch_dispatches_correction_imm
             handle.pending_agent_provider_tasks().await.unwrap().len(),
             1
         );
+        let finish = mez_agent::AgentAction {
+            id: "finish-local-after-correction".into(),
+            payload: mez_agent::AgentActionPayload::Say {
+                status: mez_agent::SayStatus::Final,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.into(),
+                text: "continued locally".into(),
+            },
+        };
         let mut final_execution = execution;
         final_execution
             .response
             .action_batch
             .as_mut()
             .unwrap()
-            .actions = vec![say.clone()];
+            .actions = vec![finish.clone()];
         final_execution.response.raw_text = "continued locally".into();
         final_execution.action_results = vec![mez_agent::ActionResult::succeeded(
             &turn,
-            &say,
+            &finish,
             vec!["continued locally".into()],
             None,
         )];
