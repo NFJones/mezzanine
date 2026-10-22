@@ -20,6 +20,9 @@ pub(super) fn control_current_unix_seconds() -> u64 {
 /// on duplicated control-flow logic.
 pub(crate) fn validate_control_method_params_schema(request: &JsonRpcRequest) -> Result<()> {
     let params = request.params.as_deref().unwrap_or("{}");
+    if request.method == "pane/close" {
+        validate_pane_close_target_presence(params)?;
+    }
     let Some(method_spec) = control_method_spec(&request.method) else {
         return Ok(());
     };
@@ -32,6 +35,25 @@ pub(crate) fn validate_control_method_params_schema(request: &JsonRpcRequest) ->
         ),
         ControlParamsSchema::Config => validate_config_control_params_schema(request),
     }
+}
+
+/// Rejects a close request that omits every supported pane selector.
+///
+/// `pane/close` requires a `PaneTarget`; unlike rename and zoom it has no
+/// documented default-to-active behavior. This admission check runs before
+/// dispatch so a standalone control request cannot reach session cleanup.
+fn validate_pane_close_target_presence(params: &str) -> Result<()> {
+    let value = parse_json_object_value(params, "pane/close params")?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| MezError::invalid_args("pane/close params must be an object"))?;
+    if ["target", "pane_id", "pane_title", "pane_index"]
+        .iter()
+        .any(|selector| object.contains_key(*selector))
+    {
+        return Ok(());
+    }
+    Err(MezError::invalid_args("pane/close requires a target"))
 }
 
 /// Runs the reject runtime required creation fields operation for this subsystem.

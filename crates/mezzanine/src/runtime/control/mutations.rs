@@ -640,15 +640,13 @@ impl RuntimeSessionService {
         primary_client_id: Option<&mez_core::ids::ClientId>,
         params: &str,
     ) -> Result<String> {
-        let focus_before = self.capture_zen_focus_snapshots();
+        let target = pane_target_checked_resolved(&self.session, params)?
+            .ok_or_else(|| MezError::invalid_args("pane/close requires a target"))?;
         let force = runtime_json_bool_field(params, "force").unwrap_or(false);
-        let target = pane_target_checked_resolved(&self.session, params)?;
-        let descriptor = match target.as_deref() {
-            Some(target) => self.find_pane_descriptor(target).ok_or_else(|| {
-                MezError::new(crate::error::MezErrorKind::NotFound, "pane not found")
-            })?,
-            None => self.active_window_pane_descriptor(None)?,
-        };
+        let focus_before = self.capture_zen_focus_snapshots();
+        let descriptor = self
+            .find_pane_descriptor(target.as_str())
+            .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "pane not found"))?;
         let render_effects = self.render_effects_for_clients_projecting_windows(
             &[descriptor.window_id.to_string()],
             RenderInvalidationReason::Layout,
@@ -662,10 +660,10 @@ impl RuntimeSessionService {
         }
         let transition = if let Some(primary_client_id) = primary_client_id {
             self.session
-                .kill_pane_with_effects(primary_client_id, target.as_deref(), force)?
+                .kill_pane_with_effects(primary_client_id, Some(target.as_str()), force)?
         } else {
             self.session
-                .kill_pane_session_owned(target.as_deref(), force)?
+                .kill_pane_session_owned(Some(target.as_str()), force)?
         };
         let terminated = if let Some(pane) = transition.pane {
             let pane_id = pane.id.to_string();
