@@ -245,11 +245,9 @@ fn header_still_queued(fixture: &DrainFixture) -> bool {
         .agent_queued_provider_headers
         .get(&fixture.header_key)
         .is_some_and(|(action, header, entry)| {
-            action.id == fixture.queued_header.action.id
+            action == &fixture.queued_header.action
                 && header == &fixture.queued_header.header
-                && entry
-                    .as_ref()
-                    .is_some_and(|entry| entry.id == fixture.queued_header.entry.id)
+                && entry.as_ref() == Some(&fixture.queued_header.entry)
         })
 }
 
@@ -260,13 +258,29 @@ fn result_still_queued(fixture: &DrainFixture) -> bool {
         .agent_queued_provider_results
         .get(&fixture.header_key)
         .is_some_and(|(action, result, text, entry, transaction, raw)| {
-            action.id == fixture.queued_result.action.id
+            action == &fixture.queued_result.action
                 && result == &fixture.queued_result.result
                 && text == &fixture.queued_result.text
-                && entry.id == fixture.queued_result.entry.id
+                && entry == &fixture.queued_result.entry
                 && transaction == &fixture.queued_result.transaction
                 && *raw == fixture.queued_result.raw
         })
+}
+
+fn header_queue_absent(fixture: &DrainFixture) -> bool {
+    !fixture
+        .service
+        .presentation
+        .agent_queued_provider_headers
+        .contains_key(&fixture.header_key)
+}
+
+fn result_queue_absent(fixture: &DrainFixture) -> bool {
+    !fixture
+        .service
+        .presentation
+        .agent_queued_provider_results
+        .contains_key(&fixture.header_key)
 }
 
 fn header_acknowledged(fixture: &DrainFixture) -> bool {
@@ -320,6 +334,7 @@ fn runtime_ordered_drain_running_unowned_shell_holds_later_sources() {
     assert!(result_still_queued(&fixture));
     assert!(!header_acknowledged(&fixture));
     assert!(!body_ack_membership(&fixture));
+    assert!(!shell_acknowledged(&fixture));
 }
 
 /// A Completed response is deliberate synthetic input for the same strictness:
@@ -327,6 +342,12 @@ fn runtime_ordered_drain_running_unowned_shell_holds_later_sources() {
 #[test]
 fn runtime_ordered_drain_completed_unowned_shell_holds_later_sources() {
     let mut fixture = drain_fixture(BarrierState::Completed);
+    drain(&mut fixture);
+    assert!(header_still_queued(&fixture));
+    assert!(result_still_queued(&fixture));
+    assert!(!header_acknowledged(&fixture));
+    assert!(!body_ack_membership(&fixture));
+    assert!(!shell_acknowledged(&fixture));
     drain(&mut fixture);
     assert!(header_still_queued(&fixture));
     assert!(result_still_queued(&fixture));
@@ -343,8 +364,8 @@ fn runtime_ordered_drain_completed_unowned_shell_holds_later_sources() {
 fn runtime_ordered_drain_failed_unowned_shell_releases_later_sources_once() {
     let mut fixture = drain_fixture(BarrierState::Failed);
     drain(&mut fixture);
-    assert!(!header_still_queued(&fixture));
-    assert!(!result_still_queued(&fixture));
+    assert!(header_queue_absent(&fixture));
+    assert!(result_queue_absent(&fixture));
     assert!(header_acknowledged(&fixture));
     assert!(body_ack_membership(&fixture));
     assert!(!shell_acknowledged(&fixture));
@@ -357,8 +378,8 @@ fn runtime_ordered_drain_failed_unowned_shell_releases_later_sources_once() {
         .count();
     assert_eq!(acknowledged, 1, "single acknowledgment membership");
     drain(&mut fixture);
-    assert!(!header_still_queued(&fixture));
-    assert!(!result_still_queued(&fixture));
+    assert!(header_queue_absent(&fixture));
+    assert!(result_queue_absent(&fixture));
     assert!(header_acknowledged(&fixture));
     assert!(body_ack_membership(&fixture));
     assert!(!shell_acknowledged(&fixture));
