@@ -182,17 +182,17 @@ pub(super) fn has_manifest_control_character(value: &str) -> bool {
     value.contains('\n') || value.contains('\r')
 }
 
-/// Runs the current rfc3339 utc operation for this subsystem.
+/// Returns the current wall-clock time as whole Unix seconds.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn current_rfc3339_utc() -> String {
-    let seconds = SystemTime::now()
+/// Snapshot creation reads the clock once here so a creation stamp and the
+/// comparison against the previous winner share one reading. A clock before the
+/// Unix epoch reports zero, which matches the range the persisted stamp shape
+/// can represent.
+pub(super) fn current_unix_seconds_utc() -> u64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    unix_seconds_to_rfc3339(seconds)
+        .unwrap_or(0)
 }
 
 /// Runs the unix seconds to rfc3339 operation for this subsystem.
@@ -208,6 +208,93 @@ pub(super) fn unix_seconds_to_rfc3339(seconds: u64) -> String {
     let second = seconds_of_day % 60;
     let (year, month, day) = civil_from_days(days);
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+/// Decodes the fixed `YYYY-MM-DDTHH:MM:SSZ` stamp back into Unix seconds.
+///
+/// Only the exact UTC shape this module writes is accepted: the separator
+/// positions, ASCII digits everywhere else, calendar fields inside their
+/// ranges, and no offset or fractional seconds. Latest selection compares the
+/// newest stored creation stamp with a fresh reading, so an unreadable or
+/// foreign stamp returns `None` rather than guessing an order.
+pub(super) fn unix_seconds_from_rfc3339(value: &str) -> Option<u64> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return None;
+    }
+    for (index, byte) in bytes.iter().enumerate() {
+        if matches!(index, 4 | 7 | 10 | 13 | 16 | 19) {
+            continue;
+        }
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+    }
+    let year = value.get(0..4)?.parse::<i64>().ok()?;
+    let month = value.get(5..7)?.parse::<i64>().ok()?;
+    let day = value.get(8..10)?.parse::<i64>().ok()?;
+    let hour = value.get(11..13)?.parse::<i64>().ok()?;
+    let minute = value.get(14..16)?.parse::<i64>().ok()?;
+    let second = value.get(17..19)?.parse::<i64>().ok()?;
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0..=59).contains(&second)
+    {
+        return None;
+    }
+    let days = days_from_civil(year, month, day);
+    if days < 0 || civil_from_days(days) != (year, month, day) {
+        return None;
+    }
+    let seconds_of_day = hour * 3_600 + minute * 60 + second;
+    Some(days as u64 * 86_400 + seconds_of_day as u64)
+}
+
+/// Last second the fixed-width snapshot stamp can represent.
+///
+/// `created_at` carries a four-digit year in UTC, so the ascending order latest
+/// selection relies on ends at `9999-12-31T23:59:59Z`. Saturation at this second
+/// keeps an extreme stamp inside the written shape instead of formatting a
+/// five-digit year that would sort before the timestamp it was meant to overtake.
+pub(super) const MAX_CREATION_SECONDS: u64 = 253_402_300_799;
+
+/// Returns the next strictly increasing creation stamp in Unix seconds.
+///
+/// A repeated or regressed wall-clock reading would otherwise let an older
+/// snapshot keep the latest slot, so a reading that is not newer than the
+/// current winner advances one second past it. The result is bounded by
+/// [`MAX_CREATION_SECONDS`]: once that second is reached no newer stamp is
+/// representable, so ordering falls back to the documented id tie-break.
+pub(super) fn advance_creation_seconds(now: u64, previous: Option<u64>) -> u64 {
+    let next = match previous {
+        Some(previous) if now <= previous => previous.saturating_add(1),
+        _ => now,
+    };
+    next.min(MAX_CREATION_SECONDS)
+}
+
+/// Returns days since the Unix epoch for one proleptic Gregorian date.
+///
+/// This is the inverse of [`civil_from_days`], used so a persisted creation
+/// stamp is compared numerically instead of as text. Field ranges are validated
+/// by the decoder; stamps are only written by this module.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month_prime = (month + 9) % 12;
+    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
 }
 
 /// Runs the civil from days operation for this subsystem.

@@ -9,12 +9,16 @@
 //! macOS admission. Pending work and live registrations share one explicit finite
 //! descriptor budget, with RAII release on failed capture, retirement and drop.
 
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+#[cfg(any(target_os = "linux", test))]
+use std::time::Duration;
 #[cfg(target_os = "linux")]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[cfg(target_os = "linux")]
 use super::parent;
@@ -34,6 +38,23 @@ const CAPTURE_BUDGET: Duration = Duration::from_millis(100);
 #[derive(Debug, Default)]
 pub(crate) struct UnixAncestryBudget {
     reserved: AtomicUsize,
+    /// Test-only per-instance capture budget in microseconds; zero uses the
+    /// production 100 ms policy so other fixtures and production stay strict.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    capture_budget_us: AtomicU64,
+    /// Test-only checkpoint number at which the next capture must expire.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    capture_expiry_check: AtomicUsize,
+    /// Test-only checkpoint that actually forced expiry, zero when none did.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    capture_expiry_reached: AtomicUsize,
+    /// Test-only live reservation count observed at forced expiry.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    capture_expiry_reserved_at: AtomicUsize,
 }
 
 impl UnixAncestryBudget {
@@ -75,6 +96,66 @@ impl UnixAncestryBudget {
     #[cfg(test)]
     pub(crate) fn reserved(&self) -> usize {
         self.reserved.load(Ordering::SeqCst)
+    }
+
+    /// Overrides only this test-owned budget instance; production and every
+    /// other budget keep the fixed capture deadline.
+    #[cfg(test)]
+    pub(crate) fn set_capture_budget_for_tests(&self, budget: Duration) {
+        self.capture_budget_us.store(
+            u64::try_from(budget.as_micros()).unwrap_or(u64::MAX),
+            Ordering::SeqCst,
+        );
+    }
+
+    /// Returns the production capture deadline unless this test instance opted
+    /// into a finite override.
+    #[cfg(target_os = "linux")]
+    fn active_capture_budget(&self) -> Duration {
+        #[cfg(test)]
+        {
+            let micros = self.capture_budget_us.load(Ordering::SeqCst);
+            if micros > 0 {
+                return Duration::from_micros(micros);
+            }
+        }
+        CAPTURE_BUDGET
+    }
+
+    /// Forces the next real capture to expire once at one known checkpoint, so
+    /// a control does not depend on native syscalls exceeding a clock.
+    #[cfg(test)]
+    pub(crate) fn force_capture_expiry_at_check_for_tests(&self, check: usize) {
+        self.capture_expiry_check.store(check, Ordering::SeqCst);
+        self.capture_expiry_reached.store(0, Ordering::SeqCst);
+        self.capture_expiry_reserved_at.store(0, Ordering::SeqCst);
+    }
+
+    /// Returns the checkpoint that forced expiry and the reservation count seen
+    /// there; zeroes mean no forced expiry was observed.
+    #[cfg(test)]
+    pub(crate) fn capture_expiry_observation_for_tests(&self) -> (usize, usize) {
+        (
+            self.capture_expiry_reached.load(Ordering::SeqCst),
+            self.capture_expiry_reserved_at.load(Ordering::SeqCst),
+        )
+    }
+
+    /// Evaluates one numbered capture checkpoint, honoring a one-shot test-only
+    /// forced checkpoint before the real elapsed budget.
+    #[cfg(target_os = "linux")]
+    fn capture_expired(&self, started: Instant, _check: usize) -> bool {
+        #[cfg(test)]
+        {
+            if self.capture_expiry_check.load(Ordering::SeqCst) == _check {
+                self.capture_expiry_check.store(0, Ordering::SeqCst);
+                self.capture_expiry_reached.store(_check, Ordering::SeqCst);
+                self.capture_expiry_reserved_at
+                    .store(self.reserved.load(Ordering::SeqCst), Ordering::SeqCst);
+                return true;
+            }
+        }
+        started.elapsed() >= self.active_capture_budget()
     }
 
     /// Deterministic full-capacity injection exercises admission cleanup without
@@ -213,7 +294,7 @@ fn capture_retained_ancestry(
         return Err(unavailable());
     }
     let chain = mez_mux::process::process_ancestry(origin, root).map_err(|_| unavailable())?;
-    if started.elapsed() >= CAPTURE_BUDGET {
+    if budget.capture_expired(started, 1) {
         return Err(unavailable());
     }
     let count = chain
@@ -232,14 +313,14 @@ fn capture_retained_ancestry(
             identity: origin,
             lifetime: retained.lifetime.try_clone()?,
         };
-        if started.elapsed() >= CAPTURE_BUDGET {
+        if budget.capture_expired(started, 2) {
             return Err(unavailable());
         }
         duplicate.reobserve()?;
-        if started.elapsed() >= CAPTURE_BUDGET {
+        if budget.capture_expired(started, 3) {
             return Err(unavailable());
         }
-        if observe()? != origin || started.elapsed() >= CAPTURE_BUDGET {
+        if observe()? != origin || budget.capture_expired(started, 4) {
             return Err(unavailable());
         }
         Some(duplicate)
@@ -259,7 +340,7 @@ fn capture_retained_ancestry(
             parent::parent_uid,
             parent::open_parent,
             super::require_live_origin,
-            || started.elapsed() >= CAPTURE_BUDGET,
+            || budget.capture_expired(started, 5),
         )?;
         if identity != *expected {
             return Err(unavailable());
@@ -274,11 +355,11 @@ fn capture_retained_ancestry(
     // then the original socket fence checks the producer once more.
     for retained in parents.iter().rev() {
         retained.reobserve()?;
-        if started.elapsed() >= CAPTURE_BUDGET {
+        if budget.capture_expired(started, 6) {
             return Err(unavailable());
         }
     }
-    if observe()? != origin || started.elapsed() >= CAPTURE_BUDGET {
+    if observe()? != origin || budget.capture_expired(started, 7) {
         return Err(unavailable());
     }
     if let Some(retained) = &source {
@@ -289,7 +370,7 @@ fn capture_retained_ancestry(
         parents,
         _reservation: reservation,
     };
-    if !witness.is_live() || started.elapsed() >= CAPTURE_BUDGET {
+    if !witness.is_live() || budget.capture_expired(started, 8) {
         return Err(unavailable());
     }
     Ok(witness)
@@ -401,6 +482,56 @@ mod tests {
         drop(reservations);
         assert_eq!(budget.reserved(), 0);
         drop(budget.reserve(MAX_RETAINED_ANCESTORS).unwrap());
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    /// Test overrides are instance-local; production and every other budget
+    /// instance retain the fixed 100 ms capture deadline.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn unix_ancestry_capture_budget_override_is_instance_local() {
+        let budget = Arc::new(UnixAncestryBudget::default());
+        assert_eq!(budget.active_capture_budget(), CAPTURE_BUDGET);
+        budget.set_capture_budget_for_tests(Duration::from_secs(10));
+        assert_eq!(budget.active_capture_budget(), Duration::from_secs(10));
+        let other = Arc::new(UnixAncestryBudget::default());
+        assert_eq!(other.active_capture_budget(), CAPTURE_BUDGET);
+        assert_eq!(other.reserved(), 0);
+    }
+
+    /// Forced checkpoint expiry is deterministic: the pre-reservation checkpoint
+    /// rejects without a charge, and the post-reservation checkpoint proves the
+    /// acquired real reservation is released on return.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn unix_ancestry_checkpoint_expiry_distinguishes_pre_and_post_reservation() {
+        let identity =
+            mez_mux::process::process_parent_identity_for_pid(std::process::id()).unwrap();
+        let root =
+            mez_mux::process::process_parent_identity_for_pid(identity.parent_process_id).unwrap();
+        let uid = parent::parent_uid(identity.process_id).unwrap();
+        let source = UnixParentProcess {
+            uid,
+            identity,
+            lifetime: parent::open_parent(identity.process_id).unwrap(),
+        };
+        let budget = Arc::new(UnixAncestryBudget::default());
+        budget.force_capture_expiry_at_check_for_tests(1);
+        let early =
+            capture_retained_ancestry(uid, || source.reobserve(), Some(&source), root, &budget);
+        assert_eq!(early.unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(budget.capture_expiry_observation_for_tests(), (1, 0));
+        assert_eq!(budget.reserved(), 0);
+        budget.force_capture_expiry_at_check_for_tests(2);
+        let late =
+            capture_retained_ancestry(uid, || source.reobserve(), Some(&source), root, &budget);
+        assert_eq!(late.unwrap_err().kind(), io::ErrorKind::NotFound);
+        let (check, reserved_at) = budget.capture_expiry_observation_for_tests();
+        assert_eq!(check, 2);
+        assert!(
+            reserved_at > 0,
+            "post-reservation expiry must observe a live charge"
+        );
         assert_eq!(budget.reserved(), 0);
     }
 }

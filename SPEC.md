@@ -6259,6 +6259,24 @@ concrete terminal guard. Signals MUST retire only that frontend and attempt boun
 terminal restoration. Initial missing/refused discovery for profiles with configured
 route availability MAY invoke elected startup using the running executable and caller-retained
 child evidence. Startup failure MUST NOT authorize direct fallback or replacement.
+Elected startup MUST observe the caller's exact spawned child exit beside
+authenticated readiness under the same absolute deadline. An exited child MUST be
+classified promptly as a failed/nonzero exit or as a successful no-publication
+exit, distinctly from a live-but-not-ready timeout, election contention,
+readiness protocol rejection and launcher spawn failure, retaining the exact
+child handle and bounded status evidence for the caller. An authenticated broker
+MUST remain authoritative in a readiness/exit race. Observation MUST remain
+active during an in-flight bounded readiness negotiation and MUST precede any
+deadline-exhaustion classification, so an exit during the final interval is still
+reported as an exit. An observed exit MUST settle an already-connected readiness
+probe before classifying the exit, and startup MUST NOT cancel that handshake and
+immediately reconnect merely because a child exited; only a probe that actually
+settled as missing or refused discovery MAY take one bounded post-exit recheck.
+A startup election held by another launcher MUST be reported
+as contention rather than as an unready child. Observation MUST NOT signal,
+adopt, replace or terminate a discovered, sibling or unknown process, MUST NOT
+delete discovery, lock or key entries, MUST NOT extend the deadline, and MUST NOT
+retry application creation or input.
 Frontend exit MUST NOT kill the potentially shared child; exited children MAY be
 reaped by exact handle, while live-child disposal retains the documented best-effort
 reaping limitation. Unqualified routes retain direct eligibility before startup.
@@ -11447,6 +11465,18 @@ exit. Late or undrained notifications MUST NOT discard actual EOF evidence.
 Cancellation, cancellation-owner disconnect, read failure and reader panic MUST
 NOT establish EOF; retained bytes alone cannot prove closure. The bounded
 post-exit drain period and strict capture/parse limits MUST remain in force.
+Native child and staging custody MUST begin immediately after the OS confirms
+the direct child creation and before any pipe extraction or fallible reader
+setup: the exact owned direct child and its process group MUST be terminated
+and reaped on every startup failure and unwind, materialized launch files MUST
+be removed through RAII ownership on every completion path, and reader
+creation MUST use a fallible thread spawn whose failure is returned rather
+than unwound. A partial startup MUST settle already-created readers through
+bounded cancellation that never waits for descendant pipe EOF, MUST preserve
+the first failure, and MUST report any unproven kill or reap as unresolved
+native effects instead of claiming that the command could not have run. No
+cleanup path may signal a guessed or reused process id, replay the command, or
+change the bounded drain, capture, or child-timeout limits.
 Valid, closed missing-exit evidence MAY enter bounded action-failure feedback
 to the acting model for a narrower diagnostic or sandbox-preserving alternative.
 This guidance MUST consume the existing failure-feedback budget and MUST NOT
@@ -14233,6 +14263,26 @@ be one of `info`, `warning`, or `error`. It MAY include `path`, `line`,
 `automatic`, or `crash_recovery`. Persisted snapshot manifests MUST include
 enough restore metadata, including restart-required pane ids, to describe
 recovery limitations without loading the snapshot payload.
+
+Latest-snapshot selection MUST order candidates by `created_at` and then by
+`id`, so equal creation times resolve deterministically instead of depending on
+scan order. A session filter MUST select only snapshots whose `session_id` is
+exactly the requested session and MUST NOT fall back to another session's
+winner. A snapshot created after reading the repository's current selection MUST
+be stamped strictly newer than it, so a repeated or regressed host clock cannot
+leave the previous snapshot as the latest one. That stamp is the repository's
+logical creation time: it MAY run ahead of wall time after a burst of saves, it
+is shared by every session in the repository, and it ends at
+`9999-12-31T23:59:59Z`. Creation that cannot read the current selection MUST NOT
+publish a snapshot on a raw wall-clock stamp; it MUST fail instead. Creation is
+not serialized across concurrent writers, so racing saves MAY share a stamp and
+are then ordered by the documented id tie-break; the strict guarantee covers a
+creation that observed the winner it advances past. Two deliberate exceptions
+remain: a selected snapshot whose persisted `created_at` is outside the fixed
+written shape cannot be compared, so that store keeps lexical selection and a
+new save makes no newest-save claim against it; and at
+`9999-12-31T23:59:59Z` no newer stamp is representable, so creation saturates
+there and ordering falls back to `id`.
 
 `McpServerState` MUST include `id`, `version`, `name`, `state`, `configured`,
 `blacklisted`, `transport`, `tools`, `last_checked_at`, and `diagnostics`.
