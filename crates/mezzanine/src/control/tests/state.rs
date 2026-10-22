@@ -520,3 +520,25 @@ fn layout_state_preserves_ambiguous_original_split_ancestry() {
     assert_eq!(root["children"][1]["children"][0]["pane_id"], "%2");
     assert_eq!(root["children"][1]["children"][1]["pane_id"], "%3");
 }
+
+/// Standalone control dispatch must reject an omitted `pane/close` target
+/// before any pane mutation, matching the runtime control ingress.
+#[test]
+fn standalone_pane_close_rejects_omitted_target_without_mutation() {
+    let (mut session, primary) = test_session();
+    session
+        .split_active_pane_select(&primary, SplitDirection::Vertical, true)
+        .unwrap();
+    let before = format!("{:?}", session);
+    let response = dispatch_control_request(
+        r#"{"jsonrpc":"2.0","id":"omitted-close","method":"pane/close","params":{"force":true,"idempotency_key":"omitted-close"}}"#,
+        &mut session,
+        &primary,
+    );
+    assert!(
+        response.contains(r#""mezzanine_code":"invalid_params""#),
+        "{response}"
+    );
+    assert_eq!(format!("{:?}", session), before);
+    assert_eq!(session.active_window().unwrap().panes().len(), 2);
+}

@@ -750,3 +750,324 @@ fn runtime_terminal_step_projects_divider_only_until_release_debounce() {
         } if client_id == &primary
     )));
 }
+
+/// Builds two primary clients with different caller-local focus over one window.
+///
+/// The first primary focuses the left pane while the second focuses the right
+/// pane. The session-wide active pane remains the right pane, so an omitted
+/// close target cannot silently mean either caller-local focus or the global
+/// projection.
+fn two_primary_close_fixture() -> (RuntimeSessionService, ClientId, ClientId, String, String) {
+    let size = Size::new(100, 40).unwrap();
+    let mut service = test_runtime_service_with_size(size);
+    let first = service.attach_primary("first", true, size, 120).unwrap();
+    let left = service.active_pane_id().unwrap();
+    let right = service
+        .session
+        .split_active_pane(&first, SplitDirection::Vertical)
+        .unwrap()
+        .to_string();
+    service.session.select_pane(&first, left.as_str()).unwrap();
+    let second = service.attach_primary("second", true, size, 121).unwrap();
+    service
+        .session
+        .select_pane(&second, right.as_str())
+        .unwrap();
+    assert_eq!(
+        service.session.active_pane_for(&first).unwrap().id.as_str(),
+        left.as_str(),
+        "first primary must retain caller-local focus on the left pane"
+    );
+    assert_eq!(
+        service
+            .session
+            .active_pane_for(&second)
+            .unwrap()
+            .id
+            .as_str(),
+        right.as_str(),
+        "second primary must retain caller-local focus on the right pane"
+    );
+    assert_eq!(
+        service.active_pane_id().unwrap(),
+        right,
+        "global focus must differ from the first primary's local focus"
+    );
+    (service, first, second, left, right)
+}
+
+/// Captures the stable display identity of one surviving pane.
+///
+/// Layout indexes may legitimately shift when a sibling pane is removed, so
+/// sibling preservation is asserted by exact pane identity, title, liveness and
+/// size rather than a positional row number.
+fn pane_display_identity(
+    service: &RuntimeSessionService,
+    pane_id: &str,
+) -> (String, String, bool, Size) {
+    let pane = service
+        .session
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes())
+        .find(|pane| pane.id.as_str() == pane_id)
+        .unwrap_or_else(|| panic!("pane {pane_id} must remain present"));
+    (
+        pane.id.to_string(),
+        pane.title.clone(),
+        pane.live,
+        pane.size,
+    )
+}
+
+/// Asserts one close request is rejected before any session or event effect.
+fn assert_pane_close_rejected(
+    service: &mut RuntimeSessionService,
+    primary: &ClientId,
+    request_id: &str,
+    params: serde_json::Value,
+    expected_code: &str,
+) {
+    let before = format!("{:?}", service.session);
+    let cutoff = service.event_log().unwrap().latest_event_id();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "pane/close",
+        "params": params,
+    })
+    .to_string();
+    let response = service.dispatch_runtime_control_body(&body, primary);
+    assert!(
+        response.contains(expected_code),
+        "close rejection must carry {expected_code}: {response}"
+    );
+    assert_eq!(
+        format!("{:?}", service.session),
+        before,
+        "rejected close must not mutate session state"
+    );
+    assert_eq!(
+        service.event_log().unwrap().latest_event_id(),
+        cutoff,
+        "rejected close must not append lifecycle events"
+    );
+}
+
+/// Asserts the admitted close event names the same pane and window descriptor.
+fn assert_exact_pane_close_event(
+    service: &RuntimeSessionService,
+    cutoff: u64,
+    pane_id: &str,
+    window_id: &str,
+) {
+    let events =
+        service
+            .event_log()
+            .unwrap()
+            .replay_after_for(&EventAudience::AllPrimaries, cutoff, 8);
+    let close = events
+        .iter()
+        .find(|event| {
+            event.kind == EventKind::PaneChanged && event.payload.contains(r#""state":"closed""#)
+        })
+        .unwrap_or_else(|| panic!("admitted close must publish one exact close event: {events:?}"));
+    assert!(
+        close.payload.contains(&format!(r#""pane_id":"{pane_id}""#)),
+        "close event pane identity must match the admitted target: {}",
+        close.payload
+    );
+    assert!(
+        close
+            .payload
+            .contains(&format!(r#""window_id":"{window_id}""#)),
+        "close event window identity must match the admitted descriptor: {}",
+        close.payload
+    );
+}
+
+/// `pane/close` must require one explicit `PaneTarget` and freeze that exact
+/// pane through cleanup, layout removal and event publication.
+///
+/// The two-primary fixture makes caller-local and global focus disagree. An
+/// omitted target must be rejected by the supported registry boundary before
+/// any turn cancellation or process/layout cleanup runs. Explicit pane-id,
+/// title and index selectors must still close exactly one original target,
+/// preserve its sibling, honor the live-pane non-force rejection, and publish a
+/// close event naming the same descriptor that was removed.
+#[test]
+fn runtime_pane_close_rejects_omitted_target_and_preserves_exact_admitted_target() {
+    for force in [false, true] {
+        let (mut service, first, _, left, right) = two_primary_close_fixture();
+        let request_id = if force {
+            "omitted-force-close"
+        } else {
+            "omitted-nonforce-close"
+        };
+        assert_pane_close_rejected(
+            &mut service,
+            &first,
+            request_id,
+            serde_json::json!({"force": force, "idempotency_key": request_id}),
+            "invalid_params",
+        );
+        assert!(service.session.contains_pane(&left));
+        assert!(service.session.contains_pane(&right));
+    }
+
+    // A dead caller-local pane makes the pre-fix divergence visible even
+    // without force: cleanup inspects global focus while removal later uses
+    // the invoking client's navigation. Omission must still reject first.
+    let (mut service, first, _, left, right) = two_primary_close_fixture();
+    service.session.set_pane_live_state(&left, false).unwrap();
+    assert_pane_close_rejected(
+        &mut service,
+        &first,
+        "omitted-dead-nonforce-close",
+        serde_json::json!({"force": false, "idempotency_key": "omitted-dead-nonforce-close"}),
+        "invalid_params",
+    );
+    assert!(service.session.contains_pane(&left));
+    assert!(service.session.contains_pane(&right));
+
+    // Non-force rejection on a live exact target must not cancel turns or
+    // remove the pane; it is a policy refusal, not an omitted-target alias.
+    let (mut service, first, _, left, right) = two_primary_close_fixture();
+    assert_pane_close_rejected(
+        &mut service,
+        &first,
+        "explicit-live-nonforce-close",
+        serde_json::json!({
+            "target": {"pane_id": right.clone()},
+            "force": false,
+            "idempotency_key": "explicit-live-nonforce-close",
+        }),
+        "forbidden",
+    );
+    assert!(service.session.contains_pane(&left));
+    assert!(service.session.contains_pane(&right));
+
+    // An admitted explicit close must remove exactly the requested pane and
+    // publish that same pane/window descriptor after its sibling survives.
+    let (mut service, first, _, left, right) = two_primary_close_fixture();
+    let sibling_before = pane_display_identity(&service, &left);
+    let window_id = service
+        .session
+        .active_window_for(&first)
+        .unwrap()
+        .id
+        .to_string();
+    let cutoff = service.event_log().unwrap().latest_event_id();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "explicit-force-close",
+        "method": "pane/close",
+        "params": {
+            "target": {"pane_id": right.clone()},
+            "force": true,
+            "idempotency_key": "explicit-force-close",
+        },
+    })
+    .to_string();
+    let response: serde_json::Value =
+        serde_json::from_str(&service.dispatch_runtime_control_body(&body, &first)).unwrap();
+    assert_eq!(response["result"]["closed"], true, "{response}");
+    assert!(!service.session.contains_pane(&right));
+    assert!(service.session.contains_pane(&left));
+    assert_eq!(pane_display_identity(&service, &left), sibling_before);
+    assert_exact_pane_close_event(&service, cutoff, &right, &window_id);
+
+    // Title selectors resolve to the named pane, not the global active pane.
+    let (mut service, first, _, left, right) = two_primary_close_fixture();
+    service
+        .session
+        .set_pane_title_explicit(&left, "left-close-title")
+        .unwrap();
+    let sibling_before = pane_display_identity(&service, &right);
+    let window_id = service
+        .session
+        .active_window_for(&first)
+        .unwrap()
+        .id
+        .to_string();
+    let cutoff = service.event_log().unwrap().latest_event_id();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "title-force-close",
+        "method": "pane/close",
+        "params": {
+            "target": {"pane_title": "left-close-title"},
+            "force": true,
+            "idempotency_key": "title-force-close",
+        },
+    })
+    .to_string();
+    let response: serde_json::Value =
+        serde_json::from_str(&service.dispatch_runtime_control_body(&body, &first)).unwrap();
+    assert_eq!(response["result"]["closed"], true, "{response}");
+    assert!(!service.session.contains_pane(&left));
+    assert!(service.session.contains_pane(&right));
+    assert_eq!(pane_display_identity(&service, &right), sibling_before);
+    assert_exact_pane_close_event(&service, cutoff, &left, &window_id);
+
+    // Index selectors resolve within the active window to the indexed pane.
+    let (mut service, first, _, left, right) = two_primary_close_fixture();
+    let cutoff = service.event_log().unwrap().latest_event_id();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "index-force-close",
+        "method": "pane/close",
+        "params": {
+            "target": {"pane_index": 0},
+            "force": true,
+            "idempotency_key": "index-force-close",
+        },
+    })
+    .to_string();
+    let response: serde_json::Value =
+        serde_json::from_str(&service.dispatch_runtime_control_body(&body, &first)).unwrap();
+    assert_eq!(response["result"]["closed"], true, "{response}");
+    assert!(!service.session.contains_pane(&left));
+    assert!(service.session.contains_pane(&right));
+    let events =
+        service
+            .event_log()
+            .unwrap()
+            .replay_after_for(&EventAudience::AllPrimaries, cutoff, 8);
+    assert!(
+        events.iter().any(|event| {
+            event.kind == EventKind::PaneChanged
+                && event.payload.contains(r#""state":"closed""#)
+                && event.payload.contains(&format!(r#""pane_id":"{left}""#))
+        }),
+        "index close must publish the exact indexed pane: {events:?}"
+    );
+
+    // Explicit non-force close of a dead pane remains admitted and exact.
+    let (mut service, first, _, left, right) = two_primary_close_fixture();
+    service.session.set_pane_live_state(&left, false).unwrap();
+    let cutoff = service.event_log().unwrap().latest_event_id();
+    let window_id = service
+        .session
+        .active_window_for(&first)
+        .unwrap()
+        .id
+        .to_string();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "dead-explicit-close",
+        "method": "pane/close",
+        "params": {
+            "target": {"pane_id": left.clone()},
+            "force": false,
+            "idempotency_key": "dead-explicit-close",
+        },
+    })
+    .to_string();
+    let response: serde_json::Value =
+        serde_json::from_str(&service.dispatch_runtime_control_body(&body, &first)).unwrap();
+    assert_eq!(response["result"]["closed"], true, "{response}");
+    assert!(!service.session.contains_pane(&left));
+    assert!(service.session.contains_pane(&right));
+    assert_exact_pane_close_event(&service, cutoff, &left, &window_id);
+}
