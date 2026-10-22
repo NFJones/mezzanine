@@ -938,6 +938,45 @@ fn runtime_native_tool_result_completes_only_after_abandonment_settlement() {
     assert!(corrective_result.contains("action_abandoned_not_started"));
 }
 
+/// A failed canonical commitment must leave the original Running discovery
+/// placeholder intact rather than silently mutating in-memory results first.
+#[test]
+fn runtime_settlement_commit_failure_preserves_original_results() {
+    let (mut service, turn) = open_turn_for_constructed_execution();
+    let missing = send_action("msg-commit-fault", "agent:agent-nowhere", "handoff");
+    let discovery = list_agents_action("discover-commit-fault");
+    let say = final_say_action("say-commit-fault", "finished");
+    let failed = mez_agent::ActionResult::failed(
+        &turn,
+        &missing,
+        ActionStatus::Failed,
+        "message_recipient_unavailable",
+        "message recipient is not registered or available",
+    )
+    .unwrap();
+    let succeeded =
+        mez_agent::ActionResult::succeeded(&turn, &say, vec!["finished".to_string()], None);
+    let running = mez_agent::ActionResult::running(&turn, &discovery, Vec::new(), None);
+    let original = running.clone();
+    let mut execution = constructed_execution(
+        &turn,
+        vec![missing, discovery, say],
+        vec![failed, running, succeeded],
+        false,
+    );
+    service.agent_turn_contexts_mut().remove("turn-1");
+    let error = service
+        .settle_unstarted_local_action_siblings(&turn, &mut execution)
+        .expect_err("missing canonical context must fail the commit");
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert_eq!(
+        result_for(&execution, "discover-commit-fault"),
+        &original,
+        "failed commit must not leave a mutated abandoned result"
+    );
+    assert!(service.pending_agent_provider_tasks().is_empty());
+}
+
 /// Produces a running turn without a provider execution.
 fn open_turn_for_constructed_execution() -> (RuntimeSessionService, AgentTurnRecord) {
     let mut service = test_runtime_service();

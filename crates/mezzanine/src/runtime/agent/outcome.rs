@@ -144,14 +144,17 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         self.settle_unstarted_local_action_siblings(turn, execution)?;
         if !self.execution_can_feed_failure_to_model(&turn.turn_id, execution) {
-            self.append_agent_trace_turn_event(
+            // Ineligible feedback is a normal outcome; a best-effort trace
+            // diagnostic must not turn it into a service error or mask the
+            // original failed action result.
+            let _ = self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 &turn.turn_id,
                 &format!(
                     "failure feedback unavailable reason={}",
                     runtime_action_feedback_admission_reason(execution)
                 ),
-            )?;
+            );
             return Ok(false);
         }
         let attempt_limit = self.agent_action_failure_retry_limit();
@@ -296,19 +299,20 @@ impl RuntimeSessionService {
             return Ok(0);
         }
         let mut abandoned = Vec::new();
-        for result in &mut execution.action_results {
+        for (index, result) in execution.action_results.iter().enumerate() {
             if result.status != ActionStatus::Running
                 || result.is_error
                 || !runtime_action_type_is_local_unstarted_sibling(result.action_type)
             {
                 continue;
             }
-            result.status = ActionStatus::Cancelled;
-            result.is_error = true;
-            result.content = vec![mez_agent::ActionContentBlock::text(
+            let mut settled = result.clone();
+            settled.status = ActionStatus::Cancelled;
+            settled.is_error = true;
+            settled.content = vec![mez_agent::ActionContentBlock::text(
                 "action was not started because an earlier action in the same batch failed",
             )];
-            result.error = Some(mez_agent::ActionError {
+            settled.error = Some(mez_agent::ActionError {
                 code: runtime_action_abandoned_not_started_code.to_string(),
                 message:
                     "action was not started because an earlier action in the same batch failed"
@@ -321,7 +325,7 @@ impl RuntimeSessionService {
                     .to_string(),
                 ),
             });
-            result.structured_content_json = Some(
+            settled.structured_content_json = Some(
                 serde_json::json!({
                     "state": "not_started",
                     "code": runtime_action_abandoned_not_started_code,
@@ -329,12 +333,24 @@ impl RuntimeSessionService {
                 })
                 .to_string(),
             );
-            abandoned.push(result.clone());
+            abandoned.push((index, settled));
         }
-        if !abandoned.is_empty() {
-            self.commit_settled_action_results_context(&turn.turn_id, &abandoned)?;
+        if abandoned.is_empty() {
+            return Ok(0);
         }
-        Ok(abandoned.len())
+        let count = abandoned.len();
+        let committed = abandoned
+            .iter()
+            .map(|(_, result)| result.clone())
+            .collect::<Vec<_>>();
+        // Commit before mutating the live execution: a failed commit leaves the
+        // original Running placeholders intact for retention or a later
+        // deduplicated retry, with no effect replay implied.
+        self.commit_settled_action_results_context(&turn.turn_id, &committed)?;
+        for (index, result) in abandoned {
+            execution.action_results[index] = result;
+        }
+        Ok(count)
     }
 
     /// Returns true when a running shell-backed sibling has not reached the
