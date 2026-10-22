@@ -73,6 +73,41 @@ impl NativeCompletionReceipt {
                 == self.command_sha256
             && self.expected_command.as_deref() == Some(outcome.command.as_str())
     }
+
+    /// Reports the fixed identity-only equality flags for one worker outcome.
+    /// Test-only and read-only: no command text, digest, timestamp or payload is
+    /// exposed, and this cannot change the fail-closed comparison above.
+    #[cfg(test)]
+    pub(super) fn issued_outcome_identity_flags(
+        &self,
+        outcome: &RuntimeNativeShellOutcome,
+    ) -> [(&'static str, bool); 4] {
+        [
+            (
+                "probe_only_equal",
+                outcome.capability_probe_only == self.probe_only,
+            ),
+            (
+                "started_at_equal",
+                outcome.started_at_unix_ms == self.started_at_unix_ms,
+            ),
+            (
+                "command_sha_equal",
+                exact_command_sha256(self.shell_classification.as_str(), &outcome.command)
+                    == self.command_sha256,
+            ),
+            (
+                "expected_command_equal",
+                self.expected_command.as_deref() == Some(outcome.command.as_str()),
+            ),
+        ]
+    }
+
+    /// Reports whether the retained receipt is still in its issued phase.
+    #[cfg(test)]
+    pub(super) fn is_issued_phase(&self) -> bool {
+        self.phase == NativeCompletionPhase::Issued
+    }
 }
 
 impl fmt::Debug for NativeCompletionReceipt {
@@ -93,6 +128,38 @@ impl fmt::Debug for NativeCompletionReceipt {
 }
 
 impl RuntimeSessionService {
+    /// Reports fixed identity-only facts for one retained native receipt and its
+    /// worker outcome. Test-only and read-only: no command text, digest,
+    /// timestamp or payload is exposed and nothing is acknowledged or cleared.
+    #[cfg(test)]
+    pub(crate) fn native_issued_outcome_identity_flags_for_tests(
+        &self,
+        key: &NativeCompletionKey,
+        outcome: &RuntimeNativeShellOutcome,
+    ) -> Option<[(&'static str, bool); 6]> {
+        let receipt = self.agent.completion_settlements.native.get(key)?;
+        let [probe_only, started_at, command_sha, expected_command] =
+            receipt.issued_outcome_identity_flags(outcome);
+        let identity = (key.0.clone(), key.1.clone());
+        Some([
+            probe_only,
+            started_at,
+            command_sha,
+            expected_command,
+            ("phase_is_issued", receipt.is_issued_phase()),
+            (
+                "owner_present",
+                self.agent
+                    .pending_native_shell_dispatches
+                    .contains_key(&identity)
+                    || self
+                        .agent
+                        .claimed_native_shell_dispatches
+                        .contains_key(&identity),
+            ),
+        ])
+    }
+
     /// Reserves from the existing actor dispatch before its exact claim is
     /// returned. Worker command/probe labels cannot select another phase later.
     pub(in crate::runtime::agent) fn reserve_native_completion(
