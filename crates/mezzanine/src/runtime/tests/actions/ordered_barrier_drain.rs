@@ -25,7 +25,13 @@ enum BarrierState {
     Failed,
 }
 
-type OrderedKey = crate::runtime::render::RuntimeProviderLogOrdinal;
+type OrderedKey = (
+    String,
+    String,
+    String,
+    mez_agent::ContextExecutionGroupId,
+    usize,
+);
 
 struct QueuedHeader {
     action: mez_agent::AgentAction,
