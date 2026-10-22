@@ -1659,8 +1659,10 @@ impl RuntimeSessionService {
                 .iter()
                 .find_map(|result| result.error.as_ref().map(|error| error.message.as_str()))
                 .unwrap_or("runtime loop guard suppressed this action batch");
-            self.append_agent_error_text_to_terminal_buffer(
+            self.publish_agent_aggregate_outcome_once(
                 pane_id,
+                execution,
+                &runtime_loop_guard_failure_summary_line(label, matching_results.len(), message),
                 &runtime_loop_guard_failure_summary_line(label, matching_results.len(), message),
             )?;
             aggregated_result_ids.extend(
@@ -1771,6 +1773,45 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Publishes one execution-wide aggregate summary at most once per
+    /// validated response.
+    ///
+    /// Loop-guard summaries describe the whole execution rather than one
+    /// action, so they bypass the per-action published-outcome keys. Several
+    /// settlement families present the same execution as siblings finish, so a
+    /// shared aggregate key keeps the summary exactly once regardless of which
+    /// family settles next.
+    fn publish_agent_aggregate_outcome_once(
+        &mut self,
+        pane_id: &str,
+        execution: &AgentTurnExecution,
+        dedupe_key: &str,
+        line: &str,
+    ) -> Result<()> {
+        let owner = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone());
+        let group = super::provider_execution::provider_log_execution_group_id(execution).ok();
+        if let (Some(conversation_id), Some(group)) = (owner, group) {
+            let key = (
+                pane_id.to_string(),
+                execution.request.turn_id.clone(),
+                conversation_id,
+                group,
+                usize::MAX,
+            );
+            if !self.presentation.agent_published_provider_outcomes.insert((
+                key,
+                true,
+                dedupe_key.to_string(),
+            )) {
+                return Ok(());
+            }
+        }
+        self.append_agent_error_text_to_terminal_buffer(pane_id, line)
+    }
+
     /// Presents bounded failure details when the runtime is ending a failed
     /// turn instead of giving the model another recovery attempt.
     pub(crate) fn present_unrecovered_agent_failure_diagnostics_to_terminal_buffer(
@@ -1815,12 +1856,13 @@ impl RuntimeSessionService {
                 .iter()
                 .find_map(|result| result.error.as_ref().map(|error| error.message.as_str()))
                 .unwrap_or("runtime loop guard suppressed this action batch");
-            self.append_agent_error_text_to_terminal_buffer(
+            let summary =
+                runtime_loop_guard_failure_summary_line(label, matching_results.len(), message);
+            self.publish_agent_aggregate_outcome_once(
                 pane_id,
-                &format!(
-                    "{}; {reason}",
-                    runtime_loop_guard_failure_summary_line(label, matching_results.len(), message)
-                ),
+                execution,
+                &summary,
+                &format!("{summary}; {reason}"),
             )?;
             aggregated_result_ids.extend(
                 matching_results

@@ -931,10 +931,16 @@ async fn runtime_deferred_external_aggregate_summary_presents_once() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(
-        !after_first.contains(aggregate_marker),
-        "the execution-wide summary must wait for the terminal settlement: {after_first}"
+    assert_eq!(
+        after_first.matches(aggregate_marker).count(),
+        1,
+        "the first settlement publishes the execution-wide summary once: {after_first}"
     );
+    let retained_execution = service
+        .agent_turn_executions()
+        .get(&turn.turn_id)
+        .cloned()
+        .expect("a pending external sibling retains the execution");
     let second_dispatch = service
         .claim_approved_external_action(&turn.turn_id, &second.id)
         .unwrap()
@@ -969,6 +975,21 @@ async fn runtime_deferred_external_aggregate_summary_presents_once() {
         after_second.matches(aggregate_marker).count(),
         1,
         "the loop-guard summary must appear exactly once: {after_second}"
+    );
+    // A native shell or other family can present the same execution again; the
+    // shared presenter must keep the aggregate summary at exactly one row.
+    service
+        .present_agent_action_outcomes_to_terminal_buffer("%1", &retained_execution)
+        .unwrap();
+    let after_replay = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        after_replay.matches(aggregate_marker).count(),
+        1,
+        "re-presenting the execution must not repeat the aggregate summary: {after_replay}"
     );
     // The second sibling never published an execution header, so its ordinary
     // outcome stays queued behind that header rather than appending here; the
