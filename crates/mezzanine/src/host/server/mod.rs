@@ -131,6 +131,12 @@ struct HostConnectionResult {
     completion_id: Option<Value>,
 }
 
+type LocalControlRequest = (Value, String, Value);
+type HostConnectionFuture<'a> =
+    std::pin::Pin<Box<dyn Future<Output = Result<HostConnectionResult>> + Send + 'a>>;
+type LocalControlRequestFuture<'a> =
+    std::pin::Pin<Box<dyn Future<Output = Result<LocalControlRequest>> + Send + 'a>>;
+
 /// An authenticated shutdown reply retained outside the connections being
 /// drained. Its deadline was captured at accept, never renewed after cleanup.
 struct HostShutdownCompletion {
@@ -530,7 +536,7 @@ impl HostServer {
     fn serve_connection<'a>(
         &'a self,
         stream: &'a mut tokio::net::UnixStream,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<HostConnectionResult>> + Send + 'a>> {
+    ) -> HostConnectionFuture<'a> {
         Box::pin(async move {
             let (request, method, id) = Self::read_control_request(stream).await?;
             self.complete_control_request(stream, request, method, id)
@@ -542,7 +548,7 @@ impl HostServer {
     /// state. This is the only phase whose panic may be isolated per connection.
     fn read_control_request<'a>(
         stream: &'a mut tokio::net::UnixStream,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(Value, String, Value)>> + Send + 'a>> {
+    ) -> LocalControlRequestFuture<'a> {
         Box::pin(async move {
             let mut framed = Framed::new(
                 stream,
@@ -572,7 +578,7 @@ impl HostServer {
         request: Value,
         method: String,
         id: Value,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<HostConnectionResult>> + Send + 'a>> {
+    ) -> HostConnectionFuture<'a> {
         Box::pin(async move {
             let result = self.dispatch_managed_request(&request).await;
             #[cfg(test)]
