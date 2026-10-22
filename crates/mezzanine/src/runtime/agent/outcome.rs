@@ -142,7 +142,7 @@ impl RuntimeSessionService {
         execution: &mut AgentTurnExecution,
         reason: &str,
     ) -> Result<bool> {
-        self.settle_unstarted_local_action_siblings(turn, execution)?;
+        self.settle_unstarted_action_siblings(turn, execution)?;
         if !self.execution_can_feed_failure_to_model(&turn.turn_id, execution) {
             // Ineligible feedback is a normal outcome; a best-effort trace
             // diagnostic must not turn it into a service error or mask the
@@ -275,17 +275,22 @@ impl RuntimeSessionService {
             && runtime_action_type_is_local_unstarted_sibling(result.action_type)
     }
 
-    /// Settles planned local siblings whose executors never started.
+    /// Settles planned siblings whose executors never started.
     ///
-    /// Executor families refuse to begin after an earlier family failed, so a
-    /// read-only discovery placeholder can remain `Running` without any work,
-    /// event, owner or side effect. Replace only those unstarted placeholders
-    /// with one truthful terminal abandonment result and commit them to
-    /// canonical chronology independently of whether bounded correction is
-    /// admitted or has budget left, so abandoned actions in an otherwise
-    /// settled group carry a complete disposition. Active external, subagent,
-    /// approval, cancellation, persistence and shell ownership is untouched.
-    pub(crate) fn settle_unstarted_local_action_siblings(
+    /// Executor families refuse to begin after an earlier family failed, and
+    /// shell dispatch itself refuses to start while the execution is already
+    /// failed, so a read-only discovery or shell-backed placeholder can remain
+    /// `Running` without any work, event, owner or side effect. Replace only
+    /// those unstarted placeholders with one truthful terminal abandonment
+    /// result and commit them to canonical chronology independently of whether
+    /// bounded correction is admitted or has budget left, so abandoned actions
+    /// in an otherwise settled group carry a complete disposition instead of
+    /// leaving the provider tool-result group permanently incomplete. Shell
+    /// siblings are admitted only through the same owner checks that already
+    /// prove no pane shell transaction, native dispatch owner or pre-shell hook
+    /// owns them; active external, subagent, approval, cancellation and
+    /// persistence ownership is untouched.
+    pub(crate) fn settle_unstarted_action_siblings(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
@@ -298,12 +303,17 @@ impl RuntimeSessionService {
         {
             return Ok(0);
         }
+        let unstarted = execution
+            .action_results
+            .iter()
+            .map(|result| {
+                runtime_action_type_is_local_unstarted_sibling(result.action_type)
+                    || self.action_result_is_inactive_pending_shell_sibling(&turn.turn_id, result)
+            })
+            .collect::<Vec<_>>();
         let mut abandoned = Vec::new();
         for (index, result) in execution.action_results.iter().enumerate() {
-            if result.status != ActionStatus::Running
-                || result.is_error
-                || !runtime_action_type_is_local_unstarted_sibling(result.action_type)
-            {
+            if result.status != ActionStatus::Running || result.is_error || !unstarted[index] {
                 continue;
             }
             let mut settled = result.clone();

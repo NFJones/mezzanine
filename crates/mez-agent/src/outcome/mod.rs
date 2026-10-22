@@ -698,7 +698,20 @@ pub fn runtime_action_type_is_local_unstarted_sibling(action_type: &str) -> bool
 /// an earlier action in the same batch failed.
 pub const RUNTIME_ACTION_ABANDONED_NOT_STARTED: &str = "action_abandoned_not_started";
 
-/// Returns true for one truthful terminal abandonment of a never-started local
+/// Returns true for the action families that may be abandoned as never started.
+///
+/// Read-only discovery executors settle synchronously and never begin after an
+/// earlier family failed. Shell-backed actions are additionally abandoned only
+/// when the runtime proves that no pane shell transaction, native dispatch owner
+/// or pre-shell hook owns the action. Both families can therefore carry one
+/// truthful terminal not-started disposition instead of leaving a `Running`
+/// placeholder that keeps a canonical result group incomplete.
+pub fn runtime_action_type_can_be_abandoned_unstarted(action_type: &str) -> bool {
+    runtime_action_type_is_local_unstarted_sibling(action_type)
+        || runtime_action_type_is_shell_backed(action_type)
+}
+
+/// Returns true for one truthful terminal abandonment of a never-started
 /// sibling.
 ///
 /// The result is an error only so the action has a complete, non-success
@@ -708,7 +721,7 @@ pub const RUNTIME_ACTION_ABANDONED_NOT_STARTED: &str = "action_abandoned_not_sta
 pub fn runtime_action_result_is_abandoned_unstarted(result: &ActionResult) -> bool {
     result.status == ActionStatus::Cancelled
         && result.is_error
-        && runtime_action_type_is_local_unstarted_sibling(result.action_type)
+        && runtime_action_type_can_be_abandoned_unstarted(result.action_type)
         && result
             .error
             .as_ref()
@@ -1763,10 +1776,11 @@ mod tests {
     }
 
     /// Only the truthful not-started disposition is accepted as one abandoned
-    /// local sibling, and abandonment never becomes a correction candidate by
-    /// itself. Shell-backed or incorrectly coded results remain ineligible.
+    /// sibling, and abandonment never becomes a correction candidate by itself.
+    /// Discovery and shell-backed siblings are both admitted, while a still
+    /// `Running` placeholder or any other error code remains ineligible.
     #[test]
-    fn abandoned_unstarted_local_sibling_is_complete_but_not_correctable() {
+    fn abandoned_unstarted_sibling_is_complete_but_not_correctable() {
         let discovery = AgentAction {
             id: "discover".to_string(),
             payload: AgentActionPayload::ListAgents {
@@ -1787,6 +1801,8 @@ mod tests {
         let mut wrong_code = abandoned.clone();
         wrong_code.error.as_mut().unwrap().code = "cancelled".to_string();
         assert!(!runtime_action_result_is_abandoned_unstarted(&wrong_code));
+        let running = ActionResult::running(&turn(), &discovery, Vec::new(), None);
+        assert!(!runtime_action_result_is_abandoned_unstarted(&running));
         let shell = ActionResult::failed(
             &turn(),
             &shell_action(),
@@ -1795,7 +1811,12 @@ mod tests {
             "not started",
         )
         .unwrap();
-        assert!(!runtime_action_result_is_abandoned_unstarted(&shell));
+        assert!(runtime_action_result_is_abandoned_unstarted(&shell));
+        let mut cancelled_shell = shell.clone();
+        cancelled_shell.error.as_mut().unwrap().code = "cancelled".to_string();
+        assert!(!runtime_action_result_is_abandoned_unstarted(
+            &cancelled_shell
+        ));
     }
 
     /// Pure admission accepts a settled local abandonment beside one genuine

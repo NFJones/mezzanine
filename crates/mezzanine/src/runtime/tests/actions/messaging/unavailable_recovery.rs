@@ -91,6 +91,21 @@ fn list_agents_action(id: &str) -> AgentAction {
     }
 }
 
+/// Builds one shell-backed action that a failed batch never reaches the pane
+/// with.
+fn shell_sibling_action(id: &str) -> AgentAction {
+    AgentAction {
+        id: id.to_string(),
+        payload: AgentActionPayload::ShellCommand {
+            summary: "Observe an unsent shell sibling".to_string(),
+            command: "printf sibling".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    }
+}
+
 /// Builds a provider response carrying one exact provider identity.
 fn provider_response(provider: &str, actions: Vec<AgentAction>) -> mez_agent::ModelResponse {
     mez_agent::ModelResponse {
@@ -966,13 +981,192 @@ fn runtime_settlement_commit_failure_preserves_original_results() {
     );
     service.agent_turn_contexts_mut().remove("turn-1");
     let error = service
-        .settle_unstarted_local_action_siblings(&turn, &mut execution)
+        .settle_unstarted_action_siblings(&turn, &mut execution)
         .expect_err("missing canonical context must fail the commit");
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
     assert_eq!(
         result_for(&execution, "discover-commit-fault"),
         &original,
         "failed commit must not leave a mutated abandoned result"
+    );
+    assert!(service.pending_agent_provider_tasks().is_empty());
+}
+
+/// A shell-backed sibling that never reached the pane must receive one truthful
+/// not-started disposition instead of remaining `Running` while bounded
+/// correction runs.
+#[test]
+fn runtime_unavailable_recipient_abandons_unsent_shell_sibling() {
+    let (mut service, turn) = open_turn_for_constructed_execution();
+    let missing = send_action("msg-shell", "agent:agent-nowhere", "handoff");
+    let shell = shell_sibling_action("shell-unsent");
+    let say = final_say_action("say-shell", "finished");
+    let failed = mez_agent::ActionResult::failed(
+        &turn,
+        &missing,
+        ActionStatus::Failed,
+        "message_recipient_unavailable",
+        "message recipient is not registered or available",
+    )
+    .unwrap();
+    let succeeded =
+        mez_agent::ActionResult::succeeded(&turn, &say, vec!["finished".to_string()], None);
+    let running = mez_agent::ActionResult::running(&turn, &shell, Vec::new(), None);
+    let mut execution = constructed_execution(
+        &turn,
+        vec![missing, shell, say],
+        vec![failed, running, succeeded],
+        false,
+    );
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
+    let queued = service
+        .queue_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
+        .unwrap();
+    assert!(
+        queued,
+        "an unsent shell sibling must not block bounded correction"
+    );
+    let settled = result_for(&execution, "shell-unsent");
+    assert_eq!(settled.status, ActionStatus::Cancelled);
+    assert!(settled.is_error);
+    assert_eq!(
+        settled.error.as_ref().map(|error| error.code.as_str()),
+        Some(mez_agent::outcome::RUNTIME_ACTION_ABANDONED_NOT_STARTED)
+    );
+    assert!(
+        settled
+            .structured_content_json
+            .as_deref()
+            .unwrap_or_default()
+            .contains("\"state\":\"not_started\""),
+        "abandoned shell sibling must carry its not-started state"
+    );
+    assert_eq!(
+        action_result_block_count(&service, "shell-unsent"),
+        1,
+        "abandonment must be committed to canonical chronology exactly once"
+    );
+    assert_eq!(action_result_block_count(&service, "msg-shell"), 1);
+    assert!(
+        !service.agent_action_has_native_shell_owner("turn-1", "shell-unsent"),
+        "no shell owner may exist for an abandoned sibling"
+    );
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+}
+
+/// The same unsent shell sibling must also complete the native provider
+/// tool-result group: without a terminal disposition the group stays incomplete
+/// forever and the corrective request never sees the batch evidence.
+#[test]
+fn runtime_native_tool_result_completes_with_unsent_shell_sibling() {
+    let (mut service, _target) = mixed_batch_fixture();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let missing = send_action("msg-native-shell", "agent:agent-nowhere", "handoff");
+    let shell = shell_sibling_action("shell-native");
+    let say = final_say_action("say-native-shell", "finished");
+    let failed = mez_agent::ActionResult::failed(
+        &turn,
+        &missing,
+        ActionStatus::Failed,
+        "message_recipient_unavailable",
+        "message recipient is not registered or available",
+    )
+    .unwrap();
+    let succeeded =
+        mez_agent::ActionResult::succeeded(&turn, &say, vec!["finished".to_string()], None);
+    let running = mez_agent::ActionResult::running(&turn, &shell, Vec::new(), None);
+    let mut execution = constructed_execution(
+        &turn,
+        vec![missing, shell, say],
+        vec![failed.clone(), running, succeeded.clone()],
+        false,
+    );
+    execution.request.provider = "deepseek".to_string();
+    execution.response.provider = "deepseek".to_string();
+    execution.response.provider_transcript_events = vec![
+        mez_agent::ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: String::new(),
+            reasoning_content: None,
+            tool_calls: vec![serde_json::json!({
+                "id": "call-native-shell",
+                "type": "function",
+                "function": {"name": "submit_maap_action_batch", "arguments": "{}"}
+            })],
+        },
+    ];
+    let owner = mez_agent::ProviderContinuityOwner::new(
+        mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+        "deepseek",
+    )
+    .unwrap();
+    service
+        .append_agent_execution_chronology_for_provider(&turn, &execution, Some(&owner))
+        .unwrap();
+    service
+        .commit_settled_action_results_context(&turn.turn_id, &[failed, succeeded])
+        .unwrap();
+    assert_eq!(
+        native_tool_result_count(&service, "call-native-shell"),
+        0,
+        "a native group result requires every owned action to settle"
+    );
+    let queued = service
+        .queue_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
+        .unwrap();
+    assert!(queued, "settled shell abandonment must admit correction");
+    assert_eq!(
+        native_tool_result_count(&service, "call-native-shell"),
+        1,
+        "the abandoned shell sibling must complete the native tool-result group"
+    );
+    let native = native_tool_result_content(&service, "call-native-shell").unwrap();
+    assert!(native.contains("message_recipient_unavailable"));
+    assert!(native.contains("action_abandoned_not_started"));
+    assert_eq!(
+        result_for(&execution, "shell-native").status,
+        ActionStatus::Cancelled
+    );
+}
+
+/// An approval-blocked shell sibling still owns a gate and must never be
+/// reclassified into a not-started abandonment.
+#[test]
+fn runtime_blocked_shell_sibling_keeps_correction_unavailable() {
+    let (mut service, turn) = open_turn_for_constructed_execution();
+    let missing = send_action("msg-shell-blocked", "agent:agent-nowhere", "handoff");
+    let shell = shell_sibling_action("shell-blocked");
+    let say = final_say_action("say-shell-blocked", "finished");
+    let blocked = mez_agent::ActionResult::blocked(&turn, &shell, Vec::new(), "{}".to_string());
+    let results = vec![
+        mez_agent::ActionResult::failed(
+            &turn,
+            &missing,
+            ActionStatus::Failed,
+            "message_recipient_unavailable",
+            "message recipient is not registered or available",
+        )
+        .unwrap(),
+        blocked,
+        mez_agent::ActionResult::succeeded(&turn, &say, vec!["finished".to_string()], None),
+    ];
+    let mut execution = constructed_execution(&turn, vec![missing, shell, say], results, false);
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
+    let queued = service
+        .queue_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
+        .unwrap();
+    assert!(
+        !queued,
+        "approval-blocked shell sibling must block correction"
+    );
+    assert_eq!(
+        result_for(&execution, "shell-blocked").status,
+        ActionStatus::Blocked
     );
     assert!(service.pending_agent_provider_tasks().is_empty());
 }
