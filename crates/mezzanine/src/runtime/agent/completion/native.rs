@@ -148,14 +148,16 @@ impl RuntimeSessionService {
             expected_command,
             ("phase_is_issued", receipt.is_issued_phase()),
             (
-                "owner_present",
+                "exact_owner_present",
                 self.agent
                     .pending_native_shell_dispatches
-                    .contains_key(&identity)
+                    .get(&identity)
+                    .is_some_and(|dispatch| dispatch.marker == key.2)
                     || self
                         .agent
                         .claimed_native_shell_dispatches
-                        .contains_key(&identity),
+                        .get(&identity)
+                        .is_some_and(|dispatch| dispatch.marker == key.2),
             ),
         ])
     }
