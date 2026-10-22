@@ -85,20 +85,79 @@ fn validate_pane_close_selector_types(
             )));
         }
     }
-    for selector in ["window", "session"] {
-        if let Some(value) = object.get(selector)
-            && !value.is_object()
-        {
-            return Err(MezError::invalid_args(format!(
-                "pane/close {selector} must be an object"
-            )));
-        }
+    if let Some(window) = object.get("window") {
+        validate_pane_close_window_target(window)?;
+    }
+    if let Some(session) = object.get("session") {
+        validate_pane_close_session_target(session)?;
     }
     if let Some(value) = object.get("active")
         && !value.is_boolean()
     {
         return Err(MezError::invalid_args(
             "pane/close active must be a boolean",
+        ));
+    }
+    Ok(())
+}
+
+/// Rejects malformed nested WindowTarget members before resolution can ignore them.
+fn validate_pane_close_window_target(value: &serde_json::Value) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| MezError::invalid_args("pane/close window must be an object"))?;
+    for selector in ["window_id", "window_name", "name", "session_id"] {
+        if let Some(value) = object.get(selector)
+            && !value.is_string()
+        {
+            return Err(MezError::invalid_args(format!(
+                "pane/close window {selector} must be a string"
+            )));
+        }
+    }
+    for selector in ["window_index", "index"] {
+        if let Some(value) = object.get(selector)
+            && value.as_u64().is_none()
+        {
+            return Err(MezError::invalid_args(format!(
+                "pane/close window {selector} must be a non-negative integer"
+            )));
+        }
+    }
+    for selector in ["default_session", "active"] {
+        if let Some(value) = object.get(selector)
+            && !value.is_boolean()
+        {
+            return Err(MezError::invalid_args(format!(
+                "pane/close window {selector} must be a boolean"
+            )));
+        }
+    }
+    if let Some(session) = object.get("session") {
+        validate_pane_close_session_target(session)?;
+    }
+    Ok(())
+}
+
+/// Rejects malformed nested SessionTarget members before resolution can ignore them.
+fn validate_pane_close_session_target(value: &serde_json::Value) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| MezError::invalid_args("pane/close session must be an object"))?;
+    for selector in ["session_id", "name"] {
+        if let Some(value) = object.get(selector)
+            && !value.is_string()
+        {
+            return Err(MezError::invalid_args(format!(
+                "pane/close session {selector} must be a string"
+            )));
+        }
+    }
+    if let Some(value) = object.get("default")
+        && !value.is_boolean()
+    {
+        return Err(MezError::invalid_args(
+            "pane/close session default must be a boolean",
         ));
     }
     Ok(())

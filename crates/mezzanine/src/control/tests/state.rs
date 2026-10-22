@@ -553,4 +553,25 @@ fn standalone_pane_close_rejects_omitted_target_without_mutation() {
     );
     assert_eq!(format!("{:?}", session), before);
     assert_eq!(session.active_window().unwrap().panes().len(), 2);
+
+    for (id, params) in [
+        (
+            "malformed-session-close",
+            r#"{"target":{"session":{"session_id":17,"default":true},"active":true},"force":true,"idempotency_key":"malformed-session-close"}"#,
+        ),
+        (
+            "malformed-window-close",
+            r#"{"target":{"window":{"window_id":17,"active":true},"pane_index":0},"force":true,"idempotency_key":"malformed-window-close"}"#,
+        ),
+    ] {
+        let body =
+            format!(r#"{{"jsonrpc":"2.0","id":"{id}","method":"pane/close","params":{params}}}"#);
+        let response = dispatch_control_request(&body, &mut session, &primary);
+        assert!(
+            response.contains(r#""mezzanine_code":"invalid_params""#),
+            "{response}"
+        );
+        assert_eq!(format!("{:?}", session), before);
+        assert_eq!(session.active_window().unwrap().panes().len(), 2);
+    }
 }

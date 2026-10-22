@@ -932,6 +932,22 @@ fn runtime_pane_close_rejects_omitted_target_and_preserves_exact_admitted_target
                 "idempotency_key": "malformed-top-level-selector",
             }),
         ),
+        (
+            "malformed-nested-session",
+            serde_json::json!({
+                "target": {"session": {"session_id": 17, "default": true}, "active": true},
+                "force": true,
+                "idempotency_key": "malformed-nested-session",
+            }),
+        ),
+        (
+            "malformed-nested-window",
+            serde_json::json!({
+                "target": {"window": {"window_id": 17, "active": true}, "pane_index": 0},
+                "force": true,
+                "idempotency_key": "malformed-nested-window",
+            }),
+        ),
     ] {
         let (mut service, first, _, left, right) = two_primary_close_fixture();
         assert_pane_close_rejected(&mut service, &first, request_id, params, "invalid_params");
@@ -940,6 +956,10 @@ fn runtime_pane_close_rejects_omitted_target_and_preserves_exact_admitted_target
     }
 
     let (mut service, first, _, left, right) = two_primary_close_fixture();
+    service
+        .session
+        .set_pane_title_explicit(&left, "conflict-title")
+        .unwrap();
     assert_pane_close_rejected(
         &mut service,
         &first,
