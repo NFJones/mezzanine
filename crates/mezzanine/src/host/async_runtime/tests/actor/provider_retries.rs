@@ -6,6 +6,7 @@ mod close;
 mod input_overflow;
 mod recovery_attribution;
 mod terminal_compaction;
+mod unavailable_recipient;
 
 /// Verifies that provider-poll timer events convert pending provider work into
 /// bounded dispatch side effects without executing provider I/O inside the

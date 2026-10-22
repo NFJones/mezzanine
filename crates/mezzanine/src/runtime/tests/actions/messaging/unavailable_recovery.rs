@@ -746,6 +746,133 @@ fn runtime_settlement_commits_abandonment_before_budget_exhaustion() {
     assert!(service.pending_agent_provider_tasks().is_empty());
 }
 
+/// Counts native provider tool-result events for one call identity.
+fn native_tool_result_count(service: &RuntimeSessionService, call_id: &str) -> usize {
+    service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .map(|context| {
+            context
+                .chronology()
+                .iter()
+                .filter(|event| {
+                    event.block().source == ContextSourceKind::TranscriptTool
+                        && event.block().label == format!("provider tool result {call_id}")
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// Returns the native provider tool-result content for one call identity.
+fn native_tool_result_content(service: &RuntimeSessionService, call_id: &str) -> Option<String> {
+    service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .and_then(|context| {
+            context
+                .chronology()
+                .iter()
+                .find(|event| {
+                    event.block().source == ContextSourceKind::TranscriptTool
+                        && event.block().label == format!("provider tool result {call_id}")
+                })
+                .map(|event| event.block().content.clone())
+        })
+}
+
+/// DeepSeek native tool-call composition: committing only original terminal
+/// results must not emit a premature tool result; settling the abandoned
+/// discovery through real feedback admission completes exactly one native
+/// result containing the failed, abandoned and successful evidence, and the
+/// corrective request sees the same content without duplication.
+#[test]
+fn runtime_native_tool_result_completes_only_after_abandonment_settlement() {
+    let (mut service, _target) = mixed_batch_fixture();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let missing = send_action("msg-native", "agent:agent-nowhere", "handoff");
+    let discovery = list_agents_action("discover-native");
+    let say = final_say_action("say-native", "finished");
+    let failed = mez_agent::ActionResult::failed(
+        &turn,
+        &missing,
+        ActionStatus::Failed,
+        "message_recipient_unavailable",
+        "message recipient is not registered or available",
+    )
+    .unwrap();
+    let succeeded =
+        mez_agent::ActionResult::succeeded(&turn, &say, vec!["finished".to_string()], None);
+    let running = mez_agent::ActionResult::running(&turn, &discovery, Vec::new(), None);
+    let mut execution = constructed_execution(
+        &turn,
+        vec![missing, discovery, say],
+        vec![failed.clone(), running, succeeded.clone()],
+        false,
+    );
+    execution.request.provider = "deepseek".to_string();
+    execution.response.provider = "deepseek".to_string();
+    execution.response.provider_transcript_events = vec![
+        mez_agent::ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: String::new(),
+            reasoning_content: None,
+            tool_calls: vec![serde_json::json!({
+                "id": "call-native-group",
+                "type": "function",
+                "function": {"name": "submit_maap_action_batch", "arguments": "{}"}
+            })],
+        },
+    ];
+    let owner = mez_agent::ProviderContinuityOwner::new(
+        mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+        "deepseek",
+    )
+    .unwrap();
+    service
+        .append_agent_execution_chronology_for_provider(&turn, &execution, Some(&owner))
+        .unwrap();
+    service
+        .commit_settled_action_results_context(&turn.turn_id, &[failed, succeeded])
+        .unwrap();
+    assert_eq!(
+        native_tool_result_count(&service, "call-native-group"),
+        0,
+        "a native group result requires every owned action to settle"
+    );
+    let queued = service
+        .queue_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
+        .unwrap();
+    assert!(queued, "settled abandonment must admit bounded correction");
+    assert_eq!(native_tool_result_count(&service, "call-native-group"), 1);
+    let native = native_tool_result_content(&service, "call-native-group").unwrap();
+    assert!(native.contains("message_recipient_unavailable"));
+    assert!(native.contains("action_abandoned_not_started"));
+    assert!(native.contains("finished"));
+    service
+        .commit_settled_action_results_context(&turn.turn_id, &execution.action_results.clone())
+        .unwrap();
+    assert_eq!(
+        native_tool_result_count(&service, "call-native-group"),
+        1,
+        "repeated full commit must not duplicate the native tool result"
+    );
+    let prepared = crate::runtime::tests::runtime_prepared_context_for_turn(&service, "turn-1");
+    let corrective = prepared
+        .blocks()
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(corrective.contains("message_recipient_unavailable"));
+    assert!(corrective.contains("action_abandoned_not_started"));
+}
+
 /// Produces a running turn without a provider execution.
 fn open_turn_for_constructed_execution() -> (RuntimeSessionService, AgentTurnRecord) {
     let mut service = test_runtime_service();
