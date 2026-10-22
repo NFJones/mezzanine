@@ -674,8 +674,36 @@ fn runtime_unavailable_recipient_mixed_batch_correction_budget_is_stable() {
 /// exhausted, and repeating settlement/feedback does not duplicate evidence.
 #[test]
 fn runtime_settlement_commits_abandonment_before_budget_exhaustion() {
-    let (mut service, turn) = open_turn_for_constructed_execution();
-    service.set_agent_action_failure_retry_limit(0);
+    let (mut service, _target) = mixed_batch_fixture();
+    service.set_agent_action_failure_retry_limit(1);
+    let first = execute_sync(
+        &mut service,
+        batch_response(
+            "runtime-batch",
+            vec![
+                send_action("msg-attempt-1", "agent:agent-nowhere", "handoff"),
+                list_agents_action("discover-attempt-1"),
+                final_say_action("say-attempt-1", "finished"),
+            ],
+        ),
+    );
+    assert_eq!(first.terminal_state, AgentTurnState::Running);
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == "turn-1")
+    );
+    // Simulate the runtime claiming the admitted corrective continuation while
+    // keeping the same turn and stable failed-action signature.
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
     let missing = send_action("msg-custody", "agent:agent-nowhere", "handoff");
     let discovery = list_agents_action("discover-custody");
     let say = final_say_action("say-custody", "finished");
@@ -703,7 +731,7 @@ fn runtime_settlement_commits_abandonment_before_budget_exhaustion() {
     let queued = service
         .queue_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
         .unwrap();
-    assert!(!queued, "zero retry limit exhausts correction");
+    assert!(!queued, "consumed limit-one budget exhausts correction");
     assert_eq!(
         result_for(&execution, "discover-custody").status,
         ActionStatus::Cancelled
