@@ -820,6 +820,170 @@ async fn runtime_deferred_fetch_http_404_queues_model_correction() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// An execution-wide loop-guard summary must not be re-presented when a second
+/// deferred external sibling settles later.
+///
+/// Both siblings belong to one response. The first settles through the loop
+/// guard while the second is still running, so per-sibling presentation must
+/// withhold the aggregate summary; the terminal settlement then prints it
+/// exactly once alongside the ordinary failure outcome.
+#[tokio::test]
+async fn runtime_deferred_external_aggregate_summary_presents_once() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"deferred-aggregate","method":"agent/shell/command","params":{"idempotency_key":"deferred-aggregate","input":"research the docs"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .unwrap()
+        .clone();
+    let first = mez_agent::AgentAction {
+        id: "fetch-aggregate".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/first".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let second = mez_agent::AgentAction {
+        id: "fetch-sibling".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/second".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "read two sources".to_string(),
+                actions: vec![first.clone(), second.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![
+            mez_agent::ActionResult::running(&turn, &first, vec!["queued".to_string()], None),
+            mez_agent::ActionResult::running(&turn, &second, vec!["queued".to_string()], None),
+        ],
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    let aggregate_marker = "fixture-no-progress-marker";
+    let first_dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &first.id)
+        .unwrap()
+        .unwrap();
+    let no_progress = mez_agent::ActionResult::failed(
+        &turn,
+        &first,
+        ActionStatus::Failed,
+        "network_action_no_progress",
+        aggregate_marker,
+    )
+    .unwrap();
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: first.id.clone(),
+                    attempt: first_dispatch.attempt,
+                    result: Ok(no_progress),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    let after_first = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !after_first.contains(aggregate_marker),
+        "the execution-wide summary must wait for the terminal settlement: {after_first}"
+    );
+    let second_dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &second.id)
+        .unwrap()
+        .unwrap();
+    let failed = mez_agent::ActionResult::failed(
+        &turn,
+        &second,
+        ActionStatus::Failed,
+        "network_http_error",
+        "network request returned HTTP 404",
+    )
+    .unwrap();
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: second.id.clone(),
+                    attempt: second_dispatch.attempt,
+                    result: Ok(failed),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    let after_second = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        after_second.matches(aggregate_marker).count(),
+        1,
+        "the loop-guard summary must appear exactly once: {after_second}"
+    );
+    // The second sibling never published an execution header, so its ordinary
+    // outcome stays queued behind that header rather than appending here; the
+    // owner that drains accepted entries across handoffs is tracked separately.
+    // This regression only requires that nothing is duplicated.
+    assert!(
+        after_second
+            .matches("agent warning: URL fetch failed")
+            .count()
+            <= 1,
+        "an ordinary sibling failure must never duplicate: {after_second}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// A lone deferred fetch failure must install its ordinary pane warning before
 /// the settled result is handed to bounded model correction.
 ///

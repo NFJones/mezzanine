@@ -302,6 +302,27 @@ impl RuntimeSessionService {
         Ok(queued.saturating_add(preexecuted))
     }
 
+    /// Returns true when one settled external result is presented as an
+    /// execution-wide aggregate summary instead of one per-action outcome.
+    ///
+    /// The loop-guard codes below reach the shared presenter's aggregate branch,
+    /// which appends a single summary line derived from the whole execution and
+    /// deliberately bypasses the per-action published-outcome deduplication.
+    /// Deferred external completions settle one sibling at a time, so these
+    /// results must be withheld from intermediate presentations and shown only
+    /// at the terminal settlement or the summary would repeat.
+    fn external_action_result_is_aggregate_outcome(result: &ActionResult) -> bool {
+        result.is_error
+            && result.error.as_ref().is_some_and(|error| {
+                matches!(
+                    error.code.as_str(),
+                    "shell_dispatch_limit_exceeded"
+                        | "network_action_limit_exceeded"
+                        | "network_action_no_progress"
+                )
+            })
+    }
+
     /// Returns approved external actions that are ready for worker dispatch.
     pub(crate) fn pending_approved_external_actions(&self) -> Vec<(String, String)> {
         self.agent
@@ -936,15 +957,28 @@ impl RuntimeSessionService {
             execution.final_turn,
         );
         self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
-        // Header flushing only drains outcomes queued by earlier work. The newly
-        // settled deferred result must derive and install its own ordinary pane
-        // outcome here, before correction or terminal cleanup releases this
-        // response owner and before the execution may be removed.
-        self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
         let siblings_pending = execution.action_results.iter().any(|result| {
             matches!(result.status, ActionStatus::Running | ActionStatus::Blocked)
                 && !self.action_result_is_inactive_pending_shell_sibling(&turn.turn_id, result)
         });
+        // Header flushing only drains outcomes queued by earlier work. The newly
+        // settled deferred result must derive and install its own ordinary pane
+        // outcome here, before correction or terminal cleanup releases this
+        // response owner and before the execution may be removed. Loop-guard
+        // aggregate summaries describe the whole execution rather than one
+        // action, so they are withheld from per-sibling presentation and appear
+        // once, when the execution reaches a terminal state.
+        let filtered_presentation = siblings_pending.then(|| {
+            let mut filtered = execution.clone();
+            filtered
+                .action_results
+                .retain(|result| !Self::external_action_result_is_aggregate_outcome(result));
+            filtered
+        });
+        self.present_agent_action_outcomes_to_terminal_buffer(
+            &turn.pane_id,
+            filtered_presentation.as_ref().unwrap_or(&execution),
+        )?;
         let failure_feedback_queued = if execution.terminal_state == AgentTurnState::Failed
             && !siblings_pending
             && execution
