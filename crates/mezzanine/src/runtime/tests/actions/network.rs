@@ -820,6 +820,132 @@ async fn runtime_deferred_fetch_http_404_queues_model_correction() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// A lone deferred fetch failure must install its ordinary pane warning before
+/// the settled result is handed to bounded model correction.
+///
+/// The completion owner previously flushed only headers and outcomes queued by
+/// earlier work, so a deferred failure whose header was already published could
+/// reach correction and terminal cleanup without ever deriving an outcome for
+/// the newly settled result. This drives the production claim/complete path and
+/// requires exactly one eligible warning while correction is still queued.
+#[tokio::test]
+async fn runtime_deferred_fetch_failure_presents_outcome_before_correction() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"deferred-outcome","method":"agent/shell/command","params":{"idempotency_key":"deferred-outcome","input":"research the docs"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .unwrap()
+        .clone();
+    let action = mez_agent::AgentAction {
+        id: "fetch-outcome".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/missing".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "read the source".to_string(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            vec!["queued".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    let dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &action.id)
+        .unwrap()
+        .unwrap();
+    let failed = mez_agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Failed,
+        "network_http_error",
+        "network request returned HTTP 404",
+    )
+    .unwrap();
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: action.id.clone(),
+                    attempt: dispatch.attempt,
+                    result: Ok(failed),
+                    mcp_transport: None,
+                }
+            )
+            .unwrap()
+    );
+    assert!(
+        service.agent_provider_task_is_pending(&turn.turn_id),
+        "a correctable deferred failure must still queue one continuation"
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        pane_text.matches("agent warning: URL fetch failed").count(),
+        1,
+        "the settled deferred failure must install exactly one ordinary outcome: {pane_text}"
+    );
+    assert!(
+        pane_text.contains("network request returned HTTP 404"),
+        "the outcome must carry the canonical failure detail: {pane_text}"
+    );
+    assert!(
+        pane_text.contains("response")
+            && pane_text.contains("details are available for correction"),
+        "the correction hint belongs to the same outcome line: {pane_text}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// A failed deferred search waits for its successful fetch sibling, then feeds
 /// both settled results to the model exactly once without replaying either.
 #[tokio::test]

@@ -936,6 +936,11 @@ impl RuntimeSessionService {
             execution.final_turn,
         );
         self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
+        // Header flushing only drains outcomes queued by earlier work. The newly
+        // settled deferred result must derive and install its own ordinary pane
+        // outcome here, before correction or terminal cleanup releases this
+        // response owner and before the execution may be removed.
+        self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
         let siblings_pending = execution.action_results.iter().any(|result| {
             matches!(result.status, ActionStatus::Running | ActionStatus::Blocked)
                 && !self.action_result_is_inactive_pending_shell_sibling(&turn.turn_id, result)
