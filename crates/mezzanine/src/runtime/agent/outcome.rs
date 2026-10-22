@@ -366,6 +366,14 @@ impl RuntimeSessionService {
     /// Returns true when a running shell-backed sibling has not reached the
     /// pane shell yet.
     ///
+    /// A shell-backed action is only ever "unsent" when no owner retains any
+    /// deferred work for it. Beyond a live pane shell transaction, native
+    /// dispatch ownership and a pending pre-shell hook, this includes semantic
+    /// `apply_patch` progress: a started patch batch and a retained generated
+    /// follow-up phase both own work that outlives their live shell owner, so
+    /// they must never be reclassified as never started even after the stored
+    /// execution has already failed.
+    ///
     /// # Parameters
     /// - `turn_id`: The owning turn id.
     /// - `result`: The action result being classified.
@@ -377,9 +385,29 @@ impl RuntimeSessionService {
         result.status == ActionStatus::Running
             && !result.is_error
             && runtime_action_type_is_shell_backed(result.action_type)
-            && !self.agent_action_has_running_shell_transaction(turn_id, &result.action_id)
-            && !self.agent_action_has_native_shell_owner(turn_id, &result.action_id)
-            && !self.agent_action_has_pending_pre_shell_hook(turn_id, &result.action_id)
+            && !self.shell_sibling_retains_deferred_work(turn_id, &result.action_id)
+    }
+
+    /// Returns true when any owner still retains deferred work for one
+    /// shell-backed action identity.
+    ///
+    /// `apply_patch` is the case that matters most: its read phase can complete
+    /// and release live native ownership while a generated write/read follow-up
+    /// phase or a started semantic batch remains queued for the same action, so
+    /// status and live-owner checks alone are not proof that nothing started.
+    ///
+    /// # Parameters
+    /// - `turn_id`: The owning turn id.
+    /// - `action_id`: The action identity being classified.
+    fn shell_sibling_retains_deferred_work(&self, turn_id: &str, action_id: &str) -> bool {
+        let identity = Self::apply_patch_batch_state_key(turn_id, action_id);
+        self.agent
+            .pending_apply_patch_phases
+            .contains_key(&identity)
+            || self.agent.apply_patch_batch_states.contains_key(&identity)
+            || self.agent_action_has_running_shell_transaction(turn_id, action_id)
+            || self.agent_action_has_native_shell_owner(turn_id, action_id)
+            || self.agent_action_has_pending_pre_shell_hook(turn_id, action_id)
     }
 
     /// Removes all request-recovery attempt counters owned by one turn.

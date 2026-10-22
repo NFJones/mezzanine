@@ -11633,7 +11633,10 @@ persistent child, persistence phase, or other runtime boundary MAY still block
 correction until that work settles or is explicitly cancelled. Memory, issue,
 validated-configuration and other mutation or persistence-owning families MUST
 NOT be treated as unstarted from status alone until their owner proves no
-generation-owned work began.
+generation-owned work began. A shell-backed action is likewise NOT unstarted
+while it retains a started semantic patch batch or a generated follow-up phase:
+that ownership outlives its live shell worker, so abandoning it would fabricate
+not-started evidence for work that already ran.
 Async runtime event handling MUST emit the provider-dispatch side effect for a
 newly queued corrective continuation promptly after applying the failed action
 event, rather than relying solely on a later provider-poll timer.
