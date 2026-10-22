@@ -1823,6 +1823,14 @@ worker capacity. Stale failure completions MUST obey the same fences as success.
 Actor ingress loss, poisoned shared ownership, and critical invariants MUST
 remain fatal to their compromised owner; auxiliary service lifetime alone MUST
 NOT suppress errors.
+A panic in the request-local framing/JSON read phase of one authenticated local
+control connection MUST retire only that connection while the host continues to
+serve other clients. A panic after shared host dispatch begins MUST remain
+host-fatal and MUST NOT be caught and continued with potentially corrupted
+authority or routing state. This boundary adds no admission-state fence or
+structured critical-failure receipt beyond that fatal propagation, does not
+replace or suppress the process-wide panic hook, and MUST NOT add panic
+payloads or private request data to its bounded diagnostics.
 
 Bare local `mez` MUST contact the protected local host when persistent host mode
 is active. It MUST attach to the first eligible live session that accepts a

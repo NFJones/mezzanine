@@ -520,3 +520,58 @@ fn layout_state_preserves_ambiguous_original_split_ancestry() {
     assert_eq!(root["children"][1]["children"][0]["pane_id"], "%2");
     assert_eq!(root["children"][1]["children"][1]["pane_id"], "%3");
 }
+
+/// Standalone control dispatch must reject an omitted `pane/close` target
+/// before any pane mutation, matching the runtime control ingress.
+#[test]
+fn standalone_pane_close_rejects_omitted_target_without_mutation() {
+    let (mut session, primary) = test_session();
+    session
+        .split_active_pane_select(&primary, SplitDirection::Vertical, true)
+        .unwrap();
+    let before = format!("{:?}", session);
+    let response = dispatch_control_request(
+        r#"{"jsonrpc":"2.0","id":"omitted-close","method":"pane/close","params":{"force":true,"idempotency_key":"omitted-close"}}"#,
+        &mut session,
+        &primary,
+    );
+    assert!(
+        response.contains(r#""mezzanine_code":"invalid_params""#),
+        "{response}"
+    );
+    assert_eq!(format!("{:?}", session), before);
+    assert_eq!(session.active_window().unwrap().panes().len(), 2);
+
+    let malformed = dispatch_control_request(
+        r#"{"jsonrpc":"2.0","id":"malformed-close","method":"pane/close","params":{"target":{"pane_id":17,"pane_index":0},"force":true,"idempotency_key":"malformed-close"}}"#,
+        &mut session,
+        &primary,
+    );
+    assert!(
+        malformed.contains(r#""mezzanine_code":"invalid_params""#),
+        "{malformed}"
+    );
+    assert_eq!(format!("{:?}", session), before);
+    assert_eq!(session.active_window().unwrap().panes().len(), 2);
+
+    for (id, params) in [
+        (
+            "malformed-session-close",
+            r#"{"target":{"session":{"session_id":17,"default":true},"active":true},"force":true,"idempotency_key":"malformed-session-close"}"#,
+        ),
+        (
+            "malformed-window-close",
+            r#"{"target":{"window":{"window_id":17,"active":true},"pane_index":0},"force":true,"idempotency_key":"malformed-window-close"}"#,
+        ),
+    ] {
+        let body =
+            format!(r#"{{"jsonrpc":"2.0","id":"{id}","method":"pane/close","params":{params}}}"#);
+        let response = dispatch_control_request(&body, &mut session, &primary);
+        assert!(
+            response.contains(r#""mezzanine_code":"invalid_params""#),
+            "{response}"
+        );
+        assert_eq!(format!("{:?}", session), before);
+        assert_eq!(session.active_window().unwrap().panes().len(), 2);
+    }
+}

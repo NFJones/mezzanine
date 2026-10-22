@@ -1855,15 +1855,18 @@ mod tests {
         assert_eq!(supervisor.native_pending_count().unwrap(), 0);
     }
 
-    /// Installs only an exact native cleanup obligation, without actor/filesystem
-    /// setup. The real production stop/drain path supplies all retirement proof.
-    fn pending_native_fixture(
-        supervisor: &SessionSupervisor,
-        id: &str,
+    /// Spawns the exact fixture child without actor/filesystem setup. The
+    /// returned duplicated master is a custody decision for the caller: holding
+    /// it excludes kernel PTY hangup as an alternate cause while the exact child
+    /// is observed, while dropping it preserves the original handle-return shape
+    /// of fixtures that need only slot evidence.
+    fn spawn_pending_native_child(
         gate: bool,
     ) -> (
+        PaneProcessRetirementOwner,
         rustix::process::Pid,
         Option<mez_mux::process::PaneProcessChildReservation>,
+        std::os::fd::OwnedFd,
     ) {
         let native = PaneProcessRetirementOwner::default();
         let gate = gate.then(|| native.reserve().unwrap());
@@ -1878,6 +1881,18 @@ mod tests {
         .unwrap();
         let pid =
             rustix::process::Pid::from_raw(i32::try_from(process.primary_pid()).unwrap()).unwrap();
+        let master = process.duplicate_master_fd().unwrap();
+        drop(process);
+        (native, pid, gate, master)
+    }
+
+    /// Inserts the closed-actor generation that owns only the fixture's exact
+    /// native obligation. The real production stop/drain path supplies proof.
+    fn insert_pending_native_entry(
+        supervisor: &SessionSupervisor,
+        id: &str,
+        native: PaneProcessRetirementOwner,
+    ) {
         supervisor.inner.entries().unwrap().insert(
             id.to_string(),
             SupervisorEntry {
@@ -1890,27 +1905,76 @@ mod tests {
                 },
             },
         );
-        drop(process);
+    }
+
+    /// Installs only an exact native cleanup obligation, without actor/filesystem
+    /// setup, and releases the duplicated master unheld. Callers that need PTY
+    /// custody use `pending_native_fixture_with_custody` instead.
+    fn pending_native_fixture(
+        supervisor: &SessionSupervisor,
+        id: &str,
+        gate: bool,
+    ) -> (
+        rustix::process::Pid,
+        Option<mez_mux::process::PaneProcessChildReservation>,
+    ) {
+        let (native, pid, gate, master) = spawn_pending_native_child(gate);
+        insert_pending_native_entry(supervisor, id, native);
+        drop(master);
         (pid, gate)
+    }
+
+    /// Custody variant: the caller keeps the duplicated PTY master so kernel
+    /// hangup cannot retire the exact child behind the test's observations.
+    fn pending_native_fixture_with_custody(
+        supervisor: &SessionSupervisor,
+        id: &str,
+        gate: bool,
+    ) -> (
+        rustix::process::Pid,
+        Option<mez_mux::process::PaneProcessChildReservation>,
+        PaneProcessRetirementOwner,
+        std::os::fd::OwnedFd,
+    ) {
+        let (native, pid, gate, master) = spawn_pending_native_child(gate);
+        insert_pending_native_entry(supervisor, id, native.clone());
+        (pid, gate, native, master)
     }
 
     /// Cleanup-pending ownership cannot be evicted by zero terminal history or
     /// removed on a bounded unproven error. Retry uses the same closed-actor
     /// generation and preserves the original failure diagnostic until settlement.
+    ///
+    /// A real drain lease, not the reservation gate (which is cardinality only),
+    /// is the effect barrier here: it deterministically excludes every child
+    /// claim during the bounded stop, so the fixture cannot leave the exact child
+    /// holding a retained expired effect plan that an ordinary continuation is
+    /// contract-forbidden to renew.
     #[tokio::test]
     async fn native_cleanup_pending_survives_history_and_bounded_retry_error() {
         let supervisor = SessionSupervisor::new(0);
-        let (pid, gate) = pending_native_fixture(&supervisor, "$native-pending", true);
+        let (pid, gate, native, master) =
+            pending_native_fixture_with_custody(&supervisor, "$native-pending", true);
+        let barrier = native.begin_drain().unwrap();
+        let bounded = supervisor
+            .stop_with_native_deadline(
+                "$native-pending",
+                true,
+                tokio::time::Instant::now() + Duration::from_millis(30),
+            )
+            .await
+            .expect_err("unproven obligation must bound the stop");
         assert!(
-            supervisor
-                .stop_with_native_deadline(
-                    "$native-pending",
-                    true,
-                    tokio::time::Instant::now() + Duration::from_millis(30)
-                )
-                .await
-                .is_err()
+            bounded
+                .message()
+                .contains("unproven for 2 exact owned children"),
+            "bounded stop must fail on the unproven reservation, not a child deadline: {bounded}"
         );
+        // Sanitized phase receipt: while the blocked prefix was held, the drain
+        // claimed no child, reaped none, and latched no native failure.
+        assert_eq!(native.outstanding(), 2);
+        assert_eq!(native.returned_count(), 1);
+        assert!(native.cleanup_failure().is_none());
         assert!(supervisor.contains("$native-pending").unwrap());
         assert_eq!(supervisor.remove_terminal("$native-pending").unwrap(), 0);
         let snapshot = supervisor.snapshots().await.unwrap().pop().unwrap();
@@ -1919,22 +1983,124 @@ mod tests {
             snapshot.failure.as_deref(),
             Some("original native fixture failure")
         );
+        drop(barrier);
         drop(gate);
         supervisor.stop("$native-pending", true).await.unwrap();
         assert!(!supervisor.contains("$native-pending").unwrap());
+        assert_eq!(native.outstanding(), 0);
         assert_eq!(
             rustix::process::test_kill_process(pid),
             Err(rustix::io::Errno::SRCH)
         );
+        drop(master);
+    }
+
+    /// Pins the retained initial0 effect-plan contract: once a claimed exact
+    /// child's only initial authority has expired, an ordinary continuation may
+    /// observe status only and must retain ownership; only a separately prepared
+    /// and admitted explicit retry may advance the epoch (SPEC 2267-2306).
+    ///
+    /// The pre-effect claim is controlled here on purpose, so the retained count
+    /// at the failing ordinary stop is this fixture's evidence. It does not
+    /// identify the historical 6fe run's child PID, signal, or reap state.
+    #[tokio::test]
+    async fn native_cleanup_pending_expired_initial_plan_needs_explicit_retry() {
+        let supervisor = SessionSupervisor::new(0);
+        let (pid, _, native, master) =
+            pending_native_fixture_with_custody(&supervisor, "$native-expired", false);
+        let attempt = native
+            .capture_cleanup_attempt(std::time::Instant::now() + Duration::from_millis(30))
+            .unwrap();
+        let mut claim = native
+            .try_begin_drain_for_attempt(&attempt)
+            .unwrap()
+            .expect("fixture drain claimed");
+        let child = claim.take_returned().expect("exact returned child claimed");
+        drop(child);
+        drop(claim);
+        let retained_deadline = attempt.deadline();
+        tokio::time::sleep_until(tokio::time::Instant::from_std(
+            retained_deadline + Duration::from_millis(20),
+        ))
+        .await;
+        let primary = supervisor
+            .stop_with_native_deadline(
+                "$native-expired",
+                true,
+                tokio::time::Instant::now() + Duration::from_millis(200),
+            )
+            .await
+            .expect_err("an ordinary continuation cannot renew expired authority");
+        assert!(
+            primary
+                .message()
+                .contains("native termination deadline expired; exact ownership retained"),
+            "ordinary continuation must retain the expired exact plan: {primary}"
+        );
+        assert_eq!(native.outstanding(), 1);
+        assert_eq!(native.returned_count(), 1);
+        assert!(native.has_cleanup_failure());
+        let retained = supervisor.snapshots().await.unwrap().pop().unwrap();
+        assert_eq!(
+            retained.failure.as_deref(),
+            Some("original native fixture failure")
+        );
+        // Fixture-only independent cleanup under a separate prepared/admitted
+        // token. This is lower-layer test custody, not new automatic host retry
+        // authority. Sticky receipts may accompany a successful exact wait.
+        let retry = native
+            .prepare_explicit_cleanup_retry(std::time::Instant::now() + Duration::from_secs(5))
+            .unwrap()
+            .admit()
+            .expect("expired initial plan authorizes explicit retry");
+        assert!(
+            attempt.identity().validate(&native).is_err(),
+            "stale initial scope must stay stale after explicit retry admission"
+        );
+        let retry_deadline = tokio::time::Instant::from_std(retry.deadline());
+        while native.outstanding() != 0 {
+            assert!(
+                tokio::time::Instant::now() < retry_deadline,
+                "explicit fixture cleanup exceeded its admitted token budget"
+            );
+            let _ = crate::host::async_runtime::advance_native_pane_retirement_for_attempt(
+                &native,
+                &retry,
+                retry_deadline,
+            );
+            if native.outstanding() != 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+        assert_eq!(
+            rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
+        );
+        // The sticky receipt outlives the reap: the ordinary stop retires the
+        // entry but still reports the retained native failure. Neither is erased.
+        let sticky = supervisor
+            .stop("$native-expired", true)
+            .await
+            .expect_err("sticky native receipt must not be erased by settlement");
+        assert!(
+            sticky.message().contains("retained native cleanup failure"),
+            "settlement must report the retained native receipt: {sticky}"
+        );
+        assert!(!supervisor.contains("$native-expired").unwrap());
+        drop(master);
     }
 
     /// A stuck independent cleanup owner cannot prevent a sibling's exact child
-    /// from being stopped/reaped within the same enclosing shutdown budget.
+    /// from being stopped/reaped within the same enclosing shutdown budget. The
+    /// blocked prefix holds a real drain lease (the reservation gate alone is
+    /// cardinality only), while the sibling stays fully drainable.
     #[tokio::test]
     async fn native_shutdown_budget_attempts_siblings_after_one_unproven_owner() {
         let supervisor = SessionSupervisor::new(0);
-        let (first, gate) = pending_native_fixture(&supervisor, "$a-pending", true);
+        let (first, gate, blocked, master) =
+            pending_native_fixture_with_custody(&supervisor, "$a-pending", true);
         let (sibling, _) = pending_native_fixture(&supervisor, "$b-sibling", false);
+        let barrier = blocked.begin_drain().unwrap();
         let start = tokio::time::Instant::now();
         assert!(
             supervisor
@@ -1946,17 +2112,21 @@ mod tests {
             start.elapsed() < Duration::from_secs(1),
             "shutdown restarted the budget per session"
         );
+        assert_eq!(blocked.outstanding(), 2);
+        assert!(blocked.cleanup_failure().is_none());
         assert_eq!(
             rustix::process::test_kill_process(sibling),
             Err(rustix::io::Errno::SRCH)
         );
         assert!(supervisor.contains("$a-pending").unwrap());
+        drop(barrier);
         drop(gate);
         supervisor.stop("$a-pending", true).await.unwrap();
         assert_eq!(
             rustix::process::test_kill_process(first),
             Err(rustix::io::Errno::SRCH)
         );
+        drop(master);
     }
 
     /// Captured completion guards run even when a runtime task never receives

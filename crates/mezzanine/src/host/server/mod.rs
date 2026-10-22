@@ -17,10 +17,11 @@ use std::ffi::OsString;
 use std::fs;
 use std::future::Future;
 use std::os::fd::AsRawFd;
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use futures_util::{StreamExt, stream::FuturesUnordered};
+use futures_util::{FutureExt, StreamExt, stream::FuturesUnordered};
 use mez_mux::layout::Size;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
@@ -103,6 +104,15 @@ pub(crate) struct HostServer {
     administration_lock: tokio::sync::Mutex<()>,
     #[cfg(test)]
     fail_next_administration_completion_audit: std::sync::atomic::AtomicBool,
+    /// Test-only one-shot panic at the start of one accepted local handler.
+    #[cfg(test)]
+    panic_next_local_connection: std::sync::atomic::AtomicBool,
+    /// Proves the caught local-handler panic was observed by the host loop.
+    #[cfg(test)]
+    local_connection_panic_observed: std::sync::atomic::AtomicBool,
+    /// Test-only one-shot panic after shared request dispatch returns.
+    #[cfg(test)]
+    panic_next_dispatch: std::sync::atomic::AtomicBool,
     socket_path: PathBuf,
     _ownership: HostOwnershipGuard,
 }
@@ -120,6 +130,12 @@ struct HostConnectionResult {
     /// Request id whose authenticated stream must receive the final verdict.
     completion_id: Option<Value>,
 }
+
+type LocalControlRequest = (Value, String, Value);
+type HostConnectionFuture<'a> =
+    std::pin::Pin<Box<dyn Future<Output = Result<HostConnectionResult>> + Send + 'a>>;
+type LocalControlRequestFuture<'a> =
+    std::pin::Pin<Box<dyn Future<Output = Result<LocalControlRequest>> + Send + 'a>>;
 
 /// An authenticated shutdown reply retained outside the connections being
 /// drained. Its deadline was captured at accept, never renewed after cleanup.
@@ -233,6 +249,12 @@ impl HostServer {
             administration_lock: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             fail_next_administration_completion_audit: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            panic_next_local_connection: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            local_connection_panic_observed: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            panic_next_dispatch: std::sync::atomic::AtomicBool::new(false),
             socket_path,
             _ownership: ownership,
         })
@@ -241,6 +263,27 @@ impl HostServer {
     /// Returns the protected host management socket.
     pub(crate) fn socket_path(&self) -> &Path {
         &self.socket_path
+    }
+
+    /// Arms one accepted local connection to panic before request dispatch.
+    #[cfg(test)]
+    pub(crate) fn panic_next_local_connection_for_test(&self) {
+        self.panic_next_local_connection
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Reports whether the host loop caught an armed local-handler panic.
+    #[cfg(test)]
+    pub(crate) fn local_connection_panic_observed_for_test(&self) -> bool {
+        self.local_connection_panic_observed
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Arms one request to panic after shared dispatch has returned.
+    #[cfg(test)]
+    pub(crate) fn panic_next_dispatch_for_test(&self) {
+        self.panic_next_dispatch
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Returns the shared session router used by local and remote front doors.
@@ -362,9 +405,42 @@ impl HostServer {
                     }
                     let deadline = tokio::time::Instant::now() + HOST_CONTROL_CONNECTION_TIMEOUT;
                     connections.push(async move {
+                        let read = AssertUnwindSafe(async {
+                            #[cfg(test)]
+                            if self
+                                .panic_next_local_connection
+                                .swap(false, std::sync::atomic::Ordering::SeqCst)
+                            {
+                                panic!("test-only local connection handler panic");
+                            }
+                            tokio::time::timeout_at(deadline, Self::read_control_request(&mut stream))
+                                .await
+                        })
+                        .catch_unwind()
+                        .await;
+                        let (request, method, id) = match read {
+                            Ok(Ok(Ok(request))) => request,
+                            Ok(Ok(Err(error))) => {
+                                eprintln!("mez host: local client request failed: uid {peer_uid}, error {error}");
+                                return None;
+                            }
+                            Ok(Err(_)) => {
+                                eprintln!("mez host: local client request timed out: uid {peer_uid}, timeout_seconds {}", HOST_CONTROL_CONNECTION_TIMEOUT.as_secs());
+                                return None;
+                            }
+                            Err(_) => {
+                                #[cfg(test)]
+                                self.local_connection_panic_observed
+                                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                                eprintln!(
+                                    "mez host: local client handler panicked; connection retired"
+                                );
+                                return None;
+                            }
+                        };
                         match tokio::time::timeout_at(
                             deadline,
-                            self.serve_connection(&mut stream),
+                            self.complete_control_request(&mut stream, request, method, id),
                         )
                         .await
                         {
@@ -456,10 +532,23 @@ impl HostServer {
         }
     }
 
+    #[cfg(test)]
     fn serve_connection<'a>(
         &'a self,
         stream: &'a mut tokio::net::UnixStream,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<HostConnectionResult>> + Send + 'a>> {
+    ) -> HostConnectionFuture<'a> {
+        Box::pin(async move {
+            let (request, method, id) = Self::read_control_request(stream).await?;
+            self.complete_control_request(stream, request, method, id)
+                .await
+        })
+    }
+
+    /// Reads one local request frame and metadata without touching shared host
+    /// state. This is the only phase whose panic may be isolated per connection.
+    fn read_control_request<'a>(
+        stream: &'a mut tokio::net::UnixStream,
+    ) -> LocalControlRequestFuture<'a> {
         Box::pin(async move {
             let mut framed = Framed::new(
                 stream,
@@ -477,7 +566,28 @@ impl HostServer {
                 .unwrap_or("<missing>")
                 .to_string();
             let id = request.get("id").cloned().unwrap_or(Value::Null);
+            Ok((request, method, id))
+        })
+    }
+
+    /// Dispatches an already-read local request through shared host state and
+    /// writes its response. A panic here remains host-critical and uncatchable.
+    fn complete_control_request<'a>(
+        &'a self,
+        stream: &'a mut tokio::net::UnixStream,
+        request: Value,
+        method: String,
+        id: Value,
+    ) -> HostConnectionFuture<'a> {
+        Box::pin(async move {
             let result = self.dispatch_managed_request(&request).await;
+            #[cfg(test)]
+            if self
+                .panic_next_dispatch
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                panic!("test-only shared dispatch panic");
+            }
             let (body, shutdown, failure) = match result {
                 Ok((result, shutdown)) => (
                     json!({"jsonrpc":"2.0","id":id.clone(),"result":result}),
@@ -499,11 +609,10 @@ impl HostServer {
                 })
                 .map(|_| id);
             if completion_id.is_none() {
-                framed
-                    .get_mut()
+                stream
                     .write_all(&crate::control::encode_control_body(&body.to_string()))
                     .await?;
-                framed.get_mut().flush().await?;
+                stream.flush().await?;
             }
             Ok(HostConnectionResult {
                 method,
@@ -2658,6 +2767,93 @@ mod tests {
         );
         assert!(served.shutdown.is_none());
         response
+    }
+
+    /// A panic in one accepted local handler retires only that connection; the
+    /// host still serves an independent request and completes bounded shutdown.
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_handler_panic_retires_connection_and_preserves_host() {
+        let root = test_root("local-handler-panic");
+        let host = std::sync::Arc::new(HostServer::bind(config(root.clone())).unwrap());
+        let serving_host = std::sync::Arc::clone(&host);
+        let server_task =
+            tokio::spawn(async move { serving_host.serve(std::future::pending()).await });
+        host.panic_next_local_connection_for_test();
+        let panicked = tokio::net::UnixStream::connect(host.socket_path())
+            .await
+            .unwrap();
+        let mut observed = false;
+        for _ in 0..2_000 {
+            if host.local_connection_panic_observed_for_test() {
+                observed = true;
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            observed,
+            "host did not catch the controlled local-handler panic"
+        );
+        let status = tokio::time::timeout(
+            Duration::from_secs(1),
+            exchange_host_socket_request(host.socket_path(), "host/get", json!({})),
+        )
+        .await
+        .expect("host stopped serving after one handler panic");
+        assert_eq!(status["result"]["ready"], true);
+        let shutdown = exchange_host_socket_request(
+            host.socket_path(),
+            "host/shutdown",
+            json!({"force":true}),
+        )
+        .await;
+        assert_eq!(shutdown["result"]["shutting_down"], true);
+        tokio::time::timeout(Duration::from_secs(1), server_task)
+            .await
+            .expect("host shutdown should complete after a handler panic")
+            .unwrap()
+            .unwrap();
+        drop(panicked);
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A panic after shared dispatch has run cannot be isolated as a local
+    /// client failure; it must terminate the host serve task as critical.
+    #[tokio::test(flavor = "current_thread")]
+    async fn shared_dispatch_panic_terminates_host_instead_of_continuing() {
+        let root = test_root("shared-dispatch-panic");
+        let host = std::sync::Arc::new(HostServer::bind(config(root.clone())).unwrap());
+        let serving_host = std::sync::Arc::clone(&host);
+        let server_task =
+            tokio::spawn(async move { serving_host.serve(std::future::pending()).await });
+        host.panic_next_dispatch_for_test();
+        let mut stream = tokio::net::UnixStream::connect(host.socket_path())
+            .await
+            .unwrap();
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": "shared-dispatch-panic",
+            "method": "host/get",
+            "params": {},
+        })
+        .to_string();
+        stream
+            .write_all(&crate::control::encode_control_body(&request))
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        let joined = tokio::time::timeout(Duration::from_secs(1), server_task)
+            .await
+            .expect("shared-dispatch panic did not terminate the host task");
+        let error = match joined {
+            Ok(_) => panic!("host task completed without the armed critical panic"),
+            Err(error) => error,
+        };
+        assert!(error.is_panic(), "host task ended without a critical panic");
+        drop(stream);
+        drop(host);
+        let _ = fs::remove_dir_all(root);
     }
 
     async fn exchange_host_socket_request(

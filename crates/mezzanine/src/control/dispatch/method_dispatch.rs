@@ -408,8 +408,9 @@ pub(super) fn dispatch_parsed_request(
                 .ok_or_else(|| MezError::invalid_args("pane/close requires a params object"))?;
             require_idempotency_key(params)?;
             let force = json_bool_field(params, "force").unwrap_or(false);
-            let target = pane_target_checked_resolved(session, params)?;
-            session.kill_pane(primary_client_id, target.as_deref(), force)?;
+            let target = pane_target_checked_resolved(session, params)?
+                .ok_or_else(|| MezError::invalid_args("pane/close requires a target"))?;
+            session.kill_pane(primary_client_id, Some(target.as_str()), force)?;
             Ok(r#"{"closed":true}"#.to_string())
         }
         ControlDispatchKind::PaneRename => {
