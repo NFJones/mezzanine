@@ -976,7 +976,23 @@ impl RuntimeSessionService {
                                 .agent_deferred_provider_progress
                                 .contains(&prior_key);
                         }
-                        action_holds_later_log(prior)
+                        // A failed response may retain a shell sibling that never
+                        // started: no live transaction, native owner or pre-shell
+                        // hook means it cannot render a later row, so it must not
+                        // hold the ordered log behind it. A Running/Completed
+                        // response keeps the strict barrier because that shell
+                        // could still start and render after a successor.
+                        let prior_is_inactive_failed_shell = execution.terminal_state
+                            == AgentTurnState::Failed
+                            && execution.action_results.iter().any(|result| {
+                                result.action_id == prior.id
+                                    && self.action_result_is_inactive_pending_shell_sibling(
+                                        &execution.request.turn_id,
+                                        result,
+                                    )
+                            });
+                        !prior_is_inactive_failed_shell
+                            && action_holds_later_log(prior)
                             && !self
                                 .presentation
                                 .agent_published_provider_headers
@@ -1169,7 +1185,15 @@ impl RuntimeSessionService {
                     }
                 }
                 self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, execution)?;
-            } else if action_holds_later_log(action)
+            } else if !(execution.terminal_state == AgentTurnState::Failed
+                && execution.action_results.iter().any(|result| {
+                    result.action_id == action.id
+                        && self.action_result_is_inactive_pending_shell_sibling(
+                            &execution.request.turn_id,
+                            result,
+                        )
+                }))
+                && action_holds_later_log(action)
                 && !(matches!(action.payload, AgentActionPayload::ShellCommand { .. })
                     && self
                         .presentation
