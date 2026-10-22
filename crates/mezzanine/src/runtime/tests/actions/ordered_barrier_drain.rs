@@ -3,32 +3,58 @@
 //! These are deliberately synthetic presentation controls: they install an
 //! execution snapshot and register its provider presentation order through the
 //! supported owner APIs, without admitting a provider response or executing any
-//! command. They exist to pin the two barrier sites that decide whether an
-//! inactive failed shell sibling may hold a later component. A genuine
-//! unpublished-header integration window and the pending pre-shell-hook state
-//! remain explicitly unqualified and are not claimed here.
+//! command. They pin the two barrier sites that decide whether an inactive
+//! failed shell sibling may hold a later component.
+//!
+//! Explicit limitations: acknowledgment storage is a set, so these controls
+//! establish exact key/body acknowledgment *membership* and its stability, not
+//! physical exactly-once rendering. A genuine unpublished-header integration
+//! window, native/transaction-owned shell negatives and the pending pre-shell
+//! hook state remain unqualified and are not claimed here.
 
 use super::*;
 
-/// Synthetic response terminal states that must keep the strict barrier.
+/// Synthetic response terminal states.
 #[derive(Clone, Copy)]
 enum BarrierState {
     /// Running response: an unowned shell could still start.
     Running,
-    /// Settled response: the same shape is deliberate synthetic input.
+    /// Settled response: deliberate synthetic predicate input.
     Completed,
     /// Failed response: the unowned shell is provably inactive.
     Failed,
+}
+
+type OrderedKey = crate::runtime::render::RuntimeProviderLogOrdinal;
+
+struct QueuedHeader {
+    action: mez_agent::AgentAction,
+    header: String,
+    entry: mez_core::presentation::PresentationEntry,
+}
+
+struct QueuedResult {
+    action: mez_agent::AgentAction,
+    result: mez_agent::ActionResult,
+    text: String,
+    entry: mez_core::presentation::PresentationEntry,
+    transaction: Option<String>,
+    raw: bool,
 }
 
 struct DrainFixture {
     service: crate::runtime::RuntimeSessionService,
     execution: mez_agent::AgentTurnExecution,
     turn: AgentTurnRecord,
+    shell_key: OrderedKey,
+    header_key: OrderedKey,
+    queued_header: QueuedHeader,
+    queued_result: QueuedResult,
 }
 
-/// Installs one two-action snapshot (earlier shell, later fetch) and registers
-/// its provider presentation order without admitting or dispatching work.
+/// Installs one two-action snapshot (earlier shell, later fetch), registers its
+/// provider presentation order through the supported owner and queues the later
+/// header and RESULT. Returns the owner-complete exact keys and retained sources.
 fn drain_fixture(state: BarrierState) -> DrainFixture {
     let mut service = test_runtime_service();
     service
@@ -108,6 +134,44 @@ fn drain_fixture(state: BarrierState) -> DrainFixture {
     service
         .retain_provider_presentation_order("%1", &execution)
         .unwrap();
+    // The expected owner comes from the registered production order, which must
+    // be unique for this pane/turn/session chronology; it is never selected from
+    // an arbitrary queued component.
+    let conversation = service
+        .agent_shell_store()
+        .get(&turn.pane_id)
+        .map(|session| session.session_id.clone())
+        .expect("fixture shell session");
+    let mut groups = service
+        .presentation
+        .agent_provider_log_orders
+        .keys()
+        .filter(|(pane, candidate, session, _)| {
+            pane == &turn.pane_id && candidate == &turn.turn_id && session == &conversation
+        })
+        .map(|(_, _, _, group)| group.clone())
+        .collect::<Vec<_>>();
+    groups.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    assert_eq!(
+        groups.len(),
+        1,
+        "the fixture chronology owns exactly one provider-log order"
+    );
+    let group = groups.remove(0);
+    let shell_key: OrderedKey = (
+        turn.pane_id.clone(),
+        turn.turn_id.clone(),
+        conversation.clone(),
+        group.clone(),
+        0,
+    );
+    let header_key: OrderedKey = (
+        turn.pane_id.clone(),
+        turn.turn_id.clone(),
+        conversation,
+        group,
+        1,
+    );
     assert!(
         !service
             .queue_ordered_provider_header("%1", &execution, &shell)
@@ -125,58 +189,111 @@ fn drain_fixture(state: BarrierState) -> DrainFixture {
     service
         .queue_ordered_provider_result("%1", &execution, &fetch, &body)
         .unwrap();
+
+    // Preconditions: both later sources are independently queued under the exact
+    // expected key, with their full retained provenance captured for comparison.
+    let queued_header = service
+        .presentation
+        .agent_queued_provider_headers
+        .get(&header_key)
+        .map(|(action, header, entry)| QueuedHeader {
+            action: action.clone(),
+            header: header.clone(),
+            entry: entry.clone().expect("queued header occurrence entry"),
+        })
+        .expect("later header queued exactly under the expected owner");
+    let queued_result = service
+        .presentation
+        .agent_queued_provider_results
+        .get(&header_key)
+        .map(
+            |(action, result, text, entry, transaction, raw)| QueuedResult {
+                action: action.clone(),
+                result: result.clone(),
+                text: text.clone(),
+                entry: entry.clone(),
+                transaction: transaction.clone(),
+                raw: *raw,
+            },
+        )
+        .expect("later RESULT queued exactly under the expected owner");
+    assert_eq!(
+        queued_header.action.id, fetch.id,
+        "the queued header belongs to the later fetch"
+    );
+    assert_eq!(queued_result.action.id, fetch.id);
+    assert_eq!(queued_result.result.action_id, fetch.id);
+    assert_eq!(queued_result.text, "barrier body");
+    assert!(queued_header.header.contains("fetch url"));
+    assert!(!queued_header.entry.id.is_empty());
+    assert!(!queued_result.entry.id.is_empty());
     DrainFixture {
         service,
         execution,
         turn,
+        shell_key,
+        header_key,
+        queued_header,
+        queued_result,
     }
 }
 
-/// Reports queued later components for the exact turn and ordinal.
-fn later_component_queued(fixture: &DrainFixture) -> bool {
-    let presentation = &fixture.service.presentation;
-    presentation
+fn header_still_queued(fixture: &DrainFixture) -> bool {
+    fixture
+        .service
+        .presentation
         .agent_queued_provider_headers
-        .keys()
-        .any(|key| key.1 == fixture.turn.turn_id && key.4 == 1)
-        || presentation
-            .agent_queued_provider_results
-            .keys()
-            .any(|key| key.1 == fixture.turn.turn_id && key.4 == 1)
+        .get(&fixture.header_key)
+        .is_some_and(|(action, header, entry)| {
+            action.id == fixture.queued_header.action.id
+                && header == &fixture.queued_header.header
+                && entry
+                    .as_ref()
+                    .is_some_and(|entry| entry.id == fixture.queued_header.entry.id)
+        })
 }
 
-/// Reports the exact later header acknowledgment.
-fn later_header_published(fixture: &DrainFixture) -> bool {
+fn result_still_queued(fixture: &DrainFixture) -> bool {
+    fixture
+        .service
+        .presentation
+        .agent_queued_provider_results
+        .get(&fixture.header_key)
+        .is_some_and(|(action, result, text, entry, transaction, raw)| {
+            action.id == fixture.queued_result.action.id
+                && result == &fixture.queued_result.result
+                && text == &fixture.queued_result.text
+                && entry.id == fixture.queued_result.entry.id
+                && transaction == &fixture.queued_result.transaction
+                && *raw == fixture.queued_result.raw
+        })
+}
+
+fn header_acknowledged(fixture: &DrainFixture) -> bool {
     fixture
         .service
         .presentation
         .agent_published_provider_headers
-        .iter()
-        .any(|key| key.1 == fixture.turn.turn_id && key.4 == 1)
+        .contains(&fixture.header_key)
 }
 
-/// Counts the exact later RESULT acknowledgment by body text.
-fn later_body_acknowledgments(fixture: &DrainFixture) -> usize {
+fn body_ack_membership(fixture: &DrainFixture) -> bool {
     fixture
         .service
         .presentation
         .agent_published_provider_results
-        .iter()
-        .filter(|(key, text)| key.1 == fixture.turn.turn_id && key.4 == 1 && text == "barrier body")
-        .count()
+        .contains(&(fixture.header_key.clone(), "barrier body".to_string()))
 }
 
-/// Reports whether the earlier headerless shell gained any acknowledgment.
-fn earlier_shell_acknowledged(fixture: &DrainFixture) -> bool {
+fn shell_acknowledged(fixture: &DrainFixture) -> bool {
     let presentation = &fixture.service.presentation;
     presentation
         .agent_published_provider_headers
-        .iter()
-        .any(|key| key.1 == fixture.turn.turn_id && key.4 == 0)
+        .contains(&fixture.shell_key)
         || presentation
             .agent_published_provider_results
             .iter()
-            .any(|(key, _)| key.1 == fixture.turn.turn_id && key.4 == 0)
+            .any(|(key, _)| key == &fixture.shell_key)
 }
 
 fn drain(fixture: &mut DrainFixture) {
@@ -186,16 +303,23 @@ fn drain(fixture: &mut DrainFixture) {
         .unwrap();
 }
 
-/// A Running response keeps the strict barrier: the headerless earlier shell
-/// could still start and render later, so both later sources stay queued.
+/// A Running response keeps the strict barrier: both exact later sources stay
+/// queued with full provenance unchanged and nothing acknowledged, and the
+/// earlier headerless shell gains no acknowledgment.
 #[test]
 fn runtime_ordered_drain_running_unowned_shell_holds_later_sources() {
     let mut fixture = drain_fixture(BarrierState::Running);
     drain(&mut fixture);
-    assert!(later_component_queued(&fixture));
-    assert!(!later_header_published(&fixture));
-    assert_eq!(later_body_acknowledgments(&fixture), 0);
-    assert!(!earlier_shell_acknowledged(&fixture));
+    assert!(header_still_queued(&fixture));
+    assert!(result_still_queued(&fixture));
+    assert!(!header_acknowledged(&fixture));
+    assert!(!body_ack_membership(&fixture));
+    assert!(!shell_acknowledged(&fixture));
+    drain(&mut fixture);
+    assert!(header_still_queued(&fixture));
+    assert!(result_still_queued(&fixture));
+    assert!(!header_acknowledged(&fixture));
+    assert!(!body_ack_membership(&fixture));
 }
 
 /// A Completed response is deliberate synthetic input for the same strictness:
@@ -204,25 +328,38 @@ fn runtime_ordered_drain_running_unowned_shell_holds_later_sources() {
 fn runtime_ordered_drain_completed_unowned_shell_holds_later_sources() {
     let mut fixture = drain_fixture(BarrierState::Completed);
     drain(&mut fixture);
-    assert!(later_component_queued(&fixture));
-    assert_eq!(later_body_acknowledgments(&fixture), 0);
+    assert!(header_still_queued(&fixture));
+    assert!(result_still_queued(&fixture));
+    assert!(!header_acknowledged(&fixture));
+    assert!(!body_ack_membership(&fixture));
+    assert!(!shell_acknowledged(&fixture));
 }
 
 /// A Failed response exempts the inactive shell sibling: both barrier sites must
-/// release, installing the exact later header and acknowledging the exact body
-/// once while the earlier shell gains no acknowledgment.
+/// release, installing the exact later header and acknowledging the exact later
+/// body once, while the earlier shell gains no acknowledgment. A repeated drain
+/// keeps acknowledgment membership and source state stable.
 #[test]
 fn runtime_ordered_drain_failed_unowned_shell_releases_later_sources_once() {
     let mut fixture = drain_fixture(BarrierState::Failed);
     drain(&mut fixture);
-    assert!(!later_component_queued(&fixture));
-    assert!(later_header_published(&fixture));
-    assert_eq!(later_body_acknowledgments(&fixture), 1);
-    assert!(!earlier_shell_acknowledged(&fixture));
-
-    // A repeated drain must not acknowledge or re-queue anything again.
+    assert!(!header_still_queued(&fixture));
+    assert!(!result_still_queued(&fixture));
+    assert!(header_acknowledged(&fixture));
+    assert!(body_ack_membership(&fixture));
+    assert!(!shell_acknowledged(&fixture));
+    let acknowledged = fixture
+        .service
+        .presentation
+        .agent_published_provider_results
+        .iter()
+        .filter(|(key, text)| key == &fixture.header_key && text == "barrier body")
+        .count();
+    assert_eq!(acknowledged, 1, "single acknowledgment membership");
     drain(&mut fixture);
-    assert!(!later_component_queued(&fixture));
-    assert_eq!(later_body_acknowledgments(&fixture), 1);
-    assert!(!earlier_shell_acknowledged(&fixture));
+    assert!(!header_still_queued(&fixture));
+    assert!(!result_still_queued(&fixture));
+    assert!(header_acknowledged(&fixture));
+    assert!(body_ack_membership(&fixture));
+    assert!(!shell_acknowledged(&fixture));
 }
