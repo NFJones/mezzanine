@@ -1418,7 +1418,7 @@ impl AgentTranscriptStore {
                 "compaction epoch summary is empty or exceeds the accepted size limit",
             ));
         }
-        let latest_sequence = match self.next_sequence_locked(conversation_id) {
+        let latest_sequence = match self.next_sequence(conversation_id) {
             Ok(next) => Some(next.saturating_sub(1)),
             Err(error) if error.kind() == MezErrorKind::NotFound => None,
             Err(error) => return Err(error),
@@ -2727,7 +2727,7 @@ impl AgentTranscriptStore {
         }
         if let ConversationTranscriptRead::After(through_sequence) = read
             && through_sequence > 0
-            && self.next_sequence_locked(conversation_id)? <= through_sequence
+            && self.next_sequence(conversation_id)? <= through_sequence
         {
             return Err(MezError::invalid_state(
                 "transcript replay boundary is absent from the durable archive",
@@ -3236,17 +3236,14 @@ impl AgentTranscriptStore {
         Ok(entries)
     }
 
-    /// Returns the next append sequence for one conversation.
+    /// Returns the next append sequence for one conversation without scanning
+    /// the full transcript file.
     ///
-    /// Allocation locates the last COMPLETE record rather than reading a bounded
-    /// preview suffix: a single valid encoded record may legitimately exceed the
-    /// context-preview byte window, and sequence allocation must not inherit
-    /// that budget. The read happens under the conversation lock, so a row whose
-    /// terminator the owning appender is still writing can never be mistaken for
-    /// corruption, and exhaustion is an explicit error rather than a saturated
-    /// duplicate sequence.
+    /// The method reads only the bounded tail needed to decode the latest
+    /// complete entry. If the transcript exists but the bounded tail contains
+    /// no complete entry, the file is treated as oversized or corrupt rather
+    /// than risking a whole-file read.
     pub fn next_sequence(&self, conversation_id: &str) -> Result<u64> {
-        // Preserve the NotFound contract without creating lock state first.
         let path = self.existing_transcript_path_for(conversation_id)?;
         if !path.exists() {
             return Err(MezError::new(
@@ -3254,74 +3251,17 @@ impl AgentTranscriptStore {
                 "conversation transcript not found",
             ));
         }
-        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
-        self.next_sequence_locked(conversation_id)
-    }
-
-    /// Allocates the next sequence while the caller already owns the
-    /// conversation lock.
-    ///
-    /// Only the final record is read, so cost tracks that record's size rather
-    /// than the file's, and nothing beyond the row whose sequence is needed is
-    /// decoded.
-    fn next_sequence_locked(&self, conversation_id: &str) -> Result<u64> {
-        let path = self.existing_transcript_path_for(conversation_id)?;
-        let length = match std_fs::metadata(&path) {
-            Ok(metadata) => metadata.len(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Err(MezError::new(
-                    MezErrorKind::NotFound,
-                    "conversation transcript not found",
-                ));
-            }
-            Err(error) => return Err(error.into()),
-        };
-        if length == 0 {
+        let entries =
+            self.inspect_recent(conversation_id, 1, DEFAULT_TRANSCRIPT_TAIL_READ_BYTES)?;
+        if let Some(entry) = entries.last() {
+            return Ok(entry.sequence.saturating_add(1));
+        }
+        if path.metadata()?.len() == 0 {
             return Ok(1);
         }
-        let mut file = std_fs::File::open(&path)?;
-        let record_start = self.last_complete_record_start(&mut file, length)?;
-        let mut record = Vec::new();
-        file.seek(SeekFrom::Start(record_start))?;
-        file.read_to_end(&mut record)?;
-        let text = std::str::from_utf8(&record).map_err(|_| {
-            MezError::invalid_state("conversation transcript row is not valid UTF-8")
-        })?;
-        let entry = decode_transcript_entry(text)?;
-        entry
-            .sequence
-            .checked_add(1)
-            .ok_or_else(|| MezError::invalid_state("conversation transcript sequence exhausted"))
-    }
-
-    /// Returns the byte offset of the final newline-terminated record.
-    ///
-    /// Scans backwards in fixed-size chunks, so locating the record boundary
-    /// never copies a growing prefix. A tail that is not newline-terminated is
-    /// genuine corruption here: the conversation lock guarantees that no owning
-    /// appender is mid-write.
-    fn last_complete_record_start(&self, file: &mut std_fs::File, length: u64) -> Result<u64> {
-        const CHUNK: u64 = 64 * 1024;
-        file.seek(SeekFrom::Start(length - 1))?;
-        let mut last = [0u8; 1];
-        file.read_exact(&mut last)?;
-        if last[0] != b'\n' {
-            return Err(MezError::invalid_state(
-                "conversation transcript tail is not newline-terminated",
-            ));
-        }
-        let mut cursor = length - 1;
-        while cursor > 0 {
-            let start = cursor.saturating_sub(CHUNK);
-            let mut buffer = vec![0u8; (cursor - start) as usize];
-            file.seek(SeekFrom::Start(start))?;
-            file.read_exact(&mut buffer)?;
-            if let Some(index) = buffer.iter().rposition(|byte| *byte == b'\n') {
-                return Ok(start + index as u64 + 1);
-            }
-            cursor = start;
-        }
-        Ok(0)
+        Err(MezError::invalid_state(
+            "conversation transcript tail contains no complete entry",
+        ))
     }
 
     /// Lists transcript-backed summaries for focused compatibility tests.
