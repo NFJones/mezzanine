@@ -24,23 +24,16 @@ const PANE_EVENT_CAPACITY_RETRY_ATTEMPTS: usize = 32;
 /// Delay between bounded pane-event capacity retries.
 const PANE_EVENT_CAPACITY_RETRY_DELAY: Duration = Duration::from_millis(20);
 
-/// Submits one pane-produced runtime event and accumulates ingress counters.
-pub(super) async fn submit_pane_runtime_event(
+/// Submits one pane-side event batch, retrying only pre-application capacity
+/// pressure so a transient backlog cannot abort a pane service.
+pub(super) async fn submit_pane_runtime_events_bounded(
     handle: &AsyncRuntimeSessionHandle,
-    event: RuntimeEvent,
-    submitted_events: &mut usize,
-    applied_events: &mut usize,
-) -> Result<()> {
-    let mut batch = RuntimeEventBatch::new();
-    batch.push(event);
-    // A pane worker must not fail because unrelated effects transiently filled
-    // the bounded side-effect queue. Only a pre-application rejection is
-    // retried, so resubmitting this exact batch cannot duplicate an effect; a
-    // rejection that already applied or drained work still propagates.
+    batch: RuntimeEventBatch,
+) -> Result<super::RuntimeEventIngressReport> {
     let mut attempts = 0usize;
-    let ingress = loop {
+    loop {
         match handle.submit_runtime_events(batch.clone()).await {
-            Ok(ingress) => break ingress,
+            Ok(ingress) => return Ok(ingress),
             Err(error)
                 if attempts < PANE_EVENT_CAPACITY_RETRY_ATTEMPTS
                     && crate::host::async_runtime::error_is_retryable_side_effect_capacity(
@@ -52,7 +45,21 @@ pub(super) async fn submit_pane_runtime_event(
             }
             Err(error) => return Err(error),
         }
-    };
+    }
+}
+
+/// Submits one pane-produced runtime event and accumulates ingress counters.
+pub(super) async fn submit_pane_runtime_event(
+    handle: &AsyncRuntimeSessionHandle,
+    event: RuntimeEvent,
+    submitted_events: &mut usize,
+    applied_events: &mut usize,
+) -> Result<()> {
+    let mut batch = RuntimeEventBatch::new();
+    batch.push(event);
+    // A pane worker must not fail because unrelated effects transiently filled
+    // the bounded side-effect queue; only pre-application rejections retry.
+    let ingress = submit_pane_runtime_events_bounded(handle, batch).await?;
     *submitted_events = submitted_events.saturating_add(ingress.accepted);
     *applied_events = applied_events.saturating_add(ingress.applied);
     Ok(())

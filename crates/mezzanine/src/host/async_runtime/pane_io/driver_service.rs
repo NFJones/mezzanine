@@ -132,7 +132,7 @@ where
         };
         let mut batch = RuntimeEventBatch::new();
         batch.push(event);
-        let ingress = handle.submit_runtime_events(batch).await?;
+        let ingress = super::helpers::submit_pane_runtime_events_bounded(handle, batch).await?;
         report.submitted_events = report.submitted_events.saturating_add(ingress.accepted);
         report.applied_events = report.applied_events.saturating_add(ingress.applied);
     }

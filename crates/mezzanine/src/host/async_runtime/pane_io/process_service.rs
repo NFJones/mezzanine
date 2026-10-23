@@ -630,7 +630,7 @@ pub(super) async fn submit_batched_pane_output_event(
 ) -> Result<super::RuntimeEventIngressReport> {
     let mut batch = RuntimeEventBatch::new();
     batch.push(event);
-    handle.submit_runtime_events(batch).await
+    super::helpers::submit_pane_runtime_events_bounded(handle, batch).await
 }
 
 /// Runs the terminate pane process for terminal state operation for this subsystem.
