@@ -1,7 +1,7 @@
 //! Pure regression coverage for Bubblewrap policy compilation.
 
 #[cfg(target_os = "linux")]
-mod real_bubblewrap;
+pub(crate) mod real_bubblewrap;
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;

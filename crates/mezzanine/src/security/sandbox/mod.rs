@@ -2018,4 +2018,4 @@ fn path_overlaps(left: &str, right: &str) -> bool {
 /// Reports whether one canonical mount root identifies a single user beneath
 /// a Linux-style home directory rather than an unbounded multi-user ancestor.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

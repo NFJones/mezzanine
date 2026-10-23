@@ -1725,10 +1725,62 @@ fn assert_real_bubblewrap_profile_is_available() -> PathBuf {
     }
     let plan =
         crate::security::sandbox::bubblewrap_capability_probe_plan(config, "/bin/sh").unwrap();
-    let output = std::process::Command::new(&plan.executable)
-        .args(&plan.arguments)
-        .output()
+    // The production capability profile reports lifecycle status on the
+    // descriptor it reserves, so the child must own that descriptor. A fresh
+    // uniquely named 0700 directory plus `create_new` proves this fixture
+    // created the sink (create_dir fails on collision, so no unverified path is
+    // ever deleted), and the shared sole-reaper owner supplies complete
+    // capture, one deadline and observed cleanup instead of an unguarded
+    // `Command::output`.
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    let mut sink = None;
+    for _ in 0..8 {
+        let candidate = std::env::temp_dir().join(format!(
+            "mez-bwrap-probe-{}-{}",
+            std::process::id(),
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        match builder.create(&candidate) {
+            Ok(()) => {
+                sink = Some(candidate);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => panic!("real Bubblewrap probe sink: {error}"),
+        }
+    }
+    let status_dir = sink.expect("exclusively owned probe sink directory");
+    let status_path = status_dir.join("status.json");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&status_path)
         .unwrap();
+    let mut command = std::process::Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg("exec 3>\"$1\"; shift; exec \"$@\"")
+        .arg("mez-bubblewrap-status")
+        .arg(&status_path)
+        .arg(&plan.executable)
+        .args(&plan.arguments);
+    let output = crate::security::sandbox::tests::real_bubblewrap::workload_owner::output(
+        command,
+        None,
+        crate::security::sandbox::tests::real_bubblewrap::REAL_BUBBLEWRAP_EXECUTION_TIMEOUT,
+    )
+    .unwrap_or_else(|error| panic!("real Bubblewrap acceptance probe failed: {error}"));
+    let status_bytes = std::fs::read(&status_path).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&status_dir);
+    assert!(
+        !status_bytes.is_empty(),
+        "real Bubblewrap acceptance requires a lifecycle status report on its reserved descriptor"
+    );
     assert!(
         output.status.success(),
         "real Bubblewrap acceptance requires the production capability profile: {}",
@@ -1740,6 +1792,20 @@ fn assert_real_bubblewrap_profile_is_available() -> PathBuf {
         "real Bubblewrap acceptance requires the exact production capability sentinel"
     );
     PathBuf::from(&plan.executable)
+}
+
+/// Verifies the production Bubblewrap capability profile reports its lifecycle
+/// status on the descriptor it reserves, through the shared sole-reaper owner.
+///
+/// Ignored: requires real Bubblewrap on a supported host. Routed acceptance
+/// below additionally depends on the production-stack qualification tracked
+/// separately, so an abort there is not a probe failure.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires real Bubblewrap on a supported host"]
+fn real_bubblewrap_capability_profile_reports_on_reserved_status_descriptor() {
+    let executable = assert_real_bubblewrap_profile_is_available();
+    assert!(executable.is_file());
 }
 
 /// Verifies the complete routed continuation lifecycle independently of host

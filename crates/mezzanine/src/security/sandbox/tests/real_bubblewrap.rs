@@ -5,7 +5,7 @@
 //! user-namespace profile report an explicit skip instead of conflating host
 //! support with a product probe or policy failure.
 
-mod workload_owner;
+pub(crate) mod workload_owner;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -34,7 +34,7 @@ use super::*;
 
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 static REAL_BUBBLEWRAP_EXECUTION_LOCK: Mutex<()> = Mutex::new(());
-const REAL_BUBBLEWRAP_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const REAL_BUBBLEWRAP_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Filesystem and host-service fixtures used by one real sandbox launch.
 struct RealBubblewrapFixture {

@@ -491,7 +491,7 @@ fn spawn_owner(
 }
 
 /// Spawns and collects one command without exposing an unguarded Child.
-pub(super) fn output(
+pub(crate) fn output(
     command: Command,
     input: Option<(Vec<u8>, Vec<u8>)>,
     timeout: Duration,
