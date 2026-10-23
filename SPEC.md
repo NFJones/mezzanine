@@ -11712,20 +11712,29 @@ Provider errors, malformed responses, permission denials, command timeouts, and
 transport failures MUST be recorded in the agent transcript.
 
 Bounded side-effect admission MUST distinguish a pre-application rejection from
-partial application. When the actor refuses an entire submitted batch before
-applying anything, the producer MUST be able to identify the refusal as
-transient capacity pressure and MUST retain the exact same work for a bounded
-retry instead of dropping it or terminating its service. A refusal that already
-applied events or consumed deferred work MUST NOT be retried, because replaying
-applied effects is unsafe; it remains a terminal, attributed failure. Retention
-is per producer: an authoritative completion MUST retry that same completion,
-optional reconstructible presentation MAY retry and MAY be abandoned after the
-bounded attempts, and neither MUST ever repeat an external effect, provider
-request, or settled action. Exhausting the bound MUST surface the original
-failure rather than converting it into success or silence. Genuine actor loss,
-channel loss, or shared ownership corruption stays fatal to its owner and MUST
-NOT be reported as recoverable capacity pressure, and terminating panes or the
-session MUST NOT be used to recover from transient admission pressure.
+partial application, and the two classes MUST NOT be conflated. A refusal is
+retryable only when the actor both rejected the whole submitted batch before
+application and confirmed that it consumed no deferred work; the actor's
+queue-full refusal carries a terminal applied/consumed marker for exactly that
+decision. Bare pre-application refusal alone is insufficient: a refusal can
+apply zero events and still have consumed deferred work, and that case stays
+terminal. Only the narrower condition authorizes a producer to retain the exact
+same work for a bounded retry instead of dropping it or terminating its
+service. Any refusal that applied events or consumed deferred work MUST NOT be
+retried, because replaying applied effects is unsafe; it remains a terminal,
+attributed failure.
+
+Retention is per producer and the governing rule differs by class. An
+authoritative completion MUST retry that same completion while the retryable
+condition holds, and MUST surface the original failure once the bound is
+exhausted. Optional reconstructible presentation MAY retry, and MAY instead be
+abandoned after the bounded attempts; an abandoned preview MUST NOT be reported
+as delivered. Neither class MUST ever repeat an external effect, provider
+request, or settled action, and neither MUST convert an exhausted bound into
+silent success. Genuine actor loss, channel loss, or shared ownership corruption
+stays fatal to its owner and MUST NOT be reported as recoverable capacity
+pressure, and terminating panes or the session MUST NOT be used to recover from
+transient admission pressure.
 
 The harness MAY retry provider requests according to provider policy and local
 configuration. Retries MUST NOT repeat shell actions unless the user or policy
