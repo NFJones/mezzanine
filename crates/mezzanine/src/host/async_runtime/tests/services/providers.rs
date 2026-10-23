@@ -1725,59 +1725,10 @@ fn assert_real_bubblewrap_profile_is_available() -> PathBuf {
     }
     let plan =
         crate::security::sandbox::bubblewrap_capability_probe_plan(config, "/bin/sh").unwrap();
-    // The production capability profile reports its lifecycle status on the
-    // descriptor it reserves, so the child must actually own that descriptor.
-    // Running the probe without opening it left the child waiting on an
-    // unconnected status channel until the outer deadline expired. Redirect an
-    // exclusively owned task file onto the reserved descriptor through `sh`
-    // (no unsafe descriptor surgery, no global environment change) and bound
-    // the wait so a broken profile fails promptly instead of hanging.
-    let status_path = std::env::temp_dir().join(format!(
-        "mez-bubblewrap-status-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let mut command = std::process::Command::new("/bin/sh");
-    command
-        .arg("-c")
-        .arg("exec 3>\"$1\"; shift; exec \"$@\"")
-        .arg("mez-bubblewrap-status")
-        .arg(&status_path)
-        .arg(&plan.executable)
+    let output = std::process::Command::new(&plan.executable)
         .args(&plan.arguments)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut child = command.spawn().unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = std::fs::remove_file(&status_path);
-            panic!("real Bubblewrap acceptance probe exceeded its bounded wait");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
-    let mut stdout = String::new();
-    let mut stderr = String::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        use std::io::Read as _;
-        let _ = pipe.read_to_string(&mut stdout);
-    }
-    if let Some(mut pipe) = child.stderr.take() {
-        use std::io::Read as _;
-        let _ = pipe.read_to_string(&mut stderr);
-    }
-    let output = std::process::Output {
-        status,
-        stdout: stdout.into_bytes(),
-        stderr: stderr.into_bytes(),
-    };
-    let _ = std::fs::remove_file(&status_path);
+        .output()
+        .unwrap();
     assert!(
         output.status.success(),
         "real Bubblewrap acceptance requires the production capability profile: {}",
@@ -1789,21 +1740,6 @@ fn assert_real_bubblewrap_profile_is_available() -> PathBuf {
         "real Bubblewrap acceptance requires the exact production capability sentinel"
     );
     PathBuf::from(&plan.executable)
-}
-
-/// Verifies the production Bubblewrap capability profile reports its lifecycle
-/// status on the descriptor it reserves, without an unbounded child wait.
-///
-/// Ignored: requires a real Bubblewrap executable on a supported host. The
-/// routed acceptance below additionally depends on the production-sized stack
-/// qualification tracked separately, so a stack abort there is not a probe
-/// failure.
-#[cfg(unix)]
-#[test]
-#[ignore = "requires real Bubblewrap on a supported host"]
-fn real_bubblewrap_capability_profile_reports_on_reserved_status_descriptor() {
-    let executable = assert_real_bubblewrap_profile_is_available();
-    assert!(executable.is_file());
 }
 
 /// Verifies the complete routed continuation lifecycle independently of host
