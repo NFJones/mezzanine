@@ -3236,32 +3236,77 @@ impl AgentTranscriptStore {
         Ok(entries)
     }
 
-    /// Returns the next append sequence for one conversation without scanning
-    /// the full transcript file.
+    /// Returns the next append sequence for one conversation.
     ///
-    /// The method reads only the bounded tail needed to decode the latest
-    /// complete entry. If the transcript exists but the bounded tail contains
-    /// no complete entry, the file is treated as oversized or corrupt rather
-    /// than risking a whole-file read.
+    /// Allocation reads the last COMPLETE record instead of a bounded preview
+    /// suffix: a single valid encoded record may legitimately exceed the
+    /// context-preview byte window, and allocation must not inherit that budget.
+    /// The final record is located with a fixed-size backward scan and only that
+    /// record is decoded, so cost tracks the record rather than the preview
+    /// window or the file.
+    ///
+    /// This lookup takes no lock of its own and is not an atomic sequence
+    /// reservation: callers that already own the conversation lock get a
+    /// coherent snapshot, while an unsynchronized caller keeps the pre-existing
+    /// behaviour of observing whatever the durable file currently contains.
     pub fn next_sequence(&self, conversation_id: &str) -> Result<u64> {
         let path = self.existing_transcript_path_for(conversation_id)?;
-        if !path.exists() {
-            return Err(MezError::new(
-                MezErrorKind::NotFound,
-                "conversation transcript not found",
-            ));
-        }
-        let entries =
-            self.inspect_recent(conversation_id, 1, DEFAULT_TRANSCRIPT_TAIL_READ_BYTES)?;
-        if let Some(entry) = entries.last() {
-            return Ok(entry.sequence.saturating_add(1));
-        }
-        if path.metadata()?.len() == 0 {
+        let length = match std_fs::metadata(&path) {
+            Ok(metadata) => metadata.len(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(MezError::new(
+                    MezErrorKind::NotFound,
+                    "conversation transcript not found",
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if length == 0 {
             return Ok(1);
         }
-        Err(MezError::invalid_state(
-            "conversation transcript tail contains no complete entry",
-        ))
+        let mut file = std_fs::File::open(&path)?;
+        let record_start = self.last_complete_record_start(&mut file, length)?;
+        let mut record = Vec::new();
+        file.seek(SeekFrom::Start(record_start))?;
+        file.read_to_end(&mut record)?;
+        let text = std::str::from_utf8(&record).map_err(|_| {
+            MezError::invalid_state("conversation transcript row is not valid UTF-8")
+        })?;
+        let entry = decode_transcript_entry(text)?;
+        entry
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| MezError::invalid_state("conversation transcript sequence exhausted"))
+    }
+
+    /// Returns the byte offset of the final newline-terminated record.
+    ///
+    /// Scans backwards in fixed-size chunks so locating the boundary never
+    /// copies a growing prefix. A tail that is not newline-terminated is genuine
+    /// corruption for a caller holding the lock, and unreadable framing for one
+    /// that does not; both are reported rather than guessed.
+    fn last_complete_record_start(&self, file: &mut std_fs::File, length: u64) -> Result<u64> {
+        const CHUNK: u64 = 64 * 1024;
+        file.seek(SeekFrom::Start(length - 1))?;
+        let mut last = [0u8; 1];
+        file.read_exact(&mut last)?;
+        if last[0] != b'\n' {
+            return Err(MezError::invalid_state(
+                "conversation transcript tail is not newline-terminated",
+            ));
+        }
+        let mut cursor = length - 1;
+        while cursor > 0 {
+            let start = cursor.saturating_sub(CHUNK);
+            let mut buffer = vec![0u8; (cursor - start) as usize];
+            file.seek(SeekFrom::Start(start))?;
+            file.read_exact(&mut buffer)?;
+            if let Some(index) = buffer.iter().rposition(|byte| *byte == b'\n') {
+                return Ok(start + index as u64 + 1);
+            }
+            cursor = start;
+        }
+        Ok(0)
     }
 
     /// Lists transcript-backed summaries for focused compatibility tests.
