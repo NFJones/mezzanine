@@ -241,6 +241,15 @@ impl TokenUsageStore {
     }
 }
 
+/// Bounded budget for concurrent store initialization.
+///
+/// Unlike an ordinary statement on an already-initialized store, the winner of
+/// initialization performs WAL setup and a full migration, so a concurrent
+/// opener waits for that work before it can take writer ownership. Both WAL
+/// setup and schema admission use this one bound, which exists so a genuinely
+/// stuck writer still fails truthfully instead of blocking an opener forever.
+const STORE_INITIALIZATION_BUDGET: Duration = Duration::from_millis(1_000);
+
 /// Enables WAL before writer admission. SQLite can reject concurrent journal
 /// mode changes without invoking its busy handler, so retry only this idempotent
 /// setup operation within the ordinary connection contention budget. No usage
@@ -250,7 +259,7 @@ fn initialize_wal(
     admission: &mut super::ExternalUsageAdmissionWitness,
 ) -> Result<()> {
     let started = std::time::Instant::now();
-    let budget = Duration::from_millis(250);
+    let budget = STORE_INITIALIZATION_BUDGET;
     loop {
         let result = connection.query_row("PRAGMA journal_mode = WAL", [], |row| {
             row.get::<_, String>(0)
@@ -293,13 +302,39 @@ fn initialize_schema(
     if observed_version == SCHEMA_VERSION {
         return Ok(());
     }
-    let transaction =
-        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)
-            .map_err(|error| {
-                MezError::invalid_state(format!(
+    // Concurrent openers of a fresh store must serialize through schema
+    // creation: the loser of this admission is expected to wait, not fail, and
+    // the winner's work is a full WAL setup plus migration rather than a single
+    // statement. SQLite also does not invoke its busy handler for every
+    // writer-admission conflict (a would-deadlock BEGIN IMMEDIATE returns BUSY
+    // immediately), so retry this one idempotent admission within a budget
+    // sized for that initialization work. No usage transaction or committed
+    // observation is replayed by this owner.
+    let started = std::time::Instant::now();
+    let transaction = loop {
+        match rusqlite::Transaction::new_unchecked(
+            connection,
+            rusqlite::TransactionBehavior::Immediate,
+        ) {
+            Ok(transaction) => break transaction,
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if matches!(
+                    error.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) && started.elapsed() < STORE_INITIALIZATION_BUDGET =>
+            {
+                std::thread::sleep(
+                    Duration::from_millis(5)
+                        .min(STORE_INITIALIZATION_BUDGET.saturating_sub(started.elapsed())),
+                );
+            }
+            Err(error) => {
+                return Err(MezError::invalid_state(format!(
                     "token usage schema writer admission failed: {error}"
-                ))
-            })?;
+                )));
+            }
+        }
+    };
     let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     match version {
         0 => {
