@@ -2177,6 +2177,122 @@ fn transcript_store_compacts_presentation_tail_into_zstd_history() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Commits one earlier tail and leaves a later cleartext tail pending publication.
+///
+/// Reproduces `compact_presentation_tail_if_needed` up to the boundary of the
+/// next publication: entries 1-2 are already committed as one valid zstd frame
+/// with the cleartext tail truncated, and entries 3-4 are appended to the
+/// cleartext tail that a subsequent compaction would move into a new frame.
+/// Returns the store root, both presentation paths, the exact pending tail bytes
+/// and the entries every recovery must preserve.
+fn pending_presentation_frame_fixture(
+    label: &str,
+) -> (
+    PathBuf,
+    AgentTranscriptStore,
+    PathBuf,
+    PathBuf,
+    Vec<u8>,
+    Vec<AgentPresentationEntry>,
+) {
+    let root = temp_root(label);
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_presentation_compaction_threshold(64 * 1024 * 1024)
+        .unwrap();
+    let first = compacting_presentation("conv1", 1);
+    let second = compacting_presentation("conv1", 2);
+    store.append_presentation(&first).unwrap();
+    store.append_presentation(&second).unwrap();
+    let cleartext = store.presentation_path("conv1").unwrap();
+    let compressed = store.presentation_compressed_path("conv1").unwrap();
+    // Commit entries 1-2 exactly as one completed compaction would.
+    let committed_tail = fs::read(&cleartext).unwrap();
+    let frame = zstd::stream::encode_all(&committed_tail[..], 0).unwrap();
+    fs::write(&compressed, &frame).unwrap();
+    fs::write(&cleartext, b"").unwrap();
+    // A later tail is still cleartext when the next publication starts.
+    let third = compacting_presentation("conv1", 3);
+    let fourth = compacting_presentation("conv1", 4);
+    store.append_presentation(&third).unwrap();
+    store.append_presentation(&fourth).unwrap();
+    let pending_tail = fs::read(&cleartext).unwrap();
+    assert!(!pending_tail.is_empty());
+    (
+        root,
+        store,
+        compressed,
+        cleartext,
+        pending_tail,
+        vec![first, second, third, fourth],
+    )
+}
+
+/// An interrupted frame append must not make committed history unreadable.
+///
+/// Compaction appends and syncs the frame before truncating the cleartext tail,
+/// so a crash inside that append leaves a partially written frame next to the
+/// intact committed tail. The intact tail is then the authoritative source of
+/// exactly those occurrences: earlier committed frames and the tail must remain
+/// readable, and the uncommitted partial frame must not destroy them.
+#[test]
+#[ignore = "RED: interrupted frame append currently makes committed history unreadable"]
+fn transcript_store_recovers_interrupted_presentation_frame_append() {
+    let (root, store, compressed, cleartext, pending_tail, entries) =
+        pending_presentation_frame_fixture("presentation-zstd-torn-frame");
+    let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let mut torn = fs::read(&compressed).unwrap();
+    torn.extend_from_slice(&frame[..frame.len() / 2]);
+    fs::write(&compressed, &torn).unwrap();
+    // The cleartext tail is still exactly the committed source of that frame.
+    assert_eq!(fs::read(&cleartext).unwrap(), pending_tail);
+
+    let inspected = store
+        .inspect_presentation("conv1")
+        .expect("committed frames and the intact tail stay recoverable");
+    assert_eq!(
+        inspected,
+        entries
+            .iter()
+            .map(|entry| entry.normalized_for_agent_log_wrap())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(store.next_presentation_sequence("conv1").unwrap(), 5);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A published frame whose cleartext source was not retired must not duplicate.
+///
+/// The frame is synced before the tail truncate, so a crash in between leaves the
+/// same occurrences in both files. Replay concatenates both sources, and those
+/// occurrences must still be delivered exactly once in sequence order rather than
+/// duplicated or silently dropped.
+#[test]
+#[ignore = "RED: a published frame with a live cleartext tail currently replays twice"]
+fn transcript_store_deduplicates_published_presentation_frame_with_live_tail() {
+    let (root, store, compressed, cleartext, pending_tail, entries) =
+        pending_presentation_frame_fixture("presentation-zstd-untruncated-tail");
+    let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let mut published = fs::read(&compressed).unwrap();
+    published.extend_from_slice(&frame);
+    fs::write(&compressed, &published).unwrap();
+    // The tail truncate never ran: the identical occurrences remain cleartext.
+    assert_eq!(fs::read(&cleartext).unwrap(), pending_tail);
+
+    let inspected = store
+        .inspect_presentation("conv1")
+        .expect("both copies describe the same committed occurrences");
+    assert_eq!(
+        inspected,
+        entries
+            .iter()
+            .map(|entry| entry.normalized_for_agent_log_wrap())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(store.next_presentation_sequence("conv1").unwrap(), 5);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies one presentation batch allocates contiguous sequences under the
 /// conversation lock instead of requiring actor-side index reads.
 ///
