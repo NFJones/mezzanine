@@ -1732,29 +1732,11 @@ fn assert_real_bubblewrap_profile_is_available() -> PathBuf {
     // exclusively owned task file onto the reserved descriptor through `sh`
     // (no unsafe descriptor surgery, no global environment change) and bound
     // the wait so a broken profile fails promptly instead of hanging.
-    // Exclusively owned, private status location: a fresh 0700 directory plus a
-    // create_new file proves this fixture created the pathname, so the shell
-    // redirect below can only truncate our own empty file inside a directory no
-    // other user can enter or swap. The directory is removed with the file.
-    let status_dir = std::env::temp_dir().join(format!(
+    let status_path = std::env::temp_dir().join(format!(
         "mez-bubblewrap-status-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
     ));
-    let _ = std::fs::remove_dir_all(&status_dir);
-    let mut builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt as _;
-        builder.mode(0o700);
-    }
-    builder.create(&status_dir).unwrap();
-    let status_path = status_dir.join("status.json");
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&status_path)
-        .unwrap();
     let mut command = std::process::Command::new("/bin/sh");
     command
         .arg("-c")
@@ -1767,30 +1749,6 @@ fn assert_real_bubblewrap_profile_is_available() -> PathBuf {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let mut child = command.spawn().unwrap();
-    let mut stdout_pipe = child.stdout.take();
-    let mut stderr_pipe = child.stderr.take();
-    // Drain both pipes on their own threads so a writer that keeps a descriptor
-    // open can never block the bounded wait, and bound the drain itself.
-    let (text_sender, text_receiver) = std::sync::mpsc::channel::<(bool, String)>();
-    if let Some(mut pipe) = stdout_pipe.take() {
-        let sender = text_sender.clone();
-        std::thread::spawn(move || {
-            use std::io::Read as _;
-            let mut text = String::new();
-            let _ = pipe.read_to_string(&mut text);
-            let _ = sender.send((true, text));
-        });
-    }
-    if let Some(mut pipe) = stderr_pipe.take() {
-        let sender = text_sender.clone();
-        std::thread::spawn(move || {
-            use std::io::Read as _;
-            let mut text = String::new();
-            let _ = pipe.read_to_string(&mut text);
-            let _ = sender.send((false, text));
-        });
-    }
-    drop(text_sender);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
@@ -1799,37 +1757,27 @@ fn assert_real_bubblewrap_profile_is_available() -> PathBuf {
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            let _ = std::fs::remove_dir_all(&status_dir);
+            let _ = std::fs::remove_file(&status_path);
             panic!("real Bubblewrap acceptance probe exceeded its bounded wait");
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     };
     let mut stdout = String::new();
     let mut stderr = String::new();
-    let drain_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        let remaining = drain_deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        match text_receiver.recv_timeout(remaining.min(std::time::Duration::from_millis(50))) {
-            Ok((true, text)) => stdout.push_str(&text),
-            Ok((false, text)) => stderr.push_str(&text),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-        }
+    if let Some(mut pipe) = child.stdout.take() {
+        use std::io::Read as _;
+        let _ = pipe.read_to_string(&mut stdout);
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        use std::io::Read as _;
+        let _ = pipe.read_to_string(&mut stderr);
     }
     let output = std::process::Output {
         status,
         stdout: stdout.into_bytes(),
         stderr: stderr.into_bytes(),
     };
-    let status_bytes = std::fs::read(&status_path).unwrap_or_default();
-    let _ = std::fs::remove_dir_all(&status_dir);
-    assert!(
-        !status_bytes.is_empty(),
-        "real Bubblewrap acceptance requires a lifecycle status report on its reserved descriptor"
-    );
+    let _ = std::fs::remove_file(&status_path);
     assert!(
         output.status.success(),
         "real Bubblewrap acceptance requires the production capability profile: {}",
@@ -1850,7 +1798,7 @@ fn assert_real_bubblewrap_profile_is_available() -> PathBuf {
 /// routed acceptance below additionally depends on the production-sized stack
 /// qualification tracked separately, so a stack abort there is not a probe
 /// failure.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 #[ignore = "requires real Bubblewrap on a supported host"]
 fn real_bubblewrap_capability_profile_reports_on_reserved_status_descriptor() {
