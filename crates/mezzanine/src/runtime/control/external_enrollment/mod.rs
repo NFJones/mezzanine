@@ -632,8 +632,16 @@ impl RuntimeSessionService {
         }
         observed?;
         self.require_live()?;
-        if Instant::now() >= work.deadline
-            || !self.pane_process_identity_is_current(&work.pane_id, &work.process)
+        // Bounded admission expiry and a changed root incarnation are different
+        // refusals. Reporting them as one conflict made a loaded-run refusal
+        // unattributable; this stays content-free and adds no new acceptance
+        // path.
+        if Instant::now() >= work.deadline {
+            return Err(MezError::conflict(
+                "external enrollment admission deadline expired",
+            ));
+        }
+        if !self.pane_process_identity_is_current(&work.pane_id, &work.process)
             || !self
                 .pane_process_identity(&work.pane_id)
                 .is_ok_and(|root| root.same_incarnation(&work.process))
