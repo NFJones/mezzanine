@@ -19,8 +19,13 @@ use crate::error::{MezError, MezErrorKind};
 /// The setup owner and this classifier share the constant, so an expected local
 /// disconnect is recognised from one pinned text instead of a duplicated
 /// literal in two modules.
-/// Shared with the setup module, which reports the same unavailable guidance.
 pub(crate) const SETUP_UNAVAILABLE_MESSAGE: &str = "outbound frontend setup unavailable";
+
+/// Hello admission reports this when a local peer closed before sending.
+///
+/// A same-user client that connects and disconnects without a hello is an
+/// expected pre-setup disconnect, so it must stay as quiet as the setup case.
+const HELLO_UNAVAILABLE_MESSAGE: &str = "outbound frontend hello unavailable";
 
 /// Static stage labels for bounded pipeline failure evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,9 +77,10 @@ pub(super) struct PipelineFailure {
 impl PipelineFailure {
     /// Classifies one pipeline error without retaining any error text.
     pub(super) fn classify(stage: PipelineStage, error: &MezError) -> Self {
-        let expected_local_disconnect = stage == PipelineStage::Profile
-            && error.kind() == MezErrorKind::InvalidState
-            && error.message() == SETUP_UNAVAILABLE_MESSAGE;
+        let expected_local_disconnect = error.kind() == MezErrorKind::InvalidState
+            && ((stage == PipelineStage::Admit && error.message() == HELLO_UNAVAILABLE_MESSAGE)
+                || (stage == PipelineStage::Profile
+                    && error.message() == SETUP_UNAVAILABLE_MESSAGE));
         Self {
             stage,
             class: error_class(error),
@@ -110,7 +116,20 @@ pub(super) fn report_failure(failure: &PipelineFailure) {
     };
     #[cfg(test)]
     record_reported_failure(&line);
-    eprintln!("{line}");
+    // Reporting one failed peer must never become a supervisor failure: the
+    // broker diagnostic sink is an append-only log that can be full or fail, and
+    // a panicking writer would unwind the shared listener and drop sibling
+    // pipelines. Sink errors are therefore ignored here.
+    write_private_diagnostic(&line);
+}
+
+/// Writes one bounded line to the private sink, ignoring sink failures.
+fn write_private_diagnostic(line: &str) {
+    use std::io::Write as _;
+    let mut sink = std::io::stderr();
+    let _ = sink.write_all(line.as_bytes());
+    let _ = sink.write_all(b"\n");
+    let _ = sink.flush();
 }
 
 #[cfg(test)]
@@ -164,5 +183,46 @@ fn io_class(kind: Option<std::io::ErrorKind>) -> &'static str {
         Some(std::io::ErrorKind::WouldBlock) => "io_would_block",
         Some(_) => "io_other",
         None => "io",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        HELLO_UNAVAILABLE_MESSAGE, PipelineFailure, PipelineStage, SETUP_UNAVAILABLE_MESSAGE,
+    };
+    use crate::MezError;
+
+    /// A same-user client that connects and disconnects before sending a hello
+    /// is an expected pre-setup disconnect and must not be reported as a failed
+    /// request.
+    #[test]
+    fn pre_hello_disconnect_stays_quiet() {
+        let failure = PipelineFailure::classify(
+            PipelineStage::Admit,
+            &MezError::invalid_state(HELLO_UNAVAILABLE_MESSAGE),
+        );
+        assert!(failure.report_line().is_none());
+        let failure = PipelineFailure::classify(
+            PipelineStage::Profile,
+            &MezError::invalid_state(SETUP_UNAVAILABLE_MESSAGE),
+        );
+        assert!(failure.report_line().is_none());
+    }
+
+    /// Any other admission failure is still reported with a static stage and
+    /// class, and without carrying the error text.
+    #[test]
+    fn unexpected_admission_failure_is_reported_without_payload() {
+        let failure = PipelineFailure::classify(
+            PipelineStage::Admit,
+            &MezError::invalid_args("SENTINEL admission detail"),
+        );
+        let line = failure
+            .report_line()
+            .expect("unexpected failure is reported");
+        assert!(line.contains("stage=admit"), "{line}");
+        assert!(line.contains("class=invalid_args"), "{line}");
+        assert!(!line.contains("SENTINEL"), "{line}");
     }
 }
