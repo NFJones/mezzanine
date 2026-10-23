@@ -22,6 +22,8 @@ const SOCKET_NAME: &str = "outbound.sock";
 #[cfg(test)]
 pub(super) mod setup_diagnostics;
 
+pub(super) mod pipeline_diagnostics;
+
 /// Published local front door retaining the endpoint and socket cleanup owner.
 /// Drop removes only its positively identified socket, never a replacement.
 pub(crate) struct OutboundFrontendListener {
@@ -119,7 +121,17 @@ impl OutboundFrontendListener {
             tokio::select! {
                 biased;
                 () = &mut cancellation => return Ok(accepted_count),
-                _ = pipelines.next(), if !pipelines.is_empty() => {},
+                completed = pipelines.next(), if !pipelines.is_empty() => {
+                    match completed {
+                        Some(Ok(())) | None => {}
+                        Some(Err(failure)) => {
+                            // The retired pipeline reports one bounded stage and
+                            // class line. Supervision never retries, replays input
+                            // or disturbs sibling pipelines from this branch.
+                            pipeline_diagnostics::report_failure(&failure);
+                        }
+                    }
+                },
                 accepted = self.listener.accept(), if pipelines.len() < self.pipeline_limit => {
                     let (stream, _) = accepted?;
                     self.admission.endpoint.frontend_config_root()?;
@@ -134,44 +146,51 @@ impl OutboundFrontendListener {
 
     /// Runs exactly one consumed setup and initialized display connection.
     /// No automatic reconnect, setup retry or generic control forwarding exists.
-    async fn serve_frontend(&self, stream: tokio::net::UnixStream) -> Result<()> {
-        #[cfg(test)]
-        let mut diagnostics = setup_diagnostics::SetupDiagnostics::new();
+    async fn serve_frontend(
+        &self,
+        stream: tokio::net::UnixStream,
+    ) -> std::result::Result<(), pipeline_diagnostics::PipelineFailure> {
+        let mut stage = pipeline_diagnostics::PipelineStage::Admit;
+        self.run_frontend(stream, &mut stage)
+            .await
+            .map_err(|error| pipeline_diagnostics::PipelineFailure::classify(stage, &error))
+    }
+
+    /// Runs one consumed setup and initialized display connection.
+    ///
+    /// The caller owns pipeline disposition; this function records the current
+    /// static stage before each step so a retirement classifies the exact step
+    /// that failed without retaining peer or payload material.
+    async fn run_frontend(
+        &self,
+        stream: tokio::net::UnixStream,
+        stage: &mut pipeline_diagnostics::PipelineStage,
+    ) -> Result<()> {
+        use pipeline_diagnostics::PipelineStage;
+        *stage = PipelineStage::Admit;
         let frontend = self.admit(stream).await?;
-        #[cfg(test)]
-        diagnostics.advance("profile");
+        *stage = PipelineStage::Profile;
         let prepared = match frontend.prepare_operation(self.admission.deadline).await? {
             super::setup::PreparedOperation::Profile(profile) => profile,
             super::setup::PreparedOperation::Pairing(pairing) => {
-                #[cfg(test)]
-                diagnostics.advance("pairing-delivery");
+                *stage = PipelineStage::PairingDelivery;
                 pairing.deliver().await?;
-                #[cfg(test)]
-                diagnostics.complete();
                 return Ok(());
             }
         };
-        #[cfg(test)]
-        diagnostics.advance("connect");
+        *stage = PipelineStage::Connect;
         let connected = prepared.connect_pinned().await?;
-        #[cfg(test)]
-        diagnostics.advance("initialize");
+        *stage = PipelineStage::Initialize;
         if connected.host_only_requested()? {
             let initialized = connected.initialize_host_only().await?;
-            #[cfg(test)]
-            diagnostics.advance("host-only-delivery");
+            *stage = PipelineStage::HostOnlyDelivery;
             initialized.deliver_list().await?;
-            #[cfg(test)]
-            diagnostics.complete();
             return Ok(());
         }
         if connected.x11_requested()? {
             let session = Box::pin(connected.initialize_x11_session()).await?;
-            #[cfg(test)]
-            diagnostics.advance("x11-supervision");
+            *stage = PipelineStage::X11Supervision;
             session.serve_x11().await?;
-            #[cfg(test)]
-            diagnostics.complete();
             return Ok(());
         }
         let mut session = if connected.clipboard_requested()? {
@@ -179,12 +198,10 @@ impl OutboundFrontendListener {
         } else {
             Box::pin(connected.initialize_session()).await?
         };
-        #[cfg(test)]
-        diagnostics.advance("first-view");
+        *stage = PipelineStage::FirstView;
         loop {
             session = session.deliver_view().await?;
-            #[cfg(test)]
-            diagnostics.complete();
+            *stage = PipelineStage::ViewDelivery;
             if session.is_detached() {
                 return Ok(());
             }

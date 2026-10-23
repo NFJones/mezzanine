@@ -72,12 +72,11 @@ impl AdmittedFrontend {
 
     /// Keeps source parsing and protected-profile work in one consumed transition.
     async fn prepare_inner(mut self) -> Result<PreparedOperation> {
-        let frame = self
-            .stream
-            .next()
-            .await
-            .transpose()?
-            .ok_or_else(|| MezError::invalid_state("outbound frontend setup unavailable"))?;
+        let frame = self.stream.next().await.transpose()?.ok_or_else(|| {
+            MezError::invalid_state(
+                super::listener::pipeline_diagnostics::SETUP_UNAVAILABLE_MESSAGE,
+            )
+        })?;
         if frame.content_type != CONTENT_TYPE {
             return Err(MezError::invalid_args(
                 "outbound frontend content type unsupported",

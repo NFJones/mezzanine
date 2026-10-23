@@ -6554,6 +6554,17 @@ readiness or EOF MUST remain terminal and content-free, with owner-aware upgrade
 and coordinated retirement guidance. EOF alone MUST NOT be diagnosed as proof of
 mixed versions. Recovery MUST NOT automatically fall back, replay any operation,
 unlink discovery/locks, restart, kill or replace a potentially shared broker.
+The broker MUST retain bounded, privacy-safe failure evidence for every retired
+frontend pipeline. A retired pipeline MUST contribute at most one diagnostic
+record on the broker's existing private stderr diagnostics stream, carrying only
+a static stage label and a static error class. Records MUST NOT include frames,
+request bodies, profile aliases, device proofs, invitation tokens, credentials,
+terminal rows or input, clipboard or X11 payloads, or arbitrary remote error
+text. A peer that disconnects before sending setup is expected local lifecycle
+and MUST NOT be reported as a failed request; caller cancellation MUST NOT be
+reported; and one failed pipeline MUST NOT retry, reconnect, replay input or
+disturb sibling pipelines. Cleanup uncertainty MUST remain separate from the
+recorded first cause.
 Explicit operator retirement MUST account for live sibling attachments and the
 exact lifecycle owner; absent lifecycle evidence withholds takeover authority.
 Internal startup composition MAY invoke one caller-supplied launcher only after

@@ -221,3 +221,120 @@ async fn outbound_frontend_listener_cleanup_preserves_replaced_socket() {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+/// A failed request reports exactly one bounded stage/class line while an
+/// expected pre-setup disconnect stays silent and a live sibling keeps working.
+///
+/// The malformed setup body carries a payload sentinel; the diagnostic must
+/// never echo it. Supervision retires only the failed pipeline and does not
+/// retry, replay input or disturb the sibling connection.
+#[tokio::test]
+async fn outbound_frontend_reports_bounded_pipeline_failures_without_payloads() {
+    let _ = super::pipeline_diagnostics::take_reported_failures();
+    let root = std::env::temp_dir().join(format!(
+        "mez-listener-diagnostics-{:032x}",
+        rand::random::<u128>()
+    ));
+    let endpoint = OutboundEndpointOwner::bind(&root, &RuntimeIrohTransportPolicy::default())
+        .await
+        .unwrap();
+    let listener =
+        OutboundFrontendListener::bind(endpoint.clone(), 4, std::time::Duration::from_secs(5))
+            .unwrap();
+    let path = listener.socket_path().unwrap().to_path_buf();
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let server_stop = stop.clone();
+    let serve = listener.serve(async move { server_stop.notified().await });
+    let client_work = async {
+        let hello = || {
+            ProtocolFrame::new(
+                super::super::CONTENT_TYPE,
+                serde_json::json!({"protocol": super::super::PROTOCOL}).to_string(),
+            )
+        };
+        // 1. A malformed setup request carrying a payload sentinel retires only
+        //    this pipeline and is reported once at the profile stage.
+        let failed = tokio::net::UnixStream::connect(&path).await.unwrap();
+        let mut failed = Framed::new(
+            failed,
+            ProtocolFrameCodec::new(super::super::HELLO_LIMIT).unwrap(),
+        );
+        failed.send(hello()).await.unwrap();
+        assert!(
+            failed
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .body
+                .contains("generation")
+        );
+        failed
+            .send(ProtocolFrame::new(
+                super::super::CONTENT_TYPE,
+                "{\"broken\":\"SENTINEL-BROKER-PAYLOAD-7f3a\"}".to_string(),
+            ))
+            .await
+            .unwrap();
+        assert!(failed.next().await.is_none());
+
+        // 2. A peer that leaves before sending setup is expected lifecycle and
+        //    must not be reported as a failed request.
+        let quiet = tokio::net::UnixStream::connect(&path).await.unwrap();
+        let mut quiet = Framed::new(
+            quiet,
+            ProtocolFrameCodec::new(super::super::HELLO_LIMIT).unwrap(),
+        );
+        quiet.send(hello()).await.unwrap();
+        assert!(
+            quiet
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .body
+                .contains("generation")
+        );
+        drop(quiet);
+
+        // 3. A sibling admitted after the failure still completes its hello.
+        let sibling = tokio::net::UnixStream::connect(&path).await.unwrap();
+        let mut sibling = Framed::new(
+            sibling,
+            ProtocolFrameCodec::new(super::super::HELLO_LIMIT).unwrap(),
+        );
+        sibling.send(hello()).await.unwrap();
+        assert!(
+            sibling
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .body
+                .contains("generation")
+        );
+        drop(sibling);
+        stop.notify_one();
+    };
+    let (served, ()) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(serve, client_work)
+    })
+    .await
+    .unwrap();
+    assert_eq!(served.unwrap(), 3);
+
+    let reported = super::pipeline_diagnostics::take_reported_failures();
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert!(reported[0].contains("stage=profile"), "{}", reported[0]);
+    assert!(
+        reported[0].contains("class=invalid_args"),
+        "{}",
+        reported[0]
+    );
+    assert!(!reported[0].contains("SENTINEL"), "{}", reported[0]);
+    assert!(!reported[0].contains("broken"), "{}", reported[0]);
+
+    drop(listener);
+    assert!(!path.exists());
+    endpoint.begin_shutdown().unwrap().finish().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
