@@ -1340,6 +1340,20 @@ fn runtime_routed_loop_fresh_iteration_waits_for_worker_turn_settlement() {
             "{mode}: a deferred iteration must not replace the routed child early"
         );
 
+        // A duplicate terminal delivery must not advance the controller again or
+        // replace the pending iteration.
+        service
+            .emit_subagent_task_result_for_execution(
+                &worker_turn,
+                &routed_patch_execution(&worker_turn),
+            )
+            .unwrap();
+        assert_eq!(
+            service.agent_loop_state(&pane).unwrap().iteration,
+            2,
+            "{mode}"
+        );
+
         service
             .complete_running_agent_turn_and_start_ready(
                 &worker_turn,
@@ -1404,6 +1418,26 @@ fn runtime_routed_loop_fresh_iteration_waits_for_worker_turn_settlement() {
         assert_eq!(
             mez_mux::process::process_start_token_for_pid(pid),
             Some(token)
+        );
+        // A late duplicate of the settled predecessor must remain inert and
+        // leave the running iteration intact.
+        service
+            .emit_subagent_task_result_for_execution(
+                &worker_turn,
+                &routed_patch_execution(&worker_turn),
+            )
+            .unwrap();
+        assert_eq!(
+            service.agent_loop_state(&pane).unwrap().iteration,
+            2,
+            "{mode}"
+        );
+        assert_eq!(
+            service
+                .routed_workflow_for_tests(&parent_turn_id)
+                .and_then(|workflow| workflow.child_turn_id.as_deref()),
+            Some(second_turn_id.as_str()),
+            "{mode}: a late duplicate must not reschedule the iteration"
         );
         let pane_text = service
             .pane_screen("%1")
@@ -2259,6 +2293,10 @@ fn runtime_routed_loop_continuation_queue_failure_recovers_once() {
     assert!(service.agent_loop_state("%1").is_none());
     assert!(service.agent_loop_state(&worker_turn.pane_id).is_none());
     assert!(service.agent_loop_turns_for_tests().is_empty());
+    assert!(
+        service.find_pane_descriptor(&worker_turn.pane_id).is_none(),
+        "a failed continuation must retire the finished worker pane in the settling pass"
+    );
     assert!(
         service
             .pending_agent_provider_tasks()

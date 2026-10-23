@@ -253,6 +253,10 @@ impl RuntimeSessionService {
         // finished turn still owned the running-turn slot released above. This
         // settlement boundary therefore owns the pending iteration.
         self.start_deferred_agent_loop_continuation(turn_id)?;
+        // A continuation that could not start may have queued this exact
+        // finished worker's terminal close after the checkpoint above. Drain it
+        // in the same pass so a retired iteration cannot leave its pane running.
+        self.close_terminal_subagent_pane_if_pending(&turn)?;
         self.start_ready_agent_turns()?;
         if !completion_attention_eligible {
             self.presentation.acknowledge_completion_attention(pane_id);
@@ -503,6 +507,9 @@ impl RuntimeSessionService {
         // iteration may now bind its next conversation without racing the
         // shell session's running-turn guard.
         self.start_deferred_agent_loop_continuation(&turn.turn_id)?;
+        // A failed continuation can queue this finished worker's terminal close
+        // after the earlier checkpoint; drain it rather than retain the pane.
+        self.close_terminal_subagent_pane_if_pending(turn)?;
         self.start_ready_agent_turns()?;
         if !completion_attention_eligible {
             self.presentation

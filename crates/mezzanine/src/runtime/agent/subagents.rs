@@ -177,6 +177,21 @@ impl RuntimeSessionService {
             .contains_key(turn_id)
     }
 
+    /// Returns the execution-aware settlement already recorded for one turn.
+    ///
+    /// A duplicate terminal delivery reports the disposition it already
+    /// produced instead of advancing a loop controller, replacing a pending
+    /// continuation, or re-emitting a retained result.
+    pub(crate) fn terminal_result_disposition(
+        &self,
+        turn_id: &str,
+    ) -> Option<TerminalResultDisposition> {
+        self.agent
+            .terminal_result_dispositions
+            .get(turn_id)
+            .copied()
+    }
+
     /// Records a routed parent result idempotency key within a bounded set.
     fn record_settled_routed_parent_result(&mut self, turn_id: &str) {
         self.agent
@@ -1325,6 +1340,13 @@ impl RuntimeSessionService {
             .contains(&turn.turn_id)
         {
             return Ok(TerminalResultDisposition::PresentationDelivered);
+        }
+        // Execution-aware settlement is exactly-once per turn. A duplicate
+        // delivery for an already settled turn must not advance the loop
+        // controller, replace its pending continuation, or re-emit a result
+        // the owning workflow already retained.
+        if let Some(disposition) = self.terminal_result_disposition(&turn.turn_id) {
+            return Ok(disposition);
         }
         let routed_parent_turn_id = self.routed_parent_turn_id_for_child(&turn.turn_id);
         let loop_settlement = self.settle_agent_loop_after_terminal_execution(turn, execution)?;
