@@ -138,7 +138,18 @@ fn spawn_client(root: &Path, home: &Path, runtime: &Path, name: &str) -> Foregro
             }
         })
         .unwrap();
-    let child = pair.slave.spawn_command(command).unwrap();
+    let child = match pair.slave.spawn_command(command) {
+        Ok(child) => child,
+        Err(error) => {
+            // No child owns the PTY. Close the slave so the already-started
+            // reader observes EOF, then wait for that reader before the failure
+            // escapes; otherwise the startup failure would drop the only handle
+            // to a thread still holding the cloned master.
+            drop(pair.slave);
+            let _ = reader_thread.join();
+            panic!("foreground fixture child spawn failed: {error}");
+        }
+    };
     drop(pair.slave);
     ForegroundProcess {
         child,
