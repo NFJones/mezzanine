@@ -268,7 +268,16 @@ fn semantic_apply_patch_native_resolver_handles_symlink_after_missing_parent() {
     std::fs::create_dir_all(&outside).unwrap();
     std::os::unix::fs::symlink("../outside", cwd.join("link")).unwrap();
     let path = path_with_failing_realpath(&root);
-    let mut lines = vec!["MEZ_APPLY_CWD=$(pwd -P) || exit 1".to_string()];
+    // Pass the physical cwd explicitly instead of forking a `$(pwd -P)`
+    // subshell in this restricted-PATH child. The subshell is an extra process
+    // in the fixture that can fail under a loaded host before the resolver ever
+    // runs, which produces an unsuccessful child with no diagnostic output; the
+    // assertion below is about resolution, not about fork availability.
+    let physical_cwd = std::fs::canonicalize(&cwd).unwrap();
+    let mut lines = vec![format!(
+        "MEZ_APPLY_CWD={}",
+        crate::shell_quote(&physical_cwd.to_string_lossy())
+    )];
     lines.extend(apply_patch_path_resolution_lines());
     lines.push(format!(
         "mez_apply_patch_resolve {}",
