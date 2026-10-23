@@ -3273,6 +3273,11 @@ impl AgentTranscriptStore {
             MezError::invalid_state("conversation transcript row is not valid UTF-8")
         })?;
         let entry = decode_transcript_entry(text)?;
+        if entry.conversation_id != conversation_id {
+            return Err(MezError::invalid_state(
+                "conversation transcript final row belongs to another conversation",
+            ));
+        }
         entry
             .sequence
             .checked_add(1)
