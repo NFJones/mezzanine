@@ -302,7 +302,7 @@ impl Drop for ForegroundProcess {
             Ok(Some(_)) => true,
             Ok(None) => {
                 let killed = self.child.kill().is_ok();
-                killed && matches!(self.child.wait(), Ok(_))
+                killed && self.child.wait().is_ok()
             }
             Err(_) => false,
         };
