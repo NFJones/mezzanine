@@ -8510,3 +8510,25 @@ fn transcript_sequence_allocation_handles_boundaries_and_exhaustion() {
     assert_eq!(error.kind(), crate::MezErrorKind::InvalidState);
     let _ = fs::remove_dir_all(root);
 }
+
+/// A tail whose final record has no terminating newline is reported as
+/// unterminated framing rather than being decoded as a complete row.
+#[test]
+fn transcript_sequence_allocation_reports_an_unterminated_tail() {
+    let root = temp_root("sequence-torn-tail");
+    let store = AgentTranscriptStore::new(root.clone());
+    let row = entry("torn-record", 1, TranscriptRole::User);
+    let encoded = encode_transcript_entry(&row).unwrap();
+    let path = store.transcript_path("torn-record").unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let truncated = encoded.trim_end_matches('\n');
+    fs::write(&path, truncated).unwrap();
+    let error = store.next_sequence("torn-record").unwrap_err();
+    assert_eq!(error.kind(), crate::MezErrorKind::InvalidState);
+    assert!(
+        error.message().contains("not newline-terminated"),
+        "{}",
+        error.message()
+    );
+    let _ = fs::remove_dir_all(root);
+}
