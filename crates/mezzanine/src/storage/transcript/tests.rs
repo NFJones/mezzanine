@@ -8422,3 +8422,33 @@ fn deleting_a_conversation_prunes_its_objective_title_mirror() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// A single valid record larger than the context-preview byte window must still
+/// allocate the next sequence, and allocation must read only the final record.
+#[test]
+fn transcript_sequence_allocation_reads_large_complete_records() {
+    let root = temp_root("sequence-large-record");
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut large = entry("large-record", 1, TranscriptRole::Assistant);
+    large.content = "x".repeat(3 * 1024 * 1024);
+    assert!(store.append_many(std::slice::from_ref(&large)).unwrap() > 0);
+    assert_eq!(
+        store.next_sequence("large-record").unwrap(),
+        2,
+        "a valid oversized record still allocates the next sequence"
+    );
+
+    let follow = entry("large-record", 2, TranscriptRole::User);
+    assert!(store.append_many(&[follow]).unwrap() > 0);
+    assert_eq!(store.next_sequence("large-record").unwrap(), 3);
+
+    // Controls: short history and an absent conversation keep their contracts.
+    let small = entry("small-record", 1, TranscriptRole::User);
+    assert!(store.append_many(&[small]).unwrap() > 0);
+    assert_eq!(store.next_sequence("small-record").unwrap(), 2);
+    assert_eq!(
+        store.next_sequence("absent-record").unwrap_err().kind(),
+        crate::MezErrorKind::NotFound
+    );
+    let _ = fs::remove_dir_all(root);
+}
