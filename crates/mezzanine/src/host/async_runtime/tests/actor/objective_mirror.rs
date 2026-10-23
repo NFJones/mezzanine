@@ -313,7 +313,8 @@ async fn objective_mirror_actor_case(run_service: bool) {
     // Release and join before any assertions or filesystem cleanup, including
     // the baseline failure. Drop is also the unwind fallback for early errors.
     drop(watchdog);
-    let idle = !run_service || settle::settle_objective_mirrors(&mut exit.service);
+    exit.service.poll_runtime_objective_mirror(false);
+    let idle = !run_service || exit.service.objective_mirrors_are_idle_for_tests();
     let mirrored = if run_service && idle {
         store
             .session_objective_mirror(&conversation)
@@ -499,7 +500,8 @@ async fn async_objective_write_does_not_starve_essential_persistence_or_replacem
     };
     let ((converged, final_shutdown), replacement, mut exit) =
         tokio::join!(client, persistence, actor.run());
-    let idle = settle::settle_objective_mirrors(&mut exit.service);
+    exit.service.poll_runtime_objective_mirror(false);
+    let idle = exit.service.objective_mirrors_are_idle_for_tests();
     let mirror = if idle {
         store
             .session_objective_mirror("cache-only")
@@ -541,28 +543,4 @@ async fn async_objective_write_does_not_starve_essential_persistence_or_replacem
     assert_eq!(mirror.as_deref(), Some("replacement newest"));
     assert_eq!(essential, b"essential once");
     assert!(exit.service.tracked_runtime_pane_process_ids().is_empty());
-}
-#[cfg(test)]
-mod settle {
-    /// Polls the production mirror poller until it reports idle.
-    ///
-    /// A single poll assumes one cycle is enough, but a transiently busy store
-    /// re-dirties the entry and schedules a later eligible instant, so the
-    /// mirror legitimately needs another cycle. The bound keeps a genuine stall
-    /// a failure instead of a wait.
-    pub(super) fn settle_objective_mirrors(
-        service: &mut crate::runtime::RuntimeSessionService,
-    ) -> bool {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            service.poll_runtime_objective_mirror(false);
-            if service.objective_mirrors_are_idle_for_tests() {
-                return true;
-            }
-            if std::time::Instant::now() >= deadline {
-                return false;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-    }
 }
