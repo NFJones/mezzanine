@@ -30,9 +30,23 @@ pub(crate) async fn submit_pane_runtime_events_bounded(
     handle: &AsyncRuntimeSessionHandle,
     batch: RuntimeEventBatch,
 ) -> Result<super::RuntimeEventIngressReport> {
+    retry_pre_application_capacity(|| handle.submit_runtime_events(batch.clone())).await
+}
+
+/// Retries one submit operation while it is rejected before application because
+/// unrelated effects transiently filled the bounded side-effect queue.
+///
+/// The closure re-submits the exact same source on every attempt, so a retry can
+/// never duplicate an effect that the actor already applied. Exhausting the
+/// bounded attempts returns the last error instead of discarding the work.
+async fn retry_pre_application_capacity<F, Fut, T>(mut submit: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
     let mut attempts = 0usize;
     loop {
-        match handle.submit_runtime_events(batch.clone()).await {
+        match submit().await {
             Ok(ingress) => return Ok(ingress),
             Err(error)
                 if attempts < PANE_EVENT_CAPACITY_RETRY_ATTEMPTS
@@ -45,6 +59,63 @@ pub(crate) async fn submit_pane_runtime_events_bounded(
             }
             Err(error) => return Err(error),
         }
+    }
+}
+
+#[cfg(test)]
+mod capacity_retry_tests {
+    use super::retry_pre_application_capacity;
+    use crate::host::async_runtime::{MezError, Result};
+    use std::cell::Cell;
+
+    /// Pre-application saturation is retried with the same operation and stops
+    /// as soon as the actor accepts it.
+    #[tokio::test]
+    async fn pre_application_capacity_retries_until_the_same_submit_succeeds() {
+        let calls = Cell::new(0usize);
+        let result = retry_pre_application_capacity(|| {
+            calls.set(calls.get() + 1);
+            let attempt = calls.get();
+            async move {
+                if attempt < 3 {
+                    Err(MezError::invalid_state(
+                        "async runtime side-effect queue is full: applied=0",
+                    ))
+                } else {
+                    Ok(attempt)
+                }
+            }
+        })
+        .await;
+        assert_eq!(result.unwrap(), 3);
+        assert_eq!(calls.get(), 3, "two rejections then one accepted submit");
+    }
+
+    /// A rejection that already applied work, and any unrelated error, must
+    /// propagate immediately without a retry.
+    #[tokio::test]
+    async fn applied_capacity_and_unrelated_errors_are_not_retried() {
+        let calls = Cell::new(0usize);
+        let result: Result<()> = retry_pre_application_capacity(|| {
+            calls.set(calls.get() + 1);
+            async move {
+                Err(MezError::invalid_state(
+                    "async runtime side-effect queue is full: applied=3",
+                ))
+            }
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 1, "applied work is never replayed");
+
+        let unrelated = Cell::new(0usize);
+        let result: Result<()> = retry_pre_application_capacity(|| {
+            unrelated.set(unrelated.get() + 1);
+            async move { Err(MezError::invalid_state("runtime actor is gone")) }
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(unrelated.get(), 1, "actor loss is not retried");
     }
 }
 
