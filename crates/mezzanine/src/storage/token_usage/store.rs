@@ -226,7 +226,9 @@ impl TokenUsageStore {
     }
 
     /// Preserves ordinary store opening while observing only a final WAL
-    /// refusal for this invocation. Schema acquisition and writes are terminal.
+    /// refusal for this invocation. Exhausted schema admission and any write
+    /// remain terminal; only pre-acquisition initialization is retried, inside
+    /// one bounded deadline.
     pub(super) fn open_with_external_admission(
         &self,
         admission: &mut super::ExternalUsageAdmissionWitness,
@@ -235,19 +237,21 @@ impl TokenUsageStore {
         ensure_private_parent(&self.path)?;
         let connection = Connection::open(&self.path)?;
         connection.busy_timeout(Duration::from_millis(250))?;
-        initialize_schema(&connection, admission)?;
+        let deadline = std::time::Instant::now() + STORE_INITIALIZATION_BUDGET;
+        initialize_schema(&connection, admission, deadline)?;
         set_private_file_permissions(&self.path)?;
         Ok(connection)
     }
 }
 
-/// Bounded budget for concurrent store initialization.
+/// Bounded total budget for concurrent store initialization.
 ///
 /// Unlike an ordinary statement on an already-initialized store, the winner of
 /// initialization performs WAL setup and a full migration, so a concurrent
 /// opener waits for that work before it can take writer ownership. Both WAL
-/// setup and schema admission use this one bound, which exists so a genuinely
-/// stuck writer still fails truthfully instead of blocking an opener forever.
+/// setup and schema admission draw on this single deadline, which exists so a
+/// genuinely stuck writer still fails truthfully instead of blocking an opener
+/// forever. Migration execution itself is not retried by either loop.
 const STORE_INITIALIZATION_BUDGET: Duration = Duration::from_millis(1_000);
 
 /// Enables WAL before writer admission. SQLite can reject concurrent journal
@@ -257,9 +261,8 @@ const STORE_INITIALIZATION_BUDGET: Duration = Duration::from_millis(1_000);
 fn initialize_wal(
     connection: &Connection,
     admission: &mut super::ExternalUsageAdmissionWitness,
+    deadline: std::time::Instant,
 ) -> Result<()> {
-    let started = std::time::Instant::now();
-    let budget = STORE_INITIALIZATION_BUDGET;
     loop {
         let result = connection.query_row("PRAGMA journal_mode = WAL", [], |row| {
             row.get::<_, String>(0)
@@ -269,13 +272,14 @@ fn initialize_wal(
             Ok(_) => return Err(MezError::invalid_state("token usage WAL mode unavailable")),
             Err(rusqlite::Error::SqliteFailure(error, _))
                 if matches!(
-                    error.code,
-                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
-                ) && started.elapsed() < budget =>
+                    error.extended_code,
+                    rusqlite::ffi::SQLITE_BUSY | rusqlite::ffi::SQLITE_LOCKED
+                ) && std::time::Instant::now() < deadline =>
             {
-                std::thread::sleep(
-                    Duration::from_millis(2).min(budget.saturating_sub(started.elapsed())),
-                );
+                // Retry only while the one initialization deadline allows; an
+                // attempt begun after it falls through to the terminal arm and
+                // becomes the recorded refusal.
+                std::thread::sleep(Duration::from_millis(2));
             }
             Err(error) => {
                 // Record only this final return. Earlier busy results followed
@@ -293,8 +297,9 @@ fn initialize_wal(
 fn initialize_schema(
     connection: &Connection,
     admission: &mut super::ExternalUsageAdmissionWitness,
+    deadline: std::time::Instant,
 ) -> Result<()> {
-    initialize_wal(connection, admission)?;
+    initialize_wal(connection, admission, deadline)?;
     // Current-schema inspection needs no writer ownership. Migrations still
     // reread the version after acquiring their immediate transaction below.
     let observed_version: i64 =
@@ -308,9 +313,9 @@ fn initialize_schema(
     // statement. SQLite also does not invoke its busy handler for every
     // writer-admission conflict (a would-deadlock BEGIN IMMEDIATE returns BUSY
     // immediately), so retry this one idempotent admission within a budget
-    // sized for that initialization work. No usage transaction or committed
-    // observation is replayed by this owner.
-    let started = std::time::Instant::now();
+    // sized for that initialization work and drawn from the same deadline WAL
+    // setup uses. No usage transaction or committed observation is replayed by
+    // this owner.
     let transaction = loop {
         match rusqlite::Transaction::new_unchecked(
             connection,
@@ -319,14 +324,11 @@ fn initialize_schema(
             Ok(transaction) => break transaction,
             Err(rusqlite::Error::SqliteFailure(error, _))
                 if matches!(
-                    error.code,
-                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
-                ) && started.elapsed() < STORE_INITIALIZATION_BUDGET =>
+                    error.extended_code,
+                    rusqlite::ffi::SQLITE_BUSY | rusqlite::ffi::SQLITE_LOCKED
+                ) && std::time::Instant::now() < deadline =>
             {
-                std::thread::sleep(
-                    Duration::from_millis(5)
-                        .min(STORE_INITIALIZATION_BUDGET.saturating_sub(started.elapsed())),
-                );
+                std::thread::sleep(Duration::from_millis(5));
             }
             Err(error) => {
                 return Err(MezError::invalid_state(format!(
