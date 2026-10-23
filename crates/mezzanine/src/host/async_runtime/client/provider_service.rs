@@ -778,6 +778,36 @@ async fn submit_authoritative_runtime_event(
     }
 }
 
+/// Submits one optional progress batch, retrying only transient capacity
+/// pressure.
+///
+/// Executor progress is reconstructible presentation rather than authoritative
+/// completion, so a persistent rejection stays non-fatal to the provider
+/// service. A transient pre-application queue-full rejection is retried with the
+/// same batch instead of being dropped, which is what previously let unrelated
+/// queue pressure discard executor previews.
+async fn submit_optional_progress_batch(
+    handle: &AsyncRuntimeSessionHandle,
+    batch: RuntimeEventBatch,
+) {
+    let mut attempts = 0usize;
+    loop {
+        match handle.submit_runtime_events(batch.clone()).await {
+            Ok(_ingress) => return,
+            Err(error)
+                if attempts < AUTHORITATIVE_EVENT_CAPACITY_RETRY_ATTEMPTS
+                    && crate::host::async_runtime::error_is_retryable_side_effect_capacity(
+                        &error,
+                    ) =>
+            {
+                attempts = attempts.saturating_add(1);
+                tokio::time::sleep(AUTHORITATIVE_EVENT_CAPACITY_RETRY_DELAY).await;
+            }
+            Err(_) => return,
+        }
+    }
+}
+
 /// Records one completed provider worker and applies its runtime event.
 async fn record_joined_agent_provider_worker(
     joined: std::result::Result<Result<AsyncAgentProviderWorkerResult>, tokio::task::JoinError>,
@@ -1134,7 +1164,7 @@ async fn execute_native_shell_action(
                 }
                 confirmed_patch_sections = progress.confirmed_patch_sections.len();
                 if !batch.events.is_empty() {
-                    let _ = handle.submit_runtime_events(batch).await;
+                    submit_optional_progress_batch(&handle, batch).await;
                 }
             }
         }
@@ -1186,7 +1216,7 @@ async fn execute_native_shell_action(
             ));
         }
         if !batch.events.is_empty() {
-            let _ = handle.submit_runtime_events(batch).await;
+            submit_optional_progress_batch(&handle, batch).await;
         }
     }
     let outcome = match joined {
