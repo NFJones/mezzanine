@@ -739,6 +739,45 @@ async fn drain_completed_agent_provider_workers(
     Ok(())
 }
 
+/// Bounded attempts for one authoritative actor event rejected before
+/// application because unrelated effects transiently filled the queue.
+const AUTHORITATIVE_EVENT_CAPACITY_RETRY_ATTEMPTS: usize = 32;
+
+/// Delay between bounded authoritative-event capacity retries.
+const AUTHORITATIVE_EVENT_CAPACITY_RETRY_DELAY: std::time::Duration =
+    std::time::Duration::from_millis(20);
+
+/// Submits one authoritative runtime event, retrying only the exact same event
+/// while the actor reports pre-application capacity pressure.
+///
+/// A rejection carrying `applied=0` proves the actor consumed nothing, so
+/// re-submitting this same event cannot duplicate an effect. Anything that
+/// already applied or drained work is never retried. Exhausting the bounded
+/// attempts still propagates the error rather than dropping the completion.
+async fn submit_authoritative_runtime_event(
+    handle: &AsyncRuntimeSessionHandle,
+    event: RuntimeEvent,
+) -> Result<()> {
+    let mut attempts = 0usize;
+    loop {
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(event.clone());
+        match handle.submit_runtime_events(batch).await {
+            Ok(_ingress) => return Ok(()),
+            Err(error)
+                if attempts < AUTHORITATIVE_EVENT_CAPACITY_RETRY_ATTEMPTS
+                    && crate::host::async_runtime::error_is_retryable_side_effect_capacity(
+                        &error,
+                    ) =>
+            {
+                attempts = attempts.saturating_add(1);
+                tokio::time::sleep(AUTHORITATIVE_EVENT_CAPACITY_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 /// Records one completed provider worker and applies its runtime event.
 async fn record_joined_agent_provider_worker(
     joined: std::result::Result<Result<AsyncAgentProviderWorkerResult>, tokio::task::JoinError>,
@@ -750,9 +789,7 @@ async fn record_joined_agent_provider_worker(
             if completed {
                 report.executions = report.executions.saturating_add(1);
             }
-            let mut batch = RuntimeEventBatch::new();
-            batch.push(event);
-            handle.submit_runtime_events(batch).await?;
+            submit_authoritative_runtime_event(handle, event).await?;
             Ok(())
         }
         Ok(Ok(None)) => Ok(()),
@@ -910,9 +947,9 @@ async fn dispatch_agent_provider_side_effects(
                     Ok(Some(dispatch)) => dispatch,
                     Ok(None) => continue,
                     Err(error) => {
-                        let mut batch = RuntimeEventBatch::new();
-                        batch.push(RuntimeEvent::AgentCompaction(
-                            AgentCompactionEvent::Failed {
+                        submit_authoritative_runtime_event(
+                            handle,
+                            RuntimeEvent::AgentCompaction(AgentCompactionEvent::Failed {
                                 pane_id,
                                 task_generation,
                                 usage: Default::default(),
@@ -922,9 +959,9 @@ async fn dispatch_agent_provider_side_effects(
                                     .provider_failure_json()
                                     .map(str::to_string),
                                 provider_raw_text: error.provider_raw_text().map(str::to_string),
-                            },
-                        ));
-                        handle.submit_runtime_events(batch).await?;
+                            }),
+                        )
+                        .await?;
                         continue;
                     }
                 };
