@@ -120,19 +120,26 @@ fn spawn_client(root: &Path, home: &Path, runtime: &Path, name: &str) -> Foregro
     command.env("MEZ_TMPDIR", runtime.as_os_str());
     command.env("TERM", "xterm-256color");
     command.args(["--iroh-profile", "fixture", "new", "--name", name]);
-    let child = pair.slave.spawn_command(command).unwrap();
+    // Acquire the fallible PTY plumbing and the reader thread BEFORE the frontend
+    // child exists. Starting the child first left a running process with no
+    // cleanup guard when reader/writer acquisition or thread construction
+    // failed, which is the ownership gap this fixture must close.
     let mut reader = pair.master.try_clone_reader().unwrap();
     let writer = pair.master.take_writer().unwrap();
-    drop(pair.slave);
     let (output_tx, output_rx) = mpsc::channel();
-    let reader_thread = thread::spawn(move || {
-        let mut bytes = [0; 4096];
-        while let Ok(read) = reader.read(&mut bytes) {
-            if read == 0 || output_tx.send(bytes[..read].to_vec()).is_err() {
-                break;
+    let reader_thread = thread::Builder::new()
+        .name(format!("foreground-reader-{name}"))
+        .spawn(move || {
+            let mut bytes = [0; 4096];
+            while let Ok(read) = reader.read(&mut bytes) {
+                if read == 0 || output_tx.send(bytes[..read].to_vec()).is_err() {
+                    break;
+                }
             }
-        }
-    });
+        })
+        .unwrap();
+    let child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
     ForegroundProcess {
         child,
         master: pair.master,
