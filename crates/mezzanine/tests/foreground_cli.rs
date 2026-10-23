@@ -295,14 +295,37 @@ impl Drop for ForegroundProcess {
     /// on duplicated control-flow logic.
     fn drop(&mut self) {
         let _ = self.writer.take();
-        if self.child.try_wait().ok().flatten().is_none() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
+        // A termination request is not a reap. Attempt exactly one termination
+        // sequence and remember whether the child was affirmatively reaped, so
+        // the storage decision below can stay truthful.
+        let reaped = match self.child.try_wait() {
+            Ok(Some(_)) => true,
+            Ok(None) => {
+                let killed = self.child.kill().is_ok();
+                killed && matches!(self.child.wait(), Ok(_))
+            }
+            Err(_) => false,
+        };
+        // The reader holds a clone of the master, so a descendant that keeps the
+        // PTY open can outlive the child. Observe its settlement within a bound
+        // instead of joining forever.
+        let mut reader_settled = true;
         if let Some(reader_thread) = self.reader_thread.take() {
-            let _ = reader_thread.join();
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !reader_thread.is_finished() && std::time::Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if reader_thread.is_finished() {
+                let _ = reader_thread.join();
+            } else {
+                // Detaching keeps the failure path from blocking forever; the
+                // retained root below records that settlement was unproven.
+                reader_settled = false;
+            }
         }
-        let _ = fs::remove_dir_all(&self.root);
+        if reaped && reader_settled {
+            let _ = fs::remove_dir_all(&self.root);
+        }
     }
 }
 
