@@ -16249,6 +16249,48 @@ compress it into concatenated zstd frames in the same saved-session directory.
 Readers of presentation logs MUST treat the concatenated zstd history and the
 active cleartext tail as one ordered presentation stream.
 
+Compressed presentation publication MUST be recoverable across interruption. A
+frame append and the retirement of the cleartext source it consumed are two
+separate durable steps, so an implementation that performs them sequentially MUST
+publish explicit publication evidence naming the exact frame byte range and an
+integrity digest of the cleartext source that frame consumed, before that frame
+exists. Recovery MUST use that evidence to keep every committed frame readable
+when the final frame append was interrupted, to discard only a suffix proven
+uncommitted, and to retire a cleartext overlap only after the retained digest
+proves the tail prefix is exactly that frame's consumed source. Rows appended
+after an interruption MUST survive recovery. Absent, partial or unrecognized
+publication evidence MUST NOT authorize discarding, truncating or deduplicating
+any committed bytes: without recognized evidence, midstream corruption and an
+uncommitted suffix are indistinguishable and MUST fail honestly rather than be
+guessed. Deduplication MUST be by exact proven range and identity, never by text,
+timestamp or repetition. Recovery MUST be idempotent and MUST NOT delete committed
+history, and a successful publication MUST retire its evidence so a healthy store
+carries no pending obligation.
+
+Publication evidence MUST be durable before the frame it describes, and its
+retirement MUST be durable before the store is considered healthy again; the
+record and the compressed-history name MUST be synced together with their
+containing directory, so this ordering holds across a host or power-loss crash and
+not merely a process interruption. A complete byte range is not proof of
+committed content: recovery MUST decode exactly the recorded frame and verify the
+recorded source identity before retiring any cleartext bytes, and MUST retain the
+intact cleartext source when that verification fails. A partially rewritten
+cleartext tail MUST be replaced atomically so an interruption inside recovery
+cannot lose rows that only the cleartext file holds. Recovery that must retire a
+partially consumed cleartext tail MUST run as an explicit ordered sequence -
+publish a complete durable staged copy bound to that exact publication identity,
+install the remainder atomically, retire the publication evidence, then drop the
+staged copy - so every interruption point reconverges: a staged copy is
+authoritative only for the publication identity it names, and the evidence MUST be
+retired before the staged copy is dropped so it can never outlive the state it
+describes. An ordinary publication holds the conversation lock, so it may retire
+its fully consumed tail in place once the frame is durable, because no later rows
+exist for that source at that point. Evidence that does not
+account for every byte of the compressed history MUST NOT authorize hiding the
+bytes it does not cover, and every reader of that history - including catalog
+reconstruction and summaries - MUST apply the same committed-range policy as
+replay.
+
 Presentation occurrence provenance MUST remain separate from persistence/catalog
 creation time. One independently presented semantic component is one entry;
 authored newlines, Markdown blocks/table rows, grouped result preview rows and

@@ -444,6 +444,156 @@ const SESSION_PRESENTATION_INDEX_FILE_NAME: &str = "presentation-index.tsv";
 /// The file is append-only and may contain any number of concatenated zstd
 /// frames. The active cleartext tail remains in `presentation.tsv`.
 const SESSION_PRESENTATION_COMPRESSED_FILE_NAME: &str = "presentation.tsv.zst";
+
+/// Publication witness for one in-flight compressed presentation frame.
+const SESSION_PRESENTATION_COMPACTION_FILE_NAME: &str = "presentation-compaction.witness";
+
+/// Durable staging copy of a cleartext tail whose retirement is in progress.
+const SESSION_PRESENTATION_RETIRING_FILE_NAME: &str = "presentation.tsv.retiring";
+
+/// Witness record format version; unknown versions are not evidence.
+const PRESENTATION_COMPACTION_WITNESS_FORMAT: u32 = 1;
+
+/// Exact publication evidence for one compressed presentation frame.
+///
+/// Compaction appends a frame and only then retires the cleartext source it
+/// copied. Without this record an interrupted publication is indistinguishable
+/// from corruption, and a synced frame whose tail truncate never ran replays its
+/// occurrences twice. The record names the exact frame range and the digest of
+/// the source it consumed, so recovery keeps committed frames, discards only a
+/// proven-uncommitted suffix, and retires the overlap only when the cleartext
+/// tail prefix is proven to be that same source.
+#[derive(Debug, Clone)]
+struct PresentationCompactionWitness {
+    /// Byte offset in the compressed history where this frame begins.
+    frame_offset: u64,
+    /// Exact number of frame bytes this publication writes.
+    frame_length: u64,
+    /// Number of cleartext bytes the frame consumed.
+    source_bytes: u64,
+    /// Digest of exactly those consumed cleartext bytes.
+    source_digest: String,
+}
+
+impl PresentationCompactionWitness {
+    /// Encodes the record for durable publication before the frame exists.
+    fn encode(&self) -> String {
+        format!(
+            "format={PRESENTATION_COMPACTION_WITNESS_FORMAT}\nframe_offset={}\nframe_length={}\nsource_bytes={}\nsource_digest={}\n",
+            self.frame_offset, self.frame_length, self.source_bytes, self.source_digest
+        )
+    }
+
+    /// Decodes one record, treating unknown or partial records as absent evidence.
+    fn decode(text: &str) -> Option<Self> {
+        let mut format = None;
+        let mut frame_offset = None;
+        let mut frame_length = None;
+        let mut source_bytes = None;
+        let mut source_digest = None;
+        for line in text.lines() {
+            let (key, value) = line.split_once('=')?;
+            match key {
+                "format" => format = value.parse::<u32>().ok(),
+                "frame_offset" => frame_offset = value.parse::<u64>().ok(),
+                "frame_length" => frame_length = value.parse::<u64>().ok(),
+                "source_bytes" => source_bytes = value.parse::<u64>().ok(),
+                "source_digest" => source_digest = Some(value.to_string()),
+                _ => {}
+            }
+        }
+        if format? != PRESENTATION_COMPACTION_WITNESS_FORMAT {
+            return None;
+        }
+        let frame_offset = frame_offset?;
+        let frame_length = frame_length?;
+        let source_bytes = source_bytes?;
+        let source_digest = source_digest?;
+        if frame_length == 0
+            || source_bytes == 0
+            || source_digest.len() != 64
+            || !source_digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return None;
+        }
+        Some(Self {
+            frame_offset,
+            frame_length,
+            source_bytes,
+            source_digest,
+        })
+    }
+
+    /// Returns the first byte after this frame, or `None` on range overflow.
+    fn frame_end(&self) -> Option<u64> {
+        self.frame_offset.checked_add(self.frame_length)
+    }
+
+    /// Returns whether the compressed history holds this whole frame yet.
+    fn frame_is_committed(&self, compressed_len: u64) -> bool {
+        self.frame_end().is_some_and(|end| compressed_len >= end)
+    }
+
+    /// Returns the proven consumed prefix length of one cleartext tail.
+    fn verified_source_prefix(&self, tail: &[u8]) -> Option<usize> {
+        let retired = usize::try_from(self.source_bytes).ok()?;
+        if tail.len() < retired {
+            return None;
+        }
+        (presentation_compaction_digest(&tail[..retired]) == self.source_digest).then_some(retired)
+    }
+}
+
+/// Returns the digest recorded for one presentation compaction source.
+fn presentation_compaction_digest(source: &[u8]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(source);
+    hash.finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Durable staging record for a cleartext tail whose retirement is in progress.
+///
+/// The record carries the exact publication identity it belongs to, so a stage left
+/// behind by one generation can never be mistaken for the source of another. A
+/// stage whose identity does not match the live witness is an orphan and carries no
+/// authority.
+#[derive(Debug, Clone)]
+struct PresentationRetirementStage {
+    /// Publication identity this staged source belongs to.
+    identity: PresentationCompactionWitness,
+    /// Complete pre-retirement cleartext tail for that publication.
+    source: Vec<u8>,
+}
+
+impl PresentationRetirementStage {
+    /// Encodes the identity header followed by the exact staged source bytes.
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = self.identity.encode().into_bytes();
+        bytes.extend_from_slice(b"stage=complete\n\n");
+        bytes.extend_from_slice(&self.source);
+        bytes
+    }
+
+    /// Decodes one staged record, rejecting incomplete or inconsistent content.
+    fn decode(bytes: &[u8]) -> Option<Self> {
+        let separator = b"stage=complete\n\n";
+        let split = bytes
+            .windows(separator.len())
+            .position(|window| window == separator)?;
+        let header = std::str::from_utf8(&bytes[..split]).ok()?;
+        let identity = PresentationCompactionWitness::decode(header)?;
+        let source = bytes[split + separator.len()..].to_vec();
+        // The authenticated identity covers only the consumed prefix; a staged tail
+        // may legitimately also hold rows appended after the interruption.
+        if source.len() < usize::try_from(identity.source_bytes).ok()? {
+            return None;
+        }
+        Some(Self { identity, source })
+    }
+}
 /// Defines the ACTIVE AGENT SESSION METADATA FILE NAME const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -2021,6 +2171,9 @@ impl AgentTranscriptStore {
             return self.append_presentation_many_locked(&[entry]).map(|_| ());
         }
         self.ensure_session_dir(&entry.conversation_id)?;
+        // Finish or discard any inherited publication before new tail bytes are
+        // accepted, so pending evidence never describes a mutated tail.
+        self.recover_presentation_compaction(&entry.conversation_id)?;
         let path = self.presentation_path_for(&entry.conversation_id)?;
         let encoded = entry.encode()?;
         let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
@@ -2055,6 +2208,9 @@ impl AgentTranscriptStore {
             return Ok(0);
         };
         validate_conversation_id(&first.conversation_id)?;
+        // Finish or discard any inherited publication before new tail bytes are
+        // accepted, so pending evidence never describes a mutated tail.
+        self.recover_presentation_compaction(&first.conversation_id)?;
         if entries
             .iter()
             .any(|entry| entry.conversation_id != first.conversation_id)
@@ -2290,13 +2446,25 @@ impl AgentTranscriptStore {
     ) -> Result<Vec<AgentPresentationEntry>> {
         let mut data = String::new();
         let compressed_path = self.presentation_compressed_path_for(conversation_id)?;
+        let witness = self.read_presentation_compaction_witness(conversation_id)?;
+        let mut compressed_len = 0u64;
         if compressed_path.exists() {
             let compressed = std_fs::read(&compressed_path)?;
-            let decoded = zstd::stream::decode_all(&compressed[..]).map_err(|error| {
-                MezError::invalid_args(format!(
-                    "presentation compressed history decode failed: {error}"
-                ))
-            })?;
+            compressed_len = u64::try_from(compressed.len())
+                .map_err(|_| MezError::invalid_state("presentation history length overflow"))?;
+            // Publication evidence speaks only for its own frame range. When it
+            // accounts for the whole file it is authoritative; when the file is
+            // shorter, the recorded frame was never committed and the intact tail
+            // stays authoritative; anything else is unaccounted, and unaccounted
+            // bytes are decoded strictly rather than hidden.
+            let committed_len =
+                self.committed_presentation_history_len(compressed_len, witness.as_ref())?;
+            let decoded =
+                zstd::stream::decode_all(&compressed[..committed_len]).map_err(|error| {
+                    MezError::invalid_args(format!(
+                        "presentation compressed history decode failed: {error}"
+                    ))
+                })?;
             data.push_str(&String::from_utf8(decoded).map_err(|error| {
                 MezError::invalid_args(format!(
                     "presentation compressed history is not UTF-8: {error}"
@@ -2305,7 +2473,36 @@ impl AgentTranscriptStore {
         }
         let path = self.presentation_path_for(conversation_id)?;
         if path.exists() {
-            std_fs::File::open(path)?.read_to_string(&mut data)?;
+            let mut tail = Vec::new();
+            std_fs::File::open(&path)?.read_to_end(&mut tail)?;
+            // A committed frame whose source tail was never truncated is the same
+            // source twice. Retire exactly the proven consumed prefix and keep any
+            // rows appended after the interruption.
+            let exact_publication = witness
+                .as_ref()
+                .is_some_and(|witness| witness.frame_end() == Some(compressed_len));
+            // Retiring the cleartext prefix is only honest when the recorded
+            // frame actually decodes to the recorded source; a same-length but
+            // altered frame must fail rather than present the wrong history.
+            let retired = match witness.as_ref() {
+                Some(witness) if exact_publication => {
+                    let compressed = std_fs::read(&compressed_path)?;
+                    if Self::presentation_compaction_frame_source(&compressed, witness).is_none() {
+                        return Err(MezError::invalid_state(
+                            "presentation compressed history frame does not match its published evidence",
+                        ));
+                    }
+                    witness.verified_source_prefix(&tail).unwrap_or(0)
+                }
+                _ => 0,
+            };
+            data.push_str(
+                &String::from_utf8(tail[retired..].to_vec()).map_err(|error| {
+                    MezError::invalid_args(format!(
+                        "presentation cleartext tail is not UTF-8: {error}"
+                    ))
+                })?,
+            );
         }
         if data.is_empty() {
             return Ok(Vec::new());
@@ -2451,6 +2648,10 @@ impl AgentTranscriptStore {
         if metadata.len() < self.presentation_compaction_threshold {
             return Ok(());
         }
+        // Finish or discard any publication this process inherited before
+        // reading the tail, so a frame is never published on top of an
+        // uncommitted suffix.
+        self.recover_presentation_compaction(conversation_id)?;
         let data = std_fs::read(&path)?;
         if data.is_empty() {
             return Ok(());
@@ -2459,6 +2660,23 @@ impl AgentTranscriptStore {
             MezError::invalid_args(format!("presentation compression failed: {error}"))
         })?;
         let compressed_path = self.presentation_compressed_path_for(conversation_id)?;
+        let frame_offset = std_fs::metadata(&compressed_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        // Publish the exact frame range and the digest of the source it consumes
+        // before the frame exists, so an interrupted publication is
+        // distinguishable from corruption when this store is reopened.
+        self.write_presentation_compaction_witness(
+            conversation_id,
+            &PresentationCompactionWitness {
+                frame_offset,
+                frame_length: u64::try_from(compressed.len())
+                    .map_err(|_| MezError::invalid_state("presentation frame length overflow"))?,
+                source_bytes: u64::try_from(data.len())
+                    .map_err(|_| MezError::invalid_state("presentation tail length overflow"))?,
+                source_digest: presentation_compaction_digest(&data),
+            },
+        )?;
         let mut compressed_file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -2466,10 +2684,303 @@ impl AgentTranscriptStore {
         compressed_file.write_all(&compressed)?;
         compressed_file.sync_all()?;
         set_private_file_permissions(&compressed_path)?;
+        drop(compressed_file);
+        // The compressed history name must be durable before its only cleartext
+        // source is retired.
+        self.sync_presentation_session_dir(conversation_id)?;
 
         let tail = OpenOptions::new().write(true).truncate(true).open(&path)?;
         tail.sync_all()?;
         set_private_file_permissions(&path)?;
+        // The cleartext source is retired, so the publication is complete and
+        // needs no recovery evidence.
+        self.clear_presentation_compaction_witness(conversation_id)?;
+        Ok(())
+    }
+
+    /// Returns the publication witness path for one conversation.
+    fn presentation_compaction_witness_path_for(&self, conversation_id: &str) -> Result<PathBuf> {
+        Ok(self
+            .session_dir_for(conversation_id)?
+            .join(SESSION_PRESENTATION_COMPACTION_FILE_NAME))
+    }
+
+    /// Reads the publication witness, treating absent or unreadable evidence as
+    /// absent so legacy stores keep their strict decode behavior.
+    fn read_presentation_compaction_witness(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<PresentationCompactionWitness>> {
+        let path = self.presentation_compaction_witness_path_for(conversation_id)?;
+        let Ok(text) = std_fs::read_to_string(&path) else {
+            return Ok(None);
+        };
+        Ok(PresentationCompactionWitness::decode(&text))
+    }
+
+    /// Publishes the exact frame range and consumed source before the frame exists.
+    fn write_presentation_compaction_witness(
+        &self,
+        conversation_id: &str,
+        witness: &PresentationCompactionWitness,
+    ) -> Result<()> {
+        let path = self.presentation_compaction_witness_path_for(conversation_id)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)?;
+        file.write_all(witness.encode().as_bytes())?;
+        file.sync_all()?;
+        set_private_file_permissions(&path)?;
+        drop(file);
+        // The new directory entry must be durable before the frame it describes.
+        self.sync_presentation_session_dir(conversation_id)?;
+        Ok(())
+    }
+
+    /// Retires the publication witness once the frame is committed.
+    fn clear_presentation_compaction_witness(&self, conversation_id: &str) -> Result<()> {
+        let path = self.presentation_compaction_witness_path_for(conversation_id)?;
+        match std_fs::remove_file(&path) {
+            Ok(()) => self.sync_presentation_session_dir(conversation_id),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Finishes or discards one interrupted presentation publication.
+    ///
+    /// A complete frame is committed: the cleartext source it consumed is retired
+    /// only after the retained digest proves the tail prefix is that exact source,
+    /// and newer appended rows are preserved. An incomplete frame was never
+    /// committed: its bytes are discarded from the compressed history while the
+    /// intact cleartext tail stays authoritative. Anything unproven is reported
+    /// instead of silently dropped.
+    fn recover_presentation_compaction(&self, conversation_id: &str) -> Result<()> {
+        let Some(witness) = self.read_presentation_compaction_witness(conversation_id)? else {
+            // No obligation exists, so any staged copy belongs to an already
+            // retired generation and carries no authority.
+            return self.discard_presentation_retiring(conversation_id);
+        };
+        let compressed_path = self.presentation_compressed_path_for(conversation_id)?;
+        let compressed_len = std_fs::metadata(&compressed_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let path = self.presentation_path_for(conversation_id)?;
+        let retiring_path = self.presentation_retiring_path_for(conversation_id)?;
+        let tail = if path.exists() {
+            std_fs::read(&path)?
+        } else {
+            Vec::new()
+        };
+        // Evidence without any compressed history means the first publication
+        // died before the file existed: nothing was ever published, and the
+        // intact cleartext tail is still the only copy.
+        if compressed_len == 0 && witness.frame_offset == 0 {
+            self.discard_presentation_retiring(conversation_id)?;
+            self.clear_presentation_compaction_witness(conversation_id)?;
+            return Ok(());
+        }
+        if !witness.frame_is_committed(compressed_len) {
+            // The frame was never fully written, so those bytes were never
+            // committed. The intact cleartext tail remains authoritative.
+            let compressed_file = OpenOptions::new().write(true).open(&compressed_path)?;
+            if compressed_len > witness.frame_offset {
+                compressed_file.set_len(witness.frame_offset)?;
+                compressed_file.sync_all()?;
+            }
+            drop(compressed_file);
+            self.sync_presentation_session_dir(conversation_id)?;
+            self.discard_presentation_retiring(conversation_id)?;
+            self.clear_presentation_compaction_witness(conversation_id)?;
+            return Ok(());
+        }
+        // A complete byte range is not content proof: decode exactly the
+        // published frame and require it to reproduce the recorded source before
+        // retiring any cleartext bytes.
+        let compressed = std_fs::read(&compressed_path)?;
+        if Self::presentation_compaction_frame_source(&compressed, &witness).is_none() {
+            return Err(MezError::invalid_state(
+                "presentation compaction frame does not match its published evidence",
+            ));
+        }
+        // The verified frame must be durable before its only other copy is retired.
+        {
+            let compressed_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&compressed_path)?;
+            compressed_file.sync_all()?;
+        }
+        // A staged copy is authoritative only for the exact publication it names.
+        // It survives both an interruption before the remainder install and one
+        // after it, while a stage from another generation is an orphan.
+        let stage = self.read_presentation_retiring(conversation_id)?;
+        let matching_stage = stage.filter(|stage| {
+            stage.identity.frame_offset == witness.frame_offset
+                && stage.identity.frame_length == witness.frame_length
+                && stage.identity.source_bytes == witness.source_bytes
+                && stage.identity.source_digest == witness.source_digest
+        });
+        if matching_stage.is_none() && retiring_path.exists() {
+            self.discard_presentation_retiring(conversation_id)?;
+        }
+        let source = if let Some(stage) = matching_stage {
+            stage.source
+        } else if tail.is_empty() {
+            // The source was already retired before this interruption.
+            self.clear_presentation_compaction_witness(conversation_id)?;
+            return Ok(());
+        } else {
+            tail
+        };
+        let Some(retired) = witness.verified_source_prefix(&source) else {
+            return Err(MezError::invalid_state(
+                "presentation compaction overlap does not match its committed source",
+            ));
+        };
+        if !retiring_path.exists() {
+            self.write_presentation_retiring(conversation_id, &witness, &source)?;
+        }
+        self.replace_presentation_tail(conversation_id, &source[retired..])?;
+        // Retire the phase record before dropping the staged copy: the witness must
+        // never outlive the state it describes, so an interruption in cleanup leaves
+        // only an inert staged file rather than a witness that demands a tail it can
+        // no longer verify.
+        self.clear_presentation_compaction_witness(conversation_id)?;
+        self.discard_presentation_retiring(conversation_id)?;
+        Ok(())
+    }
+
+    /// Returns the staging path for a cleartext tail whose retirement is pending.
+    fn presentation_retiring_path_for(&self, conversation_id: &str) -> Result<PathBuf> {
+        Ok(self
+            .session_dir_for(conversation_id)?
+            .join(SESSION_PRESENTATION_RETIRING_FILE_NAME))
+    }
+
+    /// Reads the staged retirement record for one conversation, if present.
+    fn read_presentation_retiring(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<PresentationRetirementStage>> {
+        let path = self.presentation_retiring_path_for(conversation_id)?;
+        let Ok(bytes) = std_fs::read(&path) else {
+            return Ok(None);
+        };
+        Ok(PresentationRetirementStage::decode(&bytes))
+    }
+
+    /// Durably stages the whole tail for one exact publication generation.
+    fn write_presentation_retiring(
+        &self,
+        conversation_id: &str,
+        witness: &PresentationCompactionWitness,
+        source: &[u8],
+    ) -> Result<()> {
+        let path = self.presentation_retiring_path_for(conversation_id)?;
+        // The staged copy becomes authoritative for its publication by existing, so
+        // it is published atomically with the identity it belongs to: an interrupted
+        // stage write must leave the previous state, never a partial stage.
+        let temp = path.with_extension("retiring.tmp");
+        let stage = PresentationRetirementStage {
+            identity: witness.clone(),
+            source: source.to_vec(),
+        };
+        {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&temp)?;
+            file.write_all(&stage.encode())?;
+            file.sync_all()?;
+        }
+        set_private_file_permissions(&temp)?;
+        std_fs::rename(&temp, &path)?;
+        set_private_file_permissions(&path)?;
+        self.sync_presentation_session_dir(conversation_id)
+    }
+
+    /// Clears a completed retirement stage. Removal is idempotent.
+    fn discard_presentation_retiring(&self, conversation_id: &str) -> Result<()> {
+        let path = self.presentation_retiring_path_for(conversation_id)?;
+        match std_fs::remove_file(&path) {
+            Ok(()) => self.sync_presentation_session_dir(conversation_id),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Returns the decoded source of one published frame when it verifies exactly.
+    fn presentation_compaction_frame_source(
+        compressed: &[u8],
+        witness: &PresentationCompactionWitness,
+    ) -> Option<Vec<u8>> {
+        let start = usize::try_from(witness.frame_offset).ok()?;
+        let end = usize::try_from(witness.frame_end()?).ok()?;
+        if compressed.len() < end || start > end {
+            return None;
+        }
+        let decoded = zstd::stream::decode_all(&compressed[start..end]).ok()?;
+        if u64::try_from(decoded.len()).ok()? != witness.source_bytes
+            || presentation_compaction_digest(&decoded) != witness.source_digest
+        {
+            return None;
+        }
+        Some(decoded)
+    }
+
+    /// Returns the committed compressed prefix described by recognized evidence.
+    ///
+    /// Publication evidence accounts only for its own frame range: an exact match
+    /// is authoritative, a shorter file means the recorded frame was never
+    /// committed, and anything the evidence does not account for is read strictly
+    /// instead of being hidden. Every reader, including catalog reconstruction,
+    /// must use this one policy.
+    fn committed_presentation_history_len(
+        &self,
+        compressed_len: u64,
+        witness: Option<&PresentationCompactionWitness>,
+    ) -> Result<usize> {
+        let committed = match witness {
+            Some(witness) if witness.frame_end() == Some(compressed_len) => compressed_len,
+            Some(witness) if !witness.frame_is_committed(compressed_len) => {
+                witness.frame_offset.min(compressed_len)
+            }
+            _ => compressed_len,
+        };
+        usize::try_from(committed)
+            .map_err(|_| MezError::invalid_state("presentation history length overflow"))
+    }
+
+    /// Replaces the cleartext tail atomically so interrupted recovery cannot lose it.
+    ///
+    /// The remainder is written and synced in a sibling temporary file, renamed
+    /// over the tail, and the directory entry is made durable, so an interruption
+    /// leaves either the previous tail or the recovered one.
+    fn replace_presentation_tail(&self, conversation_id: &str, remainder: &[u8]) -> Result<()> {
+        let path = self.presentation_path_for(conversation_id)?;
+        let temp = path.with_extension("tsv.recovery");
+        {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&temp)?;
+            file.write_all(remainder)?;
+            file.sync_all()?;
+        }
+        set_private_file_permissions(&temp)?;
+        std_fs::rename(&temp, &path)?;
+        set_private_file_permissions(&path)?;
+        self.sync_presentation_session_dir(conversation_id)
+    }
+
+    /// Makes publication evidence and tail names durable in the session directory.
+    fn sync_presentation_session_dir(&self, conversation_id: &str) -> Result<()> {
+        std_fs::File::open(self.session_dir_for(conversation_id)?)?.sync_all()?;
         Ok(())
     }
 
@@ -4538,8 +5049,18 @@ impl AgentTranscriptStore {
         let mut last = None;
         let compressed_path = self.presentation_compressed_path_for(conversation_id)?;
         if compressed_path.is_file() {
-            let file = std_fs::File::open(&compressed_path)?;
-            let decoder = zstd::stream::read::Decoder::new(file).map_err(|error| {
+            let witness = self.read_presentation_compaction_witness(conversation_id)?;
+            let compressed_len = std_fs::metadata(&compressed_path)?.len();
+            let committed_len =
+                self.committed_presentation_history_len(compressed_len, witness.as_ref())?;
+            let committed_len = u64::try_from(committed_len)
+                .map_err(|_| MezError::invalid_state("presentation history length overflow"))?;
+            // Stream only the committed byte range so catalog reconstruction keeps
+            // constant row memory even for large presentation-only histories.
+            let decoder = zstd::stream::read::Decoder::new(BufReader::new(
+                std_fs::File::open(&compressed_path)?.take(committed_len),
+            ))
+            .map_err(|error| {
                 MezError::invalid_args(format!(
                     "presentation compressed history decode failed: {error}"
                 ))

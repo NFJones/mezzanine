@@ -2236,11 +2236,17 @@ fn pending_presentation_frame_fixture(
 /// exactly those occurrences: earlier committed frames and the tail must remain
 /// readable, and the uncommitted partial frame must not destroy them.
 #[test]
-#[ignore = "RED: interrupted frame append currently makes committed history unreadable"]
 fn transcript_store_recovers_interrupted_presentation_frame_append() {
     let (root, store, compressed, cleartext, pending_tail, entries) =
         pending_presentation_frame_fixture("presentation-zstd-torn-frame");
     let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let frame_offset = fs::metadata(&compressed).unwrap().len();
+    write_pending_presentation_compaction_witness(
+        &cleartext,
+        frame_offset,
+        frame.len() as u64,
+        &pending_tail,
+    );
     let mut torn = fs::read(&compressed).unwrap();
     torn.extend_from_slice(&frame[..frame.len() / 2]);
     fs::write(&compressed, &torn).unwrap();
@@ -2268,11 +2274,17 @@ fn transcript_store_recovers_interrupted_presentation_frame_append() {
 /// occurrences must still be delivered exactly once in sequence order rather than
 /// duplicated or silently dropped.
 #[test]
-#[ignore = "RED: a published frame with a live cleartext tail currently replays twice"]
 fn transcript_store_deduplicates_published_presentation_frame_with_live_tail() {
     let (root, store, compressed, cleartext, pending_tail, entries) =
         pending_presentation_frame_fixture("presentation-zstd-untruncated-tail");
     let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let frame_offset = fs::metadata(&compressed).unwrap().len();
+    write_pending_presentation_compaction_witness(
+        &cleartext,
+        frame_offset,
+        frame.len() as u64,
+        &pending_tail,
+    );
     let mut published = fs::read(&compressed).unwrap();
     published.extend_from_slice(&frame);
     fs::write(&compressed, &published).unwrap();
@@ -2290,6 +2302,483 @@ fn transcript_store_deduplicates_published_presentation_frame_with_live_tail() {
             .collect::<Vec<_>>()
     );
     assert_eq!(store.next_presentation_sequence("conv1").unwrap(), 5);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Publishes the witness record exactly as the store does before a frame exists.
+fn write_pending_presentation_compaction_witness(
+    cleartext: &std::path::Path,
+    frame_offset: u64,
+    frame_length: u64,
+    source: &[u8],
+) -> PathBuf {
+    use sha2::{Digest, Sha256};
+
+    let mut hash = Sha256::new();
+    hash.update(source);
+    let digest = hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let path = cleartext.with_file_name("presentation-compaction.witness");
+    fs::write(
+        &path,
+        format!(
+            "format=1\nframe_offset={frame_offset}\nframe_length={frame_length}\nsource_bytes={}\nsource_digest={digest}\n",
+            source.len()
+        ),
+    )
+    .unwrap();
+    path
+}
+
+/// Stages a retirement exactly as the store does for the current witness identity.
+fn write_presentation_retirement_stage(cleartext: &std::path::Path, source: &[u8]) -> PathBuf {
+    let witness = cleartext.with_file_name("presentation-compaction.witness");
+    let mut bytes = fs::read(&witness)
+        .expect("current witness must exist")
+        .to_vec();
+    bytes.extend_from_slice(b"stage=complete\n\n");
+    bytes.extend_from_slice(source);
+    let path = cleartext.with_file_name("presentation.tsv.retiring");
+    fs::write(&path, bytes).unwrap();
+    path
+}
+
+/// The next publication finishes a proven overlap before adding its own frame.
+///
+/// Recovery runs while the conversation write lock is held, so the retired prefix
+/// is exactly the source the committed frame consumed and any later rows survive,
+/// then the new tail is published normally and no witness is left behind.
+#[test]
+fn transcript_store_retires_proven_overlap_before_next_presentation_publication() {
+    let (root, _store, compressed, cleartext, pending_tail, entries) =
+        pending_presentation_frame_fixture("presentation-zstd-recovery");
+    let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let frame_offset = fs::metadata(&compressed).unwrap().len();
+    write_pending_presentation_compaction_witness(
+        &cleartext,
+        frame_offset,
+        frame.len() as u64,
+        &pending_tail,
+    );
+    let mut published = fs::read(&compressed).unwrap();
+    published.extend_from_slice(&frame);
+    fs::write(&compressed, &published).unwrap();
+
+    // A small-threshold store publishes the next tail and must recover first.
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_presentation_compaction_threshold(1024)
+        .unwrap();
+    let fifth = compacting_presentation("conv1", 5);
+    store.append_presentation(&fifth).unwrap();
+
+    let mut expected = entries;
+    expected.push(fifth);
+    assert_eq!(
+        store.inspect_presentation("conv1").unwrap(),
+        expected
+            .iter()
+            .map(|entry| entry.normalized_for_agent_log_wrap())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(store.next_presentation_sequence("conv1").unwrap(), 6);
+    assert!(fs::read(&cleartext).unwrap().is_empty());
+    assert!(
+        !cleartext
+            .with_file_name("presentation-compaction.witness")
+            .exists()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// An unrecognized witness format is not evidence and never authorizes dropping data.
+#[test]
+fn transcript_store_ignores_unknown_presentation_compaction_witness_format() {
+    let (root, store, compressed, cleartext, pending_tail, _entries) =
+        pending_presentation_frame_fixture("presentation-zstd-unknown-witness");
+    let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let frame_offset = fs::metadata(&compressed).unwrap().len();
+    let witness = write_pending_presentation_compaction_witness(
+        &cleartext,
+        frame_offset,
+        frame.len() as u64,
+        &pending_tail,
+    );
+    let record = fs::read_to_string(&witness)
+        .unwrap()
+        .replace("format=1", "format=2");
+    fs::write(&witness, record).unwrap();
+    let mut torn = fs::read(&compressed).unwrap();
+    torn.extend_from_slice(&frame[..frame.len() / 2]);
+    fs::write(&compressed, &torn).unwrap();
+
+    // With no recognized witness the store keeps its strict decode contract
+    // rather than guessing that the suffix was uncommitted.
+    assert!(store.inspect_presentation("conv1").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A publication that already retired its source completes instead of erroring.
+///
+/// Interruption after the cleartext truncate but before the evidence was retired
+/// leaves a committed frame, its witness and an empty tail. New rows may already be
+/// waiting, and recovery must recognize that the source was retired rather than
+/// treat the fresh tail as an overlap mismatch.
+#[test]
+fn transcript_store_completes_publication_after_source_was_retired() {
+    let (root, _store, compressed, cleartext, pending_tail, entries) =
+        pending_presentation_frame_fixture("presentation-zstd-retired-source");
+    let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let frame_offset = fs::metadata(&compressed).unwrap().len();
+    write_pending_presentation_compaction_witness(
+        &cleartext,
+        frame_offset,
+        frame.len() as u64,
+        &pending_tail,
+    );
+    let mut published = fs::read(&compressed).unwrap();
+    published.extend_from_slice(&frame);
+    fs::write(&compressed, &published).unwrap();
+    // The truncate ran; only retiring the evidence was interrupted.
+    fs::write(&cleartext, b"").unwrap();
+
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_presentation_compaction_threshold(1024)
+        .unwrap();
+    let fifth = compacting_presentation("conv1", 5);
+    store.append_presentation(&fifth).unwrap();
+
+    let mut expected = entries;
+    expected.push(fifth);
+    assert_eq!(
+        store.inspect_presentation("conv1").unwrap(),
+        expected
+            .iter()
+            .map(|entry| entry.normalized_for_agent_log_wrap())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !cleartext
+            .with_file_name("presentation-compaction.witness")
+            .exists()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A complete byte range is not content proof, so a damaged frame keeps its source.
+#[test]
+fn transcript_store_refuses_to_retire_source_for_damaged_frame() {
+    let (root, _store, compressed, cleartext, pending_tail, _entries) =
+        pending_presentation_frame_fixture("presentation-zstd-damaged-frame");
+    let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let frame_offset = fs::metadata(&compressed).unwrap().len();
+    write_pending_presentation_compaction_witness(
+        &cleartext,
+        frame_offset,
+        frame.len() as u64,
+        &pending_tail,
+    );
+    let mut published = fs::read(&compressed).unwrap();
+    published.extend_from_slice(&frame);
+    // Same length, damaged payload: the recorded range alone proves nothing.
+    let damaged_at = usize::try_from(frame_offset).unwrap() + frame.len() / 2;
+    published[damaged_at] ^= 0x5a;
+    fs::write(&compressed, &published).unwrap();
+
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_presentation_compaction_threshold(1024)
+        .unwrap();
+    assert!(
+        store
+            .append_presentation(&compacting_presentation("conv1", 5))
+            .is_err()
+    );
+    // The intact cleartext source must still be there.
+    assert_eq!(fs::read(&cleartext).unwrap(), pending_tail);
+    // Reading must also refuse to present the altered frame as proven source.
+    assert!(store.inspect_presentation("conv1").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Evidence published before the first frame file exists is a not-started state.
+///
+/// First publication can die after the witness is durable but before
+/// `presentation.tsv.zst` is created. Nothing was published, so recovery must not
+/// require the missing file and must leave the intact cleartext tail authoritative.
+#[test]
+fn transcript_store_recovers_first_publication_that_never_created_history() {
+    let root = temp_root("presentation-zstd-first-publication");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_presentation_compaction_threshold(64 * 1024 * 1024)
+        .unwrap();
+    let first = compacting_presentation("conv1", 1);
+    store.append_presentation(&first).unwrap();
+    let cleartext = store.presentation_path("conv1").unwrap();
+    let compressed = store.presentation_compressed_path("conv1").unwrap();
+    assert!(!compressed.exists());
+    let source = fs::read(&cleartext).unwrap();
+    let frame = zstd::stream::encode_all(&source[..], 0).unwrap();
+    write_pending_presentation_compaction_witness(&cleartext, 0, frame.len() as u64, &source);
+
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_presentation_compaction_threshold(1024)
+        .unwrap();
+    let second = compacting_presentation("conv1", 2);
+    store.append_presentation(&second).unwrap();
+
+    assert_eq!(
+        store.inspect_presentation("conv1").unwrap(),
+        [first, second]
+            .iter()
+            .map(|entry| entry.normalized_for_agent_log_wrap())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !cleartext
+            .with_file_name("presentation-compaction.witness")
+            .exists()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A staged retirement that already installed its remainder still converges.
+///
+/// Recovery stages the whole tail before atomically installing the remainder, so an
+/// interruption after that install leaves the witness plus the staged copy. The
+/// next recovery must prefer the staged source and finish without guessing.
+#[test]
+fn transcript_store_completes_retirement_after_interrupted_remainder_install() {
+    let (root, _store, compressed, cleartext, pending_tail, entries) =
+        pending_presentation_frame_fixture("presentation-zstd-staged-retirement");
+    let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let frame_offset = fs::metadata(&compressed).unwrap().len();
+    write_pending_presentation_compaction_witness(
+        &cleartext,
+        frame_offset,
+        frame.len() as u64,
+        &pending_tail,
+    );
+    let mut published = fs::read(&compressed).unwrap();
+    published.extend_from_slice(&frame);
+    fs::write(&compressed, &published).unwrap();
+    // Stage the pre-retirement tail, then install the (empty) remainder.
+    let retiring = write_presentation_retirement_stage(&cleartext, &pending_tail);
+    fs::write(&cleartext, b"").unwrap();
+
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_presentation_compaction_threshold(1024)
+        .unwrap();
+    let fifth = compacting_presentation("conv1", 5);
+    store.append_presentation(&fifth).unwrap();
+
+    let mut expected = entries;
+    expected.push(fifth);
+    assert_eq!(
+        store.inspect_presentation("conv1").unwrap(),
+        expected
+            .iter()
+            .map(|entry| entry.normalized_for_agent_log_wrap())
+            .collect::<Vec<_>>()
+    );
+    assert!(!retiring.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Newer rows appended after an interruption survive the retirement transaction.
+///
+/// The published frame consumed only the earlier tail A, so a tail of A followed by
+/// newer B must retire exactly A and keep B - including when recovery is entered
+/// with the remainder already installed and the stage still present.
+#[test]
+fn transcript_store_retires_only_consumed_prefix_and_keeps_newer_rows() {
+    let (root, _store, compressed, cleartext, pending_tail, entries) =
+        pending_presentation_frame_fixture("presentation-zstd-nonempty-remainder");
+    let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let frame_offset = fs::metadata(&compressed).unwrap().len();
+    write_pending_presentation_compaction_witness(
+        &cleartext,
+        frame_offset,
+        frame.len() as u64,
+        &pending_tail,
+    );
+    let mut published = fs::read(&compressed).unwrap();
+    published.extend_from_slice(&frame);
+    fs::write(&compressed, &published).unwrap();
+    // A newer row lands in the tail while the retirement is still pending.
+    let fifth = compacting_presentation("conv1", 5);
+    let fifth_bytes = fifth.normalized_for_agent_log_wrap().encode().unwrap();
+    let mut newer_tail = pending_tail.clone();
+    newer_tail.extend_from_slice(fifth_bytes.as_bytes());
+    newer_tail.push(b'\n');
+    fs::write(&cleartext, &newer_tail).unwrap();
+    // Re-enter with the remainder already installed and the stage still present.
+    let retiring = write_presentation_retirement_stage(&cleartext, &newer_tail);
+    fs::write(&cleartext, fifth_bytes.as_bytes()).unwrap();
+
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_presentation_compaction_threshold(1024)
+        .unwrap();
+    store
+        .append_presentation(&compacting_presentation("conv1", 6))
+        .unwrap();
+
+    let mut expected = entries;
+    expected.push(fifth);
+    expected.push(compacting_presentation("conv1", 6));
+    let inspected = store.inspect_presentation("conv1").unwrap();
+    assert_eq!(
+        inspected,
+        expected
+            .iter()
+            .map(|entry| entry.normalized_for_agent_log_wrap())
+            .collect::<Vec<_>>()
+    );
+    assert!(!retiring.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A retirement stage from another generation is never treated as authority.
+///
+/// Cleanup can leave a staged copy after its evidence was retired. A later
+/// publication has its own identity, so recovery must discard that stale stage
+/// instead of preferring it over the state the live witness describes.
+#[test]
+fn transcript_store_ignores_retirement_stage_from_another_generation() {
+    let (root, _store, compressed, cleartext, pending_tail, _entries) =
+        pending_presentation_frame_fixture("presentation-zstd-cross-generation");
+    let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let frame_offset = fs::metadata(&compressed).unwrap().len();
+    write_pending_presentation_compaction_witness(
+        &cleartext,
+        frame_offset,
+        frame.len() as u64,
+        &pending_tail,
+    );
+    let mut published = fs::read(&compressed).unwrap();
+    published.extend_from_slice(&frame);
+    fs::write(&compressed, &published).unwrap();
+    // Retire the evidence and the cleartext source, but leave the stage behind.
+    let stale_stage = write_presentation_retirement_stage(&cleartext, &pending_tail);
+    fs::write(&cleartext, b"").unwrap();
+    let stale_bytes = fs::read(&stale_stage).unwrap();
+    fs::remove_file(cleartext.with_file_name("presentation-compaction.witness")).unwrap();
+
+    // A later generation publishes its own tail normally.
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_presentation_compaction_threshold(1024)
+        .unwrap();
+    store
+        .append_presentation(&compacting_presentation("conv1", 5))
+        .unwrap();
+    // That generation is then interrupted after its frame was published.
+    let sixth = presentation("conv1", 6);
+    let mut sixth_source = sixth.encode().unwrap();
+    sixth_source.push('\n');
+    fs::write(&cleartext, &sixth_source).unwrap();
+    let later_offset = fs::metadata(&compressed).unwrap().len();
+    let later_frame = zstd::stream::encode_all(sixth_source.as_bytes(), 0).unwrap();
+    write_pending_presentation_compaction_witness(
+        &cleartext,
+        later_offset,
+        later_frame.len() as u64,
+        sixth_source.as_bytes(),
+    );
+    let mut with_later = fs::read(&compressed).unwrap();
+    with_later.extend_from_slice(&later_frame);
+    fs::write(&compressed, &with_later).unwrap();
+    // The retired generation's stage reappears while this witness is pending.
+    fs::write(&stale_stage, &stale_bytes).unwrap();
+
+    store
+        .append_presentation(&presentation("conv1", 7))
+        .unwrap();
+
+    let inspected = store.inspect_presentation("conv1").unwrap();
+    assert_eq!(
+        inspected
+            .iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5, 6, 7]
+    );
+    assert!(!stale_stage.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Evidence that does not account for later frames must not hide them.
+#[test]
+fn transcript_store_reads_strictly_when_witness_does_not_cover_later_frame() {
+    let (root, store, compressed, cleartext, pending_tail, _entries) =
+        pending_presentation_frame_fixture("presentation-zstd-stale-witness");
+    let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let frame_offset = fs::metadata(&compressed).unwrap().len();
+    write_pending_presentation_compaction_witness(
+        &cleartext,
+        frame_offset,
+        frame.len() as u64,
+        &pending_tail,
+    );
+    let mut published = fs::read(&compressed).unwrap();
+    published.extend_from_slice(&frame);
+    // A later, independent publication also succeeded, so this witness now covers
+    // only part of the compressed history.
+    let mut later_source = presentation("conv1", 5).encode().unwrap();
+    later_source.push('\n');
+    let later_frame = zstd::stream::encode_all(later_source.as_bytes(), 0).unwrap();
+    published.extend_from_slice(&later_frame);
+    fs::write(&compressed, &published).unwrap();
+    fs::write(&cleartext, b"").unwrap();
+
+    let inspected = store.inspect_presentation("conv1").unwrap();
+    assert_eq!(
+        inspected
+            .iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A partial evidence record is not recognized and never authorizes shortening.
+#[test]
+fn transcript_store_treats_partial_witness_record_as_no_evidence() {
+    let (root, store, compressed, cleartext, pending_tail, _entries) =
+        pending_presentation_frame_fixture("presentation-zstd-partial-witness");
+    let frame = zstd::stream::encode_all(&pending_tail[..], 0).unwrap();
+    let frame_offset = fs::metadata(&compressed).unwrap().len();
+    let witness = write_pending_presentation_compaction_witness(
+        &cleartext,
+        frame_offset,
+        frame.len() as u64,
+        &pending_tail,
+    );
+    let record = fs::read_to_string(&witness).unwrap();
+    let mut torn = fs::read(&compressed).unwrap();
+    torn.extend_from_slice(&frame[..frame.len() / 2]);
+    fs::write(&compressed, &torn).unwrap();
+
+    for malformed in [
+        record
+            .lines()
+            .filter(|line| !line.starts_with("source_digest="))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        record.replace(
+            &record
+                .lines()
+                .find(|line| line.starts_with("source_digest="))
+                .unwrap()
+                .to_string(),
+            "source_digest=0011aabb",
+        ),
+    ] {
+        fs::write(&witness, malformed).unwrap();
+        assert!(store.inspect_presentation("conv1").is_err());
+    }
     let _ = fs::remove_dir_all(root);
 }
 
