@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod fish_admission_fixture;
+
 /// Verifies that runtime shell transaction markers are generated with fresh
 /// entropy for every dispatch. Identical turn/action metadata must not produce
 /// reusable marker tokens.
@@ -1508,27 +1510,19 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
         eprintln!("skipping dirty Fish prompt regression because fish is unavailable");
         return;
     };
-    let root = temp_root("fish-dirty-agent-admission");
-    let mut service = RuntimeSessionService::with_event_log(
-        Session::new_default(
-            ResolvedShell::new(fish_path, ShellSource::ShellEnv),
-            Size::new(80, 24).unwrap(),
-        )
-        .unwrap(),
-        root.join("default.sock"),
-        100,
-        10,
-        1024,
-    )
-    .unwrap();
-    configure_pane_shell_protocol_fixture(&mut service);
-    *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
+    let fixture = fish_admission_fixture::IsolatedFishFixture::new(&fish_path).unwrap();
+    let root = fixture.root().to_path_buf();
+    let mut service = fixture.service(fish_path).unwrap();
+    let checked = fixture.run(&mut service, |service| {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
-    service.start_initial_pane_process(None).unwrap();
-    wait_until_primary_shell_foreground(&mut service, "%1");
-    settle_initial_managed_fish_bootstrap(&mut service, "%1");
+    service.start_initial_pane_process_with_launch_context(
+        None, Some(&root), Some(fixture.environment()),
+    ).unwrap();
+    wait_until_primary_shell_foreground(&mut *service, "%1");
+    settle_initial_managed_fish_bootstrap(&mut *service, "%1");
+    fixture.assert_parent_rc_before_adapter(service.pane_processes().primary_pid("%1").unwrap());
     service
         .write_input_to_pane(
             &primary,
@@ -1536,7 +1530,7 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
             b"fish_vi_key_bindings; printf '__MEZ_FISH_VI_READY__\\n'\n",
         )
         .unwrap();
-    wait_for_managed_fish_command_prompt(&mut service, "%1", "__MEZ_FISH_VI_READY__");
+    wait_for_managed_fish_command_prompt(&mut *service, "%1", "__MEZ_FISH_VI_READY__");
     let discarded_path = root.join("discarded-fish-draft");
     let draft = format!(
         "command touch {}",
@@ -1621,7 +1615,7 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
         {
             break;
         }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+        wait_for_pane_process_activity(&*service, "%1", Duration::from_millis(10));
     }
     assert!(
         child_confirmed,
@@ -1647,7 +1641,7 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
             break;
         }
         if updates.is_empty() {
-            wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+            wait_for_pane_process_activity(&*service, "%1", Duration::from_millis(10));
         }
     }
     assert!(
@@ -1691,7 +1685,7 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
             parent_responsive = true;
             break;
         }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+        wait_for_pane_process_activity(&*service, "%1", Duration::from_millis(10));
     }
     assert!(
         parent_responsive,
@@ -1712,7 +1706,8 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
     );
     assert!(service.poll_pane_processes().unwrap().is_empty());
     assert!(service.pane_processes().contains_pane("%1"));
-    service.terminate_all_pane_processes().unwrap();
+    });
+    checked.finish();
 }
 
 /// Verifies hiding agent mode before Fish installs its child receiver cancels
