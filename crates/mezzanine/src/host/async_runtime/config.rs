@@ -419,6 +419,10 @@ pub struct AsyncRuntimeActorMetrics {
     pub runtime_side_effects_drained: u64,
     /// Number of droppable repaint side effects dropped under queue pressure.
     pub runtime_side_effects_evicted: u64,
+    /// Committed admissions that installed work while transient occupancy was
+    /// above the configured lane capacity. Counted per admission call, after
+    /// coalescing and eviction, not per queued effect or per event batch.
+    pub runtime_side_effects_admitted_over_capacity: u64,
     /// Number of queued render invalidations dropped under queue pressure.
     pub render_client_side_effects_evicted: u64,
     /// Number of queued client-output flushes dropped under queue pressure.

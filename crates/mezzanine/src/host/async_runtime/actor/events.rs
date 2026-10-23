@@ -219,8 +219,11 @@ impl AsyncRuntimeSessionActor {
             report.side_effects = report
                 .side_effects
                 .saturating_add(application.side_effects.len());
-            self.queue_runtime_side_effects(application.side_effects)
-                .map_err(|error| runtime_event_queue_error_with_applied(error, report.applied))?;
+            self.admit_applied_event_side_effects(
+                application.side_effects,
+                provisional_provider_batch,
+            )
+            .map_err(|error| runtime_event_queue_error_with_applied(error, report.applied))?;
         }
         let mut batch_side_effects = Vec::new();
         if global_reconciliation_required {
@@ -261,7 +264,7 @@ impl AsyncRuntimeSessionActor {
             || side_effects_include_registry_persistence(&batch_side_effects);
         report.side_effects = report.side_effects.saturating_add(batch_side_effects.len());
         if !batch_side_effects.is_empty() {
-            self.queue_runtime_side_effects(batch_side_effects)
+            self.admit_committed_side_effects(batch_side_effects)
                 .map_err(|error| {
                     runtime_event_queue_error_after_service_drain(error, report.applied)
                 })?;
@@ -275,7 +278,7 @@ impl AsyncRuntimeSessionActor {
             && !registry_persistence_queued
             && let Some((registry, update)) = self.service.registry_update_for_async_persistence()
         {
-            self.queue_runtime_side_effects(vec![RuntimeSideEffect::PersistRegistry {
+            self.admit_committed_side_effects(vec![RuntimeSideEffect::PersistRegistry {
                 registry,
                 update,
             }])

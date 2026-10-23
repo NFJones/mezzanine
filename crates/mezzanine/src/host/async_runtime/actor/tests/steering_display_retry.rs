@@ -436,3 +436,78 @@ async fn steering_display_retry_exhausted_generation_cannot_fail_timer_drain() {
     );
     assert!(fixture.actor.timers.idle_cleanup.is_none());
 }
+
+/// A committed event batch must not fail ingress or lose its effects when the
+/// lane is momentarily full.
+///
+/// Capacity one is occupied by unrelated timer work, so the mandatory resize
+/// dispatch the applied batch computed cannot fit in the producer budget. It is
+/// admitted above capacity instead, ingress stays successful, and that exact
+/// dispatch is delivered once through its ordinary lane.
+#[tokio::test(flavor = "current_thread")]
+async fn committed_batch_effects_survive_lane_refusal() {
+    let mut fixture = Fixture::new(1);
+    fixture.fail_initial_display();
+    let occupant = RuntimeTimerKey::new(RuntimeTimerKind::SavedSessionRetention, "occupant", 3);
+    fixture
+        .actor
+        .queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+            key: occupant.clone(),
+            delay_ms: 5,
+        }])
+        .unwrap();
+    assert!(
+        fixture
+            .actor
+            .service
+            .apply_pane_resize_completion_event("%1", Size::new(40, 24).unwrap())
+            .unwrap()
+    );
+    fixture
+        .actor
+        .service
+        .fail_agent_presentation_install_for_tests(0);
+    let stale = RuntimeTimerKey::new(RuntimeTimerKind::IdleCleanup, "session", 0);
+    fixture
+        .actor
+        .apply_runtime_event_batch(RuntimeEventBatch {
+            events: vec![RuntimeEvent::Timer(TimerEvent {
+                key: stale,
+                now_ms: 1234,
+            })],
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .actor
+            .metrics
+            .runtime_side_effects_admitted_over_capacity,
+        1
+    );
+    let occupied = fixture.actor.drain_timer_side_effects(32).unwrap();
+    assert!(matches!(
+        occupied.as_slice(),
+        [RuntimeSideEffect::ScheduleTimer { key, .. }] if key == &occupant
+    ));
+    let delivered = fixture.actor.drain_runtime_side_effects(32).unwrap();
+    assert!(matches!(
+        delivered.as_slice(),
+        [RuntimeSideEffect::DispatchAgentPresentationResize { pane_id, .. }]
+            if pane_id == "%1"
+    ));
+    // The only remaining work is the pre-existing optional idle-retry
+    // enrollment; the mandatory dispatch above is never delivered twice.
+    let trailing = fixture.actor.drain_runtime_side_effects(32).unwrap();
+    assert!(matches!(
+        trailing.as_slice(),
+        [RuntimeSideEffect::ScheduleTimer { key, .. }] if key.kind == RuntimeTimerKind::IdleCleanup
+    ));
+    assert!(
+        fixture
+            .actor
+            .drain_runtime_side_effects(32)
+            .unwrap()
+            .is_empty()
+    );
+}

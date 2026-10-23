@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, Semaphore, oneshot};
 
+mod side_effect_capacity_overshoot;
 mod steering_display_retry;
 
 /// Cohesive raw connection state must retain the exact notifier already shared

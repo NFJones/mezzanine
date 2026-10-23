@@ -44,6 +44,15 @@ pub(super) fn is_retryable_side_effect_queue_full_error(error: &MezError) -> boo
     is_side_effect_queue_full_error(error) && error.message().ends_with("applied=0")
 }
 
+/// Multiplier applied to the configured lane capacity for the committed reserve.
+const SIDE_EFFECT_OVERSHOOT_BUFFER_MULTIPLE: usize = 4;
+
+/// Floor of the committed reserve so a small lane still has usable headroom.
+///
+/// This is a reserve policy, not a statement that any particular committed batch
+/// fits: a batch larger than capacity plus the reserve is still refused.
+const SIDE_EFFECT_OVERSHOOT_FLOOR: usize = 16;
+
 impl AsyncRuntimeSessionActor {
     /// Reconciles the daily saved-session retention maintenance timer.
     pub(super) fn saved_session_retention_timer_side_effects(
@@ -179,8 +188,116 @@ impl AsyncRuntimeSessionActor {
     /// on duplicated control-flow logic.
     pub(super) fn queue_runtime_side_effects(
         &mut self,
-        mut side_effects: Vec<RuntimeSideEffect>,
+        side_effects: Vec<RuntimeSideEffect>,
     ) -> Result<()> {
+        let mut side_effects = side_effects;
+        self.try_queue_runtime_side_effects_with_allowance(&mut side_effects, 0)
+            .map(|_| ())
+    }
+
+    /// Enqueues the effects one applied event produced.
+    ///
+    /// Whole-batch provisional provider presentation is reconstructible, so it
+    /// keeps the strict producer budget first: repaint pressure must still evict
+    /// pixels instead of growing the lane, and an eviction-only enqueue is still
+    /// reported as admitted. A refusal there falls through to committed
+    /// admission, because the event is already applied and those effects have no
+    /// other owner to retry from.
+    pub(super) fn admit_applied_event_side_effects(
+        &mut self,
+        side_effects: Vec<RuntimeSideEffect>,
+        provisional_presentation: bool,
+    ) -> Result<()> {
+        let mut side_effects = side_effects;
+        if provisional_presentation {
+            match self.try_queue_runtime_side_effects_with_allowance(&mut side_effects, 0) {
+                Ok(enqueued) => {
+                    self.record_reserve_admission(enqueued);
+                    return Ok(());
+                }
+                Err(error) if !is_side_effect_queue_full_error(&error) => return Err(error),
+                Err(_) => {}
+            }
+        }
+        self.admit_committed_side_effects(side_effects)
+    }
+
+    /// Admits side effects whose originating event batch already committed them.
+    ///
+    /// Event application is irreversible: once a batch has mutated runtime state
+    /// its effects have no other owner to retry from, so a refusal must not drop
+    /// them. These effects are admitted through ordinary lane routing within a
+    /// bounded overshoot of the configured capacity instead of being retained
+    /// outside it: timer ownership, dispatch deduplication, persistence
+    /// coalescing and receipt enrollment all have to observe the effect when it
+    /// is queued, in its original order relative to every later admission.
+    ///
+    /// The overshoot keeps transient admission pressure from destroying
+    /// committed work without becoming unbounded buffering; beyond it the
+    /// refusal is reported truthfully to the caller.
+    pub(super) fn admit_committed_side_effects(
+        &mut self,
+        side_effects: Vec<RuntimeSideEffect>,
+    ) -> Result<()> {
+        let mut side_effects = side_effects;
+        let enqueued = self.try_queue_runtime_side_effects_with_allowance(
+            &mut side_effects,
+            self.committed_side_effect_overshoot(),
+        )?;
+        self.record_reserve_admission(enqueued);
+        Ok(())
+    }
+
+    /// Counts one committed admission that added work while above nominal.
+    ///
+    /// `enqueued` is the post-coalescing count the admission actually installed,
+    /// including compensation redraws, so a coalescing-only or fully evicted
+    /// admission never counts. The comparison uses the same transient budget as
+    /// the admission verdict: durable persistence has its own lane and never
+    /// registers as reserve hold. Cardinality is one increment per admission
+    /// call, not per queued effect, and the counter intentionally reports
+    /// "committed work admitted while the transient lane is above its configured
+    /// capacity" rather than a per-batch proof that the reserve was decisive.
+    fn record_reserve_admission(&mut self, enqueued: usize) {
+        if enqueued == 0 {
+            return;
+        }
+        if self
+            .side_effects
+            .len()
+            .saturating_add(self.side_effect_routes.non_persistence_len())
+            > self.side_effect_buffer
+        {
+            self.metrics.runtime_side_effects_admitted_over_capacity = self
+                .metrics
+                .runtime_side_effects_admitted_over_capacity
+                .saturating_add(1);
+        }
+    }
+
+    /// Bounded reserve allowed for effects a committed batch already produced.
+    ///
+    /// The reserve scales with the configured lane capacity and keeps a floor so
+    /// a small lane still has usable headroom. It is the only part of admission
+    /// that may exceed the configured capacity, producer-submitted work never
+    /// uses it, and it absorbs bounded pressure rather than guaranteeing that a
+    /// particular batch size fits.
+    pub(super) fn committed_side_effect_overshoot(&self) -> usize {
+        self.side_effect_buffer
+            .saturating_mul(SIDE_EFFECT_OVERSHOOT_BUFFER_MULTIPLE)
+            .max(SIDE_EFFECT_OVERSHOOT_FLOOR)
+    }
+
+    /// Runs one admission attempt with an explicit capacity allowance.
+    ///
+    /// `allowance` extends the capacity verdict only for work the caller already
+    /// owns irreversibly; producer-submitted work passes zero.
+    fn try_queue_runtime_side_effects_with_allowance(
+        &mut self,
+        side_effects: &mut Vec<RuntimeSideEffect>,
+        allowance: usize,
+    ) -> Result<usize> {
+        let capacity = self.side_effect_buffer.saturating_add(allowance);
         // Divider reconciliation consumes pending divider gesture state in its
         // superseded branch, and a rejected enqueue must not lose that work, so
         // only the non-destructive filter runs before the capacity verdict. The
@@ -189,10 +306,10 @@ impl AsyncRuntimeSessionActor {
         // compensation redraws.
         let divider_superseded = self
             .service
-            .pending_divider_render_effects_are_superseded(&side_effects);
+            .pending_divider_render_effects_are_superseded(side_effects);
         if !divider_superseded {
             self.service
-                .filter_pending_divider_render_effects(&mut side_effects);
+                .filter_pending_divider_render_effects(side_effects);
         }
         let mut queued_side_effects = self.side_effects.drain(..).collect::<Vec<_>>();
         let queued_divider_superseded = self
@@ -206,10 +323,10 @@ impl AsyncRuntimeSessionActor {
         let terminal_config_invalidated = side_effects
             .iter()
             .any(runtime_side_effect_invalidates_terminal_config);
-        let (mut side_effects, coalesced) = coalesce_output_side_effects_for_enqueue(
+        let (mut incoming, coalesced) = coalesce_output_side_effects_for_enqueue(
             &mut self.side_effects,
             &mut self.side_effect_routes,
-            side_effects,
+            std::mem::take(side_effects),
         );
         // Repaint work is level-triggered, so a transient backlog drops the
         // oldest droppable repaint effect - queued work first, then incoming
@@ -226,12 +343,12 @@ impl AsyncRuntimeSessionActor {
             .len()
             .saturating_add(self.side_effect_routes.non_persistence_len())
             .saturating_add(
-                side_effects
+                incoming
                     .iter()
                     .filter(|effect| !runtime_side_effect_is_durable_persistence(effect))
                     .count(),
             )
-            > self.side_effect_buffer;
+            > capacity;
         while over_capacity {
             let dropped = match self
                 .side_effects
@@ -244,11 +361,11 @@ impl AsyncRuntimeSessionActor {
                     .expect("queued repaint position is valid by construction"),
                 None => match self.side_effect_routes.pop_droppable_repaint() {
                     Some(effect) => effect,
-                    None => match side_effects
+                    None => match incoming
                         .iter()
                         .position(runtime_side_effect_is_droppable_repaint)
                     {
-                        Some(position) => side_effects.remove(position),
+                        Some(position) => incoming.remove(position),
                         None => break,
                     },
                 },
@@ -273,12 +390,12 @@ impl AsyncRuntimeSessionActor {
                 .len()
                 .saturating_add(self.side_effect_routes.non_persistence_len())
                 .saturating_add(
-                    side_effects
+                    incoming
                         .iter()
                         .filter(|effect| !runtime_side_effect_is_durable_persistence(effect))
                         .count(),
                 )
-                > self.side_effect_buffer;
+                > capacity;
         }
         let evicted_repaint_effects = evicted_render_clients.saturating_add(evicted_flush_outputs);
         if evicted_repaint_effects > 0 {
@@ -326,13 +443,17 @@ impl AsyncRuntimeSessionActor {
                     .max(self.metrics.side_effect_queue_depth);
                 self.notify_side_effect_delivery();
             }
+            // Leave the un-admitted work with the caller so a committed-effect
+            // admission can retry it under its bounded allowance.
+            *side_effects = std::mem::take(&mut incoming);
             return Err(MezError::invalid_state(format!(
-                "{SIDE_EFFECT_QUEUE_FULL_PREFIX}: queued={} incoming={} capacity={} queued_kinds={} incoming_kinds={}",
+                "{SIDE_EFFECT_QUEUE_FULL_PREFIX}: queued={} incoming={} capacity={} allowance={} queued_kinds={} incoming_kinds={}",
                 self.side_effects
                     .len()
                     .saturating_add(self.side_effect_routes.len()),
                 side_effects.len(),
-                self.side_effect_buffer,
+                capacity,
+                allowance,
                 if self.side_effects.is_empty() {
                     self.side_effect_routes.kind_summary()
                 } else if self.side_effect_routes.is_empty() {
@@ -351,7 +472,7 @@ impl AsyncRuntimeSessionActor {
         // probes above deliberately left untouched.
         if divider_superseded {
             self.service
-                .commit_pending_divider_render_effects(&mut side_effects);
+                .commit_pending_divider_render_effects(&mut incoming);
         }
         if queued_divider_superseded {
             let mut queued_committed = self.side_effects.drain(..).collect::<Vec<_>>();
@@ -365,33 +486,33 @@ impl AsyncRuntimeSessionActor {
                 .terminal_config_generation_tx
                 .send(self.terminal_config_generation);
         }
-        let timer_schedules = side_effects
+        let timer_schedules = incoming
             .iter()
             .filter(|effect| matches!(effect, RuntimeSideEffect::ScheduleTimer { .. }))
             .count();
-        let timer_cancellations = side_effects
+        let timer_cancellations = incoming
             .iter()
             .filter(|effect| matches!(effect, RuntimeSideEffect::CancelTimer { .. }))
             .count();
-        let pane_processes = side_effects
+        let pane_processes = incoming
             .iter()
             .filter_map(|effect| match effect {
                 RuntimeSideEffect::PaneProcessIo { instance, .. } => Some(instance.clone()),
                 _ => None,
             })
             .collect::<std::collections::BTreeSet<_>>();
-        let has_non_pane_process_effect = side_effects
+        let has_non_pane_process_effect = incoming
             .iter()
             .any(|effect| !matches!(effect, RuntimeSideEffect::PaneProcessIo { .. }));
         // Compensation redraws count as queued work and must notify the
         // delivery chain: an eviction-only enqueue adds no incoming effect, so
         // otherwise the redraw could wait for an unrelated notification.
-        let queued = side_effects.len().saturating_add(compensation_redraws);
+        let queued = incoming.len().saturating_add(compensation_redraws);
         let should_notify = queued > 0;
-        for effect in &side_effects {
+        for effect in &incoming {
             self.track_runtime_timer_side_effect(effect);
         }
-        for effect in side_effects {
+        for effect in incoming {
             self.enqueue_runtime_side_effect(effect);
         }
         if self.side_effect_queue_nonempty_since.is_none()
@@ -438,7 +559,7 @@ impl AsyncRuntimeSessionActor {
             self.notify_pane_process_side_effect_delivery(&instance);
         }
         self.notify_steering_presentation_retry_idle_wake();
-        Ok(())
+        Ok(queued)
     }
 
     /// Publishes a level-triggered timer-worker wake without consuming capacity.

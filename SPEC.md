@@ -11743,6 +11743,26 @@ stays fatal to its owner and MUST NOT be reported as recoverable capacity
 pressure, and terminating panes or the session MUST NOT be used to recover from
 transient admission pressure.
 
+Committed-effect admission is a separate custody boundary from producer retry.
+Once an event batch has applied its events, the side effects it produced MUST NOT
+be destroyed by a capacity refusal: the actor MUST admit them to their ordinary
+lanes within a bounded reserve above the configured capacity, in the same
+operation, so timer ownership, dispatch deduplication, persistence coalescing
+and any receipt enrollment observe each effect exactly once and in the lane
+admission order that later effects of that lane observe. Lane admission order is
+the guarantee; delivery order across unrelated lanes remains each lane's own
+contract and MUST NOT be described as a global FIFO invariant. Holding such
+effects outside their lanes or deferring them past the producer's own capability
+handoff is not acceptable exactly-once behavior. The reserve MUST be finite,
+scaled from the configured capacity with a documented floor, and MUST NOT be
+available to producer-submitted work; it is a bounded pressure-absorption
+reserve, not a promise that any particular batch size fits, and existing
+persistence and per-client compensation exemptions still apply. Exceeding the
+reserve MUST surface the refusal as a terminal, attributed failure rather than
+silent success or unbounded buffering. A committed effect MUST NOT be regenerated
+by replaying its originating events; work a producer still owns MUST use the
+producer-side rule above.
+
 The harness MAY retry provider requests according to provider policy and local
 configuration. Retries MUST NOT repeat shell actions unless the user or policy
 explicitly permits repetition.
