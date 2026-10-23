@@ -642,34 +642,7 @@ impl Plan {
                 })?;
         }
         self.publisher.require_no_pending_journal()?;
-        // An absent root cannot be bound during inspection (binding needs the
-        // vendor directory descriptor), so a private receipt that exists in the
-        // root-keyed state namespace is only addressable once the lock has
-        // materialized the directory. When inspection therefore recorded no
-        // previous private receipt, re-derive BOTH the planned preimage and the
-        // captured previous manifest from the now-bound authority, keeping the
-        // journal self-consistent for recovery. A plan that observed a receipt
-        // keeps the strict unconditional comparison.
-        let rebound_receipt = if self.intent.receipt_location == ReceiptLocation::Private
-            && self.intent.previous_private.is_none()
-        {
-            let path = private_receipt_path(&self.intent.manifest.harness)?;
-            if let Some(bytes) = self.publisher.read(&path)? {
-                let receipt: Receipt = serde_json::from_slice(&bytes)
-                    .map_err(|_| MezError::conflict("bootstrap receipt invalid; no mutation"))?;
-                if let Some(change) = self.changes.iter_mut().find(|change| change.path == path) {
-                    change.before = Some(bytes);
-                }
-                self.intent.previous_private = Some(receipt.manifest);
-            }
-            Some(path)
-        } else {
-            None
-        };
         for (path, before) in &self.observed {
-            if rebound_receipt.as_deref() == Some(path.as_str()) {
-                continue;
-            }
             if self.publisher.read(path)? != *before {
                 return Err(MezError::conflict(
                     "bootstrap inspected preimage changed; no publication",
