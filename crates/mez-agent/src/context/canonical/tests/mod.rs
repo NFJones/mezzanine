@@ -7,6 +7,7 @@ use crate::{ActionContentBlock, ActionResult, ActionStatus, AgentPromptError};
 mod history;
 mod projection;
 mod storage;
+mod summary_identity;
 
 mod chronology {
     use super::*;
