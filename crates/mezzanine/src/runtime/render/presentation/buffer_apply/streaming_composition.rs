@@ -1,16 +1,17 @@
-//! Installation of provider-only screens with independently owned shell previews.
+//! Installation of provider screens with shell and executor overlays.
 //!
 //! Composition uses the current conversation and exact installed-screen lineage.
-//! Provider and preview metadata are updated only after one atomic screen install;
-//! stale preview ownership is discarded without erasing intervening durable rows.
+//! Provider, shell-preview, and executor metadata advance after one screen install.
+//! Layers compose in that order, before the common pending-steering suffix.
+//! Executor promotion receipts remain attached even when no overlay rows remain.
 
 use super::*;
 
 impl RuntimeSessionService {
-    /// Installs one provider-only screen with active shell previews recomposed.
+    /// Installs a provider screen with active shell and executor layers recomposed.
     ///
-    /// The provider and shell-preview states record the same exact composite
-    /// generation so delayed updates from either owner are fenced atomically.
+    /// All owners record the same exact composite generation so delayed work is
+    /// fenced without losing executor final-settlement suppression receipts.
     pub(super) fn update_agent_streaming_screen(
         &mut self,
         pane_id: &str,
@@ -50,6 +51,19 @@ impl RuntimeSessionService {
                 self.presentation.settings.terminal_agent_wrap_column_cap,
             )?;
         }
+        let (composite_screen, progress_presentation) = self
+            .compose_action_presentation_progress_over(
+                pane_id,
+                conversation_id,
+                current_lineage,
+                composite_screen,
+            )?;
+        #[cfg(test)]
+        if std::mem::take(&mut self.presentation.reject_next_streaming_composite_install) {
+            return Err(MezError::invalid_state(
+                "injected streaming composite pre-install failure",
+            ));
+        }
         let installed_lineage = self
             .update_agent_pane_screen_preserving_interaction(
                 pane_id,
@@ -70,6 +84,11 @@ impl RuntimeSessionService {
                 .agent_shell_output_previews
                 .insert(pane_id.to_string(), preview);
         }
+        self.restore_composed_action_presentation_progress(
+            pane_id,
+            installed_lineage,
+            progress_presentation,
+        );
         if let Some(presentation) = self
             .presentation
             .agent_streaming_say_presentations

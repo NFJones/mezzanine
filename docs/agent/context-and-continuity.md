@@ -97,6 +97,16 @@ Filtered executor progress keeps its captured metadata only for the existing
 component/promotion receipt's bounded lifetime; this does not make suppressed
 content appear later or persist it after that owner retires.
 
+Provider projections compose with active shell previews and executor progress
+before pending steering. Initial stream and response-generation capture strip
+exact-owned shell and executor overlays from the rollback prefix, regardless of
+arrival order.
+Failed provider installation retains executor source and settlement receipts.
+Confirmed executor promotion extends the provider's rollback prefix without
+retaining provisional provider text. Later provider
+updates or discard keep those confirmed sections and their exact settlement
+receipts, so final action presentation does not append the same effect again.
+
 Transcript-only forks retain a bounded original record tail in the existing
 presentation log so their new conversation/catalog creation time does not replace
 coarse source-time evidence. Replay keeps each record boundary separate and

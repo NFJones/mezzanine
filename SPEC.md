@@ -4806,10 +4806,21 @@ result presentation.
 Executor-progress projection MUST share the composite screen lineage with
 provider and shell-preview projection. It MUST reject stale attempt,
 transaction, revision, conversation, pane, geometry, theme, visibility, or
-screen-lineage state without restoring unrelated newer rows. Exact successful
-terminal source MAY promote a matching provisional component and suppress only
-that matching final replay; a mismatch or failure MUST restore ordinary terminal
-presentation. Terminal action cleanup, cancellation, retry, conversation
+screen-lineage state without restoring unrelated newer rows. Successful
+provider installations MUST recompose shell previews and executor overlays, in
+that order, before pending steering, and advance all matching owners only after
+installation. New provider streams and response generations MUST strip exact-owned
+shell and executor suffixes before capturing their rollback prefix, regardless of
+which layer arrived first. Failed composition or installation MUST retain current
+executor source and settlement receipts without repeating execution.
+Confirmed executor promotion MUST extend the provider's rollback
+prefix with only the promoted sections, never its mutable provider rows. Later
+provider projections and discard MUST retain those sections exactly once and
+preserve their executor settlement receipts, even when no executor overlay rows
+remain. A lineage update alone is not evidence of a complete rollback source.
+Exact successful terminal source MAY promote a matching provisional component and
+suppress only that matching final replay; a mismatch or failure MUST restore
+ordinary terminal presentation. Terminal action cleanup, cancellation, retry, conversation
 replacement, and pane teardown MUST retire transient executor-progress state.
 
 For runtime-network `fetch_url` and `web_search`, ordinary HTTP body chunks MAY

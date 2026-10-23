@@ -3,6 +3,8 @@
 //! These tests keep provisional executor observations outside canonical action
 //! results and durable presentation until an exact settlement promotes them.
 
+mod provider_composition;
+
 use super::*;
 use mez_agent::{
     ActionPresentationComponentIdentity, ActionPresentationExecutionIdentity,

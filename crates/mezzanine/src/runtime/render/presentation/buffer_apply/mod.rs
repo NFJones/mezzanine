@@ -2157,20 +2157,17 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Returns the provider-only base and current composite for a new stream.
+    /// Returns the overlay-free provider base for a new stream.
     ///
-    /// Active shell previews remain independently owned above the provider base.
-    /// Stale preview lineage is discarded without changing the current pane.
+    /// Shell previews and executor progress remain independently owned above
+    /// this base, including when they arrived before the first provider byte.
+    /// Strip only exact-lineage suffixes; a failed strip cannot become rollback
+    /// authority containing a second copy of a transient component.
     fn agent_streaming_base_screen(
         &mut self,
         pane_id: &str,
         conversation_id: &str,
     ) -> Result<TerminalScreen> {
-        let current_screen = self
-            .agent_screen_without_pending_steering(pane_id, conversation_id)
-            .ok_or_else(|| {
-                MezError::invalid_state("streaming presentation screen was not initialized")
-            })?;
         let current_lineage = self
             .agent_pane_screen_lineage(pane_id, conversation_id)
             .ok_or_else(|| {
@@ -2181,18 +2178,40 @@ impl RuntimeSessionService {
             .agent_shell_output_previews
             .get(pane_id)
             .cloned();
-        if let Some(preview) = preview.as_ref()
-            && preview.conversation_id == conversation_id
-            && preview.installed_lineage == current_lineage
-        {
-            return Ok(preview.baseline_screen.as_ref().clone());
-        }
-        if preview.is_some() {
+        let preview_rows = preview
+            .as_ref()
+            .filter(|preview| {
+                preview.conversation_id == conversation_id
+                    && preview.installed_lineage == current_lineage
+            })
+            .map_or(0, |preview| preview.transient_rows);
+        if preview.as_ref().is_some_and(|preview| {
+            preview.conversation_id != conversation_id
+                || preview.installed_lineage != current_lineage
+        }) {
             self.presentation
                 .agent_shell_output_previews
                 .remove(pane_id);
         }
-        Ok(current_screen)
+        let progress_rows = self
+            .presentation
+            .action_presentation_progress
+            .get(pane_id)
+            .filter(|progress| {
+                progress.conversation_id == conversation_id
+                    && progress.installed_lineage == current_lineage
+            })
+            .map_or(0, |progress| progress.transient_rows);
+        self.clear_installed_agent_transient_suffixes(
+            pane_id,
+            conversation_id,
+            current_lineage,
+            preview_rows,
+            progress_rows,
+        )
+        .ok_or_else(|| {
+            MezError::invalid_state("streaming presentation transient suffix could not be removed")
+        })
     }
 
     /// Appends one existing styled prefix for a provisional plain-text source.

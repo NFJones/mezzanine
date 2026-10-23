@@ -498,7 +498,10 @@ impl RuntimeSessionService {
                 .all(|(_key, source)| output.contains(source.source.as_str()))
     }
 
-    /// Composes retained executor progress over a newly rebuilt lower baseline.
+    /// Prepares retained executor progress over a newly rebuilt lower baseline.
+    ///
+    /// Keep the current owner until installation succeeds: rendering failure
+    /// cannot consume its immutable components or promoted settlement receipts.
     pub(super) fn compose_action_presentation_progress_over(
         &mut self,
         pane_id: &str,
@@ -512,13 +515,17 @@ impl RuntimeSessionService {
         let Some(mut presentation) = self
             .presentation
             .action_presentation_progress
-            .remove(pane_id)
+            .get(pane_id)
+            .cloned()
         else {
             return Ok((baseline, None));
         };
         if presentation.conversation_id != conversation_id
             || presentation.installed_lineage != expected_lineage
         {
+            self.presentation
+                .action_presentation_progress
+                .remove(pane_id);
             return Ok((baseline, None));
         }
         presentation.baseline_screen = std::sync::Arc::new(baseline.clone());
@@ -926,17 +933,28 @@ impl RuntimeSessionService {
             &target_sections,
             self.ui_theme(),
         )?;
-        if let Some(streaming) = self
+        // Extend only the provider's immutable rollback prefix. `durable_base`
+        // still includes mutable provider rows and cannot become that prefix.
+        let streaming_baseline = self
             .presentation
             .agent_streaming_say_presentations
-            .get_mut(pane_id)
+            .get(pane_id)
             .filter(|streaming| {
-                streaming.conversation_id == presentation.conversation_id
+                !streaming.layout_retired
+                    && streaming.conversation_id == presentation.conversation_id
                     && streaming.installed_lineage == old_lineage
             })
-        {
-            streaming.provider_screen = std::sync::Arc::new(durable_base.clone());
-        }
+            .map(|streaming| streaming.baseline_screen.as_ref().clone());
+        let streaming_baseline = if let Some(mut baseline) = streaming_baseline {
+            Self::append_action_progress_sections_to_screen(
+                &mut baseline,
+                &target_sections,
+                self.ui_theme(),
+            )?;
+            Some(std::sync::Arc::new(baseline))
+        } else {
+            None
+        };
         let mut progress_baseline = durable_base.clone();
         let preview_source = self
             .presentation
@@ -981,6 +999,15 @@ impl RuntimeSessionService {
             .ok_or_else(|| {
                 MezError::invalid_state("executor progress promotion conversation changed")
             })?;
+        if let Some(baseline) = streaming_baseline
+            && let Some(streaming) = self
+                .presentation
+                .agent_streaming_say_presentations
+                .get_mut(pane_id)
+        {
+            streaming.baseline_screen = baseline;
+            streaming.provider_screen = std::sync::Arc::new(durable_base);
+        }
         self.synchronize_action_progress_companion_lineage(
             pane_id,
             &presentation.conversation_id,

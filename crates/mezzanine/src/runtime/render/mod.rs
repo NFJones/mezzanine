@@ -620,6 +620,9 @@ pub(crate) struct RuntimePresentationComponent {
     /// Test-only countdown to a single failure before durable screen installation.
     #[cfg(test)]
     pub(super) agent_install_failure_countdown: Option<usize>,
+    /// One-shot provider install refusal after all transient layers are prepared.
+    #[cfg(test)]
+    pub(super) reject_next_streaming_composite_install: bool,
     /// One-shot fault at outbound settlement, after real send acceptance.
     #[cfg(test)]
     reject_next_settled_outbound_projection: bool,
