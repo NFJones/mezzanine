@@ -3239,10 +3239,11 @@ impl AgentTranscriptStore {
     /// Returns the next append sequence for one conversation without scanning
     /// the full transcript file.
     ///
-    /// The method reads only the bounded tail needed to decode the latest
-    /// complete entry. If the transcript exists but the bounded tail contains
-    /// no complete entry, the file is treated as oversized or corrupt rather
-    /// than risking a whole-file read.
+    /// Allocation reads the latest COMPLETE record rather than a bounded
+    /// preview suffix: a single valid encoded record may legitimately exceed the
+    /// context-preview byte window, and sequence allocation must not inherit
+    /// that budget. Exhaustion is an explicit error rather than a saturated
+    /// duplicate sequence.
     pub fn next_sequence(&self, conversation_id: &str) -> Result<u64> {
         let path = self.existing_transcript_path_for(conversation_id)?;
         if !path.exists() {
@@ -3251,10 +3252,11 @@ impl AgentTranscriptStore {
                 "conversation transcript not found",
             ));
         }
-        let entries =
-            self.inspect_recent(conversation_id, 1, DEFAULT_TRANSCRIPT_TAIL_READ_BYTES)?;
+        let entries = self.inspect_latest_entries(conversation_id, 1)?;
         if let Some(entry) = entries.last() {
-            return Ok(entry.sequence.saturating_add(1));
+            return entry.sequence.checked_add(1).ok_or_else(|| {
+                MezError::invalid_state("conversation transcript sequence exhausted")
+            });
         }
         if path.metadata()?.len() == 0 {
             return Ok(1);
