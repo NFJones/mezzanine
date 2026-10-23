@@ -642,7 +642,30 @@ impl Plan {
                 })?;
         }
         self.publisher.require_no_pending_journal()?;
+        // The publisher materializes its own private receipt - and the private
+        // state directory that holds it - when the lock binds an absent root, so
+        // an inspection taken before that binding legitimately recorded the
+        // node as absent. That node is Mez-owned state validated by receipt
+        // parsing and reconciliation below, not a foreign edit between
+        // inspection and publication, so it is excluded from this preimage
+        // guard. Every other observed node keeps the strict comparison.
+        let own_receipt = private_receipt_path(&self.intent.manifest.harness)?;
+        // The same binding may also have materialized the receipt that this plan
+        // is about to replace. Refresh only that node's expected preimage from
+        // the now-bound publisher so publication does not refuse the state it
+        // just created; the planned `after` still governs the written bytes and
+        // every vendor-relative node keeps its inspection-time preimage.
+        if let Some(change) = self
+            .changes
+            .iter_mut()
+            .find(|change| change.path == own_receipt)
+        {
+            change.before = self.publisher.read(&change.path)?;
+        }
         for (path, before) in &self.observed {
+            if *path == own_receipt {
+                continue;
+            }
             if self.publisher.read(path)? != *before {
                 return Err(MezError::conflict(
                     "bootstrap inspected preimage changed; no publication",
