@@ -251,7 +251,9 @@ impl TokenUsageStore {
 /// opener waits for that work before it can take writer ownership. Both WAL
 /// setup and schema admission draw on this single deadline, which exists so a
 /// genuinely stuck writer still fails truthfully instead of blocking an opener
-/// forever. Migration execution itself is not retried by either loop.
+/// forever. This is a shared contention-retry horizon, not a hard total timeout:
+/// the guard is evaluated between attempts, so an in-flight statement may still
+/// finish after it, and migration execution is not retried by either loop.
 const STORE_INITIALIZATION_BUDGET: Duration = Duration::from_millis(1_000);
 
 /// Enables WAL before writer admission. SQLite can reject concurrent journal
@@ -276,9 +278,10 @@ fn initialize_wal(
                     rusqlite::ffi::SQLITE_BUSY | rusqlite::ffi::SQLITE_LOCKED
                 ) && std::time::Instant::now() < deadline =>
             {
-                // Retry only while the one initialization deadline allows; an
-                // attempt begun after it falls through to the terminal arm and
-                // becomes the recorded refusal.
+                // Retry only while the one initialization deadline allows. A
+                // failure after it falls through to the terminal arm and becomes
+                // the recorded refusal; an attempt that succeeds late is still
+                // accepted, since this is a retry horizon rather than a fence.
                 std::thread::sleep(Duration::from_millis(2));
             }
             Err(error) => {
