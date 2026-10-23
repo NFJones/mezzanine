@@ -662,7 +662,7 @@ mod tests {
                     assert_eq!(queue.status.confirmed, 0);
                     assert!(store.session_objective_mirror("deleted").unwrap().is_none());
                     assert!(queue.publish(store.clone(), "deleted", Some("retained secret")));
-                    settle(&mut queue);
+                    settle_converged(&mut queue);
                     assert_eq!(
                         store
                             .session_objective_mirror("deleted")
@@ -736,7 +736,7 @@ mod tests {
             }
             assert!(queue.collect().is_none());
             assert_eq!(queue.status.confirmed, 0);
-            settle(&mut queue);
+            settle_converged(&mut queue);
             assert_eq!(queue.status.confirmed, 1);
             assert_eq!(
                 store
@@ -793,6 +793,37 @@ mod tests {
         queue.collect();
     }
 
+    /// Executes claimable jobs until no registered entry remains dirty, waiting
+    /// out the documented busy backoff within a bounded deadline.
+    ///
+    /// A transiently busy store schedules the next eligible instant instead of
+    /// converging in one cycle, so assertions that expect a completed mirror
+    /// must not be made after a single claim/execute/collect pass. Tests that
+    /// deliberately hold a store lock keep using `settle`, which preserves the
+    /// pending state those oracles assert.
+    fn settle_converged(queue: &mut ObjectiveMirrorQueue) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(work) = queue.claim() {
+                work.execute();
+                queue.collect();
+                continue;
+            }
+            let outstanding = queue
+                .entries
+                .values()
+                .any(|entry| entry.registration.load(Ordering::Acquire) && entry.dirty);
+            if !outstanding {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "objective mirror queue did not converge within the bounded fixture deadline"
+            );
+            std::thread::sleep(OBJECTIVE_MIRROR_BUSY_DELAY);
+        }
+    }
+
     /// A -> B -> A cannot suppress final A because last persisted was A while B
     /// was in flight. Clear is an ordered value and unchanged confirmed values
     /// do not perform additional filesystem reads/writes.
@@ -801,7 +832,7 @@ mod tests {
         let (store, root) = store();
         let mut queue = ObjectiveMirrorQueue::default();
         assert!(queue.publish(store.clone(), "same", Some("A")));
-        settle(&mut queue);
+        settle_converged(&mut queue);
         assert!(queue.publish(store.clone(), "same", Some("B")));
         let old = queue.claim().unwrap();
         assert!(queue.publish(store.clone(), "same", Some("A")));
@@ -815,7 +846,7 @@ mod tests {
             queue.collect().is_none(),
             "stale B cannot confirm current A"
         );
-        settle(&mut queue);
+        settle_converged(&mut queue);
         assert_eq!(
             store
                 .session_objective_mirror("same")
@@ -829,7 +860,7 @@ mod tests {
         assert!(queue.claim().is_none());
         assert_eq!(store.session_objective_mirror_status().index_writes, writes);
         assert!(queue.publish(store.clone(), "same", None));
-        settle(&mut queue);
+        settle_converged(&mut queue);
         assert!(store.session_objective_mirror("same").unwrap().is_none());
         assert!(!queue.publish(store, "same", None));
         std::fs::remove_dir_all(root).unwrap();
