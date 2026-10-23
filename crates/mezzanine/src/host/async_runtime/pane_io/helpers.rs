@@ -17,6 +17,13 @@ const FOREGROUND_CERTIFICATION_OBSERVATION_ATTEMPTS: usize = 150;
 /// Delay between foreground queries while the isolated child relinquishes the PTY.
 const FOREGROUND_CERTIFICATION_OBSERVATION_DELAY: Duration = Duration::from_millis(10);
 
+/// Bounded attempts for one pane-produced event batch rejected before
+/// application because unrelated effects transiently filled the queue.
+const PANE_EVENT_CAPACITY_RETRY_ATTEMPTS: usize = 32;
+
+/// Delay between bounded pane-event capacity retries.
+const PANE_EVENT_CAPACITY_RETRY_DELAY: Duration = Duration::from_millis(20);
+
 /// Submits one pane-produced runtime event and accumulates ingress counters.
 pub(super) async fn submit_pane_runtime_event(
     handle: &AsyncRuntimeSessionHandle,
@@ -26,7 +33,26 @@ pub(super) async fn submit_pane_runtime_event(
 ) -> Result<()> {
     let mut batch = RuntimeEventBatch::new();
     batch.push(event);
-    let ingress = handle.submit_runtime_events(batch).await?;
+    // A pane worker must not fail because unrelated effects transiently filled
+    // the bounded side-effect queue. Only a pre-application rejection is
+    // retried, so resubmitting this exact batch cannot duplicate an effect; a
+    // rejection that already applied or drained work still propagates.
+    let mut attempts = 0usize;
+    let ingress = loop {
+        match handle.submit_runtime_events(batch.clone()).await {
+            Ok(ingress) => break ingress,
+            Err(error)
+                if attempts < PANE_EVENT_CAPACITY_RETRY_ATTEMPTS
+                    && crate::host::async_runtime::error_is_retryable_side_effect_capacity(
+                        &error,
+                    ) =>
+            {
+                attempts = attempts.saturating_add(1);
+                sleep(PANE_EVENT_CAPACITY_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error),
+        }
+    };
     *submitted_events = submitted_events.saturating_add(ingress.accepted);
     *applied_events = applied_events.saturating_add(ingress.applied);
     Ok(())
@@ -205,8 +231,22 @@ pub(super) async fn retire_failed_pane_process(
             signal: Some("pane worker failed".to_string()),
         }),
     });
-    handle.submit_runtime_events(batch).await?;
-    Ok(())
+    let mut attempts = 0usize;
+    loop {
+        match handle.submit_runtime_events(batch.clone()).await {
+            Ok(_ingress) => return Ok(()),
+            Err(error)
+                if attempts < PANE_EVENT_CAPACITY_RETRY_ATTEMPTS
+                    && crate::host::async_runtime::error_is_retryable_side_effect_capacity(
+                        &error,
+                    ) =>
+            {
+                attempts = attempts.saturating_add(1);
+                sleep(PANE_EVENT_CAPACITY_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// Runs the drain completed pane process workers operation for this subsystem.
