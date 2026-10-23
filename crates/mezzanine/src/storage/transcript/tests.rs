@@ -8464,3 +8464,49 @@ fn transcript_sequence_allocation_rejects_a_foreign_final_row() {
     assert_eq!(error.kind(), crate::MezErrorKind::InvalidState);
     let _ = fs::remove_dir_all(root);
 }
+
+/// Boundary sizes, escaping, an empty file and sequence exhaustion all keep the
+/// allocation contract: the backward scan straddles its 64 KiB chunk edges, the
+/// encoded row stays one record, and overflow is reported rather than wrapped.
+#[test]
+fn transcript_sequence_allocation_handles_boundaries_and_exhaustion() {
+    let root = temp_root("sequence-boundaries");
+    let store = AgentTranscriptStore::new(root.clone());
+
+    // Empty file allocates the first sequence.
+    let empty_path = store.transcript_path("empty-record").unwrap();
+    fs::create_dir_all(empty_path.parent().unwrap()).unwrap();
+    fs::write(&empty_path, b"").unwrap();
+    assert_eq!(store.next_sequence("empty-record").unwrap(), 1);
+
+    // Chunk-edge and escaping cases: 64 KiB minus one, exactly 64 KiB, plus one,
+    // and content carrying newlines, backslashes and non-ASCII text.
+    for (name, content) in [
+        ("edge-64k-minus-one", "a".repeat(64 * 1024 - 1)),
+        ("edge-64k", "b".repeat(64 * 1024)),
+        ("edge-64k-plus-one", "c".repeat(64 * 1024 + 1)),
+        (
+            "escaped-content",
+            "line\nwith\\backslash and unicode \u{1f600} tail".to_string(),
+        ),
+    ] {
+        let mut row = entry(name, 1, TranscriptRole::Assistant);
+        row.content = content;
+        assert!(store.append_many(std::slice::from_ref(&row)).unwrap() > 0);
+        assert_eq!(store.next_sequence(name).unwrap(), 2, "{name}");
+    }
+
+    // Exhaustion is explicit rather than a saturated duplicate sequence.
+    let mut exhausted = entry("exhausted-record", 1, TranscriptRole::User);
+    exhausted.sequence = u64::MAX;
+    let exhausted_path = store.transcript_path("exhausted-record").unwrap();
+    fs::create_dir_all(exhausted_path.parent().unwrap()).unwrap();
+    fs::write(
+        &exhausted_path,
+        encode_transcript_entry(&exhausted).unwrap(),
+    )
+    .unwrap();
+    let error = store.next_sequence("exhausted-record").unwrap_err();
+    assert_eq!(error.kind(), crate::MezErrorKind::InvalidState);
+    let _ = fs::remove_dir_all(root);
+}
