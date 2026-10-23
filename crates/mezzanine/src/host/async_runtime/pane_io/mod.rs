@@ -36,6 +36,7 @@ mod driver_service;
 #[cfg(test)]
 mod fake;
 mod helpers;
+pub(super) use helpers::submit_pane_runtime_events_bounded;
 mod process_service;
 mod pty;
 mod retirement;

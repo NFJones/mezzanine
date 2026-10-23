@@ -26,7 +26,7 @@ const PANE_EVENT_CAPACITY_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 /// Submits one pane-side event batch, retrying only pre-application capacity
 /// pressure so a transient backlog cannot abort a pane service.
-pub(super) async fn submit_pane_runtime_events_bounded(
+pub(crate) async fn submit_pane_runtime_events_bounded(
     handle: &AsyncRuntimeSessionHandle,
     batch: RuntimeEventBatch,
 ) -> Result<super::RuntimeEventIngressReport> {

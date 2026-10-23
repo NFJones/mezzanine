@@ -395,7 +395,7 @@ where
                     now_ms: runtime_timer_now_ms(start, base_now_ms),
                 }));
             }
-            let ingress = handle.submit_runtime_events(batch).await?;
+            let ingress = super::pane_io::submit_pane_runtime_events_bounded(handle, batch).await?;
             report.fired = report
                 .fired
                 .saturating_add(u64::try_from(ingress.accepted).unwrap_or(u64::MAX));
@@ -543,7 +543,7 @@ where
             }
         }
         if !batch.events.is_empty() {
-            let ingress = handle.submit_runtime_events(batch).await?;
+            let ingress = super::pane_io::submit_pane_runtime_events_bounded(handle, batch).await?;
             report.submitted_events = report.submitted_events.saturating_add(ingress.accepted);
             report.applied_events = report.applied_events.saturating_add(ingress.applied);
         }
@@ -632,7 +632,7 @@ where
             ));
         }
         if !batch.events.is_empty() {
-            let ingress = handle.submit_runtime_events(batch).await?;
+            let ingress = super::pane_io::submit_pane_runtime_events_bounded(handle, batch).await?;
             report.submitted_events = report.submitted_events.saturating_add(ingress.accepted);
             report.applied_events = report.applied_events.saturating_add(ingress.applied);
         }
@@ -667,7 +667,7 @@ async fn submit_status_pill_worker_event(
 ) -> Result<()> {
     let mut batch = RuntimeEventBatch::new();
     batch.push(event);
-    let ingress = handle.submit_runtime_events(batch).await?;
+    let ingress = super::pane_io::submit_pane_runtime_events_bounded(handle, batch).await?;
     report.submitted_events = report.submitted_events.saturating_add(ingress.accepted);
     report.applied_events = report.applied_events.saturating_add(ingress.applied);
     Ok(())
@@ -1592,7 +1592,7 @@ where
             _ => false,
         });
         if !batch.events.is_empty() {
-            let ingress = handle.submit_runtime_events(batch).await?;
+            let ingress = super::pane_io::submit_pane_runtime_events_bounded(handle, batch).await?;
             report.submitted_events = report.submitted_events.saturating_add(ingress.accepted);
             report.applied_events = report.applied_events.saturating_add(ingress.applied);
         }
