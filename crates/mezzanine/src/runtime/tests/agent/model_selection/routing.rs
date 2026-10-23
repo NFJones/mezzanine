@@ -1290,6 +1290,221 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
     assert!(!pane_text.contains("result committed: subagent task completed"));
 }
 
+/// Verifies a routed fresh iteration binds its next conversation only after the
+/// patch-producing work turn releases the pinned worker's running-turn slot.
+///
+/// Terminal-result settlement previously started the next iteration directly.
+/// The fork and new modes bind a fresh ephemeral conversation there, which the
+/// pane shell refuses while the finished iteration still owns that slot, so the
+/// controller failed instead of running a second iteration. Settlement must
+/// record the pending iteration and completion must perform the transition.
+#[test]
+fn runtime_routed_loop_fresh_iteration_waits_for_worker_turn_settlement() {
+    for mode in ["--fork", "--new"] {
+        let (mut service, parent_turn_id, worker_turn) = selected_routed_loop_with_parent(
+            &format!("/loop {mode} --limit 3 inspect fresh iteration ordering"),
+            crate::runtime::config::ShellMode::Native,
+            true,
+        );
+        let pane = worker_turn.pane_id.clone();
+        let pid = service.primary_pid_for_live_pane_process(&pane).unwrap();
+        let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+        let loop_state = service.agent_loop_state(&pane).unwrap().clone();
+        let first_session = service.agent_shell_store().get(&pane).unwrap().clone();
+
+        service
+            .emit_subagent_task_result_for_execution(
+                &worker_turn,
+                &routed_patch_execution(&worker_turn),
+            )
+            .unwrap();
+
+        // The controller advanced the iteration, but the finished turn still
+        // owns the running-turn slot, so no conversation switch happened yet.
+        assert_eq!(service.agent_loop_state(&pane).unwrap().iteration, 2);
+        let during = service.agent_shell_store().get(&pane).unwrap().clone();
+        assert_eq!(
+            during.running_turn_id.as_deref(),
+            Some(worker_turn.turn_id.as_str()),
+            "{mode}: terminal-result settlement must not release the running turn"
+        );
+        assert_eq!(
+            during.session_id, first_session.session_id,
+            "{mode}: no conversation rebind before authoritative settlement"
+        );
+        assert_eq!(
+            service
+                .routed_workflow_for_tests(&parent_turn_id)
+                .and_then(|workflow| workflow.child_turn_id.clone()),
+            Some(worker_turn.turn_id.clone()),
+            "{mode}: a deferred iteration must not replace the routed child early"
+        );
+
+        service
+            .complete_running_agent_turn_and_start_ready(
+                &worker_turn,
+                AgentTurnState::Completed,
+                "routed_loop_iteration_settled",
+            )
+            .unwrap();
+
+        let workflow = service
+            .routed_workflow_for_tests(&parent_turn_id)
+            .expect("continued routed workflow should remain active");
+        assert_eq!(
+            workflow.phase,
+            mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult,
+            "{mode}: the continued iteration must keep the invoking parent waiting"
+        );
+        let second_turn_id = workflow
+            .child_turn_id
+            .clone()
+            .expect("the continuation should schedule a second work turn");
+        assert_ne!(second_turn_id, worker_turn.turn_id, "{mode}");
+        let loop_turn = service.agent_loop_turn(&second_turn_id).unwrap().clone();
+        assert_eq!(
+            loop_turn.kind,
+            crate::runtime::agent_state::RuntimeAgentLoopTurnKind::Work
+        );
+        assert_eq!(loop_turn.iteration, 2, "{mode}");
+        assert_eq!(loop_turn.pane_id, pane, "{mode}");
+
+        let session = service.agent_shell_store().get(&pane).unwrap().clone();
+        assert_ne!(session.session_id, first_session.session_id, "{mode}");
+        assert!(
+            session.ephemeral,
+            "{mode}: loop iterations stay runtime-only"
+        );
+        assert_eq!(
+            session.running_turn_id.as_deref(),
+            Some(second_turn_id.as_str()),
+            "{mode}: the second iteration must run in the pinned worker"
+        );
+        if mode == "--fork" {
+            assert_eq!(
+                session
+                    .ephemeral_transcript_source_conversation_id
+                    .as_deref(),
+                Some(loop_state.parent_conversation_id.as_str()),
+                "fork iteration must retain the parent history source"
+            );
+            if let Some(lineage) = loop_state.parent_prompt_cache_lineage_id.as_deref() {
+                assert_eq!(session.prompt_cache_lineage_id, lineage);
+            }
+        } else {
+            assert!(
+                session
+                    .ephemeral_transcript_source_conversation_id
+                    .is_none(),
+                "new iteration must not inherit parent history"
+            );
+            assert_eq!(session.transcript_entries, 0);
+        }
+        assert_eq!(service.primary_pid_for_live_pane_process(&pane), Some(pid));
+        assert_eq!(
+            mez_mux::process::process_start_token_for_pid(pid),
+            Some(token)
+        );
+        let pane_text = service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        assert!(
+            pane_text.contains("loop: continuing fresh iteration 2/3"),
+            "{mode}: {pane_text}"
+        );
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
+/// Verifies the synchronous and asynchronous provider result owners both perform
+/// the deferred fresh-iteration transition.
+///
+/// A goal-mode iteration continues without a patch action, so this exercises the
+/// ordinary production result application rather than only the settlement pair.
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_routed_loop_fresh_iteration_settles_through_provider_application() {
+    for (mode, asynchronous) in [("--fork", false), ("--new", true)] {
+        let (mut service, parent_turn_id, worker_turn) = selected_routed_loop_with_parent(
+            &format!(
+                "/loop {mode} --limit 3 --goal 'inspect the fixture goal' advance the iteration"
+            ),
+            crate::runtime::config::ShellMode::Native,
+            true,
+        );
+        let pane = worker_turn.pane_id.clone();
+        let pid = service.primary_pid_for_live_pane_process(&pane).unwrap();
+        let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+        let profile = service
+            .agent_turn_model_profile(&worker_turn.turn_id)
+            .expect("routed worker profile should exist")
+            .clone();
+        let execution = mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(
+                &worker_turn.turn_id,
+                &worker_turn.agent_id,
+            ),
+            response: runtime_say_response_for_agent(
+                &worker_turn.turn_id,
+                &worker_turn.agent_id,
+                "the first iteration finished without the completion marker",
+                true,
+            ),
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: Vec::new(),
+            final_turn: true,
+            terminal_state: AgentTurnState::Completed,
+        };
+        if asynchronous {
+            service
+                .apply_agent_provider_execution_async_for_tests(&worker_turn, &profile, execution)
+                .await
+                .unwrap();
+        } else {
+            service
+                .apply_agent_provider_execution(&worker_turn, &profile, "runtime-batch", execution)
+                .unwrap();
+        }
+
+        let workflow = service
+            .routed_workflow_for_tests(&parent_turn_id)
+            .expect("goal-mode continuation should retain the routed workflow");
+        assert_eq!(
+            workflow.phase,
+            mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult,
+            "{mode}: the invoking parent must stay waiting for the next iteration"
+        );
+        let second_turn_id = workflow
+            .child_turn_id
+            .clone()
+            .expect("provider application should schedule the second iteration");
+        assert_ne!(second_turn_id, worker_turn.turn_id, "{mode}");
+        assert_eq!(
+            service.agent_loop_turn(&second_turn_id).unwrap().iteration,
+            2,
+            "{mode}"
+        );
+        assert_eq!(
+            service
+                .agent_shell_store()
+                .get(&pane)
+                .unwrap()
+                .running_turn_id
+                .as_deref(),
+            Some(second_turn_id.as_str()),
+            "{mode}: the second iteration must run in the pinned worker"
+        );
+        assert_eq!(service.primary_pid_for_live_pane_process(&pane), Some(pid));
+        assert_eq!(
+            mez_mux::process::process_start_token_for_pid(pid),
+            Some(token)
+        );
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
 /// Verifies a routed child that terminates without an execution record resumes
 /// the blocked parent through bounded failure recovery rather than false success.
 #[test]
@@ -2020,10 +2235,12 @@ fn runtime_routed_loop_continuation_queue_failure_recovers_once() {
         .emit_subagent_task_result_for_execution(&worker_turn, &execution)
         .unwrap();
     service
-        .agent_scheduler_mut()
-        .complete(&worker_turn.turn_id)
+        .complete_running_agent_turn_and_start_ready(
+            &worker_turn,
+            AgentTurnState::Completed,
+            "routed_loop_continuation_queue_failure",
+        )
         .unwrap();
-    service.start_ready_agent_turns().unwrap();
 
     let workflow = service
         .routed_workflow_for_tests(&parent_turn_id)

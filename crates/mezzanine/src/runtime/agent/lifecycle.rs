@@ -248,6 +248,11 @@ impl RuntimeSessionService {
         ) {
             self.close_terminal_subagent_pane_if_pending(&turn)?;
         }
+        // A loop continuation may bind a fresh ephemeral conversation for its
+        // next fork/new iteration, and the pane shell refuses that while the
+        // finished turn still owned the running-turn slot released above. This
+        // settlement boundary therefore owns the pending iteration.
+        self.start_deferred_agent_loop_continuation(turn_id)?;
         self.start_ready_agent_turns()?;
         if !completion_attention_eligible {
             self.presentation.acknowledge_completion_attention(pane_id);
@@ -494,6 +499,10 @@ impl RuntimeSessionService {
         {
             self.close_terminal_subagent_pane_if_pending(turn)?;
         }
+        // The exact running turn was settled above, so a pending fork/new loop
+        // iteration may now bind its next conversation without racing the
+        // shell session's running-turn guard.
+        self.start_deferred_agent_loop_continuation(&turn.turn_id)?;
         self.start_ready_agent_turns()?;
         if !completion_attention_eligible {
             self.presentation

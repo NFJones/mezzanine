@@ -30,8 +30,8 @@ use super::{
     PathScopes, PendingFocusedShellHookContinuation, PermissionPolicy, ReadinessOverrideRevocation,
     Recipient, ReqwestProviderHttpTransport, Result, RuleDecision, RunningShellTransactionKind,
     RunningShellTransactionRef, RuntimeAgentCompactionTask, RuntimeAgentCopyOutput,
-    RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
-    RuntimeAgentModifiedFileSummary, RuntimeAgentPreShellHookCompletion,
+    RuntimeAgentLoopContinuation, RuntimeAgentLoopState, RuntimeAgentLoopTurn,
+    RuntimeAgentLoopTurnKind, RuntimeAgentModifiedFileSummary, RuntimeAgentPreShellHookCompletion,
     RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
     RuntimeAgentRememberTask, RuntimeAgentSessionTitleClaim, RuntimeAgentSessionTitleTask,
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
@@ -390,6 +390,13 @@ pub(crate) struct RuntimeAgentComponent {
     agent_loop_by_pane: BTreeMap<String, String>,
     /// Loop-owned turn metadata keyed by turn id.
     agent_loop_turns: BTreeMap<String, RuntimeAgentLoopTurn>,
+    /// Loop continuations awaiting their predecessor turn's settlement.
+    ///
+    /// Keyed by the settled predecessor turn id so a duplicate terminal result
+    /// cannot schedule the same iteration twice, and so the transition runs
+    /// only for the exact turn whose shell completion released the pane's
+    /// running-turn slot.
+    agent_loop_continuations: BTreeMap<String, RuntimeAgentLoopContinuation>,
     /// Per-signature correction retry limit for failed model actions.
     agent_action_failure_retry_limit: usize,
     /// Total wall-clock budget snapshotted when each new agent turn is created.
@@ -4354,6 +4361,9 @@ impl RuntimeSessionService {
         self.agent
             .agent_loop_turns
             .retain(|_, loop_turn| loop_turn.loop_id != loop_id);
+        self.agent
+            .agent_loop_continuations
+            .retain(|_, continuation| continuation.loop_id != loop_id);
         Some(state)
     }
 
@@ -4393,6 +4403,33 @@ impl RuntimeSessionService {
         self.agent
             .agent_loop_turns
             .retain(|_, loop_turn| loop_turn.pane_id != pane_id);
+        self.agent
+            .agent_loop_continuations
+            .retain(|_, continuation| continuation.pane_id != pane_id);
+    }
+
+    /// Records one loop continuation awaiting its predecessor's settlement.
+    ///
+    /// Fork and new iterations bind a fresh ephemeral conversation, and the
+    /// pane shell refuses that switch while a finished turn still owns the
+    /// running-turn slot. Terminal-result settlement therefore records the
+    /// pending iteration instead of starting it early.
+    pub(crate) fn defer_agent_loop_continuation(
+        &mut self,
+        previous_turn_id: &str,
+        continuation: RuntimeAgentLoopContinuation,
+    ) {
+        self.agent
+            .agent_loop_continuations
+            .insert(previous_turn_id.to_string(), continuation);
+    }
+
+    /// Takes the deferred loop continuation recorded for one settled turn.
+    pub(crate) fn take_agent_loop_continuation(
+        &mut self,
+        previous_turn_id: &str,
+    ) -> Option<RuntimeAgentLoopContinuation> {
+        self.agent.agent_loop_continuations.remove(previous_turn_id)
     }
 
     /// Returns the raw-context percentage retained after compaction.

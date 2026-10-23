@@ -7456,6 +7456,15 @@ parent agent screen and its surface-qualified interaction state. Normal
 settlement, cancellation, and recoverable failure MUST restore that projection
 atomically with the parent conversation binding; ephemeral rows, viewport, and
 copy state MUST NOT replace or contaminate the retained parent projection.
+The next work iteration of a fork-mode or new-mode `/loop` MUST start only after
+the completed work turn has settled and released the pane's running-turn slot.
+Mezzanine MUST NOT rebind the pane to the next ephemeral conversation while the
+completing turn still owns that slot, and a duplicate terminal result MUST NOT
+schedule the same iteration twice. A continuation that cannot start MUST
+terminate the controller once, restore the invoking parent binding, and either
+resume the routed parent through its bounded failure explanation or report the
+failure on the invoking pane without reclassifying or replaying the settled
+iteration.
 The `/loop` command MUST accept `--limit <int>` as a per-command positive
 integer override for `agents.loop_limit`.
 The `/loop` command MUST accept `--goal <string>` as an optional non-empty

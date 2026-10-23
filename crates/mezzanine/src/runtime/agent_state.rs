@@ -601,6 +601,23 @@ pub struct RuntimeAgentLoopTurn {
     pub iteration: usize,
 }
 
+/// One loop continuation awaiting its predecessor turn's settlement.
+///
+/// Terminal-result delivery settles a loop-owned work turn before the pane
+/// shell releases its running-turn slot. Fork and new iterations bind a fresh
+/// ephemeral conversation, and that lower binding refuses to switch while a
+/// turn is still running, so the controller records the pending iteration here
+/// and the authoritative completion path performs the transition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAgentLoopContinuation {
+    /// Stable identity of the logical loop that owns the pending iteration.
+    pub loop_id: String,
+    /// Pane that will execute the pending loop work turn.
+    pub pane_id: String,
+    /// One-based iteration the pending work turn will execute.
+    pub iteration: usize,
+}
+
 /// Result of consuming one terminal loop-owned work turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeAgentLoopSettlement {

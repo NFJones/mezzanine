@@ -421,9 +421,9 @@ pub(crate) use agent::{SessionTitleDenial, session_title_task_id};
 #[cfg(test)]
 pub(crate) use agent_state::{RuntimeActiveTurnCompactionTrigger, RuntimeAgentCompactionTarget};
 pub use agent_state::{
-    RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentLoopState,
-    RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
+    RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentLoopContinuation,
+    RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
+    RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
     RuntimeAgentProviderWorkerOutcome, RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
     RuntimeAgentSessionTitleClaim, RuntimeAgentSessionTitleDispatch, RuntimeAgentSessionTitleTask,
 };

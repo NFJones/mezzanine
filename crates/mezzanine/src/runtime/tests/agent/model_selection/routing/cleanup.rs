@@ -190,10 +190,11 @@ fn runtime_routed_cleanup_independent_child_rebind_preserves_native_worker() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// The existing fork/new continuation order still rejects rebinding while the
-/// old work turn runs. Its real recovery nevertheless restores the invoking
-/// parent before failure explanation. If that explanation fails before child
-/// release, explicit parent close must retain the original native obligation.
+/// A fork/new continuation is deferred until its work turn settles, but that
+/// settlement still owns its recovery. A continuation that cannot start
+/// restores the invoking parent before the failure explanation; if that
+/// explanation fails before child release, explicit parent close must retain
+/// the original native obligation.
 #[test]
 fn runtime_routed_cleanup_failed_fresh_iteration_retains_recovery_obligation() {
     for mode in ["--fork", "--new"] {
@@ -210,9 +211,17 @@ fn runtime_routed_cleanup_failed_fresh_iteration_retains_recovery_obligation() {
             .primary_pid_for_live_pane_process(&worker.pane_id)
             .unwrap();
         let token = mez_mux::process::process_start_token_for_pid(pid).unwrap();
+        service.fail_next_routed_loop_continuation_queue_for_tests();
         service.fail_routed_cleanup_recovery_before_release_for_tests();
-        let error = service
+        service
             .emit_subagent_task_result_for_execution(&worker, &routed_patch_execution(&worker))
+            .unwrap();
+        let error = service
+            .complete_running_agent_turn_and_start_ready(
+                &worker,
+                AgentTurnState::Completed,
+                "routed_loop_recovery_failure",
+            )
             .unwrap_err();
         assert!(
             error.message().contains("injected routed recovery failure"),

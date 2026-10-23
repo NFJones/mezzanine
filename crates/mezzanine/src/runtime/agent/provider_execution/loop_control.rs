@@ -1,8 +1,9 @@
 //! Loop settlement policy after terminal provider execution.
 
 use super::super::{
-    AgentTurnExecution, AgentTurnRecord, AgentTurnState, Result, RuntimeAgentLoopSettlement,
-    RuntimeAgentLoopTurnKind, RuntimeSessionService,
+    AgentTurnExecution, AgentTurnRecord, AgentTurnState, MezError, Result,
+    RuntimeAgentLoopContinuation, RuntimeAgentLoopSettlement, RuntimeAgentLoopTurnKind,
+    RuntimeSessionService,
 };
 use mez_agent::outcome::runtime_execution_has_apply_patch_action;
 
@@ -138,37 +139,106 @@ impl RuntimeSessionService {
                     .agent_loop_state_mut_by_id(&loop_turn.loop_id)
                     .expect("logical loop state was read immediately before update") =
                     next_state.clone();
-                if let Err(error) = self.start_agent_loop_work_turn(&next_state.execution_pane_id) {
-                    if let Some(state) = self.agent_loop_state_by_id(&loop_turn.loop_id).cloned() {
-                        let objective = self.preflight_agent_loop_parent_objective(&state)?;
-                        self.restore_agent_loop_parent_conversation(
-                            &state.invoking_pane_id,
-                            &state,
-                            objective.as_deref(),
-                        )?;
-                        self.remove_agent_loop_state_by_id(&loop_turn.loop_id);
-                        if let Some(parent_turn_id) = state.routed_parent_turn_id.as_deref() {
-                            self.fail_routed_loop_continuation(
-                                parent_turn_id,
-                                &turn.turn_id,
-                                error.message(),
-                            )?;
-                            return Ok(RuntimeAgentLoopSettlement::Terminal {
-                                completion: state.completion,
-                            });
-                        }
-                    }
-                    return Err(error);
-                }
-                self.append_agent_status_text_to_terminal_buffer(
-                    &next_state.invoking_pane_id,
-                    &format!(
-                        "loop: continuing fresh iteration {}/{}",
-                        next_state.iteration, next_state.max_iterations
-                    ),
-                )?;
+                // Fork and new iterations bind a fresh ephemeral conversation,
+                // which the pane shell refuses while this settled turn still
+                // owns its running-turn slot. Record the pending iteration and
+                // let authoritative completion start it.
+                self.defer_agent_loop_continuation(
+                    &turn.turn_id,
+                    RuntimeAgentLoopContinuation {
+                        loop_id: loop_turn.loop_id.clone(),
+                        pane_id: next_state.execution_pane_id.clone(),
+                        iteration: next_state.iteration,
+                    },
+                );
                 Ok(RuntimeAgentLoopSettlement::Continued)
             }
         }
+    }
+
+    /// Starts one deferred loop continuation after its predecessor settled.
+    ///
+    /// The finished turn's shell session releases the pane's running-turn slot
+    /// before this runs, so a fork/new iteration can bind its next ephemeral
+    /// conversation. A duplicate terminal result finds no pending record and is
+    /// inert instead of starting a second iteration.
+    pub(crate) fn start_deferred_agent_loop_continuation(
+        &mut self,
+        settled_turn_id: &str,
+    ) -> Result<()> {
+        let Some(continuation) = self.take_agent_loop_continuation(settled_turn_id) else {
+            return Ok(());
+        };
+        let Some(state) = self.agent_loop_state_by_id(&continuation.loop_id).cloned() else {
+            return Ok(());
+        };
+        match self.start_agent_loop_work_turn(&continuation.pane_id) {
+            Ok(_) => {
+                self.append_agent_status_text_to_terminal_buffer(
+                    &state.invoking_pane_id,
+                    &format!(
+                        "loop: continuing fresh iteration {}/{}",
+                        continuation.iteration, state.max_iterations
+                    ),
+                )?;
+                Ok(())
+            }
+            Err(error) => self.recover_failed_agent_loop_continuation(
+                &continuation.loop_id,
+                settled_turn_id,
+                error,
+            ),
+        }
+    }
+
+    /// Terminates one loop whose next iteration could not start after
+    /// settlement.
+    ///
+    /// The settled turn keeps its own completed execution and effects; only the
+    /// pending iteration is abandoned. Routed controllers resume the blocked
+    /// parent through the existing bounded explanation path, while an ordinary
+    /// controller reports the failure on its invoking pane because the turn it
+    /// belonged to has already settled.
+    fn recover_failed_agent_loop_continuation(
+        &mut self,
+        loop_id: &str,
+        settled_turn_id: &str,
+        error: MezError,
+    ) -> Result<()> {
+        let Some(state) = self.agent_loop_state_by_id(loop_id).cloned() else {
+            return Err(error);
+        };
+        let objective = self.preflight_agent_loop_parent_objective(&state)?;
+        self.restore_agent_loop_parent_conversation(
+            &state.invoking_pane_id,
+            &state,
+            objective.as_deref(),
+        )?;
+        self.remove_agent_loop_state_by_id(loop_id);
+        if let Some(parent_turn_id) = state.routed_parent_turn_id.clone() {
+            self.fail_routed_loop_continuation(
+                parent_turn_id.as_str(),
+                settled_turn_id,
+                error.message(),
+            )?;
+            if let Some(completion) = state.completion.clone() {
+                self.retain_routed_loop_completion(parent_turn_id.as_str(), completion)?;
+            }
+            return Ok(());
+        }
+        self.append_agent_trace_turn_event(
+            &state.execution_pane_id,
+            settled_turn_id,
+            &format!("loop continuation failed reason={}", error.message()),
+        )?;
+        self.append_agent_status_text_to_terminal_buffer(
+            &state.invoking_pane_id,
+            &format!(
+                "loop: stopped after iteration {} because the next iteration could not start: {}",
+                state.iteration,
+                error.message()
+            ),
+        )?;
+        Ok(())
     }
 }
