@@ -25,6 +25,22 @@ impl IsolatedFishFixture {
         ));
         create_private_directory(&candidate)?;
         let root = candidate.canonicalize()?;
+        match Self::build(&root, fish) {
+            Ok(environment) => Ok(Self { root, environment }),
+            Err(error) => {
+                // The root is exclusively owned by this fixture, so a failed
+                // construction must not leave it behind unreported.
+                let _ = std::fs::remove_dir_all(&root);
+                Err(std::io::Error::other(format!(
+                    "fish admission fixture setup failed for {}: {error}",
+                    root.display()
+                )))
+            }
+        }
+    }
+
+    /// Builds the owned launch environment inside an existing private root.
+    fn build(root: &Path, fish: &Path) -> std::io::Result<Vec<(String, String)>> {
         let mut environment = Vec::new();
         for (key, directory) in [
             ("HOME", "home"),
@@ -70,7 +86,7 @@ impl IsolatedFishFixture {
             .mode(0o600)
             .open(fish_config.join("config.fish"))?;
         config.write_all(b"set -g fish_greeting ''\nset -l __mez_fixture_adapter absent\nif functions -q __mez_agent_wrapper_receive\n    set __mez_fixture_adapter present\nend\nbuiltin printf '%s %s\\n' $fish_pid $__mez_fixture_adapter >> \"$HOME/normal-rc-witness\"\nfunction fish_prompt\n    builtin printf '__MEZ_TEST_NORMAL_RC__> '\nend\nfunction fish_right_prompt\nend\n")?;
-        Ok(Self { root, environment })
+        Ok(environment)
     }
 
     /// Returns the owned physical root retained on uncertain cleanup.
