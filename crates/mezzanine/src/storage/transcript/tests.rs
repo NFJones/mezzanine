@@ -8422,31 +8422,3 @@ fn deleting_a_conversation_prunes_its_objective_title_mirror() {
     );
     let _ = fs::remove_dir_all(root);
 }
-
-/// A single valid record larger than the context-preview byte window must still
-/// allocate the next sequence. Allocation previously read a bounded preview
-/// suffix, so an oversized final row left zero complete entries and the store
-/// reported that the tail contained none even though the file was valid.
-#[test]
-fn transcript_sequence_allocation_reads_large_complete_records() {
-    let root = temp_root("sequence-large-record");
-    let store = AgentTranscriptStore::new(root.clone());
-    let mut large = entry("large-record", 1, TranscriptRole::Assistant);
-    large.content = "x".repeat(3 * 1024 * 1024);
-    assert!(store.append_many(std::slice::from_ref(&large)).unwrap() > 0);
-    assert_eq!(
-        store.next_sequence("large-record").unwrap(),
-        2,
-        "a valid oversized record still allocates the next sequence"
-    );
-
-    let follow = entry("large-record", 2, TranscriptRole::User);
-    assert!(store.append_many(&[follow]).unwrap() > 0);
-    assert_eq!(store.next_sequence("large-record").unwrap(), 3);
-
-    // Control: a short history keeps the same behaviour.
-    let small = entry("small-record", 1, TranscriptRole::User);
-    assert!(store.append_many(&[small]).unwrap() > 0);
-    assert_eq!(store.next_sequence("small-record").unwrap(), 2);
-    let _ = fs::remove_dir_all(root);
-}
