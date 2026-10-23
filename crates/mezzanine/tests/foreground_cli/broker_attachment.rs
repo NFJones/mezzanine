@@ -105,6 +105,10 @@ fn serve_frontend(
 
 /// Launches the real new-session command on an independently owned PTY.
 fn spawn_client(root: &Path, home: &Path, runtime: &Path, name: &str) -> ForegroundProcess {
+    // Establish ownership of the exact storage this fixture will remove before any
+    // live resource exists, so a filesystem failure cannot strand a child.
+    let owned_root = root.join(name);
+    fs::create_dir_all(&owned_root).unwrap();
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -157,7 +161,12 @@ fn spawn_client(root: &Path, home: &Path, runtime: &Path, name: &str) -> Foregro
         writer: Some(writer),
         output_rx,
         reader_thread: Some(reader_thread),
-        root: root.join(name),
+        root: owned_root,
+        writer_worker: None,
+        writer_obligation: None,
+        fail_writer_handoff: false,
+        park_writer_worker: false,
+        writer_park_release: None,
     }
 }
 
@@ -269,8 +278,10 @@ fn foreground_new_reuses_live_broker_for_independent_frontends() {
     assert!(!client.join("endpoint.key").exists());
     assert!(String::from_utf8_lossy(&first_output).contains("\x1b[?1049l"));
     assert!(String::from_utf8_lossy(&second_output).contains("\x1b[?1049l"));
-    drop(first);
-    drop(second);
+    // Both real frontends must release their exact child, reader and storage.
+    // A plain drop could only do this silently and without a bound.
+    assert_eq!(first.retire(), super::FixtureCleanup::Retired);
+    assert_eq!(second.retire(), super::FixtureCleanup::Retired);
     server.join().unwrap();
     fs::remove_dir_all(root).unwrap();
 }
