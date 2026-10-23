@@ -8449,3 +8449,18 @@ fn transcript_sequence_allocation_reads_large_complete_records() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// A final row whose recorded conversation differs from the requested one must
+/// not authorize the next sequence.
+#[test]
+fn transcript_sequence_allocation_rejects_a_foreign_final_row() {
+    let root = temp_root("sequence-foreign-row");
+    let store = AgentTranscriptStore::new(root.clone());
+    let foreign = entry("other-conversation", 7, TranscriptRole::User);
+    let path = store.transcript_path("wanted-conversation").unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, encode_transcript_entry(&foreign).unwrap()).unwrap();
+    let error = store.next_sequence("wanted-conversation").unwrap_err();
+    assert_eq!(error.kind(), crate::MezErrorKind::InvalidState);
+    let _ = fs::remove_dir_all(root);
+}
