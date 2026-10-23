@@ -1262,6 +1262,10 @@ impl AgentTranscriptStore {
     ///
     /// A malformed, mismatched, unsupported, or oversized sidecar is an error;
     /// callers must not silently replay only a shortened transcript suffix.
+    ///
+    /// This read takes no lock and is meant for callers that already own the
+    /// conversation lock. Unlocked callers that need a snapshot consistent with
+    /// concurrent appends use [`Self::compaction_epoch_coherent`].
     pub fn compaction_epoch(
         &self,
         conversation_id: &str,
@@ -1319,6 +1323,19 @@ impl AgentTranscriptStore {
             validate_compaction_range_sources(&epoch.ranges, &self.inspect(conversation_id)?)?;
         }
         Ok(Some(epoch))
+    }
+
+    /// Reads the compaction epoch under the conversation lock.
+    ///
+    /// Unlocked callers that need a snapshot consistent with concurrent appends
+    /// use this entry point. The reader itself takes no second lock, so the
+    /// write path's transaction that already owns the lock is unaffected.
+    pub fn compaction_epoch_coherent(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<super::types::AgentCompactionEpoch>> {
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        self.compaction_epoch(conversation_id)
     }
 
     /// Atomically commits the summary and the highest transcript sequence it replaces.
