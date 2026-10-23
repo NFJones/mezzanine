@@ -9902,6 +9902,13 @@ pane-local replay counts or optional memory records. Epoch publication MUST
 NOT truncate the append-only transcript. A corrupt required epoch or failed
 publication MUST be reported visibly rather than presenting a shortened raw
 suffix without its summary.
+Durable transcript records MUST be treated as unbounded in size. Sequence
+allocation and every other record-boundary lookup MUST locate the final complete
+record from the durable bytes themselves - a newline-terminated framing check
+plus a bounded backward scan - and MUST NOT infer completeness from a
+context-preview byte window. A single valid record larger than any preview
+budget MUST still allocate its successor, and such a lookup MUST NOT claim
+sequence reservation or lock coherence it does not hold.
 Content-only transcript edits MUST be refused for every row represented by the
 committed prefix or any inclusive selective range. The authoritative store MUST
 recheck current epoch coverage under the conversation write lock at SAVE, even
