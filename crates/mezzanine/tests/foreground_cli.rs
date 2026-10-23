@@ -1555,25 +1555,41 @@ fn spawn_foreground_serve(
     command.arg("--attach-primary");
     command.arg("--no-aux-sockets");
 
-    let child = pair.slave.spawn_command(command).unwrap();
+    // Acquire the fallible PTY plumbing and the reader thread BEFORE the
+    // frontend child exists. Starting the child first left a running process
+    // with no cleanup guard when reader/writer acquisition or thread
+    // construction failed.
     let mut reader = pair.master.try_clone_reader().unwrap();
     let writer = pair.master.take_writer().unwrap();
-    drop(pair.slave);
     let (output_tx, output_rx) = mpsc::channel();
-    let reader_thread = thread::spawn(move || {
-        let mut buffer = [0u8; 4096];
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => {
-                    if output_tx.send(buffer[..read].to_vec()).is_err() {
-                        break;
+    let reader_thread = thread::Builder::new()
+        .name("foreground-serve-reader".to_string())
+        .spawn(move || {
+            let mut buffer = [0u8; 4096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        if output_tx.send(buffer[..read].to_vec()).is_err() {
+                            break;
+                        }
                     }
+                    Err(_) => break,
                 }
-                Err(_) => break,
             }
+        })
+        .unwrap();
+    let child = match pair.slave.spawn_command(command) {
+        Ok(child) => child,
+        Err(error) => {
+            // No child owns the PTY. Close the slave so the already-started
+            // reader observes EOF, then wait for it before the failure escapes.
+            drop(pair.slave);
+            let _ = reader_thread.join();
+            panic!("foreground serve fixture child spawn failed: {error}");
         }
-    });
+    };
+    drop(pair.slave);
 
     ForegroundProcess {
         child,
@@ -1644,25 +1660,37 @@ fn spawn_foreground_attach_with_terminal_size(
     command.arg(socket.as_os_str());
     command.arg("attach");
 
-    let child = pair.slave.spawn_command(command).unwrap();
+    // Same ownership order as the serve fixture: plumbing and the reader exist
+    // before the child, so a setup failure can never strand a live frontend.
     let mut reader = pair.master.try_clone_reader().unwrap();
     let writer = pair.master.take_writer().unwrap();
-    drop(pair.slave);
     let (output_tx, output_rx) = mpsc::channel();
-    let reader_thread = thread::spawn(move || {
-        let mut buffer = [0u8; 4096];
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => {
-                    if output_tx.send(buffer[..read].to_vec()).is_err() {
-                        break;
+    let reader_thread = thread::Builder::new()
+        .name("foreground-attach-reader".to_string())
+        .spawn(move || {
+            let mut buffer = [0u8; 4096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        if output_tx.send(buffer[..read].to_vec()).is_err() {
+                            break;
+                        }
                     }
+                    Err(_) => break,
                 }
-                Err(_) => break,
             }
+        })
+        .unwrap();
+    let child = match pair.slave.spawn_command(command) {
+        Ok(child) => child,
+        Err(error) => {
+            drop(pair.slave);
+            let _ = reader_thread.join();
+            panic!("foreground attach fixture child spawn failed: {error}");
         }
-    });
+    };
+    drop(pair.slave);
 
     ForegroundProcess {
         child,
