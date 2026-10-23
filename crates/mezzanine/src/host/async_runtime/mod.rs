@@ -97,6 +97,17 @@ pub(crate) struct AsyncPaneCertificationSnapshot {
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod actor;
+
+/// Reports whether one actor-origin error is transient side-effect capacity
+/// pressure that did not consume any deferred work.
+///
+/// Supervised services may defer and retry this condition through their normal
+/// wakeup ownership instead of failing the service and tearing down unrelated
+/// panes. Failures carrying applied/consumed work are never retryable because a
+/// retry cannot restore work the actor already drained.
+pub(crate) fn error_is_retryable_side_effect_capacity(error: &crate::MezError) -> bool {
+    actor::retryable_side_effect_capacity(error)
+}
 /// Exposes the actor types module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

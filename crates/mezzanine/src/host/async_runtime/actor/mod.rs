@@ -80,3 +80,11 @@ pub(super) mod routes;
 
 #[cfg(test)]
 mod tests;
+/// Re-exports the pre-application side-effect capacity classifier.
+///
+/// The async-runtime boundary uses this so supervised services can defer a
+/// transient queue-full rejection instead of failing the service. Work that
+/// already consumed a destructive drain is deliberately excluded.
+pub(super) fn retryable_side_effect_capacity(error: &crate::MezError) -> bool {
+    queue::is_retryable_side_effect_queue_full_error(error)
+}

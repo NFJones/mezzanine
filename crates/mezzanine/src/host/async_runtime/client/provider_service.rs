@@ -321,12 +321,25 @@ where
                 .drain_agent_provider_dispatch_side_effects(config.max_tasks_per_poll)
                 .await?;
             if dispatches.is_empty() {
-                handle
+                match handle
                     .queue_provider_poll_timer_if_needed(
                         report.polls.saturating_add(1),
                         config.provider_poll_fallback_delay_ms(),
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(_queued) => {}
+                    // The optional fallback poll is schedule-only work. When
+                    // unrelated effects transiently fill the bounded queue, a
+                    // pre-application rejection must not fail the provider
+                    // service: the idle wakeup below retries scheduling without
+                    // starting a duplicate provider request.
+                    Err(error)
+                        if crate::host::async_runtime::error_is_retryable_side_effect_capacity(
+                            &error,
+                        ) => {}
+                    Err(error) => return Err(error),
+                }
             }
             if dispatches.is_empty() {
                 report.idle_polls = report.idle_polls.saturating_add(1);
