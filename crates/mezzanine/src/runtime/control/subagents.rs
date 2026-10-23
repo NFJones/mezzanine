@@ -1996,7 +1996,7 @@ impl RuntimeSessionService {
             source_entries
         } else {
             store
-                .compaction_epoch(&source_conversation_id)
+                .compaction_epoch_coherent(&source_conversation_id)
                 .map_err(|error| {
                     if error.kind() == crate::error::MezErrorKind::NotFound {
                         MezError::invalid_state("required transcript archive is missing")
