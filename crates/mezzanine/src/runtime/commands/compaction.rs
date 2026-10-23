@@ -298,7 +298,7 @@ impl RuntimeSessionService {
         }
         self.persistence
             .cloned_transcript_store()
-            .map(|store| store.compaction_epoch_coherent(&task.conversation_id))
+            .map(|store| store.compaction_epoch(&task.conversation_id))
             .transpose()
             .map(Option::flatten)
     }
@@ -422,7 +422,7 @@ impl RuntimeSessionService {
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(None);
         };
-        let previous = store.compaction_epoch_coherent(&task.conversation_id)?;
+        let previous = store.compaction_epoch(&task.conversation_id)?;
         let boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
         if matches!(&task.target, RuntimeAgentCompactionTarget::ActiveTurn {
             staged: Some(state), ..
@@ -2563,7 +2563,7 @@ impl RuntimeSessionService {
         let retained_count = usize::try_from(retained_count).unwrap_or(usize::MAX);
         let first_retained = entries.len().saturating_sub(retained_count);
         let retained_entries = &entries[first_retained..];
-        let previous_epoch = store.compaction_epoch_coherent(&task.conversation_id)?;
+        let previous_epoch = store.compaction_epoch(&task.conversation_id)?;
         let boundary = task.compacted_through_sequence.unwrap_or_else(|| {
             previous_epoch
                 .as_ref()
@@ -2756,7 +2756,7 @@ impl RuntimeSessionService {
             summary,
         );
         if let Some(store) = self.persistence.cloned_transcript_store() {
-            let previous = store.compaction_epoch_coherent(&task.conversation_id)?;
+            let previous = store.compaction_epoch(&task.conversation_id)?;
             let previous_boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
             let boundary = task.compacted_through_sequence.unwrap_or(previous_boundary);
             if let Some(projection) = projection {
