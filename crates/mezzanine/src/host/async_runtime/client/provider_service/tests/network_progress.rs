@@ -261,3 +261,38 @@ async fn outer_progress_ready_terminal_wins_over_ready_snapshot() {
     .await;
     assert_eq!(result, 23);
 }
+
+/// A consumed progress refusal is observed once but cannot replace the network
+/// outcome or replay its applied batch. Completion remains the sole authority;
+/// closing progress after rejection neither spins nor manufactures completion.
+#[tokio::test]
+async fn outer_progress_consumed_refusal_preserves_network_outcome() {
+    let feedback = ExecutorProgressFeedback::new(ExecutorProgressFamily::ExternalAction);
+    let (sender, receiver) = watch::channel(None);
+    sender.send_replace(Some("PRIVATE_SOURCE_CANARY".into()));
+    let (finish, completion) = tokio::sync::oneshot::channel::<u8>();
+    let mut finish = Some(finish);
+    let calls = AtomicUsize::new(0);
+    tokio::pin!(completion);
+    let result =
+        drive_external_network_with_progress(completion.as_mut(), receiver, |source, revision| {
+            assert_eq!(source, "PRIVATE_SOURCE_CANARY");
+            assert_eq!(revision, 1);
+            let finish = finish.take().expect("one progress snapshot");
+            let feedback = &feedback;
+            let calls = &calls;
+            async move {
+                submit_executor_progress(feedback, || {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    std::future::ready::<Result<()>>(Err(MezError::invalid_state(
+                        "async runtime side-effect queue is full consumed=1 applied=0",
+                    )))
+                })
+                .await;
+                finish.send(37).unwrap();
+            }
+        })
+        .await;
+    assert_eq!(result.unwrap(), 37);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}

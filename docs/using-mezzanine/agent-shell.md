@@ -279,6 +279,14 @@ unrelated deferred runtime work. Under queue pressure that work stays with its
 service owner for an authoritative transfer; preview arrival is not delivery
 evidence. Confirmed mutation sections and action completion are not provisional
 and retain their separate settlement obligations.
+Executor progress failures produce at most one payload-free stderr diagnostic
+per execution, including cancellation. It distinguishes exhausted unapplied
+capacity refusals, consumed-or-unknown failures, and dropped unacknowledged
+submissions using fixed family/count fields only. A missing acknowledgment does
+not prove the actor did nothing. Successful progress (including a recovered safe
+retry) stays quiet; the diagnostic neither replaces the settled action result
+nor proves recovery of refused effects. Network completion does not wait for a
+held preview acknowledgment or flush obsolete preview snapshots.
 Authoritative transfers take only the deferred dispatches that fit the finite
 transient reserve. Excess dispatches stay at their original service owners and
 transfer as workers drain capacity, without another user event or action replay.

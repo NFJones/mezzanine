@@ -11889,6 +11889,20 @@ stays fatal to its owner and MUST NOT be reported as recoverable capacity
 pressure, and terminating panes or the session MUST NOT be used to recover from
 transient admission pressure.
 
+Native-shell and approved-network progress forwarding MUST observe terminal
+ingress feedback rather than silently discard it. Each execution MUST retain
+only fixed-size, saturating reason counts and emit at most one payload-free
+stderr diagnostic on retirement, including cancellation: exhausted proven
+unapplied capacity refusals, consumed-or-unknown failures, and submissions dropped
+while awaiting acknowledgment are distinct. Interim safe retries followed by
+success remain quiet. An unacknowledged drop MUST NOT claim non-application or
+rollback; cancelling a known-unapplied retry delay alone is not a lost
+acknowledgment. Diagnostics MUST contain only a fixed executor family and counts,
+not source, action/turn identifiers, error text, paths or credentials. They MUST
+NOT replace authoritative execution outcomes, authorize replay or claim custody
+recovery. Network completion/deadline/cancellation MUST remain independent of a
+held progress acknowledgment; no obsolete preview tail flush may delay it.
+
 Committed-effect admission is a separate custody boundary from producer retry.
 Nonempty batches containing only provisional provider, native-shell-output or
 external-read progress MUST NOT drain unrelated service-owned deferred effects.

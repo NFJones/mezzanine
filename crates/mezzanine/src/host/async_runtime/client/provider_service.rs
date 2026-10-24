@@ -29,6 +29,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
+mod executor_progress;
+use executor_progress::{
+    ExecutorProgressFamily, ExecutorProgressFeedback, submit_executor_progress,
+};
+
 /// Maximum ordered streaming events buffered between a provider and the actor.
 const STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY: usize = 32;
 /// Maximum progress events submitted in one actor request after provider completion.
@@ -778,34 +783,16 @@ async fn submit_authoritative_runtime_event(
     }
 }
 
-/// Submits one optional progress batch, retrying only transient capacity
-/// pressure.
-///
-/// Executor progress is reconstructible presentation rather than authoritative
-/// completion, so a persistent rejection stays non-fatal to the provider
-/// service. A transient pre-application queue-full rejection is retried with the
-/// same batch instead of being dropped, which is what previously let unrelated
-/// queue pressure discard executor previews.
-async fn submit_optional_progress_batch(
+/// Submits original executor progress with bounded payload-free feedback.
+/// Confirmed sections may carry publication obligations, so terminal consumed
+/// or unknown errors must remain distinguishable from unapplied preview refusal.
+/// Neither kind may replace authoritative completion or replay an applied batch.
+async fn submit_executor_progress_batch(
     handle: &AsyncRuntimeSessionHandle,
     batch: RuntimeEventBatch,
+    feedback: &ExecutorProgressFeedback,
 ) {
-    let mut attempts = 0usize;
-    loop {
-        match handle.submit_runtime_events(batch.clone()).await {
-            Ok(_ingress) => return,
-            Err(error)
-                if attempts < AUTHORITATIVE_EVENT_CAPACITY_RETRY_ATTEMPTS
-                    && crate::host::async_runtime::error_is_retryable_side_effect_capacity(
-                        &error,
-                    ) =>
-            {
-                attempts = attempts.saturating_add(1);
-                tokio::time::sleep(AUTHORITATIVE_EVENT_CAPACITY_RETRY_DELAY).await;
-            }
-            Err(_) => return,
-        }
-    }
+    submit_executor_progress(feedback, || handle.submit_runtime_events(batch.clone())).await;
 }
 
 /// Records one completed provider worker and applies its runtime event.
@@ -1091,6 +1078,7 @@ async fn execute_native_shell_action(
     handle: AsyncRuntimeSessionHandle,
     dispatch: RuntimeNativeShellDispatch,
 ) -> Result<AsyncAgentProviderWorkerResult> {
+    let progress_feedback = ExecutorProgressFeedback::new(ExecutorProgressFamily::NativeShell);
     let turn_id = dispatch.turn_id.clone();
     let action_id = dispatch.action_id.clone();
     let marker = dispatch.marker.clone();
@@ -1164,7 +1152,7 @@ async fn execute_native_shell_action(
                 }
                 confirmed_patch_sections = progress.confirmed_patch_sections.len();
                 if !batch.events.is_empty() {
-                    submit_optional_progress_batch(&handle, batch).await;
+                    submit_executor_progress_batch(&handle, batch, &progress_feedback).await;
                 }
             }
         }
@@ -1216,7 +1204,7 @@ async fn execute_native_shell_action(
             ));
         }
         if !batch.events.is_empty() {
-            submit_optional_progress_batch(&handle, batch).await;
+            submit_executor_progress_batch(&handle, batch, &progress_feedback).await;
         }
     }
     let outcome = match joined {
@@ -1260,6 +1248,7 @@ async fn execute_approved_external_action_inner(
     handle: AsyncRuntimeSessionHandle,
     dispatch: RuntimeApprovedExternalActionDispatch,
 ) -> Result<AsyncAgentProviderWorkerResult> {
+    let progress_feedback = ExecutorProgressFeedback::new(ExecutorProgressFamily::ExternalAction);
     let RuntimeApprovedExternalActionDispatch {
         turn,
         action,
@@ -1323,7 +1312,7 @@ async fn execute_approved_external_action_inner(
                         ),
                     },
                 ));
-                handle.submit_runtime_events(batch)
+                submit_executor_progress_batch(&handle, batch, &progress_feedback)
             },
         )
         .await;
@@ -1347,8 +1336,9 @@ async fn execute_approved_external_action_inner(
 /// the watch retains only the latest cumulative source while that ingress is
 /// pending. No watch borrow survives an await and no detached task is spawned.
 /// Terminal network readiness wins over optional progress and drops a pending
-/// submission without flushing obsolete snapshots. Already queued actor work
-/// still relies on the actor's exact-attempt/revision/Running guards.
+/// submission without flushing obsolete snapshots. The submission owner records
+/// an unacknowledged drop without claiming non-application. Already queued actor
+/// work still relies on the actor's exact-attempt/revision/Running guards.
 /// The concrete caller must own/pin network work in the same cancellation
 /// scope: dropping this borrowing helper alone does not drop that work. Branch
 /// exit drops the owner before authoritative actor completion is awaited.
@@ -1360,7 +1350,7 @@ async fn drive_external_network_with_progress<T, Network, Submit, Submission>(
 where
     Network: Future<Output = T> + ?Sized,
     Submit: FnMut(String, u64) -> Submission,
-    Submission: Future,
+    Submission: Future<Output = ()>,
 {
     let forward = async {
         let mut revision = 0_u64;
@@ -1370,7 +1360,7 @@ where
                 continue;
             };
             revision = revision.saturating_add(1);
-            let _ = submit(source, revision).await;
+            submit(source, revision).await;
         }
     };
     tokio::pin!(forward);
