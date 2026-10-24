@@ -98,6 +98,13 @@ or weaken production ownership/mode checks to admit an unsafe fixture. Test
 alternate umasks only in isolated child processes; negative permission tests
 must keep their deliberately unsafe nodes unchanged.
 
+Optional real-Fish fixtures resolve a concrete installed file before launching
+it. An unsearchable PATH directory alone is not evidence that Fish exists;
+permission refusal for a selected file is still a test failure. Existing
+optional runners treat exec NotFound, including a removed candidate or missing
+interpreter, as unavailable. This discovery does not replace the required-shell
+managed acceptance suite.
+
 The optional `just test-real-bubblewrap` acceptance test requires Linux and a
 working Bubblewrap environment. Run it when a change affects the real
 confinement path. `just test-real-seatbelt` requires macOS and executable

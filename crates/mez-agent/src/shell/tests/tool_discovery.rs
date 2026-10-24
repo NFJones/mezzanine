@@ -5,6 +5,59 @@
 
 use super::*;
 
+/// Optional Fish checks must not confuse an unsearchable PATH component with
+/// an installed shell that failed to execute. Run the real parser fixture in
+/// child-local environments: a denied search directory must remain optional,
+/// while a concrete nonexecutable Fish file must still fail loudly. Neither
+/// case mutates the parallel parent's PATH or probes a user startup file.
+#[test]
+fn optional_fish_discovery_distinguishes_denied_search_from_selected_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = test_temp_dir("fish-denied-search");
+    let denied = root.join("denied");
+    std::fs::create_dir(&denied).unwrap();
+    std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let denied_witness = Command::new("fish").env("PATH", &denied).output();
+    let mut parser = Command::new(std::env::current_exe().unwrap());
+    parser.args([
+        "--exact",
+        "shell::tests::shell_transport::non_stateful_fish_wrappers_parse_as_complete_programs",
+        "--quiet",
+    ]);
+    let denied_output = parser.env("PATH", &denied).output();
+    std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let selected = root.join("fish");
+    std::fs::write(&selected, b"not executable").unwrap();
+    std::fs::set_permissions(&selected, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let selected_output = parser.env("PATH", &root).output();
+    std::fs::remove_dir_all(root).unwrap();
+
+    let selected_output = selected_output.unwrap();
+    assert!(!selected_output.status.success(), "{selected_output:?}");
+    assert!(
+        String::from_utf8_lossy(&selected_output.stdout)
+            .contains("the Fish parser process should spawn"),
+        "a selected nonexecutable shell must not be silently skipped: {selected_output:?}"
+    );
+    // Privileged test users may search mode000 directories. Do not claim the
+    // denied-search oracle was exercised unless the kernel supplied EACCES.
+    if denied_witness.as_ref().err().map(std::io::Error::kind)
+        != Some(std::io::ErrorKind::PermissionDenied)
+    {
+        eprintln!("denied-search control unavailable for this test user");
+        return;
+    }
+    let denied_output = denied_output.unwrap();
+    assert!(denied_output.status.success(), "{denied_output:?}");
+    assert!(
+        String::from_utf8_lossy(&denied_output.stdout)
+            .contains("test result: ok. 1 passed; 0 failed"),
+        "the exact parser fixture must execute: {denied_output:?}"
+    );
+}
+
 #[test]
 /// Verifies discovery script uses shell command lookup.
 ///
@@ -33,6 +86,10 @@ fn fish_discovery_preserves_version_producer_status() {
     use std::os::unix::fs::PermissionsExt as _;
     use std::time::Instant;
 
+    let Some(fish_path) = fish_path_for_tests() else {
+        eprintln!("skipping real-Fish discovery assertion because fish is unavailable");
+        return;
+    };
     let temp = test_temp_dir("fish-tool-version-status");
     for (tool, version, status) in [
         ("sed", "failing sed 1.0", 37),
@@ -57,7 +114,7 @@ fn fish_discovery_preserves_version_producer_status() {
     probe_paths.extend(std::env::split_paths(&inherited_path));
     let probe_path =
         std::env::join_paths(&probe_paths).expect("the Fish probe PATH should be valid");
-    let mut child = match std::process::Command::new("fish")
+    let mut child = match std::process::Command::new(&fish_path)
         .args(["--no-config", "-c", fish_tool_discovery_script()])
         .env("PATH", probe_path)
         .stdout(std::process::Stdio::piped())

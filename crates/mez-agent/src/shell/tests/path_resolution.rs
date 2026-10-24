@@ -211,14 +211,14 @@ fn fish_path_resolution_uses_only_absolute_python_candidates() {
 /// protocol record that can be parsed into pane-local path evidence.
 #[test]
 fn fish_path_resolution_executes_and_emits_protocol_output() {
-    if Command::new("fish").arg("--version").output().is_err() {
+    let Some(fish_path) = fish_path_for_tests() else {
         eprintln!("skipping real-Fish path-resolution assertion because fish is unavailable");
         return;
-    }
+    };
     let request =
         PanePathResolutionRequest::new(vec![".".to_string()], Vec::new(), Vec::new()).unwrap();
     let command = pane_path_resolution_command(&request, ShellClassification::Fish).unwrap();
-    let output = Command::new("fish")
+    let output = Command::new(&fish_path)
         .args(["--no-config", "-c", &command])
         .output()
         .unwrap();

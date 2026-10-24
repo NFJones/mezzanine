@@ -450,12 +450,16 @@ mod tests {
     /// Parses a complete generated wrapper with a real Fish process under a
     /// finite deadline, or returns `None` when Fish is not installed.
     fn parse_fish_wrapper(wrapper: &str) -> Option<Output> {
-        let mut command = Command::new("fish");
+        let mut command = Command::new(fish_path_for_tests()?);
         command.args(["--no-config", "--no-execute"]);
         run_optional_command_stdin_bounded(&mut command, wrapper, "Fish parser")
     }
 
-    /// Resolves a real Fish executable for bounded execution tests.
+    /// Resolves a concrete Fish file before optional execution. Bare-name exec
+    /// can return EACCES for an unsearchable PATH component even when Fish is
+    /// absent. PermissionDenied for a selected file remains a test failure.
+    /// Existing optional runners still treat exec NotFound (including a removed
+    /// candidate or missing interpreter) as unavailable.
     fn fish_path_for_tests() -> Option<PathBuf> {
         std::env::var_os("PATH")
             .into_iter()

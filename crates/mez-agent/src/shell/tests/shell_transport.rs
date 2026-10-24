@@ -831,6 +831,10 @@ fn fish_wrappers_complete_only_after_deterministic_cleanup() {
 /// Success and failure commands are both exercised because cleanup must use
 /// the saved command status without allowing that status to skip restoration.
 fn fish_stateful_cleanup_restores_private_mode_for_success_and_failure() {
+    let Some(fish_path) = fish_path_for_tests() else {
+        eprintln!("skipping real-Fish cleanup assertion because fish is unavailable");
+        return;
+    };
     for (setup, expected_state) in [
         ("set -e fish_private_mode", "__MEZ_STATE__unset"),
         (
@@ -856,7 +860,7 @@ fn fish_stateful_cleanup_restores_private_mode_for_success_and_failure() {
             let script = format!(
                 "{setup}\n{wrapper}\nif set -q fish_private_mode\n  printf '__MEZ_STATE__set count=%s length=%s\\n' (count $fish_private_mode) (string length -- \"$fish_private_mode\")\nelse\n  printf '__MEZ_STATE__unset\\n'\nend\n"
             );
-            let mut fish = Command::new("fish");
+            let mut fish = Command::new(&fish_path);
             fish.arg("--no-config");
             let Some(output) =
                 run_optional_command_stdin_bounded(&mut fish, &script, "Fish cleanup probe")
@@ -886,6 +890,10 @@ fn fish_stateful_cleanup_restores_private_mode_for_success_and_failure() {
 /// Cleanup must not broaden a wrapper-owned record into a prefix deletion,
 /// because the latter both prompts and can select unrelated user commands.
 fn fish_exact_history_cleanup_preserves_similarly_prefixed_user_record() {
+    let Some(fish_path) = fish_path_for_tests() else {
+        eprintln!("skipping real-Fish history assertion because fish is unavailable");
+        return;
+    };
     let temp = test_temp_dir("fish-exact-history-cleanup");
     let fish_data = temp.join("fish");
     std::fs::create_dir_all(&fish_data).expect("the Fish data directory should be created");
@@ -906,7 +914,7 @@ fn fish_exact_history_cleanup_preserves_similarly_prefixed_user_record() {
         .expect("Fish cleanup should begin with exact history deletion")
         .to_string();
     let cleanup = format!("set -g fish_history mez_cleanup; {exact_delete}; builtin history save");
-    let mut fish = Command::new("fish");
+    let mut fish = Command::new(&fish_path);
     fish.args(["--no-config", "-c", &cleanup])
         .env("XDG_DATA_HOME", &temp);
     let Some(output) =
@@ -1992,10 +2000,10 @@ fn typed_child_launch_bounds_long_posix_argument_lines() {
 /// command-substitution-like literals in addition to a long repeated value.
 /// Real Fish execution proves source chunking does not split or evaluate argv.
 fn typed_child_launch_bounds_fish_lines_and_preserves_argv() {
-    if Command::new("fish").arg("--version").output().is_err() {
+    let Some(fish_path) = fish_path_for_tests() else {
         eprintln!("skipping real-Fish argv assertion because fish is unavailable");
         return;
-    }
+    };
 
     let long_argument = "sandbox-path-segment:".repeat(200);
     let launch = ShellChildLaunch::new(
@@ -2046,7 +2054,7 @@ fn typed_child_launch_bounds_fish_lines_and_preserves_argv() {
         "set -l MEZ_COMMAND_FILE {}\n{launch_words}\n",
         fish_quote(&command_file.to_string_lossy())
     );
-    let mut fish = Command::new("fish");
+    let mut fish = Command::new(&fish_path);
     fish.args(["--no-config", "-c", &source]);
     let output = run_optional_command_stdin_bounded(&mut fish, "", "Fish typed child launch")
         .expect("Fish availability was checked before executing the typed launch");
