@@ -11890,6 +11890,12 @@ pressure, and terminating panes or the session MUST NOT be used to recover from
 transient admission pressure.
 
 Committed-effect admission is a separate custody boundary from producer retry.
+Nonempty batches containing only provisional provider, native-shell-output or
+external-read progress MUST NOT drain unrelated service-owned deferred effects.
+Those effects retain their original service owner for authoritative transfer;
+a preview's arrival is not permission to consume them. Confirmed mutation
+sections and batches mixed with authoritative completions are not provisional
+and MUST retain their ordinary committed-effect admission semantics.
 Once an event batch has applied its events, the side effects it produced MUST NOT
 be destroyed by a capacity refusal: the actor MUST admit them to their ordinary
 lanes within a bounded reserve above the configured capacity, in the same

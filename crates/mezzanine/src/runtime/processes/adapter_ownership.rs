@@ -174,6 +174,15 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Seeds deferred dispatch custody without starting a process in actor tests.
+    ///
+    /// The supplied effect is never execution or process-identity evidence; tests
+    /// must inspect its transfer rather than dispatch it to a native worker.
+    #[cfg(test)]
+    pub(crate) fn queue_deferred_pane_input_for_tests(&mut self, effect: RuntimeSideEffect) {
+        self.persistence.queue_pane_input(effect);
+    }
+
     /// Reports whether an external adapter owns the pane's PTY/process handle.
     pub fn pane_process_is_adapter_owned(&self, pane_id: &str) -> bool {
         self.process.detached_pane_processes.contains_key(pane_id)

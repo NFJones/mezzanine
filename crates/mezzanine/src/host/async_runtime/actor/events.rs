@@ -181,19 +181,25 @@ impl AsyncRuntimeSessionActor {
         batch: RuntimeEventBatch,
     ) -> Result<RuntimeEventIngressReport> {
         let batch_started = std::time::Instant::now();
-        // Provisional provider events update presentation or wire accounting,
+        // Provisional progress events update presentation or wire accounting,
         // not the ownership of unrelated deferred work. Leave that work with
         // its service owner for the next authoritative event instead of taking
         // it into an optional ingress batch that may be rejected under pressure.
-        let provisional_provider_batch = !batch.events.is_empty()
-            && batch.events.iter().all(|event| {
-                matches!(
-                    event,
-                    RuntimeEvent::AgentProvider(
-                        AgentProviderEvent::StreamingSay { .. }
-                            | AgentProviderEvent::WireRequestObserved { .. }
-                    )
-                )
+        // Confirmed mutation sections are not previews and keep authoritative
+        // admission even when the rest of the batch is provisional.
+        let provisional_progress_batch = !batch.events.is_empty()
+            && batch.events.iter().all(|event| match event {
+                RuntimeEvent::AgentProvider(
+                    AgentProviderEvent::StreamingSay { .. }
+                    | AgentProviderEvent::WireRequestObserved { .. },
+                ) => true,
+                RuntimeEvent::NativeShellProgress(progress) => {
+                    progress.presentation.component.is_provisional()
+                }
+                RuntimeEvent::ApprovedExternalActionProgress(progress) => {
+                    progress.presentation.component.is_provisional()
+                }
+                _ => false,
             });
         let mut report = batch.ingress_report();
         let mut registry_persistence_queued = false;
@@ -221,7 +227,7 @@ impl AsyncRuntimeSessionActor {
                 .saturating_add(application.side_effects.len());
             self.admit_applied_event_side_effects(
                 application.side_effects,
-                provisional_provider_batch,
+                provisional_progress_batch,
             )
             .map_err(|error| runtime_event_queue_error_with_applied(error, report.applied))?;
         }
@@ -257,7 +263,7 @@ impl AsyncRuntimeSessionActor {
                 .runtime_event_global_reconciliation_skipped
                 .saturating_add(1);
         }
-        if !provisional_provider_batch {
+        if !provisional_progress_batch {
             batch_side_effects.extend(self.deferred_service_side_effects_from_service());
         }
         registry_persistence_queued = registry_persistence_queued

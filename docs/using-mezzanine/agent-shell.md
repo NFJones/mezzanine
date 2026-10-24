@@ -274,6 +274,12 @@ before relying on an action. A confirmed file-mutation section proves that
 section's effect, not whole-action success; a later failure does not imply
 rollback.
 
+Provisional shell-output and external-read previews do not take ownership of
+unrelated deferred runtime work. Under queue pressure that work stays with its
+service owner for an authoritative transfer; preview arrival is not delivery
+evidence. Confirmed mutation sections and action completion are not provisional
+and retain their separate settlement obligations.
+
 Use `/show-context activity` to inspect recent retained action intent, outcomes,
 and bounded result previews. Enter or click a row to open detail; Escape
 returns to the list. `/show-context activity <sequence>` opens the activity

@@ -42,6 +42,138 @@ fn inert_actor(capacity: usize) -> AsyncRuntimeSessionActor {
     actor
 }
 
+/// Provisional executor ingress must not take unrelated service-owned replies.
+///
+/// The lane and its committed reserve are both full. Stale preview identities
+/// deliberately have no execution authority: they must remain inert rather than
+/// draining a terminal reply into a rejected batch. The original reply remains
+/// available exactly once from its existing service owner after capacity drains.
+/// No process, timer worker, or persistence worker is started by this fixture.
+#[tokio::test(flavor = "current_thread")]
+async fn provisional_executor_progress_preserves_service_custody() {
+    for native in [true, false] {
+        let mut actor = inert_actor(1);
+        let occupied = 1 + actor.committed_side_effect_overshoot();
+        actor
+            .admit_committed_side_effects(
+                (0..occupied)
+                    .map(|index| timer_effect(&format!("occupied-{index}")))
+                    .collect(),
+            )
+            .unwrap();
+        actor.service.queue_deferred_pane_input_for_tests(
+            RuntimeSideEffect::WritePaneInputPriority {
+                pane_id: "%1".to_string(),
+                bytes: b"\x1b[3;5R".to_vec(),
+            },
+        );
+        let presentation = mez_agent::ActionPresentationProgress::new(
+            "stale-turn",
+            "stale-action",
+            mez_agent::ActionPresentationExecutionIdentity::Attempt("stale-attempt".into()),
+            1,
+            if native {
+                mez_agent::ActionPresentationComponentIdentity::ShellOutput
+            } else {
+                mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody
+            },
+            "preview",
+        );
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(if native {
+            RuntimeEvent::NativeShellProgress(crate::runtime::RuntimeNativeShellProgress {
+                presentation,
+            })
+        } else {
+            RuntimeEvent::ApprovedExternalActionProgress(
+                crate::runtime::RuntimeApprovedExternalActionProgress { presentation },
+            )
+        });
+        let report = actor.apply_runtime_event_batch(batch).await.unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(actor.drain_timer_side_effects(64).unwrap().len(), occupied);
+        let original = actor.service.drain_pane_io_transition().side_effects;
+        assert_eq!(original.len(), 1, "native={native}: {original:?}");
+        assert!(matches!(
+            &original[0],
+            RuntimeSideEffect::WritePaneInputPriority { bytes, .. }
+                if bytes == b"\x1b[3;5R"
+        ));
+        assert!(
+            actor
+                .service
+                .drain_pane_io_transition()
+                .side_effects
+                .is_empty()
+        );
+    }
+}
+
+/// Confirmed evidence, mixed batches, and empty drains remain authoritative.
+///
+/// Only an entirely provisional nonempty batch may leave service work untouched.
+/// With available capacity, each other shape must transfer the original deferred
+/// dispatch exactly once through its ordinary lane even for stale event owners.
+/// This guards the ownership boundary without executing synthetic dispatches.
+#[tokio::test(flavor = "current_thread")]
+async fn authoritative_progress_shapes_keep_service_transfer() {
+    for shape in ["confirmed-native", "confirmed-external", "mixed", "empty"] {
+        let mut actor = inert_actor(1);
+        actor.service.queue_deferred_pane_input_for_tests(
+            RuntimeSideEffect::WritePaneInputPriority {
+                pane_id: "%1".to_string(),
+                bytes: b"original-reply".to_vec(),
+            },
+        );
+        let mut batch = RuntimeEventBatch::new();
+        if shape != "empty" {
+            let presentation = mez_agent::ActionPresentationProgress::new(
+                "stale-turn",
+                "stale-action",
+                mez_agent::ActionPresentationExecutionIdentity::Attempt("stale-attempt".into()),
+                1,
+                if shape == "mixed" {
+                    mez_agent::ActionPresentationComponentIdentity::ShellOutput
+                } else {
+                    mez_agent::ActionPresentationComponentIdentity::confirmed_mutation(0, "file")
+                },
+                "evidence",
+            );
+            batch.push(if shape == "confirmed-external" {
+                RuntimeEvent::ApprovedExternalActionProgress(
+                    crate::runtime::RuntimeApprovedExternalActionProgress { presentation },
+                )
+            } else {
+                RuntimeEvent::NativeShellProgress(crate::runtime::RuntimeNativeShellProgress {
+                    presentation,
+                })
+            });
+        }
+        if shape == "mixed" {
+            batch.push(RuntimeEvent::Timer(TimerEvent {
+                key: RuntimeTimerKey::new(RuntimeTimerKind::PanePipeHealth, "stale", 1),
+                now_ms: 1,
+            }));
+        }
+        actor.apply_runtime_event_batch(batch).await.unwrap();
+        assert!(
+            actor
+                .service
+                .drain_pane_io_transition()
+                .side_effects
+                .is_empty()
+        );
+        let delivered = actor.drain_runtime_side_effects(64).unwrap();
+        assert_eq!(delivered.len(), 1, "shape={shape}: {delivered:?}");
+        assert!(matches!(
+            &delivered[0],
+            RuntimeSideEffect::WritePaneInputPriority { bytes, .. }
+                if bytes == b"original-reply"
+        ));
+        assert!(actor.drain_runtime_side_effects(64).unwrap().is_empty());
+    }
+}
+
 /// Committed effects reach their ordinary lane instead of being dropped.
 ///
 /// Producer-submitted work still observes the strict capacity verdict, while the
