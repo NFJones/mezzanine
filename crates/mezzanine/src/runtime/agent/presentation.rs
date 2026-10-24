@@ -673,7 +673,10 @@ impl RuntimeSessionService {
         self.flush_ordered_provider_headers(pane_id, execution)
     }
 
-    /// Queues a settled verbose result behind its accepted action header.
+    /// Retains a settled verbose result behind its accepted action header.
+    /// Immutable source and occurrence ownership precede immediate installation;
+    /// installation errors retain that tuple for publication-only recovery.
+    /// This does not commit execution or authorize repeating the action.
     pub(crate) fn queue_ordered_provider_result(
         &mut self,
         pane_id: &str,
@@ -721,24 +724,6 @@ impl RuntimeSessionService {
         {
             return Ok(());
         }
-        if self
-            .presentation
-            .agent_published_provider_headers
-            .contains(&key)
-        {
-            self.append_ordered_activity_result(
-                pane_id,
-                (key.3.as_str(), key.4, None),
-                action,
-                result,
-                &text,
-                self.activity_intent_for_result(pane_id, execution, action),
-            )?;
-            self.presentation
-                .agent_published_provider_results
-                .insert(source_key);
-            return Ok(());
-        }
         if !self
             .presentation
             .agent_queued_provider_results
@@ -750,7 +735,43 @@ impl RuntimeSessionService {
             );
             self.presentation
                 .agent_queued_provider_results
-                .insert(key, (action.clone(), result.clone(), text, entry));
+                .insert(key.clone(), (action.clone(), result.clone(), text, entry));
+        }
+        if self
+            .presentation
+            .agent_published_provider_headers
+            .contains(&key)
+        {
+            let (accepted_action, accepted_result, accepted_text, entry) = self
+                .presentation
+                .agent_queued_provider_results
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| {
+                    crate::error::MezError::invalid_state("accepted result source is unavailable")
+                })?;
+            let entry_id = entry.id.clone();
+            self.with_presentation_entry(pane_id, entry, |service| {
+                service.append_ordered_activity_result(
+                    pane_id,
+                    (key.3.as_str(), key.4, None),
+                    &accepted_action,
+                    &accepted_result,
+                    &accepted_text,
+                    service.activity_intent_for_result(pane_id, execution, &accepted_action),
+                )
+            })?;
+            self.presentation
+                .agent_published_provider_results
+                .insert((key.clone(), accepted_text.clone()));
+            if self
+                .presentation
+                .agent_queued_provider_results
+                .get(&key)
+                .is_some_and(|(_, _, text, entry)| *text == accepted_text && entry.id == entry_id)
+            {
+                self.presentation.agent_queued_provider_results.remove(&key);
+            }
         }
         Ok(())
     }

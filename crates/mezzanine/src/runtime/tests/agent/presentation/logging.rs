@@ -3,6 +3,7 @@
 use super::*;
 
 mod command_acknowledgments;
+mod immediate_results;
 
 /// Accepted queued sources must survive a failure before installation of the
 /// header, either of two distinct commands at one action ordinal, or the result.

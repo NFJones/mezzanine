@@ -4867,6 +4867,12 @@ ordinal. A failed installation MAY receive one bounded presentation-only retry;
 it MUST NOT redispatch an action or provider request. Repeated failure MUST
 remain explicit with the failed source retained, never silently acknowledge
 missing output. Successfully installed components MUST NOT be appended again.
+The already-published-header result path MUST retain the original result source
+and presentation occurrence before attempting immediate installation. Failed
+installation MUST preserve that exact tuple for publication-only recovery;
+a later callback MUST NOT substitute new result bytes or resample its occurrence.
+Successful installation acknowledges only that retained tuple. This publication
+acknowledgment is not canonical execution acceptance or authority to rerun work.
 When one action ordinal retains multiple command entries, each successful
 installation MUST acknowledge only that exact entry before the next command is
 attempted. A later pre-install failure MUST retain the failed entry and remaining
