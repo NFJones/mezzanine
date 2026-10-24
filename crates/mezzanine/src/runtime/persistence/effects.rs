@@ -202,13 +202,10 @@ impl RuntimePersistenceComponent {
 
     /// Queues one transcript or prompt-history persistence effect.
     pub(crate) fn queue_transcript(&mut self, effect: RuntimeSideEffect) {
-        if let RuntimeSideEffect::PersistTranscriptEntries { entries, .. } = &effect
+        if let RuntimeSideEffect::PersistTranscriptEntries { entries, path, .. } = &effect
             && let Some(last) = entries.last()
         {
-            self.set_deferred_transcript_next_sequence(
-                last.conversation_id.clone(),
-                last.sequence.saturating_add(1),
-            );
+            self.reserve_transcript_sequence_at_path(path, &last.conversation_id, last.sequence);
         }
         self.queued_transcript_effects.push(effect);
     }
@@ -298,14 +295,7 @@ impl RuntimePersistenceComponent {
                 }
                 _ => true,
             });
-        if !self
-            .in_flight_transcript_entries
-            .keys()
-            .any(|(owner, _)| owner == conversation_id)
-        {
-            self.deferred_transcript_next_sequences
-                .remove(conversation_id);
-        }
+        self.cancel_transcript_admissions_for_conversation(conversation_id);
     }
 
     /// Queues one archive lifecycle operation unless that conversation already has work pending.
@@ -512,6 +502,9 @@ impl RuntimePersistenceComponent {
         let key = (conversation_id.to_string(), first_sequence);
         if !self.owns_transcript_write_at_path(conversation_id, first_sequence, path, entries) {
             return false;
+        }
+        if let Some(last) = entries.last() {
+            self.observe_committed_transcript_at_path(path, conversation_id, last.sequence);
         }
         if let Some(batches) = self.in_flight_transcript_entries.get_mut(&key) {
             if let Some(position) = batches

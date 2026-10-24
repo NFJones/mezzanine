@@ -80,6 +80,18 @@ impl AsyncRuntimeSessionActor {
         owner: WorkerClaimLease<'_>,
         effects: Vec<RuntimeSideEffect>,
     ) -> Result<bool> {
+        self.admit_worker_claim_lease_with_refusal(owner, effects, |_, _| {})
+    }
+
+    /// The provider caller may qualify its exact negative completion event at
+    /// this actual boundary, before unchanged refusal settlement clears claim
+    /// attribution. Compaction and legacy no-group callers keep the same path.
+    pub(super) fn admit_worker_claim_lease_with_refusal(
+        &mut self,
+        owner: WorkerClaimLease<'_>,
+        effects: Vec<RuntimeSideEffect>,
+        on_refusal: impl FnOnce(&mut crate::runtime::RuntimeSessionService, &MezError),
+    ) -> Result<bool> {
         if !owner.is_current(self) {
             return Ok(false);
         }
@@ -97,9 +109,20 @@ impl AsyncRuntimeSessionActor {
         let Err(error) = admitted else {
             return Ok(true);
         };
+        #[cfg(test)]
+        if let WorkerClaimLease::Provider {
+            turn_id,
+            generation,
+            ..
+        } = &owner
+        {
+            self.service
+                .observe_provider_lease_refusal_for_tests(turn_id, *generation, &error);
+        }
         // No await or worker handoff occurs between recording and this guard.
         // Still check identity explicitly so a future caller cannot settle a replacement.
         if owner.is_current(self) {
+            on_refusal(&mut self.service, &error);
             match owner {
                 WorkerClaimLease::Provider { turn_id, .. } => self
                     .service
@@ -132,6 +155,858 @@ mod tests {
     use crate::host::async_runtime::AsyncRuntimeActorConfig;
     use crate::test_support::runtime::RuntimeServiceFixture;
     use mez_mux::layout::Size;
+
+    /// Chooses real ingress/storage only, never installed owner state.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum HandoffSource {
+        RuntimeOnly,
+        CorrectionRuntimeOnly,
+        CorrectionOriginal,
+        FreshLoop,
+    }
+
+    /// Generated private fixture data, never a preserved worktree/cache path.
+    struct HandoffFixtureRoot(std::path::PathBuf);
+
+    impl Drop for HandoffFixtureRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A real completed RuntimeOnly G1 must survive refusal of its ordinary
+    /// provider continuation's mandatory timer. Setup admits trusted synthetic
+    /// provider output and two serialized external outcomes through production
+    /// APIs; it never forges a claim/group or executes a provider, HTTP/MCP,
+    /// native command, sandbox probe or assessment. The actual actor request
+    /// handles preparation, provisional accounting and capacity refusal. Inspect
+    /// custody BEFORE shutdown; a missing G1 is the desired baseline failure,
+    /// distinct from all readiness, preparation and refusal precondition checks.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_lease_refusal_retains_original_runtime_only_completion() {
+        run_completion_handoff(false, None, HandoffSource::RuntimeOnly).await;
+    }
+
+    /// Free capacity admits one actual lease and carries original chronology
+    /// into the returned dispatch. A second real preparation request must not
+    /// renew the same claimed work or create another claim generation. No
+    /// provider is invoked; every observed effect remains inert fixture data.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_lease_acceptance_hands_off_original_group_once() {
+        run_completion_handoff(true, None, HandoffSource::RuntimeOnly).await;
+    }
+
+    /// An admitted timer followed by an actual pre-dispatch queue fault must
+    /// retain original source without dispatch or renewal. The existing timer
+    /// may become stale after exact failed-claim settlement; it is not restarted.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_post_lease_queue_failure_retains_original_completion() {
+        run_completion_handoff(false, Some("after_lease"), HandoffSource::RuntimeOnly).await;
+    }
+
+    /// Nested original-backing capture cannot remove a still-required live
+    /// consumer context. A fault after entering that consumer stays secondary,
+    /// and duplicate failure ingress must not repeat task/loop/routed effects.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_refusal_context_consumer_failure_keeps_original_source() {
+        run_completion_handoff(false, Some("task_consumer"), HandoffSource::RuntimeOnly).await;
+    }
+
+    /// Actual RuntimeOnly correction transfer must remain a legal next claim.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_correction_runtime_only_accepts_transferred_original() {
+        run_completion_handoff(true, None, HandoffSource::CorrectionRuntimeOnly).await;
+    }
+
+    /// RuntimeOnly refusal needs actual transferred failure source, not absence.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_correction_runtime_only_refusal_retains_transferred_original() {
+        run_completion_handoff(false, None, HandoffSource::CorrectionRuntimeOnly).await;
+    }
+
+    /// Original-store correction carries its actual accepted source to admission.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_correction_original_store_accepts_transferred_original() {
+        run_completion_handoff(true, None, HandoffSource::CorrectionOriginal).await;
+    }
+
+    /// Refusal cannot substitute provider-error source for original-store G1.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_correction_original_store_refusal_retains_transferred_original() {
+        run_completion_handoff(false, None, HandoffSource::CorrectionOriginal).await;
+    }
+
+    /// A real standalone fresh-loop failure restores its parent on this pane.
+    /// Only its private installed receipt can qualify closing old custody.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_refusal_closes_source_after_actual_same_pane_loop_restore() {
+        run_completion_handoff(false, None, HandoffSource::FreshLoop).await;
+    }
+
+    /// A wrong expected argument to the unchanged lower guard rejects without
+    /// binding, rolls back the exact prior snapshot and never installs an ack.
+    #[tokio::test(flavor = "current_thread")]
+    async fn negative_loop_wrong_turn_rejects_without_ack() {
+        run_completion_handoff(false, Some("loop_wrong_turn"), HandoffSource::FreshLoop).await;
+    }
+
+    /// Failure at the metadata reset boundary follows the same full snapshot
+    /// rollback path; the successful exact restore alone is not an install ack.
+    #[tokio::test(flavor = "current_thread")]
+    async fn negative_loop_metadata_reset_failure_rolls_back_without_ack() {
+        run_completion_handoff(false, Some("loop_metadata_reset"), HandoffSource::FreshLoop).await;
+    }
+
+    /// A pre-commit injected error leaves the real cleanup witness untouched,
+    /// rolls back binding/metadata and cannot publish installed success.
+    #[tokio::test(flavor = "current_thread")]
+    async fn negative_loop_cleanup_commit_failure_rolls_back_without_ack() {
+        run_completion_handoff(false, Some("loop_cleanup_commit"), HandoffSource::FreshLoop).await;
+    }
+
+    /// A failure after actual cleanup commit retains its genuine ack. Duplicate
+    /// negative ingress cannot repeat binding or the task consumer.
+    #[tokio::test(flavor = "current_thread")]
+    async fn negative_loop_postcommit_failure_keeps_ack_without_replay() {
+        run_completion_handoff(false, Some("loop_after_commit"), HandoffSource::FreshLoop).await;
+    }
+
+    /// Uses identical real admission/completion setup for refusal and acceptance;
+    /// the refusal oracle remains evaluated on the frozen pre-drain source.
+    async fn run_completion_handoff(
+        accept_lease: bool,
+        fault: Option<&'static str>,
+        source: HandoffSource,
+    ) {
+        use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
+        use crate::host::async_runtime::actor::queue::SIDE_EFFECT_QUEUE_FULL_PREFIX;
+        use crate::runtime::{RuntimeApprovedExternalActionOutcome, RuntimeSessionService};
+        use mez_agent::{
+            ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution, AgentTurnState,
+        };
+
+        let root = HandoffFixtureRoot(std::env::temp_dir().join(format!(
+            "mez-completion-handoff-fixture-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        )));
+        assert!(!root.0.exists());
+        std::fs::create_dir(&root.0).unwrap();
+        let mut service = RuntimeServiceFixture::new().build();
+        let auth_root = root.0.join("auth");
+        assert!(
+            !auth_root.exists(),
+            "setup requires an isolated absent credential root"
+        );
+        service.set_auth_store(crate::security::auth::AuthStore::new(
+            crate::security::auth::AuthPaths::under_config_root(&auth_root),
+        ));
+        service.replace_config_layers(vec![ConfigLayer {
+            name: "runtime-only-lease-refusal".into(), path: None,
+            format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+            text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"default\"\nshell_mode = \"pane\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.default]\nprovider = \"runtime-batch\"\nmodel = \"test\"\n".into(),
+        }]).unwrap();
+        let primary = service
+            .attach_primary("primary", true, Size::new(120, 32).unwrap(), 120)
+            .unwrap();
+        if matches!(
+            source,
+            HandoffSource::CorrectionOriginal | HandoffSource::FreshLoop
+        ) {
+            let transcripts = root.0.join("transcripts");
+            std::fs::create_dir(&transcripts).unwrap();
+            service.set_agent_transcript_store(
+                crate::storage::transcript::AgentTranscriptStore::new(transcripts),
+            );
+        }
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        // Use the real visible prompt entry point. Its display ACK is not
+        // evidence of admission: assert the actual pending/ledger binding.
+        let parent_cid = service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .session_id
+            .clone();
+        let prompt = if source == HandoffSource::FreshLoop {
+            "/loop --new --limit 1 retain original completion evidence"
+        } else {
+            "retain original RuntimeOnly results"
+        };
+        let _ack = service
+            .execute_agent_shell_command(&primary, prompt)
+            .unwrap();
+        let pending = service.pending_agent_provider_tasks();
+        assert_eq!(
+            pending.len(),
+            1,
+            "setup: prompt must admit exactly one real provider task"
+        );
+        let task = &pending[0];
+        let turn = service
+            .agent_turn_ledger()
+            .turn(&task.turn_id)
+            .unwrap()
+            .clone();
+        assert_eq!(turn.state, AgentTurnState::Running);
+        assert_eq!(turn.pane_id, "%1");
+        assert_eq!(turn.agent_id, task.agent_id);
+        let session = service.agent_shell_store().get("%1").unwrap();
+        assert_eq!(session.session_id, turn.conversation_id);
+        if source == HandoffSource::FreshLoop {
+            assert!(session.ephemeral);
+            assert_ne!(
+                turn.conversation_id, parent_cid,
+                "setup requires a real fresh-loop iteration"
+            );
+        }
+        assert_eq!(
+            session.running_turn_id.as_deref(),
+            Some(turn.turn_id.as_str())
+        );
+        assert!(service.agent_provider_task_is_pending(&turn.turn_id));
+        assert!(!service.agent_provider_task_is_claimed(&turn.turn_id));
+        let agent = AgentId::opaque(turn.agent_id.clone()).unwrap();
+        service.remove_pending_agent_provider_task(&turn.turn_id);
+        let actions: Vec<_> = ["first", "second"]
+            .into_iter()
+            .map(|id| AgentAction {
+                id: id.into(),
+                payload: AgentActionPayload::FetchUrl {
+                    url: format!("https://example.test/runtime-only-{id}"),
+                    format: None,
+                    max_bytes: None,
+                },
+            })
+            .collect();
+        let execution = AgentTurnExecution {
+            request: mez_agent::ModelRequest {
+                provider: "runtime-batch".into(),
+                model: "test".into(),
+                model_capabilities: Default::default(),
+                max_input_tokens: None,
+                reasoning_effort: None,
+                thinking_enabled: None,
+                latency_preference: None,
+                prompt_cache_retention: None,
+                max_output_tokens: None,
+                temperature: None,
+                stop: None,
+                prompt_cache_session_id: None,
+                prompt_cache_lineage_id: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
+                issue_actions_enabled: true,
+                interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+                allowed_actions: mez_agent::AllowedActionSet::capability_decision(),
+                messages: vec![mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::User,
+                    source: mez_agent::ContextSourceKind::UserInstruction,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    content: "retain original RuntimeOnly results".into(),
+                }]
+                .into(),
+            },
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".into(),
+                model: "test".into(),
+                raw_text: "synthetic completed-group source".into(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    rationale: "inert ordinary continuation custody".into(),
+                    actions: actions.clone(),
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: Default::default(),
+            action_results: actions
+                .iter()
+                .map(|action| {
+                    ActionResult::running(
+                        &turn,
+                        action,
+                        vec!["awaiting synthetic external completion".into()],
+                        None,
+                    )
+                })
+                .collect(),
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        };
+        service
+            .apply_agent_provider_completed_event(&agent, &turn.turn_id, execution)
+            .await
+            .unwrap();
+        let mut expected_results = Vec::new();
+        for action in &actions {
+            let dispatch = service
+                .claim_approved_external_action(&turn.turn_id, &action.id)
+                .unwrap()
+                .expect("fixture must claim its real serialized external attempt");
+            let result = if matches!(
+                source,
+                HandoffSource::CorrectionRuntimeOnly | HandoffSource::CorrectionOriginal
+            ) && action.id == "second"
+            {
+                ActionResult::failed(
+                    &turn,
+                    action,
+                    mez_agent::ActionStatus::Failed,
+                    "fixture_shared_failure",
+                    "F668_RUNTIME_ONLY_ORIGINAL_second correction",
+                )
+                .unwrap()
+            } else {
+                ActionResult::succeeded(
+                    &turn,
+                    action,
+                    vec![format!("F668_RUNTIME_ONLY_ORIGINAL_{}", action.id)],
+                    None,
+                )
+            };
+            expected_results.push(result.clone());
+            assert!(
+                service
+                    .complete_approved_external_action(RuntimeApprovedExternalActionOutcome {
+                        turn_id: turn.turn_id.clone(),
+                        action_id: action.id.clone(),
+                        attempt: dispatch.attempt,
+                        result: Ok(result),
+                        mcp_transport: None,
+                    })
+                    .unwrap()
+            );
+        }
+        service.retry_completion_publications();
+        assert!(
+            service.agent_provider_task_is_pending(&turn.turn_id),
+            "setup: completed G1 must queue ordinary continuation"
+        );
+        assert!(
+            service
+                .ready_agent_provider_turn(&agent, &turn.turn_id)
+                .unwrap()
+                .is_some(),
+            "setup: continuation must be genuinely ready"
+        );
+        let (policy, group) = service
+            .completion_source_group_for_tests(&turn.turn_id)
+            .expect("setup requires an actually admitted original completion group");
+        let expected_policy = match source {
+            HandoffSource::CorrectionOriginal => "original",
+            HandoffSource::FreshLoop => "ephemeral",
+            _ => "runtime_only",
+        };
+        assert_eq!(policy, expected_policy);
+        if matches!(
+            source,
+            HandoffSource::CorrectionRuntimeOnly | HandoffSource::CorrectionOriginal
+        ) {
+            assert!(
+                service.agent_turn_executions().get(&turn.turn_id).is_none(),
+                "setup must exercise actual correction transfer and legacy live-slot removal"
+            );
+        }
+        let (original_execution, original_context, original_error) = service
+            .original_completion_source_for_tests(&turn.turn_id, &group)
+            .expect("setup: exact G1 result AND context must exist before claiming");
+        assert_eq!(original_execution.action_results, expected_results);
+        if matches!(
+            source,
+            HandoffSource::CorrectionRuntimeOnly | HandoffSource::CorrectionOriginal
+        ) {
+            assert_eq!(
+                original_execution.terminal_state,
+                AgentTurnState::Failed,
+                "retain the original failed source, not the local Running feedback copy"
+            );
+        }
+        assert!(original_error.is_none());
+        assert!(original_context.chronology().iter().any(|event| {
+            event
+                .execution_group_id()
+                .is_some_and(|owner| owner.as_str() == group)
+                && event
+                    .block()
+                    .content
+                    .contains("F668_RUNTIME_ONLY_ORIGINAL_")
+        }));
+
+        let parent_metadata_before_claim = if source == HandoffSource::FreshLoop {
+            Some(
+                service
+                    .loop_parent_metadata_for_tests(&turn.turn_id)
+                    .expect("actual private loop parent metadata"),
+            )
+        } else {
+            None
+        };
+        let mut actor = AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default())
+            .unwrap()
+            .1;
+        // Execute the SAME preparation request and worker-side preparation as
+        // the public handle, without starting a provider or the actor run loop.
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(
+                super::super::AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+                    agent_id: agent.clone(),
+                    turn_id: turn.turn_id.clone(),
+                    reply,
+                },
+            )
+            .await;
+        let work = receive
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("setup: real preparation request must return work");
+        assert!(
+            work.mcp_plans.is_empty(),
+            "setup must not execute MCP discovery"
+        );
+        assert_eq!(
+            work.provider_auth_refresh_profiles,
+            vec!["runtime-batch".to_string()]
+        );
+        // Actual preparation retains its selected identity. Absent metadata
+        // returns Ok(false) at auth/store.rs before secret lookup or refresh
+        // transport; do not clear profiles or manufacture a preparation result.
+        assert!(
+            work.auth_store
+                .as_ref()
+                .expect("setup auth store")
+                .read_metadata_for_provider("runtime-batch")
+                .unwrap()
+                .is_none()
+        );
+        assert!(!auth_root.exists());
+        assert!(
+            work.accounting_projects.is_none(),
+            "setup must not run an accounting preparation worker"
+        );
+        let preparation = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+        assert!(
+            preparation.provider_refresh_error.is_none(),
+            "setup: preparation failure is NOT the custody regression"
+        );
+        assert!(preparation.mcp.is_empty());
+        assert!(preparation.accounting_projects.is_none());
+        assert!(
+            !auth_root.exists(),
+            "inert preparation must not create credential state"
+        );
+        // Drain setup effects through the normal adapter API without executing
+        // them. No worker has received a dispatch and no claim timer may exist.
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(super::super::AsyncRuntimeRequest::DrainRuntimeSideEffects {
+                limit: 1024,
+                reply,
+            })
+            .await;
+        let setup_effects = receive.await.unwrap().unwrap();
+        assert!(!setup_effects.iter().any(|effect| matches!(effect,
+            RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::ProviderClaim)));
+        assert!(actor.service.agent_provider_task_is_pending(&turn.turn_id));
+        assert!(!actor.service.agent_provider_task_is_claimed(&turn.turn_id));
+        if let Some(fault) = fault {
+            actor.service.set_provider_handoff_fault_for_tests(fault);
+        }
+        if !accept_lease && fault != Some("after_lease") {
+            actor.side_effect_buffer = 1;
+            actor
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: agent.clone(),
+                    turn_id: "unrelated-retained-work".into(),
+                }])
+                .unwrap();
+        }
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(
+                super::super::AsyncRuntimeRequest::ClaimConfiguredAgentProviderTask {
+                    agent_id: agent.clone(),
+                    turn_id: turn.turn_id.clone(),
+                    preparation,
+                    reply,
+                },
+            )
+            .await;
+        let refusal = receive.await.unwrap();
+        // Freeze the immediate post-Claim facts BEFORE drain can reconcile
+        // pending work and BEFORE teardown. Missing custody stays an Option
+        // until the legal refusal/conservation preconditions have been checked.
+        let source_after_claim = actor
+            .service
+            .original_completion_source_for_tests(&turn.turn_id, &group);
+        let lease_error_after_claim = actor.service.provider_lease_refusal_for_tests().cloned();
+        let generation_after_claim = actor.timers.next_provider_claim_generation;
+        let timer_after_claim = actor.timers.provider_claim.get(&turn.turn_id).cloned();
+        let claimed_after_claim = actor.service.agent_provider_task_is_claimed(&turn.turn_id);
+        let pending_after_claim = actor.service.agent_provider_task_is_pending(&turn.turn_id);
+        let accounting_after_claim = actor
+            .service
+            .provider_refusal_accounting_for_tests(&turn.turn_id, generation_after_claim);
+        let ledger_after_claim = actor
+            .service
+            .agent_turn_ledger()
+            .turn(&turn.turn_id)
+            .map(|turn| turn.state);
+        let critical_after_claim = actor.service.ensure_completion_admission_open().err();
+        let external_after_claim = actor.service.pending_approved_external_actions();
+        let shell_after_claim = actor.service.agent_shell_store().get("%1").cloned();
+        let shell_cid_after_claim = shell_after_claim
+            .as_ref()
+            .map(|session| session.session_id.clone());
+        let loop_ack_after_claim = actor
+            .service
+            .provider_loop_restore_ack_for_tests(&turn.turn_id, &group);
+        let loop_facts_after_claim = actor
+            .service
+            .provider_loop_restore_facts_for_tests(&turn.turn_id, &group);
+        let phases_after_claim = actor
+            .service
+            .provider_refusal_test_facts(&turn.turn_id, &group);
+        let loop_fault = source == HandoffSource::FreshLoop && fault.is_some();
+        let duplicate_after_claim = if fault == Some("task_consumer") || loop_fault {
+            let duplicate = actor.service.fail_configured_agent_provider_task(
+                &turn.turn_id,
+                &MezError::invalid_state("duplicate refusal must not replace primary"),
+            );
+            let after_duplicate = actor
+                .service
+                .original_completion_source_for_tests(&turn.turn_id, &group);
+            let phases = actor
+                .service
+                .provider_refusal_test_facts(&turn.turn_id, &group);
+            let loop_facts = actor
+                .service
+                .provider_loop_restore_facts_for_tests(&turn.turn_id, &group);
+            Some((duplicate, after_duplicate, phases, loop_facts))
+        } else {
+            None
+        };
+
+        // The acceptance control attempts another REAL preparation request,
+        // after freezing first-claim facts. It does not fabricate a second claim.
+        let repeat_preparation = if accept_lease {
+            let (reply, receive) = tokio::sync::oneshot::channel();
+            actor
+                .handle_request(
+                    super::super::AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+                        agent_id: agent.clone(),
+                        turn_id: turn.turn_id.clone(),
+                        reply,
+                    },
+                )
+                .await;
+            Some(receive.await)
+        } else {
+            None
+        };
+
+        // Use the supported combined drain: provider dispatch lives in its
+        // dedicated route, not the raw side_effects deque. Never execute it.
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(super::super::AsyncRuntimeRequest::DrainRuntimeSideEffects {
+                limit: 1024,
+                reply,
+            })
+            .await;
+        let drained = receive.await;
+        // Shutdown is handled by the actor's synchronous message boundary, not
+        // handle_request. Settle this workerless fixture before any expected
+        // assertion failure; teardown must not replace the frozen evidence.
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        let shutdown_requested =
+            actor.dispatch_message_request(super::super::AsyncRuntimeRequest::Shutdown { reply });
+        let shutdown = receive.await;
+        drop(actor);
+
+        let queued = drained.unwrap().unwrap();
+        assert!(shutdown_requested);
+        assert!(
+            shutdown.unwrap().is_ok(),
+            "fixture shutdown must settle before the custody oracle"
+        );
+        if accept_lease {
+            assert_eq!(generation_after_claim, 1);
+            assert!(claimed_after_claim && !pending_after_claim);
+            assert!(timer_after_claim.is_some());
+            assert!(
+                source_after_claim.is_none(),
+                "accepted handoff must release its exact original group"
+            );
+            assert!(lease_error_after_claim.is_none());
+            assert!(accounting_after_claim.is_some());
+            assert!(external_after_claim.is_empty());
+            assert_eq!(
+                queued
+                    .iter()
+                    .filter(|effect| matches!(effect,
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::ProviderClaim && key.owner_id == turn.turn_id))
+                    .count(),
+                1
+            );
+            assert!(
+                repeat_preparation.unwrap().unwrap().unwrap().is_none(),
+                "claimed work must not prepare/renew a duplicate dispatch"
+            );
+            let dispatch = refusal
+                .unwrap()
+                .expect("actual admitted continuation dispatch");
+            assert_eq!(dispatch.claim_generation, 1);
+            assert!(
+                dispatch
+                    .context
+                    .durable()
+                    .chronology()
+                    .starts_with(original_context.chronology())
+            );
+            return;
+        }
+        assert!(
+            !matches!(&refusal, Ok(Some(_))),
+            "admission must withhold the worker dispatch"
+        );
+        assert_eq!(
+            generation_after_claim, 1,
+            "setup: request must reach actual provisional claim recording"
+        );
+        assert_eq!(timer_after_claim.is_some(), fault == Some("after_lease"));
+        assert!(!claimed_after_claim);
+        if fault != Some("after_lease") {
+            assert!(queued.iter().any(|effect| matches!(effect,
+            RuntimeSideEffect::DispatchAgentProvider { turn_id, .. } if turn_id == "unrelated-retained-work")));
+        }
+        assert_eq!(
+            queued
+                .iter()
+                .filter(|effect| matches!(effect,
+            RuntimeSideEffect::ScheduleTimer { key, .. }
+                if key.kind == RuntimeTimerKind::ProviderClaim && key.owner_id == turn.turn_id))
+                .count(),
+            usize::from(fault == Some("after_lease"))
+        );
+        let (issued_turn, issued_provider, issued_model, _issued_origin) = accounting_after_claim
+            .expect("setup: provisional claim must retain its actual issued accounting owner");
+        assert_eq!(issued_turn, turn);
+        assert_eq!(issued_provider, "runtime-batch");
+        assert_eq!(issued_model, "test");
+        let (refused_turn, refused_generation, refused_error) = lease_error_after_claim.expect(
+            "setup: must observe actual timer refusal, not a source-stage/claim-precondition error",
+        );
+        assert_eq!(refused_turn, turn.turn_id);
+        assert_eq!(refused_generation, generation_after_claim);
+        assert_eq!(
+            refused_error.kind(),
+            MezError::invalid_state("type oracle").kind()
+        );
+        if fault == Some("after_lease") {
+            assert_eq!(
+                refused_error.message(),
+                "injected post-lease provider queue failure"
+            );
+        } else {
+            assert!(
+                refused_error
+                    .message()
+                    .starts_with(SIDE_EFFECT_QUEUE_FULL_PREFIX)
+            );
+        }
+        let terminal = ledger_after_claim.is_some_and(|state| {
+            matches!(state, AgentTurnState::Failed | AgentTurnState::Interrupted)
+        });
+        assert!(
+            terminal || critical_after_claim.is_some(),
+            "nonterminal refusal needs the existing bounded retained-failure owner, not an unleased runnable claim"
+        );
+        assert!(!pending_after_claim);
+        assert!(external_after_claim.is_empty());
+        if source == HandoffSource::FreshLoop {
+            // Diagnostic only: these values were frozen immediately after
+            // Claim. Never recapture actor/pane/root state after drain/teardown
+            // or print execution/context/private payloads to explain this cut.
+            let phase_facts = phases_after_claim.as_ref().map(|phase| {
+                (
+                    phase.task_entered,
+                    phase.task_accepted,
+                    phase.scheduler_accepted,
+                    phase.settlement_terminal,
+                )
+            });
+            let secondary_facts = phases_after_claim
+                .as_ref()
+                .map(|phase| {
+                    phase
+                        .secondary
+                        .iter()
+                        .map(|error| (error.kind(), error.message()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let rolled_back = matches!(
+                fault,
+                Some("loop_wrong_turn" | "loop_metadata_reset" | "loop_cleanup_commit")
+            );
+            let expected_cid = if rolled_back {
+                turn.conversation_id.as_str()
+            } else {
+                parent_cid.as_str()
+            };
+            assert_eq!(
+                shell_cid_after_claim.as_deref(),
+                Some(expected_cid),
+                "F668_LOOP_PHASE frozen_post_claim ledger={ledger_after_claim:?} ack={loop_ack_after_claim} source_present={} task_entered/task_accepted/scheduler_accepted/settlement_terminal={phase_facts:?} secondary_kind_message={secondary_facts:?}",
+                source_after_claim.is_some()
+            );
+            let facts = loop_facts_after_claim
+                .as_ref()
+                .expect("real sealed loop receipt observations");
+            assert_eq!(facts.bind_attempts, 1);
+            assert_eq!(facts.ack, !rolled_back);
+            assert_eq!(loop_ack_after_claim, facts.ack);
+            if rolled_back {
+                assert_eq!(
+                    facts.rollback_equal,
+                    Some(true),
+                    "actual full previous snapshot must be restored"
+                );
+                if fault == Some("loop_cleanup_commit") {
+                    assert_eq!(facts.metadata_only, Some(true));
+                    assert_eq!(facts.unacked_parent_rejected, Some(true));
+                } else {
+                    assert!(facts.metadata_only.is_none());
+                }
+                assert!(facts.foreign_snapshot_rejected.is_none());
+            } else {
+                assert!(facts.rollback_equal.is_none());
+                assert_eq!(
+                    facts.metadata_only,
+                    Some(true),
+                    "actual restore/reset differs only in generic metadata fields"
+                );
+                assert_eq!(facts.unacked_parent_rejected, Some(true));
+                assert_eq!(facts.foreign_snapshot_rejected, Some(true));
+                assert_eq!(facts.foreign_scope_rejected, Some(true));
+            }
+            let shell = shell_after_claim
+                .as_ref()
+                .expect("same-pane restored or rolled-back shell");
+            if fault.is_none() {
+                assert!(
+                    shell.running_turn_id.is_none(),
+                    "normal finish must clear the old turn, never a manual clear"
+                );
+                let (allowed, name) = parent_metadata_before_claim.as_ref().unwrap();
+                assert!(
+                    shell.allowed_actions.as_ref() == Some(allowed),
+                    "existing caller restores frozen parent catalog only"
+                );
+                if name.is_some() {
+                    assert!(shell.display_name.as_ref() == name.as_ref());
+                }
+            } else {
+                assert_eq!(
+                    shell.running_turn_id.as_deref(),
+                    Some(turn.turn_id.as_str()),
+                    "failed consumer remains owned, not manually cleared"
+                );
+            }
+        }
+        let phases = phases_after_claim.expect("exact negative phase owner");
+        if fault == Some("task_consumer") {
+            assert!(phases.live_before && phases.live_after && phases.task_entered);
+            assert_eq!(phases.consumer_entries, 1);
+            assert!(phases.secondary.iter().any(
+                |error| error.message() == "injected required refusal context consumer failure"
+            ));
+            assert!(!phases.secondary.iter().any(|error| error.message()
+                == "nested refusal capture lost the original live consumer context"));
+            let (duplicate, after_duplicate, after_phases, _) = duplicate_after_claim.unwrap();
+            assert!(
+                duplicate.is_err(),
+                "entered refusal is retained, not replayed"
+            );
+            assert_eq!(after_phases.unwrap().consumer_entries, 1);
+            assert_eq!(
+                after_duplicate.as_ref().map(|source| &source.0),
+                source_after_claim.as_ref().map(|source| &source.0)
+            );
+            assert_eq!(
+                after_duplicate.as_ref().map(|source| &source.1),
+                source_after_claim.as_ref().map(|source| &source.1)
+            );
+        } else if loop_fault {
+            assert_eq!(ledger_after_claim, Some(AgentTurnState::Running));
+            assert!(critical_after_claim.is_some() && phases.task_entered && !phases.task_accepted);
+            assert!(!phases.scheduler_accepted && !phases.settlement_terminal);
+            let expected_secondary = match fault.unwrap() {
+                "loop_wrong_turn" => "cannot restore a running conversation for a different turn",
+                "loop_metadata_reset" => "injected negative loop metadata reset failure",
+                "loop_cleanup_commit" => "injected negative loop cleanup commit failure",
+                "loop_after_commit" => "injected negative loop postcommit failure",
+                _ => panic!("unknown isolated loop fault"),
+            };
+            assert!(
+                phases
+                    .secondary
+                    .iter()
+                    .any(|error| error.message() == expected_secondary)
+            );
+            let (duplicate, after_duplicate, _, after_loop) = duplicate_after_claim.unwrap();
+            assert!(duplicate.is_err());
+            assert_eq!(
+                after_loop.unwrap().bind_attempts,
+                1,
+                "duplicate ingress must not re-enter binding"
+            );
+            assert_eq!(
+                after_duplicate.as_ref().map(|source| &source.0),
+                source_after_claim.as_ref().map(|source| &source.0)
+            );
+            assert_eq!(
+                after_duplicate.as_ref().map(|source| &source.1),
+                source_after_claim.as_ref().map(|source| &source.1)
+            );
+        } else {
+            assert_eq!(ledger_after_claim, Some(AgentTurnState::Failed));
+            assert!(
+                phases.task_accepted && phases.scheduler_accepted && phases.settlement_terminal,
+                "healthy negative bookkeeping must finish its actual terminal milestones before reporting settlement"
+            );
+        }
+
+        // Desired oracle uses only the frozen immediate-post-Claim source.
+        // Drain/shutdown cannot heal, erase or substitute its custody result.
+        let (retained_execution, retained_context, primary) = source_after_claim
+            .expect("F668_CUSTODY: exact original RuntimeOnly G1 result and context lost at undispatched lease refusal");
+        assert_eq!(
+            retained_execution, original_execution,
+            "original canonical result/request must not become provider-error source"
+        );
+        assert!(
+            retained_context
+                .chronology()
+                .starts_with(original_context.chronology()),
+            "original canonical context events and metadata must remain owned in order"
+        );
+        let primary = primary
+            .or_else(|| refusal.err())
+            .expect("exact typed refusal must remain reported or retained");
+        assert_eq!(primary.kind(), refused_error.kind());
+        assert_eq!(primary.message(), refused_error.message());
+    }
 
     /// A full non-droppable side-effect queue rejects the mandatory auxiliary
     /// retry timer before dispatch and settles its exact pending owner. It must

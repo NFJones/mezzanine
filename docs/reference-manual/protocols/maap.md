@@ -60,6 +60,21 @@ after installation. If a later entry fails before installation, retry retains
 that entry and its remaining suffix without reappending an installed prefix.
 Equal command text with different accepted entry identities remains distinct;
 retries preserve each entry's original occurrence and source/copy attribution.
+A settled result whose header is already visible still retains its original
+immutable source and entry before immediate append. A failed installation keeps
+that tuple for publication-only retry, without a new occurrence or changed body;
+only successful installation acknowledges and removes the original source.
+This log-source acknowledgment is not execution, canonical-result, or required
+audit/hook gate acceptance and never authorizes action replay.
+Approved external completion retains its actor-issued attempt and original
+execution group before consuming worker delivery ownership. Terminal context is
+retained before optional result installation; completed-hook/audit failures stay
+typed errors, not a reason to resubmit the performed action. Exact duplicate
+delivery does not invoke those gates again or count another applied execution.
+Retirement handoff witnesses identify exact immutable original-conversation
+evidence, not merely a turn or persistence key. Repeating the same owned snapshot
+does not enqueue another candidate; changed evidence requires distinct acceptance.
+Queued candidate ownership does not certify checked history or durable disk append.
 
 ## Action catalog
 

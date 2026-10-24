@@ -860,10 +860,21 @@ fn runtime_native_tool_result_completes_only_after_abandonment_settlement() {
         0,
         "a native group result requires every owned action to settle"
     );
-    let queued = service
-        .queue_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
+    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
+    let queue_before = service.completion_provider_queue_flags_for_tests(&turn.turn_id);
+    let disposition = service
+        .settle_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
         .unwrap();
-    assert!(queued, "settled abandonment must admit bounded correction");
+    assert_eq!(
+        disposition,
+        crate::runtime::agent::CompletionSettlementDisposition::Retained,
+        "settled abandonment must retain the existing correction destination"
+    );
+    assert_eq!(
+        service.completion_provider_queue_flags_for_tests(&turn.turn_id),
+        queue_before
+    );
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(native_tool_result_count(&service, "call-native-group"), 1);
     let native = native_tool_result_content(&service, "call-native-group").unwrap();
     let native_event =
@@ -1116,10 +1127,21 @@ fn runtime_native_tool_result_completes_with_unsent_shell_sibling() {
         0,
         "a native group result requires every owned action to settle"
     );
-    let queued = service
-        .queue_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
+    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
+    let queue_before = service.completion_provider_queue_flags_for_tests(&turn.turn_id);
+    let disposition = service
+        .settle_agent_failure_feedback_for_correction(&turn, &mut execution, "fixture")
         .unwrap();
-    assert!(queued, "settled shell abandonment must admit correction");
+    assert_eq!(
+        disposition,
+        crate::runtime::agent::CompletionSettlementDisposition::Retained,
+        "settled shell abandonment must retain the existing correction destination"
+    );
+    assert_eq!(
+        service.completion_provider_queue_flags_for_tests(&turn.turn_id),
+        queue_before
+    );
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(
         native_tool_result_count(&service, "call-native-shell"),
         1,

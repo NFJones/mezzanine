@@ -431,7 +431,19 @@ fn runtime_human_pause_drains_native_without_replaying_siblings() {
             .resume_agent_lifecycle_target(&primary, &target, generation)
             .is_err()
     );
+    let issued_key = (
+        dispatch.turn_id.clone(),
+        dispatch.action_id.clone(),
+        dispatch.marker.clone(),
+    );
     let outcome = crate::runtime::execute_native_shell_dispatch(dispatch);
+    let identity_flags = service
+        .native_issued_outcome_identity_flags_for_tests(&issued_key, &outcome)
+        .expect("the actual claimed native phase must retain its receipt");
+    assert!(
+        identity_flags.iter().all(|(_, matches)| *matches),
+        "{identity_flags:?}"
+    );
     assert!(
         service
             .complete_native_shell_action(outcome.clone())
@@ -909,12 +921,32 @@ fn run_native_lifecycle_guidance(malformed: bool, cancelled: bool) {
         "{}",
         feedback.content
     );
+    // The plain ActionResult projection above is display evidence, not the
+    // durable execution block: both forms are stored and the plain entry
+    // precedes the block. Select the block by parsing rather than by entry
+    // order, and require exactly one matching durable event.
+    let lifecycle_blocks = entries
+        .iter()
+        .filter_map(|entry| {
+            match mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content) {
+                Some(mez_agent::TranscriptContextEvent::ExecutionBlock { content, .. })
+                    if content.contains("sandbox_lifecycle") =>
+                {
+                    Some(content)
+                }
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lifecycle_blocks.len(),
+        1,
+        "exactly one durable lifecycle execution block must be retained"
+    );
     assert!(
-        matches!(mez_agent::TranscriptContextEvent::from_transcript_content(&feedback.content),
-            Some(mez_agent::TranscriptContextEvent::ExecutionBlock { content, .. })
-                if content.contains("\"automatic_replay\":false")),
+        lifecycle_blocks[0].contains("\"automatic_replay\":false"),
         "{}",
-        feedback.content
+        lifecycle_blocks[0]
     );
     assert_eq!(fs::read(&counter).unwrap(), b"x");
     assert!(

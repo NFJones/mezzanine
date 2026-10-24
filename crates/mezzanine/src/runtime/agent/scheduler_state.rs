@@ -111,6 +111,7 @@ impl RuntimeSessionService {
     /// it runs after the scheduler accepted the work so a rejected enqueue is not
     /// counted as a prompt turn.
     pub(crate) fn enqueue_agent_work(&mut self, work: ScheduledWork) -> Result<()> {
+        self.ensure_completion_admission_open()?;
         let conversation_id = work.conversation_id.clone();
         let paused_work = work.clone();
         self.agent.agent_scheduler.enqueue(work)?;

@@ -202,11 +202,14 @@ mod audit;
 mod bookkeeping;
 mod child_failures;
 mod cleanup_ownership;
+mod completion;
 pub(crate) use bookkeeping::{
     RuntimeBookkeepingCandidate, RuntimeBookkeepingCandidateWork,
     RuntimeBookkeepingTranscriptReadWork,
 };
 pub(crate) use cleanup_ownership::RuntimePreparedCleanupParent;
+pub(in crate::runtime) use completion::CompletionScope;
+pub(in crate::runtime) use completion::CompletionSettlementDisposition;
 mod config_change;
 mod context_documents;
 mod discovery;
@@ -548,6 +551,9 @@ pub(crate) struct RuntimeAgentComponent {
     pending_approved_external_actions: BTreeMap<(String, String), Option<String>>,
     /// Approved external actions currently owned by async workers.
     claimed_approved_external_actions: BTreeMap<(String, String), String>,
+    /// Exact admitted-attempt outcomes/phases, never a worker replay queue.
+    /// Heap ownership keeps payload and phase growth out of actor stack frames.
+    completion_settlements: Box<completion::RuntimeCompletionSettlements>,
     /// Cooperative cancellation shared only with each exact claimed attempt.
     approved_external_cancellations: BTreeMap<
         (String, String),
@@ -3657,9 +3663,7 @@ impl RuntimeSessionService {
 
     /// Queues one provider turn when it is not already pending.
     pub(crate) fn queue_agent_provider_task(&mut self, turn_id: impl Into<String>) -> bool {
-        self.agent
-            .pending_agent_provider_tasks
-            .insert(turn_id.into())
+        self.queue_completion_provider_task(turn_id.into())
     }
 
     /// Removes one pending provider turn.

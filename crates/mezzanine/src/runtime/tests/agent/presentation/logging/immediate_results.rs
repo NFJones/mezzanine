@@ -8,8 +8,8 @@ use super::*;
 
 /// A visible header must not bypass source retention. Two failed immediate
 /// installations retain the original result bytes, entry identity and occurrence,
-/// even when a later caller supplies different text. Both an ordinary ordered
-/// drain and a successful immediate retry install/acknowledge that original
+/// even when a later caller supplies different text (which must be rejected).
+/// Both an ordinary ordered drain and a successful exact-source retry acknowledge that original
 /// component once without any action/provider execution.
 #[test]
 fn runtime_immediate_result_retains_original_source_across_install_failures() {
@@ -122,9 +122,13 @@ fn runtime_immediate_result_retains_original_source_across_install_failures() {
         service.fail_agent_presentation_install_for_tests(0);
         assert!(
             service
-                .queue_ordered_provider_result("%1", &execution, &action, &replacement)
+                .queue_ordered_provider_result("%1", &execution, &action, &result)
                 .is_err()
         );
+        let conflict = service
+            .queue_ordered_provider_result("%1", &execution, &action, &replacement)
+            .expect_err("a different callback cannot replace retained source");
+        assert!(conflict.message().contains("retained source owner"));
         let pending = service
             .presentation
             .agent_queued_provider_results
@@ -137,7 +141,7 @@ fn runtime_immediate_result_retains_original_source_across_install_failures() {
 
         if immediate_retry {
             service
-                .queue_ordered_provider_result("%1", &execution, &action, &replacement)
+                .queue_ordered_provider_result("%1", &execution, &action, &result)
                 .unwrap();
             assert!(
                 service

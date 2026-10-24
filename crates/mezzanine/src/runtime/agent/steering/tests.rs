@@ -491,9 +491,13 @@ fn steering_receipts_deferred_transfer_trace_failure_retains_runnable_owner() {
 
 /// Terminal ledger evidence must settle pending receipts even when the later
 /// diagnostic trace fails, for both bound and replacement-conversation paths.
+/// Optional paint cannot revoke canonical completion. Retained in-memory trace
+/// and consumed failure evidence must remain observable without pretending the
+/// line installed. Unfaulted controls prove the same wrapped-screen matcher is
+/// capable of seeing each transition; this is not action/durability/replay ACK.
 #[test]
 fn steering_receipts_terminal_commit_settles_before_trace_failure() {
-    for rebound in [false, true] {
+    for (rebound, fault) in [(false, false), (false, true), (true, false), (true, true)] {
         let (mut service, turn) = fixture();
         service
             .inject_agent_steering_with_display("%1", "pending", "display")
@@ -514,7 +518,9 @@ fn steering_receipts_terminal_commit_settles_before_trace_failure() {
             .unwrap();
         // Bound completion installs its footer and settled steering occurrence
         // before the transition trace; target that trace, not the new promotion.
-        service.fail_agent_presentation_install_for_tests(if rebound { 0 } else { 2 });
+        if fault {
+            service.fail_agent_presentation_install_for_tests(if rebound { 0 } else { 2 });
+        }
         let result = if rebound {
             service
                 .finish_agent_turn_without_shell_session(
@@ -527,7 +533,59 @@ fn steering_receipts_terminal_commit_settles_before_trace_failure() {
                 .finish_agent_turn("%1", &turn.turn_id, mez_agent::AgentTurnState::Completed)
                 .map(|_| ())
         };
-        assert!(result.is_err());
+        assert!(
+            result.is_ok(),
+            "optional trace paint cannot reject canonical completion: rebound={rebound} fault={fault} result={result:?}"
+        );
+        if fault {
+            assert!(
+                service
+                    .presentation
+                    .agent_install_failure_countdown
+                    .is_none(),
+                "the actual pre-install fault must be consumed: rebound={rebound}"
+            );
+        }
+        let reason = super::super::outcome::runtime_humanize_agent_diagnostic(if rebound {
+            "finish_agent_turn_without_shell_session"
+        } else {
+            "finish_agent_turn"
+        });
+        let prefix = format!("agent trace: turn {} moved from ", turn.turn_id);
+        let suffix = format!(" to completed ({reason})");
+        let trace = service.agent_pane_trace_log_text("%1").unwrap();
+        let transitions = trace
+            .lines()
+            .filter(|line| line.starts_with(&prefix) && line.ends_with(&suffix))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            transitions.len(),
+            1,
+            "retain one exact-turn terminal source: rebound={rebound} fault={fault} trace={trace}"
+        );
+        // Apply the SAME gutter/whitespace-insensitive matcher to positive and
+        // fault arms. Every wrapped diagnostic row has a leading display gutter;
+        // it is not part of the retained source and must not break the positive
+        // control (or make the negative check vacuous).
+        let compact = |text: &str| {
+            text.lines()
+                .flat_map(|line| line.trim_start().strip_prefix('│').unwrap_or(line).chars())
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>()
+        };
+        let transition = compact(transitions[0].strip_prefix("agent trace: ").unwrap());
+        let screen = compact(
+            &service
+                .agent_pane_screen("%1")
+                .unwrap()
+                .normal_content_lines()
+                .join("\n"),
+        );
+        assert_eq!(
+            screen.matches(transition.as_str()).count(),
+            usize::from(!fault),
+            "acknowledge only actually visible trace: rebound={rebound} fault={fault} screen={screen}"
+        );
         assert_eq!(
             service
                 .agent_turn_ledger()

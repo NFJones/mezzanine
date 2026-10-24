@@ -1498,9 +1498,7 @@ impl RuntimeSessionService {
                     workflow.error_explanation_attempted = true;
                     workflow.diagnostic = Some(diagnostic);
                 }
-                self.agent
-                    .pending_agent_provider_tasks
-                    .insert(turn_id.to_string());
+                self.admit_completion_provider_continuation(turn_id)?;
                 Ok(true)
             }
             RoutedPresentationCompletionPlan::Fail {

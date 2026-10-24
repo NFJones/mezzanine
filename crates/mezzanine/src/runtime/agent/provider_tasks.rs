@@ -745,6 +745,10 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Result<Option<AgentTurnRecord>> {
         self.require_live()?;
+        self.ensure_completion_admission_open()?;
+        if self.completion_finalization_holds_new_work() {
+            return Ok(None);
+        }
         if self.agent_turn_is_human_paused(turn_id) {
             return Ok(None);
         }
@@ -803,6 +807,7 @@ impl RuntimeSessionService {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(None);
         }
+        self.ensure_completion_provider_claim_ready(turn_id)?;
         Ok(Some(turn))
     }
 
@@ -1239,11 +1244,12 @@ impl RuntimeSessionService {
             .as_str()
             .to_string();
         self.agent.pending_agent_provider_tasks.remove(turn_id);
-        self.append_agent_trace_turn_event(
+        let trace = self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,
             "provider_task claimed reason=async_provider_worker",
-        )?;
+        );
+        self.note_completion_optional_error(turn_id, trace);
         Ok(Some(RuntimeAgentProviderDispatch {
             accounting_origin: self.capture_accounting_origin_for_pane(&turn.pane_id),
             macro_bridge_recipients: self.macro_bridge_message_recipient_ids(&turn.turn_id),
@@ -1288,6 +1294,23 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(crate) fn fail_configured_agent_provider_task(
+        &mut self,
+        turn_id: &str,
+        error: &MezError,
+    ) -> Result<()> {
+        let refusal = self.begin_completion_provider_refusal(turn_id)?;
+        if let Some(refusal) = refusal {
+            let result = self
+                .freeze_completion_provider_refusal_source(&refusal)
+                .and_then(|()| self.fail_configured_agent_provider_task_inner(turn_id, error));
+            return self.finish_completion_provider_refusal(refusal, result);
+        }
+        self.fail_configured_agent_provider_task_inner(turn_id, error)
+    }
+
+    /// Existing provider-failure policy, also used inside the explicitly armed
+    /// negative scope. A prepared marker alone never changes this dispatch.
+    fn fail_configured_agent_provider_task_inner(
         &mut self,
         turn_id: &str,
         error: &MezError,
@@ -1904,8 +1927,12 @@ impl RuntimeSessionService {
         dispatch: &RuntimeAgentProviderDispatch,
         generation: u64,
         timeout_ms: u64,
-    ) -> Result<RuntimeTransition> {
+    ) -> Result<(
+        RuntimeTransition,
+        super::completion::CompletionProviderHandoff,
+    )> {
         let turn = &dispatch.turn;
+        self.ensure_completion_provider_dispatch_ready(dispatch)?;
         let retain_request_chain = dispatch.auto_sizing.is_none()
             && dispatch.macro_judge_request.is_none()
             && dispatch.sandbox_failure_assessment_request.is_none();
@@ -1922,6 +1949,7 @@ impl RuntimeSessionService {
                 "issued provider accounting capacity exhausted",
             ));
         }
+        let handoff = self.prepare_completion_provider_handoff(dispatch, generation)?;
         self.agent.claimed_agent_provider_tasks.insert(
             turn.turn_id.clone(),
             RuntimeAgentProviderClaim {
@@ -1944,13 +1972,14 @@ impl RuntimeSessionService {
                 openai_request_stream,
             },
         );
-        self.append_agent_trace_turn_event(
+        let trace = self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
             &format!(
                 "provider_task claim_lease started generation={generation} timeout_ms={timeout_ms}"
             ),
-        )?;
+        );
+        self.note_completion_optional_error(&turn.turn_id, trace);
         self.agent.provider_accounting_owners.insert(
             (turn.turn_id.clone(), generation),
             super::project_accounting::ProviderAccountingOwner {
@@ -1967,17 +1996,23 @@ impl RuntimeSessionService {
                 checkpoint_usage: Default::default(),
             },
         );
-        Ok(RuntimeTransition {
-            applied: true,
-            side_effects: vec![RuntimeSideEffect::ScheduleTimer {
-                key: RuntimeTimerKey::new(
-                    RuntimeTimerKind::ProviderClaim,
-                    turn.turn_id.clone(),
-                    generation,
-                ),
-                delay_ms: timeout_ms,
-            }],
-        })
+        // Claim/accounting is provisional until the actor admits the timer
+        // and every remaining fallible queue step. Dropping this permit is not
+        // an accepted destination or permission to discard original results.
+        Ok((
+            RuntimeTransition {
+                applied: true,
+                side_effects: vec![RuntimeSideEffect::ScheduleTimer {
+                    key: RuntimeTimerKey::new(
+                        RuntimeTimerKind::ProviderClaim,
+                        turn.turn_id.clone(),
+                        generation,
+                    ),
+                    delay_ms: timeout_ms,
+                }],
+            },
+            handoff,
+        ))
     }
 
     /// Clears the provider-worker claim lease for a settled turn.

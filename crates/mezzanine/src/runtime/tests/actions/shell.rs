@@ -1999,18 +1999,20 @@ fn runtime_native_apply_patch_shows_confirmed_diff_before_completion() {
             ))
             .unwrap()
     );
-    let mut write_dispatch = service
+    service
+        .append_pending_native_phase_command_for_tests(
+            "turn-1",
+            "patch-1",
+            &format!(
+                "while [ ! -e '{}' ]; do sleep 0.01; done\n",
+                release_path.display()
+            ),
+        )
+        .unwrap();
+    let write_dispatch = service
         .claim_native_shell_action("turn-1", "patch-1")
         .unwrap()
         .expect("native apply-patch write should be queued");
-    write_dispatch
-        .request
-        .transaction
-        .command
-        .push_str(&format!(
-            "while [ ! -e '{}' ]; do sleep 0.01; done\n",
-            release_path.display()
-        ));
     let marker = write_dispatch.marker.clone();
     let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
     let worker = thread::spawn(move || {

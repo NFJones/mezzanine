@@ -91,6 +91,15 @@ fn provider_tool_result_event(
 }
 
 impl RuntimeSessionService {
+    /// Isolated fixture budget oracle; reading does not consume a correction.
+    #[cfg(test)]
+    pub(crate) fn failure_feedback_attempt_total_for_tests(&self) -> usize {
+        self.agent
+            .agent_turn_failure_feedback_attempts
+            .values()
+            .copied()
+            .sum()
+    }
     /// Retains already observed terminal effects before an application error
     /// escapes its execution owner. This commits only original action evidence,
     /// in observation order; it neither retries effects nor queues a provider.
@@ -136,26 +145,173 @@ impl RuntimeSessionService {
     /// stay excluded. An opaque pre-effect unavailable `close_agent` rejection
     /// permits bounded rediscovery or a changed course, not automatic replay or
     /// any relaxation of persistent-child ownership.
+    #[cfg(test)]
     pub(crate) fn queue_agent_failure_feedback_for_correction(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
         reason: &str,
     ) -> Result<bool> {
-        self.settle_unstarted_action_siblings(turn, execution)?;
-        if !self.execution_can_feed_failure_to_model(&turn.turn_id, execution) {
-            // Ineligible feedback is a normal outcome; a best-effort trace
-            // diagnostic must not turn it into a service error or mask the
-            // original failed action result.
-            let _ = self.append_agent_trace_turn_event(
-                &turn.pane_id,
+        // Queue-only compatibility: false means no insertion, not a terminal
+        // decision. Settlement consumers must handle the three-way facade.
+        Ok(matches!(
+            self.settle_agent_failure_feedback_for_correction(turn, execution, reason)?,
+            super::completion::CompletionSettlementDisposition::Queued
+        ))
+    }
+
+    /// Retains original canonical source before budget/context/append changes.
+    /// Retained keeps the bounded group and eligible recovery obligation; only
+    /// an actual insertion is Queued, and only policy exhaustion is Declined.
+    pub(crate) fn settle_agent_failure_feedback_for_correction(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &mut AgentTurnExecution,
+        reason: &str,
+    ) -> Result<super::completion::CompletionSettlementDisposition> {
+        use super::completion::{
+            CompletionScope, CompletionSettlementDisposition, CompletionSettlementIntent,
+        };
+        if !self.completion_owns_transcript_policy(&turn.turn_id) {
+            return self.queue_agent_failure_feedback_after_retention(turn, execution, reason);
+        }
+        if let Err(error) = self.ensure_completion_settlement_source_current(turn, execution) {
+            self.record_completion_required_failure(
                 &turn.turn_id,
-                &format!(
-                    "failure feedback unavailable reason={}",
-                    runtime_action_feedback_admission_reason(execution)
-                ),
+                "settlement_source",
+                None,
+                None,
+                &error,
             );
-            return Ok(false);
+            return Err(error);
+        }
+        let scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Callback);
+        let result = (|| -> Result<CompletionSettlementDisposition> {
+            self.stage_completion_group_transcript(&turn.turn_id)?;
+            self.retain_completion_settlement_intent(
+                &turn.turn_id,
+                CompletionSettlementIntent::Failure,
+            );
+            if !self.completion_settlement_binding_current(&turn.turn_id)
+                || !self
+                    .agent_turn_ledger()
+                    .turn(&turn.turn_id)
+                    .is_some_and(|current| current.state == AgentTurnState::Running)
+                || self.agent_turn_is_human_paused(&turn.turn_id)
+                || !self.completion_group_publication_ready(&turn.turn_id)
+                || self.completion_settlement_publication_pending(&turn.turn_id)
+                || self.agent_provider_task_is_owned(&turn.turn_id)
+            {
+                return Ok(CompletionSettlementDisposition::Retained);
+            }
+            let disposition =
+                self.queue_agent_failure_feedback_after_retention(turn, execution, reason)?;
+            match disposition {
+                CompletionSettlementDisposition::Queued => {
+                    self.retain_queued_completion_correction_source(turn)?;
+                    self.clear_completion_settlement_intent(&turn.turn_id);
+                    Ok(disposition)
+                }
+                CompletionSettlementDisposition::Declined => {
+                    if execution.terminal_state == AgentTurnState::Running {
+                        self.clear_completion_settlement_intent(&turn.turn_id);
+                    }
+                    Ok(disposition)
+                }
+                CompletionSettlementDisposition::Retained => Ok(disposition),
+            }
+        })();
+        let result = result.map_err(|error| {
+            self.retain_completion_settlement_error(
+                &turn.turn_id,
+                "ordinary_failure_feedback",
+                error,
+            )
+        });
+        self.end_completion_scope(scope, "ordinary_failure_feedback", false, result)
+    }
+
+    /// A pending key owns a late-bound ordinary turn, not a frozen request or
+    /// claim generation. Reusing it grants no dispatch/policy/lease authority.
+    /// Reject incompatible ownership BEFORE budget/context mutation, then check
+    /// again after canonical feedback is committed. Actual claim admission still
+    /// validates current context, identity, policy and its newly allocated lease.
+    fn failure_feedback_pending_destination_is_current(&self, turn: &AgentTurnRecord) -> bool {
+        if self.completion_owns_transcript_policy(&turn.turn_id)
+            || !self.agent_provider_task_is_pending(&turn.turn_id)
+            || self.agent_provider_task_is_claimed(&turn.turn_id)
+            || self.agent_turn_is_human_paused(&turn.turn_id)
+            || self.subagent_descendant_is_fenced(&turn.agent_id)
+            || self.agent_is_compacting(&turn.pane_id)
+            || self.persistence.bookkeeping_pending(&turn.conversation_id)
+            || self
+                .macro_judge_step_index_for_turn(&turn.turn_id)
+                .is_some()
+            || self
+                .agent
+                .sandbox_failure_assessments
+                .contains_key(&turn.turn_id)
+            || self.routed_presentation_turn(&turn.turn_id)
+            || !self.agent_turn_contexts().contains_key(&turn.turn_id)
+        {
+            return false;
+        }
+        if !self
+            .agent_turn_ledger()
+            .turn(&turn.turn_id)
+            .is_some_and(|current| {
+                current.state == AgentTurnState::Running
+                    && current.agent_id == turn.agent_id
+                    && current.pane_id == turn.pane_id
+                    && current.conversation_id == turn.conversation_id
+            })
+            || !self
+                .agent_shell_store()
+                .get(&turn.pane_id)
+                .is_some_and(|session| {
+                    session.session_id == turn.conversation_id
+                        && session.running_turn_id.as_deref() == Some(turn.turn_id.as_str())
+                })
+        {
+            return false;
+        }
+        let Some(task) = self.runtime_agent_provider_task(&turn.turn_id) else {
+            return false;
+        };
+        task.agent_id == turn.agent_id
+            && task.pane_id == turn.pane_id
+            && self
+                .runtime_auto_sizing_dispatch_for_turn(turn, &task.model_profile)
+                .is_ok_and(|dispatch| dispatch.is_none())
+    }
+
+    /// Existing correction policy/budget transition, entered only after the
+    /// owning facade retained source and publication is eligible (or no group).
+    fn queue_agent_failure_feedback_after_retention(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &mut AgentTurnExecution,
+        reason: &str,
+    ) -> Result<super::completion::CompletionSettlementDisposition> {
+        use super::completion::CompletionSettlementDisposition;
+        self.settle_unstarted_action_siblings(turn, execution)?;
+        if self.agent_turn_is_human_paused(&turn.turn_id)
+            || !self.completion_group_publication_ready(&turn.turn_id)
+        {
+            return Ok(CompletionSettlementDisposition::Declined);
+        }
+        if !self.execution_can_feed_failure_to_model(&turn.turn_id, execution) {
+            return Ok(CompletionSettlementDisposition::Declined);
+        }
+        let existing_pending = self.agent_provider_task_is_pending(&turn.turn_id);
+        if existing_pending {
+            self.ensure_completion_required_gates_ready(&turn.turn_id)?;
+            self.ensure_completion_admission_open()?;
+            if !self.failure_feedback_pending_destination_is_current(turn) {
+                return Err(MezError::invalid_state(
+                    "existing failure feedback provider destination is not current ordinary work",
+                ));
+            }
         }
         let attempt_limit = self.agent_action_failure_retry_limit();
         let attempt_keys = runtime_failure_feedback_attempt_keys(&turn.turn_id, execution);
@@ -180,12 +336,13 @@ impl RuntimeSessionService {
         let exhausted = !unbounded_apply_patch_recovery && !any_budget_remaining;
         let attempt = attempts_after_update.into_iter().max().unwrap_or(0);
         if exhausted {
-            self.append_agent_trace_turn_event(
+            let trace = self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 &turn.turn_id,
                 "failure feedback exhausted; ending turn as failed",
-            )?;
-            return Ok(false);
+            );
+            self.note_completion_optional_error(&turn.turn_id, trace);
+            return Ok(CompletionSettlementDisposition::Declined);
         }
         let settled_results = execution
             .action_results
@@ -194,27 +351,62 @@ impl RuntimeSessionService {
             .cloned()
             .collect::<Vec<_>>();
         self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
+        if self.completion_owns_transcript_policy(&turn.turn_id) {
+            self.retain_completion_group_transcript(&turn.turn_id)?;
+        }
         execution.final_turn = false;
         execution.terminal_state = AgentTurnState::Running;
-        self.agent
-            .pending_agent_provider_tasks
-            .insert(turn.turn_id.clone());
+        if existing_pending {
+            let destination = self
+                .ensure_completion_required_gates_ready(&turn.turn_id)
+                .and_then(|()| self.ensure_completion_admission_open())
+                .and_then(|()| {
+                    if self.failure_feedback_pending_destination_is_current(turn) {
+                        Ok(())
+                    } else {
+                        Err(MezError::invalid_state(
+                            "committed failure feedback lost its existing provider destination",
+                        ))
+                    }
+                });
+            if let Err(error) = destination {
+                return Err(self.retain_settled_results_after_application_error(
+                    &turn.turn_id,
+                    execution,
+                    &settled_results,
+                    error,
+                ));
+            }
+            // The existing turn-keyed intent will read the newly committed
+            // context at actual claim. No insertion, queued trace or ACK here.
+            return Ok(CompletionSettlementDisposition::Retained);
+        }
+        if !self.queue_agent_provider_task(turn.turn_id.clone()) {
+            self.ensure_completion_required_gates_ready(&turn.turn_id)?;
+            self.ensure_completion_admission_open()?;
+            return Err(MezError::invalid_state(
+                "failure feedback provider insertion was not accepted",
+            ));
+        }
         let feedback_status_line = runtime_failure_feedback_status_line(
             execution,
             attempt,
             attempt_limit,
             unbounded_apply_patch_recovery,
         );
-        self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &feedback_status_line)?;
-        self.append_agent_trace_turn_event(
+        let status =
+            self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &feedback_status_line);
+        self.note_completion_optional_error(&turn.turn_id, status);
+        let trace = self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
             &format!(
                 "provider_task queued reason=action_failure_feedback source={}",
                 reason
             ),
-        )?;
-        Ok(true)
+        );
+        self.note_completion_optional_error(&turn.turn_id, trace);
+        Ok(CompletionSettlementDisposition::Queued)
     }
 
     /// Returns true when a failed execution can be retried by the model.
@@ -228,7 +420,7 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `turn_id`: The owning turn id used to inspect active shell work.
     /// - `execution`: The failed execution being evaluated.
-    fn execution_can_feed_failure_to_model(
+    pub(in crate::runtime::agent) fn execution_can_feed_failure_to_model(
         &self,
         turn_id: &str,
         execution: &AgentTurnExecution,

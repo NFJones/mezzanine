@@ -559,9 +559,7 @@ fn runtime_executor_progress_keeps_pending_steering_at_tail() {
             "{text}"
         );
     }
-    service
-        .retire_action_presentation_progress_for_turn(&turn.turn_id)
-        .unwrap();
+    service.retire_action_presentation_progress_for_turn(&turn.turn_id);
     service
         .append_agent_status_text_to_terminal_buffer("%1", "after retirement")
         .unwrap();
@@ -902,7 +900,7 @@ fn runtime_action_progress_retirement_preserves_bottom_viewport_origin() {
     assert_eq!(
         service
             .retire_action_presentation_progress_for_action(&turn.turn_id, "shell-1")
-            .unwrap(),
+            .retired,
         1
     );
 
@@ -1116,7 +1114,7 @@ fn runtime_action_progress_reconciles_provisional_results_without_replay() {
     assert_eq!(
         service
             .retire_action_presentation_progress_for_action(&turn.turn_id, &action.id)
-            .unwrap(),
+            .retired,
         1
     );
     assert_eq!(service.agent_pane_screen("%1").unwrap(), &promoted_screen);

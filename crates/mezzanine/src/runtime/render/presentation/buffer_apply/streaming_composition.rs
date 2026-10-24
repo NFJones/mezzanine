@@ -88,7 +88,7 @@ impl RuntimeSessionService {
             pane_id,
             installed_lineage,
             progress_presentation,
-        );
+        )?;
         if let Some(presentation) = self
             .presentation
             .agent_streaming_say_presentations

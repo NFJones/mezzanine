@@ -1717,18 +1717,21 @@ impl RuntimeSessionService {
     /// completes. Manual readiness overrides use this helper so an operator
     /// can unblock a turn waiting for readiness without waiting for a pending
     /// probe marker to finish.
-    pub(crate) fn queue_ready_provider_continuation_for_pane(&mut self, pane_id: &str) -> usize {
+    pub(crate) fn queue_ready_provider_continuation_for_pane(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<usize> {
         if self.pane_readiness_state(pane_id) != PaneReadinessState::Ready
             || self.pane_readiness_override_has_pending_probe(pane_id)
         {
-            return 0;
+            return Ok(0);
         }
         let Some(turn_id) = self
             .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
         else {
-            return 0;
+            return Ok(0);
         };
         if self.agent.pending_agent_provider_tasks.contains(turn_id)
             || self
@@ -1736,7 +1739,7 @@ impl RuntimeSessionService {
                 .claimed_agent_provider_tasks
                 .contains_key(turn_id)
         {
-            return 0;
+            return Ok(0);
         }
         let turn_is_running = self
             .agent_turn_ledger()
@@ -1744,19 +1747,18 @@ impl RuntimeSessionService {
             .iter()
             .any(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running);
         if !turn_is_running {
-            return 0;
+            return Ok(0);
         }
         let Some(execution) = self.agent_turn_executions().get(turn_id) else {
-            return 0;
+            return Ok(0);
         };
         if !runtime_execution_ready_for_provider_continuation(execution)
             && !self.execution_has_pending_shell_dispatch(turn_id, execution)
         {
-            return 0;
+            return Ok(0);
         }
-        self.agent
-            .pending_agent_provider_tasks
-            .insert(turn_id.to_string());
-        1
+        let turn_id = turn_id.to_string();
+        self.admit_completion_provider_continuation(&turn_id)
+            .map(usize::from)
     }
 }

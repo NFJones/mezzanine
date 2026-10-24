@@ -1218,9 +1218,9 @@ impl RuntimeSessionService {
                 if execution.terminal_state == AgentTurnState::Running
                     && runtime_execution_ready_for_provider_continuation(&execution)
                 {
-                    self.agent
-                        .pending_agent_provider_tasks
-                        .insert(turn.turn_id.clone());
+                    self.agent_turn_executions_mut()
+                        .insert(turn.turn_id.clone(), execution.clone());
+                    self.admit_completion_provider_continuation(&turn.turn_id)?;
                 }
                 self.agent_turn_executions_mut()
                     .insert(turn.turn_id.clone(), execution);

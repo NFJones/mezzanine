@@ -508,7 +508,7 @@ pub enum MezErrorKind {
 }
 
 /// Confirmed or uncertain configuration effects retained across a failed operation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ConfigMutationFailureEvidence {
     /// Durable destination outcome; absence means it could not be established.
     pub(crate) persisted: Option<bool>,
@@ -522,7 +522,9 @@ pub(crate) struct ConfigMutationFailureEvidence {
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-#[derive(Debug, Error)]
+/// Cloning preserves diagnostic/policy observations for retained completion
+/// failure reporting; these fields contain no executable ownership grant.
+#[derive(Debug, Clone, Error)]
 #[error("{kind:?}: {message}")]
 pub struct MezError {
     /// Stores the kind value for this data structure.

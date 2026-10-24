@@ -20,6 +20,13 @@ use super::RuntimeSideEffect;
 
 mod adapters;
 mod bookkeeping;
+mod transcript_admission;
+#[cfg(test)]
+pub(crate) use bookkeeping::RuntimeCompletionCandidateAcceptance;
+pub(crate) use bookkeeping::{RuntimeBookkeepingClaimIdentity, RuntimeCompletionCandidateWitness};
+pub(crate) use transcript_admission::{
+    RuntimeTranscriptAdmissionStamp, RuntimeTranscriptNextSequence,
+};
 mod effects;
 mod objective_mirrors;
 pub use objective_mirrors::RuntimeObjectiveMirrorStatus;
@@ -62,7 +69,7 @@ pub(crate) struct RuntimePersistenceComponent {
     /// Unchecked chronology candidates; never exposed as accepted transcript rows.
     bookkeeping_candidates: Vec<crate::runtime::RuntimeBookkeepingCandidate>,
     /// Exact worker generations currently checking candidates.
-    bookkeeping_claims: BTreeSet<u64>,
+    bookkeeping_claims: BTreeMap<u64, RuntimeBookkeepingClaimIdentity>,
     next_bookkeeping_generation: u64,
     /// Transcript writes handed to the external worker but not yet settled.
     in_flight_transcript_entries: BTreeMap<(String, u64), Vec<InFlightTranscriptBatch>>,
@@ -76,7 +83,8 @@ pub(crate) struct RuntimePersistenceComponent {
     queued_provider_settlement_effects: Vec<RuntimeSideEffect>,
     queued_config_effects: Vec<RuntimeSideEffect>,
     queued_program_hook_effects: Vec<RuntimeSideEffect>,
-    deferred_transcript_next_sequences: BTreeMap<String, u64>,
+    deferred_transcript_next_sequences:
+        BTreeMap<(std::path::PathBuf, String), transcript_admission::TranscriptAdmission>,
     pending_presentation_entries: BTreeMap<String, usize>,
     /// Immutable steering writes retained until exact acknowledgement or retry exhaustion.
     steering_presentation_writes: BTreeMap<(String, String), RuntimeSideEffect>,

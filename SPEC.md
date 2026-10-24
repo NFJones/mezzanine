@@ -4823,6 +4823,23 @@ suppress only that matching final replay; a mismatch or failure MUST restore
 ordinary terminal presentation. Terminal action cleanup, cancellation, retry, conversation
 replacement, and pane teardown MUST retire transient executor-progress state.
 
+Progress cleanup MUST distinguish components actually retired from exact source
+and cleanup intent still retained. An unowned suffix, stale screen lineage, or
+failed optional installation MUST NOT be reported as successful retirement.
+Retained cleanup intent MUST NOT promote source or suppress eligible final
+output. Optional paint failures MUST NOT prevent worker delivery cancellation,
+transaction protocol retirement, or interruption of other selected transactions.
+Canonical source-backed replay MAY discharge retained cleanup only after its
+complete screen transaction commits; a provisional clean screen that can still
+roll back is not a cleanup acknowledgment. A generic screen replacement alone
+MUST NOT discharge the original source or permit stale snapshots to revive it.
+Canonical reconstruction with no eligible replay source MUST return an owned
+unavailable-source disposition rather than silently dropping its worker reply.
+It MUST preserve pending payload and pixels without installing a candidate or
+repeating unchanged impossible reconstruction indefinitely. Observed source,
+image, or explicit repository replacement changes MAY reactivate recovery;
+unavailable-source evidence is not durability or cleanup acceptance.
+
 For runtime-network `fetch_url` and `web_search`, ordinary HTTP body chunks MAY
 produce provisional read-body progress only after actor ingress has claimed the
 approved external action and issued its exact attempt identity. Fetch progress
@@ -4873,12 +4890,71 @@ installation MUST preserve that exact tuple for publication-only recovery;
 a later callback MUST NOT substitute new result bytes or resample its occurrence.
 Successful installation acknowledges only that retained tuple. This publication
 acknowledgment is not canonical execution acceptance or authority to rerun work.
+Installing provisional provider claim/accounting state MUST NOT discharge an
+original completion group. Ordinary handoff requires actual bounded lease
+admission and completion of the actor's remaining fallible pre-dispatch steps.
+Lease refusal MUST retain exact original result/context custody before any
+provider-error overwrite. Its negative Failed-settlement disposition MUST keep
+the original typed failure and once-only task/scheduler/consumer obligations;
+it MUST NOT acknowledge ordinary success or replay effects. Dedicated existing
+preterminal assessment custody is not an ordinary handoff or refusal permit.
+Existing synchronous completion-retention scopes MUST close through a consumed,
+non-clonable observation of the original group allocation, immutable turn/group
+identity and actual installed outer scope. A nested requested scope MUST NOT
+replace or clear its outer scope. Absence at entry MUST NOT adopt a later group;
+a stale close MUST NOT attribute errors, cancel work or retire a replacement.
+An operation error MUST remain primary on stale close. This retention identity
+is not live execution/context authority or permission for pane teardown, and
+pinning a group alone does not retain components already legitimately retired.
+Shared pane shutdown MUST capture its existing selected-pane groups before
+descendant cleanup and retain those exact observations through its complete
+synchronous return. This outer boundary MUST attribute errors without invoking
+additional cancellation or backing cleanup, and MUST NOT adopt later groups.
+Every original observation MUST close even after a mismatch or required failure.
+The original operation error remains aggregate primary; otherwise the first
+exact original required failure in capture order precedes a close mismatch.
+One group's derived primary MUST NOT become another group's operation error.
+This retention boundary does not change inner turn selection, scheduling or
+destructive cleanup authority, nor establish replacement-safe pane teardown.
+The generic pane cleanup helper MUST retain its existing groups from entry
+through its complete synchronous return, including present-layout callers.
+An admitted pane-close call with an already resolved explicit target MUST keep
+its original observations across shared shutdown and the complete removal
+suffix. Invalid-target, nonprimary and rejected live/non-force requests MUST NOT
+be latched as required completion failures by that caller boundary. Omitted
+targets retain their separate routing behavior and are not qualified by this
+explicit-target retention rule. Both helper and caller use error-only close;
+neither grants process ownership nor reconstructs legitimately retired context.
+Only an exact armed negative own-loop restoration MAY preserve its frozen old
+running turn through the existing qualified restoration contract. It MUST keep
+the generic durable metadata-reset values, existing incoming/outgoing/native
+cleanup validation and full rollback; installed acknowledgement follows actual
+cleanup commit, not parent CID text. Unqualified active-turn binding remains
+rejected. This exception grants no restored-parent work or project membership.
 When one action ordinal retains multiple command entries, each successful
 installation MUST acknowledge only that exact entry before the next command is
 attempted. A later pre-install failure MUST retain the failed entry and remaining
 suffix, not replay the installed prefix. Entries with equal command text but
 distinct accepted identities MUST remain distinct, preserving their original
 occurrence, source, copy attribution and persistence identity.
+A settled RESULT accepted after its header is visible MUST retain its immutable
+full source and original presentation entry BEFORE immediate installation. A
+pre-install error MUST leave that same tuple/occurrence owned; retry MUST NOT
+replace it with a newly captured clock or source. Acknowledgment and removal
+MUST refer only to the successfully installed original component. Presentation
+source acceptance alone is not canonical execution commit or required-gate success.
+Approved external integration completion MUST transfer its exact outcome into
+actor ownership before retiring the matching worker claim. Canonical terminal
+result/context ownership precedes optional result installation. Required audit
+and completed-hook stages distinguish entry from acceptance; a failed stage
+retains the original typed error and MUST NOT be replayed on duplicate delivery.
+An unchanged duplicate is not another applied execution or transport dispatch.
+Completion retirement evidence MUST identify the exact immutable original
+conversation/read owner and ordered terminal-result/required-failure snapshot;
+matching only a turn, group or persistence key is insufficient. Identical owned
+snapshots may reuse the same producer-issued candidate witness, but changed
+evidence MUST NOT acknowledge an older snapshot. Candidate ownership is not
+checked archive acceptance or disk durability; generation exhaustion fails closed.
 If projection is unavailable, validation fails, or source mismatches cannot be
 reconciled independently, Mezzanine MUST remove only the still-provisional
 owned suffix and present validated source through normal renderers. Provider
@@ -10871,6 +10947,50 @@ MUST NOT retry a possibly delivered wrapper. Transaction output retention and
 private output-frame rendering MUST preserve bounded incremental state across
 arbitrary PTY chunk boundaries, including split UTF-8 scalars and Base64 frame
 markers, without exposing private framing bytes.
+Completed external and native worker outcomes MUST transfer to the exact
+actor-owned turn/action/group/attempt receipt before their delivery claims or
+native markers retire. Canonical terminal results and context MUST precede
+optional pane paint. Required audit, storage, context and hook failures MUST
+retain their original typed evidence and MUST NOT be retried as publication.
+An installation failure MUST retain the original immutable RESULT source,
+entry, occurrence and native transaction where present. Only matching installed
+source ownership acknowledges publication; this is not disk durability.
+Publication-only recovery MUST use the existing bounded completion/group owner,
+never repeat a completed action, provider request, hook or ambiguous effect,
+and MUST preserve real native, external, dependency and human-pause barriers.
+Shared settlement MUST distinguish retained source/intent from actual queued
+continuation and an ordinary declined correction decision. Retained paint MUST
+NOT consume correction budget, commit context again, or terminalize the task.
+An already-pending ordinary turn may retain newly committed failure feedback
+only under its exact current turn/agent/conversation and open admission guards;
+pending is a late-bound scheduling intent, not a frozen request or claim lease.
+Coalescence MUST NOT report a new insertion or queued acknowledgment. Both
+synchronous and asynchronous callers MUST preserve the three-way disposition
+through terminal bookkeeping and lifecycle reporting. Retained failed execution
+evidence MUST remain unchanged; reporting uses the same current ledger owner
+and MUST NOT overwrite a replacement execution or prompt. Actual provider
+claim, policy, preparation and generation-qualified lease admission remain
+authoritative. A Running observation is not a new correction attempt; this
+does not license replay of a stale Failed copy or of audit/hooks/application.
+Required failure audit MUST retain exact group/failure-qualified entered and
+accepted ownership; ambiguous append failure MUST remain unproven without replay.
+Missing configured audit/profile MUST remain explicit not-required policy, not a
+claimed append or durability receipt.
+Readiness probes MUST NOT retire completion backing before an actual provider
+claim. An existing purpose-qualified preterminal internal assessment MUST retain
+its original completion group and backing; dedicated request presence alone
+MUST NOT grant that disposition or approve any action. Terminal cleanup and
+forced cancellation MUST retain original-target
+evidence on handoff failure and cancel only the exact admitted worker.
+Frozen completion archive identity MUST remain immutable. Fresh archive
+admission MUST be qualified by the original transcript path and conversation,
+one coherent checked history/frontier view, exact queued/inflight row bytes and
+the current private strong reservation identity. Cancellation, matching write
+failure, rollback and synchronous in-place writes MUST revoke old read admission
+before fallible diagnostics. Only checked committed observations or exact owned
+successful writes may advance the committed frontier. A committed maximum
+sequence has no successor; legacy conversation-wide cursor compatibility MUST
+NOT manufacture original-target archive proof.
 The `apply_patch` semantic action MUST emit one execution row naming the active path for each per-file read transaction and MUST suppress its internal write-phase start row. It MUST preserve completed per-file mutations when a later file operation in the same patch fails, retain and display confirmed diffs for applied paths, update modified-file tracking for those paths, and identify each failed path or operation so the model can retry only the remaining file work instead of treating the whole patch as rolled back. Machine-readable per-file outcome records MUST be filtered from user-visible diff output; malformed, missing, or truncated records MUST retain generic fail-closed diagnostics.
 The `apply_patch` semantic action MUST synthesize an explicit short timeout
 instead of inheriting the general shell-command default, so malformed or

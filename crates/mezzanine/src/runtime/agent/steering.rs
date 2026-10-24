@@ -548,7 +548,7 @@ impl RuntimeSessionService {
             {
                 self.agent_turn_ledger_mut()
                     .finish_turn(&turn.turn_id, super::AgentTurnState::Failed)?;
-                self.clear_terminal_agent_turn_runtime_state(&turn.turn_id);
+                self.clear_terminal_agent_turn_runtime_state(&turn.turn_id)?;
             }
         }
         Ok(())

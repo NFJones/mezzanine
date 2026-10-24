@@ -894,7 +894,7 @@ pub(super) fn runtime_mark_pane_ready_command(
     if body.contains("override=applied") {
         service.set_pane_readiness(&pane_id, PaneReadinessState::Ready);
         let queued_provider_continuations =
-            service.queue_ready_provider_continuation_for_pane(&pane_id);
+            service.queue_ready_provider_continuation_for_pane(&pane_id)?;
         service.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(

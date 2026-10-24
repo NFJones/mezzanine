@@ -1053,14 +1053,15 @@ impl RuntimeSessionService {
         {
             let observed_result = execution.action_results[result_index].clone();
             self.append_action_result_context_if_absent(&turn.turn_id, &observed_result)?;
-            self.agent
-                .pending_agent_provider_tasks
-                .insert(turn.turn_id.clone());
-            self.append_agent_trace_turn_event(
+            self.agent_turn_executions_mut()
+                .insert(turn.turn_id.clone(), execution.clone());
+            self.admit_completion_provider_continuation(&turn.turn_id)?;
+            let trace = self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 &turn.turn_id,
                 "provider_task queued reason=approval_resume_ready_for_provider_continuation",
-            )?;
+            );
+            self.note_completion_optional_error(&turn.turn_id, trace);
         }
         if matches!(
             execution.terminal_state,
@@ -1274,14 +1275,15 @@ impl RuntimeSessionService {
                 {
                     let observed_result = execution.action_results[result_index].clone();
                     self.append_action_result_context_if_absent(&turn.turn_id, &observed_result)?;
-                    self.agent
-                        .pending_agent_provider_tasks
-                        .insert(turn.turn_id.clone());
-                    self.append_agent_trace_turn_event(
+                    self.agent_turn_executions_mut()
+                        .insert(turn.turn_id.clone(), execution.clone());
+                    self.admit_completion_provider_continuation(&turn.turn_id)?;
+                    let trace = self.append_agent_trace_turn_event(
                         &turn.pane_id,
                         &turn.turn_id,
                         "provider_task queued reason=approval_redirect_ready_for_provider_continuation",
-                    )?;
+                    );
+                    self.note_completion_optional_error(&turn.turn_id, trace);
                 }
                 if matches!(
                     execution.terminal_state,

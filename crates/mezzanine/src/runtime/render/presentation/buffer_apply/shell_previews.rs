@@ -15,12 +15,20 @@ impl RuntimeSessionService {
         self.presentation.agent_install_failure_countdown = Some(after);
     }
 
+    /// Holds the existing preinstall failure cut across callback/idle attempts.
+    /// This does not change execution, queues, policy or production retry limits.
+    #[cfg(test)]
+    pub(crate) fn hold_agent_presentation_installs_for_tests(&mut self, held: bool) {
+        self.presentation.agent_install_failure_held = held;
+    }
+
     /// Removes previews whose final output has already been retained.
     pub(super) fn retire_settled_agent_shell_previews(
         presentation: &mut RuntimeAgentShellPreviewPresentation,
     ) {
         for owner in std::mem::take(&mut presentation.settled_owners) {
             presentation.previews.remove(&owner);
+            presentation.retirement_requested.remove(&owner);
         }
     }
 
@@ -218,6 +226,12 @@ impl RuntimeSessionService {
                 presentation.transient_rows,
                 progress_rows,
             ) else {
+                if !presentation.retirement_requested.is_empty() {
+                    self.defer_retained_shell_preview_cleanup(pane_id);
+                    return Err(MezError::invalid_state(
+                        "shell preview cleanup source is retained",
+                    ));
+                }
                 self.presentation
                     .agent_shell_output_previews
                     .remove(pane_id);
@@ -230,6 +244,15 @@ impl RuntimeSessionService {
             presentation.baseline_screen = std::sync::Arc::new(baseline.clone());
             presentation.transient_rows = 0;
             return Ok((conversation_id, baseline, Some(presentation)));
+        }
+        if presentation
+            .as_ref()
+            .is_some_and(|owner| !owner.retirement_requested.is_empty())
+        {
+            self.defer_retained_shell_preview_cleanup(pane_id);
+            return Err(MezError::invalid_state(
+                "shell preview cleanup source is retained",
+            ));
         }
         if presentation.is_some() {
             self.presentation
@@ -247,6 +270,12 @@ impl RuntimeSessionService {
         baseline_screen: TerminalScreen,
         presentation: Option<RuntimeAgentShellPreviewPresentation>,
     ) -> Result<()> {
+        #[cfg(test)]
+        if self.presentation.agent_install_failure_held {
+            return Err(MezError::invalid_state(
+                "injected held pre-install presentation failure",
+            ));
+        }
         #[cfg(test)]
         if let Some(remaining) = self.presentation.agent_install_failure_countdown.as_mut() {
             if *remaining == 0 {
@@ -292,22 +321,20 @@ impl RuntimeSessionService {
             .ok_or_else(|| {
                 MezError::invalid_state("agent durable presentation conversation changed")
             })?;
-        self.presentation
-            .agent_shell_output_previews
-            .remove(pane_id);
         if let Some(mut presentation) = presentation.take() {
             presentation.installed_lineage = installed_lineage;
             presentation.baseline_screen = std::sync::Arc::new(baseline_screen);
             presentation.transient_rows = transient_rows;
             self.presentation
-                .agent_shell_output_previews
-                .insert(pane_id.to_string(), presentation);
+                .commit_shell_preview(pane_id, Some(presentation));
+        } else {
+            self.presentation.commit_shell_preview(pane_id, None);
         }
         self.restore_composed_action_presentation_progress(
             pane_id,
             installed_lineage,
             progress_presentation,
-        );
+        )?;
         Ok(())
     }
 
@@ -369,6 +396,14 @@ impl RuntimeSessionService {
                     || presentation.installed_lineage != current_lineage
             });
         if stale_projection {
+            if self
+                .presentation
+                .agent_shell_output_previews
+                .get(pane_id)
+                .is_some_and(|owner| !owner.retirement_requested.is_empty())
+            {
+                return Ok(());
+            }
             self.presentation
                 .agent_shell_output_previews
                 .remove(pane_id);
@@ -397,8 +432,10 @@ impl RuntimeSessionService {
         let mut presentation = self
             .presentation
             .agent_shell_output_previews
-            .remove(pane_id)
+            .get(pane_id)
+            .cloned()
             .unwrap_or_else(|| RuntimeAgentShellPreviewPresentation {
+                snapshot_current: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 conversation_id: conversation_id.clone(),
                 installed_lineage: self
                     .agent_pane_screen_lineage(pane_id, &conversation_id)
@@ -408,6 +445,9 @@ impl RuntimeSessionService {
                 next_order: 0,
                 previews: std::collections::BTreeMap::new(),
                 settled_owners: std::collections::BTreeSet::new(),
+                retirement_requested: std::collections::BTreeSet::new(),
+                retirement_refused: false,
+                replay_unavailable: None,
             });
         if presentation.settled_owners.contains(&owner)
             || presentation
@@ -488,13 +528,12 @@ impl RuntimeSessionService {
         presentation.installed_lineage = installed_lineage;
         presentation.transient_rows = transient_rows;
         self.presentation
-            .agent_shell_output_previews
-            .insert(pane_id.to_string(), presentation);
+            .commit_shell_preview(pane_id, Some(presentation));
         self.restore_composed_action_presentation_progress(
             pane_id,
             installed_lineage,
             progress_presentation,
-        );
+        )?;
         Ok(())
     }
 
@@ -518,14 +557,38 @@ impl RuntimeSessionService {
         if !presentation.previews.contains_key(owner) {
             return false;
         }
+        if !presentation.settled_owners.contains(owner) {
+            presentation
+                .snapshot_current
+                .store(false, std::sync::atomic::Ordering::Release);
+            presentation.snapshot_current =
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        }
         presentation.settled_owners.insert(owner.clone())
+    }
+
+    /// Invalidates stale workers/snapshots before cleanup intent is retained.
+    /// This changes no pixels and grants no worker or terminal authority.
+    fn fence_shell_preview_cleanup_intent(&mut self, pane_id: &str) {
+        if let Some(owner) = self
+            .presentation
+            .agent_shell_output_previews
+            .get_mut(pane_id)
+        {
+            owner
+                .snapshot_current
+                .store(false, std::sync::atomic::Ordering::Release);
+            owner.snapshot_current = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            owner.retirement_refused = false;
+            owner.replay_unavailable = None;
+        }
     }
 
     /// Retires every preview owned by one turn without disturbing other owners.
     ///
     /// Exact installed-screen lineage is required before the remaining owners
-    /// are reprojected. A lineage mismatch discards stale projection metadata
-    /// without mutating intervening pane content.
+    /// are reprojected. Refusal retains selected source and cleanup intent;
+    /// neither unrelated owners nor replacement pixels are consumed on error.
     pub(crate) fn retire_agent_shell_output_previews_for_turn(
         &mut self,
         turn_id: &str,
@@ -547,7 +610,8 @@ impl RuntimeSessionService {
             let Some(mut presentation) = self
                 .presentation
                 .agent_shell_output_previews
-                .remove(&pane_id)
+                .get(&pane_id)
+                .cloned()
             else {
                 continue;
             };
@@ -557,14 +621,34 @@ impl RuntimeSessionService {
                 .filter(|owner| owner.turn_id == turn_id)
                 .cloned()
                 .collect::<Vec<_>>();
-            retired = retired.saturating_add(owners.len());
+            if owners
+                .iter()
+                .any(|owner| !presentation.retirement_requested.contains(owner))
+            {
+                self.fence_shell_preview_cleanup_intent(&pane_id);
+            }
+            if let Some(current) = self
+                .presentation
+                .agent_shell_output_previews
+                .get_mut(&pane_id)
+            {
+                current.retirement_requested.extend(owners.iter().cloned());
+                current.settled_owners.extend(owners);
+                presentation = current.clone();
+            }
+            let selected_count = presentation.retirement_requested.len();
             let owns_live_screen = self
                 .agent_pane_screen_lineage(&pane_id, &presentation.conversation_id)
-                == Some(presentation.installed_lineage);
+                == Some(presentation.installed_lineage)
+                && self
+                    .agent_shell_store()
+                    .get(&pane_id)
+                    .is_some_and(|session| session.session_id == presentation.conversation_id);
             if !owns_live_screen {
+                self.defer_retained_shell_preview_cleanup(&pane_id);
                 continue;
             }
-            for owner in owners {
+            for owner in std::mem::take(&mut presentation.retirement_requested) {
                 presentation.previews.remove(&owner);
                 presentation.settled_owners.remove(&owner);
             }
@@ -584,13 +668,127 @@ impl RuntimeSessionService {
                 presentation.transient_rows,
                 progress_rows,
             ) else {
+                self.defer_retained_shell_preview_cleanup(&pane_id);
                 continue;
             };
             let conversation_id = presentation.conversation_id.clone();
             let retained = (!presentation.previews.is_empty()).then_some(presentation);
             self.install_agent_shell_preview_write(&pane_id, &conversation_id, baseline, retained)?;
+            retired = retired.saturating_add(selected_count);
         }
         Ok(retired)
+    }
+
+    /// Checks the existing renderer's actual canonical-replay eligibility.
+    fn shell_preview_rebuild_is_eligible(
+        &self,
+        pane: &str,
+        owner: &RuntimeAgentShellPreviewPresentation,
+    ) -> bool {
+        !self.presentation_replay_is_unavailable(
+            pane,
+            &owner.conversation_id,
+            owner.replay_unavailable,
+        ) && self.persistence.transcript_store().is_some()
+            && self.find_pane_descriptor(pane).is_some()
+            && self.agent_shell_store().get(pane).is_some_and(|session| {
+                session.session_id == owner.conversation_id
+                    && session.visibility == mez_agent::AgentShellVisibility::Visible
+                    && !session.ephemeral
+            })
+            && self
+                .agent_pane_screen_lineage(pane, &owner.conversation_id)
+                .is_some()
+            && self
+                .agent_pane_screen(pane)
+                .is_some_and(|screen| !screen.normal_viewport_detached_from_history())
+    }
+
+    /// Retains the unowned source while handing recovery to the already bounded
+    /// canonical renderer. Ineligible/no-store sources remain explicit refusals,
+    /// not cleanup acknowledgments or endless suffix-only idle attempts.
+    fn defer_retained_shell_preview_cleanup(&mut self, pane: &str) {
+        if let Some(owner) = self.presentation.agent_shell_output_previews.get_mut(pane) {
+            owner.retirement_refused = true;
+        }
+        let eligible = self
+            .presentation
+            .agent_shell_output_previews
+            .get(pane)
+            .is_some_and(|owner| self.shell_preview_rebuild_is_eligible(pane, owner));
+        if eligible && let Some(size) = self.agent_pane_screen(pane).map(TerminalScreen::size) {
+            self.presentation
+                .agent_presentation_projection_cache
+                .remove(pane);
+            self.presentation
+                .defer_agent_presentation_resize(pane, size);
+        }
+    }
+
+    /// Keeps existing idle cleanup enrolled for exact bound cancelled sources.
+    pub(crate) fn shell_preview_retirement_retry_needed(&self) -> bool {
+        self.presentation
+            .agent_shell_output_previews
+            .iter()
+            .any(|(pane, owner)| {
+                !owner.retirement_requested.is_empty()
+                    && (!owner.retirement_refused
+                        || self.shell_preview_rebuild_is_eligible(pane, owner))
+                    && self
+                        .agent_shell_store()
+                        .get(pane)
+                        .is_some_and(|session| session.session_id == owner.conversation_id)
+                    && self
+                        .agent_pane_screen_lineage(pane, &owner.conversation_id)
+                        .is_some()
+            })
+    }
+
+    /// Retries only existing cleanup intent on at most eight pane owners. No
+    /// worker, hook, canonical result or provider continuation is re-entered.
+    pub(crate) fn retry_shell_preview_retirements(&mut self) -> usize {
+        let mut panes = self
+            .presentation
+            .agent_shell_output_previews
+            .iter()
+            .filter(|(pane, owner)| {
+                !owner.retirement_requested.is_empty()
+                    && (!owner.retirement_refused
+                        || self.shell_preview_rebuild_is_eligible(pane, owner))
+                    && self
+                        .agent_shell_store()
+                        .get(pane)
+                        .is_some_and(|session| session.session_id == owner.conversation_id)
+                    && self
+                        .agent_pane_screen_lineage(pane, &owner.conversation_id)
+                        .is_some()
+            })
+            .map(|(pane, owner)| {
+                (
+                    pane.clone(),
+                    owner
+                        .retirement_requested
+                        .iter()
+                        .next()
+                        .map(|owner| owner.turn_id.clone()),
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(cursor) = &self.presentation.shell_preview_retirement_cursor {
+            let split = panes.partition_point(|(pane, _)| pane <= cursor);
+            panes.rotate_left(split);
+        }
+        let mut retired = 0usize;
+        for (pane, turn) in panes.into_iter().take(8) {
+            self.presentation.shell_preview_retirement_cursor = Some(pane);
+            if let Some(turn) = turn {
+                match self.retire_agent_shell_output_previews_for_turn(&turn) {
+                    Ok(count) => retired = retired.saturating_add(count),
+                    Err(error) => self.note_completion_optional_error(&turn, Err(error)),
+                }
+            }
+        }
+        retired
     }
 
     /// Returns structured shell preview state for chronology regressions.

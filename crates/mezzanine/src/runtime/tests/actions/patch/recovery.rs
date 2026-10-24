@@ -781,15 +781,23 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
         };
         let mut execution = build_execution(raw_text, &action_id);
         append_test_execution_assistant_context(&mut service, &turn, &execution);
-        assert!(
+        let pending_before = service.agent_provider_task_is_pending(&turn.turn_id);
+        assert_eq!(
             service
-                .queue_agent_failure_feedback_for_correction(
+                .settle_agent_failure_feedback_for_correction(
                     &turn,
                     &mut execution,
                     "apply_patch_hunk_mismatch",
                 )
-                .unwrap()
+                .unwrap(),
+            if pending_before {
+                crate::runtime::agent::CompletionSettlementDisposition::Retained
+            } else {
+                crate::runtime::agent::CompletionSettlementDisposition::Queued
+            }
         );
+        assert!(service.agent_provider_task_is_pending(&turn.turn_id));
+        assert_eq!(execution.terminal_state, AgentTurnState::Running);
     }
 
     assert_eq!(

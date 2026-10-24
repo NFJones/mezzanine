@@ -187,11 +187,12 @@ fn runtime_agent_resume_snapshot_requires_exact_transient_lineage() {
     service.set_agent_pane_screen("%1", conversation_id, intervening);
     service.restore_agent_resume_presentation("%1", stale);
 
-    assert!(
-        service
-            .agent_shell_output_previews_for_tests("%1")
-            .is_empty()
-    );
+    // A stale snapshot has no authority to erase the current source owner.
+    // Retaining source does not rebind it or restore pixels over this image.
+    let retained = service.agent_shell_output_previews_for_tests("%1");
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].0, owner);
+    assert_eq!(retained[0].2, 3);
     assert!(
         !service
             .presentation

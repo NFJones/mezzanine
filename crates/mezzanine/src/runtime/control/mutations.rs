@@ -657,49 +657,75 @@ impl RuntimeSessionService {
                 "killing a live pane requires an explicit force flag",
             ));
         }
-        if force || !pane.live {
-            self.fail_agent_turns_for_pane_shutdown(
-                &[descriptor.pane_id.to_string()],
-                "pane closed",
+        let admitted = force || !pane.live;
+        // Rejected live/non-force requests must not become required completion
+        // failures. Default targets retain their existing behavior: this pin
+        // covers only an already resolved explicit target, not active fallback.
+        let observe_original = admitted;
+        let observations = observe_original.then(|| {
+            self.begin_completion_scopes_for_panes(
+                &[descriptor.pane_id.as_str()].into_iter().collect(),
+                crate::runtime::agent::CompletionScope::PaneRemoval,
+            )
+        });
+        let result = (|| {
+            #[cfg(test)]
+            if observe_original
+                && let Some(error) = self.take_pane_retention_fault_for_tests("pane_close")
+            {
+                return Err(error);
+            }
+            if admitted {
+                self.fail_agent_turns_for_pane_shutdown(
+                    &[descriptor.pane_id.to_string()],
+                    "pane closed",
+                )?;
+            }
+            let transition = if let Some(primary_client_id) = primary_client_id {
+                self.session.kill_pane_with_effects(
+                    primary_client_id,
+                    Some(target.as_str()),
+                    force,
+                )?
+            } else {
+                self.session
+                    .kill_pane_session_owned(Some(target.as_str()), force)?
+            };
+            let terminated = if let Some(pane) = transition.pane {
+                let pane_id = pane.id.to_string();
+                // Membership is already committed, even if later process teardown
+                // fails. Repair presentation without replaying the close effects.
+                self.refresh_subagent_window_names_after_pane_removal()?;
+                let _ = self.stop_active_pane_pipe(pane.id.as_str());
+                let terminated = usize::from(self.terminate_runtime_pane_process(&pane_id, force)?);
+                self.cleanup_removed_pane_runtime_state(&pane_id)?;
+                terminated
+            } else {
+                0
+            };
+            self.sync_pane_resize_effects(&transition.effects)?;
+            self.presentation.defer_render_effects(render_effects);
+            self.session
+                .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                    self.session.state,
+                ));
+            self.append_pane_close_event(
+                descriptor.pane_id.as_str(),
+                descriptor.window_id.as_str(),
+                terminated,
+                self.session.windows().is_empty(),
             )?;
+            self.reconcile_zen_focus_snapshots(focus_before);
+            Ok(format!(
+                r#"{{"closed":true,"terminated_panes":{},"session_empty":{}}}"#,
+                terminated,
+                self.session.windows().is_empty()
+            ))
+        })();
+        match observations {
+            Some(observations) => self.end_completion_scopes(observations, "pane_close", result),
+            None => result,
         }
-        let transition = if let Some(primary_client_id) = primary_client_id {
-            self.session
-                .kill_pane_with_effects(primary_client_id, Some(target.as_str()), force)?
-        } else {
-            self.session
-                .kill_pane_session_owned(Some(target.as_str()), force)?
-        };
-        let terminated = if let Some(pane) = transition.pane {
-            let pane_id = pane.id.to_string();
-            // Membership is already committed, even if later process teardown
-            // fails. Repair presentation without replaying the close effects.
-            self.refresh_subagent_window_names_after_pane_removal()?;
-            let _ = self.stop_active_pane_pipe(pane.id.as_str());
-            let terminated = usize::from(self.terminate_runtime_pane_process(&pane_id, force)?);
-            self.cleanup_removed_pane_runtime_state(&pane_id)?;
-            terminated
-        } else {
-            0
-        };
-        self.sync_pane_resize_effects(&transition.effects)?;
-        self.presentation.defer_render_effects(render_effects);
-        self.session
-            .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
-                self.session.state,
-            ));
-        self.append_pane_close_event(
-            descriptor.pane_id.as_str(),
-            descriptor.window_id.as_str(),
-            terminated,
-            self.session.windows().is_empty(),
-        )?;
-        self.reconcile_zen_focus_snapshots(focus_before);
-        Ok(format!(
-            r#"{{"closed":true,"terminated_panes":{},"session_empty":{}}}"#,
-            terminated,
-            self.session.windows().is_empty()
-        ))
     }
 
     /// Runs the dispatch runtime window close operation for this subsystem.

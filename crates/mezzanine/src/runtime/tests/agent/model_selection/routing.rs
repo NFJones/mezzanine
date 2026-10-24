@@ -11,6 +11,371 @@ use mez_agent::AutoSizingRoutingSelection;
 
 mod cleanup;
 
+/// A real routed native claim under the fixture's explicit ask/policy-only
+/// policy must retain a synthetic terminal outcome before optional installation
+/// fails. Debug proves no generic ordered RESULT is fabricated for a headerless
+/// result; Verbose proves the shell-view raw body owner is retained.
+/// No approval bypass, sandbox capability fabrication, command execution or
+/// launch-count inference is used: only claim-derived delivery identity and
+/// returned bytes are synthetic. This is not platform sandbox execution proof.
+#[test]
+fn runtime_routed_native_completion_retains_result_before_optional_install() {
+    for level in [
+        mez_agent::AgentLogLevel::Debug,
+        mez_agent::AgentLogLevel::Verbose,
+    ] {
+        let (mut service, _, worker_turn) =
+            selected_routed_loop("/loop --limit 3 inspect retained native outcome");
+        assert!(!service.permission_policy().approval_bypass());
+        service
+            .agent_shell_store_mut()
+            .set_log_level(&worker_turn.pane_id, level)
+            .unwrap();
+        let action = mez_agent::AgentAction {
+            id: "native-completion-owner".to_string(),
+            payload: mez_agent::AgentActionPayload::ShellCommand {
+                summary: "Inspect completion ownership".to_string(),
+                command: "printf unexecuted-fixture".to_string(),
+                interactive: false,
+                stateful: false,
+                timeout_ms: Some(5_000),
+            },
+        };
+        let provider = RuntimeBatchProvider {
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "admit native completion fixture".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    rationale: "retain completed native payload".to_string(),
+                    actions: vec![action.clone()],
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+        };
+        service
+            .execute_agent_turn_with_provider(
+                &worker_turn.turn_id,
+                &provider,
+                runtime_model_profile("runtime-batch", "test"),
+            )
+            .unwrap();
+        let dispatch = service
+            .claim_native_shell_action(&worker_turn.turn_id, &action.id)
+            .unwrap()
+            .expect("ordinary policy must admit the exact native dispatch");
+        assert!(
+            !dispatch.capability_probe_only,
+            "policy-only fixture has no fabricated probe result"
+        );
+        assert!(!service.permission_policy().approval_bypass());
+        let execution = service
+            .agent_turn_executions()
+            .get(&worker_turn.turn_id)
+            .unwrap()
+            .clone();
+        service
+            .flush_ordered_provider_headers(&worker_turn.pane_id, &execution)
+            .unwrap();
+        let body = "F668_NATIVE_CLAIMED_EXACT_BODY\n";
+        let outcome = crate::runtime::RuntimeNativeShellOutcome {
+            turn_id: dispatch.turn_id.clone(),
+            action_id: dispatch.action_id.clone(),
+            marker: dispatch.marker.clone(),
+            command: dispatch.request.transaction.command.clone(),
+            started_at_unix_ms: dispatch.started_at_unix_ms,
+            sandbox_capability: None,
+            capability_probe_only: dispatch.capability_probe_only,
+            launch_counts: None,
+            result: Ok(mez_agent::ShellExecutionOutput::new(
+                Some(0),
+                body.to_string(),
+                String::new(),
+                false,
+                false,
+            )),
+        };
+        service.hold_agent_presentation_installs_for_tests(true);
+        let pending_before_completion =
+            service.agent_provider_task_is_pending(&worker_turn.turn_id);
+        assert!(
+            pending_before_completion,
+            "the routed loop pre-queues its next iteration before completion"
+        );
+        assert!(
+            service
+                .complete_native_shell_action(outcome.clone())
+                .unwrap()
+        );
+        let publication_ready = |service: &crate::runtime::RuntimeSessionService| {
+            service
+                .completion_provider_queue_flags_for_tests(&worker_turn.turn_id)
+                .iter()
+                .find(|(name, _)| *name == "publication_ready")
+                .map(|(_, ready)| *ready)
+                .expect("publication readiness flag is exposed for tests")
+        };
+        let verbose_shell_view = matches!(level, mez_agent::AgentLogLevel::Verbose);
+        if verbose_shell_view {
+            // Verbose shell-view retains the exact raw native RESULT tuple from
+            // the original projection (marker transaction, raw diagnostics).
+            // Completion must hold that original owner rather than fabricate a
+            // generic one, and it may only acknowledge an actual install.
+            assert!(
+                service.completion_publication_retry_needed_for_turn(&worker_turn.turn_id),
+                "verbose shell-view must retain its raw native publication obligation"
+            );
+            let expected_pane = worker_turn.pane_id.clone();
+            let expected_turn = worker_turn.turn_id.clone();
+            let expected_conversation = worker_turn.conversation_id.clone();
+            let expected_ordinal = execution
+                .response
+                .action_batch
+                .as_ref()
+                .and_then(|batch| {
+                    batch
+                        .actions
+                        .iter()
+                        .position(|candidate| candidate.id == action.id)
+                })
+                .expect("native action ordinal");
+            let expected_group = service
+                .presentation
+                .agent_provider_log_orders
+                .keys()
+                .find(|(pane, turn, conversation, _)| {
+                    pane == &expected_pane
+                        && turn == &expected_turn
+                        && conversation == &expected_conversation
+                })
+                .map(|(_, _, _, group)| group.clone())
+                .expect("native provider log order");
+            let expected_text = body.to_string();
+            let retained_key = (
+                expected_pane,
+                expected_turn,
+                expected_conversation,
+                expected_group,
+                expected_ordinal,
+            );
+            let queued_tuple = |service: &crate::runtime::RuntimeSessionService| {
+                service
+                    .presentation
+                    .agent_queued_provider_results
+                    .get(&retained_key)
+                    .cloned()
+                    .expect("verbose shell-view retains the independently expected raw RESULT")
+            };
+            let retained_tuple = queued_tuple(&service);
+            let held_execution = service
+                .agent_turn_executions()
+                .get(&worker_turn.turn_id)
+                .cloned()
+                .expect("canonical execution is retained while held");
+            let held_result = held_execution
+                .action_results
+                .iter()
+                .find(|result| result.action_id == action.id)
+                .cloned()
+                .expect("canonical native result is retained while held");
+            assert_eq!(held_result.status, ActionStatus::Succeeded);
+            assert_eq!(held_result.content_text(), expected_text);
+            // The complete retained source must match the independently expected
+            // action, canonical result, exact text, original entry and marker
+            // transaction, with the shell-view raw diagnostic mode enabled.
+            assert_eq!(retained_tuple.0, action);
+            assert_eq!(retained_tuple.1, held_result);
+            assert_eq!(retained_tuple.2, expected_text);
+            assert!(!retained_tuple.3.id.is_empty());
+            assert_eq!(
+                retained_tuple.4.as_deref(),
+                Some(dispatch.marker.as_str()),
+                "the original marker transaction owns the retained source"
+            );
+            assert!(
+                retained_tuple.5,
+                "verbose shell-view retains the raw diagnostic owner"
+            );
+            let structured: serde_json::Value = serde_json::from_str(
+                held_result
+                    .structured_content_json
+                    .as_deref()
+                    .expect("canonical native structured content"),
+            )
+            .expect("canonical native structured content is JSON");
+            assert_eq!(
+                structured
+                    .pointer("/terminal_observation/marker")
+                    .and_then(serde_json::Value::as_str),
+                Some(dispatch.marker.as_str()),
+                "the canonical structured payload carries the exact dispatch marker at its schema field"
+            );
+            assert_eq!(
+                structured
+                    .pointer("/terminal_observation/exit_code")
+                    .and_then(serde_json::Value::as_i64),
+                Some(0),
+                "the canonical structured payload retains the exact exit code"
+            );
+            assert_eq!(
+                structured
+                    .pointer("/terminal_observation/combined_output_preview")
+                    .and_then(serde_json::Value::as_str),
+                Some(expected_text.as_str()),
+                "the canonical structured payload retains the exact combined output"
+            );
+            assert!(
+                service
+                    .presentation
+                    .agent_published_provider_results
+                    .iter()
+                    .all(|(key, _)| key.1 != worker_turn.turn_id),
+                "nothing may be acknowledged while the install is held"
+            );
+            assert!(!publication_ready(&service));
+            assert_eq!(service.retry_completion_publications(), 0);
+            assert_eq!(service.retry_completion_publications(), 0);
+            assert_eq!(
+                queued_tuple(&service),
+                retained_tuple,
+                "the complete retained source is immutable across held retries"
+            );
+            assert_eq!(
+                service
+                    .agent_turn_executions()
+                    .get(&worker_turn.turn_id)
+                    .and_then(|execution| {
+                        execution
+                            .action_results
+                            .iter()
+                            .find(|result| result.action_id == action.id)
+                            .cloned()
+                    })
+                    .expect("canonical result survives held retries"),
+                held_result,
+                "held publication retries must not mutate canonical custody"
+            );
+            let held_rows = service
+                .agent_pane_screen(&worker_turn.pane_id)
+                .unwrap()
+                .normal_content_lines()
+                .join("\n");
+            assert_eq!(
+                held_rows.matches(body.trim()).count(),
+                0,
+                "a held install cannot show the body"
+            );
+            service.hold_agent_presentation_installs_for_tests(false);
+            assert_eq!(service.retry_completion_publications(), 1);
+            assert_eq!(service.retry_completion_publications(), 0);
+            assert!(publication_ready(&service));
+            assert!(
+                service
+                    .presentation
+                    .agent_queued_provider_results
+                    .keys()
+                    .all(|key| key.1 != worker_turn.turn_id),
+                "the installed raw source leaves the queue"
+            );
+            assert!(
+                service
+                    .presentation
+                    .agent_published_provider_results
+                    .contains(&(retained_key.clone(), expected_text.clone())),
+                "the exact raw owner is acknowledged once installed"
+            );
+            assert_eq!(
+                service
+                    .agent_turn_executions()
+                    .get(&worker_turn.turn_id)
+                    .and_then(|execution| {
+                        execution
+                            .action_results
+                            .iter()
+                            .find(|result| result.action_id == action.id)
+                            .cloned()
+                    })
+                    .expect("canonical result survives release"),
+                held_result,
+                "publication must not mutate canonical custody"
+            );
+        } else {
+            // Debug carries no shell-view raw owner, and a headerless result has
+            // no generic ordered renderer, so completion must not fabricate an
+            // ordered source, an acknowledgment or a retry obligation.
+            assert!(
+                !service.completion_publication_retry_needed_for_turn(&worker_turn.turn_id),
+                "a headerless shell result must not create a phantom publication obligation"
+            );
+            assert!(
+                service
+                    .presentation
+                    .agent_queued_provider_results
+                    .keys()
+                    .all(|key| key.1 != worker_turn.turn_id)
+                    && service
+                        .presentation
+                        .agent_published_provider_results
+                        .iter()
+                        .all(|(key, _)| key.1 != worker_turn.turn_id),
+                "no ordered RESULT source may be created or acknowledged for a headerless shell result"
+            );
+            assert!(publication_ready(&service));
+            assert_eq!(service.retry_completion_publications(), 0);
+            service.hold_agent_presentation_installs_for_tests(false);
+            assert_eq!(service.retry_completion_publications(), 0);
+        }
+        // Measured operands: entry and exit both saw the same inherited pending
+        // routed task, so completion must not change that observed membership.
+        assert_eq!(
+            service.agent_provider_task_is_pending(&worker_turn.turn_id),
+            pending_before_completion,
+            "native completion must not change an inherited routed continuation"
+        );
+        assert!(!service.complete_native_shell_action(outcome).unwrap());
+        assert!(
+            service
+                .claim_native_shell_action(&worker_turn.turn_id, &action.id)
+                .unwrap()
+                .is_none()
+        );
+        let retained = service
+            .agent_turn_executions()
+            .get(&worker_turn.turn_id)
+            .unwrap();
+        let result = retained
+            .action_results
+            .iter()
+            .find(|result| result.action_id == action.id)
+            .unwrap();
+        assert_eq!(result.status, ActionStatus::Succeeded);
+        assert!(result.content_text().contains(body.trim()));
+        assert!(
+            result
+                .structured_content_json
+                .as_deref()
+                .unwrap()
+                .contains(&dispatch.marker)
+        );
+        assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
+        service.ensure_completion_admission_open().unwrap();
+        let final_rows = service
+            .agent_pane_screen(&worker_turn.pane_id)
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        assert_eq!(
+            final_rows.matches(body.trim()).count(),
+            usize::from(verbose_shell_view),
+            "{level:?}: the raw shell-view owner shows one body, Debug shows none: {final_rows}"
+        );
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
 /// Builds a stable pane identity for routed primary-authority tests.
 fn routed_path_resolution_environment(working_directory: &Path) -> mez_agent::EnvironmentSignature {
     mez_agent::EnvironmentSignature::new(

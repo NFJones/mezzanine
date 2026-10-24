@@ -828,8 +828,9 @@ impl RuntimeSessionService {
                     &previous_session.session_id,
                 );
             }
+            self.presentation
+                .suspend_agent_presentation_state(pane_id, &previous_presentation)?;
             if let Some(projection) = projection.take() {
-                self.presentation.remove_agent_presentation_state(pane_id);
                 self.set_agent_pane_screen(
                     pane_id.to_string(),
                     session_id.clone(),
@@ -977,7 +978,10 @@ impl RuntimeSessionService {
                 } else {
                     self.remove_agent_pane_screen(pane_id);
                 }
-                self.restore_agent_resume_presentation(pane_id, previous_presentation);
+                self.restore_agent_resume_presentation_after_screen_rollback(
+                    pane_id,
+                    previous_presentation,
+                );
                 self.persistence
                     .replace_pane_transcript_refs(pane_id, previous_transcript_refs);
                 if let Some(path) = previous_working_directory {
@@ -1070,6 +1074,7 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
+        self.commit_agent_resume_progress_replacement(pane_id, &previous_presentation);
         self.install_composer_saved_title(&composer_title_metadata);
         self.request_steering_presentation(pane_id);
         Ok(AgentShellCommandOutcome::Mutated {

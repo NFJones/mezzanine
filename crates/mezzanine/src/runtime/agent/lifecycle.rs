@@ -5,6 +5,7 @@
 //! subagent trees close. Provider execution, action dispatch, and presentation
 //! remain in their narrower runtime-agent modules.
 
+use super::CompletionScope;
 use super::{
     AgentShellSession, AgentShellVisibility, AgentTurnRecord, AgentTurnState, EventKind, MezError,
     Result, RuntimeSessionService, TaskState, current_unix_millis, json_escape,
@@ -141,6 +142,30 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
             .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
+        if turn.pane_id != pane_id {
+            return Err(MezError::invalid_state(
+                "finished turn no longer owns the selected pane",
+            ));
+        }
+        let scope = self.begin_completion_scope(turn_id, CompletionScope::Finish);
+        let result = self.finish_agent_turn_after_completion_guard(pane_id, turn_id, state, &turn);
+        self.end_completion_scope(scope, "turn_finalization", true, result)
+    }
+
+    /// Runs only after exact shell-turn validation; completion obligations are
+    /// checked before footer, ledger, task-result, scheduler or backing mutations.
+    fn finish_agent_turn_after_completion_guard(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        state: AgentTurnState,
+        turn: &AgentTurnRecord,
+    ) -> Result<AgentShellSession> {
+        if state == AgentTurnState::Interrupted {
+            self.prepare_completion_forced_retirement(turn)?;
+        } else {
+            self.prepare_completion_terminal_cleanup(turn, state)?;
+        }
         let completion_attention_eligible = self.subagent_lineage(&turn.agent_id).is_none();
         let suppress_exit_output = self
             .agent_shell_store()
@@ -150,18 +175,20 @@ impl RuntimeSessionService {
             });
 
         if state == AgentTurnState::Interrupted {
-            self.retain_interrupted_worker_effects(&turn)?;
-            self.ingest_provider_log(
+            self.retain_interrupted_worker_effects(turn)?;
+            let publication = self.ingest_provider_log(
                 pane_id,
                 turn_id,
                 super::presentation::RuntimeProviderLogInput::Interrupted,
-            )?;
+            );
+            self.note_completion_optional_error(turn_id, publication);
         } else if matches!(state, AgentTurnState::Completed | AgentTurnState::Failed) {
-            self.ingest_provider_log(
+            let publication = self.ingest_provider_log(
                 pane_id,
                 turn_id,
                 super::presentation::RuntimeProviderLogInput::Terminal,
-            )?;
+            );
+            self.note_completion_optional_error(turn_id, publication);
         }
 
         if !suppress_exit_output
@@ -175,26 +202,29 @@ impl RuntimeSessionService {
                 self.agent_action_failure_retry_limit(),
                 &self.agent.agent_turn_failure_feedback_attempts,
             );
-            self.present_unrecovered_agent_failure_diagnostics_to_terminal_buffer(
-                pane_id, &execution, &reason,
-            )?;
+            let publication = self
+                .present_unrecovered_agent_failure_diagnostics_to_terminal_buffer(
+                    pane_id, &execution, &reason,
+                );
+            self.note_completion_optional_error(turn_id, publication);
         }
         let awaiting_redirection = state == AgentTurnState::Interrupted
             && self.interrupted_subagent_awaits_redirection(turn_id);
-        let display_duration_started_at = self.agent_display_duration_started_at(&turn);
+        let display_duration_started_at = self.agent_display_duration_started_at(turn);
         if matches!(
             state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
         ) && !awaiting_redirection
             && !self.terminal_result_claimed_by_execution(turn_id)
         {
-            self.emit_subagent_task_result_for_state(&turn, state)?;
+            self.emit_subagent_task_result_for_state(turn, state)?;
         }
         if !suppress_exit_output
             && let Some(footer) =
                 runtime_agent_finished_footer_line(state, display_duration_started_at)
         {
-            self.append_agent_status_text_to_terminal_buffer(pane_id, &footer)?;
+            let footer = self.append_agent_status_text_to_terminal_buffer(pane_id, &footer);
+            self.note_completion_optional_error(turn_id, footer);
         }
         let previous_state = turn.state;
         self.integration
@@ -208,7 +238,7 @@ impl RuntimeSessionService {
             self.settle_steering_receipts(turn_id);
         }
         if state == AgentTurnState::Interrupted {
-            self.retain_interrupted_agent_continuation(&turn);
+            self.retain_interrupted_agent_continuation(turn);
         }
         self.reconcile_active_turn_sleep_inhibition();
         if !awaiting_redirection
@@ -223,18 +253,19 @@ impl RuntimeSessionService {
                 .register_completion_attention(pane_id, focused_pane_id.as_deref());
         }
         if state == AgentTurnState::Interrupted {
-            self.persist_interrupted_agent_turn_transcript(&turn, "agent turn stopped")?;
-            self.retain_interrupted_agent_continuation(&turn);
+            self.persist_interrupted_agent_turn_transcript(turn, "agent turn stopped")?;
+            self.retain_interrupted_agent_continuation(turn);
         }
         if !suppress_exit_output {
-            self.append_agent_trace_turn_transition(
-                &turn,
+            let trace = self.append_agent_trace_turn_transition(
+                turn,
                 previous_state,
                 state,
                 "finish_agent_turn",
-            )?;
+            );
+            self.note_completion_optional_error(turn_id, trace);
         }
-        self.clear_terminal_agent_turn_runtime_state(turn_id);
+        self.clear_terminal_agent_turn_runtime_state(turn_id)?;
         let finished = self
             .agent_shell_store_mut()
             .finish_turn(pane_id, turn_id)?
@@ -246,18 +277,9 @@ impl RuntimeSessionService {
             state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
         ) {
-            self.close_terminal_subagent_pane_if_pending(&turn)?;
+            self.close_terminal_subagent_pane_if_pending(turn)?;
         }
-        // A loop continuation may bind a fresh ephemeral conversation for its
-        // next fork/new iteration, and the pane shell refuses that while the
-        // finished turn still owned the running-turn slot released above. This
-        // settlement boundary therefore owns the pending iteration.
-        self.start_deferred_agent_loop_continuation(turn_id)?;
-        // A continuation that could not start may have queued this exact
-        // finished worker's terminal close after the checkpoint above. Drain it
-        // in the same pass so a retired iteration cannot leave its pane running.
-        self.close_terminal_subagent_pane_if_pending(&turn)?;
-        self.start_ready_agent_turns()?;
+        self.start_ready_after_completion_cleanup(turn)?;
         if !completion_attention_eligible {
             self.presentation.acknowledge_completion_attention(pane_id);
         }
@@ -271,7 +293,34 @@ impl RuntimeSessionService {
     /// Normal completion, queued-turn cancellation, and missing-pane cleanup
     /// share this operation so provider claims, approvals, action bookkeeping,
     /// and retained execution context cannot outlive any terminal ledger path.
-    pub(super) fn clear_terminal_agent_turn_runtime_state(&mut self, turn_id: &str) {
+    pub(in crate::runtime) fn clear_terminal_agent_turn_runtime_state(
+        &mut self,
+        turn_id: &str,
+    ) -> Result<()> {
+        if self.provider_refusal_is_armed(turn_id) {
+            self.validate_provider_refusal_cleanup_before_cancellation(turn_id)?;
+        }
+        self.request_agent_worker_cancellation_for_turn(turn_id);
+        let completion_retirement = if self.provider_refusal_is_armed(turn_id) {
+            let turn = self.completion_original_turn(turn_id).ok_or_else(|| {
+                MezError::invalid_state("negative cleanup original turn is missing")
+            })?;
+            let state = self
+                .agent_turn_ledger()
+                .turn(turn_id)
+                .map(|turn| turn.state)
+                .ok_or_else(|| MezError::invalid_state("negative cleanup ledger is missing"))?;
+            self.prepare_completion_terminal_cleanup(&turn, state)?;
+            Ok(())
+        } else if self.ensure_completion_terminal_retirement(turn_id).is_err() {
+            if let Some(turn) = self.completion_original_turn(turn_id) {
+                self.prepare_completion_forced_retirement(&turn)
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        };
         self.settle_steering_receipts(turn_id);
         self.retire_cancelled_mcp_leases_for_turn(turn_id);
         // Only terminal parent ownership retires a local failure handoff.
@@ -285,13 +334,20 @@ impl RuntimeSessionService {
             .retain(|_, pause| pause.turn_id() != Some(turn_id));
         self.agent.skill_discovery_receipts.remove(turn_id);
         self.agent.model_loaded_skills.remove(turn_id);
-        let _ = self.retire_action_presentation_progress_for_turn(turn_id);
+        // Retained optional cleanup owns its own exact source after live
+        // execution disappears; never turn paint refusal into terminal failure.
+        let retirement = self.retire_action_presentation_progress_for_turn(turn_id);
+        for (_, error) in retirement.errors {
+            self.note_completion_optional_error(turn_id, Err(error));
+        }
         self.clear_completed_received_peer_message_presentations_for_turn(turn_id);
         self.clear_settled_outbound_message_actions(turn_id);
         self.clear_settled_provider_log_groups_for_turn(turn_id);
         self.clear_accepted_streaming_headers_for_turn(turn_id);
         self.clear_pending_final_say_previews_for_turn(turn_id);
-        self.agent_turn_contexts_mut().remove(turn_id);
+        if !self.provider_refusal_context_is_live(turn_id) {
+            self.agent_turn_contexts_mut().remove(turn_id);
+        }
         self.agent.agent_turn_compaction_handoffs.remove(turn_id);
         self.agent
             .agent_turn_native_shell_timeout_ms
@@ -339,35 +395,10 @@ impl RuntimeSessionService {
         self.agent
             .agent_provider_persistence_generations
             .remove(turn_id);
-        self.agent
-            .pending_approved_external_actions
-            .retain(|identity, _| identity.0 != turn_id);
-        self.agent
-            .approved_external_cancellations
-            .retain(|(owner, _), cancellation| {
-                if owner == turn_id {
-                    cancellation.cancel();
-                    false
-                } else {
-                    true
-                }
-            });
-        self.agent
-            .claimed_approved_external_actions
-            .retain(|(claimed_turn_id, _), _| claimed_turn_id != turn_id);
-        for ((pending_turn_id, _), dispatch) in &self.agent.pending_native_shell_dispatches {
-            if pending_turn_id == turn_id {
-                dispatch.cancellation.cancel();
-            }
-        }
-        self.agent
-            .pending_native_shell_dispatches
-            .retain(|(pending_turn_id, _), _| pending_turn_id != turn_id);
-        self.agent
-            .claimed_native_shell_dispatches
-            .retain(|(claimed_turn_id, _), _| claimed_turn_id != turn_id);
+        self.retire_completion_worker_deliveries(turn_id);
         self.clear_agent_provider_retry_attempt(turn_id);
         self.clear_blocked_agent_approvals_for_turn(turn_id);
+        completion_retirement
     }
 
     /// Cleans up a queued or blocked turn that is not currently bound as the
@@ -382,6 +413,36 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         state: AgentTurnState,
     ) -> Result<Option<AgentShellSession>> {
+        let matches = self
+            .agent_turn_ledger()
+            .turn(&turn.turn_id)
+            .is_some_and(|current| {
+                current.agent_id == turn.agent_id
+                    && current.pane_id == turn.pane_id
+                    && current.conversation_id == turn.conversation_id
+            });
+        if !matches {
+            return Err(MezError::invalid_state(
+                "terminal cleanup turn owner changed",
+            ));
+        }
+        let scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Finish);
+        let result = self.finish_agent_turn_without_session_after_completion_guard(turn, state);
+        self.end_completion_scope(scope, "turn_finalization", true, result)
+    }
+
+    /// Applies the same group guard before missing-pane binding retirement or
+    /// any terminal ledger/task/scheduler cleanup in the detached-session path.
+    fn finish_agent_turn_without_session_after_completion_guard(
+        &mut self,
+        turn: &AgentTurnRecord,
+        state: AgentTurnState,
+    ) -> Result<Option<AgentShellSession>> {
+        if state == AgentTurnState::Interrupted {
+            self.prepare_completion_forced_retirement(turn)?;
+        } else {
+            self.prepare_completion_terminal_cleanup(turn, state)?;
+        }
         let pane_present = self.find_pane_descriptor(&turn.pane_id).is_some();
         if !pane_present {
             self.retire_subagent_cleanup_pane_binding(&turn.pane_id);
@@ -444,7 +505,8 @@ impl RuntimeSessionService {
             && let Some(footer) =
                 runtime_agent_finished_footer_line(state, display_duration_started_at)
         {
-            self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &footer)?;
+            let footer = self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &footer);
+            self.note_completion_optional_error(&turn.turn_id, footer);
         }
         self.integration
             .runtime_metrics_mut()
@@ -474,17 +536,18 @@ impl RuntimeSessionService {
             self.presentation
                 .register_completion_attention(&turn.pane_id, focused_pane_id.as_deref());
         }
-        self.append_agent_trace_turn_transition(
+        let trace = self.append_agent_trace_turn_transition(
             turn,
             turn.state,
             state,
             "finish_agent_turn_without_shell_session",
-        )?;
+        );
+        self.note_completion_optional_error(&turn.turn_id, trace);
         if state == AgentTurnState::Interrupted {
             self.persist_interrupted_agent_turn_transcript(turn, "agent turn stopped")?;
             self.retain_interrupted_agent_continuation(turn);
         }
-        self.clear_terminal_agent_turn_runtime_state(&turn.turn_id);
+        self.clear_terminal_agent_turn_runtime_state(&turn.turn_id)?;
         let session = if pane_present {
             Some(
                 self.agent_shell_store_mut()
@@ -503,14 +566,7 @@ impl RuntimeSessionService {
         {
             self.close_terminal_subagent_pane_if_pending(turn)?;
         }
-        // The exact running turn was settled above, so a pending fork/new loop
-        // iteration may now bind its next conversation without racing the
-        // shell session's running-turn guard.
-        self.start_deferred_agent_loop_continuation(&turn.turn_id)?;
-        // A failed continuation can queue this finished worker's terminal close
-        // after the earlier checkpoint; drain it rather than retain the pane.
-        self.close_terminal_subagent_pane_if_pending(turn)?;
-        self.start_ready_agent_turns()?;
+        self.start_ready_after_completion_cleanup(turn)?;
         if !completion_attention_eligible {
             self.presentation
                 .acknowledge_completion_attention(&turn.pane_id);
@@ -533,15 +589,33 @@ impl RuntimeSessionService {
         state: AgentTurnState,
         reason: &str,
     ) -> Result<()> {
+        if self.completion_group_requires_terminal_finalize(&turn.turn_id) {
+            let execution = self
+                .agent_turn_executions()
+                .get(&turn.turn_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("terminal completion execution is unavailable")
+                })?;
+            if execution.terminal_state != state {
+                return Err(MezError::invalid_state(
+                    "terminal completion state differs from canonical execution",
+                ));
+            }
+            let scope = self.begin_completion_scope(&turn.turn_id, CompletionScope::Finish);
+            let result = self.finalize_completion_group(turn, &execution, reason);
+            return self.end_completion_scope(scope, "terminal_finalization", true, result);
+        }
+        self.prepare_completion_terminal_cleanup(turn, state)?;
         if self.find_pane_descriptor(&turn.pane_id).is_none() {
             self.cleanup_removed_pane_runtime_state(&turn.pane_id)?;
             return Ok(());
         }
-        if self.complete_routed_presentation(&turn.turn_id, state)? {
+        if self.complete_provider_error_routed_presentation(&turn.turn_id, state)? {
             return Ok(());
         }
         let _ = self.agent.agent_scheduler.complete(&turn.turn_id);
-        self.append_agent_trace_turn_event(
+        let trace = self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
             &format!(
@@ -549,7 +623,8 @@ impl RuntimeSessionService {
                 runtime_agent_turn_state_name(state),
                 reason
             ),
-        )?;
+        );
+        self.note_completion_optional_error(&turn.turn_id, trace);
         if self
             .agent_shell_store()
             .get(&turn.pane_id)
@@ -636,7 +711,7 @@ impl RuntimeSessionService {
         let _ = self
             .agent_shell_store_mut()
             .finish_turn(&turn.pane_id, &turn.turn_id);
-        self.clear_terminal_agent_turn_runtime_state(&turn.turn_id);
+        self.clear_terminal_agent_turn_runtime_state(&turn.turn_id)?;
         self.reconcile_active_turn_sleep_inhibition();
         settlement_result
     }
@@ -663,6 +738,10 @@ impl RuntimeSessionService {
                 | RuntimeLifecycleState::Killed
                 | RuntimeLifecycleState::Failed
         ) {
+            return Ok(0);
+        }
+        self.ensure_completion_admission_open()?;
+        if self.completion_finalization_holds_new_work() {
             return Ok(0);
         }
         let mut started = 0usize;
@@ -743,7 +822,7 @@ impl RuntimeSessionService {
                         "injected scheduler-start post-admission failure",
                     ));
                 }
-                self.append_agent_trace_turn_transition(
+                let trace = self.append_agent_trace_turn_transition(
                     &turn,
                     previous_state,
                     AgentTurnState::Running,
@@ -752,7 +831,8 @@ impl RuntimeSessionService {
                     } else {
                         "scheduler_start"
                     },
-                )?;
+                );
+                self.note_completion_optional_error(&turn.turn_id, trace);
                 if previous_state == AgentTurnState::Queued {
                     self.emit_subagent_task_status(
                         &turn,
@@ -774,11 +854,10 @@ impl RuntimeSessionService {
                 started = started.saturating_add(1);
                 let resumed_decided_action = previous_state == AgentTurnState::Blocked
                     && self.resume_decided_agent_action_after_reacquisition(&running.turn_id)?;
-                if !resumed_decided_action {
-                    self.agent
-                        .pending_agent_provider_tasks
-                        .insert(running.turn_id.clone());
-                    self.append_agent_trace_turn_event(
+                if !resumed_decided_action
+                    && self.admit_completion_provider_continuation(&running.turn_id)?
+                {
+                    let trace = self.append_agent_trace_turn_event(
                         &turn.pane_id,
                         &running.turn_id,
                         if previous_state == AgentTurnState::Blocked {
@@ -786,7 +865,8 @@ impl RuntimeSessionService {
                         } else {
                             "provider_task queued reason=scheduler_start"
                         },
-                    )?;
+                    );
+                    self.note_completion_optional_error(&running.turn_id, trace);
                 }
                 Ok(())
             })();
@@ -855,7 +935,28 @@ impl RuntimeSessionService {
         if pane_ids.is_empty() {
             return Ok(0);
         }
-        for pane_id in &pane_ids {
+        let observations =
+            self.begin_completion_scopes_for_panes(&pane_ids, CompletionScope::PaneRemoval);
+        let result = self
+            .fail_agent_turns_for_pane_shutdown_after_completion_capture(&pane_ids, reason, cause);
+        self.end_completion_scopes(observations, "pane_shutdown", result)
+    }
+
+    /// Runs the existing shutdown algorithm under an attribution-only pin.
+    /// Current turn selection, cancellation, notification and scheduling remain
+    /// authoritative here; the outer observations grant no mutation authority
+    /// and do not qualify replacement-safe teardown or retain retired backing.
+    fn fail_agent_turns_for_pane_shutdown_after_completion_capture(
+        &mut self,
+        pane_ids: &std::collections::BTreeSet<&str>,
+        reason: &str,
+        cause: PaneShutdownCause,
+    ) -> Result<usize> {
+        #[cfg(test)]
+        if let Some(error) = self.take_completion_shutdown_fault_for_tests() {
+            return Err(error);
+        }
+        for pane_id in pane_ids {
             if self.find_pane_descriptor(pane_id).is_none() {
                 self.retire_subagent_cleanup_pane_binding(pane_id);
             }
@@ -863,7 +964,7 @@ impl RuntimeSessionService {
             self.close_subagent_descendants_for_parent_agent(&parent_agent_id, reason)?;
         }
         if cause == PaneShutdownCause::Requested {
-            for pane_id in &pane_ids {
+            for pane_id in pane_ids {
                 self.mark_pane_closing(*pane_id);
             }
         }
@@ -910,7 +1011,7 @@ impl RuntimeSessionService {
                     AgentTurnState::Failed,
                     "pane_shutdown_without_shell_session",
                 )?;
-                self.clear_terminal_agent_turn_runtime_state(&turn.turn_id);
+                self.clear_terminal_agent_turn_runtime_state(&turn.turn_id)?;
                 if !pane_present {
                     self.retire_subagent_cleanup_pane_binding(&turn.pane_id);
                     self.agent_shell_store_mut().remove_session(&turn.pane_id);
@@ -927,7 +1028,7 @@ impl RuntimeSessionService {
             )?;
             failed = failed.saturating_add(1);
         }
-        for pane_id in &pane_ids {
+        for pane_id in pane_ids {
             self.mark_pane_closing(*pane_id);
         }
         self.start_ready_agent_turns()?;

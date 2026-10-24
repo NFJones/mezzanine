@@ -198,17 +198,10 @@ impl RuntimeSessionService {
         history: &[TranscriptEntry],
         entries: &mut [TranscriptEntry],
     ) -> Result<()> {
-        use crate::storage::transcript::compaction_handoff::{
-            MARKER, terminal_handoff_source_is_contiguous,
-        };
         let mut logical = history.to_vec();
         logical.extend_from_slice(entries);
         for entry in entries {
-            if entry.role != TranscriptRole::System || !entry.content.starts_with(MARKER) {
-                continue;
-            }
-            if !terminal_handoff_source_is_contiguous(&entry.content, &logical)? {
-                entry.content = "[mez-terminal-compaction-handoff/unsupported]\nreason=noncontiguous_archive_source".to_string();
+            if Self::admit_terminal_compaction_handoff_entry(entry, &logical)? {
                 if self
                     .agent_shell_store()
                     .get(&turn.pane_id)
@@ -227,5 +220,44 @@ impl RuntimeSessionService {
             }
         }
         Ok(())
+    }
+
+    /// Checks detached original-archive evidence without pane or diagnostic I/O.
+    /// Required malformed/conflicting source errors are unchanged; unsupported
+    /// interleaving retains the exact existing raw-authority marker rewrite.
+    pub(in crate::runtime) fn check_detached_terminal_compaction_handoff_admission(
+        history: &[TranscriptEntry],
+        entries: &mut [TranscriptEntry],
+    ) -> Result<()> {
+        let mut logical = history.to_vec();
+        logical.extend_from_slice(entries);
+        for entry in entries {
+            Self::admit_terminal_compaction_handoff_entry(entry, &logical)?;
+        }
+        Ok(())
+    }
+
+    /// Pure shared validation/transformation for one prospective certificate.
+    /// Returns true only when this exact entry becomes the unsupported marker.
+    /// The complete prospective archive is required even for per-entry callers;
+    /// no live pane identity, presentation, trace, or lifecycle diagnostic enters
+    /// this decision. Legacy callers project each returned fact independently.
+    fn admit_terminal_compaction_handoff_entry(
+        entry: &mut TranscriptEntry,
+        logical: &[TranscriptEntry],
+    ) -> Result<bool> {
+        use crate::storage::transcript::compaction_handoff::{
+            MARKER, terminal_handoff_source_is_contiguous,
+        };
+        if entry.role != TranscriptRole::System || !entry.content.starts_with(MARKER) {
+            return Ok(false);
+        }
+        if terminal_handoff_source_is_contiguous(&entry.content, logical)? {
+            return Ok(false);
+        }
+        entry.content =
+            "[mez-terminal-compaction-handoff/unsupported]\nreason=noncontiguous_archive_source"
+                .to_string();
+        Ok(true)
     }
 }

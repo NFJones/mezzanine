@@ -88,9 +88,18 @@ fn runtime_transcript_editor_save_rechecks_selective_epoch_published_after_open(
     let history = fs::read(&history_path).unwrap();
     let edited = typed_content("private edited body");
     complete_prompt_editor(&mut service, &root, &protected, edited.as_bytes(), 9);
+    let path = store.transcript_path(conversation_id).unwrap();
+    let before_failed_cas = service
+        .persistence
+        .capture_transcript_admission_stamp(&path, conversation_id);
     let error = service
         .apply_external_editor_recovery(&primary, "%1", &protected.2)
         .unwrap_err();
+    assert!(
+        !service
+            .persistence
+            .transcript_admission_matches(&before_failed_cas)
+    );
     assert!(
         error
             .message()
@@ -138,9 +147,28 @@ fn runtime_transcript_editor_save_rechecks_selective_epoch_published_after_open(
         .unwrap();
     let allowed = editor_transaction(&service);
     complete_prompt_editor(&mut service, &root, &allowed, b"uncovered after", 9);
+    // A same-frontier edit revokes any checked original archive read. Another
+    // target with the same CID must not lose its independent admission owner.
+    let before_successful_cas = service
+        .persistence
+        .capture_transcript_admission_stamp(&path, conversation_id);
+    let other_path = root.join("other-store").join("transcript.tsv");
+    let other_target = service
+        .persistence
+        .capture_transcript_admission_stamp(&other_path, conversation_id);
     service
         .apply_external_editor_recovery(&primary, "%1", &allowed.2)
         .unwrap();
+    assert!(
+        !service
+            .persistence
+            .transcript_admission_matches(&before_successful_cas)
+    );
+    assert!(
+        service
+            .persistence
+            .transcript_admission_matches(&other_target)
+    );
     assert!(
         !service
             .list_external_editor_recoveries(&primary)

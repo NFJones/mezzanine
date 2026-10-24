@@ -1287,15 +1287,23 @@ fn runtime_mixed_spawn_batch_correction_retains_successful_sibling() {
     assert_eq!(service.session().windows().len(), window_count + 1);
 
     append_test_execution_assistant_context(&mut service, &turn, &execution);
-    assert!(
+    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
+    let queue_before = service.completion_provider_queue_flags_for_tests(&turn.turn_id);
+    assert_eq!(
         service
-            .queue_agent_failure_feedback_for_correction(
+            .settle_agent_failure_feedback_for_correction(
                 &turn,
                 &mut execution,
                 "subagent_spawn_validation_failed",
             )
-            .unwrap()
+            .unwrap(),
+        crate::runtime::agent::CompletionSettlementDisposition::Retained
     );
+    assert_eq!(
+        service.completion_provider_queue_flags_for_tests(&turn.turn_id),
+        queue_before
+    );
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult

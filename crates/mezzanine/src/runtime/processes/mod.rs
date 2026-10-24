@@ -4791,6 +4791,25 @@ impl RuntimeSessionService {
     /// before later fallible cleanup: stopped-but-open children remain named,
     /// and an already committed removal is never replayed to repair a title.
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) -> Result<()> {
+        let observations = self.begin_completion_scopes_for_panes(
+            &[pane_id].into_iter().collect(),
+            crate::runtime::agent::CompletionScope::PaneRemoval,
+        );
+        let result = self.cleanup_removed_pane_runtime_state_after_completion_capture(pane_id);
+        self.end_completion_scopes(observations, "pane_cleanup", result)
+    }
+
+    /// Runs the existing helper under a group-only retention boundary, including
+    /// present-layout teardown callers. A pin proves neither pane absence nor
+    /// live-source/process authority; no extra cancellation or cleanup is added.
+    fn cleanup_removed_pane_runtime_state_after_completion_capture(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<()> {
+        #[cfg(test)]
+        if let Some(error) = self.take_pane_retention_fault_for_tests("pane_cleanup") {
+            return Err(error);
+        }
         self.reconcile_external_agent_registrations();
         let pane_present = self.find_pane_descriptor(pane_id).is_some();
         if !pane_present {

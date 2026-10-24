@@ -4,6 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use super::agent::CompletionScope;
 use super::agent_state::{
     RuntimeAgentLoopMode, RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
     RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
@@ -684,6 +685,37 @@ impl RuntimeSessionService {
                     .map(|work| work.turn_id.clone())
             })
             .ok_or_else(|| MezError::invalid_state("agent shell session has no running turn"))?;
+        let turn = self
+            .agent_turn_ledger()
+            .turn(&turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
+        if turn.pane_id != pane_id
+            || self
+                .agent_shell_store()
+                .get(pane_id)
+                .is_none_or(|session| session.session_id != turn.conversation_id)
+        {
+            return Err(MezError::invalid_state(
+                "stopped turn no longer owns the pane binding",
+            ));
+        }
+        self.request_agent_worker_cancellation_for_turn(&turn_id);
+        self.revoke_completion_paint(&turn_id);
+        let scope = self.begin_completion_scope(&turn_id, CompletionScope::Stop);
+        let result = self.stop_agent_turn_after_completion_guard(pane_id, &turn, turn_id.clone());
+        self.end_completion_scope(scope, "stop_finalization", true, result)
+    }
+
+    /// Runs after exact target validation and unconditional worker cancellation.
+    /// Original-group handoff precedes task-result and shell-binding mutations.
+    fn stop_agent_turn_after_completion_guard(
+        &mut self,
+        pane_id: &str,
+        turn: &AgentTurnRecord,
+        turn_id: String,
+    ) -> Result<RuntimeAgentTurnStop> {
+        self.prepare_completion_forced_retirement(turn)?;
         let prepared_loop_parent_objective = if let Some(loop_turn) = self.agent_loop_turn(&turn_id)
             && let Some(state) = self.agent_loop_state_by_id(&loop_turn.loop_id)
         {
@@ -694,19 +726,12 @@ impl RuntimeSessionService {
         let scheduler_cancelled = self.cancel_agent_work(&turn_id);
         let interrupted_shell_transactions =
             self.cancel_live_shell_transactions_for_turn(&turn_id)?;
-        let turn = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
         let turn_was_already_terminal = matches!(
             turn.state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
         );
         let awaiting_redirection =
-            !turn_was_already_terminal && self.retain_subagent_interruption_for_redirection(&turn);
+            !turn_was_already_terminal && self.retain_subagent_interruption_for_redirection(turn);
         let routed_cleanup_error = self.cancel_routed_workflow_for_parent(&turn_id).err();
         let session = if turn_was_already_terminal {
             let running_in_shell = self
@@ -742,7 +767,7 @@ impl RuntimeSessionService {
             session
         } else {
             if !awaiting_redirection {
-                self.emit_cancelled_subagent_task_result(&turn)?;
+                self.emit_cancelled_subagent_task_result(turn)?;
             }
             if self
                 .agent_shell_store()
@@ -752,7 +777,7 @@ impl RuntimeSessionService {
             {
                 self.finish_agent_turn(pane_id, &turn_id, AgentTurnState::Interrupted)?
             } else {
-                self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?
+                self.finish_agent_turn_without_shell_session(turn, AgentTurnState::Interrupted)?
                     .ok_or_else(|| {
                         MezError::invalid_state(
                             "stopped agent turn no longer has a live pane shell session",
@@ -808,14 +833,20 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Result<usize> {
+        self.request_agent_worker_cancellation_for_turn(turn_id);
         let cancelled = self.running_shell_transaction_targets_for_turn(turn_id);
-        self.retire_agent_shell_output_previews_for_turn(turn_id)?;
-        self.retire_action_presentation_progress_for_turn(turn_id)?;
+        let preview = self.retire_agent_shell_output_previews_for_turn(turn_id);
+        self.note_completion_optional_error(turn_id, preview.map(|_| ()));
+        let retirement = self.retire_action_presentation_progress_for_turn(turn_id);
+        for (_, error) in retirement.errors {
+            self.note_completion_optional_error(turn_id, Err(error));
+        }
         if cancelled.is_empty() {
             return Ok(0);
         }
 
         let mut interrupted_panes = BTreeSet::new();
+        let mut interruption_error = None;
         for (marker, pane_id) in &cancelled {
             let native = self.native_shell_marker_has_worker_owner(marker);
             self.cancel_runtime_pane_shell_delivery(pane_id, marker);
@@ -828,12 +859,14 @@ impl RuntimeSessionService {
                 match self.write_runtime_pane_input(pane_id, b"\x03") {
                     Ok(_) => {}
                     Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}
-                    Err(error) => return Err(error),
+                    Err(error) => {
+                        interruption_error.get_or_insert(error);
+                    }
                 }
             }
         }
 
-        Ok(cancelled.len())
+        interruption_error.map_or_else(|| Ok(cancelled.len()), Err)
     }
 
     /// Runs the apply agent shell preference context operation for this subsystem.
@@ -1203,6 +1236,7 @@ impl RuntimeSessionService {
         if state.mode == RuntimeAgentLoopMode::ReuseCurrentConversation {
             return Ok(());
         }
+        let completion_restore = self.prepare_completion_provider_loop_restore(pane_id, state)?;
         if let Some(parent_turn_id) = state.routed_parent_turn_id.as_deref() {
             if self.agent_shell_store().get(pane_id).is_none() {
                 return Ok(());
@@ -1239,6 +1273,7 @@ impl RuntimeSessionService {
                     .restore_session(pane_id, previous)?;
                 return Err(error);
             }
+            Self::acknowledge_completion_provider_loop_restore(completion_restore);
             self.restore_agent_loop_parent_projection(&state.loop_id, pane_id);
             self.sync_prepared_runtime_agent_objective_for_conversation(
                 pane_id,
@@ -1256,22 +1291,65 @@ impl RuntimeSessionService {
             .get(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("loop restoration shell is unavailable"))?;
-        if let Err(error) = self.agent_shell_store_mut().bind_conversation_with_lineage(
-            pane_id,
-            &state.parent_conversation_id,
-            state.parent_transcript_entries,
-            state.parent_prompt_cache_lineage_id.clone(),
-        ) {
+        #[cfg(test)]
+        let expected_rollback = previous.clone();
+        let binding = if let Some(restore) = completion_restore.as_ref() {
+            self.restore_completion_provider_loop_parent(restore)
+        } else {
             self.agent_shell_store_mut()
+                .bind_conversation_with_lineage(
+                    pane_id,
+                    &state.parent_conversation_id,
+                    state.parent_transcript_entries,
+                    state.parent_prompt_cache_lineage_id.clone(),
+                )
+                .map(|_| ())
+                .map_err(MezError::from)
+        };
+        if let Err(error) = binding {
+            let _rolled_back = self
+                .agent_shell_store_mut()
                 .restore_session(pane_id, previous)?;
-            return Err(error.into());
-        }
-        if let Some(cleanup) = cleanup
-            && let Err(error) = self.commit_owned_loop_cleanup_rebind(cleanup)
-        {
-            self.agent_shell_store_mut()
-                .restore_session(pane_id, previous)?;
+            #[cfg(test)]
+            Self::observe_completion_provider_loop_rollback(
+                completion_restore.as_ref(),
+                _rolled_back == &expected_rollback,
+            );
             return Err(error);
+        }
+        if let Some(cleanup) = cleanup {
+            #[cfg(test)]
+            let committed = if completion_restore.is_some()
+                && self.take_provider_handoff_fault_for_tests("loop_cleanup_commit")
+            {
+                Err(MezError::invalid_state(
+                    "injected negative loop cleanup commit failure",
+                ))
+            } else {
+                self.commit_owned_loop_cleanup_rebind(cleanup)
+            };
+            #[cfg(not(test))]
+            let committed = self.commit_owned_loop_cleanup_rebind(cleanup);
+            if let Err(error) = committed {
+                let _rolled_back = self
+                    .agent_shell_store_mut()
+                    .restore_session(pane_id, previous)?;
+                #[cfg(test)]
+                Self::observe_completion_provider_loop_rollback(
+                    completion_restore.as_ref(),
+                    _rolled_back == &expected_rollback,
+                );
+                return Err(error);
+            }
+        }
+        #[cfg(test)]
+        let scoped_restore = completion_restore.is_some();
+        Self::acknowledge_completion_provider_loop_restore(completion_restore);
+        #[cfg(test)]
+        if scoped_restore && self.take_provider_handoff_fault_for_tests("loop_after_commit") {
+            return Err(MezError::invalid_state(
+                "injected negative loop postcommit failure",
+            ));
         }
         self.agent_shell_store_mut()
             .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
@@ -1472,6 +1550,7 @@ impl RuntimeSessionService {
         initial_capability: Option<mez_agent::AgentCapability>,
         initial_model_selection: Option<mez_agent::AutoSizingSelection>,
     ) -> Result<RuntimeAgentPromptTurnStart> {
+        self.ensure_completion_admission_open()?;
         self.refresh_project_config_layers_for_pane(pane_id)?;
         if let Some(project_trust_request) = self
             .pending_project_trust_requests_for_agent_work()
@@ -1535,6 +1614,7 @@ impl RuntimeSessionService {
         prompt: &str,
         steering_receipts: Vec<crate::runtime::agent::RuntimeSteeringReceipt>,
     ) -> Result<bool> {
+        self.ensure_completion_admission_open()?;
         self.refresh_project_config_layers_for_pane(pane_id)?;
         if let Some(project_trust_request) = self
             .pending_project_trust_requests_for_agent_work()
