@@ -90,6 +90,14 @@ TMPDIR="$canonical_tmp" timeout 120s cargo test -p mez-agent --lib --all-feature
 Increase the timeout when compilation or the selected suite needs more time;
 120 seconds is a minimum, not the expected duration of the workspace suite.
 
+Positive bootstrap fixtures must create their synthetic HOME anchors with
+explicit owner-only directory permissions and synthetic private/legacy state
+files with explicit owner-only file permissions. Do not assume the developer's
+inherited umask removes group writes, change the parallel test process's umask,
+or weaken production ownership/mode checks to admit an unsafe fixture. Test
+alternate umasks only in isolated child processes; negative permission tests
+must keep their deliberately unsafe nodes unchanged.
+
 The optional `just test-real-bubblewrap` acceptance test requires Linux and a
 working Bubblewrap environment. Run it when a change affects the real
 confinement path. `just test-real-seatbelt` requires macOS and executable

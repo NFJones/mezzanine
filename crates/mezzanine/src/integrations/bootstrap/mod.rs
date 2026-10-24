@@ -28,6 +28,9 @@ mod copilot_artifact;
 pub(crate) mod curated_client;
 /// Owns exact Cursor shared hook members, not authored document/settings fields.
 mod cursor_artifact;
+/// Explicit secure creation for generated positive-test HOME and state nodes.
+#[cfg(test)]
+pub(crate) mod fixtures;
 /// Retains exact compiled historical source bytes, not active vendor entries.
 mod history;
 #[allow(

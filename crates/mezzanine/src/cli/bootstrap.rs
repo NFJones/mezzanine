@@ -933,9 +933,9 @@ mod tests {
         assert!(accepted.apply().is_err());
         let bytes = std::fs::read(private_fixture_journal(&home.0)).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        std::fs::write(
+        crate::integrations::bootstrap::fixtures::create_private_file(
             root.join(".mez-bootstrap-journal"),
-            serde_json::to_vec_pretty(&value).unwrap(),
+            &serde_json::to_vec_pretty(&value).unwrap(),
         )
         .unwrap();
         let before = tree_snapshot(&home.0);
@@ -998,7 +998,7 @@ mod tests {
             "mez-bootstrap-intents-{}",
             crate::storage::token_usage::new_token_usage_event_id()
         ));
-        std::fs::create_dir(&home).unwrap();
+        crate::integrations::bootstrap::fixtures::create_private_directory(&home).unwrap();
         let root = home.join(".pi/agent");
         let invoke = |flags: &[&str]| {
             let mut arguments = vec!["fixture", "pi"];
@@ -1134,7 +1134,11 @@ mod tests {
         })
         .unwrap();
         let journal = serde_json::to_vec(&serde_json::json!({"version":2,"root_device":metadata.dev(),"root_inode":metadata.ino(),"intent":{"manifest":manifest,"previous":null,"operation":"Install"},"changes":[{"path":"owned","before":null,"after":b"owned".to_vec()},{"path":"mez-bootstrap-ownership-codex.json","before":null,"after":receipt}]})).unwrap();
-        std::fs::write(root.join(".mez-bootstrap-journal"), &journal).unwrap();
+        crate::integrations::bootstrap::fixtures::create_private_file(
+            root.join(".mez-bootstrap-journal"),
+            &journal,
+        )
+        .unwrap();
         let invoke = |flags: &[&str]| {
             let mut arguments = vec!["fixture", "codex", "--root", root.to_str().unwrap()];
             arguments.extend_from_slice(flags);
@@ -1180,7 +1184,11 @@ mod tests {
         );
         // All effects already equal their after state, but the original journal
         // still requires settlement even when requested reconciliation is noop.
-        std::fs::write(root.join(".mez-bootstrap-journal"), &journal).unwrap();
+        crate::integrations::bootstrap::fixtures::create_private_file(
+            root.join(".mez-bootstrap-journal"),
+            &journal,
+        )
+        .unwrap();
         let installed = invoke(&[]);
         assert_eq!(installed["recovered"], true);
         assert_eq!(installed["recovery_pending"], false);
@@ -1207,7 +1215,7 @@ mod tests {
             "mez-auto-root-{}",
             crate::storage::token_usage::new_token_usage_event_id()
         ));
-        std::fs::create_dir(&home).unwrap();
+        crate::integrations::bootstrap::fixtures::create_private_directory(&home).unwrap();
         for (harness, suffix, variable) in [
             ("pi", ".pi/agent", "PI_CODING_AGENT_DIR"),
             ("opencode", ".config/opencode", "OPENCODE_CONFIG_DIR"),
@@ -1488,6 +1496,7 @@ mod tests {
             "mez-process-root-{}",
             crate::storage::token_usage::new_token_usage_event_id()
         ));
+        crate::integrations::bootstrap::fixtures::create_private_directory(&home).unwrap();
         let root = home.join(".pi/agent");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("authored"), b"unchanged").unwrap();

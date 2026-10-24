@@ -143,7 +143,7 @@ mod tests {
         }
         let _directory = Directory(base.clone());
         let home = base.join("home");
-        std::fs::create_dir(&home).unwrap();
+        super::super::fixtures::create_private_directory(&home).unwrap();
         let root = home.join(".claude");
         let manifest = compiled_manifest("claude", None).expect("compiled Claude adapter");
         let preview = plan_private(&root, &home, &manifest, Operation::Install).unwrap();
@@ -227,7 +227,7 @@ mod tests {
         ));
         std::fs::create_dir(&base).unwrap();
         let home = base.join("home");
-        std::fs::create_dir(&home).unwrap();
+        super::super::fixtures::create_private_directory(&home).unwrap();
         let root = home.join(".claude");
         plan_private(&root, &home, previous, Operation::Install)
             .unwrap()
@@ -300,7 +300,7 @@ mod tests {
         ));
         std::fs::create_dir(&base).unwrap();
         let home = base.join("home");
-        std::fs::create_dir(&home).unwrap();
+        super::super::fixtures::create_private_directory(&home).unwrap();
         let root = home.join(".claude");
         plan_private(&root, &home, previous, Operation::Install)
             .unwrap()
@@ -360,7 +360,7 @@ mod tests {
         ));
         std::fs::create_dir(&base).unwrap();
         let home = base.join("home");
-        std::fs::create_dir(&home).unwrap();
+        super::super::fixtures::create_private_directory(&home).unwrap();
         let root = home.join(".claude");
         plan_private(&root, &home, &previous, Operation::Install)
             .unwrap()
@@ -405,7 +405,7 @@ mod tests {
         ));
         std::fs::create_dir(&base).unwrap();
         let home = base.join("home");
-        std::fs::create_dir(&home).unwrap();
+        super::super::fixtures::create_private_directory(&home).unwrap();
         let root = home.join(".claude");
         plan_private(&root, &home, previous, Operation::Install)
             .unwrap()

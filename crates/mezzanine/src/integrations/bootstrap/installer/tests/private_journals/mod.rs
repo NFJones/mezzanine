@@ -36,7 +36,11 @@ fn bootstrap_private_explicit_recovery_rejects_acquisition_snapshot_drift() {
                 let value: serde_json::Value = serde_json::from_slice(&original).unwrap();
                 std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
             } else {
-                std::fs::write(&legacy_path, &original).unwrap();
+                crate::integrations::bootstrap::fixtures::create_private_file(
+                    &legacy_path,
+                    &original,
+                )
+                .unwrap();
             }
         }));
         let vendor_before = tree_snapshot(&fixture.root);
@@ -64,7 +68,11 @@ fn bootstrap_private_explicit_recovery_rejects_acquisition_snapshot_drift() {
             );
             std::fs::remove_file(&legacy).unwrap();
             assert_eq!(tree_snapshot(&fixture.root), vendor_before);
-            std::fs::write(&legacy, std::fs::read(&private).unwrap()).unwrap();
+            crate::integrations::bootstrap::fixtures::create_private_file(
+                &legacy,
+                &std::fs::read(&private).unwrap(),
+            )
+            .unwrap();
         }
         assert!(recover_private(&fixture.root, &fixture.home, &current).unwrap());
         assert!(!private.exists() && !legacy.exists());
@@ -94,7 +102,11 @@ fn bootstrap_private_publisher_final_removal_fences_post_effect_journal_drift() 
             if drift == "bytes" {
                 fs::write(&private_path, b"foreign final journal").unwrap();
             } else {
-                fs::write(&legacy_path, &original).unwrap();
+                crate::integrations::bootstrap::fixtures::create_private_file(
+                    &legacy_path,
+                    &original,
+                )
+                .unwrap();
             }
         }));
         let error = accepted

@@ -1579,7 +1579,7 @@ mod tests {
                         "mez-all-pending-targets-{}",
                         crate::storage::token_usage::new_token_usage_event_id()
                     ));
-                    fs::create_dir(&root).unwrap();
+                    super::super::fixtures::create_private_directory(&root).unwrap();
                     fs::write(root.join("authored"), b"preserved").unwrap();
                     if target.entries.iter().any(|entry| {
                         matches!(

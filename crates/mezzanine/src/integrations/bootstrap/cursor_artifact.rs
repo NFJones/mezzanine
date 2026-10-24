@@ -116,7 +116,7 @@ mod tests {
             "mez-cursor-upgrade-{}",
             crate::storage::token_usage::new_token_usage_event_id()
         ));
-        std::fs::create_dir(&home).unwrap();
+        super::super::fixtures::create_private_directory(&home).unwrap();
         let root = home.join("vendor");
         std::fs::create_dir(&root).unwrap();
         let old = super::historical_manifest().unwrap();
@@ -179,7 +179,7 @@ mod tests {
             "mez-cursor-shared-{}",
             crate::storage::token_usage::new_token_usage_event_id()
         ));
-        std::fs::create_dir(&home).unwrap();
+        super::super::fixtures::create_private_directory(&home).unwrap();
         let root = home.join("vendor");
         std::fs::create_dir(&root).unwrap();
         let plan = |operation| plan_private(&root, &home, &manifest, operation);

@@ -115,7 +115,7 @@ mod tests {
             "mez-copilot-owned-{}",
             crate::storage::token_usage::new_token_usage_event_id()
         ));
-        std::fs::create_dir(&home).unwrap();
+        super::super::fixtures::create_private_directory(&home).unwrap();
         let root = home.join("vendor");
         std::fs::create_dir(&root).unwrap();
         let manifest = manifest().unwrap();
@@ -145,7 +145,7 @@ mod tests {
             "mez-copilot-upgrade-{}",
             crate::storage::token_usage::new_token_usage_event_id()
         ));
-        std::fs::create_dir(&home).unwrap();
+        super::super::fixtures::create_private_directory(&home).unwrap();
         let root = home.join("vendor");
         std::fs::create_dir(&root).unwrap();
         let old = historical_manifest().unwrap();

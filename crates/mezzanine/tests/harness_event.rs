@@ -7,6 +7,7 @@
 #[path = "harness_event/helper_publication.rs"]
 mod helper_publication;
 use helper_publication::copy_fixture_helper;
+use std::os::unix::fs::DirBuilderExt;
 
 /// Production Cursor bootstrap must create version1 only for an absent shared
 /// document, preserve authored callbacks/metadata/CLI policy and leave previews
@@ -27,7 +28,10 @@ fn standalone_cursor_bootstrap_shared_members_and_commands_remain_neutral() {
     let helper = root.join("owned 'quote' $LITERAL; mez");
     copy_fixture_helper(std::path::Path::new(env!("CARGO_BIN_EXE_mez")), &helper).unwrap();
     let home = root.join("home");
-    std::fs::create_dir(&home).unwrap();
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&home)
+        .unwrap();
     let vendor = root.join("custom-cursor");
     let bootstrap = |flags: &[&str]| {
         let output = std::process::Command::new(&helper)
@@ -136,7 +140,10 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
     let helper = root.join("owned 'quote' $LITERAL; mez");
     copy_fixture_helper(std::path::Path::new(env!("CARGO_BIN_EXE_mez")), &helper).unwrap();
     let home = root.join("home");
-    std::fs::create_dir(&home).unwrap();
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&home)
+        .unwrap();
     let vendor = root.join("custom-copilot");
     let bootstrap = |flags: &[&str]| {
         let output = std::process::Command::new(&helper)
@@ -241,7 +248,10 @@ fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks()
     let helper = root.join("owned 'quote' $NOT_A_VARIABLE; mez");
     copy_fixture_helper(std::path::Path::new(env!("CARGO_BIN_EXE_mez")), &helper).unwrap();
     let home = root.join("home");
-    std::fs::create_dir(&home).unwrap();
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&home)
+        .unwrap();
     let bootstrap = |flags: &[&str]| {
         let result = std::process::Command::new(&helper)
             .args(["--json", "bootstrap", "codex"])

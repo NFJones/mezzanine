@@ -148,7 +148,7 @@ mod tests {
                 "mez-client-upgrade-{}",
                 crate::storage::token_usage::new_token_usage_event_id()
             ));
-            std::fs::create_dir(&root).unwrap();
+            super::super::fixtures::create_private_directory(&root).unwrap();
             plan(&root, &previous, Operation::Install)
                 .unwrap()
                 .apply()
@@ -180,7 +180,7 @@ mod tests {
                 "mez-client-immediate-upgrade-{}",
                 crate::storage::token_usage::new_token_usage_event_id()
             ));
-            std::fs::create_dir(&root).unwrap();
+            super::super::fixtures::create_private_directory(&root).unwrap();
             plan(&root, &immediate, Operation::Install)
                 .unwrap()
                 .apply()
@@ -283,7 +283,7 @@ mod tests {
                     "mez-client-frozen-upgrade-{}",
                     crate::storage::token_usage::new_token_usage_event_id()
                 ));
-                std::fs::create_dir(&root).unwrap();
+                super::super::fixtures::create_private_directory(&root).unwrap();
                 std::fs::write(root.join("authored.json"), b"{\"authored\":true}\n").unwrap();
                 super::super::installer::fixture_seed_nested_layout(&root, &previous);
                 plan(&root, &previous, Operation::Install)
