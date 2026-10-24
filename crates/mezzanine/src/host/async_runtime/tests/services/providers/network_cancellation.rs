@@ -136,3 +136,132 @@ async fn async_approved_network_stop_drops_held_ingress_and_real_body() {
     assert!(!actor.service.agent_turn_is_running(&turn.turn_id));
     actor.service.terminate_all_pane_processes().unwrap();
 }
+
+/// Applied read previews must not reconcile unrelated execution or timer owners.
+///
+/// A real runtime-issued external attempt is claimed but never executed. Its
+/// accepted body preview is submitted through the actor while transient capacity
+/// is occupied. The preview may repaint, but must neither run global convergence
+/// nor take a synthetic service-owned dispatch. This fixture starts no child and
+/// makes no HTTP or provider request; the exact turn is stopped before teardown.
+#[tokio::test(flavor = "current_thread")]
+async fn async_applied_external_preview_keeps_unrelated_service_owners() {
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    let primary = service
+        .attach_primary("preview-primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "preview custody")
+        .unwrap();
+    let task = service.pending_agent_provider_tasks().remove(0);
+    service.remove_pending_agent_provider_task(&task.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&task.turn_id)
+        .unwrap()
+        .clone();
+    let action = mez_agent::AgentAction {
+        id: "fetch-preview".into(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.invalid/never-executed".into(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let mut execution = native_shell_provider_execution(&task, String::new());
+    execution.request.allowed_actions =
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::NetworkFetch);
+    execution.response.action_batch = Some(mez_agent::MaapBatch {
+        rationale: "exercise preview admission without network execution".into(),
+        actions: vec![action.clone()],
+    });
+    execution.action_results = vec![mez_agent::ActionResult::running(
+        &turn,
+        &action,
+        Vec::new(),
+        None,
+    )];
+    service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(task.agent_id).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    let dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &action.id)
+        .unwrap()
+        .unwrap();
+    // Retain the actual cancellation handle; the dispatch is never executed.
+    let cancellation = dispatch.cancellation.clone();
+    service.queue_deferred_pane_input_for_tests(RuntimeSideEffect::WritePaneInputPriority {
+        pane_id: "%1".into(),
+        bytes: b"original-unrelated-reply".to_vec(),
+    });
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 1,
+            ..Default::default()
+        })
+        .build()
+        .unwrap();
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(RuntimeTimerKind::PanePipeHealth, "occupant", 1),
+                delay_ms: 25,
+            }])
+            .await
+            .unwrap();
+        let before = handle
+            .metrics()
+            .await
+            .unwrap()
+            .runtime_event_reconciliation_passes;
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::ApprovedExternalActionProgress(
+            crate::runtime::RuntimeApprovedExternalActionProgress {
+                presentation: mez_agent::ActionPresentationProgress::new(
+                    &turn.turn_id,
+                    &action.id,
+                    mez_agent::ActionPresentationExecutionIdentity::Attempt(
+                        dispatch.attempt.clone(),
+                    ),
+                    1,
+                    mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody,
+                    "accepted preview",
+                ),
+            },
+        ));
+        assert_eq!(
+            handle.submit_runtime_events(batch).await.unwrap().applied,
+            1
+        );
+        assert_eq!(
+            handle
+                .metrics()
+                .await
+                .unwrap()
+                .runtime_event_reconciliation_passes,
+            before
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    let original = exit.service.drain_pane_io_transition().side_effects;
+    assert_eq!(original.len(), 1, "{original:?}");
+    assert!(matches!(
+        &original[0], RuntimeSideEffect::WritePaneInputPriority { bytes, .. }
+            if bytes == b"original-unrelated-reply"
+    ));
+    exit.service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    assert!(cancellation.flag().load(Ordering::SeqCst));
+    drop(dispatch);
+}

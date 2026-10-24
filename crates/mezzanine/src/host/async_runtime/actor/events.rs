@@ -43,6 +43,26 @@ fn runtime_event_queue_error_after_service_drain(error: MezError, applied: usize
     MezError::invalid_state(format!("{} applied={applied} consumed=1", error.message()))
 }
 
+/// Identifies presentation-only progress without execution-settlement authority.
+///
+/// Confirmed mutation sections are deliberately excluded: their publication
+/// obligations must keep authoritative reconciliation and deferred transfer.
+fn runtime_event_is_provisional_progress(event: &RuntimeEvent) -> bool {
+    match event {
+        RuntimeEvent::AgentProvider(
+            AgentProviderEvent::StreamingSay { .. }
+            | AgentProviderEvent::WireRequestObserved { .. },
+        ) => true,
+        RuntimeEvent::NativeShellProgress(progress) => {
+            progress.presentation.component.is_provisional()
+        }
+        RuntimeEvent::ApprovedExternalActionProgress(progress) => {
+            progress.presentation.component.is_provisional()
+        }
+        _ => false,
+    }
+}
+
 /// Returns whether an event can change an owner that requires the global
 /// bootstrap, agent-progress, and timer convergence pass.
 ///
@@ -51,14 +71,13 @@ fn runtime_event_queue_error_after_service_drain(error: MezError, applied: usize
 /// application, so reconciling pane bootstrap and agent progress after each
 /// such signal only scans unrelated session state.
 fn runtime_event_requires_global_reconciliation(event: &RuntimeEvent) -> bool {
+    if runtime_event_is_provisional_progress(event) {
+        return false;
+    }
     !matches!(
         event,
-        RuntimeEvent::AgentProvider(
-            AgentProviderEvent::StreamingSay { .. }
-                | AgentProviderEvent::WireRequestObserved { .. }
-        ) | RuntimeEvent::Client(
-            ClientEvent::ResizeSignal { .. } | ClientEvent::OutputReady { .. }
-        ) | RuntimeEvent::Pane(PaneEvent::Output { .. })
+        RuntimeEvent::Client(ClientEvent::ResizeSignal { .. } | ClientEvent::OutputReady { .. })
+            | RuntimeEvent::Pane(PaneEvent::Output { .. })
             | RuntimeEvent::PaneProcess {
                 event: PaneProcessEvent::Pane(PaneEvent::Output { .. }),
                 ..
@@ -188,19 +207,10 @@ impl AsyncRuntimeSessionActor {
         // Confirmed mutation sections are not previews and keep authoritative
         // admission even when the rest of the batch is provisional.
         let provisional_progress_batch = !batch.events.is_empty()
-            && batch.events.iter().all(|event| match event {
-                RuntimeEvent::AgentProvider(
-                    AgentProviderEvent::StreamingSay { .. }
-                    | AgentProviderEvent::WireRequestObserved { .. },
-                ) => true,
-                RuntimeEvent::NativeShellProgress(progress) => {
-                    progress.presentation.component.is_provisional()
-                }
-                RuntimeEvent::ApprovedExternalActionProgress(progress) => {
-                    progress.presentation.component.is_provisional()
-                }
-                _ => false,
-            });
+            && batch
+                .events
+                .iter()
+                .all(runtime_event_is_provisional_progress);
         let mut report = batch.ingress_report();
         let mut registry_persistence_queued = false;
         let mut registry_persistence_required = false;

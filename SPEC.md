@@ -11893,7 +11893,8 @@ Committed-effect admission is a separate custody boundary from producer retry.
 Nonempty batches containing only provisional provider, native-shell-output or
 external-read progress MUST NOT drain unrelated service-owned deferred effects.
 Those effects retain their original service owner for authoritative transfer;
-a preview's arrival is not permission to consume them. Confirmed mutation
+a preview's arrival is not permission to consume them or run unrelated global
+bootstrap, execution-progress, or timer reconciliation. Confirmed mutation
 sections and batches mixed with authoritative completions are not provisional
 and MUST retain their ordinary committed-effect admission semantics.
 Once an event batch has applied its events, the side effects it produced MUST NOT
