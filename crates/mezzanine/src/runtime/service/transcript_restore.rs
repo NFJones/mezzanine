@@ -1519,20 +1519,58 @@ impl RuntimeSessionService {
 
     /// Drains all queued external work through one transport-neutral transition.
     pub(crate) fn drain_deferred_effects_transition(&mut self) -> RuntimeTransition {
-        let mut side_effects = self.drain_pane_io_transition().side_effects;
-        side_effects.extend(
-            self.presentation
-                .take_agent_presentation_resize_dispatch_effects(),
-        );
-        side_effects.extend(self.drain_audit_persistence_transition().side_effects);
+        self.drain_deferred_effects_transition_up_to(usize::MAX)
+    }
+
+    /// Transfers only transient dispatches covered by an already reserved budget.
+    ///
+    /// The serialized actor computes `limit` before extraction. Excess dispatches
+    /// stay at their original owners, not a second recovery queue. Durable writes
+    /// are independently admissible; transcript receipt enrollment therefore runs
+    /// once at transfer and is never repeated by a restore/re-drain operation.
+    /// Repaint remains optional under the actor's existing eviction contract.
+    pub(crate) fn drain_deferred_effects_transition_up_to(
+        &mut self,
+        limit: usize,
+    ) -> RuntimeTransition {
+        let mut side_effects = self.drain_audit_persistence_transition().side_effects;
         side_effects.extend(self.drain_transcript_persistence_transition().side_effects);
         side_effects.extend(self.drain_token_usage_persistence_transition().side_effects);
         side_effects.extend(self.drain_provider_settlement_transition().side_effects);
         side_effects.extend(self.drain_config_persistence_transition().side_effects);
         side_effects.extend(self.drain_pane_pipe_persistence_transition().side_effects);
-        side_effects.extend(self.drain_program_hook_transition().side_effects);
-        side_effects.extend(self.drain_host_clipboard_read_transition().side_effects);
-        side_effects.extend(self.drain_status_pill_refresh_transition().side_effects);
+        // Rotate only between families, never within their immutable FIFO or
+        // canonical pane-I/O order. A one-slot drain still gives each pending
+        // family a turn even while an earlier family is continuously refilled.
+        let start = if limit == usize::MAX {
+            0
+        } else {
+            self.persistence.deferred_transient_family_cursor
+        };
+        let mut remaining = limit;
+        for offset in 0..5 {
+            let family = (start + offset) % 5;
+            let effects = match family {
+                0 => self.persistence.take_pane_io_effects_up_to(remaining),
+                1 => self
+                    .presentation
+                    .take_agent_presentation_resize_dispatch_effects_up_to(remaining),
+                2 => self.persistence.take_program_hook_effects_up_to(remaining),
+                3 => {
+                    self.drain_host_clipboard_read_transition_up_to(remaining)
+                        .side_effects
+                }
+                _ => {
+                    self.drain_status_pill_refresh_transition_up_to(remaining)
+                        .side_effects
+                }
+            };
+            if !effects.is_empty() {
+                self.persistence.deferred_transient_family_cursor = (family + 1) % 5;
+            }
+            remaining = remaining.saturating_sub(effects.len());
+            side_effects.extend(effects);
+        }
         // Display retries above can install a source without another input or
         // cleanup mutation. Deliver their coalesced repaint in this same drain.
         side_effects.extend(self.presentation.take_deferred_render_effects());

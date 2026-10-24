@@ -288,6 +288,18 @@ impl AsyncRuntimeSessionActor {
             .max(SIDE_EFFECT_OVERSHOOT_FLOOR)
     }
 
+    /// Reserves a fitting service-transfer prefix at the serialized actor boundary.
+    ///
+    /// No actor mutation can interleave extraction and admission. Counting every
+    /// existing transient effect is conservative: coalescing/eviction can free
+    /// more room but cannot make this prefix exceed the finite committed budget.
+    pub(super) fn available_committed_side_effect_capacity(&self) -> usize {
+        self.side_effect_buffer
+            .saturating_add(self.committed_side_effect_overshoot())
+            .saturating_sub(self.side_effects.len())
+            .saturating_sub(self.side_effect_routes.non_persistence_len())
+    }
+
     /// Runs one admission attempt with an explicit capacity allowance.
     ///
     /// `allowance` extends the capacity verdict only for work the caller already
@@ -338,17 +350,24 @@ impl AsyncRuntimeSessionActor {
         let mut owed_full_redraws: Vec<ClientId> = Vec::new();
         let mut evicted_render_clients = 0usize;
         let mut evicted_flush_outputs = 0usize;
-        let mut over_capacity = self
-            .side_effects
-            .len()
-            .saturating_add(self.side_effect_routes.non_persistence_len())
-            .saturating_add(
-                incoming
-                    .iter()
-                    .filter(|effect| !runtime_side_effect_is_durable_persistence(effect))
-                    .count(),
-            )
-            > capacity;
+        // A durable-only (or fully coalesced) admission needs no transient
+        // capacity, even when owed compensation redraws exceed the reserve.
+        // Recompute after eviction too: dropping the last optional repaint
+        // must not turn its accompanying durable write into a refused batch.
+        let mut over_capacity = incoming
+            .iter()
+            .any(|effect| !runtime_side_effect_is_durable_persistence(effect))
+            && self
+                .side_effects
+                .len()
+                .saturating_add(self.side_effect_routes.non_persistence_len())
+                .saturating_add(
+                    incoming
+                        .iter()
+                        .filter(|effect| !runtime_side_effect_is_durable_persistence(effect))
+                        .count(),
+                )
+                > capacity;
         while over_capacity {
             let dropped = match self
                 .side_effects
@@ -385,17 +404,20 @@ impl AsyncRuntimeSessionActor {
                 }
                 None => break,
             }
-            over_capacity = self
-                .side_effects
-                .len()
-                .saturating_add(self.side_effect_routes.non_persistence_len())
-                .saturating_add(
-                    incoming
-                        .iter()
-                        .filter(|effect| !runtime_side_effect_is_durable_persistence(effect))
-                        .count(),
-                )
-                > capacity;
+            over_capacity = incoming
+                .iter()
+                .any(|effect| !runtime_side_effect_is_durable_persistence(effect))
+                && self
+                    .side_effects
+                    .len()
+                    .saturating_add(self.side_effect_routes.non_persistence_len())
+                    .saturating_add(
+                        incoming
+                            .iter()
+                            .filter(|effect| !runtime_side_effect_is_durable_persistence(effect))
+                            .count(),
+                    )
+                    > capacity;
         }
         let evicted_repaint_effects = evicted_render_clients.saturating_add(evicted_flush_outputs);
         if evicted_repaint_effects > 0 {

@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod deferred_transfer;
 mod execution;
 mod lifecycle;
 mod logging;

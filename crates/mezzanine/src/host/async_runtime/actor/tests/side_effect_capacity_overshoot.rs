@@ -91,7 +91,6 @@ async fn provisional_executor_progress_preserves_service_custody() {
         });
         let report = actor.apply_runtime_event_batch(batch).await.unwrap();
         assert_eq!(report.applied, 0);
-        assert_eq!(actor.drain_timer_side_effects(64).unwrap().len(), occupied);
         let original = actor.service.drain_pane_io_transition().side_effects;
         assert_eq!(original.len(), 1, "native={native}: {original:?}");
         assert!(matches!(
@@ -106,6 +105,7 @@ async fn provisional_executor_progress_preserves_service_custody() {
                 .side_effects
                 .is_empty()
         );
+        assert_eq!(actor.drain_timer_side_effects(64).unwrap().len(), occupied);
     }
 }
 
@@ -171,6 +171,354 @@ async fn authoritative_progress_shapes_keep_service_transfer() {
                 if bytes == b"original-reply"
         ));
         assert!(actor.drain_runtime_side_effects(64).unwrap().is_empty());
+    }
+}
+
+/// Saturated authoritative ingress keeps original dispatch custody until drain.
+///
+/// More service-owned replies than the whole finite lane can hold must transfer
+/// in fitting prefixes. Confirmed executor, mixed, and empty batch shapes all
+/// exercise the authoritative path. Only actual lane drains may recover the
+/// remainder; no new event or replay regenerates the immutable reply identities.
+#[tokio::test(flavor = "current_thread")]
+async fn authoritative_service_transfer_recovers_fitting_prefixes_on_lane_drain() {
+    for shape in ["confirmed-native", "confirmed-external", "mixed", "empty"] {
+        let mut actor = inert_actor(1);
+        let capacity = 1 + actor.committed_side_effect_overshoot();
+        actor
+            .admit_committed_side_effects(
+                (0..capacity)
+                    .map(|index| timer_effect(&format!("occupied-{index}")))
+                    .collect(),
+            )
+            .unwrap();
+        let expected = (0..capacity + 3)
+            .map(|index| format!("original-{index}").into_bytes())
+            .collect::<Vec<_>>();
+        for bytes in &expected {
+            actor.service.queue_deferred_pane_input_for_tests(
+                RuntimeSideEffect::WritePaneInputPriority {
+                    pane_id: "%1".to_string(),
+                    bytes: bytes.clone(),
+                },
+            );
+        }
+        let mut batch = RuntimeEventBatch::new();
+        if shape != "empty" {
+            let presentation = mez_agent::ActionPresentationProgress::new(
+                "stale-turn",
+                "stale-action",
+                mez_agent::ActionPresentationExecutionIdentity::Attempt("stale-attempt".into()),
+                1,
+                mez_agent::ActionPresentationComponentIdentity::confirmed_mutation(0, "file"),
+                "evidence",
+            );
+            batch.push(if shape == "confirmed-external" {
+                RuntimeEvent::ApprovedExternalActionProgress(
+                    crate::runtime::RuntimeApprovedExternalActionProgress { presentation },
+                )
+            } else {
+                RuntimeEvent::NativeShellProgress(crate::runtime::RuntimeNativeShellProgress {
+                    presentation,
+                })
+            });
+        }
+        if shape == "mixed" {
+            batch.push(RuntimeEvent::Timer(TimerEvent {
+                key: RuntimeTimerKey::new(RuntimeTimerKind::PanePipeHealth, "stale", 1),
+                now_ms: 1,
+            }));
+        }
+        actor.apply_runtime_event_batch(batch).await.unwrap();
+        assert_eq!(actor.drain_timer_side_effects(1).unwrap().len(), 1);
+        let mut observed = Vec::new();
+        for _ in 0..capacity * 3 {
+            for effect in actor.drain_runtime_side_effects(1).unwrap() {
+                if let RuntimeSideEffect::WritePaneInputPriority { bytes, .. } = effect {
+                    observed.push(bytes);
+                }
+            }
+            assert!(
+                actor.side_effects.len() + actor.side_effect_routes.non_persistence_len()
+                    <= capacity,
+                "shape={shape}: transfer exceeded its reserved budget"
+            );
+        }
+        assert_eq!(observed, expected, "shape={shape}");
+        assert!(
+            actor
+                .service
+                .drain_pane_io_transition()
+                .side_effects
+                .is_empty()
+        );
+        assert!(actor.drain_runtime_side_effects(64).unwrap().is_empty());
+    }
+}
+
+/// Lease arbitration must progress when all transient slots hold foreign input.
+/// Both an acquire consumed without a worker dispatch and a previously active
+/// lease must reach their source-owned release. Protected generated input must
+/// remain ahead of all foreign input, even when it starts beyond the prefix.
+#[tokio::test(flavor = "current_thread")]
+async fn bounded_service_transfer_preserves_exact_process_lease_progress() {
+    use crate::runtime::{PaneProcessInstance, PaneProcessIoEffect};
+    for active_lease in [false, true] {
+        for protected_write in [false, true] {
+            let mut actor = inert_actor(1);
+            let capacity = 1 + actor.committed_side_effect_overshoot();
+            let instance = PaneProcessInstance {
+                pane_id: "%1".into(),
+                generation: 7,
+            };
+            let (sender, mut worker_watcher) = tokio::sync::watch::channel(0_u64);
+            actor
+                .pane_process_side_effect_delivery_txs
+                .lock()
+                .unwrap()
+                .insert(instance.clone(), sender);
+            let owner = "transaction-owner";
+            let effect = |effect| RuntimeSideEffect::PaneProcessIo {
+                instance: instance.clone(),
+                effect,
+            };
+            if active_lease {
+                actor
+                    .pane_input_leases
+                    .insert(instance.clone(), owner.into());
+            } else {
+                actor.service.queue_deferred_pane_input_for_tests(effect(
+                    PaneProcessIoEffect::AcquireShellInputLease {
+                        owner_id: owner.into(),
+                    },
+                ));
+            }
+            let blocked = capacity - usize::from(!active_lease);
+            for index in 0..blocked {
+                actor.service.queue_deferred_pane_input_for_tests(effect(
+                    PaneProcessIoEffect::WriteInput {
+                        bytes: vec![index as u8],
+                    },
+                ));
+            }
+            if protected_write {
+                actor.service.queue_deferred_pane_input_for_tests(effect(
+                    PaneProcessIoEffect::WriteShellInput {
+                        delivery:
+                            mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                                b"protected".to_vec(),
+                                owner,
+                            ),
+                    },
+                ));
+            }
+            actor.service.queue_deferred_pane_input_for_tests(effect(
+                PaneProcessIoEffect::ReleaseShellInputLease {
+                    owner_id: owner.into(),
+                },
+            ));
+            actor
+                .apply_runtime_event_batch(RuntimeEventBatch::new())
+                .await
+                .unwrap();
+            worker_watcher.borrow_and_update();
+            let mut observed = Vec::new();
+            for index in 0..capacity + 4 {
+                let revision = actor.metrics.side_effect_delivery_notifications;
+                let drained = actor
+                    .drain_pane_process_io_side_effects(&instance, 1)
+                    .unwrap();
+                if index == 0 && !protected_write {
+                    assert!(drained.is_empty());
+                    assert!(
+                        worker_watcher.has_changed().unwrap(),
+                        "lease-control progress must wake the exact-process watcher"
+                    );
+                    assert!(
+                        actor.metrics.side_effect_delivery_notifications > revision,
+                        "internal lease-control progress must wake retained input"
+                    );
+                }
+                observed.extend(drained);
+            }
+            if protected_write {
+                assert!(
+                    matches!(
+                        &observed[0],
+                        RuntimeSideEffect::PaneProcessIo {
+                            effect: PaneProcessIoEffect::WriteShellInput { .. },
+                            ..
+                        }
+                    ),
+                    "foreign input passed the protected write"
+                );
+                observed.remove(0);
+            }
+            assert_eq!(
+                observed.len(),
+                blocked,
+                "active={active_lease} protected={protected_write}"
+            );
+            for (index, effect) in observed.iter().enumerate() {
+                assert!(
+                    matches!(effect, RuntimeSideEffect::PaneProcessIo { effect: PaneProcessIoEffect::WriteInput { bytes }, .. } if bytes == &[index as u8])
+                );
+            }
+            assert!(!actor.pane_input_leases.contains_key(&instance));
+            assert!(
+                actor
+                    .service
+                    .drain_pane_io_transition()
+                    .side_effects
+                    .is_empty()
+            );
+        }
+    }
+}
+
+/// A source-owned release cannot pass protected input already retained in the
+/// actor lane by a one-item worker limit. All three protected writes must be handed
+/// off before any older foreign input becomes eligible after lease release.
+#[tokio::test(flavor = "current_thread")]
+async fn bounded_lease_release_waits_for_older_queued_protected_input() {
+    use crate::runtime::{PaneProcessInstance, PaneProcessIoEffect};
+    let mut actor = inert_actor(1);
+    let capacity = 1 + actor.committed_side_effect_overshoot();
+    let instance = PaneProcessInstance {
+        pane_id: "%1".into(),
+        generation: 8,
+    };
+    let owner = "queued-protected-owner";
+    let effect = |effect| RuntimeSideEffect::PaneProcessIo {
+        instance: instance.clone(),
+        effect,
+    };
+    actor.service.queue_deferred_pane_input_for_tests(effect(
+        PaneProcessIoEffect::AcquireShellInputLease {
+            owner_id: owner.into(),
+        },
+    ));
+    for _ in 0..capacity - 4 {
+        actor.service.queue_deferred_pane_input_for_tests(effect(
+            PaneProcessIoEffect::WriteInput {
+                bytes: b"foreign".to_vec(),
+            },
+        ));
+    }
+    for bytes in [b"protected-a", b"protected-b", b"protected-c"] {
+        actor.service.queue_deferred_pane_input_for_tests(effect(
+            PaneProcessIoEffect::WriteShellInput {
+                delivery: mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                    bytes.to_vec(),
+                    owner,
+                ),
+            },
+        ));
+    }
+    actor.service.queue_deferred_pane_input_for_tests(effect(
+        PaneProcessIoEffect::ReleaseShellInputLease {
+            owner_id: owner.into(),
+        },
+    ));
+    actor
+        .apply_runtime_event_batch(RuntimeEventBatch::new())
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        let drained = actor
+            .drain_pane_process_io_side_effects(&instance, 1)
+            .unwrap();
+        assert!(
+            matches!(
+                &drained[..],
+                [RuntimeSideEffect::PaneProcessIo {
+                    effect: PaneProcessIoEffect::WriteShellInput { .. },
+                    ..
+                }]
+            ),
+            "release passed protected input: {drained:?}"
+        );
+    }
+}
+
+/// Neither a stale process generation nor a mismatched transaction release can
+/// unlock foreign input. Once the exact release is source-owned, worker drains
+/// alone reduce it and wake the already-admitted blocked lane.
+#[tokio::test(flavor = "current_thread")]
+async fn bounded_lease_handoff_preserves_owner_and_process_fences() {
+    use crate::runtime::{PaneProcessInstance, PaneProcessIoEffect};
+    for wrong_generation in [false, true] {
+        let mut actor = inert_actor(1);
+        let capacity = 1 + actor.committed_side_effect_overshoot();
+        let instance = PaneProcessInstance {
+            pane_id: "%1".into(),
+            generation: 9,
+        };
+        actor
+            .pane_input_leases
+            .insert(instance.clone(), "owner".into());
+        for _ in 0..capacity {
+            actor
+                .service
+                .queue_deferred_pane_input_for_tests(RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::WriteInput {
+                        bytes: b"blocked".to_vec(),
+                    },
+                });
+        }
+        actor
+            .service
+            .queue_deferred_pane_input_for_tests(RuntimeSideEffect::PaneProcessIo {
+                instance: PaneProcessInstance {
+                    generation: if wrong_generation { 10 } else { 9 },
+                    ..instance.clone()
+                },
+                effect: PaneProcessIoEffect::ReleaseShellInputLease {
+                    owner_id: if wrong_generation {
+                        "owner"
+                    } else {
+                        "foreign-owner"
+                    }
+                    .into(),
+                },
+            });
+        actor
+            .apply_runtime_event_batch(RuntimeEventBatch::new())
+            .await
+            .unwrap();
+        assert!(
+            actor
+                .drain_pane_process_io_side_effects(&instance, 1)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            actor.pane_input_leases.get(&instance).map(String::as_str),
+            Some("owner")
+        );
+        actor
+            .service
+            .queue_deferred_pane_input_for_tests(RuntimeSideEffect::PaneProcessIo {
+                instance: instance.clone(),
+                effect: PaneProcessIoEffect::ReleaseShellInputLease {
+                    owner_id: "owner".into(),
+                },
+            });
+        assert!(
+            actor
+                .drain_pane_process_io_side_effects(&instance, 1)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!actor.pane_input_leases.contains_key(&instance));
+        assert_eq!(
+            actor
+                .drain_pane_process_io_side_effects(&instance, 1)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }
 
@@ -277,6 +625,55 @@ async fn committed_persistence_admits_while_transient_occupancy_exceeds_capacity
             .iter()
             .any(|effect| matches!(effect, RuntimeSideEffect::PersistAuditLog { .. })),
         "durable persistence must reach its lane: {drained:?}"
+    );
+}
+
+/// Durable work must transfer even when full transient reserve plus an owed
+/// compensation redraw leave no transient slot. The deferred reply stays at its
+/// original owner while the immutable audit reaches persistence exactly once.
+#[tokio::test(flavor = "current_thread")]
+async fn durable_source_transfer_is_independent_of_full_transient_and_redraw_reserve() {
+    let mut actor = inert_actor(1);
+    let capacity = 1 + actor.committed_side_effect_overshoot();
+    actor
+        .admit_committed_side_effects(
+            (0..capacity)
+                .map(|index| timer_effect(&format!("occupied-{index}")))
+                .collect(),
+        )
+        .unwrap();
+    actor
+        .admit_committed_side_effects(vec![RuntimeSideEffect::RenderClient {
+            client_id: mez_core::ids::ClientId::new('c', 9002),
+            reason: RenderInvalidationReason::FullRedraw,
+        }])
+        .unwrap();
+    assert!(actor.side_effects.len() + actor.side_effect_routes.non_persistence_len() > capacity);
+    actor
+        .service
+        .queue_deferred_pane_input_for_tests(RuntimeSideEffect::WritePaneInputPriority {
+            pane_id: "%1".into(),
+            bytes: b"retained".to_vec(),
+        });
+    actor
+        .service
+        .queue_transcript_for_tests(RuntimeSideEffect::PersistAuditLog {
+            path: std::env::temp_dir().join("mez-inert-transfer-audit"),
+            bytes: b"immutable audit".to_vec(),
+            retention: crate::security::audit::AuditRetentionPolicy::default(),
+        });
+    actor
+        .apply_runtime_event_batch(RuntimeEventBatch::new())
+        .await
+        .unwrap();
+    let durable = actor.drain_persistence_side_effects(1).unwrap();
+    assert!(
+        matches!(&durable[..], [RuntimeSideEffect::PersistAuditLog { bytes, .. }] if bytes == b"immutable audit")
+    );
+    assert!(actor.drain_persistence_side_effects(1).unwrap().is_empty());
+    assert!(
+        matches!(actor.service.drain_pane_io_transition().side_effects.as_slice(),
+        [RuntimeSideEffect::WritePaneInputPriority { bytes, .. }] if bytes == b"retained")
     );
 }
 

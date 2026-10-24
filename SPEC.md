@@ -11897,6 +11897,25 @@ a preview's arrival is not permission to consume them or run unrelated global
 bootstrap, execution-progress, or timer reconciliation. Confirmed mutation
 sections and batches mixed with authoritative completions are not provisional
 and MUST retain their ordinary committed-effect admission semantics.
+Deferred dispatches still held by their original service queues MUST be extracted
+only within the actor's available committed transient budget or handed directly
+to reserved slots of the requesting exact-process worker drain. That bounded
+handoff MUST apply existing lease arbitration: protected input precedes foreign
+input, a release cannot pass an older eligible write, and lease controls reduced
+internally count as real progress even without a worker-facing dispatch. This
+prevents a full lane of lease-blocked input from stranding its own release.
+No direct handoff may exceed the worker's drain limit or change process fences.
+An unadmitted
+dispatch retains its original identity and owner; actual lane-drain progress MUST
+transfer a fitting prefix without another producer event. Capacity-bounded
+extraction MUST rotate across transient families so continuously replenished
+pane input cannot starve resize, hook, clipboard or status dispatches. Each
+family retains its existing internal order and freshness fences. Durable writes
+MUST transfer independently of transient pressure, including compensation
+redraws above the reserve, and transcript receipts MUST enroll exactly once.
+This is source-retained dispatch custody, not a second outside-lane holding queue
+for raw effects whose event has already surrendered ownership. No event, action,
+input or provider work may be replayed to recover dispatch.
 Once an event batch has applied its events, the side effects it produced MUST NOT
 be destroyed by a capacity refusal: the actor MUST admit them to their ordinary
 lanes within a bounded reserve above the configured capacity, in the same

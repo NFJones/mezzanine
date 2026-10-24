@@ -273,9 +273,6 @@ impl AsyncRuntimeSessionActor {
                 .runtime_event_global_reconciliation_skipped
                 .saturating_add(1);
         }
-        if !provisional_progress_batch {
-            batch_side_effects.extend(self.deferred_service_side_effects_from_service());
-        }
         registry_persistence_queued = registry_persistence_queued
             || side_effects_include_registry_persistence(&batch_side_effects);
         report.side_effects = report.side_effects.saturating_add(batch_side_effects.len());
@@ -284,6 +281,14 @@ impl AsyncRuntimeSessionActor {
                 .map_err(|error| {
                     runtime_event_queue_error_after_service_drain(error, report.applied)
                 })?;
+        }
+        if !provisional_progress_batch {
+            report.side_effects = report.side_effects.saturating_add(
+                self.queue_fitting_deferred_service_side_effects()
+                    .map_err(|error| {
+                        runtime_event_queue_error_after_service_drain(error, report.applied)
+                    })?,
+            );
         }
         if report.applied > 0
             && registry_persistence_required
@@ -1199,6 +1204,25 @@ impl AsyncRuntimeSessionActor {
         side_effects.extend(self.pending_divider_resize_debounce_timer_side_effects()?);
         let count = side_effects.len();
         self.queue_runtime_side_effects(side_effects)?;
+        Ok(count)
+    }
+
+    /// Transfers a fitting service-owned prefix under the finite committed budget.
+    ///
+    /// Extraction and admission cannot interleave with another actor operation.
+    /// Unadmitted transient identities stay with their original source queues;
+    /// durable receipt-bearing effects bypass transient capacity independently.
+    pub(super) fn queue_fitting_deferred_service_side_effects(&mut self) -> Result<usize> {
+        self.dispatch_bookkeeping_candidates();
+        let limit = self.available_committed_side_effect_capacity();
+        let effects = self
+            .service
+            .drain_deferred_effects_transition_up_to(limit)
+            .side_effects;
+        let count = effects.len();
+        if count > 0 {
+            self.admit_committed_side_effects(effects)?;
+        }
         Ok(count)
     }
 

@@ -2640,16 +2640,29 @@ impl RuntimePresentationComponent {
     pub(crate) fn take_agent_presentation_resize_dispatch_effects(
         &mut self,
     ) -> Vec<RuntimeSideEffect> {
+        self.take_agent_presentation_resize_dispatch_effects_up_to(usize::MAX)
+    }
+
+    /// Transfers fitting resize dispatches while retaining every unadmitted token.
+    pub(crate) fn take_agent_presentation_resize_dispatch_effects_up_to(
+        &mut self,
+        limit: usize,
+    ) -> Vec<RuntimeSideEffect> {
         let debounce_ms = self.settings.terminal_resize_debounce_ms.max(1);
-        std::mem::take(&mut self.pending_agent_presentation_resize_dispatches)
-            .into_iter()
-            .map(
-                |pane_id| RuntimeSideEffect::DispatchAgentPresentationResize {
-                    pane_id,
-                    debounce_ms,
-                },
-            )
-            .collect()
+        let mut effects = Vec::new();
+        while effects.len() < limit {
+            let Some(pane_id) = self
+                .pending_agent_presentation_resize_dispatches
+                .pop_first()
+            else {
+                break;
+            };
+            effects.push(RuntimeSideEffect::DispatchAgentPresentationResize {
+                pane_id,
+                debounce_ms,
+            });
+        }
+        effects
     }
 
     /// Requests another worker dispatch for every resize retained during a drag.
@@ -3778,16 +3791,25 @@ impl RuntimeSessionService {
 
     /// Drains command-backed status pill refreshes scheduled during rendering.
     pub(crate) fn drain_status_pill_refresh_transition(&self) -> RuntimeTransition {
+        self.drain_status_pill_refresh_transition_up_to(usize::MAX)
+    }
+
+    /// Leaves unadmitted status generations at their original cache owner.
+    pub(crate) fn drain_status_pill_refresh_transition_up_to(
+        &self,
+        limit: usize,
+    ) -> RuntimeTransition {
         let window_plans = self
             .presentation
             .window_status_pill_cache
             .borrow_mut()
-            .drain_refresh_plans();
-        let pane_preparation_needed = self
-            .presentation
-            .pane_status_provider_cache
-            .borrow()
-            .preparation_needed();
+            .drain_refresh_plans_up_to(limit);
+        let pane_preparation_needed = window_plans.len() < limit
+            && self
+                .presentation
+                .pane_status_provider_cache
+                .borrow()
+                .preparation_needed();
         RuntimeTransition {
             applied: false,
             side_effects: window_plans

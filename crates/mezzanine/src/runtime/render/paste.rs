@@ -161,10 +161,30 @@ impl RuntimeSessionService {
     }
 
     /// Drains coalesced clipboard worker requests into the actor side-effect queue.
+    #[cfg(test)]
     pub(crate) fn drain_host_clipboard_read_transition(&mut self) -> RuntimeTransition {
+        self.drain_host_clipboard_read_transition_up_to(usize::MAX)
+    }
+
+    /// Transfers only requests covered by the actor's current transient budget.
+    pub(crate) fn drain_host_clipboard_read_transition_up_to(
+        &mut self,
+        limit: usize,
+    ) -> RuntimeTransition {
+        let count = self
+            .presentation
+            .copy
+            .pending_host_clipboard_reads
+            .len()
+            .min(limit);
         RuntimeTransition {
             applied: false,
-            side_effects: std::mem::take(&mut self.presentation.copy.pending_host_clipboard_reads),
+            side_effects: self
+                .presentation
+                .copy
+                .pending_host_clipboard_reads
+                .drain(..count)
+                .collect(),
         }
     }
 

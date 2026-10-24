@@ -122,6 +122,29 @@ pub enum PaneProcessIoEffect {
     Terminate { force: bool },
 }
 
+impl PaneProcessIoEffect {
+    /// Tests input arbitration without granting process or execution authority.
+    ///
+    /// Lease controls are reduced by the actor; only the matching transaction's
+    /// generated input/cancellation and independent urgent process work may pass
+    /// foreign input while that transaction owns the exact process lease.
+    pub(crate) fn allowed_by_shell_input_lease(&self, owner: Option<&str>) -> bool {
+        let Some(owner) = owner else {
+            return true;
+        };
+        match self {
+            Self::AcquireShellInputLease { .. }
+            | Self::ReleaseShellInputLease { .. }
+            | Self::WriteInputPriority { .. }
+            | Self::Terminate { .. }
+            | Self::ObserveForegroundProcess { .. } => true,
+            Self::WriteShellInput { delivery } => delivery.delivery_id.as_deref() == Some(owner),
+            Self::CancelShellInput { delivery_id } => delivery_id == owner,
+            Self::WriteInput { .. } | Self::Resize { .. } => false,
+        }
+    }
+}
+
 /// Result of one explicitly correlated foreground-process observation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneForegroundProcessObservation {

@@ -139,11 +139,69 @@ impl RuntimePersistenceComponent {
     }
 
     /// Drains input, resize, and termination effects in canonical order.
+    #[cfg(test)]
     pub(crate) fn take_pane_io_effects(&mut self) -> Vec<RuntimeSideEffect> {
-        let mut effects = std::mem::take(&mut self.queued_pane_input_effects);
-        effects.extend(std::mem::take(&mut self.queued_pane_resize_effects).into_values());
-        effects.extend(std::mem::take(&mut self.queued_pane_termination_effects).into_values());
+        self.take_pane_io_effects_up_to(usize::MAX)
+    }
+
+    /// Transfers only a fitting canonical prefix; the remainder keeps its owner.
+    pub(crate) fn take_pane_io_effects_up_to(&mut self, limit: usize) -> Vec<RuntimeSideEffect> {
+        let count = self.queued_pane_input_effects.len().min(limit);
+        let mut effects = self
+            .queued_pane_input_effects
+            .drain(..count)
+            .collect::<Vec<_>>();
+        while effects.len() < limit {
+            let Some((_, effect)) = self.queued_pane_resize_effects.pop_first() else {
+                break;
+            };
+            effects.push(effect);
+        }
+        while effects.len() < limit {
+            let Some((_, effect)) = self.queued_pane_termination_effects.pop_first() else {
+                break;
+            };
+            effects.push(effect);
+        }
         effects
+    }
+
+    /// Hands one lease-eligible exact-process effect to a bounded worker drain.
+    ///
+    /// Foreign input stays at this source. An eligible write that cannot fit
+    /// stops selection before a later release, preserving generated-input order.
+    pub(crate) fn take_leased_pane_io_effect(
+        &mut self,
+        instance: &crate::runtime::PaneProcessInstance,
+        owner: &str,
+        allow_dispatch: bool,
+    ) -> Option<RuntimeSideEffect> {
+        for (index, effect) in self.queued_pane_input_effects.iter().enumerate() {
+            let RuntimeSideEffect::PaneProcessIo {
+                instance: target,
+                effect,
+            } = effect
+            else {
+                continue;
+            };
+            if target != instance || !effect.allowed_by_shell_input_lease(Some(owner)) {
+                continue;
+            }
+            // Never move a release past an eligible generated write that the
+            // current worker drain cannot accept. Foreign writes remain source
+            // owned while protected writes and lease controls make progress.
+            if !allow_dispatch
+                && !matches!(
+                    effect,
+                    crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { .. }
+                        | crate::runtime::PaneProcessIoEffect::ReleaseShellInputLease { .. }
+                )
+            {
+                return None;
+            }
+            return Some(self.queued_pane_input_effects.remove(index));
+        }
+        None
     }
 
     /// Removes obsolete queued pane I/O and pipe effects for a closed pane.
@@ -579,8 +637,18 @@ impl RuntimePersistenceComponent {
     }
 
     /// Drains queued non-blocking program-hook effects.
+    #[cfg(test)]
     pub(crate) fn take_program_hook_effects(&mut self) -> Vec<RuntimeSideEffect> {
-        std::mem::take(&mut self.queued_program_hook_effects)
+        self.take_program_hook_effects_up_to(usize::MAX)
+    }
+
+    /// Transfers a fitting hook prefix without retiring unadmitted dispatches.
+    pub(crate) fn take_program_hook_effects_up_to(
+        &mut self,
+        limit: usize,
+    ) -> Vec<RuntimeSideEffect> {
+        let count = self.queued_program_hook_effects.len().min(limit);
+        self.queued_program_hook_effects.drain(..count).collect()
     }
 }
 

@@ -243,8 +243,18 @@ impl RuntimeStatusPillCache {
     }
 
     /// Drains scheduled refresh plans for the supervised external worker.
+    #[cfg(test)]
     pub(super) fn drain_refresh_plans(&mut self) -> Vec<RuntimeStatusPillRefreshPlan> {
-        std::mem::take(&mut self.pending_refreshes)
+        self.drain_refresh_plans_up_to(usize::MAX)
+    }
+
+    /// Transfers a fitting prefix without losing pending-generation ownership.
+    pub(super) fn drain_refresh_plans_up_to(
+        &mut self,
+        limit: usize,
+    ) -> Vec<RuntimeStatusPillRefreshPlan> {
+        let count = self.pending_refreshes.len().min(limit);
+        self.pending_refreshes.drain(..count).collect()
     }
 
     /// Applies one current completion and reports whether visible text changed.
@@ -2621,6 +2631,31 @@ mod tests {
         let repeated = cache.render_active(&definitions, "#{pill.used}");
         assert!(repeated.is_empty());
         assert!(cache.drain_refresh_plans().is_empty());
+    }
+
+    /// A bounded drain retains every unadmitted generation at the cache owner.
+    /// Re-rendering while beta awaits a slot must neither replace its plan nor
+    /// produce a duplicate; each original generation transfers exactly once.
+    #[test]
+    fn status_pill_bounded_transfer_retains_unadmitted_generations() {
+        let root = serde_json::json!({"frames": {"window": {"pills": {
+            "alpha": {"command": "printf alpha", "interval_seconds": 1},
+            "beta": {"command": "printf beta", "interval_seconds": 1}
+        }}}});
+        let definitions = runtime_status_pill_definitions_from_config(&root).unwrap();
+        let mut cache = RuntimeStatusPillCache::default();
+        cache.render_active(&definitions, "#{pill.alpha} #{pill.beta}");
+        assert!(cache.drain_refresh_plans_up_to(0).is_empty());
+        let first = cache.drain_refresh_plans_up_to(1);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].name, "alpha");
+        // Rendering again cannot replace or duplicate the still-owned beta plan.
+        cache.render_active(&definitions, "#{pill.alpha} #{pill.beta}");
+        let second = cache.drain_refresh_plans_up_to(1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].name, "beta");
+        assert_ne!(first[0].generation, second[0].generation);
+        assert!(cache.drain_refresh_plans_up_to(1).is_empty());
     }
 
     /// Palette-only edits must not invalidate an in-flight command because

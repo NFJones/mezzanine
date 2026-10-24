@@ -2,7 +2,8 @@
 //!
 //! Real drain progress is also the existing capacity wake boundary for retained
 //! work. Steering DISPLAY recovery may separately enroll one bounded idle wake
-//! here, but never reruns a service drain, input, provider or settled action.
+//! here. Real lane progress also transfers fitting service-owned dispatches, but
+//! never repeats input, provider work or a settled action.
 //! Optional enrollment can never discard an already-taken mandatory batch; a
 //! rejected wake keeps the retained display obligation owned for later progress.
 
@@ -60,6 +61,7 @@ impl AsyncRuntimeSessionActor {
         // owns those exact dispatches; retry after real drain progress without
         // requiring an unrelated runtime event.
         if drained > 0 {
+            self.queue_fitting_deferred_service_side_effects()?;
             self.queue_steering_presentation_retry_idle_wake();
             let _ = self.queue_pending_deferred_agent_command_side_effects();
         }
@@ -476,6 +478,7 @@ impl AsyncRuntimeSessionActor {
         let mut drained = Vec::new();
         let mut retained = VecDeque::new();
         let mut queued = self.side_effect_routes.take_pane_process(instance);
+        let mut lease_controls = 0;
         while let Some(effect) = queued.pop_front() {
             if let RuntimeSideEffect::PaneProcessIo {
                 instance: effect_instance,
@@ -486,6 +489,7 @@ impl AsyncRuntimeSessionActor {
                 self.pane_input_leases
                     .entry(effect_instance.clone())
                     .or_insert_with(|| owner_id.clone());
+                lease_controls += 1;
                 continue;
             }
             if let RuntimeSideEffect::PaneProcessIo {
@@ -495,49 +499,30 @@ impl AsyncRuntimeSessionActor {
                 && effect_instance == instance
             {
                 if self.pane_input_leases.get(effect_instance) == Some(owner_id) {
+                    if retained.iter().any(|effect| {
+                        matches!(effect,
+                        RuntimeSideEffect::PaneProcessIo { effect, .. }
+                            if effect.allowed_by_shell_input_lease(Some(owner_id)))
+                    }) {
+                        // Ordinary refill can move a release from service to
+                        // this lane between drains. Keep it and every later
+                        // operation behind older protected input, including
+                        // later acquire/release controls for another owner.
+                        retained.push_back(effect);
+                        retained.extend(queued);
+                        break;
+                    }
                     self.pane_input_leases.remove(effect_instance);
                 }
+                lease_controls += 1;
                 continue;
             }
-            let lease_allows_effect = match (&effect, self.pane_input_leases.get(instance)) {
-                (
-                    RuntimeSideEffect::PaneProcessIo {
-                        effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
-                        ..
-                    },
-                    Some(owner_id),
-                ) => delivery.delivery_id.as_deref() == Some(owner_id.as_str()),
-                (
-                    RuntimeSideEffect::PaneProcessIo {
-                        effect: crate::runtime::PaneProcessIoEffect::WriteInputPriority { .. },
-                        ..
-                    },
-                    Some(_),
-                ) => true,
-                (
-                    RuntimeSideEffect::PaneProcessIo {
-                        effect: crate::runtime::PaneProcessIoEffect::Terminate { .. },
-                        ..
-                    },
-                    Some(_),
-                ) => true,
-                (
-                    RuntimeSideEffect::PaneProcessIo {
-                        effect: crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess { .. },
-                        ..
-                    },
-                    Some(_),
-                ) => true,
-                (
-                    RuntimeSideEffect::PaneProcessIo {
-                        effect:
-                            crate::runtime::PaneProcessIoEffect::CancelShellInput { delivery_id },
-                        ..
-                    },
-                    Some(owner_id),
-                ) => delivery_id == owner_id,
-                (_, Some(_)) => false,
-                (_, None) => true,
+            let lease_allows_effect = match &effect {
+                RuntimeSideEffect::PaneProcessIo { effect, .. } => effect
+                    .allowed_by_shell_input_lease(
+                        self.pane_input_leases.get(instance).map(String::as_str),
+                    ),
+                _ => !self.pane_input_leases.contains_key(instance),
             };
             if !lease_allows_effect {
                 retained.push_back(effect);
@@ -549,9 +534,51 @@ impl AsyncRuntimeSessionActor {
                 retained.push_back(effect);
             }
         }
+        // A full lane can contain only foreign input blocked by this lease.
+        // The requesting exact-process worker itself owns `limit` dispatch
+        // slots, so hand it fitting protected source work directly instead of
+        // requiring a free intermediate queue slot. Lease controls are reduced
+        // here, not sent to a native worker. Source selection cannot pass an
+        // eligible write once this drain's dispatch limit has been reached.
+        while let Some(owner) = self.pane_input_leases.get(instance) {
+            if retained.iter().any(|effect| {
+                matches!(effect,
+                RuntimeSideEffect::PaneProcessIo { effect, .. }
+                    if effect.allowed_by_shell_input_lease(Some(owner)))
+            }) {
+                // An older protected write is waiting for the next worker
+                // slot. Its later source-owned release must wait with it.
+                break;
+            }
+            let Some(effect) =
+                self.service
+                    .take_leased_pane_io_effect(instance, owner, drained.len() < limit)
+            else {
+                break;
+            };
+            match &effect {
+                RuntimeSideEffect::PaneProcessIo {
+                    effect: crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { .. },
+                    ..
+                } => lease_controls += 1,
+                RuntimeSideEffect::PaneProcessIo {
+                    effect: crate::runtime::PaneProcessIoEffect::ReleaseShellInputLease { owner_id },
+                    ..
+                } => {
+                    if self.pane_input_leases.get(instance) == Some(owner_id) {
+                        self.pane_input_leases.remove(instance);
+                    }
+                    lease_controls += 1;
+                }
+                _ => drained.push(effect),
+            }
+        }
         self.side_effect_routes
             .restore_pane_process(instance.clone(), retained);
-        self.record_side_effect_drain(drained.len())?;
+        if lease_controls > 0 {
+            self.notify_pane_process_side_effect_delivery(instance);
+        }
+        self.record_side_effect_drain(drained.len() + lease_controls)?;
         Ok(drained)
     }
 

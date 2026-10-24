@@ -59,6 +59,7 @@ impl RuntimeSessionService {
     }
 
     /// Drains queued program hooks through the runtime transition contract.
+    #[cfg(test)]
     pub(crate) fn drain_program_hook_transition(&mut self) -> RuntimeTransition {
         RuntimeTransition {
             applied: false,

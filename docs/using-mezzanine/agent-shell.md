@@ -279,6 +279,14 @@ unrelated deferred runtime work. Under queue pressure that work stays with its
 service owner for an authoritative transfer; preview arrival is not delivery
 evidence. Confirmed mutation sections and action completion are not provisional
 and retain their separate settlement obligations.
+Authoritative transfers take only the deferred dispatches that fit the finite
+transient reserve. Excess dispatches stay at their original service owners and
+transfer as workers drain capacity, without another user event or action replay.
+Transfer rotates across dispatch families; durable writes do not wait for a
+transient slot and keep their original receipt identities.
+An exact-process worker can also accept lease-protected input directly within
+its bounded drain slots. Lease release never passes an older protected write;
+blocked foreign input cannot consume the capacity needed to release that lease.
 
 Use `/show-context activity` to inspect recent retained action intent, outcomes,
 and bounded result previews. Enter or click a row to open detail; Escape

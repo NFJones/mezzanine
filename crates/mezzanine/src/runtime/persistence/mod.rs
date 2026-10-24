@@ -60,6 +60,8 @@ pub(crate) struct RuntimePersistenceComponent {
     session_registry: Option<SessionRegistry>,
     audit_log: Option<AuditLog>,
     queued_pane_input_effects: Vec<RuntimeSideEffect>,
+    /// Next transient family to visit after a capacity-bounded source transfer.
+    pub(super) deferred_transient_family_cursor: usize,
     queued_pane_resize_effects: BTreeMap<String, RuntimeSideEffect>,
     expected_pane_resize_sizes: BTreeMap<String, TerminalSize>,
     queued_pane_termination_effects: BTreeMap<String, RuntimeSideEffect>,

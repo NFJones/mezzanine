@@ -166,12 +166,26 @@ impl RuntimeSessionService {
     }
 
     /// Drains pane-worker I/O through the transport-neutral transition contract.
+    #[cfg(test)]
     pub(crate) fn drain_pane_io_transition(&mut self) -> RuntimeTransition {
         let side_effects = self.persistence.take_pane_io_effects();
         RuntimeTransition {
             applied: false,
             side_effects,
         }
+    }
+
+    /// Transfers lease-eligible input directly to its bounded exact-process drain.
+    /// The actor supplies the current lease owner and whether a dispatch fits;
+    /// controls remain actor-local and never authorize another process generation.
+    pub(crate) fn take_leased_pane_io_effect(
+        &mut self,
+        instance: &PaneProcessInstance,
+        owner: &str,
+        allow_dispatch: bool,
+    ) -> Option<RuntimeSideEffect> {
+        self.persistence
+            .take_leased_pane_io_effect(instance, owner, allow_dispatch)
     }
 
     /// Seeds deferred dispatch custody without starting a process in actor tests.
