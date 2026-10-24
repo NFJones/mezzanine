@@ -628,6 +628,208 @@ async fn committed_persistence_admits_while_transient_occupancy_exceeds_capacity
     );
 }
 
+/// A rejected mixed committed vector must not discard independent durable work.
+///
+/// Fill the entire transient reserve, interleave immutable audit records with a
+/// non-droppable timer, and require the original durable bytes in lane order
+/// exactly once despite the truthful transient refusal. The producer boundary
+/// remains all-or-error: it has not committed its work and may retry it intact.
+/// No filesystem operation or worker is executed by this inert fixture.
+#[tokio::test(flavor = "current_thread")]
+async fn mixed_committed_refusal_preserves_durable_lane_without_producer_bypass() {
+    for committed in [false, true] {
+        let mut actor = inert_actor(1);
+        let capacity = 1 + actor.committed_side_effect_overshoot();
+        actor
+            .admit_committed_side_effects(
+                (0..capacity)
+                    .map(|index| timer_effect(&format!("occupied-{index}")))
+                    .collect(),
+            )
+            .unwrap();
+        let audit = |bytes: &[u8]| RuntimeSideEffect::PersistAuditLog {
+            path: std::env::temp_dir().join("mez-inert-mixed-committed-audit"),
+            bytes: bytes.to_vec(),
+            retention: crate::security::audit::AuditRetentionPolicy::default(),
+        };
+        let effects = vec![audit(b"first"), timer_effect("refused"), audit(b"second")];
+        let error = if committed {
+            actor.admit_committed_side_effects(effects)
+        } else {
+            actor.queue_runtime_side_effects(effects)
+        }
+        .expect_err("transient reserve must remain finite");
+        assert!(super::super::queue::is_side_effect_queue_full_error(&error));
+        // Applied-event wrappers append their count after the admission error.
+        // Even a zero-applied wrapper cannot turn partial durable transfer into
+        // permission to replay the mixed vector and append its records twice.
+        let annotated = MezError::invalid_state(format!("{} applied=0", error.message()));
+        assert_eq!(
+            super::super::queue::is_retryable_side_effect_queue_full_error(&annotated),
+            !committed
+        );
+        let durable = actor.drain_persistence_side_effects(8).unwrap();
+        let observed = durable
+            .iter()
+            .map(|effect| match effect {
+                RuntimeSideEffect::PersistAuditLog { bytes, .. } => bytes.as_slice(),
+                other => panic!("unexpected durable effect: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            observed,
+            if committed {
+                vec![b"first".as_slice(), b"second".as_slice()]
+            } else {
+                vec![]
+            },
+            "committed={committed}"
+        );
+        assert!(actor.drain_persistence_side_effects(8).unwrap().is_empty());
+        let timers = actor.drain_timer_side_effects(capacity + 1).unwrap();
+        assert_eq!(timers.len(), capacity);
+        assert!(timers.iter().all(|effect| timer_owner(effect) != "refused"));
+    }
+}
+
+/// Pre-verdict registry replacement is consumed even if no durable item returns.
+///
+/// Registry coalescing replaces an existing lane item before transient admission
+/// decides. The returned overflow vector therefore contains only the timer, but
+/// a zero-applied annotation must not authorize replay of that partial transfer.
+/// This fixture exercises actual registry coalescing without running storage.
+#[tokio::test(flavor = "current_thread")]
+async fn coalesced_committed_durable_refusal_is_consumed() {
+    use crate::runtime::RuntimeRegistryUpdatePlan;
+    let mut actor = inert_actor(1);
+    let capacity = 1 + actor.committed_side_effect_overshoot();
+    actor
+        .admit_committed_side_effects(
+            (0..capacity)
+                .map(|index| timer_effect(&format!("occupied-{index}")))
+                .collect(),
+        )
+        .unwrap();
+    let registry = crate::storage::registry::SessionRegistry::new(
+        std::env::temp_dir().join("mez-inert-coalesced-committed-registry"),
+        crate::runtime::current_effective_uid(),
+    );
+    let initial = actor.service.registry_update_plan();
+    let RuntimeRegistryUpdatePlan::Upsert(record) = &initial else {
+        panic!("live service must create an upsert");
+    };
+    let session_id = record.session_id.clone();
+    actor
+        .admit_committed_side_effects(vec![RuntimeSideEffect::PersistRegistry {
+            registry: registry.clone(),
+            update: initial,
+        }])
+        .unwrap();
+    let error = actor
+        .admit_committed_side_effects(vec![
+            RuntimeSideEffect::PersistRegistry {
+                registry,
+                update: RuntimeRegistryUpdatePlan::Remove {
+                    session_id: session_id.clone(),
+                },
+            },
+            timer_effect("refused"),
+        ])
+        .expect_err("transient admission must still refuse");
+    let annotated = MezError::invalid_state(format!("{} applied=0", error.message()));
+    assert!(
+        !super::super::queue::is_retryable_side_effect_queue_full_error(&annotated),
+        "coalesced durable replacement was already consumed: {annotated}"
+    );
+    assert!(matches!(
+        actor.drain_persistence_side_effects(8).unwrap().as_slice(),
+        [RuntimeSideEffect::PersistRegistry {
+            update: RuntimeRegistryUpdatePlan::Remove { session_id: found }, ..
+        }] if found == &session_id
+    ));
+    assert!(actor.drain_persistence_side_effects(8).unwrap().is_empty());
+}
+
+/// Mixed refusal installs one held transcript claim and one receipt admission.
+///
+/// A committed immutable append must enter ordinary receipt fencing even when
+/// its accompanying timer cannot fit. Scheduling the receipt twice is inert;
+/// the original claim remains undrainable until its exact receipt settles, then
+/// delivers the original rows and claim ID once. No file or worker is started.
+#[tokio::test(flavor = "current_thread")]
+async fn mixed_committed_refusal_retains_exact_transcript_receipt_claim() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+    let mut actor = inert_actor(1);
+    let capacity = 1 + actor.committed_side_effect_overshoot();
+    actor
+        .admit_committed_side_effects(
+            (0..capacity)
+                .map(|index| timer_effect(&format!("occupied-{index}")))
+                .collect(),
+        )
+        .unwrap();
+    let store = crate::storage::transcript::AgentTranscriptStore::new(
+        std::env::temp_dir().join("mez-inert-mixed-committed-transcript"),
+    );
+    let row = TranscriptEntry {
+        conversation_id: "mixed-committed-conversation".into(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".into(),
+        agent_id: "agent-%1".into(),
+        pane_id: "%1".into(),
+        content: "immutable original row".into(),
+    };
+    let previous = actor.side_effect_routes.next_transcript_claim_id();
+    let error = actor
+        .admit_committed_side_effects(vec![
+            RuntimeSideEffect::PersistTranscriptEntries {
+                path: store.transcript_path(&row.conversation_id).unwrap(),
+                store,
+                entries: vec![row.clone()],
+            },
+            timer_effect("refused"),
+        ])
+        .expect_err("transient admission must still refuse");
+    assert!(error.message().contains(" consumed=1"));
+    let admissions = actor
+        .side_effect_routes
+        .hold_transcript_receipts_after(previous);
+    assert_eq!(admissions.len(), 1);
+    let (id, _, entries) = &admissions[0];
+    assert_eq!(entries, &vec![row.clone()]);
+    assert!(
+        actor
+            .side_effect_routes
+            .hold_transcript_receipts_after(previous)
+            .is_empty()
+    );
+    assert!(
+        actor
+            .side_effect_routes
+            .drain_persistence_claims(8)
+            .is_empty()
+    );
+    assert!(
+        actor
+            .side_effect_routes
+            .finish_transcript_receipt(*id, true)
+    );
+    let drained = actor.side_effect_routes.drain_persistence_claims(8);
+    assert!(matches!(
+        drained.as_slice(),
+        [(RuntimeSideEffect::PersistTranscriptEntries { entries, .. }, Some(found))]
+            if entries == &vec![row] && found == id
+    ));
+    assert!(
+        actor
+            .side_effect_routes
+            .drain_persistence_claims(8)
+            .is_empty()
+    );
+}
+
 /// Durable work must transfer even when full transient reserve plus an owed
 /// compensation redraw leave no transient slot. The deferred reply stays at its
 /// original owner while the immutable audit reaches persistence exactly once.

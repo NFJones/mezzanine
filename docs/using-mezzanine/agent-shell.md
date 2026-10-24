@@ -284,6 +284,10 @@ transient reserve. Excess dispatches stay at their original service owners and
 transfer as workers drain capacity, without another user event or action replay.
 Transfer rotates across dispatch families; durable writes do not wait for a
 transient slot and keep their original receipt identities.
+If an already-committed mixed effect batch exceeds the transient reserve, its
+durable records still enter persistence in order. The remaining refusal is not
+success and cannot be retried by replaying that batch. Work that a producer has
+not yet committed keeps the ordinary all-or-error admission contract.
 An exact-process worker can also accept lease-protected input directly within
 its bounded drain slots. Lease release never passes an older protected write;
 blocked foreign input cannot consume the capacity needed to release that lease.

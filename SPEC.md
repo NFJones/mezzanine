@@ -11913,6 +11913,13 @@ pane input cannot starve resize, hook, clipboard or status dispatches. Each
 family retains its existing internal order and freshness fences. Durable writes
 MUST transfer independently of transient pressure, including compensation
 redraws above the reserve, and transcript receipts MUST enroll exactly once.
+This independence also applies to a raw mixed vector from an already-applied
+event: if its transient portion exceeds the reserve, its original durable records
+MUST still enter the persistence lane once, in their original relative order.
+The transient refusal MUST remain visible and the partial transfer MUST be
+classified as consumed, even when an outer wrapper reports zero applied events;
+it MUST NOT authorize replay of the mixed vector. Producer-owned strict admission
+remains all-or-error and MUST NOT gain this committed-only partial transfer.
 This is source-retained dispatch custody, not a second outside-lane holding queue
 for raw effects whose event has already surrendered ownership. No event, action,
 input or provider work may be replayed to recover dispatch.

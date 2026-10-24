@@ -38,10 +38,13 @@ pub(super) fn is_side_effect_queue_full_error(error: &MezError) -> bool {
 /// be retried: re-submitting a partially applied chunk would re-apply committed
 /// work, so the event-application path tags queue-full failures with how many
 /// events it had already applied. Failures raised after the batch consumed
-/// destructive service-side drains carry an extra `consumed=1` marker and are
-/// never retryable because a retry cannot restore that work.
+/// destructive service-side drains or a partial committed durable transfer carry
+/// an extra `consumed=1` marker. That marker forbids retry regardless of whether
+/// an outer event wrapper appends `applied=0` after it.
 pub(super) fn is_retryable_side_effect_queue_full_error(error: &MezError) -> bool {
-    is_side_effect_queue_full_error(error) && error.message().ends_with("applied=0")
+    is_side_effect_queue_full_error(error)
+        && error.message().ends_with("applied=0")
+        && !error.message().contains(" consumed=1")
 }
 
 /// Multiplier applied to the configured lane capacity for the committed reserve.
@@ -234,18 +237,49 @@ impl AsyncRuntimeSessionActor {
     ///
     /// The overshoot keeps transient admission pressure from destroying
     /// committed work without becoming unbounded buffering; beyond it the
-    /// refusal is reported truthfully to the caller.
+    /// refusal is reported truthfully to the caller. On transient refusal,
+    /// independently capacity-exempt durable records still enter their normal
+    /// persistence lane in original order. That partial transfer is consumed
+    /// and must never authorize resubmission of the original mixed vector.
     pub(super) fn admit_committed_side_effects(
         &mut self,
         side_effects: Vec<RuntimeSideEffect>,
     ) -> Result<()> {
+        // Coalescing may consume a registry update into an existing lane item
+        // before the transient verdict, leaving no durable item in the returned
+        // vector. Capture its presence before that destructive transformation.
+        let includes_durable = side_effects
+            .iter()
+            .any(runtime_side_effect_is_durable_persistence);
         let mut side_effects = side_effects;
-        let enqueued = self.try_queue_runtime_side_effects_with_allowance(
+        let admission = self.try_queue_runtime_side_effects_with_allowance(
             &mut side_effects,
             self.committed_side_effect_overshoot(),
-        )?;
-        self.record_reserve_admission(enqueued);
-        Ok(())
+        );
+        match admission {
+            Ok(enqueued) => {
+                self.record_reserve_admission(enqueued);
+                Ok(())
+            }
+            Err(error) if is_side_effect_queue_full_error(&error) && includes_durable => {
+                // The failed attempt leaves original unadmitted records here.
+                // Only committed callers may split this vector: producers keep
+                // their all-or-error contract, including their durable work.
+                side_effects.retain(runtime_side_effect_is_durable_persistence);
+                if !side_effects.is_empty() {
+                    let enqueued = self.try_queue_runtime_side_effects_with_allowance(
+                        &mut side_effects,
+                        self.committed_side_effect_overshoot(),
+                    )?;
+                    self.record_reserve_admission(enqueued);
+                }
+                Err(MezError::invalid_state(format!(
+                    "{} consumed=1",
+                    error.message()
+                )))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Counts one committed admission that added work while above nominal.
@@ -1133,6 +1167,9 @@ mod tests {
         )));
         assert!(!is_retryable_side_effect_queue_full_error(&queue_full(
             " applied=0 consumed=1"
+        )));
+        assert!(!is_retryable_side_effect_queue_full_error(&queue_full(
+            " consumed=1 applied=0"
         )));
         assert!(!is_retryable_side_effect_queue_full_error(
             &MezError::invalid_state("unrelated failure")
