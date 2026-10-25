@@ -1682,8 +1682,20 @@ MUST refuse new records at 65536 without pruning accepted or retired facts;
 reads MUST bound metadata decoding and reject malformed state or arithmetic.
 Migration MUST be transactional and refuse unknown future versions. These facts
 MUST NOT serialize credentials, native IDs/paths or callback/transcript payloads.
-This storage-contract phase does not supply native clock/proof capture, actor
-publication/retirement integration, renewed windows or cold-service admission.
+For newly allocated ordinary socket sources, the existing off-actor enrollment
+worker MAY write only Prepared from actual retained ancestry and a suspend-aware
+native clock. Fingerprints MUST bind the original source/kind and ordered
+UID/incarnation chain THROUGH the pane root, not its out-of-scope parent. Linux
+CLOCK_BOOTTIME MUST have verified zero time-namespace offsets with matching
+worker/current-leader/leader-time-for-children namespace evidence before and
+after sampling; Darwin uses mach_continuous_time and checked
+timebase conversion. Missing/offset/ambiguous clocks MUST NOT fabricate a window.
+The original proposal and write outcome MUST remain immutable through worker
+return; optional preparation failure MUST NOT change existing native admission
+or reporting authority. Existing/curated sources MUST NOT silently acquire new
+attempts through this path. Abandoned preparation MUST remain non-authorizing.
+Actor acceptance/retirement integration, renewal and cold admission remain
+unfinished; ordinary registration MUST NOT itself mark these receipts Accepted.
 Existing same-live ownership and namespace-only activation refusals remain in
 force; a stored Accepted flag alone MUST NOT authorize recovery or reporting.
 Declared curated Claude creators MAY use fixed `curated-usage-begin/end`

@@ -188,6 +188,9 @@ impl Drop for AncestryReservation {
 /// on their original origin owner; parent-backed witnesses own the source too.
 #[derive(Debug)]
 pub(crate) struct UnixAncestryWitness {
+    /// Original native source identity and UID, never caller-provided selectors.
+    origin: ProcessParentIdentity,
+    uid: u32,
     /// Parent-backed capture owns an exact duplicate of the verified source;
     /// socket-backed capture keeps source lifetime in its original origin owner.
     source: Option<UnixParentProcess>,
@@ -197,6 +200,56 @@ pub(crate) struct UnixAncestryWitness {
 }
 
 impl UnixAncestryWitness {
+    /// Hashes the exact captured source/kind and ordered UID/birth chain through
+    /// the root, only while every retained lifetime is live. The caller must
+    /// independently reobserve its original socket/parent before and after this
+    /// operation. A digest is not a descriptor, current-writer proof or right.
+    /// Root-parent identity ABOVE the captured pane root is deliberately absent.
+    /// No native identifier leaves this API and no new descriptor is opened.
+    pub(crate) fn continuity_digest(
+        &self,
+        uid: u32,
+        origin: ProcessParentIdentity,
+    ) -> io::Result<[u8; 32]> {
+        use sha2::{Digest, Sha256};
+        if self.uid != uid
+            || self.origin != origin
+            || !self.is_live()
+            || self.parents.iter().any(|parent| parent.uid() != uid)
+            || (self.source.is_some() && !self.source_matches(uid, origin))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Unix ancestry continuity unavailable",
+            ));
+        }
+        let count = u64::try_from(self.parents.len()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Unix ancestry continuity exceeded bounds",
+            )
+        })?;
+        let mut hash = Sha256::new();
+        hash.update(b"mezzanine/native-ancestry-continuity/v1\0");
+        hash.update([u8::from(self.source.is_some())]);
+        hash.update(count.to_le_bytes());
+        hash.update(uid.to_le_bytes());
+        hash.update(origin.process_id.to_le_bytes());
+        hash.update(origin.start_token.to_le_bytes());
+        for parent in &self.parents {
+            hash.update(parent.uid().to_le_bytes());
+            hash.update(parent.identity.process_id.to_le_bytes());
+            hash.update(parent.identity.start_token.to_le_bytes());
+        }
+        if !self.is_live() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Unix ancestry continuity unavailable",
+            ));
+        }
+        Ok(hash.finalize().into())
+    }
+
     /// Test-only exact ancestor completion probe. Returns None for an uncaptured
     /// native record rather than inferring lifetime from a supplied numeric PID;
     /// fixture reparenting alone is not the retained pidfd completion boundary.
@@ -366,6 +419,8 @@ fn capture_retained_ancestry(
         retained.reobserve()?;
     }
     let witness = UnixAncestryWitness {
+        origin,
+        uid,
         source,
         parents,
         _reservation: reservation,
@@ -379,6 +434,60 @@ fn capture_retained_ancestry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two genuine captures of this test process's retained parent chain hash
+    /// identically without opening descriptors during hashing. Wrong source UID
+    /// or incarnation rejects. Test-only mutations establish ordered ancestor
+    /// birth/kind sensitivity and exclude the root's OUT-OF-SCOPE parent; they
+    /// are not admission witnesses. Every exact capture charge returns on drop.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn unix_ancestry_continuity_fingerprint_is_exact_and_bounded() {
+        let identity =
+            mez_mux::process::process_parent_identity_for_pid(std::process::id()).unwrap();
+        let root =
+            mez_mux::process::process_parent_identity_for_pid(identity.parent_process_id).unwrap();
+        let uid = parent::parent_uid(identity.process_id).unwrap();
+        let source = UnixParentProcess {
+            uid,
+            identity,
+            lifetime: parent::open_parent(identity.process_id).unwrap(),
+        };
+        let budget = Arc::new(UnixAncestryBudget::default());
+        let mut first = source.capture_ancestry(root, &budget).unwrap();
+        let second = source.capture_ancestry(root, &budget).unwrap();
+        let reserved = budget.reserved();
+        let fingerprint = first.continuity_digest(uid, identity).unwrap();
+        assert_eq!(
+            second.continuity_digest(uid, identity).unwrap(),
+            fingerprint
+        );
+        assert_eq!(budget.reserved(), reserved);
+        assert!(
+            first
+                .continuity_digest(uid.wrapping_add(1), identity)
+                .is_err()
+        );
+        let changed = ProcessParentIdentity {
+            start_token: identity.start_token.wrapping_add(1),
+            ..identity
+        };
+        assert!(first.continuity_digest(uid, changed).is_err());
+        let root_record = first.parents.last_mut().unwrap();
+        root_record.identity.parent_process_id =
+            root_record.identity.parent_process_id.wrapping_add(1);
+        assert_eq!(first.continuity_digest(uid, identity).unwrap(), fingerprint);
+        first.parents.last_mut().unwrap().identity.start_token = root.start_token.wrapping_add(1);
+        assert_ne!(first.continuity_digest(uid, identity).unwrap(), fingerprint);
+        first.parents.last_mut().unwrap().identity.start_token = root.start_token;
+        drop(first.source.take());
+        assert_ne!(first.continuity_digest(uid, identity).unwrap(), fingerprint);
+        first.parents.clear();
+        assert!(first.continuity_digest(uid, identity).is_err());
+        drop(first);
+        drop(second);
+        assert_eq!(budget.reserved(), 0);
+    }
 
     /// A code-owned current-process fence permits deterministic read failures
     /// after duplication and midway through bracketing without racing a fixture.

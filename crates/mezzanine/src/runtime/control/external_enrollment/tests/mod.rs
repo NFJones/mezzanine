@@ -4,6 +4,7 @@ use super::*;
 mod curated_request_client;
 mod curated_usage;
 mod root_replacement;
+mod source_activation;
 use crate::test_support::runtime::RuntimeServiceFixture;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;

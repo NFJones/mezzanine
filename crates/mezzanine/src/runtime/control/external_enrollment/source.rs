@@ -10,6 +10,70 @@
 use super::*;
 use crate::storage::token_usage::{ExternalSourceKey, NativeSourceKind, NativeSourceWitness};
 
+/// Frozen first-allocation inputs and the original storage outcome. This is
+/// prepared-only evidence, not acceptance or a reusable launch credential.
+/// Retaining the exact proposal permits later explicit reconciliation rather
+/// than regenerating an attempt after an ambiguous write. No retry runs here.
+#[derive(Debug)]
+pub(super) struct NativeSourcePreparation {
+    key: ExternalSourceKey,
+    activation: crate::storage::token_usage::ExternalSourceActivation,
+    receipt: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
+}
+
+impl NativeSourcePreparation {
+    /// Captures actual retained native continuity and a bracketed same-boot
+    /// window after mapping allocation, before any receipt write. Missing clock,
+    /// rollback, stale source/dead chain or arithmetic ambiguity refuses capture.
+    fn capture(
+        work: &ExternalEnrollmentWork,
+        producer: &ProducerEvidence,
+        key: ExternalSourceKey,
+    ) -> Option<Self> {
+        let before = super::source_clock::native_boot_millis()?;
+        let original = producer.reobserve().ok()?;
+        let ancestry = work.ancestry.get()?;
+        let digest = ancestry.continuity_digest(producer.uid(), original).ok()?;
+        if producer.reobserve().ok()? != original || Instant::now() >= work.deadline {
+            return None;
+        }
+        let after = super::source_clock::native_boot_millis()?;
+        let expires = before.checked_add(60_000)?;
+        if after < before || after >= expires {
+            return None;
+        }
+        let mut attempt = [0; 32];
+        rand::rng().fill_bytes(&mut attempt);
+        let activation = crate::storage::token_usage::ExternalSourceActivation::new(
+            attempt, digest, before, expires,
+        )
+        .ok()?;
+        Some(Self {
+            key,
+            activation,
+            receipt: OnceLock::new(),
+        })
+    }
+
+    /// Performs at most one prepared-only write on the existing native worker.
+    /// Cache both success and error with the immutable proposal; no Accepted
+    /// transition or implicit mutation replay is permitted in this phase.
+    fn prepare(&self, store: &crate::storage::token_usage::TokenUsageStore) {
+        let _ = self
+            .receipt
+            .get_or_init(|| store.prepare_external_source_activation(&self.key, &self.activation));
+    }
+
+    /// Exposes this fixture's original cached write result, not a constructor,
+    /// retry trigger or substitute for native/actor admission.
+    #[cfg(test)]
+    pub(super) fn outcome_for_tests(
+        &self,
+    ) -> Option<&Result<crate::storage::token_usage::ExternalSourceActivationReceipt>> {
+        self.receipt.get()
+    }
+}
+
 impl ExternalEnrollmentWork {
     /// Resolves only the original worker's qualified source lifetime. Helpers
     /// cannot allocate sources; failed/missing evidence retains unavailable
@@ -47,6 +111,20 @@ impl ExternalEnrollmentWork {
             }
             let resolved = store.resolve_external_source_owner(&key).ok()?;
             let _ = self.source_created.set(resolved.created);
+            if resolved.created
+                && let Some(preparation) = NativeSourcePreparation::capture(self, producer, key)
+            {
+                // Publish immutable inputs before I/O so a lost/failed write
+                // cannot cause this worker to mint a different attempt.
+                if self.source_preparation.set(preparation).is_ok()
+                    && let Some(original) = self.source_preparation.get()
+                {
+                    original.prepare(store);
+                }
+            }
+            // Optional preparation failure cannot remove independently proven
+            // namespace identity or weaken current lifecycle/reporting fences.
+            // Cold recovery remains unavailable regardless of this new fact.
             Some(resolved.owner)
         })();
         // Native observation already has one-shot publication; a duplicate

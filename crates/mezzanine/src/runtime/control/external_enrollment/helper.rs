@@ -268,6 +268,7 @@ impl RuntimeSessionService {
             source_store: None,
             source_owner: Arc::new(OnceLock::new()),
             source_created: Arc::new(OnceLock::new()),
+            source_preparation: Arc::new(OnceLock::new()),
             ancestry_budget: self
                 .control
                 .external_agents()

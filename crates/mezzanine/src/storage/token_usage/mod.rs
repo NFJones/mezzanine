@@ -18,13 +18,13 @@ mod external_requests;
 mod external_sources;
 mod history;
 mod projects;
-// The receipt ledger is intentionally not an admission path. Remove this narrow
-// expectation when the independently qualified native worker adopts the API.
+// The native worker uses preparation only, not an admission path. Remove this
+// narrow expectation when acceptance/retirement/recovery adopt the remaining API.
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "source activation storage contract precedes native admission integration"
+        reason = "source acceptance and retirement integration remains unfinished"
     )
 )]
 mod source_activation;
@@ -50,6 +50,7 @@ pub(crate) use external::{
 };
 pub(crate) use external_requests::ExternalRequestOrigin;
 pub(crate) use external_sources::{ExternalSourceKey, NativeSourceKind, NativeSourceWitness};
+pub(crate) use source_activation::{ExternalSourceActivation, ExternalSourceActivationReceipt};
 pub(crate) use store::{TokenUsageEvent, TokenUsageStore};
 
 /// Exact rolling windows displayed by `/status --extended`.

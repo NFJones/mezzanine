@@ -4,7 +4,9 @@
 //! not grant enrollment, attest a producer, restore credentials or activate a
 //! cold service. A future admission owner must independently qualify the exact
 //! native source and ancestry, supply a same-boot clock, and fence publication
-//! and retirement. There are no runtime callers in this storage-contract phase.
+//! and retirement. The native enrollment worker currently writes only Prepared
+//! for a newly allocated ordinary socket source; acceptance/retirement and cold
+//! recovery are not integrated. Curated and existing source paths are unchanged.
 //!
 //! Each mapped namespace retains at most one fixed-size record, including its
 //! retired tombstone. Preparation is not acceptance. Exact retries reconcile

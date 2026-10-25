@@ -48,6 +48,7 @@ mod producer;
 mod recovery;
 mod rotation;
 mod source;
+mod source_clock;
 mod targets;
 use producer::ProducerEvidence;
 pub(super) use recovery::LiveSourceAnchors;
@@ -153,6 +154,9 @@ pub(crate) struct ExternalEnrollmentWork {
     source_owner: Arc<OnceLock<Option<String>>>,
     /// Atomic lookup novelty; existing rows cannot recreate missing live owners.
     source_created: Arc<OnceLock<bool>>,
+    /// Original prepared-only native inputs and write outcome survive worker
+    /// return. They grant no actor acceptance or replacement-control authority.
+    source_preparation: Arc<OnceLock<source::NativeSourcePreparation>>,
     /// Deterministic test-owned barrier proving native work does not hold actor.
     #[cfg(test)]
     pub(crate) worker_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
@@ -538,6 +542,7 @@ impl RuntimeSessionService {
             source_store,
             source_owner: Arc::new(OnceLock::new()),
             source_created: Arc::new(OnceLock::new()),
+            source_preparation: Arc::new(OnceLock::new()),
             #[cfg(test)]
             worker_gate: registry.enrollments.worker_gate.clone(),
             #[cfg(test)]

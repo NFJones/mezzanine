@@ -919,9 +919,20 @@ revision arithmetic are checked; malformed/future state and migration collisions
 fail closed. The ledger contains no native IDs/paths, launch credentials or
 callback/transcript content, and its transitions do not charge expense.
 
-These primitives are not yet used by enrollment. Native same-boot clock/ancestry
-capture, actor-qualified acceptance/retirement, renewal and typed cold-service
-recovery remain implementation work. An Accepted row is not native authority or
+The native worker now prepares metadata only for a newly allocated ordinary
+socket source, after real retained ancestry and native boot evidence. The digest
+binds source/kind and ordered UID/incarnation ancestors through the root; no raw
+native identifiers are stored. The 60-second window uses suspend-inclusive Linux
+CLOCK_BOOTTIME with verified zero offsets and matching worker/current-leader/
+leader-time-for-children namespace objects before and after sampling, or Darwin
+mach_continuous_time with checked timebase conversion. Unknown/offset clocks
+produce no fabricated window. The original proposal and write outcome survive
+worker return, without automatic retry. Optional preparation failure leaves
+existing native lifecycle/reporting checks unchanged; abandoned work remains
+Prepared and cannot activate the old namespace. Existing/curated source behavior
+does not gain new activation attempts here. Ordinary registration never marks
+the row Accepted. Actor-qualified acceptance/retirement, renewal and typed
+cold-service recovery remain implementation work. An Accepted row is not native authority or
 a new RPC capability. Existing namespace-only activation refusal remains intact;
 schema upgrade does not make full-service restart recovery supported.
 
