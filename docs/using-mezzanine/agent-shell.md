@@ -344,6 +344,10 @@ issued accounting attempt. No-I/O claim rollback keeps that identity; a genuine
 retry or newly admitted task gets a fresh one. Stale descriptors cannot claim or
 hide replacements, and recovery does not change title refresh cadence, retry
 limits, human pause or attribution of late expense.
+An admitted title retry retains its pending source before diagnostic display.
+A failed trace installation cannot strand it or require repeating the expired
+request. Trace diagnostics are best effort; this is not a claim that the trace
+was displayed, and cancellation and the existing attempt limit still apply.
 If an already-committed mixed effect batch exceeds the transient reserve, its
 durable records still enter persistence in order. The remaining refusal is not
 success and cannot be retried by replaying that batch. A refused raw committed

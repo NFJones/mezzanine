@@ -1103,6 +1103,9 @@ impl RuntimeSessionService {
     /// admitted again before it is queued, so a policy switch, a manual name, or
     /// turn saturation between the two attempts ends generation instead of
     /// spending a second provider call.
+    /// Once admitted, retry custody and its exact dispatch descriptor precede
+    /// best-effort trace publication. Diagnostic failure cannot strand the
+    /// scheduled controller or authorize replay of the expired predecessor.
     fn settle_agent_session_title_failure(
         &mut self,
         conversation_id: &str,
@@ -1134,21 +1137,30 @@ impl RuntimeSessionService {
         };
         if retry_allowed && retry_denial.is_none() {
             self.agent.session_title_tasks.begin(conversation_id);
-            self.append_agent_trace_turn_event(
-                &task.pane_id,
-                &task_id,
-                &format!("session_title retry_scheduled reason={reason}"),
-            )?;
             // The retry is unissued. Its predecessor may still settle incurred
             // usage after lease expiry, so retain that owner's identity only in
             // the accounting ledger, never on the pending retry/rollback path.
             let mut task = task;
+            let pane_id = task.pane_id.clone();
             task.attempt_id.clear();
             task.dispatch_id = crate::storage::token_usage::new_token_usage_event_id();
             let dispatch_id = task.dispatch_id.clone();
             self.agent
                 .pending_agent_session_title_tasks
                 .insert(conversation_id.to_string(), task);
+            // Publish retry custody before optional observability. A failed
+            // trace install must not strand a scheduled controller without its
+            // pending task or discard the descriptor before actor admission.
+            if let Err(error) = self.append_agent_trace_turn_event(
+                &pane_id,
+                &task_id,
+                &format!("session_title retry_scheduled reason={reason}"),
+            ) {
+                let _ = self.append_runtime_diagnostic_event(format!(
+                    r#"{{"kind":"session_title_retry_trace_failed","error_kind":"{:?}"}}"#,
+                    error.kind(),
+                ));
+            }
             return Ok(RuntimeTransition {
                 applied: true,
                 side_effects: vec![RuntimeSideEffect::DispatchAgentSessionTitle {

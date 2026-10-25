@@ -11971,6 +11971,11 @@ or replaced tasks, and preserve retry backoff and human claim inhibition. Its
 offer settles at the actual claim attempt, including constructor or mandatory
 claim-lease refusal; recovery does not bypass completion-lease admission or
 enroll ordinary strict-producer refusals.
+An admitted generated-title retry MUST publish its pending task and exact new
+dispatch identity before fallible diagnostic installation. Retry traces and
+their bounded failure diagnostics are best effort, not delivery ownership or
+proof of visible installation. Trace failure MUST NOT discard the descriptor,
+replay the expired predecessor or expand the configured attempt budget.
 Asynchronous manual-compaction source/request completion has already accepted
 the original preparation command. It MUST transfer only its adopted compactor
 through committed-source admission and retain its exact generation on refusal.

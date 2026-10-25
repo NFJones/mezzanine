@@ -68,6 +68,12 @@ fn pending_title_at_capacity() -> (FixtureRoot, AsyncRuntimeSessionActor, String
     actor.drain_runtime_side_effects(64).unwrap();
     actor.drain_timer_side_effects(64).unwrap();
     actor.drain_persistence_side_effects(64).unwrap();
+    saturate_title_lane(&mut actor);
+    (root, actor, conversation)
+}
+
+/// Occupies the unchanged finite transient capacity without starting workers.
+fn saturate_title_lane(actor: &mut AsyncRuntimeSessionActor) {
     let capacity = 1 + actor.committed_side_effect_overshoot();
     actor
         .admit_committed_side_effects(
@@ -83,7 +89,6 @@ fn pending_title_at_capacity() -> (FixtureRoot, AsyncRuntimeSessionActor, String
                 .collect(),
         )
         .unwrap();
-    (root, actor, conversation)
 }
 
 /// A refused committed title dispatch retains an admitted service source. Freeing
@@ -164,6 +169,255 @@ async fn claim(
         })
         .await;
     response.await.unwrap()
+}
+
+/// A real issued title claim expires while diagnostic installation is held
+/// unavailable and the finite transient lane is full. Diagnostics are not the
+/// retry source: expiry must publish a new pending descriptor before any such
+/// write, and real capacity progress must recover it without replaying expiry.
+#[tokio::test(flavor = "current_thread")]
+async fn title_retry_trace_failure_preserves_original_pending_source() {
+    let (_root, mut actor, conversation) = pending_title_at_capacity();
+    let original = pending_id(&actor, &conversation);
+    let first = claim(&mut actor, &conversation, &original)
+        .await
+        .unwrap()
+        .unwrap();
+    actor
+        .service
+        .agent_shell_store_mut()
+        .set_log_level("%1", mez_agent::AgentLogLevel::Debug)
+        .unwrap();
+    actor
+        .service
+        .hold_agent_presentation_installs_for_tests(true);
+    let expired = actor
+        .service
+        .reap_expired_agent_session_title_claims(u64::MAX);
+    assert!(
+        expired.is_ok(),
+        "retry custody must not depend on trace installation: {expired:?}"
+    );
+    let effects = expired.unwrap();
+    let retry = pending_id(&actor, &conversation);
+    assert_ne!(retry, original);
+    assert!(
+        actor
+            .service
+            .claimed_agent_session_title_task_ids()
+            .is_empty()
+    );
+    assert!(
+        matches!(effects.as_slice(), [RuntimeSideEffect::DispatchAgentSessionTitle { dispatch_id, .. }] if dispatch_id == &retry)
+    );
+    assert!(actor.admit_committed_side_effects(effects).is_err());
+    assert!(
+        claim(&mut actor, &conversation, &original)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    actor.drain_timer_side_effects(1).unwrap();
+    let offered = actor.drain_agent_provider_dispatch_side_effects(1).unwrap();
+    assert!(
+        matches!(offered.as_slice(), [RuntimeSideEffect::DispatchAgentSessionTitle { dispatch_id, .. }] if dispatch_id == &retry)
+    );
+    actor
+        .service
+        .hold_agent_presentation_installs_for_tests(false);
+    let second = claim(&mut actor, &conversation, &retry)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.task.dispatch_id, retry);
+    assert_ne!(second.task.attempt_id, first.task.attempt_id);
+    assert!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(64)
+            .unwrap()
+            .is_empty()
+    );
+    actor.service.cancel_agent_session_title_task(&conversation);
+}
+
+/// Actual actor timer ingress expires the issued claim under held trace failure
+/// and full transient pressure. Its consumed refusal retains the retry source;
+/// a duplicate old timer cannot advance it again, and one real drain offers it.
+#[tokio::test(flavor = "current_thread")]
+async fn title_retry_trace_failure_recovers_through_actual_poll_ingress() {
+    let (_root, mut actor, conversation) = pending_title_at_capacity();
+    let original = pending_id(&actor, &conversation);
+    let first = claim(&mut actor, &conversation, &original)
+        .await
+        .unwrap()
+        .unwrap();
+    actor.drain_timer_side_effects(64).unwrap();
+    assert!(actor.queue_provider_poll_timer_if_needed(1, 25).unwrap());
+    let poll = actor
+        .timers
+        .provider_poll
+        .clone()
+        .expect("actual scheduled title poll");
+    assert!(
+        matches!(actor.drain_timer_side_effects(1).unwrap().as_slice(),
+        [RuntimeSideEffect::ScheduleTimer { key, .. }] if key == &poll)
+    );
+    saturate_title_lane(&mut actor);
+    actor
+        .service
+        .agent_shell_store_mut()
+        .set_log_level("%1", mez_agent::AgentLogLevel::Debug)
+        .unwrap();
+    actor
+        .service
+        .hold_agent_presentation_installs_for_tests(true);
+    let mut batch = RuntimeEventBatch::new();
+    batch.push(RuntimeEvent::Timer(TimerEvent {
+        key: poll.clone(),
+        now_ms: u64::MAX,
+    }));
+    let error = actor.apply_runtime_event_batch(batch).await.unwrap_err();
+    assert!(error.message().contains("consumed=1"), "{error:?}");
+    let retry = pending_id(&actor, &conversation);
+    assert_ne!(retry, original);
+    assert!(
+        actor
+            .service
+            .claimed_agent_session_title_task_ids()
+            .is_empty()
+    );
+    let mut duplicate = RuntimeEventBatch::new();
+    duplicate.push(RuntimeEvent::Timer(TimerEvent {
+        key: poll,
+        now_ms: u64::MAX,
+    }));
+    assert_eq!(
+        actor
+            .apply_runtime_event_batch(duplicate)
+            .await
+            .unwrap()
+            .applied,
+        0
+    );
+    assert_eq!(pending_id(&actor, &conversation), retry);
+    actor.drain_timer_side_effects(1).unwrap();
+    let offered = actor.drain_agent_provider_dispatch_side_effects(1).unwrap();
+    assert!(
+        matches!(offered.as_slice(), [RuntimeSideEffect::DispatchAgentSessionTitle { dispatch_id, .. }] if dispatch_id == &retry)
+    );
+    actor
+        .service
+        .hold_agent_presentation_installs_for_tests(false);
+    let second = claim(&mut actor, &conversation, &retry)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(second.task.attempt_id, first.task.attempt_id);
+    assert!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(64)
+            .unwrap()
+            .is_empty()
+    );
+    actor.service.cancel_agent_session_title_task(&conversation);
+}
+
+/// After diagnostic failure, cancellation or actual second-lease exhaustion
+/// must still retire the exact retry source. Trace remains best-effort only on
+/// retry admission: terminal diagnostic failure is reported, not claimed as a
+/// published fallback, and cannot create a third inference attempt.
+#[tokio::test(flavor = "current_thread")]
+async fn title_retry_trace_failure_preserves_cancellation_and_attempt_limit() {
+    for exhaust in [false, true] {
+        let (_root, mut actor, conversation) = pending_title_at_capacity();
+        let original = pending_id(&actor, &conversation);
+        claim(&mut actor, &conversation, &original)
+            .await
+            .unwrap()
+            .unwrap();
+        actor
+            .service
+            .agent_shell_store_mut()
+            .set_log_level("%1", mez_agent::AgentLogLevel::Debug)
+            .unwrap();
+        actor
+            .service
+            .hold_agent_presentation_installs_for_tests(true);
+        let effects = actor
+            .service
+            .reap_expired_agent_session_title_claims(u64::MAX)
+            .unwrap();
+        let retry = pending_id(&actor, &conversation);
+        assert!(actor.admit_committed_side_effects(effects).is_err());
+        if exhaust {
+            actor
+                .service
+                .hold_agent_presentation_installs_for_tests(false);
+            claim(&mut actor, &conversation, &retry)
+                .await
+                .unwrap()
+                .unwrap();
+            actor
+                .service
+                .hold_agent_presentation_installs_for_tests(true);
+            assert!(
+                actor
+                    .service
+                    .reap_expired_agent_session_title_claims(u64::MAX)
+                    .is_err()
+            );
+        } else {
+            assert!(actor.service.cancel_agent_session_title_task(&conversation));
+        }
+        assert!(
+            !actor
+                .service
+                .agent_session_title_task_is_scheduled(&conversation)
+        );
+        assert!(
+            actor
+                .service
+                .pending_agent_session_title_dispatch_id(&conversation)
+                .is_none()
+        );
+        assert!(
+            actor
+                .service
+                .claimed_agent_session_title_task_ids()
+                .is_empty()
+        );
+        assert!(
+            actor
+                .service
+                .reap_expired_agent_session_title_claims(u64::MAX)
+                .unwrap()
+                .is_empty()
+        );
+        actor
+            .service
+            .hold_agent_presentation_installs_for_tests(false);
+        actor.drain_timer_side_effects(64).unwrap();
+        assert!(
+            actor
+                .drain_agent_provider_dispatch_side_effects(64)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            claim(&mut actor, &conversation, &original)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            claim(&mut actor, &conversation, &retry)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(actor.refused_dispatch_sources.is_empty());
+        assert!(actor.offered_dispatch_sources.is_empty());
+    }
 }
 
 /// Cancellation before or after offer removes the service source. Real drains
