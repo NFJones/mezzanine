@@ -1007,12 +1007,15 @@ async fn dispatch_agent_provider_side_effects(
                     dispatch,
                 ));
             }
-            RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id } => {
+            RuntimeSideEffect::DispatchAgentSessionTitle {
+                conversation_id,
+                dispatch_id,
+            } => {
                 // The service already retires the task with a bounded reason when
                 // the provider cannot be constructed, so a failed claim is not
                 // re-reported as a second failure event here.
                 let dispatch = match handle
-                    .claim_agent_session_title_task(conversation_id.clone())
+                    .claim_agent_session_title_task(conversation_id.clone(), dispatch_id)
                     .await
                 {
                     Ok(Some(dispatch)) => dispatch,

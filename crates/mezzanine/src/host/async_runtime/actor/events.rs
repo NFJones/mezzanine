@@ -1081,10 +1081,19 @@ impl AsyncRuntimeSessionActor {
             });
         }
         for conversation_id in self.service.pending_agent_session_title_tasks() {
-            if self.session_title_dispatch_is_already_queued(&conversation_id) {
+            let Some(dispatch_id) = self
+                .service
+                .pending_agent_session_title_dispatch_id(&conversation_id)
+            else {
+                continue;
+            };
+            if self.session_title_dispatch_is_already_queued(&conversation_id, dispatch_id) {
                 continue;
             }
-            side_effects.push(RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id });
+            side_effects.push(RuntimeSideEffect::DispatchAgentSessionTitle {
+                dispatch_id: dispatch_id.to_string(),
+                conversation_id,
+            });
         }
         Ok(side_effects)
     }
@@ -1129,16 +1138,17 @@ impl AsyncRuntimeSessionActor {
             })
     }
 
-    /// Returns true when a queued title dispatch already exists for a conversation.
+    /// Fences queued or offered descriptors for the exact pending title dispatch.
     pub(super) fn session_title_dispatch_is_already_queued(
         &self,
         target_conversation_id: &str,
+        target_dispatch_id: &str,
     ) -> bool {
-        self.side_effect_routes.any_provider(|effect| {
+        self.offered_dispatch_sources.contains(&super::SourceDispatch::Title(target_conversation_id.to_string(), target_dispatch_id.to_string())) || self.side_effect_routes.any_provider(|effect| {
             matches!(
                 effect,
-                RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id }
-                    if conversation_id == target_conversation_id
+                RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id, dispatch_id }
+                    if conversation_id == target_conversation_id && dispatch_id == target_dispatch_id
             )
         })
     }

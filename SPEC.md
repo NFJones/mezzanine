@@ -11942,8 +11942,8 @@ This is source-retained dispatch custody, not a second outside-lane holding queu
 for raw effects whose event has already surrendered ownership. No event, action,
 input or provider work may be replayed to recover dispatch.
 For a refused committed provider, approved-external-action, native-shell,
-compaction or remember descriptor whose unclaimed source is still service-owned,
-the actor MUST retain only its source identity and transfer a fitting descriptor
+compaction, remember or generated-title descriptor whose unclaimed source is
+still service-owned, the actor MUST retain only its source identity and transfer a fitting descriptor
 after real lane-drain progress. Recovery MUST NOT accelerate ordinary provider
 polls or retry timers. A recovered descriptor offered to a worker MUST
 remain fenced through off-actor preparation until no-work preparation or claim
@@ -11971,6 +11971,12 @@ the offer or returns still-owned no-work custody without rerunning model work.
 The `/stop` command MUST retire pending/claimed remember publication even without
 an ordinary turn. Late issued expense remains attributable to its original
 accounting owner; cancellation MUST NOT claim remote inference has stopped.
+Generated-title dispatch and claim MUST carry an exact pending-dispatch identity,
+separate from the issued attempt used for accounting and the worker lease. No-I/O
+claim rollback MUST preserve the pending identity; an admitted retry or new task
+MUST receive a fresh one. An old descriptor MUST NOT claim or suppress a retry or
+replacement in the same conversation. Recovery MUST preserve title cadence,
+attempt limits, pause inhibition and issued expense ownership.
 Once an event batch has applied its events, the side effects it produced MUST NOT
 be destroyed by a capacity refusal: the actor MUST admit them to their ordinary
 lanes within a bounded reserve above the configured capacity, in the same

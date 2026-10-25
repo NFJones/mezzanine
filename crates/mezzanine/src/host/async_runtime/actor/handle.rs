@@ -1201,9 +1201,11 @@ impl AsyncRuntimeSessionHandle {
     pub async fn claim_agent_session_title_task(
         &self,
         conversation_id: String,
+        dispatch_id: String,
     ) -> Result<Option<crate::runtime::RuntimeAgentSessionTitleDispatch>> {
         self.request(|reply| AsyncRuntimeRequest::ClaimAgentSessionTitleTask {
             conversation_id,
+            dispatch_id,
             reply,
         })
         .await?

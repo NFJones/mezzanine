@@ -292,10 +292,10 @@ transient reserve. Excess dispatches stay at their original service owners and
 transfer as workers drain capacity, without another user event or action replay.
 Transfer rotates across dispatch families; durable writes do not wait for a
 transient slot and keep their original receipt identities.
-Refused committed provider, external-action, native-shell, compaction and remember
-dispatches can recover from their original pending sources when a lane drains.
-Recovery does not accelerate normal polls or retry timers. A recovered descriptor remains
-fenced while that worker prepares and claims it; merely draining it cannot cause
+Refused committed provider, external-action, native-shell, compaction, remember
+and title dispatches can recover from their original pending sources when a lane
+drains. Recovery does not accelerate normal polls or retry timers. A recovered
+descriptor remains fenced while that worker prepares and claims it; merely draining it cannot cause
 a duplicate offer. Cancelled tasks are not regenerated, and provider recovery
 alternates capacity priority with other deferred service transfers.
 Temporary persistence/readiness barriers retain recovery custody. An actual
@@ -315,6 +315,11 @@ constructor retires its original offer; no model request is replayed.
 `/stop` also retires queued or claimed remember publication when no ordinary turn
 is running. An already issued request can still finish remotely; late expense
 keeps its original accounting owner, not authority to publish cancelled memories.
+Generated-title recovery carries the exact queued dispatch, separate from its
+issued accounting attempt. No-I/O claim rollback keeps that identity; a genuine
+retry or newly admitted task gets a fresh one. Stale descriptors cannot claim or
+hide replacements, and recovery does not change title refresh cadence, retry
+limits, human pause or attribution of late expense.
 If an already-committed mixed effect batch exceeds the transient reserve, its
 durable records still enter persistence in order. The remaining refusal is not
 success and cannot be retried by replaying that batch. A refused raw committed

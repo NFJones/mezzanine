@@ -1139,6 +1139,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ClaimAgentSessionTitleTask {
         /// Conversation whose queued title generation should be claimed.
         conversation_id: String,
+        /// Exact pending dispatch offered to this worker.
+        dispatch_id: String,
         /// Stores the reply value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module

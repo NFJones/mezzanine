@@ -493,6 +493,23 @@ impl RuntimeSessionService {
             .collect()
     }
 
+    /// Returns the exact unclaimed dispatch while its original conversation is
+    /// still bound. Human pause inhibits claiming, not source custody. Issued
+    /// attempt IDs and accounting ownership remain separate from this fence.
+    pub(crate) fn pending_agent_session_title_dispatch_id(
+        &self,
+        conversation_id: &str,
+    ) -> Option<&str> {
+        let task = self
+            .agent
+            .pending_agent_session_title_tasks
+            .get(conversation_id)?;
+        self.agent_shell_store()
+            .get(&task.pane_id)
+            .filter(|session| session.session_id == conversation_id)
+            .map(|_| task.dispatch_id.as_str())
+    }
+
     /// Reports whether one conversation has queued or in-flight title work.
     pub fn agent_session_title_task_is_scheduled(&self, conversation_id: &str) -> bool {
         self.agent
@@ -647,6 +664,7 @@ impl RuntimeSessionService {
         self.agent.pending_agent_session_title_tasks.insert(
             conversation_id.to_string(),
             RuntimeAgentSessionTitleTask {
+                dispatch_id: crate::storage::token_usage::new_token_usage_event_id(),
                 attempt_id: String::new(),
                 accounting_origin: self.capture_accounting_origin_for_pane(pane_id),
                 pane_process: self.pane_process_identity(pane_id).ok(),
@@ -797,7 +815,9 @@ impl RuntimeSessionService {
         ))
     }
 
-    /// Claims one queued generated-title task for execution outside the actor.
+    /// Claims only the exact pending title dispatch for execution outside the actor.
+    /// A stale identity or replaced conversation returns no work before provider
+    /// construction or task removal, without consuming a retry or replacement.
     ///
     /// A claim never touches a turn: the returned dispatch carries only the
     /// bounded request and the provider that must execute it. When the provider
@@ -808,10 +828,14 @@ impl RuntimeSessionService {
     /// diagnostic must never leave a claim that no worker owns, because such a
     /// claim would consume a concurrency slot forever. The recorded claim also
     /// carries the worker lease the provider poll timer reaps.
-    pub fn claim_agent_session_title_task(
+    pub fn claim_agent_session_title_dispatch(
         &mut self,
         conversation_id: &str,
+        dispatch_id: &str,
     ) -> MezResult<Option<RuntimeAgentSessionTitleDispatch>> {
+        if self.pending_agent_session_title_dispatch_id(conversation_id) != Some(dispatch_id) {
+            return Ok(None);
+        }
         if self.agent_shell_store().sessions().any(|session| {
             session.session_id == conversation_id && self.agent_is_human_paused(&session.pane_id)
         }) {
@@ -1120,6 +1144,8 @@ impl RuntimeSessionService {
             // the accounting ledger, never on the pending retry/rollback path.
             let mut task = task;
             task.attempt_id.clear();
+            task.dispatch_id = crate::storage::token_usage::new_token_usage_event_id();
+            let dispatch_id = task.dispatch_id.clone();
             self.agent
                 .pending_agent_session_title_tasks
                 .insert(conversation_id.to_string(), task);
@@ -1127,6 +1153,7 @@ impl RuntimeSessionService {
                 applied: true,
                 side_effects: vec![RuntimeSideEffect::DispatchAgentSessionTitle {
                     conversation_id: conversation_id.to_string(),
+                    dispatch_id,
                 }],
             });
         }

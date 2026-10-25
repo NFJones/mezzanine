@@ -3214,11 +3214,16 @@ impl AsyncRuntimeSessionActor {
             }
             AsyncRuntimeRequest::ClaimAgentSessionTitleTask {
                 conversation_id,
+                dispatch_id,
                 reply,
             } => {
                 let result = self
                     .service
-                    .claim_agent_session_title_task(&conversation_id);
+                    .claim_agent_session_title_dispatch(&conversation_id, &dispatch_id);
+                self.settle_source_offer(super::SourceDispatch::Title(
+                    conversation_id,
+                    dispatch_id,
+                ));
                 let should_notify = result.is_ok();
                 let _ = reply.send(result);
                 if should_notify {

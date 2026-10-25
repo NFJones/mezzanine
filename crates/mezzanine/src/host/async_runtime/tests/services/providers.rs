@@ -2432,6 +2432,10 @@ async fn async_agent_provider_service_settles_a_generated_session_title() {
     );
     assert!(service.agent_turn_ledger().turns().is_empty());
 
+    let queued_dispatch = service
+        .pending_agent_session_title_dispatch_id(&conversation_id)
+        .unwrap()
+        .to_string();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
@@ -2441,6 +2445,7 @@ async fn async_agent_provider_service_settles_a_generated_session_title() {
         let queued = provider_handle
             .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentSessionTitle {
                 conversation_id: queued_conversation,
+                dispatch_id: queued_dispatch,
             }])
             .await
             .unwrap();
@@ -2615,6 +2620,10 @@ async fn run_session_title_reply_plan(
             .is_ok()
     );
 
+    let queued_dispatch = service
+        .pending_agent_session_title_dispatch_id(&conversation_id)
+        .unwrap()
+        .to_string();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
@@ -2624,6 +2633,7 @@ async fn run_session_title_reply_plan(
         let queued = provider_handle
             .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentSessionTitle {
                 conversation_id: queued_conversation,
+                dispatch_id: queued_dispatch,
             }])
             .await
             .unwrap();

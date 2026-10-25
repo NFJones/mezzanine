@@ -1083,6 +1083,8 @@ pub enum RuntimeSideEffect {
     DispatchAgentSessionTitle {
         /// Conversation whose display title should be generated.
         conversation_id: String,
+        /// Exact unissued dispatch, independent of issued accounting attempts.
+        dispatch_id: String,
     },
     /// Run one runtime slash command that touches stores, files, or the network
     /// outside the serialized actor.

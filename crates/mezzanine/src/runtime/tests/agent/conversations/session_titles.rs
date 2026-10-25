@@ -14,6 +14,32 @@ use crate::session_title::SessionTitlePolicy;
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 use mez_core::ids::ClientId;
 
+/// These direct scheduling fixtures claim the currently projected dispatch.
+/// Delayed/stale descriptors are covered separately at the real actor boundary;
+/// production callers must always carry their captured pending identity.
+trait CurrentTitleFixtureClaim {
+    /// Claims exactly the fixture's current source, or reports no pending work.
+    fn claim_agent_session_title_task(
+        &mut self,
+        conversation: &str,
+    ) -> Result<Option<crate::runtime::RuntimeAgentSessionTitleDispatch>>;
+}
+
+impl CurrentTitleFixtureClaim for RuntimeSessionService {
+    fn claim_agent_session_title_task(
+        &mut self,
+        conversation: &str,
+    ) -> Result<Option<crate::runtime::RuntimeAgentSessionTitleDispatch>> {
+        let Some(dispatch) = self
+            .pending_agent_session_title_dispatch_id(conversation)
+            .map(str::to_string)
+        else {
+            return Ok(None);
+        };
+        self.claim_agent_session_title_dispatch(conversation, &dispatch)
+    }
+}
+
 /// Compound resume must restore every retained source, not just the objective,
 /// when authority restoration fails after temporarily binding another session.
 #[test]
@@ -860,7 +886,7 @@ fn runtime_generated_title_failure_degrades_with_a_bounded_reason() {
     assert!(first.applied);
     assert!(matches!(
         first.side_effects.as_slice(),
-        [RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id: id }]
+        [RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id: id, .. }]
             if id == &conversation_id
     ));
     assert_eq!(
@@ -1676,7 +1702,7 @@ fn runtime_expired_title_claim_is_reaped_and_settled() {
     assert!(service.claimed_agent_session_title_task_ids().is_empty());
     assert!(matches!(
         side_effects.as_slice(),
-        [RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id: id }]
+        [RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id: id, .. }]
             if id == &conversation_id
     ));
     assert_eq!(
