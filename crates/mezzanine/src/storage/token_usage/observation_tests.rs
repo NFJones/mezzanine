@@ -803,7 +803,7 @@ fn external_observation_schema6_migration_preserves_sources_and_legacy_replay() 
         store.ingest_external(&legacy, 100).unwrap();
         let connection = store.open().unwrap();
         connection
-            .execute_batch("DROP TABLE external_usage_observations; DROP TABLE external_usage_requests; PRAGMA user_version=5;")
+            .execute_batch("DROP TABLE external_usage_source_activations; DROP TABLE external_usage_observations; DROP TABLE external_usage_requests; PRAGMA user_version=5;")
             .unwrap();
         if fail {
             connection
@@ -816,7 +816,11 @@ fn external_observation_schema6_migration_preserves_sources_and_legacy_replay() 
             connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            if fail { 5 } else { 7 }
+            if fail {
+                5
+            } else {
+                super::store::SCHEMA_VERSION
+            }
         );
         assert_eq!(
             connection

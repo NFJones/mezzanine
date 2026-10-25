@@ -908,6 +908,23 @@ source, restore a missing control-service anchor, or turn a pending outcome into
 an acknowledged commit. Repeated loss or exhausted client retry remains visibly
 unavailable; there is no guaranteed no-gap delivery during permanent outage.
 
+Telemetry schema 8 introduces an internal source-activation metadata ledger.
+Migration preserves existing namespace, request origin and expense rows and does
+not manufacture accepted facts for legacy mappings. Worker-side primitives can
+record one exact prepared/accepted/retired attempt per mapped source, reconcile
+exact committed retries and retain absorbing retirement tombstones. Attempt and
+ancestry digests are fixed-size; a captured same-boot window is at most 60,000ms.
+There is a 65,536-record cap with explicit refusal, not eviction. Decoding and
+revision arithmetic are checked; malformed/future state and migration collisions
+fail closed. The ledger contains no native IDs/paths, launch credentials or
+callback/transcript content, and its transitions do not charge expense.
+
+These primitives are not yet used by enrollment. Native same-boot clock/ancestry
+capture, actor-qualified acceptance/retirement, renewal and typed cold-service
+recovery remain implementation work. An Accepted row is not native authority or
+a new RPC capability. Existing namespace-only activation refusal remains intact;
+schema upgrade does not make full-service restart recovery supported.
+
 Adapters must capture begin readiness before each genuine new provider request
 and associate its exact final outcome; missing readiness is a coverage gap, not
 zero usage. Historical/resumed/fork-inherited completed events must not get new

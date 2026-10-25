@@ -18,6 +18,16 @@ mod external_requests;
 mod external_sources;
 mod history;
 mod projects;
+// The receipt ledger is intentionally not an admission path. Remove this narrow
+// expectation when the independently qualified native worker adopts the API.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "source activation storage contract precedes native admission integration"
+    )
+)]
+mod source_activation;
 mod store;
 
 pub(crate) use external_attempt::{
@@ -122,5 +132,7 @@ mod observation_tests;
 mod project_tests;
 #[cfg(test)]
 mod request_tests;
+#[cfg(test)]
+mod source_activation_tests;
 #[cfg(test)]
 mod tests;

@@ -53,8 +53,8 @@ pub(crate) struct NativeSourceWitness<'a> {
 /// No RPC exposes a constructor or accepts this key as authority.
 #[derive(Debug, Clone)]
 pub(crate) struct ExternalSourceKey {
-    digest: String,
-    harness: String,
+    pub(super) digest: String,
+    pub(super) harness: String,
 }
 
 impl ExternalSourceKey {
@@ -99,7 +99,7 @@ impl ExternalSourceKey {
 }
 
 /// Validates only canonical UUID shape, without accepting arbitrary inert text.
-fn valid_uuid(value: &str) -> bool {
+pub(super) fn valid_uuid(value: &str) -> bool {
     value.len() == 36
         && value.bytes().enumerate().all(|(index, byte)| {
             if [8, 13, 18, 23].contains(&index) {
@@ -588,7 +588,7 @@ mod tests {
             store.ingest_external(&report, 100).unwrap();
             let connection = store.open().unwrap();
             connection
-                .execute_batch("DROP TABLE external_usage_sources; DROP TABLE external_usage_observations; DROP TABLE external_usage_requests; PRAGMA user_version=4;")
+                .execute_batch("DROP TABLE external_usage_source_activations; DROP TABLE external_usage_sources; DROP TABLE external_usage_observations; DROP TABLE external_usage_requests; PRAGMA user_version=4;")
                 .unwrap();
             if fail {
                 connection
@@ -601,7 +601,11 @@ mod tests {
                 connection
                     .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                     .unwrap(),
-                if fail { 4 } else { 7 }
+                if fail {
+                    4
+                } else {
+                    super::super::store::SCHEMA_VERSION
+                }
             );
             assert_eq!(
                 connection
@@ -637,7 +641,13 @@ mod tests {
         let store = store();
         store.initialize(100).unwrap();
         let connection = store.open().unwrap();
-        connection.execute_batch("PRAGMA user_version=8;").unwrap();
+        connection
+            .pragma_update(
+                None,
+                "user_version",
+                super::super::store::SCHEMA_VERSION + 1,
+            )
+            .unwrap();
         assert!(store.external_source_owner(&key("one")).is_err());
         assert_eq!(
             connection

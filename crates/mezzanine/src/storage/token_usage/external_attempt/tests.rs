@@ -223,7 +223,9 @@ fn external_attempt_future_schema_and_missing_origin_are_terminal() {
             .unwrap(),
         999
     );
-    connection.execute_batch("PRAGMA user_version=7").unwrap();
+    connection
+        .pragma_update(None, "user_version", super::super::store::SCHEMA_VERSION)
+        .unwrap();
     let mut witness = ExternalUsageAdmissionWitness::default();
     let missing = store.freeze_external_request_report_with_admission(
         &report(&owner),
@@ -303,8 +305,9 @@ fn external_attempt_schema_writer_busy_is_terminal_not_ledger_refusal() {
         witness.finish(result),
         ExternalUsageAttempt::Completed(Err(_))
     ));
+    connection.execute_batch("ROLLBACK;").unwrap();
     connection
-        .execute_batch("ROLLBACK; PRAGMA user_version=7;")
+        .pragma_update(None, "user_version", super::super::store::SCHEMA_VERSION)
         .unwrap();
     assert_eq!(
         connection

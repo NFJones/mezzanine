@@ -13,7 +13,7 @@ use super::{
     set_private_file_permissions, sqlite_i64,
 };
 
-const SCHEMA_VERSION: i64 = 7;
+pub(super) const SCHEMA_VERSION: i64 = 8;
 const SECONDS_PER_DAY: u64 = 86_400;
 
 /// One immutable provider/model usage delta.
@@ -360,7 +360,7 @@ fn initialize_schema(
                  PRAGMA user_version = 1;",
             )?;
         }
-        1 | 2 | 3 | 4 | 5 | 6 | SCHEMA_VERSION => {}
+        1 | 2 | 3 | 4 | 5 | 6 | 7 | SCHEMA_VERSION => {}
         future if future > SCHEMA_VERSION => {
             return Err(MezError::invalid_state(format!(
                 "token usage database schema version {future} is newer than supported version {SCHEMA_VERSION}"
@@ -422,6 +422,21 @@ fn initialize_schema(
             PRIMARY KEY(owner,request_id),UNIQUE(owner,observation_id));
             ALTER TABLE external_usage_observations ADD COLUMN request_id TEXT NULL;
             PRAGMA user_version=7;")?;
+    }
+    if version < 8 {
+        transaction.execute_batch(
+            "CREATE TABLE external_usage_source_activations (
+            owner TEXT PRIMARY KEY NOT NULL CHECK(length(owner)=36),
+            attempt BLOB NOT NULL CHECK(typeof(attempt)='blob' AND length(attempt)=32),
+            ancestry BLOB NOT NULL CHECK(typeof(ancestry)='blob' AND length(ancestry)=32),
+            prepared_at_boot_ms INTEGER NOT NULL CHECK(prepared_at_boot_ms>0),
+            expires_at_boot_ms INTEGER NOT NULL CHECK(expires_at_boot_ms>prepared_at_boot_ms
+                AND expires_at_boot_ms-prepared_at_boot_ms<=60000),
+            revision INTEGER NOT NULL CHECK(revision>0),
+            state INTEGER NOT NULL CHECK(state IN (0,1,2)),
+            FOREIGN KEY(owner) REFERENCES external_usage_sources(owner));
+            PRAGMA user_version=8;",
+        )?;
     }
     transaction.commit()?;
     Ok(())

@@ -1669,6 +1669,23 @@ duplicate acknowledgment MUST NOT add another expense or allocate another
 accounting namespace. Observer replacement MUST NOT transfer predecessor-local
 tickets or credentials. Neither supported case permits namespace-only activation
 after control-service replacement or guarantees delivery of never-received data.
+Telemetry schema 8 adds an INTERNAL inert source-activation receipt ledger, not
+another expense store or a new enrollment permission. Version-7 mappings MUST
+migrate without fabricated accepted receipts or changed expense/request origins.
+Each exact mapped namespace MAY retain one fixed-size prepared/accepted/retired
+record with server attempt and native ancestry digests, a revision and a positive
+same-boot clock window of at most 60000ms. Preparation MUST NOT mean acceptance;
+acceptance MUST use the exact prepared payload/revision within that window.
+Retirement MUST be absorbing, and changed/stale work MUST NOT overwrite it.
+Exact committed retries MUST reconcile without another transition. Capacity
+MUST refuse new records at 65536 without pruning accepted or retired facts;
+reads MUST bound metadata decoding and reject malformed state or arithmetic.
+Migration MUST be transactional and refuse unknown future versions. These facts
+MUST NOT serialize credentials, native IDs/paths or callback/transcript payloads.
+This storage-contract phase does not supply native clock/proof capture, actor
+publication/retirement integration, renewed windows or cold-service admission.
+Existing same-live ownership and namespace-only activation refusals remain in
+force; a stored Accepted flag alone MUST NOT authorize recovery or reporting.
 Declared curated Claude creators MAY use fixed `curated-usage-begin/end`
 helpers with public original generation/witness/session/request selectors only.
 Curated usage and heartbeat callbacks MUST narrow only the bounded indexed
