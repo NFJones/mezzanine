@@ -948,6 +948,42 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// Checks both shipped and synchronized issue-filing guidance for explicit
+    /// objectives and agent-completable acceptance criteria. The exception for
+    /// unresolved scope or access must retain concrete blockers, direct user
+    /// questions and a subsequent issue update rather than imply readiness.
+    #[test]
+    fn add_issues_requires_agent_completion_or_explicit_user_clarification() {
+        let catalog = discover_skill_catalog(None, None);
+        let builtin =
+            load_skill_document(catalog.get(BUILTIN_ADD_ISSUES_SKILL_NAME).unwrap()).unwrap();
+        let root = test_temp_root("add-issues-completion-contract");
+        sync_managed_builtin_skills(&root).unwrap();
+        let catalog = discover_skill_catalog(Some(&root), None);
+        let managed =
+            load_skill_document(catalog.get(BUILTIN_ADD_ISSUES_SKILL_NAME).unwrap()).unwrap();
+        assert_eq!(managed.summary.source, SkillSource::User);
+        for text in [&builtin.text, &managed.text] {
+            for requirement in [
+                "Every filed issue must have a clear objective",
+                "observable acceptance criteria",
+                "workable to completion by an agent",
+                "may still file an issue",
+                "Needs user clarification",
+                "ask the user specific questions",
+                "unresolved decisions, information, access or external dependencies",
+                "update the filed issue",
+                "Do not describe the issue as ready",
+            ] {
+                assert!(
+                    text.contains(requirement),
+                    "missing issue completion contract: {requirement}"
+                );
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     /// Verifies managed built-in synchronization materializes user-scope
     /// copies, preserves valid user overrides, replaces stale or malformed
     /// managed entries, and never touches trusted project skill directories.

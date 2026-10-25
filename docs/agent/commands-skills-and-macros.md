@@ -124,6 +124,15 @@ workflow can help install a skill:
 $create-skill Create a user skill for read-only release-checklist reviews.
 ```
 
+For issue filing, `$add-issues` requires a clear objective, bounded scope,
+observable completion criteria, and a plan an agent can work to completion.
+Concrete findings may still be filed when decisions, information, access, or
+external dependencies remain unresolved, but the agent must mark those issues
+**Needs user clarification**, explain the blockers, and ask you specific
+questions with the affected issue IDs. Answers are then used to update the
+objective, plan, prerequisites, and acceptance criteria; filing alone does not
+make an unresolved issue ready for implementation.
+
 For issue work, `$fix-issues` keeps implementation in the main agent with an
 independent reviewer. The built-in `$fix-issues-parallel` instead coordinates
 medium implementation agents in isolated worktrees, each with a large independent
