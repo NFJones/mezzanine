@@ -588,9 +588,11 @@ impl AsyncRuntimeSessionActor {
         }
     }
 
-    /// Builds timer effects for the active synchronized-output epoch of one pane.
+    /// Projects the active pane epoch while retaining its first recovery deadline.
+    /// Unadmitted work remains one key/deadline, not terminal bytes or an event
+    /// to replay. End/replacement retires that source; worker offer acknowledges it.
     pub(super) fn synchronized_output_timer_side_effects_for_pane(
-        &self,
+        &mut self,
         pane_id: &str,
     ) -> Vec<RuntimeSideEffect> {
         const SYNCHRONIZED_OUTPUT_TIMEOUT_MS: u64 = 1_000;
@@ -603,6 +605,9 @@ impl AsyncRuntimeSessionActor {
             });
         let previous = self.timers.synchronized_output.get(pane_id).cloned();
         if active == previous {
+            if active.is_none() {
+                self.timers.pending_synchronized_output.remove(pane_id);
+            }
             return Vec::new();
         }
         let mut side_effects = previous
@@ -610,12 +615,79 @@ impl AsyncRuntimeSessionActor {
             .map(|key| RuntimeSideEffect::CancelTimer { key })
             .collect::<Vec<_>>();
         if let Some(key) = active {
-            side_effects.push(RuntimeSideEffect::ScheduleTimer {
-                key,
-                delay_ms: SYNCHRONIZED_OUTPUT_TIMEOUT_MS,
-            });
+            let now = tokio::time::Instant::now();
+            let delay_ms = match self.timers.pending_synchronized_output.get(pane_id) {
+                Some((pending, deadline)) if pending == &key => {
+                    Self::synchronized_output_remaining_delay(*deadline)
+                }
+                _ => {
+                    self.timers.pending_synchronized_output.insert(
+                        pane_id.to_string(),
+                        (
+                            key.clone(),
+                            now + std::time::Duration::from_millis(SYNCHRONIZED_OUTPUT_TIMEOUT_MS),
+                        ),
+                    );
+                    SYNCHRONIZED_OUTPUT_TIMEOUT_MS
+                }
+            };
+            side_effects.push(RuntimeSideEffect::ScheduleTimer { key, delay_ms });
+        } else {
+            self.timers.pending_synchronized_output.remove(pane_id);
         }
         side_effects
+    }
+
+    /// Returns remaining original time rounded up to the worker's 1ms minimum.
+    fn synchronized_output_remaining_delay(deadline: tokio::time::Instant) -> u64 {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        u64::try_from(remaining.as_nanos().div_ceil(1_000_000))
+            .unwrap_or(u64::MAX)
+            .max(1)
+    }
+
+    /// Acknowledges exact timer offers, not merely queue admission. Recompute
+    /// remaining time after queued waiting too, without changing key identity.
+    /// Actual worker execution can still be late; this is no real-time guarantee.
+    pub(super) fn record_synchronized_output_timer_offers(
+        &mut self,
+        effects: &mut [RuntimeSideEffect],
+    ) {
+        for effect in effects {
+            if let RuntimeSideEffect::ScheduleTimer { key, delay_ms } = effect
+                && key.kind == RuntimeTimerKind::SynchronizedOutput
+                && let Some((pending, deadline)) =
+                    self.timers.pending_synchronized_output.get(&key.owner_id)
+                && pending == key
+            {
+                *delay_ms = Self::synchronized_output_remaining_delay(*deadline);
+                self.timers
+                    .pending_synchronized_output
+                    .remove(&key.owner_id);
+            }
+        }
+    }
+
+    /// Transfers only fitting descriptors from live synchronized-output owners.
+    /// Cancellation may transfer before its replacement schedule; that pending
+    /// epoch keeps its original deadline until a later actual capacity wake.
+    /// Other raw timer families and strict worker-claim admission are unchanged.
+    pub(super) fn queue_fitting_synchronized_output_timers(&mut self) -> Result<usize> {
+        let owners = self
+            .timers
+            .pending_synchronized_output
+            .keys()
+            .chain(self.timers.synchronized_output.keys())
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut queued = 0;
+        for pane in owners {
+            let mut effects = self.synchronized_output_timer_side_effects_for_pane(&pane);
+            effects.truncate(self.available_committed_side_effect_capacity());
+            queued += effects.len();
+            self.admit_committed_side_effects(effects)?;
+        }
+        Ok(queued)
     }
 
     /// Runs the apply runtime timer event operation for this subsystem.
@@ -1412,12 +1484,17 @@ impl AsyncRuntimeSessionActor {
 
     /// Reconciles pane-owned synchronized-output timers after a lifecycle mutation.
     pub(super) fn synchronized_output_timer_reconciliation_side_effects(
-        &self,
+        &mut self,
     ) -> Vec<RuntimeSideEffect> {
-        self.timers
+        let owners = self
+            .timers
             .synchronized_output
             .keys()
+            .chain(self.timers.pending_synchronized_output.keys())
             .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        owners
+            .into_iter()
             .flat_map(|pane_id| self.synchronized_output_timer_side_effects_for_pane(&pane_id))
             .collect()
     }

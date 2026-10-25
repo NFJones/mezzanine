@@ -3171,6 +3171,14 @@ occurred while publication was frozen, that publication MUST use a full redraw.
 An unterminated transaction MUST be force-released after a bounded internal
 timeout. Stale timeout events, normal release, pane removal, process exit, or
 session replacement MUST NOT recreate or republish synchronized state.
+Committed queue refusal MUST retain one original recovery key and monotonic
+deadline per still-active pane epoch, without retaining or replaying output.
+Real lane progress MUST fairly retry fitting timer descriptors alongside other
+retained service and provider sources. Normal end or obsolete screen state MUST
+retire unissued recovery; issued cancellation remains exact-key work. Remaining
+delay MUST be recomputed at actual worker offer, including time queued after
+admission, with the existing minimum timer delay when already expired. This is
+not a real-time worker-execution guarantee or recovery for every timer family.
 
 Pane resize and copy-mode entry MUST force-release synchronized output before
 changing geometry or deriving a copy viewport. Synchronization state is

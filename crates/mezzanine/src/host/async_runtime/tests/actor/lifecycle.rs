@@ -2570,11 +2570,14 @@ async fn async_actor_synchronized_output_timer_force_releases_and_ignores_stale_
         );
 
         let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        // Actual actor/worker handoff may consume part of the original second.
+        // Paused-clock owner tests separately assert the exact remaining delay.
         let first_key = timers
             .iter()
             .filter_map(|effect| match effect {
                 RuntimeSideEffect::ScheduleTimer { key, delay_ms }
-                    if key.kind == RuntimeTimerKind::SynchronizedOutput && *delay_ms == 1_000 =>
+                    if key.kind == RuntimeTimerKind::SynchronizedOutput
+                        && (1..=1_000).contains(delay_ms) =>
                 {
                     Some(key.clone())
                 }

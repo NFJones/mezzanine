@@ -332,7 +332,7 @@ impl AsyncRuntimeSessionActor {
             side_effect_routes: Default::default(),
             offered_dispatch_sources: Default::default(),
             refused_dispatch_sources: Default::default(),
-            provider_refill_first: false,
+            source_refill_cursor: 0,
             transcript_receipt_predecessor: None,
             side_effect_queue_nonempty_since: None,
             pane_input_leases: Default::default(),

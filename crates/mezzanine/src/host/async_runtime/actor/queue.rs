@@ -167,6 +167,17 @@ impl AsyncRuntimeSessionActor {
                 Self::track_owned_timer_key(&mut self.timers.pane_pipe_health, key, scheduled);
             }
             RuntimeTimerKind::SynchronizedOutput => {
+                if !scheduled
+                    && self
+                        .timers
+                        .pending_synchronized_output
+                        .get(&key.owner_id)
+                        .is_some_and(|(pending, _)| pending == key)
+                {
+                    self.timers
+                        .pending_synchronized_output
+                        .remove(&key.owner_id);
+                }
                 Self::track_owned_timer_key(&mut self.timers.synchronized_output, key, scheduled);
             }
         }

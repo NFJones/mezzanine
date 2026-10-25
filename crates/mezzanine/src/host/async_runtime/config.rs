@@ -540,6 +540,10 @@ pub(super) struct RuntimeTimerTracker {
     pub(super) provider_persistence: HashMap<String, RuntimeTimerKey>,
     pub(super) pane_pipe_health: HashMap<String, RuntimeTimerKey>,
     pub(super) synchronized_output: HashMap<String, RuntimeTimerKey>,
+    /// One not-yet-offered recovery deadline per actual synchronized pane epoch.
+    /// Kept through queue admission so waiting cannot restart its clock.
+    pub(super) pending_synchronized_output:
+        HashMap<String, (RuntimeTimerKey, tokio::time::Instant)>,
     pub(super) next_pane_pipe_health_generation: u64,
     pub(super) idle_cleanup: Option<RuntimeTimerKey>,
     /// Highest admitted idle generation, including display-only recovery wakes.
@@ -924,8 +928,8 @@ pub struct AsyncRuntimeSessionActor {
     pub(super) offered_dispatch_sources: std::collections::BTreeSet<super::actor::SourceDispatch>,
     /// Service sources whose committed provider-lane descriptors were refused.
     pub(super) refused_dispatch_sources: std::collections::BTreeSet<super::actor::SourceDispatch>,
-    /// Alternates provider versus deferred-service priority on real drain progress.
-    pub(super) provider_refill_first: bool,
+    /// Rotates deferred-service, provider and synchronized-timer source priority.
+    pub(super) source_refill_cursor: u8,
     /// Completion of the preceding off-actor receipt write, preserving actor enqueue order.
     pub(super) transcript_receipt_predecessor: Option<tokio::sync::oneshot::Receiver<()>>,
     /// Start of the current continuously non-empty side-effect queue generation.

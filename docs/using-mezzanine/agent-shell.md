@@ -296,8 +296,13 @@ Refused committed provider, external-action, native-shell, compaction, remember
 and title dispatches can recover from their original pending sources when a lane
 drains. Recovery does not accelerate normal polls or retry timers. A recovered
 descriptor remains fenced while that worker prepares and claims it; merely draining it cannot cause
-a duplicate offer. Cancelled tasks are not regenerated, and provider recovery
-alternates capacity priority with other deferred service transfers.
+a duplicate offer. Cancelled tasks are not regenerated. Provider, deferred
+service and retained synchronized-output timer sources rotate capacity priority.
+An accepted synchronized-output epoch retains its original recovery deadline
+through queue pressure and queued waiting; the timer worker receives only the
+remaining delay. Normal end retires unissued recovery, and cancellation keeps
+the exact old key. This does not replay terminal bytes, raise the queue bound
+or guarantee real-time execution while workers are stalled.
 Temporary persistence/readiness barriers retain recovery custody. An actual
 successful claim retires it; later continuations are not accelerated by an old
 refusal. External execution still requires its ordinary actor-issued attempt.

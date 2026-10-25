@@ -46,6 +46,7 @@ impl AsyncRuntimeSessionActor {
                 .drain_compat(limit.saturating_sub(effects.len())),
         );
         self.record_provider_offers(&effects);
+        self.record_synchronized_output_timer_offers(&mut effects);
         self.record_side_effect_drain(effects.len())?;
         Ok(effects)
     }
@@ -62,16 +63,22 @@ impl AsyncRuntimeSessionActor {
         // owns those exact dispatches; retry after real drain progress without
         // requiring an unrelated runtime event.
         if drained > 0 {
-            if self.provider_refill_first {
-                self.queue_fitting_provider_sources()?;
+            for offset in 0..3 {
+                match (self.source_refill_cursor + offset) % 3 {
+                    0 => {
+                        self.queue_fitting_deferred_service_side_effects()?;
+                    }
+                    1 => {
+                        self.queue_fitting_provider_sources()?;
+                    }
+                    _ => {
+                        self.queue_fitting_synchronized_output_timers()?;
+                    }
+                }
             }
-            self.queue_fitting_deferred_service_side_effects()?;
             self.queue_steering_presentation_retry_idle_wake();
             let _ = self.queue_pending_deferred_agent_command_side_effects();
-            if !self.provider_refill_first {
-                self.queue_fitting_provider_sources()?;
-            }
-            self.provider_refill_first = !self.provider_refill_first;
+            self.source_refill_cursor = (self.source_refill_cursor + 1) % 3;
         }
         self.metrics.runtime_side_effects_drained = self
             .metrics
@@ -224,7 +231,8 @@ impl AsyncRuntimeSessionActor {
         // Inner enqueues only notify: optional work cannot steal capacity from
         // a later mandatory effect in the same event/service drain.
         self.queue_steering_presentation_retry_idle_wake();
-        let drained = self.side_effect_routes.drain_timers(limit);
+        let mut drained = self.side_effect_routes.drain_timers(limit);
+        self.record_synchronized_output_timer_offers(&mut drained);
         self.record_side_effect_drain(drained.len())?;
         Ok(drained)
     }
