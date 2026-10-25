@@ -978,6 +978,169 @@ async fn cancelled_external_recovery_retires_before_and_after_offer() {
     }
 }
 
+/// A mixed event batch contains actual claimed native completion plus optional
+/// output, rather than stale classification-only progress. Full transient
+/// pressure may refuse the resulting provider continuation but cannot undo the
+/// accepted action result or take unrelated immutable service input. Real
+/// lane drains recover ordinary input in FIFO order and offer the continuation once;
+/// duplicate completion cannot run the action or publish its result again.
+/// Priority input is intentionally not the FIFO oracle: it overtakes existing
+/// same-pane input at each enqueue boundary under its established policy.
+///
+/// The fixture owns a pane root for ordinary native admission, but no native
+/// workload, provider request, timer or persistence worker is executed. The
+/// supplied output is a deterministic worker-result fixture, not evidence that
+/// a command actually ran. Explicit pane retirement is attempted; this test
+/// does not infer affirmative reader/reap settlement from that request alone.
+#[tokio::test(flavor = "current_thread")]
+async fn mixed_claimed_native_completion_preserves_service_tail_and_continuation() {
+    let (mut actor, turn_id, primary, action) = pending_native_at_capacity().await;
+    actor.drain_timer_side_effects(64).unwrap();
+    let (reply, response) = tokio::sync::oneshot::channel();
+    actor
+        .handle_request(AsyncRuntimeRequest::ClaimNativeShellAction {
+            turn_id: turn_id.clone(),
+            action_id: action.id.clone(),
+            reply,
+        })
+        .await;
+    let dispatch = response
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("actual native claim");
+    actor.drain_runtime_side_effects(64).unwrap();
+    actor.drain_timer_side_effects(64).unwrap();
+    let capacity = 1 + actor.committed_side_effect_overshoot();
+    actor
+        .admit_committed_side_effects(
+            (0..capacity)
+                .map(|index| RuntimeSideEffect::ScheduleTimer {
+                    key: RuntimeTimerKey::new(
+                        RuntimeTimerKind::PanePipeHealth,
+                        format!("mixed-pressure-{index}"),
+                        1,
+                    ),
+                    delay_ms: 25,
+                })
+                .collect(),
+        )
+        .unwrap();
+    let expected = (0..capacity + 3)
+        .map(|index| format!("original-native-tail-{index}").into_bytes())
+        .collect::<Vec<_>>();
+    for bytes in &expected {
+        actor
+            .service
+            .queue_deferred_pane_input_for_tests(RuntimeSideEffect::WritePaneInput {
+                pane_id: "%1".into(),
+                bytes: bytes.clone(),
+            });
+    }
+    let outcome = crate::runtime::RuntimeNativeShellOutcome {
+        turn_id: dispatch.turn_id.clone(),
+        action_id: dispatch.action_id.clone(),
+        marker: dispatch.marker.clone(),
+        command: dispatch.request.transaction.command.clone(),
+        started_at_unix_ms: dispatch.started_at_unix_ms,
+        sandbox_capability: None,
+        capability_probe_only: dispatch.capability_probe_only,
+        launch_counts: None,
+        result: Ok(mez_agent::ShellExecutionOutput::new(
+            Some(0),
+            "MIXED_NATIVE_ACCEPTED_BODY\n".into(),
+            String::new(),
+            false,
+            false,
+        )),
+    };
+    let mut batch = RuntimeEventBatch::new();
+    batch.push(RuntimeEvent::NativeShellProgress(
+        crate::runtime::RuntimeNativeShellProgress {
+            presentation: mez_agent::ActionPresentationProgress::new(
+                &turn_id,
+                &action.id,
+                mez_agent::ActionPresentationExecutionIdentity::Attempt(dispatch.marker),
+                1,
+                mez_agent::ActionPresentationComponentIdentity::ShellOutput,
+                "MIXED_NATIVE_ACCEPTED_BODY\n",
+            ),
+        },
+    ));
+    batch.push(RuntimeEvent::NativeShell(outcome.clone()));
+    let error = actor.apply_runtime_event_batch(batch).await.unwrap_err();
+    assert!(error.message().contains("consumed=1"), "{error:?}");
+    let execution = &actor.service.agent_turn_executions()[&turn_id];
+    assert_eq!(execution.action_results.len(), 1);
+    assert_eq!(
+        execution.action_results[0].status,
+        mez_agent::ActionStatus::Succeeded
+    );
+    assert!(actor.service.pending_native_shell_actions().is_empty());
+    assert!(actor.service.agent_provider_task_is_pending(&turn_id));
+    let mut duplicate = RuntimeEventBatch::new();
+    duplicate.push(RuntimeEvent::NativeShell(outcome));
+    assert_eq!(
+        actor
+            .apply_runtime_event_batch(duplicate)
+            .await
+            .unwrap()
+            .applied,
+        0
+    );
+    let mut observed = Vec::new();
+    let mut continuations = 0;
+    let mut redraws = 0;
+    for _ in 0..capacity * 4 {
+        actor.drain_timer_side_effects(1).unwrap();
+        for effect in actor.drain_runtime_side_effects(1).unwrap() {
+            match effect {
+                RuntimeSideEffect::WritePaneInput { bytes, .. } => observed.push(bytes),
+                RuntimeSideEffect::DispatchAgentProvider { turn_id: owner, .. } => {
+                    assert_eq!(owner, turn_id);
+                    continuations += 1;
+                }
+                RuntimeSideEffect::RenderClient { client_id, reason } => {
+                    assert_eq!(client_id, primary);
+                    assert_eq!(reason, RenderInvalidationReason::FullRedraw);
+                    redraws += 1;
+                }
+                other => panic!("unexpected mixed-completion recovery: {other:?}"),
+            }
+        }
+        assert!(
+            actor.side_effects.len() + actor.side_effect_routes.non_persistence_len() <= capacity
+        );
+    }
+    assert_eq!(observed, expected);
+    assert_eq!(continuations, 1);
+    assert_eq!(redraws, 1);
+    assert!(
+        actor
+            .service
+            .drain_pane_io_transition()
+            .side_effects
+            .is_empty()
+    );
+    assert!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(64)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        actor.service.agent_turn_executions()[&turn_id]
+            .action_results
+            .len(),
+        1
+    );
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    actor.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Strict producer refusal cannot enroll external recovery or accelerate its
 /// ordinary pending scheduling when an unrelated lane frees capacity.
 #[tokio::test(flavor = "current_thread")]
