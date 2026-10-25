@@ -618,7 +618,7 @@ impl AsyncRuntimeSessionActor {
             let now = tokio::time::Instant::now();
             let delay_ms = match self.timers.pending_synchronized_output.get(pane_id) {
                 Some((pending, deadline)) if pending == &key => {
-                    Self::synchronized_output_remaining_delay(*deadline)
+                    Self::remaining_timer_delay_ms(*deadline)
                 }
                 _ => {
                     self.timers.pending_synchronized_output.insert(
@@ -639,7 +639,7 @@ impl AsyncRuntimeSessionActor {
     }
 
     /// Returns remaining original time rounded up to the worker's 1ms minimum.
-    fn synchronized_output_remaining_delay(deadline: tokio::time::Instant) -> u64 {
+    pub(super) fn remaining_timer_delay_ms(deadline: tokio::time::Instant) -> u64 {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         u64::try_from(remaining.as_nanos().div_ceil(1_000_000))
             .unwrap_or(u64::MAX)
@@ -660,7 +660,7 @@ impl AsyncRuntimeSessionActor {
                     self.timers.pending_synchronized_output.get(&key.owner_id)
                 && pending == key
             {
-                *delay_ms = Self::synchronized_output_remaining_delay(*deadline);
+                *delay_ms = Self::remaining_timer_delay_ms(*deadline);
                 self.timers
                     .pending_synchronized_output
                     .remove(&key.owner_id);

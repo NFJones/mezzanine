@@ -75,6 +75,7 @@ mod events;
 mod external_usage_retry;
 mod handle;
 mod provider_handoff;
+mod provider_retry_handoff;
 mod queue;
 mod requests;
 pub(super) mod routes;

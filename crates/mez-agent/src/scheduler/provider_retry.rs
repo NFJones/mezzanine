@@ -267,6 +267,16 @@ impl ProviderRetryScheduler {
             .unwrap_or(0)
     }
 
+    /// Observes the exact attempt and original delay awaiting timer delivery.
+    /// This does not reapply recovery, acknowledge a timer or authorize a
+    /// dispatch. Other phases and retired turns have no pending timer source.
+    pub fn pending_timer(&self, turn_id: &str) -> Option<(u64, u64)> {
+        self.turns
+            .get(turn_id)
+            .filter(|state| state.phase == ProviderRetryPhase::TimerPending)
+            .map(|state| (state.attempt, state.delay_ms))
+    }
+
     /// Conserves canonical call consumption and finite inline reservations.
     /// The product supplies this once after validating the exact issued claim;
     /// this observation neither queues work nor changes an existing timer.
@@ -439,6 +449,68 @@ impl ProviderRetryScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Read-only observation exposes only the exact pending timer generation,
+    /// preserves its original delay across policy changes and stale events, and
+    /// disappears after actual timer delivery or terminal source retirement.
+    #[test]
+    fn pending_retry_timer_observation_preserves_exact_phase_and_delay() {
+        let mut scheduler = ProviderRetryScheduler::default();
+        assert_eq!(scheduler.pending_timer("turn"), None);
+        scheduler.apply(ProviderRetryEvent::FailureObserved {
+            turn_id: "turn".into(),
+            retry_class: ProviderErrorRetryClass::RetryableTransport,
+        });
+        assert_eq!(scheduler.pending_timer("turn"), None);
+        scheduler.apply(ProviderRetryEvent::RecoveryCompleted {
+            turn_id: "turn".into(),
+            attempt: 1,
+            result: ProviderRetryRecoveryResult::Ready,
+        });
+        assert_eq!(scheduler.pending_timer("turn"), Some((1, 1_000)));
+        scheduler.set_policy(ProviderRetryPolicy {
+            initial_delay_ms: 5_000,
+            max_delay_ms: 5_000,
+            ..DEFAULT_PROVIDER_RETRY_POLICY
+        });
+        assert_eq!(scheduler.pending_timer("turn"), Some((1, 1_000)));
+        assert_eq!(
+            scheduler.apply(ProviderRetryEvent::TimerElapsed {
+                turn_id: "turn".into(),
+                attempt: 2
+            }),
+            ProviderRetryTransition::Ignored
+        );
+        assert_eq!(scheduler.pending_timer("turn"), Some((1, 1_000)));
+        assert!(matches!(
+            scheduler.apply(ProviderRetryEvent::TimerElapsed {
+                turn_id: "turn".into(),
+                attempt: 1
+            }),
+            ProviderRetryTransition::Effect(ProviderRetryEffect::DispatchProvider { .. })
+        ));
+        assert_eq!(scheduler.pending_timer("turn"), None);
+        scheduler.apply(ProviderRetryEvent::DispatchCompleted {
+            turn_id: "turn".into(),
+            attempt: 1,
+            result: ProviderRetryDispatchResult::Ready,
+        });
+        assert_eq!(scheduler.pending_timer("turn"), None);
+        scheduler.apply(ProviderRetryEvent::FailureObserved {
+            turn_id: "turn".into(),
+            retry_class: ProviderErrorRetryClass::RetryableTransport,
+        });
+        scheduler.apply(ProviderRetryEvent::RecoveryCompleted {
+            turn_id: "turn".into(),
+            attempt: 2,
+            result: ProviderRetryRecoveryResult::Ready,
+        });
+        assert_eq!(scheduler.pending_timer("turn"), Some((2, 5_000)));
+        scheduler.apply(ProviderRetryEvent::TurnSettled {
+            turn_id: "turn".into(),
+        });
+        assert_eq!(scheduler.pending_timer("turn"), None);
+    }
 
     /// Returns the recovery effect for one newly observed retryable failure.
     fn observe_retry(

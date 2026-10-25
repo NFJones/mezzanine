@@ -89,6 +89,13 @@ impl RuntimeSessionService {
         self.agent.provider_retry_scheduler.policy()
     }
 
+    /// Observes one exact retry attempt and its immutable chosen backoff.
+    /// The adapter may retain deadline custody, but cannot advance this source
+    /// until the ordinary matching timer event actually reaches the reducer.
+    pub(crate) fn pending_agent_provider_retry_timer(&self, turn_id: &str) -> Option<(u64, u64)> {
+        self.agent.provider_retry_scheduler.pending_timer(turn_id)
+    }
+
     /// Conserves canonical calls and inline reservations after exact claim
     /// validation. Duplicate or stale worker results must never reach this
     /// method; the existing actor ingress owns that generation fence.

@@ -533,6 +533,9 @@ pub(super) struct RuntimeTimerTracker {
     pub(super) peer_message_delivery: Option<RuntimeTimerKey>,
     pub(super) next_peer_message_delivery_generation: u64,
     pub(super) provider_retry: HashMap<String, RuntimeTimerKey>,
+    /// One committed retry deadline per turn, retained until actual worker offer.
+    /// Only the exact service reducer's TimerPending attempt may enroll here.
+    pub(super) pending_provider_retry: HashMap<String, (RuntimeTimerKey, tokio::time::Instant)>,
     pub(super) provider_claim: HashMap<String, RuntimeTimerKey>,
     pub(super) next_provider_claim_generation: u64,
     pub(super) compaction_claim: HashSet<RuntimeTimerKey>,
@@ -928,7 +931,7 @@ pub struct AsyncRuntimeSessionActor {
     pub(super) offered_dispatch_sources: std::collections::BTreeSet<super::actor::SourceDispatch>,
     /// Service sources whose committed provider-lane descriptors were refused.
     pub(super) refused_dispatch_sources: std::collections::BTreeSet<super::actor::SourceDispatch>,
-    /// Rotates deferred-service, provider and synchronized-timer source priority.
+    /// Rotates service, provider, synchronized-output and retry-timer priority.
     pub(super) source_refill_cursor: u8,
     /// Completion of the preceding off-actor receipt write, preserving actor enqueue order.
     pub(super) transcript_receipt_predecessor: Option<tokio::sync::oneshot::Receiver<()>>,

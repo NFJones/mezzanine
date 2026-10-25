@@ -12053,6 +12053,20 @@ turn-settlement events back to that scheduler. A pure scheduler transition MUST
 NOT claim that a product timer, provider dispatch, persistence write, or
 recovery mutation succeeded.
 
+For a committed retry schedule, the adapter MUST retain one original exact
+attempt key and monotonic backoff deadline per turn before fallible transient
+admission. Enrollment MUST match the reducer's pending attempt and selected
+delay; strict producer refusal alone MUST NOT enroll ordinary retry work.
+Actual lane progress MUST fairly transfer fitting descriptors without another
+failure event, provider request or action replay. Queue admission MUST NOT
+restart or acknowledge the backoff: typed and generic worker offers MUST
+deduct queued waiting from the original deadline. Expired deadlines use the
+existing minimum timer delay; worker execution can still be late. Source
+settlement or replacement MUST retire only matching pending state, and a stale
+cancel or callback MUST NOT retire a newer attempt. Only actual matching timer
+delivery advances the reducer; provider execution still requires its normal
+actor-issued claim. Other raw timer families do not inherit this guarantee.
+
 Every completed turn MUST persist enough state to resume the conversation,
 audit actions, and explain the final result after detach and reattach.
 

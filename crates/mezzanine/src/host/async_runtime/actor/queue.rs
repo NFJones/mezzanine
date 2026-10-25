@@ -141,6 +141,15 @@ impl AsyncRuntimeSessionActor {
                 }
             }
             RuntimeTimerKind::ProviderRetry => {
+                if !scheduled
+                    && self
+                        .timers
+                        .pending_provider_retry
+                        .get(&key.owner_id)
+                        .is_some_and(|(pending, _)| pending == key)
+                {
+                    self.timers.pending_provider_retry.remove(&key.owner_id);
+                }
                 Self::track_owned_timer_key(&mut self.timers.provider_retry, key, scheduled);
             }
             RuntimeTimerKind::ProviderClaim => {
@@ -259,6 +268,7 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         side_effects: Vec<RuntimeSideEffect>,
     ) -> Result<()> {
+        self.retain_committed_provider_retry_deadlines(&side_effects);
         let mut side_effects = side_effects;
         let admission = self.try_queue_runtime_side_effects_with_allowance(
             &mut side_effects,

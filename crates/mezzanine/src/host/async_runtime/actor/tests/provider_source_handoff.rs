@@ -9,7 +9,7 @@
 use super::super::*;
 
 /// Creates a real pending provider task with a saturated finite transient lane.
-fn pending_provider_at_capacity() -> (AsyncRuntimeSessionActor, String, ClientId) {
+pub(super) fn pending_provider_at_capacity() -> (AsyncRuntimeSessionActor, String, ClientId) {
     pending_provider_in_mode_at_capacity(false)
 }
 
