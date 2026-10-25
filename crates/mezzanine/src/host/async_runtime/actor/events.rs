@@ -1088,13 +1088,18 @@ impl AsyncRuntimeSessionActor {
         target_pane_id: &str,
         target_generation: u64,
     ) -> bool {
-        self.side_effect_routes.any_provider(|effect| {
-            matches!(
-                effect,
-                RuntimeSideEffect::DispatchAgentCompaction { pane_id, task_generation }
-                    if pane_id == target_pane_id && *task_generation == target_generation
-            )
-        })
+        self.offered_dispatch_sources
+            .contains(&super::SourceDispatch::Compaction(
+                target_pane_id.to_string(),
+                target_generation,
+            ))
+            || self.side_effect_routes.any_provider(|effect| {
+                matches!(
+                    effect,
+                    RuntimeSideEffect::DispatchAgentCompaction { pane_id, task_generation }
+                        if pane_id == target_pane_id && *task_generation == target_generation
+                )
+            })
     }
 
     /// Returns true when a queued durable memory dispatch already exists for a pane.

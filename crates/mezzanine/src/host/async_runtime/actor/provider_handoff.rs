@@ -1,6 +1,6 @@
 //! Source-owned provider-lane dispatch transfer under transient pressure.
 //!
-//! The service retains pending provider, approved external and native work;
+//! The service retains pending provider, external, native and compaction work;
 //! this owner retains only refused/offered identities, never payloads or rights.
 //! Eligibility is separate from ownership: temporarily blocked external work
 //! must not lose recovery metadata while waiting for a persistence barrier or
@@ -21,6 +21,8 @@ pub(crate) enum SourceDispatch {
     External(String, String),
     /// One exact native phase, fenced by its existing transaction marker.
     Native(String, String, String),
+    /// One queued compactor, fenced by its existing task generation.
+    Compaction(String, u64),
 }
 
 impl SourceDispatch {
@@ -36,6 +38,10 @@ impl SourceDispatch {
             RuntimeSideEffect::DispatchNativeShellAction { turn_id, action_id } => service
                 .pending_native_shell_action_marker(turn_id, action_id)
                 .map(|marker| Self::Native(turn_id.clone(), action_id.clone(), marker.to_string())),
+            RuntimeSideEffect::DispatchAgentCompaction {
+                pane_id,
+                task_generation,
+            } => Some(Self::Compaction(pane_id.clone(), *task_generation)),
             _ => None,
         }
     }
@@ -50,6 +56,10 @@ impl SourceDispatch {
             Self::Native(turn_id, action_id, marker) => {
                 service.pending_native_shell_action_marker(turn_id, action_id)
                     == Some(marker.as_str())
+            }
+            Self::Compaction(pane, generation) => {
+                service.pending_agent_compaction_task_generation(pane) == Some(*generation)
+                    && service.agent_compaction_task_is_current(pane, *generation)
             }
         }
     }

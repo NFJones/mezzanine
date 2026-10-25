@@ -11941,11 +11941,11 @@ remains all-or-error and MUST NOT gain this committed-only partial transfer.
 This is source-retained dispatch custody, not a second outside-lane holding queue
 for raw effects whose event has already surrendered ownership. No event, action,
 input or provider work may be replayed to recover dispatch.
-For a refused committed provider, approved-external-action or native-shell
-descriptor whose unclaimed source is still owned by the service, the actor MUST retain only its
-source identity and transfer a fitting descriptor after real lane-drain
-progress. Recovery MUST NOT accelerate ordinary
-provider polls or retry timers. A recovered descriptor offered to a worker MUST
+For a refused committed provider, approved-external-action, native-shell or
+compaction descriptor whose unclaimed source is still owned by the service,
+the actor MUST retain only its source identity and transfer a fitting descriptor
+after real lane-drain progress. Recovery MUST NOT accelerate ordinary provider
+polls or retry timers. A recovered descriptor offered to a worker MUST
 remain fenced through off-actor preparation until no-work preparation or claim
 settlement returns ownership; draining it alone is not a claim. Cancelled sources
 MUST NOT be regenerated. Recovery and other deferred-service transfers alternate
@@ -11958,6 +11958,11 @@ Native recovery identity MUST include the existing exact transaction marker;
 an old phase refusal or offer MUST NOT recover a replacement phase of the same
 turn/action. Only an actual native claim may reserve completion and transfer the
 authorized phase to a worker; a descriptor or recovery identity grants no rights.
+Compaction recovery MUST use the existing exact task generation, exclude claimed
+or replaced tasks, and preserve retry backoff and human claim inhibition. Its
+offer settles at the actual claim attempt, including constructor or mandatory
+claim-lease refusal; recovery does not bypass completion-lease admission or
+enroll ordinary strict-producer refusals.
 Once an event batch has applied its events, the side effects it produced MUST NOT
 be destroyed by a capacity refusal: the actor MUST admit them to their ordinary
 lanes within a bounded reserve above the configured capacity, in the same

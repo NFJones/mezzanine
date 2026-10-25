@@ -3151,6 +3151,12 @@ impl AsyncRuntimeSessionActor {
                 let result = self
                     .service
                     .claim_agent_compaction_task(&pane_id, task_generation);
+                // Settle before mandatory lease admission can return early. A
+                // constructor failure may already have consumed the pending task.
+                self.settle_source_offer(super::SourceDispatch::Compaction(
+                    pane_id.clone(),
+                    task_generation,
+                ));
                 if self
                     .service
                     .agent_compaction_task_is_claimed(&pane_id, task_generation)

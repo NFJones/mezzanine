@@ -292,10 +292,10 @@ transient reserve. Excess dispatches stay at their original service owners and
 transfer as workers drain capacity, without another user event or action replay.
 Transfer rotates across dispatch families; durable writes do not wait for a
 transient slot and keep their original receipt identities.
-Refused committed provider, approved external-action and native-shell dispatches
+Refused committed provider, external-action, native-shell and compaction dispatches
 can also recover from their original pending sources when a lane drains. Recovery
-does not accelerate normal polls or retry timers. A recovered descriptor remains fenced while
-that worker prepares and claims it; merely draining the descriptor cannot cause
+does not accelerate normal polls or retry timers. A recovered descriptor remains
+fenced while that worker prepares and claims it; merely draining it cannot cause
 a duplicate offer. Cancelled tasks are not regenerated, and provider recovery
 alternates capacity priority with other deferred service transfers.
 Temporary persistence/readiness barriers retain recovery custody. An actual
@@ -304,6 +304,10 @@ refusal. External execution still requires its ordinary actor-issued attempt.
 Native recovery keeps the exact phase marker, so an old refusal cannot schedule
 a replacement phase of the same action. Only the actual native claim transfers
 authorized worker execution and reserves completion; no workload is replayed.
+Compaction recovery similarly keeps the exact task generation; claiming still
+requires its ordinary completion lease and respects human pause and transport
+backoff. Ordinary strict-producer refusal is not enrolled in this committed
+recovery mechanism.
 If an already-committed mixed effect batch exceeds the transient reserve, its
 durable records still enter persistence in order. The remaining refusal is not
 success and cannot be retried by replaying that batch. A refused raw committed
