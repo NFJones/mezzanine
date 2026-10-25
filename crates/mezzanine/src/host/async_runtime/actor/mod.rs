@@ -79,6 +79,8 @@ mod queue;
 mod requests;
 pub(super) mod routes;
 
+pub(super) use provider_handoff::SourceDispatch;
+
 #[cfg(test)]
 mod tests;
 /// Re-exports the pre-application side-effect capacity classifier.

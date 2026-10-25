@@ -1287,7 +1287,8 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn provider_dispatch_is_already_queued(&self, turn_id: &str) -> bool {
-        self.offered_provider_turns.contains(turn_id)
+        self.offered_dispatch_sources
+            .contains(&super::SourceDispatch::Provider(turn_id.to_string()))
             || self.side_effect_routes.any_provider(|effect| {
                 matches!(
                     effect,
@@ -1301,15 +1302,20 @@ impl AsyncRuntimeSessionActor {
 
     /// Returns whether one approved external action already has a queued dispatch.
     fn approved_external_dispatch_is_already_queued(&self, turn_id: &str, action_id: &str) -> bool {
-        self.side_effect_routes.any_provider(|effect| {
-            matches!(
-                effect,
-                RuntimeSideEffect::DispatchApprovedExternalAction {
-                    turn_id: queued_turn_id,
-                    action_id: queued_action_id,
-                } if queued_turn_id == turn_id && queued_action_id == action_id
-            )
-        })
+        self.offered_dispatch_sources
+            .contains(&super::SourceDispatch::External(
+                turn_id.to_string(),
+                action_id.to_string(),
+            ))
+            || self.side_effect_routes.any_provider(|effect| {
+                matches!(
+                    effect,
+                    RuntimeSideEffect::DispatchApprovedExternalAction {
+                        turn_id: queued_turn_id,
+                        action_id: queued_action_id,
+                    } if queued_turn_id == turn_id && queued_action_id == action_id
+                )
+            })
     }
 
     /// Returns whether one native shell action already has a queued dispatch.

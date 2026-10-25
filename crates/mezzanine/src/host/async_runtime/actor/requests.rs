@@ -3012,6 +3012,7 @@ impl AsyncRuntimeSessionActor {
                 let result = self
                     .service
                     .claim_approved_external_action(&turn_id, &action_id);
+                self.settle_source_offer(super::SourceDispatch::External(turn_id, action_id));
                 let should_notify = result.is_ok();
                 let _ = reply.send(result);
                 if should_notify {

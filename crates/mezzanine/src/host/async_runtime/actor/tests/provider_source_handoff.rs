@@ -9,7 +9,13 @@ use super::super::*;
 
 /// Creates a real pending provider task with a saturated finite transient lane.
 fn pending_provider_at_capacity() -> (AsyncRuntimeSessionActor, String, ClientId) {
+    use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
     let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "recovered-provider-claim".into(), path: None,
+        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"default\"\nshell_mode = \"pane\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.default]\nprovider = \"runtime-batch\"\nmodel = \"test\"\n[permissions]\napproval_policy = \"ask\"\nsandbox = \"policy-only\"\n".into(),
+    }]).unwrap();
     let primary = service
         .attach_primary("handoff-primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
@@ -131,8 +137,8 @@ async fn ordinary_pending_provider_is_not_accelerated_by_lane_drain() {
             .len(),
         1
     );
-    assert!(actor.refused_provider_turns.is_empty());
-    assert!(actor.offered_provider_turns.is_empty());
+    assert!(actor.refused_dispatch_sources.is_empty());
+    assert!(actor.offered_dispatch_sources.is_empty());
     assert!(actor.service.agent_provider_task_is_pending(&turn_id));
     actor
         .service
@@ -151,10 +157,22 @@ async fn recovered_offer_returns_to_pending_source_and_retires_on_stop() {
     assert!(actor.admit_committed_side_effects(effects).is_err());
     actor.drain_timer_side_effects(1).unwrap();
     assert_eq!(actor.drain_runtime_side_effects(1).unwrap().len(), 1);
-    assert!(actor.offered_provider_turns.contains(&turn_id));
+    assert!(
+        actor
+            .offered_dispatch_sources
+            .contains(&SourceDispatch::Provider(turn_id.clone()))
+    );
     actor.settle_provider_offer(&turn_id);
-    assert!(!actor.offered_provider_turns.contains(&turn_id));
-    assert!(actor.refused_provider_turns.contains(&turn_id));
+    assert!(
+        !actor
+            .offered_dispatch_sources
+            .contains(&SourceDispatch::Provider(turn_id.clone()))
+    );
+    assert!(
+        actor
+            .refused_dispatch_sources
+            .contains(&SourceDispatch::Provider(turn_id.clone()))
+    );
     actor.drain_timer_side_effects(1).unwrap();
     assert_eq!(
         actor
@@ -168,8 +186,8 @@ async fn recovered_offer_returns_to_pending_source_and_retires_on_stop() {
         .execute_agent_shell_command(&primary, "/stop")
         .unwrap();
     actor.drain_timer_side_effects(1).unwrap();
-    assert!(actor.offered_provider_turns.is_empty());
-    assert!(actor.refused_provider_turns.is_empty());
+    assert!(actor.offered_dispatch_sources.is_empty());
+    assert!(actor.refused_dispatch_sources.is_empty());
     assert!(
         actor
             .drain_agent_provider_dispatch_side_effects(1)
@@ -245,7 +263,406 @@ async fn cancelled_recovered_offer_retires_at_real_preparation_boundary() {
             .await
     );
     assert!(response.await.unwrap().unwrap().is_none());
-    assert!(!actor.offered_provider_turns.contains(&turn_id));
-    assert!(!actor.refused_provider_turns.contains(&turn_id));
+    assert!(
+        !actor
+            .offered_dispatch_sources
+            .contains(&SourceDispatch::Provider(turn_id.clone()))
+    );
+    assert!(
+        !actor
+            .refused_dispatch_sources
+            .contains(&SourceDispatch::Provider(turn_id.clone()))
+    );
     assert!(!actor.service.agent_provider_task_is_owned(&turn_id));
+}
+
+/// Creates accepted external work through actual provider-result adoption,
+/// without executing inference, HTTP, MCP or a native worker.
+async fn pending_external_at_capacity() -> (
+    AsyncRuntimeSessionActor,
+    String,
+    ClientId,
+    mez_agent::AgentAction,
+) {
+    let (mut actor, turn_id, primary) = pending_provider_at_capacity();
+    let turn = actor
+        .service
+        .agent_turn_ledger()
+        .turn(&turn_id)
+        .unwrap()
+        .clone();
+    actor.service.remove_pending_agent_provider_task(&turn_id);
+    let action = mez_agent::AgentAction {
+        id: "refused-fetch".into(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/never-executed".into(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let request = mez_agent::ModelRequest {
+        provider: "runtime-batch".into(),
+        model: "test".into(),
+        model_capabilities: Default::default(),
+        max_input_tokens: None,
+        reasoning_effort: None,
+        thinking_enabled: None,
+        latency_preference: None,
+        prompt_cache_retention: None,
+        max_output_tokens: None,
+        temperature: None,
+        stop: None,
+        prompt_cache_session_id: None,
+        prompt_cache_lineage_id: None,
+        turn_id: turn_id.clone(),
+        agent_id: turn.agent_id.clone(),
+        available_mcp_tools: Vec::new(),
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+        interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+        allowed_actions: mez_agent::AllowedActionSet::capability_decision(),
+        messages: vec![mez_agent::ModelMessage {
+            role: mez_agent::ModelMessageRole::User,
+            source: mez_agent::ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            content: "source handoff".into(),
+        }]
+        .into(),
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request,
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".into(),
+            model: "test".into(),
+            raw_text: "inert accepted external source".into(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "inert source custody".into(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            vec![],
+            None,
+        )],
+        final_turn: false,
+        terminal_state: mez_agent::AgentTurnState::Running,
+    };
+    actor
+        .service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id).unwrap(),
+            &turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        actor.service.pending_approved_external_actions(),
+        vec![(turn_id.clone(), action.id.clone())]
+    );
+    (actor, turn_id, primary, action)
+}
+
+/// A real committed descriptor refusal must recover after capacity drains,
+/// stay fenced across both drain APIs, and transfer once through actual claim.
+#[tokio::test(flavor = "current_thread")]
+async fn refused_external_dispatch_recovers_and_claims_once() {
+    recovered_external_claim(false).await;
+    recovered_external_claim(true).await;
+}
+
+/// Both compatibility and typed adapters must fence the offer before refill.
+async fn recovered_external_claim(compatibility: bool) {
+    let (mut actor, turn_id, primary, action) = pending_external_at_capacity().await;
+    let effects = actor.pending_provider_dispatch_side_effects().unwrap();
+    assert!(actor.admit_committed_side_effects(effects).is_err());
+    actor.drain_timer_side_effects(1).unwrap();
+    let offered = if compatibility {
+        actor.drain_runtime_side_effects(1).unwrap()
+    } else {
+        actor.drain_agent_provider_dispatch_side_effects(1).unwrap()
+    };
+    assert!(
+        matches!(offered.as_slice(), [RuntimeSideEffect::DispatchApprovedExternalAction { turn_id: owner, action_id }] if owner == &turn_id && action_id == &action.id),
+        "{offered:?}"
+    );
+    assert!(
+        !actor
+            .drain_runtime_side_effects(1)
+            .unwrap()
+            .iter()
+            .any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::DispatchApprovedExternalAction { .. }
+            ))
+    );
+    assert!(
+        actor
+            .pending_provider_dispatch_side_effects()
+            .unwrap()
+            .is_empty()
+    );
+    actor.drain_timer_side_effects(64).unwrap();
+    let (reply, response) = tokio::sync::oneshot::channel();
+    actor
+        .handle_request(AsyncRuntimeRequest::ClaimApprovedExternalAction {
+            turn_id: turn_id.clone(),
+            action_id: action.id.clone(),
+            reply,
+        })
+        .await;
+    let dispatch = response
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("actual recovered external claim");
+    assert_eq!(dispatch.turn.turn_id, turn_id);
+    assert_eq!(dispatch.action.id, action.id);
+    assert!(actor.service.pending_approved_external_actions().is_empty());
+    assert!(
+        !actor
+            .refused_dispatch_sources
+            .contains(&SourceDispatch::External(
+                turn_id.clone(),
+                action.id.clone()
+            ))
+    );
+    assert!(
+        !actor
+            .offered_dispatch_sources
+            .contains(&SourceDispatch::External(
+                turn_id.clone(),
+                action.id.clone()
+            ))
+    );
+    actor.drain_timer_side_effects(64).unwrap();
+    assert!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(64)
+            .unwrap()
+            .is_empty()
+    );
+    let (reply, response) = tokio::sync::oneshot::channel();
+    actor
+        .handle_request(AsyncRuntimeRequest::ClaimApprovedExternalAction {
+            turn_id,
+            action_id: action.id,
+            reply,
+        })
+        .await;
+    assert!(response.await.unwrap().unwrap().is_none());
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+}
+
+/// Genuine recovered provider work must pass real off-actor preparation and
+/// claim with one mandatory timer, then retire both recovery identities. The
+/// configured fake provider has no credentials; preparation cannot do refresh
+/// HTTP, MCP discovery or accounting work, and inference is never executed.
+#[tokio::test(flavor = "current_thread")]
+async fn recovered_provider_offer_prepares_and_claims_once() {
+    let (mut actor, turn_id, primary) = pending_provider_at_capacity();
+    let root = std::env::temp_dir().join(format!(
+        "mez-recovered-provider-auth-{}",
+        crate::storage::token_usage::new_token_usage_event_id()
+    ));
+    assert!(!root.exists());
+    actor
+        .service
+        .set_auth_store(crate::security::auth::AuthStore::new(
+            crate::security::auth::AuthPaths::under_config_root(&root),
+        ));
+    let effects = actor.pending_provider_dispatch_side_effects().unwrap();
+    assert!(actor.admit_committed_side_effects(effects).is_err());
+    actor.drain_timer_side_effects(1).unwrap();
+    let offered = actor.drain_agent_provider_dispatch_side_effects(1).unwrap();
+    let RuntimeSideEffect::DispatchAgentProvider { agent_id, .. } =
+        offered.into_iter().next().unwrap()
+    else {
+        panic!("recovered provider offer");
+    };
+    actor.drain_timer_side_effects(64).unwrap();
+    let (reply, response) = tokio::sync::oneshot::channel();
+    actor
+        .handle_request(AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+            agent_id: agent_id.clone(),
+            turn_id: turn_id.clone(),
+            reply,
+        })
+        .await;
+    let work = response
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("actual recovered preparation");
+    assert!(work.mcp_plans.is_empty());
+    assert!(work.accounting_projects.is_none());
+    assert_eq!(
+        work.provider_auth_refresh_profiles,
+        vec!["runtime-batch".to_string()]
+    );
+    assert!(
+        work.auth_store
+            .as_ref()
+            .unwrap()
+            .read_metadata_for_provider("runtime-batch")
+            .unwrap()
+            .is_none()
+    );
+    let preparation = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+    assert!(preparation.provider_refresh_error.is_none());
+    assert!(!root.exists());
+    assert!(
+        actor
+            .offered_dispatch_sources
+            .contains(&SourceDispatch::Provider(turn_id.clone()))
+    );
+    assert!(
+        actor
+            .pending_provider_dispatch_side_effects()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(64)
+            .unwrap()
+            .is_empty()
+    );
+    let (reply, response) = tokio::sync::oneshot::channel();
+    actor
+        .handle_request(AsyncRuntimeRequest::ClaimConfiguredAgentProviderTask {
+            agent_id: agent_id.clone(),
+            turn_id: turn_id.clone(),
+            preparation,
+            reply,
+        })
+        .await;
+    let dispatch = response
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("actual recovered claim");
+    assert!(actor.service.agent_provider_claim_matches(
+        &agent_id,
+        &turn_id,
+        dispatch.claim_generation
+    ));
+    assert!(
+        !actor
+            .offered_dispatch_sources
+            .contains(&SourceDispatch::Provider(turn_id.clone()))
+    );
+    assert!(
+        !actor
+            .refused_dispatch_sources
+            .contains(&SourceDispatch::Provider(turn_id.clone()))
+    );
+    let timers = actor.drain_timer_side_effects(64).unwrap();
+    assert_eq!(timers.iter().filter(|effect| matches!(effect,
+        RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::ProviderClaim && key.owner_id == turn_id && key.generation == dispatch.claim_generation
+    )).count(), 1);
+    let (reply, response) = tokio::sync::oneshot::channel();
+    actor
+        .handle_request(AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+            agent_id,
+            turn_id: turn_id.clone(),
+            reply,
+        })
+        .await;
+    assert!(response.await.unwrap().unwrap().is_none());
+    assert!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(64)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!root.exists());
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+}
+
+/// Cancellation before recovery and after an offer both retire the original
+/// external source. An actual no-work claim cannot retain an obsolete offer or
+/// recreate dispatch after later capacity drains. No remote attempt executes.
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_external_recovery_retires_before_and_after_offer() {
+    for after_offer in [false, true] {
+        let (mut actor, turn_id, primary, action) = pending_external_at_capacity().await;
+        let effects = actor.pending_provider_dispatch_side_effects().unwrap();
+        assert!(actor.admit_committed_side_effects(effects).is_err());
+        if after_offer {
+            actor.drain_timer_side_effects(1).unwrap();
+            assert_eq!(
+                actor
+                    .drain_agent_provider_dispatch_side_effects(1)
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        actor
+            .service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
+        actor.drain_timer_side_effects(64).unwrap();
+        let (reply, response) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(AsyncRuntimeRequest::ClaimApprovedExternalAction {
+                turn_id: turn_id.clone(),
+                action_id: action.id.clone(),
+                reply,
+            })
+            .await;
+        assert!(response.await.unwrap().unwrap().is_none());
+        let source = SourceDispatch::External(turn_id, action.id);
+        assert!(!actor.offered_dispatch_sources.contains(&source));
+        assert!(!actor.refused_dispatch_sources.contains(&source));
+        assert!(
+            actor
+                .drain_agent_provider_dispatch_side_effects(64)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+/// Strict producer refusal cannot enroll external recovery or accelerate its
+/// ordinary pending scheduling when an unrelated lane frees capacity.
+#[tokio::test(flavor = "current_thread")]
+async fn strict_external_refusal_keeps_producer_scheduling() {
+    let (mut actor, _turn_id, primary, _action) = pending_external_at_capacity().await;
+    let effects = actor.pending_provider_dispatch_side_effects().unwrap();
+    assert!(actor.queue_runtime_side_effects(effects).is_err());
+    actor.drain_timer_side_effects(1).unwrap();
+    assert!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(64)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        actor
+            .pending_provider_dispatch_side_effects()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(actor.refused_dispatch_sources.is_empty());
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
 }

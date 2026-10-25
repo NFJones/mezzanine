@@ -920,10 +920,10 @@ pub struct AsyncRuntimeSessionActor {
     pub(super) side_effects: VecDeque<RuntimeSideEffect>,
     /// Typed, keyed side-effect work owned by exact worker lanes.
     pub(super) side_effect_routes: RuntimeSideEffectRouter,
-    /// Source-owned provider turns offered to a worker but not yet claimed.
-    pub(super) offered_provider_turns: std::collections::BTreeSet<String>,
-    /// Pending provider sources whose committed descriptors were refused.
-    pub(super) refused_provider_turns: std::collections::BTreeSet<String>,
+    /// Source-owned provider-lane descriptors offered but not yet claimed.
+    pub(super) offered_dispatch_sources: std::collections::BTreeSet<super::actor::SourceDispatch>,
+    /// Service sources whose committed provider-lane descriptors were refused.
+    pub(super) refused_dispatch_sources: std::collections::BTreeSet<super::actor::SourceDispatch>,
     /// Alternates provider versus deferred-service priority on real drain progress.
     pub(super) provider_refill_first: bool,
     /// Completion of the preceding off-actor receipt write, preserving actor enqueue order.

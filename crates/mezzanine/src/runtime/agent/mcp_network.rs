@@ -324,6 +324,24 @@ impl RuntimeSessionService {
             .collect()
     }
 
+    /// Reports unclaimed source custody independently of temporary readiness.
+    /// Persistence barriers and another running action can temporarily block a
+    /// still-owned source; cancellation/removal retires it instead.
+    pub(crate) fn approved_external_action_is_unclaimed(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+    ) -> bool {
+        let identity = (turn_id.to_string(), action_id.to_string());
+        self.agent
+            .pending_approved_external_actions
+            .contains_key(&identity)
+            && !self
+                .agent
+                .claimed_approved_external_actions
+                .contains_key(&identity)
+    }
+
     /// Returns turns whose approved external work has a queued or active owner.
     pub(crate) fn approved_external_action_progress_turn_ids(&self) -> Vec<String> {
         self.agent

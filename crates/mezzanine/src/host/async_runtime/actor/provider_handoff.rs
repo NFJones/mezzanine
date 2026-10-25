@@ -1,84 +1,107 @@
-//! Source-owned provider dispatch transfer under transient lane pressure.
+//! Source-owned provider-lane dispatch transfer under transient pressure.
 //!
-//! The service retains actual pending work; this module stores only turn IDs
-//! refused after commitment or already offered during recovery. An offer lasts
-//! through off-actor preparation until the actor processes its no-work result
-//! or claim. It is not permission to execute, a second work queue, or a reason
-//! to replay an applied event.
+//! The service retains pending provider and approved external work; this owner
+//! retains only refused/offered identities, never payloads or execution rights.
+//! Eligibility is separate from ownership: temporarily blocked external work
+//! must not lose recovery metadata while waiting for a persistence barrier or
+//! another action. Normal poll/retry scheduling and strict producer admission
+//! remain unchanged. Offers last until actual preparation/claim settlement.
 
-use super::{AgentId, AsyncRuntimeSessionActor, MezError, Result, RuntimeSideEffect};
+use super::{AsyncRuntimeSessionActor, Result, RuntimeSideEffect};
+use crate::runtime::RuntimeSessionService;
+
+/// Existing service source identity, not a claim or permission to execute.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SourceDispatch {
+    /// One pending provider turn; its claim captures the actual generation.
+    Provider(String),
+    /// One approved action; its claim allocates the actual external attempt.
+    External(String, String),
+}
+
+impl SourceDispatch {
+    /// Extracts only supported source-owned descriptor families.
+    fn from_effect(effect: &RuntimeSideEffect) -> Option<Self> {
+        match effect {
+            RuntimeSideEffect::DispatchAgentProvider { turn_id, .. } => {
+                Some(Self::Provider(turn_id.clone()))
+            }
+            RuntimeSideEffect::DispatchApprovedExternalAction { turn_id, action_id } => {
+                Some(Self::External(turn_id.clone(), action_id.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Tests unclaimed source custody independently of temporary readiness.
+    fn is_owned(&self, service: &RuntimeSessionService) -> bool {
+        match self {
+            Self::Provider(turn_id) => service.agent_provider_task_is_pending(turn_id),
+            Self::External(turn_id, action_id) => {
+                service.approved_external_action_is_unclaimed(turn_id, action_id)
+            }
+        }
+    }
+}
 
 impl AsyncRuntimeSessionActor {
-    /// Retains only source identities for refused committed descriptors. Normal
-    /// pending tasks remain governed by their existing poll/retry scheduling.
+    /// Retains identities only after committed admission refuses descriptors.
+    /// Ordinary pending tasks keep their established poll/retry scheduling.
     pub(super) fn record_refused_provider_sources(&mut self, effects: &[RuntimeSideEffect]) {
-        self.refused_provider_turns
-            .retain(|turn_id| self.service.agent_provider_task_is_pending(turn_id));
-        for effect in effects {
-            if let RuntimeSideEffect::DispatchAgentProvider { turn_id, .. } = effect
-                && self.service.agent_provider_task_is_pending(turn_id)
-            {
-                self.refused_provider_turns.insert(turn_id.clone());
+        self.refused_dispatch_sources
+            .retain(|source| source.is_owned(&self.service));
+        for source in effects.iter().filter_map(SourceDispatch::from_effect) {
+            if source.is_owned(&self.service) {
+                self.refused_dispatch_sources.insert(source);
             }
         }
     }
 
-    /// Returns one recovered offer to its current source after preparation or
-    /// claim settles. Still-pending work remains eligible for later recovery;
-    /// a claimed, cancelled, or retired source cannot acquire a new descriptor.
+    /// Releases a provider offer at its real preparation/claim boundary.
     pub(super) fn settle_provider_offer(&mut self, turn_id: &str) {
-        if self.offered_provider_turns.remove(turn_id)
-            && self.service.agent_provider_task_is_pending(turn_id)
-        {
-            self.refused_provider_turns.insert(turn_id.to_string());
+        self.settle_source_offer(SourceDispatch::Provider(turn_id.to_string()));
+    }
+
+    /// Returns still-owned work to its source; successful claims remain excluded
+    /// by the existing service readiness checks, not by guessed worker outcomes.
+    pub(super) fn settle_source_offer(&mut self, source: SourceDispatch) {
+        if self.offered_dispatch_sources.remove(&source) && source.is_owned(&self.service) {
+            self.refused_dispatch_sources.insert(source);
         }
     }
 
-    /// Fences drained provider descriptors before any drain-triggered refill.
-    /// Only genuine service-owned tasks acquire metadata; arbitrary adapter
-    /// descriptors cannot grow the fence independently of active task owners.
+    /// Fences recovered descriptors before drain-triggered refill can see their
+    /// still-pending service sources. Arbitrary adapter records cannot grow it.
     pub(super) fn record_provider_offers(&mut self, effects: &[RuntimeSideEffect]) {
-        for effect in effects {
-            if let RuntimeSideEffect::DispatchAgentProvider { turn_id, .. } = effect
-                && self.refused_provider_turns.remove(turn_id)
-                && self.service.agent_provider_task_is_owned(turn_id)
-            {
-                self.offered_provider_turns.insert(turn_id.clone());
+        for source in effects.iter().filter_map(SourceDispatch::from_effect) {
+            if self.refused_dispatch_sources.remove(&source) && source.is_owned(&self.service) {
+                self.offered_dispatch_sources.insert(source);
             }
         }
     }
 
-    /// Reprojects only a fitting prefix of genuinely pending provider tasks.
-    /// The serialized actor keeps capacity stable between selection and enqueue.
-    /// Queued/offered descriptors are excluded; task payloads never leave their
-    /// existing service owner until the ordinary validated claim succeeds.
+    /// Selects a fitting prefix using ordinary service eligibility/deduplication.
+    /// Only genuinely refused sources participate; no work payload is removed
+    /// from the service and no action/provider/event is replayed.
     pub(super) fn queue_fitting_provider_sources(&mut self) -> Result<usize> {
-        self.offered_provider_turns
-            .retain(|turn_id| self.service.agent_provider_task_is_owned(turn_id));
-        self.refused_provider_turns
-            .retain(|turn_id| self.service.agent_provider_task_is_pending(turn_id));
-        if self.refused_provider_turns.is_empty() {
+        self.offered_dispatch_sources
+            .retain(|source| source.is_owned(&self.service));
+        self.refused_dispatch_sources
+            .retain(|source| source.is_owned(&self.service));
+        if self.refused_dispatch_sources.is_empty()
+            || self.available_committed_side_effect_capacity() == 0
+        {
             return Ok(0);
         }
-        let limit = self.available_committed_side_effect_capacity();
-        let mut effects = Vec::new();
-        for task in self.service.pending_agent_provider_tasks() {
-            if effects.len() == limit {
-                break;
-            }
-            if !self.refused_provider_turns.contains(&task.turn_id)
-                || self.provider_dispatch_is_already_queued(&task.turn_id)
-            {
-                continue;
-            }
-            let agent_id = AgentId::opaque(task.agent_id).ok_or_else(|| {
-                MezError::invalid_state("pending provider source has an invalid agent identity")
-            })?;
-            effects.push(RuntimeSideEffect::DispatchAgentProvider {
-                agent_id,
-                turn_id: task.turn_id,
-            });
-        }
+        let effects: Vec<_> = self
+            .pending_provider_dispatch_side_effects()?
+            .into_iter()
+            .filter(|effect| {
+                SourceDispatch::from_effect(effect)
+                    .is_some_and(|source| self.refused_dispatch_sources.contains(&source))
+            })
+            .take(self.available_committed_side_effect_capacity())
+            .collect();
         let count = effects.len();
         if count > 0 {
             self.admit_committed_side_effects(effects)?;
