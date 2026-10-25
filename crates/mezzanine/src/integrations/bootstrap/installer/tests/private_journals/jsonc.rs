@@ -227,7 +227,9 @@ fn bootstrap_jsonc_genuine_v6_and_invalid_authored_state_remain_strict() {
 /// Historical layout enumeration must not admit receipt-selected filenames,
 /// arbitrary pointers/values, or unknown helper source. Even a syntactically
 /// valid receipt containing such a manifest rejects both install and uninstall
-/// before changing the vendor or private state trees.
+/// before changing the vendor or private state trees. The payload-free conflict
+/// must explain preservation/manual migration without echoing an unknown helper
+/// path or inviting receipt edits that would bypass compiled ownership.
 #[test]
 fn bootstrap_jsonc_historical_layout_forgery_is_non_destructive() {
     use crate::integrations::bootstrap::{opencode_artifact, reconciliation::Artifact};
@@ -281,6 +283,11 @@ fn bootstrap_jsonc_historical_layout_forgery_is_non_destructive() {
                     .to_string()
                     .contains("not a recognized compiled manifest revision")
             );
+            let diagnostic = error.to_string();
+            assert!(diagnostic.contains("no publication"));
+            assert!(diagnostic.contains("preserve existing files and receipts"));
+            assert!(diagnostic.contains("manual migration"));
+            assert!(!diagnostic.contains("/unknown/mez"));
             assert_eq!(tree_snapshot(&fixture.workspace), before);
         }
     }

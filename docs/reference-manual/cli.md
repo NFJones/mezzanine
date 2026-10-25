@@ -224,9 +224,22 @@ PATH, vendor payload or launcher fallback. Literal punctuation and Unicode are
 preserved as JSON data. This is bounded deployment evidence, not safe adoption of
 unknown relocated receipt references or proof of vendor activation.
 
-Pi/OpenCode/Codex artifacts and reducers are retained, but ordinary-command
-automatic enrollment, durable source continuity and preservation/upgrade recovery
-remain implementation work; bare install and write-free dry-run are available.
+Bare install and write-free dry-run are available. Recognized compiled predecessors
+can refresh through the shared ownership, preservation and interrupted-publication
+recovery mechanisms. Ordinary-command enrollment coverage and durable source
+continuity remain separate vendor/runtime work, not proof supplied by installation.
+
+**Unsupported legacy receipts:** an unrecognized compiled revision or old helper
+reference is a non-destructive conflict, not permission to overwrite the installation.
+Keep the existing vendor files and private receipts/journals intact. `--check` and
+`--dry-run` may report the same conflict; they do not repair an unknown identity.
+Use a trusted installer that recognizes the original receipt for its supported
+maintenance operation, or review the legacy installation for manual migration.
+Preserve authored hooks/settings and remove only entries whose ownership has been
+independently established. Do not edit receipt hashes/helper paths, discard journals,
+or delete an entire shared configuration merely to make the current installer accept
+it. Rebootstrap from a different executable pathname does not authenticate the old
+helper, and automatic migration of such unknown references remains unsupported.
 Installation is not proof that
 callbacks are loaded, enrolled or accounted; current descriptor-gated artifacts
 may remain inert under ordinary invocation until migration is complete. Vendor

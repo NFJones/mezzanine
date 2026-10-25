@@ -356,7 +356,7 @@ fn plan_with_publisher(
             && !super::compiled_variant_matches(&receipt.manifest, manifest)
         {
             return Err(MezError::conflict(
-                "bootstrap receipt is not a recognized compiled manifest revision",
+                "bootstrap receipt is not a recognized compiled manifest revision; no publication; preserve existing files and receipts; use a trusted installer that recognizes this receipt, or review the legacy installation for manual migration",
             ));
         }
     }

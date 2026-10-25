@@ -1040,6 +1040,11 @@ compiled historical targets and qualified previous manifests. Recovery MUST fini
 the original operation using that target's artifacts and receipt, not reinterpret
 historical intent with current bytes. Target/version text and journal paths MUST
 NOT add authority; altered targets, effects or receipts MUST reject non-destructively.
+An otherwise valid receipt outside compiled history MUST report that no publication
+occurred and advise preserving existing files/receipts for a trusted recognizing
+installer or reviewed manual migration. The diagnostic MUST NOT echo receipt-selected
+helper paths or suggest editing ownership records to bypass qualification. Executable
+relocation alone MUST NOT authorize adopting an unknown prior helper reference.
 Normal install/uninstall MUST virtually finish recognized pending intent before
 planning requested reconciliation. Check/dry-run MUST report recovery_pending and
 the ordered deduplicated union of recovery/requested changed_paths without writes.
