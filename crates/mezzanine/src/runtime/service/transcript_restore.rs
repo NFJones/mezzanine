@@ -1517,7 +1517,14 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Reports accepted transient source left behind by a fitting transfer.
+    pub(crate) fn deferred_service_dispatches_pending(&self) -> bool {
+        self.persistence.deferred_transient_effects_pending()
+            || self.presentation.deferred_dispatches_pending()
+    }
+
     /// Drains all queued external work through one transport-neutral transition.
+    #[cfg(test)]
     pub(crate) fn drain_deferred_effects_transition(&mut self) -> RuntimeTransition {
         self.drain_deferred_effects_transition_up_to(usize::MAX)
     }

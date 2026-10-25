@@ -471,9 +471,18 @@ impl RuntimeSessionService {
         self.presentation.pending_record_browser_refreshes.remove(0);
     }
 
-    /// Drains exact clients whose latest divider action must rearm debounce.
-    pub(crate) fn take_divider_resize_debounce_requests(&mut self) -> Vec<mez_core::ids::ClientId> {
-        self.presentation.take_divider_resize_debounce_requests()
+    /// Borrows the next exact divider intent until actor admission succeeds.
+    pub(crate) fn next_divider_resize_debounce_request(&self) -> Option<mez_core::ids::ClientId> {
+        self.presentation.next_divider_resize_debounce_request()
+    }
+
+    /// Acknowledges the original intent after its timer effects transfer.
+    pub(crate) fn retire_divider_resize_debounce_request(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+    ) {
+        self.presentation
+            .retire_divider_resize_debounce_request(client_id);
     }
 
     /// Plans and applies raw primary-client input as a runtime transition.

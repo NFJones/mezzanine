@@ -67,7 +67,16 @@ impl AsyncRuntimeSessionActor {
             for offset in 0..4 {
                 match (self.source_refill_cursor + offset) % 4 {
                     0 => {
+                        let previous_id = self.side_effect_routes.next_transcript_claim_id();
                         self.queue_fitting_deferred_service_side_effects()?;
+                        self.start_transcript_receipt_admission(
+                            previous_id,
+                            super::TranscriptReceiptReply::Startup,
+                        );
+                        // The original intent remains owned if configuration or
+                        // capacity refuses this optional refill. Never replace
+                        // the already-taken mandatory drain with that failure.
+                        let _ = self.queue_fitting_divider_resize_debounce();
                     }
                     1 => {
                         self.queue_fitting_provider_sources()?;

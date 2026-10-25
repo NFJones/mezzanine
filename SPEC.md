@@ -12003,6 +12003,23 @@ producers. Stale callbacks MUST NOT enrol replacement work. Transfer failure
 MUST attempt a bounded content-free diagnostic; diagnostic persistence remains
 best effort and does not replace exact retained source custody. Optional render
 admission failure MUST NOT prevent dispatch transfer or imply inference success.
+Ordinary actor requests MUST likewise transfer already service-owned effects
+through fitting committed admission rather than take them into a fallible
+strict producer batch. Unadmitted transient sources MUST remain at their
+original owners. Durable append sources transfer independently and MUST enter
+the existing receipt admission protocol before a successful producer reply;
+drain-only recovery MUST enroll newly transferred append receipts as well.
+When accepted transient sources remain deferred, the post-service refusal MUST
+identify consumed work and MUST NOT authorize resubmission of the request.
+An occupied reserve alone MUST NOT reject an otherwise empty service transfer.
+New effects returned by a request transition retain strict producer admission.
+Already accepted divider debounce intents MUST transfer bounded whole
+cancel/schedule pairs through the same finite committed reserve. A refused pair
+MUST retain its original intent, old timer and generation; only admission of the
+complete pair may advance the generation and retire that intent. Real lane
+drain progress MUST retry these retained sources without another command,
+input, provider request or action replay. Optional refill failure MUST NOT
+discard an already-taken mandatory drain batch.
 Remember dispatch and claim MUST carry the existing immutable observation ID.
 Recovery MUST retain only that exact unclaimed request in its original current
 conversation; a stale descriptor MUST NOT claim or suppress a replacement in

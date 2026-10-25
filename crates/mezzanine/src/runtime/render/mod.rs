@@ -2463,13 +2463,21 @@ impl RuntimePresentationComponent {
             .insert(client_id);
     }
 
-    /// Drains coalesced exact-client divider debounce requests for the actor.
-    pub(crate) fn take_divider_resize_debounce_requests(&mut self) -> Vec<mez_core::ids::ClientId> {
-        let mut client_ids = std::mem::take(&mut self.pending_divider_resize_debounce_clients)
-            .into_iter()
-            .collect::<Vec<_>>();
-        client_ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-        client_ids
+    /// Selects one deterministic divider owner without consuming its intent.
+    pub(crate) fn next_divider_resize_debounce_request(&self) -> Option<mez_core::ids::ClientId> {
+        self.pending_divider_resize_debounce_clients
+            .iter()
+            .min_by(|left, right| left.as_str().cmp(right.as_str()))
+            .cloned()
+    }
+
+    /// Retires only the exact intent whose complete timer batch was admitted.
+    pub(crate) fn retire_divider_resize_debounce_request(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+    ) {
+        self.pending_divider_resize_debounce_clients
+            .remove(client_id);
     }
 
     /// Clears every in-progress or released pane-divider resize operation.
@@ -2641,6 +2649,18 @@ impl RuntimePresentationComponent {
         &mut self,
     ) -> Vec<RuntimeSideEffect> {
         self.take_agent_presentation_resize_dispatch_effects_up_to(usize::MAX)
+    }
+
+    /// Reports accepted presentation/clipboard/status dispatches still at source.
+    /// Pane-status preparation is a level-triggered due cue, not accepted work:
+    /// its due bit can remain set after its descriptor is already offered.
+    pub(crate) fn deferred_dispatches_pending(&self) -> bool {
+        !self.pending_agent_presentation_resize_dispatches.is_empty()
+            || !self.copy.pending_host_clipboard_reads.is_empty()
+            || self
+                .window_status_pill_cache
+                .borrow()
+                .refresh_plans_pending()
     }
 
     /// Transfers fitting resize dispatches while retaining every unadmitted token.

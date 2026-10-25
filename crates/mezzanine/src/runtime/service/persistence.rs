@@ -72,6 +72,12 @@ impl RuntimeSessionService {
         self.persistence.queue_transcript(effect);
     }
 
+    /// Seeds an accepted divider intent without synthetic terminal input.
+    #[cfg(test)]
+    pub(crate) fn queue_divider_debounce_for_tests(&mut self, client_id: mez_core::ids::ClientId) {
+        self.presentation.request_divider_resize_debounce(client_id);
+    }
+
     /// Assigns durable provider token accounting to the external persistence adapter.
     pub(crate) fn use_token_usage_effect_adapter(&mut self) {
         self.persistence.enable_token_usage_adapter();

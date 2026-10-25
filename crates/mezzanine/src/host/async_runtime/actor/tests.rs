@@ -22,6 +22,7 @@ mod completion_source_handoff;
 mod provider_retry_handoff;
 mod provider_source_handoff;
 mod remember_source_handoff;
+mod request_custody;
 mod side_effect_capacity_overshoot;
 mod steering_display_retry;
 mod synchronized_output_handoff;

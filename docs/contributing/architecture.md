@@ -102,6 +102,24 @@ clones of one store handle, conversation deletion and cache pruning keep their
 preexisting synchronous latency, and filesystem latency itself is never
 described as bounded.
 
+### Request-side effect custody
+
+Actor requests share the fitting committed-source transfer used by accepted
+completion paths. Capacity is checked before extraction: transient input,
+resize, hook, clipboard and status dispatches retain their original service
+owners until they fit. Durable writes transfer independently; actual append
+receipts still gate producer replies, including appends recovered during a
+later lane drain. A consumed pressure refusal is not permission to repeat the
+request. Empty service transfers remain usable under unrelated queue pressure,
+and newly produced transition effects retain strict admission.
+
+Divider debounce intent is also source-owned. The actor admits each complete
+old-timer cancellation/new-generation schedule before retiring its exact client
+intent. The bounded refill quantum and existing finite committed reserve apply;
+no recovery queue, capacity inflation or input replay is introduced. Real drain
+progress retries retained sources without replacing the mandatory drained batch
+with an optional refill failure.
+
 ## Ownership and tests
 
 Follow the closest owner rather than forwarding contracts through

@@ -2707,12 +2707,13 @@ impl AsyncRuntimeSessionActor {
                     .service
                     .complete_agent_prompt_provider_info_refresh(refresh, outcome)
                     .and_then(|()| {
-                        let mut side_effects = self.deferred_service_side_effects_from_service();
-                        side_effects.push(crate::runtime::RuntimeSideEffect::RenderClient {
-                            client_id: primary_client_id,
-                            reason: crate::runtime::RenderInvalidationReason::AgentPrompt,
-                        });
-                        self.queue_runtime_side_effects(side_effects)
+                        self.queue_deferred_pane_io_side_effects_from_service()?;
+                        self.queue_runtime_side_effects(vec![
+                            crate::runtime::RuntimeSideEffect::RenderClient {
+                                client_id: primary_client_id,
+                                reason: crate::runtime::RenderInvalidationReason::AgentPrompt,
+                            },
+                        ])
                     });
                 if result.is_ok() {
                     self.notify_event_delivery();

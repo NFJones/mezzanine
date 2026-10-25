@@ -1335,16 +1335,24 @@ impl AsyncRuntimeSessionActor {
         Ok(count)
     }
 
-    /// Runs the queue deferred pane io side effects from service operation for this subsystem.
+    /// Transfers accepted source without consuming work that cannot be admitted.
     ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// New request-transition effects remain strict producer work. Refusal here
+    /// follows service mutation and explicitly forbids resubmitting that request.
     pub(super) fn queue_deferred_pane_io_side_effects_from_service(&mut self) -> Result<usize> {
-        let mut side_effects = self.deferred_service_side_effects_from_service();
-        side_effects.extend(self.pending_divider_resize_debounce_timer_side_effects()?);
-        let count = side_effects.len();
-        self.queue_runtime_side_effects(side_effects)?;
+        let count = self.queue_fitting_deferred_service_side_effects()?;
+        let count = count.saturating_add(self.queue_fitting_divider_resize_debounce()?);
+        if self.service.deferred_service_dispatches_pending()
+            || self
+                .service
+                .next_divider_resize_debounce_request()
+                .is_some()
+        {
+            return Err(MezError::invalid_state(format!(
+                "{}: accepted service source remains deferred consumed=1",
+                super::queue::SIDE_EFFECT_QUEUE_FULL_PREFIX
+            )));
+        }
         Ok(count)
     }
 
@@ -1365,18 +1373,6 @@ impl AsyncRuntimeSessionActor {
             self.admit_committed_side_effects(effects)?;
         }
         Ok(count)
-    }
-
-    /// Runs the deferred service side effects from service operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn deferred_service_side_effects_from_service(&mut self) -> Vec<RuntimeSideEffect> {
-        self.dispatch_bookkeeping_candidates();
-        self.service
-            .drain_deferred_effects_transition()
-            .side_effects
     }
 
     /// Runs the deferred pane io side effects from service operation for this subsystem.

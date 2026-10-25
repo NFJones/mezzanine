@@ -880,16 +880,55 @@ impl AsyncRuntimeSessionActor {
         Ok(side_effects)
     }
 
-    /// Drains coalesced divider intents into actor-owned timer effects.
-    pub(super) fn pending_divider_resize_debounce_timer_side_effects(
-        &mut self,
-    ) -> Result<Vec<RuntimeSideEffect>> {
-        let client_ids = self.service.take_divider_resize_debounce_requests();
-        let mut side_effects = Vec::new();
-        for client_id in client_ids {
-            side_effects.extend(self.resize_debounce_timer_side_effects(&client_id)?);
+    /// Transfers a bounded prefix of whole accepted divider timer batches.
+    ///
+    /// Configuration, generation and capacity are checked before source retirement.
+    /// One old cancellation and its replacement schedule are admitted together;
+    /// refusal leaves intent, timer tracking and generation unchanged.
+    pub(super) fn queue_fitting_divider_resize_debounce(&mut self) -> Result<usize> {
+        let mut admitted = 0usize;
+        while admitted < 64 {
+            let Some(client_id) = self.service.next_divider_resize_debounce_request() else {
+                break;
+            };
+            let previous = self.timers.resize_debounce.get(client_id.as_str()).cloned();
+            let required = 1 + usize::from(previous.is_some());
+            if required > self.available_committed_side_effect_capacity()
+                || admitted.saturating_add(required) > 64
+            {
+                break;
+            }
+            let generation = self
+                .timers
+                .next_resize_debounce_generation
+                .checked_add(1)
+                .ok_or_else(|| MezError::invalid_state("divider debounce generation exhausted"))?;
+            let delay_ms = self
+                .service
+                .terminal_client_loop_config(
+                    crate::host::terminal::TerminalClientLoopConfig::default(),
+                )?
+                .resize_debounce_ms
+                .max(1);
+            let mut effects = previous
+                .into_iter()
+                .map(|key| RuntimeSideEffect::CancelTimer { key })
+                .collect::<Vec<_>>();
+            effects.push(RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(
+                    RuntimeTimerKind::ResizeDebounce,
+                    client_id.as_str(),
+                    generation,
+                ),
+                delay_ms,
+            });
+            self.admit_committed_side_effects(effects)?;
+            self.timers.next_resize_debounce_generation = generation;
+            self.service
+                .retire_divider_resize_debounce_request(&client_id);
+            admitted = admitted.saturating_add(required);
         }
-        Ok(side_effects)
+        Ok(admitted)
     }
 
     /// Runs the ensure client render timers operation for this subsystem.

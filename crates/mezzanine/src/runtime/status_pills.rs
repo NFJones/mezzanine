@@ -248,6 +248,11 @@ impl RuntimeStatusPillCache {
         self.drain_refresh_plans_up_to(usize::MAX)
     }
 
+    /// Reports unoffered refresh source without consuming its generation.
+    pub(super) fn refresh_plans_pending(&self) -> bool {
+        !self.pending_refreshes.is_empty()
+    }
+
     /// Transfers a fitting prefix without losing pending-generation ownership.
     pub(super) fn drain_refresh_plans_up_to(
         &mut self,

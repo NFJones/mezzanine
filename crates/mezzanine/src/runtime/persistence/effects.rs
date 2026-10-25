@@ -3,6 +3,14 @@
 use super::{RuntimePersistenceComponent, RuntimeSideEffect, TerminalSize};
 
 impl RuntimePersistenceComponent {
+    /// Reports accepted transient source without extracting or cloning payloads.
+    pub(crate) fn deferred_transient_effects_pending(&self) -> bool {
+        !self.queued_pane_input_effects.is_empty()
+            || !self.queued_pane_resize_effects.is_empty()
+            || !self.queued_pane_termination_effects.is_empty()
+            || !self.queued_program_hook_effects.is_empty()
+    }
+
     /// Cancels one queued or active shell delivery for an exact process.
     pub(crate) fn queue_shell_input_cancellation(
         &mut self,
