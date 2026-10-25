@@ -72,13 +72,15 @@ impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for RetiredReplySpy
 /// Installed revision-8 client and accounting sibling run as an ordinary Node
 /// descendant, obtain genuine native request readiness, publish normalized
 /// expense with typed durable ACK and retire without primary/observer rights.
+/// A same-run epoch-two successor reopens the original readiness and tests
+/// ledger replay/conflict with fresh local tickets, not predecessor ACK caches.
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit installed Node path and built mez helper required; offline only"]
 async fn external_enrollment_installed_request_accounting_has_durable_native_ack() {
     qualify_installed_node_entry(
         "request-accounting-ordinary-fixture.mjs",
         "persistent_client.mjs",
-        1,
+        2,
         1,
         false,
         None,
@@ -384,7 +386,8 @@ async fn qualify_installed_node_entry_result(
     assert!(install().unwrap().changed_paths().is_empty());
     let mut service = RuntimeServiceFixture::new().control_socket(&path).build();
     let pi_usage = script_name == "pi-usage-ordinary-fixture.mjs";
-    let request_accounting = script_name == "request-accounting-ordinary-fixture.mjs" || pi_usage;
+    let request_handoff = script_name == "request-accounting-ordinary-fixture.mjs";
+    let request_accounting = request_handoff || pi_usage;
     let pi_loss = script_name == "pi-loss-ordinary-fixture.mjs";
     let pi_retired = script_name == "pi-retired-source-ordinary-fixture.mjs";
     let retired_rejected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -624,7 +627,15 @@ async fn qualify_installed_node_entry_result(
     }
     assert_eq!(
         binding.enrollment.as_ref().unwrap().epoch,
-        if typed_pi || opencode || helper_callback || request_accounting || pi_loss || pi_retired {
+        if request_handoff {
+            2
+        } else if typed_pi
+            || opencode
+            || helper_callback
+            || request_accounting
+            || pi_loss
+            || pi_retired
+        {
             1
         } else {
             2

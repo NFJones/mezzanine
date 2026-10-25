@@ -8,8 +8,12 @@ const { createPersistentTelemetryClient } = await import(pathToFileURL(process.a
 const { peerHelper } = await import(pathToFileURL(process.argv[3]).href);
 const client = createPersistentTelemetryClient({ harness: "pi", session: "session-a", version: "fixture",
   displayName: "ordinary request fixture", instance: "request-instance-a", peerHelper });
+let successor;
 try {
   assert.equal(await client.start(), true);
+  const originalRun = client.status().run;
+  assert(Number.isSafeInteger(originalRun) && originalRun > 0);
+  assert.equal(client.status().epoch, 1);
   assert.equal((await client.presentation("running")).delivered, true);
   const ticket = await client.beginRequest("a".repeat(64));
   assert(ticket, "native original request marker unavailable");
@@ -18,9 +22,28 @@ try {
   const ack = await client.endRequest(ticket, report);
   assert.equal(ack.delivered, true); assert.equal(ack.durable, true); assert.equal(ack.applied, true);
   assert.equal((await client.endRequest(ticket, report)).durable, true);
+  successor = client.successor("request-instance-b");
+  assert.equal(await successor.start(), true, "accounting observer handoff unavailable");
+  assert.equal(successor.status().run, originalRun);
+  assert.equal(successor.status().epoch, 2);
+  client.detach();
+  assert.equal((await successor.endRequest(ticket, report)).durable, false,
+    "tickets must remain client-instance-local");
+  const restored = await successor.beginRequest("a".repeat(64));
+  assert(restored, "original request readiness unavailable after observer replacement");
+  for (const field of ["request_id", "admitted_at", "source_witness", "origin"]) {
+    assert.equal(restored[field] === ticket[field], true, `original ${field} must survive handoff`);
+  }
+  const replay = await successor.endRequest(restored, report);
+  assert.equal(replay.delivered, true); assert.equal(replay.durable, true);
+  assert.equal(replay.applied, false, "fresh successor replay must not recharge expense");
   const changed = { ...report, counters: { ...report.counters, input_tokens: 11 } };
-  assert.equal((await client.endRequest(ticket, changed)).durable, false);
-  assert.equal(client.status().usage, "request-bound-external-reported");
-  assert.equal((await client.presentation("complete")).delivered, true);
-  assert.equal((await client.end()).delivered, true);
-} finally { client.detach(); clearTimeout(lifetime); }
+  const conflictTicket = await successor.beginRequest("a".repeat(64));
+  assert(conflictTicket, "fresh conflict ticket unavailable");
+  assert.equal((await successor.endRequest(conflictTicket, changed)).durable, false,
+    "ledger must reject changed finalized counters beyond client-local cache");
+  successor.abandonRequest(conflictTicket);
+  assert.equal(successor.status().usage, "request-bound-external-reported");
+  assert.equal((await successor.presentation("complete")).delivered, true);
+  assert.equal((await successor.end()).delivered, true);
+} finally { client.detach(); successor?.detach(); clearTimeout(lifetime); }

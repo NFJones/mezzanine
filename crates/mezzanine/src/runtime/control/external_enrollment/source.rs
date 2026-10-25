@@ -4,8 +4,8 @@
 //! The lookup follows genuine producer/ancestry observation but grants no
 //! authority: actor commit still revalidates retained native evidence/deadline.
 //! Ledger or boot-evidence failure does not break observational lifecycle and
-//! cannot enable usage. Ordinary usage stays disabled until ordered report and
-//! baseline continuity contracts are wired separately.
+//! cannot enable usage. Request-bound usage and baseline continuity are
+//! independently qualified; finding a namespace alone never enables reporting.
 
 use super::*;
 use crate::storage::token_usage::{ExternalSourceKey, NativeSourceKind, NativeSourceWitness};
