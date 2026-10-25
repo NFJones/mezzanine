@@ -2878,6 +2878,12 @@ impl AsyncRuntimeSessionActor {
                     self.queue_shell_transaction_timer_side_effects()?;
                     Ok(work)
                 });
+                // A no-work/failed preparation returns the descriptor to its
+                // original source. A real preparation keeps its offer fenced
+                // through the later actor-validated claim request.
+                if !matches!(&result, Ok(Some(_))) {
+                    self.settle_provider_offer(&turn_id);
+                }
                 let should_notify = result.is_ok();
                 let _ = reply.send(result);
                 if should_notify {
@@ -2975,6 +2981,9 @@ impl AsyncRuntimeSessionActor {
                         Ok(None)
                     }
                 });
+                // Claim settlement either moved work to the existing worker
+                // owner or returned no work. Neither retains an unclaimed offer.
+                self.settle_provider_offer(&turn_id);
                 let should_notify = result.is_ok();
                 let _ = reply.send(result);
                 if should_notify {
@@ -2991,6 +3000,7 @@ impl AsyncRuntimeSessionActor {
                 let result = self
                     .service
                     .record_claimed_agent_provider_generation_for_tests(&turn_id, generation);
+                self.settle_provider_offer(&turn_id);
                 let _ = reply.send(result);
                 false
             }

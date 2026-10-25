@@ -11941,6 +11941,14 @@ remains all-or-error and MUST NOT gain this committed-only partial transfer.
 This is source-retained dispatch custody, not a second outside-lane holding queue
 for raw effects whose event has already surrendered ownership. No event, action,
 input or provider work may be replayed to recover dispatch.
+For a refused committed provider descriptor whose pending task is still owned by
+the service, the actor MUST retain only its source identity and transfer a fitting
+descriptor after real lane-drain progress. Recovery MUST NOT accelerate ordinary
+provider polls or retry timers. A recovered descriptor offered to a worker MUST
+remain fenced through off-actor preparation until no-work preparation or claim
+settlement returns ownership; draining it alone is not a claim. Cancelled sources
+MUST NOT be regenerated. Recovery and other deferred-service transfers alternate
+first access to newly available capacity; the finite reserve is unchanged.
 Once an event batch has applied its events, the side effects it produced MUST NOT
 be destroyed by a capacity refusal: the actor MUST admit them to their ordinary
 lanes within a bounded reserve above the configured capacity, in the same

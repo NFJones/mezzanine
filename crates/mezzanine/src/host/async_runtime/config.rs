@@ -920,6 +920,12 @@ pub struct AsyncRuntimeSessionActor {
     pub(super) side_effects: VecDeque<RuntimeSideEffect>,
     /// Typed, keyed side-effect work owned by exact worker lanes.
     pub(super) side_effect_routes: RuntimeSideEffectRouter,
+    /// Source-owned provider turns offered to a worker but not yet claimed.
+    pub(super) offered_provider_turns: std::collections::BTreeSet<String>,
+    /// Pending provider sources whose committed descriptors were refused.
+    pub(super) refused_provider_turns: std::collections::BTreeSet<String>,
+    /// Alternates provider versus deferred-service priority on real drain progress.
+    pub(super) provider_refill_first: bool,
     /// Completion of the preceding off-actor receipt write, preserving actor enqueue order.
     pub(super) transcript_receipt_predecessor: Option<tokio::sync::oneshot::Receiver<()>>,
     /// Start of the current continuously non-empty side-effect queue generation.

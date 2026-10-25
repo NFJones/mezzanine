@@ -1287,15 +1287,16 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn provider_dispatch_is_already_queued(&self, turn_id: &str) -> bool {
-        self.side_effect_routes.any_provider(|effect| {
-            matches!(
-                effect,
-                RuntimeSideEffect::DispatchAgentProvider {
-                    turn_id: queued_turn_id,
-                    ..
-                } if queued_turn_id == turn_id
-            )
-        })
+        self.offered_provider_turns.contains(turn_id)
+            || self.side_effect_routes.any_provider(|effect| {
+                matches!(
+                    effect,
+                    RuntimeSideEffect::DispatchAgentProvider {
+                        turn_id: queued_turn_id,
+                        ..
+                    } if queued_turn_id == turn_id
+                )
+            })
     }
 
     /// Returns whether one approved external action already has a queued dispatch.

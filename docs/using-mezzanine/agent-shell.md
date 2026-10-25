@@ -292,6 +292,12 @@ transient reserve. Excess dispatches stay at their original service owners and
 transfer as workers drain capacity, without another user event or action replay.
 Transfer rotates across dispatch families; durable writes do not wait for a
 transient slot and keep their original receipt identities.
+Refused committed provider dispatches can also recover from their original
+pending tasks when a lane drains. Recovery does not accelerate normal polls or
+retry timers. A recovered descriptor handed to a worker remains fenced while
+that worker prepares and claims it; merely draining the descriptor cannot cause
+a duplicate offer. Cancelled tasks are not regenerated, and provider recovery
+alternates capacity priority with other deferred service transfers.
 If an already-committed mixed effect batch exceeds the transient reserve, its
 durable records still enter persistence in order. The remaining refusal is not
 success and cannot be retried by replaying that batch. A refused raw committed

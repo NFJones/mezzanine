@@ -262,6 +262,7 @@ impl AsyncRuntimeSessionActor {
                 // The failed attempt leaves original unadmitted records here.
                 // Only committed callers may split this vector: producers keep
                 // their all-or-error contract, including their durable work.
+                self.record_refused_provider_sources(&side_effects);
                 side_effects.retain(runtime_side_effect_is_durable_persistence);
                 if !side_effects.is_empty() {
                     let enqueued = self.try_queue_runtime_side_effects_with_allowance(

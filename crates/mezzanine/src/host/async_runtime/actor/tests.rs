@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, Semaphore, oneshot};
 
+mod provider_source_handoff;
 mod side_effect_capacity_overshoot;
 mod steering_display_retry;
 
