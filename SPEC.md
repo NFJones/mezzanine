@@ -11932,7 +11932,11 @@ event: if its transient portion exceeds the reserve, its original durable record
 MUST still enter the persistence lane once, in their original relative order.
 The transient refusal MUST remain visible and the partial transfer MUST be
 classified as consumed, even when an outer wrapper reports zero applied events;
-it MUST NOT authorize replay of the mixed vector. Producer-owned strict admission
+it MUST NOT authorize replay of the mixed vector. A raw committed refusal with
+no durable records MUST also be classified as consumed: surrendering the vector
+is not proof of non-application, even when its event reports zero applied work.
+This classification forbids replay but does not establish recovery of refused
+transient effects. Producer-owned strict admission
 remains all-or-error and MUST NOT gain this committed-only partial transfer.
 This is source-retained dispatch custody, not a second outside-lane holding queue
 for raw effects whose event has already surrendered ownership. No event, action,

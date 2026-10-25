@@ -38,9 +38,10 @@ pub(super) fn is_side_effect_queue_full_error(error: &MezError) -> bool {
 /// be retried: re-submitting a partially applied chunk would re-apply committed
 /// work, so the event-application path tags queue-full failures with how many
 /// events it had already applied. Failures raised after the batch consumed
-/// destructive service-side drains or a partial committed durable transfer carry
-/// an extra `consumed=1` marker. That marker forbids retry regardless of whether
-/// an outer event wrapper appends `applied=0` after it.
+/// destructive service-side drains or surrendered a raw committed vector carry
+/// an extra `consumed=1` marker, even without a durable transfer. That marker
+/// forbids retry regardless of whether an outer event wrapper appends `applied=0`
+/// after it.
 pub(super) fn is_retryable_side_effect_queue_full_error(error: &MezError) -> bool {
     is_side_effect_queue_full_error(error)
         && error.message().ends_with("applied=0")
@@ -239,18 +240,14 @@ impl AsyncRuntimeSessionActor {
     /// committed work without becoming unbounded buffering; beyond it the
     /// refusal is reported truthfully to the caller. On transient refusal,
     /// independently capacity-exempt durable records still enter their normal
-    /// persistence lane in original order. That partial transfer is consumed
-    /// and must never authorize resubmission of the original mixed vector.
+    /// persistence lane in original order. Every capacity refusal is consumed:
+    /// the caller surrendered the original vector even if no durable record
+    /// transferred and the originating event reported zero application. This
+    /// marker forbids replay; it does not claim recovery of refused raw effects.
     pub(super) fn admit_committed_side_effects(
         &mut self,
         side_effects: Vec<RuntimeSideEffect>,
     ) -> Result<()> {
-        // Coalescing may consume a registry update into an existing lane item
-        // before the transient verdict, leaving no durable item in the returned
-        // vector. Capture its presence before that destructive transformation.
-        let includes_durable = side_effects
-            .iter()
-            .any(runtime_side_effect_is_durable_persistence);
         let mut side_effects = side_effects;
         let admission = self.try_queue_runtime_side_effects_with_allowance(
             &mut side_effects,
@@ -261,7 +258,7 @@ impl AsyncRuntimeSessionActor {
                 self.record_reserve_admission(enqueued);
                 Ok(())
             }
-            Err(error) if is_side_effect_queue_full_error(&error) && includes_durable => {
+            Err(error) if is_side_effect_queue_full_error(&error) => {
                 // The failed attempt leaves original unadmitted records here.
                 // Only committed callers may split this vector: producers keep
                 // their all-or-error contract, including their durable work.
@@ -273,6 +270,9 @@ impl AsyncRuntimeSessionActor {
                     )?;
                     self.record_reserve_admission(enqueued);
                 }
+                // Even an entirely transient vector has surrendered custody at
+                // this boundary. A zero-applied wrapper cannot prove the event
+                // or its side-effect-producing bookkeeping is safe to repeat.
                 Err(MezError::invalid_state(format!(
                     "{} consumed=1",
                     error.message()

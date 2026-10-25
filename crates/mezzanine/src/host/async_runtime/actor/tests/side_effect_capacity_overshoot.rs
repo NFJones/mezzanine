@@ -588,6 +588,52 @@ async fn committed_overshoot_is_bounded_and_reports_the_refusal() {
     assert!(actor.drain_timer_side_effects(8).unwrap().is_empty());
 }
 
+/// A surrendered raw transition cannot authorize retry merely because it held
+/// no durable record and its event reported zero application. The finite reserve
+/// is deliberately exhausted before both ordinary and provisional applied-event
+/// admission. Their refused timer has no remaining source owner; adding an outer
+/// `applied=0` annotation must therefore remain consumed and terminal. Strict
+/// producer admission is the negative control and retains its retry contract.
+/// This fixture starts no workers, processes, timers, or filesystem writes.
+#[tokio::test(flavor = "current_thread")]
+async fn raw_committed_refusal_without_durable_transfer_is_not_retryable() {
+    for provisional in [None, Some(false), Some(true)] {
+        let mut actor = inert_actor(1);
+        let capacity = 1 + actor.committed_side_effect_overshoot();
+        actor
+            .admit_committed_side_effects(
+                (0..capacity)
+                    .map(|index| timer_effect(&format!("occupied-{index}")))
+                    .collect(),
+            )
+            .unwrap();
+        let effects = vec![timer_effect("surrendered")];
+        let error = match provisional {
+            None => actor.admit_committed_side_effects(effects),
+            Some(value) => actor.admit_applied_event_side_effects(effects, value),
+        }
+        .expect_err("the transient reserve must remain finite");
+        let annotated = MezError::invalid_state(format!("{} applied=0", error.message()));
+        assert!(super::super::queue::is_side_effect_queue_full_error(&error));
+        assert!(
+            !super::super::queue::is_retryable_side_effect_queue_full_error(&annotated),
+            "provisional={provisional:?}: {annotated}"
+        );
+        let producer = actor
+            .queue_runtime_side_effects(vec![timer_effect("producer")])
+            .expect_err("producer admission remains strict");
+        let producer = MezError::invalid_state(format!("{} applied=0", producer.message()));
+        assert!(super::super::queue::is_retryable_side_effect_queue_full_error(&producer));
+        let drained = actor.drain_timer_side_effects(capacity + 1).unwrap();
+        assert_eq!(drained.len(), capacity);
+        assert!(
+            drained
+                .iter()
+                .all(|effect| timer_owner(effect) != "surrendered")
+        );
+    }
+}
+
 /// Durable persistence is admissible while transient occupancy is above nominal.
 ///
 /// Committed admission can legitimately leave non-droppable transient effects
