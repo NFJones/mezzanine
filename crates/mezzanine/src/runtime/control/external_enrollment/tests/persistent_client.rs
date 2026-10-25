@@ -90,6 +90,8 @@ async fn external_enrollment_installed_request_accounting_has_durable_native_ack
 /// mez helper. The ordinary producer loads installed compiled siblings, validates
 /// daemon peer UID through the read-only helper, and itself sends enrollment,
 /// presentation, reload and end over real kernel-qualified Unix actor ingress.
+/// Handoff retains a positive original run, advances the observer epoch, rejects
+/// publication from the still-connected old owner, and keeps the successor usable.
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and locally built mez helper required"]
 async fn external_enrollment_installed_persistent_node_client_owns_native_sender() {

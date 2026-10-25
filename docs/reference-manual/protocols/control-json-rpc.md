@@ -1118,11 +1118,18 @@ producer exit then prunes it even though the pane shell remains alive. The clock
 aging is deterministic, not a full wall-clock idle test; this SDK shim is not
 qualification of actual Claude timers after SessionStart return or deployment.
 
-This is a core admission primitive, not bare bootstrap or installed real SDK
-transport. Actual adapter deployment/consent/disabled policy, idle/reload/session
-continuity, shared-daemon association, durable accounting and macOS qualification
-remain unfinished. Ordinary persistent and primary-only legacy launch paths keep
-their separate authorization; no generic parent-enrollment or launcher fallback.
+The core primitive is also used by installed persistent clients. Offline installed
+Node qualification exercises real Unix sender evidence, a positive stable run,
+fresh observer epoch, rejection of a superseded observer on its still-live socket,
+and successful successor publication/retirement across all six protocol labels.
+These shared-client checks are not six vendor-loader or live-service certifications.
+Exact current-binding reload is independent of accounting-store availability;
+missing-binding recovery has the stronger same-live-source contract below.
+Actual adapter consent/disabled policy, arbitrary shared-daemon association,
+daemon-replacement recovery and macOS execution remain separate limits. Enrollment
+alone grants no usage coverage: supported request-bound reports must be independently
+accepted before coverage changes. Ordinary persistent and primary-only legacy launch
+paths keep separate authorization; no generic parent-enrollment or launcher fallback.
 
 #### Ordinary persistent-producer enrollment (implemented slice)
 

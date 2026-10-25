@@ -596,12 +596,18 @@ MUST be explicit rather than fabricated zero or success. Other panes' telemetry
 MUST NOT leak into this pane-scoped section; remaining session accounting stays
 separate. Connection loss and unavailable coverage MUST carry bounded caveats
 against completion, producer-death and invoice interpretations.
-`usage_coverage` MUST explicitly report `unavailable-source-continuity` for
-ordinary enrollment; legacy `external-reported` is not exhaustive billing proof.
-Ordinary usage MUST remain explicitly unavailable until durable source continuity
-is implemented, rather than permitting fresh-owner historical recharge. This
-slice does not complete all-vendor activation, helper/shared-server association,
-durable usage continuity or macOS admission.
+An active Pi usage-gap diagnostic MUST take precedence over request-report and
+source-continuity coverage labels, even when earlier reports were accepted.
+Otherwise, `usage_coverage` MUST report `unavailable-source-continuity` for ordinary
+enrollment until a supported request-bound report has actually been accepted.
+Absent that diagnostic, an owner with accepted request reports MUST report
+`request-bound-external-reported`;
+neither that label nor legacy `external-reported` is exhaustive billing proof.
+Lifecycle enrollment or observer replacement alone MUST NOT enable accounting,
+upgrade an undurable source or permit fresh-owner historical recharge. Supported
+durable source/reporting paths remain independently qualified; this slice does
+not certify all-vendor activation, arbitrary helper/shared-server association,
+daemon-replacement source recovery or macOS execution.
 The separate `agent/external/helper-presentation` slice MUST accept only a current
 private ordinary-run handle, positive generation, exact external session and
 generic `sequence`, `state`, optional `title`. An uninitialized same-user Unix

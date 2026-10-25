@@ -8,7 +8,8 @@
 //! shared/preexisting vendor servers require separate association evidence and
 //! cannot substitute payload PIDs, inherited pane hints or temporary primaries.
 //! Credentials are service-owned, private, runtime-only and producer-bound. Usage
-//! remains unavailable until durable ordinary-source continuity is implemented.
+//! requires its own qualified durable source mapping and request-bound reporting;
+//! successful lifecycle enrollment alone never enables accounting or proves billing.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};
