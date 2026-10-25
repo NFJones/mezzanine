@@ -1178,6 +1178,43 @@ impl AsyncRuntimeSessionActor {
         turn_ids
     }
 
+    /// Transfers only the compactor adopted by an asynchronous manual completion.
+    /// The original command already admitted preparation, so no caller owns a
+    /// producer retry here. Committed refusal retains the exact service source
+    /// for lane-drain recovery; unrelated pending families remain on their usual
+    /// strict scheduling path. Source adoption may instead have queued request
+    /// preparation, which must start without implying a provider was dispatched.
+    /// There is no completion reply: report transfer errors once as content-free
+    /// diagnostics, without replaying preparation or claiming inference occurred.
+    pub(super) fn queue_adopted_manual_compaction_dispatch(&mut self, pane_id: &str) {
+        self.dispatch_manual_compaction_preparations();
+        let effects = self
+            .service
+            .pending_agent_compaction_tasks()
+            .into_iter()
+            .filter(|owner| owner == pane_id)
+            .filter_map(|pane_id| {
+                let task_generation = self
+                    .service
+                    .pending_agent_compaction_task_generation(&pane_id)?;
+                if self.compaction_dispatch_is_already_queued(&pane_id, task_generation) {
+                    return None;
+                }
+                Some(RuntimeSideEffect::DispatchAgentCompaction {
+                    pane_id,
+                    task_generation,
+                })
+            })
+            .collect();
+        let transfer = self.admit_committed_side_effects(effects);
+        if let Err(error) = transfer {
+            let _ = self.service.append_runtime_diagnostic_event(format!(
+                r#"{{"kind":"manual_compaction_dispatch_transfer_failed","error_kind":"{:?}"}}"#,
+                error.kind(),
+            ));
+        }
+    }
+
     /// Runs the queue pending provider dispatch side effects operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

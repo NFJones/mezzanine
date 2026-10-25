@@ -148,6 +148,421 @@ fn pending_compaction_with_lifecycle_owner(
     (root, actor, primary, generation)
 }
 
+/// Admits a fresh asynchronous operation and performs only its immutable source
+/// phase. Returns real request work without executing inference or inserting a
+/// fabricated task; the caller drives the actual request-completion boundary.
+fn prepare_manual_request(
+    actor: &mut AsyncRuntimeSessionActor,
+    primary: &ClientId,
+) -> crate::runtime::RuntimeManualCompactionRequestWork {
+    actor
+        .service
+        .execute_agent_shell_command(primary, "/stop")
+        .unwrap();
+    let admitted = actor
+        .service
+        .execute_agent_shell_command(primary, "/compact")
+        .unwrap();
+    assert!(admitted.contains("state=preparing"));
+    let source = actor
+        .service
+        .take_manual_compaction_preparations()
+        .remove(0);
+    let result = source.execute_source();
+    assert!(
+        actor
+            .service
+            .complete_manual_compaction_preparation(&source, result)
+            .unwrap()
+    );
+    actor.service.take_manual_compaction_requests().remove(0)
+}
+
+/// Source adoption must start the real off-actor request renderer even with a
+/// full transient lane. Collect its actual bounded-ingress completion and adopt
+/// it through the ordinary handler; draining capacity then recovers one exact
+/// provider descriptor, not a second source read or a replayed slash command.
+#[tokio::test(flavor = "current_thread")]
+async fn manual_compaction_completion_drives_two_phase_worker_under_pressure() {
+    let (_root, mut actor, primary, _) = pending_compaction_at_capacity();
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    let admitted = actor
+        .service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    assert!(admitted.contains("state=preparing"));
+    let work = actor
+        .service
+        .take_manual_compaction_preparations()
+        .remove(0);
+    let result = work.execute_source();
+    Box::pin(
+        actor.handle_request(AsyncRuntimeRequest::CompleteManualCompactionPreparation {
+            work,
+            result,
+        }),
+    )
+    .await;
+    assert!(actor.service.agent_is_compacting("%1"));
+    assert!(
+        actor
+            .service
+            .pending_agent_compaction_task_generation("%1")
+            .is_none()
+    );
+    let completion = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let notify = actor.request_ingress_notify.clone();
+            let notified = notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let request = actor
+                .request_ingress
+                .lock()
+                .unwrap()
+                .normal_requests
+                .pop_front();
+            if let Some(request) = request {
+                break request.envelope.request;
+            }
+            notified.await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        matches!(&completion, AsyncRuntimeRequest::CompleteManualCompactionRequest { result, .. } if result.is_ok())
+    );
+    Box::pin(actor.handle_request(completion)).await;
+    let generation = actor
+        .service
+        .pending_agent_compaction_task_generation("%1")
+        .unwrap();
+    assert!(
+        actor
+            .refused_dispatch_sources
+            .contains(&SourceDispatch::Compaction("%1".into(), generation))
+    );
+    actor.drain_timer_side_effects(64).unwrap();
+    let effects = actor
+        .drain_agent_provider_dispatch_side_effects(64)
+        .unwrap();
+    assert!(
+        matches!(effects.as_slice(), [RuntimeSideEffect::DispatchAgentCompaction { task_generation, .. }] if *task_generation == generation)
+    );
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+}
+
+/// When the adopted compactor fits the existing reserve, completion queues it
+/// immediately rather than waiting for a future producer poll. This allowance
+/// does not claim a worker or bypass the separate mandatory completion lease.
+#[tokio::test(flavor = "current_thread")]
+async fn manual_compaction_completion_uses_available_reserve() {
+    let (_root, mut actor, primary, _) = pending_compaction_at_capacity();
+    let work = prepare_manual_request(&mut actor, &primary);
+    let result = work.execute_request();
+    actor.drain_timer_side_effects(2).unwrap();
+    Box::pin(
+        actor.handle_request(AsyncRuntimeRequest::CompleteManualCompactionRequest {
+            work: Box::new(work),
+            result: Box::new(result),
+        }),
+    )
+    .await;
+    let generation = actor
+        .service
+        .pending_agent_compaction_task_generation("%1")
+        .unwrap();
+    assert!(actor.compaction_dispatch_is_already_queued("%1", generation));
+    assert!(actor.refused_dispatch_sources.is_empty());
+    assert!(
+        !actor
+            .service
+            .agent_compaction_task_is_claimed("%1", generation)
+    );
+    assert_eq!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(64)
+            .unwrap()
+            .len(),
+        1
+    );
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+}
+
+/// Worker errors retire the exact logical owner without enrolling nonexistent
+/// provider work. Exercise both typed completion messages under full pressure;
+/// storage/construction failure must not become a fabricated successful request.
+#[tokio::test(flavor = "current_thread")]
+async fn manual_compaction_completion_worker_errors_do_not_enrol_dispatch() {
+    for source_phase in [false, true] {
+        let (_root, mut actor, primary, _) = pending_compaction_at_capacity();
+        let failure = crate::error::MezError::invalid_state("generated preparation failure");
+        let request = if source_phase {
+            actor
+                .service
+                .execute_agent_shell_command(&primary, "/stop")
+                .unwrap();
+            let admitted = actor
+                .service
+                .execute_agent_shell_command(&primary, "/compact")
+                .unwrap();
+            assert!(admitted.contains("state=preparing"));
+            let work = actor
+                .service
+                .take_manual_compaction_preparations()
+                .remove(0);
+            AsyncRuntimeRequest::CompleteManualCompactionPreparation {
+                work,
+                result: Err(failure),
+            }
+        } else {
+            let work = prepare_manual_request(&mut actor, &primary);
+            AsyncRuntimeRequest::CompleteManualCompactionRequest {
+                work: Box::new(work),
+                result: Box::new(Err(failure)),
+            }
+        };
+        Box::pin(actor.handle_request(request)).await;
+        assert!(!actor.service.agent_is_compacting("%1"));
+        assert!(
+            actor
+                .service
+                .pending_agent_compaction_task_generation("%1")
+                .is_none()
+        );
+        assert!(actor.refused_dispatch_sources.is_empty());
+        assert!(actor.offered_dispatch_sources.is_empty());
+        actor.drain_timer_side_effects(64).unwrap();
+        assert!(
+            actor
+                .drain_agent_provider_dispatch_side_effects(64)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+/// Cancelled source/request callbacks cannot enrol a separately admitted newer
+/// compactor even in the same pane. Keep the new request genuinely pending, then
+/// deliver old work through each real completion handler before freeing capacity.
+#[tokio::test(flavor = "current_thread")]
+async fn manual_compaction_completion_stale_callbacks_do_not_enrol_replacement() {
+    for source_phase in [false, true] {
+        let (_root, mut actor, primary, _) = pending_compaction_at_capacity();
+        let work = prepare_manual_request(&mut actor, &primary);
+        let old_source = work.owner.clone();
+        let old_source_result = old_source.execute_source();
+        let old_request_result = work.execute_request();
+        let replacement = prepare_manual_request(&mut actor, &primary);
+        assert!(
+            actor
+                .service
+                .complete_manual_compaction_request(&replacement, replacement.execute_request())
+                .unwrap()
+        );
+        let generation = actor
+            .service
+            .pending_agent_compaction_task_generation("%1")
+            .unwrap();
+        let request = if source_phase {
+            AsyncRuntimeRequest::CompleteManualCompactionPreparation {
+                work: old_source,
+                result: old_source_result,
+            }
+        } else {
+            AsyncRuntimeRequest::CompleteManualCompactionRequest {
+                work: Box::new(work),
+                result: Box::new(old_request_result),
+            }
+        };
+        Box::pin(actor.handle_request(request)).await;
+        assert_eq!(
+            actor.service.pending_agent_compaction_task_generation("%1"),
+            Some(generation)
+        );
+        assert!(actor.refused_dispatch_sources.is_empty());
+        assert!(actor.offered_dispatch_sources.is_empty());
+        actor.drain_timer_side_effects(64).unwrap();
+        assert!(
+            actor
+                .drain_agent_provider_dispatch_side_effects(64)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            matches!(actor.pending_provider_dispatch_side_effects().unwrap().as_slice(), [RuntimeSideEffect::DispatchAgentCompaction { task_generation, .. }] if *task_generation == generation)
+        );
+        actor
+            .service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
+    }
+}
+
+/// An ordinary pending title is a different producer, even in the same pane.
+/// Its strict refusal must not acquire committed recovery merely because manual
+/// request completion adopts a compactor. Both sources are genuinely admitted;
+/// only the compactor may be offered after real capacity progress.
+#[tokio::test(flavor = "current_thread")]
+async fn manual_compaction_completion_excludes_unrelated_pending_title() {
+    use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
+    let (_root, mut actor, primary, _) = pending_compaction_at_capacity();
+    actor.service.replace_config_layers(vec![ConfigLayer {
+        name: "compaction-title-isolation".into(), path: None, format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider=\"runtime-batch\"\ndefault_model_profile=\"default\"\nshell_mode=\"pane\"\nsession_title_policy=\"generated\"\n[providers.runtime-batch]\nkind=\"openai-compatible\"\nbase_url=\"http://127.0.0.1:9/v1\"\nmodels=[\"test\"]\ndefault_model=\"test\"\n[model_profiles.default]\nprovider=\"runtime-batch\"\nmodel=\"test\"\ncontext_window_tokens=128000\n[permissions]\nsandbox=\"policy-only\"\n".into(),
+    }]).unwrap();
+    assert_eq!(
+        actor.service.schedule_runtime_agent_session_title(
+            "handoff-compaction",
+            Some("Maintain isolated completion source ownership.")
+        ),
+        Ok(())
+    );
+    let title = actor
+        .service
+        .pending_agent_session_title_dispatch_id("handoff-compaction")
+        .unwrap()
+        .to_string();
+    let work = prepare_manual_request(&mut actor, &primary);
+    let title_effects = actor.pending_provider_dispatch_side_effects().unwrap();
+    assert!(
+        matches!(title_effects.as_slice(), [RuntimeSideEffect::DispatchAgentSessionTitle { dispatch_id, .. }] if dispatch_id == &title)
+    );
+    assert!(actor.queue_runtime_side_effects(title_effects).is_err());
+    let result = work.execute_request();
+    Box::pin(
+        actor.handle_request(AsyncRuntimeRequest::CompleteManualCompactionRequest {
+            work: Box::new(work),
+            result: Box::new(result),
+        }),
+    )
+    .await;
+    let generation = actor
+        .service
+        .pending_agent_compaction_task_generation("%1")
+        .unwrap();
+    assert_eq!(
+        actor
+            .refused_dispatch_sources
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![SourceDispatch::Compaction("%1".into(), generation)]
+    );
+    actor.drain_timer_side_effects(64).unwrap();
+    let offered = actor
+        .drain_agent_provider_dispatch_side_effects(64)
+        .unwrap();
+    assert!(
+        matches!(offered.as_slice(), [RuntimeSideEffect::DispatchAgentCompaction { task_generation, .. }] if *task_generation == generation)
+    );
+    assert!(
+        matches!(actor.pending_provider_dispatch_side_effects().unwrap().as_slice(), [RuntimeSideEffect::DispatchAgentSessionTitle { dispatch_id, .. }] if dispatch_id == &title)
+    );
+    assert_eq!(
+        actor
+            .service
+            .pending_agent_session_title_dispatch_id("handoff-compaction"),
+        Some(title.as_str())
+    );
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    actor
+        .service
+        .cancel_agent_session_title_task("handoff-compaction");
+}
+
+/// The asynchronous request-completion message has already adopted real source
+/// and a rendered request. Its accepted provider task must survive finite queue
+/// pressure even though no caller is awaiting another admission reply. Exercise
+/// the actual completion handler rather than manually enrolling its descriptor;
+/// real drain progress alone must recover it through either worker adapter.
+#[tokio::test(flavor = "current_thread")]
+async fn manual_compaction_completion_recovers_accepted_dispatch() {
+    for compatibility in [false, true] {
+        let (_root, mut actor, primary, old) = pending_compaction_at_capacity();
+        actor
+            .service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
+        let admitted = actor
+            .service
+            .execute_agent_shell_command(&primary, "/compact")
+            .unwrap();
+        assert!(admitted.contains("state=preparing"));
+        let source = actor
+            .service
+            .take_manual_compaction_preparations()
+            .remove(0);
+        let result = source.execute_source();
+        assert!(
+            actor
+                .service
+                .complete_manual_compaction_preparation(&source, result)
+                .unwrap()
+        );
+        let work = actor.service.take_manual_compaction_requests().remove(0);
+        let result = work.execute_request();
+        assert!(result.is_ok());
+        actor
+            .handle_request(AsyncRuntimeRequest::CompleteManualCompactionRequest {
+                work: Box::new(work),
+                result: Box::new(result),
+            })
+            .await;
+        let generation = actor
+            .service
+            .pending_agent_compaction_task_generation("%1")
+            .unwrap();
+        assert!(generation > old);
+        assert!(
+            actor
+                .refused_dispatch_sources
+                .contains(&SourceDispatch::Compaction("%1".into(), generation))
+        );
+        // Completion also produced status obligations. Preserve the shared
+        // transfer fairness instead of requiring the compactor to take slot one.
+        actor.drain_timer_side_effects(64).unwrap();
+        let offered = if compatibility {
+            actor.drain_runtime_side_effects(1).unwrap()
+        } else {
+            actor.drain_agent_provider_dispatch_side_effects(1).unwrap()
+        };
+        assert!(
+            matches!(offered.as_slice(), [RuntimeSideEffect::DispatchAgentCompaction { task_generation, .. }] if *task_generation == generation),
+            "{offered:?}"
+        );
+        assert!(
+            actor
+                .pending_provider_dispatch_side_effects()
+                .unwrap()
+                .is_empty()
+        );
+        actor.drain_timer_side_effects(64).unwrap();
+        let dispatch = claim(&mut actor, generation).await.unwrap().unwrap();
+        assert_eq!(dispatch.task.task_generation, generation);
+        assert!(actor.refused_dispatch_sources.is_empty());
+        assert!(actor.offered_dispatch_sources.is_empty());
+        actor
+            .service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
+    }
+}
+
 /// Committed refusal must recover on real lane progress with no new event. Both
 /// drain adapters fence the offer until actual claim; a successful claim admits
 /// exactly one existing completion lease and cannot recover or claim twice.

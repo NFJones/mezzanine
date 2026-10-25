@@ -11963,6 +11963,13 @@ or replaced tasks, and preserve retry backoff and human claim inhibition. Its
 offer settles at the actual claim attempt, including constructor or mandatory
 claim-lease refusal; recovery does not bypass completion-lease admission or
 enroll ordinary strict-producer refusals.
+Asynchronous manual-compaction source/request completion has already accepted
+the original preparation command. It MUST transfer only its adopted compactor
+through committed-source admission and retain its exact generation on refusal.
+It MUST NOT enrol unrelated pending families, or let a stale/cancelled completion
+enrol replacement work. The initial preparing response is not inference or
+publication success; transfer failure is a bounded content-free diagnostic,
+not permission to repeat the command or request construction.
 Remember dispatch and claim MUST carry the existing immutable observation ID.
 Recovery MUST retain only that exact unclaimed request in its original current
 conversation; a stale descriptor MUST NOT claim or suppress a replacement in

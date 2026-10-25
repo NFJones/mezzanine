@@ -2769,7 +2769,8 @@ impl AsyncRuntimeSessionActor {
                     completed.notify_one();
                 }
                 if applied.as_ref().is_ok_and(|applied| *applied) || applied.is_err() {
-                    let _ = self.queue_pending_provider_dispatch_side_effects();
+                    // Preparation was already accepted; transfer only its adopted work.
+                    self.queue_adopted_manual_compaction_dispatch(&pane_id);
                     let transition = self.service.runtime_pane_transition_with_render(
                         &pane_id,
                         true,
@@ -2791,7 +2792,8 @@ impl AsyncRuntimeSessionActor {
                     completed.notify_one();
                 }
                 if applied.as_ref().is_ok_and(|applied| *applied) || applied.is_err() {
-                    let _ = self.queue_pending_provider_dispatch_side_effects();
+                    // Request adoption is not a new producer admission or retry.
+                    self.queue_adopted_manual_compaction_dispatch(&pane_id);
                     let transition = self.service.runtime_pane_transition_with_render(
                         &pane_id,
                         true,

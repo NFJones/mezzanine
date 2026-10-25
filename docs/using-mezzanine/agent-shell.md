@@ -308,6 +308,11 @@ Compaction recovery similarly keeps the exact task generation; claiming still
 requires its ordinary completion lease and respects human pause and transport
 backoff. Ordinary strict-producer refusal is not enrolled in this committed
 recovery mechanism.
+Once asynchronous manual preparation is accepted, its source/request completion
+uses that same recovery path for the adopted compactor only. Queue pressure does
+not require repeating `/compact`. Unrelated pending work keeps normal scheduling,
+and stale preparation callbacks cannot enrol a replacement. A preparing response
+is not proof of inference or publication; transfer failures remain diagnostic.
 Remember recovery uses the original observation ID through dispatch and claim,
 not just the pane. Stop, conversation replacement and a later `/remember` cannot
 give an old descriptor authority over the new request. A failed provider
