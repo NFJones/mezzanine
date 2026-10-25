@@ -1068,10 +1068,17 @@ impl AsyncRuntimeSessionActor {
             });
         }
         for pane_id in self.service.pending_agent_remember_tasks() {
-            if self.remember_dispatch_is_already_queued(&pane_id) {
+            let Some(observation_id) = self.service.pending_agent_remember_observation_id(&pane_id)
+            else {
+                continue;
+            };
+            if self.remember_dispatch_is_already_queued(&pane_id, observation_id) {
                 continue;
             }
-            side_effects.push(RuntimeSideEffect::DispatchAgentRemember { pane_id });
+            side_effects.push(RuntimeSideEffect::DispatchAgentRemember {
+                observation_id: observation_id.to_string(),
+                pane_id,
+            });
         }
         for conversation_id in self.service.pending_agent_session_title_tasks() {
             if self.session_title_dispatch_is_already_queued(&conversation_id) {
@@ -1102,14 +1109,24 @@ impl AsyncRuntimeSessionActor {
             })
     }
 
-    /// Returns true when a queued durable memory dispatch already exists for a pane.
-    pub(super) fn remember_dispatch_is_already_queued(&self, target_pane_id: &str) -> bool {
-        self.side_effect_routes.any_provider(|effect| {
-            matches!(
-                effect,
-                RuntimeSideEffect::DispatchAgentRemember { pane_id } if pane_id == target_pane_id
-            )
-        })
+    /// Fences queued or offered dispatches for the exact memory observation.
+    pub(super) fn remember_dispatch_is_already_queued(
+        &self,
+        target_pane_id: &str,
+        target_observation_id: &str,
+    ) -> bool {
+        self.offered_dispatch_sources
+            .contains(&super::SourceDispatch::Remember(
+                target_pane_id.to_string(),
+                target_observation_id.to_string(),
+            ))
+            || self.side_effect_routes.any_provider(|effect| {
+                matches!(
+                    effect,
+                    RuntimeSideEffect::DispatchAgentRemember { pane_id, observation_id }
+                        if pane_id == target_pane_id && observation_id == target_observation_id
+                )
+            })
     }
 
     /// Returns true when a queued title dispatch already exists for a conversation.

@@ -725,6 +725,11 @@ impl RuntimeSessionService {
                     outcome.as_ref()
                     && command == "stop"
                 {
+                    // Retire queued/claimed memory publication even without an
+                    // ordinary turn. Issued accounting owners remain available
+                    // for late expense; cancellation does not prove remote I/O
+                    // has stopped and never replays the auxiliary request.
+                    let remember_cancelled = self.fail_agent_remember_task(&pane_id);
                     if self.agent_is_compacting(&pane_id) {
                         let cancelled = self.cancel_current_agent_compaction_task(&pane_id);
                         if self.agent_shell_pane_has_live_turn(&pane_id) {
@@ -747,6 +752,17 @@ impl RuntimeSessionService {
                                 Some(&stop_outcome),
                             )
                         }
+                    } else if remember_cancelled && !self.agent_shell_pane_has_live_turn(&pane_id) {
+                        let stop_outcome = AgentShellCommandOutcome::Mutated {
+                            command: "stop".to_string(),
+                            body: format!("pane={} remember_cancelled=true", pane_id),
+                            visibility: self.agent_shell_visibility_for_pane(&pane_id)?,
+                        };
+                        runtime_agent_shell_command_response_json(
+                            &pane_id,
+                            input,
+                            Some(&stop_outcome),
+                        )
                     } else {
                         let stopped = self.stop_agent_turn_for_pane(&pane_id)?;
                         runtime_agent_shell_stop_response_json(&pane_id, input, &stopped)

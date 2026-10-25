@@ -1127,6 +1127,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ClaimAgentRememberTask {
         /// Pane whose queued memory generation should be claimed.
         pane_id: String,
+        /// Existing observation identity captured by the dispatch descriptor.
+        observation_id: String,
         /// Stores the reply value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module

@@ -988,8 +988,14 @@ async fn dispatch_agent_provider_side_effects(
                     dispatch,
                 ));
             }
-            RuntimeSideEffect::DispatchAgentRemember { pane_id } => {
-                let dispatch = match handle.claim_agent_remember_task(pane_id.clone()).await {
+            RuntimeSideEffect::DispatchAgentRemember {
+                pane_id,
+                observation_id,
+            } => {
+                let dispatch = match handle
+                    .claim_agent_remember_task(pane_id.clone(), observation_id)
+                    .await
+                {
                     Ok(Some(dispatch)) => dispatch,
                     Ok(None) => continue,
                     // Claim failure is retired by its actor-owned admission.

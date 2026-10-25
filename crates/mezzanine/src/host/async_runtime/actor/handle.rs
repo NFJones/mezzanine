@@ -1187,9 +1187,14 @@ impl AsyncRuntimeSessionHandle {
     pub async fn claim_agent_remember_task(
         &self,
         pane_id: String,
+        observation_id: String,
     ) -> Result<Option<crate::runtime::RuntimeAgentRememberDispatch>> {
-        self.request(|reply| AsyncRuntimeRequest::ClaimAgentRememberTask { pane_id, reply })
-            .await?
+        self.request(|reply| AsyncRuntimeRequest::ClaimAgentRememberTask {
+            pane_id,
+            observation_id,
+            reply,
+        })
+        .await?
     }
 
     /// Claims one queued turn-less generated session-title task for async execution.

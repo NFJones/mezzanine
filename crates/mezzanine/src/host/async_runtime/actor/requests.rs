@@ -3196,8 +3196,15 @@ impl AsyncRuntimeSessionActor {
                 }
                 false
             }
-            AsyncRuntimeRequest::ClaimAgentRememberTask { pane_id, reply } => {
-                let result = self.service.claim_agent_remember_task(&pane_id);
+            AsyncRuntimeRequest::ClaimAgentRememberTask {
+                pane_id,
+                observation_id,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .claim_agent_remember_task(&pane_id, &observation_id);
+                self.settle_source_offer(super::SourceDispatch::Remember(pane_id, observation_id));
                 let should_notify = result.is_ok();
                 let _ = reply.send(result);
                 if should_notify {

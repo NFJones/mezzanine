@@ -3508,6 +3508,18 @@ impl RuntimeSessionService {
             .collect()
     }
 
+    /// Returns the existing observation identity only while the unclaimed task
+    /// still belongs to the active conversation. Pause does not retire custody.
+    pub(crate) fn pending_agent_remember_observation_id(&self, pane_id: &str) -> Option<&str> {
+        let task = self.agent.pending_agent_remember_tasks.get(pane_id)?;
+        (self.agent_is_remembering(pane_id)
+            && self
+                .agent_shell_store()
+                .get(pane_id)
+                .is_some_and(|session| session.session_id == task.conversation_id))
+        .then_some(task.observation_id.as_str())
+    }
+
     /// Removes one pending durable-memory task for provider construction.
     pub(crate) fn take_pending_agent_remember_task(
         &mut self,

@@ -1,6 +1,6 @@
 //! Source-owned provider-lane dispatch transfer under transient pressure.
 //!
-//! The service retains pending provider, external, native and compaction work;
+//! The service retains provider, external, native, compaction and remember work;
 //! this owner retains only refused/offered identities, never payloads or rights.
 //! Eligibility is separate from ownership: temporarily blocked external work
 //! must not lose recovery metadata while waiting for a persistence barrier or
@@ -23,6 +23,8 @@ pub(crate) enum SourceDispatch {
     Native(String, String, String),
     /// One queued compactor, fenced by its existing task generation.
     Compaction(String, u64),
+    /// One memory request, fenced by its existing observation identity.
+    Remember(String, String),
 }
 
 impl SourceDispatch {
@@ -42,6 +44,10 @@ impl SourceDispatch {
                 pane_id,
                 task_generation,
             } => Some(Self::Compaction(pane_id.clone(), *task_generation)),
+            RuntimeSideEffect::DispatchAgentRemember {
+                pane_id,
+                observation_id,
+            } => Some(Self::Remember(pane_id.clone(), observation_id.clone())),
             _ => None,
         }
     }
@@ -60,6 +66,9 @@ impl SourceDispatch {
             Self::Compaction(pane, generation) => {
                 service.pending_agent_compaction_task_generation(pane) == Some(*generation)
                     && service.agent_compaction_task_is_current(pane, *generation)
+            }
+            Self::Remember(pane, observation) => {
+                service.pending_agent_remember_observation_id(pane) == Some(observation.as_str())
             }
         }
     }

@@ -602,11 +602,17 @@ impl RuntimeSessionService {
         self.pending_agent_remember_task_ids()
     }
 
-    /// Claims one queued durable memory task for execution outside the actor.
+    /// Claims the exact queued memory observation for execution outside the actor.
+    /// Stale descriptors and paused owners return no work without consuming a
+    /// replacement; provider-construction failure retires this admission.
     pub fn claim_agent_remember_task(
         &mut self,
         pane_id: &str,
+        observation_id: &str,
     ) -> Result<Option<RuntimeAgentRememberDispatch>> {
+        if self.pending_agent_remember_observation_id(pane_id) != Some(observation_id) {
+            return Ok(None);
+        }
         if self.agent_is_human_paused(pane_id) {
             return Ok(None);
         }

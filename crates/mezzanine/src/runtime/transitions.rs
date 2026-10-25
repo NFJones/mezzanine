@@ -1076,6 +1076,8 @@ pub enum RuntimeSideEffect {
     DispatchAgentRemember {
         /// Pane whose active context should be memorized.
         pane_id: String,
+        /// Immutable observation identity of the exact queued memory request.
+        observation_id: String,
     },
     /// Start one turn-less generated session-title request outside the actor.
     DispatchAgentSessionTitle {
