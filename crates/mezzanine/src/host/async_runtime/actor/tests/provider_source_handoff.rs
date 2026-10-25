@@ -1,24 +1,36 @@
 //! Source-owned provider dispatch recovery at real capacity-drain boundaries.
 //!
-//! These fixtures submit a genuine prompt but never execute a provider, spawn a
-//! child, or run timer/persistence workers. A descriptor refused by the finite
-//! lane must remain recoverable from its service task, and a descriptor already
+//! These fixtures submit a genuine prompt but never execute a provider or run
+//! timer/persistence workers. Native cases own a real pane root for admission
+//! evidence, but never execute a native workload. A descriptor refused by the
+//! finite lane must remain recoverable from its service task, and a descriptor already
 //! offered to a worker must not be regenerated before preparation/claim settles.
 
 use super::super::*;
 
 /// Creates a real pending provider task with a saturated finite transient lane.
 fn pending_provider_at_capacity() -> (AsyncRuntimeSessionActor, String, ClientId) {
+    pending_provider_in_mode_at_capacity(false)
+}
+
+/// Selects transport before admitting the prompt; no later configuration reload
+/// can retire the turn whose accepted output supplies the dispatch source.
+fn pending_provider_in_mode_at_capacity(
+    native: bool,
+) -> (AsyncRuntimeSessionActor, String, ClientId) {
     use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
     let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
     service.replace_config_layers(vec![ConfigLayer {
         name: "recovered-provider-claim".into(), path: None,
         format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"default\"\nshell_mode = \"pane\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.default]\nprovider = \"runtime-batch\"\nmodel = \"test\"\n[permissions]\napproval_policy = \"ask\"\nsandbox = \"policy-only\"\n".into(),
+        text: format!("[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"default\"\nshell_mode = \"{}\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.default]\nprovider = \"runtime-batch\"\nmodel = \"test\"\n[permissions]\napproval_policy = \"ask\"\nsandbox = \"policy-only\"\n", if native { "native" } else { "pane" }),
     }]).unwrap();
     let primary = service
         .attach_primary("handoff-primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
+    if native {
+        service.start_initial_pane_process(None).unwrap();
+    }
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -284,14 +296,6 @@ async fn pending_external_at_capacity() -> (
     ClientId,
     mez_agent::AgentAction,
 ) {
-    let (mut actor, turn_id, primary) = pending_provider_at_capacity();
-    let turn = actor
-        .service
-        .agent_turn_ledger()
-        .turn(&turn_id)
-        .unwrap()
-        .clone();
-    actor.service.remove_pending_agent_provider_task(&turn_id);
     let action = mez_agent::AgentAction {
         id: "refused-fetch".into(),
         payload: mez_agent::AgentActionPayload::FetchUrl {
@@ -300,6 +304,35 @@ async fn pending_external_at_capacity() -> (
             max_bytes: None,
         },
     };
+    pending_action_at_capacity(action, false).await
+}
+
+/// Adopts a genuine accepted action into its service dispatch owner without
+/// inference or worker execution. Transport is selected before the prompt, so
+/// native admission does not reload or retire the admitted provider turn.
+async fn pending_action_at_capacity(
+    action: mez_agent::AgentAction,
+    native: bool,
+) -> (
+    AsyncRuntimeSessionActor,
+    String,
+    ClientId,
+    mez_agent::AgentAction,
+) {
+    let (mut actor, turn_id, primary) = pending_provider_in_mode_at_capacity(native);
+    if native {
+        actor
+            .service
+            .permission_policy_mut()
+            .set_approval_bypass(true);
+    }
+    let turn = actor
+        .service
+        .agent_turn_ledger()
+        .turn(&turn_id)
+        .unwrap()
+        .clone();
+    actor.service.remove_pending_agent_provider_task(&turn_id);
     let request = mez_agent::ModelRequest {
         provider: "runtime-batch".into(),
         model: "test".into(),
@@ -365,10 +398,316 @@ async fn pending_external_at_capacity() -> (
         .await
         .unwrap();
     assert_eq!(
-        actor.service.pending_approved_external_actions(),
-        vec![(turn_id.clone(), action.id.clone())]
+        if native {
+            actor.service.pending_native_shell_actions()
+        } else {
+            actor.service.pending_approved_external_actions()
+        },
+        vec![(turn_id.clone(), action.id.clone())],
+        "fixture source admission: {:?}",
+        actor
+            .service
+            .agent_turn_executions()
+            .get(&turn_id)
+            .map(|execution| &execution.action_results)
     );
     (actor, turn_id, primary, action)
+}
+
+/// Creates a real authorized native source using an owned pane root. No native
+/// workload starts and no action command is written to the pane PTY.
+async fn pending_native_at_capacity() -> (
+    AsyncRuntimeSessionActor,
+    String,
+    ClientId,
+    mez_agent::AgentAction,
+) {
+    pending_action_at_capacity(
+        mez_agent::AgentAction {
+            id: "refused-native".into(),
+            payload: mez_agent::AgentActionPayload::ShellCommand {
+                summary: "Inert native dispatch custody fixture".into(),
+                command: "printf never-executed".into(),
+                interactive: false,
+                stateful: false,
+                timeout_ms: Some(5_000),
+            },
+        },
+        true,
+    )
+    .await
+}
+
+/// A committed refusal must recover native work on real lane progress, not on
+/// another runtime event. Generic and typed drains must both fence the offered
+/// descriptor until actual claim; the immutable phase marker remains unchanged.
+/// Claiming transfers authority only: this test never invokes the executor.
+#[tokio::test(flavor = "current_thread")]
+async fn refused_native_dispatch_recovers_and_claims_once() {
+    for compatibility in [false, true] {
+        let (mut actor, turn_id, primary, action) = pending_native_at_capacity().await;
+        let marker = actor
+            .service
+            .pending_native_shell_action_marker(&turn_id, &action.id)
+            .unwrap()
+            .to_string();
+        let effects = actor.pending_provider_dispatch_side_effects().unwrap();
+        assert!(
+            matches!(effects.as_slice(), [RuntimeSideEffect::DispatchNativeShellAction { turn_id: owner, action_id }] if owner == &turn_id && action_id == &action.id)
+        );
+        assert!(actor.admit_committed_side_effects(effects).is_err());
+        actor.drain_timer_side_effects(1).unwrap();
+        let offered = if compatibility {
+            actor.drain_runtime_side_effects(1).unwrap()
+        } else {
+            actor.drain_agent_provider_dispatch_side_effects(1).unwrap()
+        };
+        if offered.is_empty() {
+            actor
+                .service
+                .execute_agent_shell_command(&primary, "/stop")
+                .unwrap();
+            actor.service.terminate_all_pane_processes().unwrap();
+        }
+        assert!(
+            matches!(offered.as_slice(), [RuntimeSideEffect::DispatchNativeShellAction { turn_id: owner, action_id }] if owner == &turn_id && action_id == &action.id),
+            "{offered:?}"
+        );
+        assert!(
+            !actor
+                .drain_runtime_side_effects(1)
+                .unwrap()
+                .iter()
+                .any(|effect| matches!(
+                    effect,
+                    RuntimeSideEffect::DispatchNativeShellAction { .. }
+                ))
+        );
+        assert!(
+            actor
+                .pending_provider_dispatch_side_effects()
+                .unwrap()
+                .is_empty()
+        );
+        actor.drain_timer_side_effects(64).unwrap();
+        let (reply, response) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(AsyncRuntimeRequest::ClaimNativeShellAction {
+                turn_id: turn_id.clone(),
+                action_id: action.id.clone(),
+                reply,
+            })
+            .await;
+        let dispatch = response
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("recovered native claim");
+        assert_eq!(dispatch.turn_id, turn_id);
+        assert_eq!(dispatch.action_id, action.id);
+        assert_eq!(dispatch.marker, marker);
+        assert!(actor.refused_dispatch_sources.is_empty());
+        assert!(actor.offered_dispatch_sources.is_empty());
+        assert!(actor.service.pending_native_shell_actions().is_empty());
+        let (reply, response) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(AsyncRuntimeRequest::ClaimNativeShellAction {
+                turn_id: turn_id.clone(),
+                action_id: action.id.clone(),
+                reply,
+            })
+            .await;
+        assert!(response.await.unwrap().unwrap().is_none());
+        actor
+            .service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
+        assert!(
+            dispatch
+                .cancellation
+                .flag()
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+        actor.service.terminate_all_pane_processes().unwrap();
+    }
+}
+
+/// Stop before transfer and stop after an offer both retire native source
+/// custody. A late actual claim returns no work; freeing more capacity cannot
+/// recreate the phase. Only an owned pane root exists, and it is retired here.
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_native_source_is_not_recovered_or_claimed() {
+    for after_offer in [false, true] {
+        let (mut actor, turn_id, primary, action) = pending_native_at_capacity().await;
+        let effects = actor.pending_provider_dispatch_side_effects().unwrap();
+        assert!(actor.admit_committed_side_effects(effects).is_err());
+        if after_offer {
+            actor.drain_timer_side_effects(1).unwrap();
+            assert!(matches!(
+                actor
+                    .drain_agent_provider_dispatch_side_effects(1)
+                    .unwrap()
+                    .as_slice(),
+                [RuntimeSideEffect::DispatchNativeShellAction { .. }]
+            ));
+        }
+        actor
+            .service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
+        assert!(
+            actor
+                .service
+                .pending_native_shell_action_marker(&turn_id, &action.id)
+                .is_none()
+        );
+        let (reply, response) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(AsyncRuntimeRequest::ClaimNativeShellAction {
+                turn_id,
+                action_id: action.id,
+                reply,
+            })
+            .await;
+        assert!(response.await.unwrap().unwrap().is_none());
+        actor.drain_timer_side_effects(64).unwrap();
+        assert!(
+            !actor
+                .drain_agent_provider_dispatch_side_effects(64)
+                .unwrap()
+                .iter()
+                .any(|effect| matches!(
+                    effect,
+                    RuntimeSideEffect::DispatchNativeShellAction { .. }
+                ))
+        );
+        assert!(actor.refused_dispatch_sources.is_empty());
+        assert!(actor.offered_dispatch_sources.is_empty());
+        actor.service.terminate_all_pane_processes().unwrap();
+    }
+}
+
+/// A human dispatch gate makes an actual native claim return no work without
+/// surrendering the unclaimed phase. Recovery must retain the exact marker,
+/// release the old offer, and fence a later reoffer. Stop retires it without
+/// executing the workload or interpreting pause as cancellation/settlement.
+#[tokio::test(flavor = "current_thread")]
+async fn paused_native_claim_retains_exact_recovery_source() {
+    let (mut actor, turn_id, primary, action) = pending_native_at_capacity().await;
+    let marker = actor
+        .service
+        .pending_native_shell_action_marker(&turn_id, &action.id)
+        .unwrap()
+        .to_string();
+    let source = SourceDispatch::Native(turn_id.clone(), action.id.clone(), marker.clone());
+    let effects = actor.pending_provider_dispatch_side_effects().unwrap();
+    assert!(actor.admit_committed_side_effects(effects).is_err());
+    actor.drain_timer_side_effects(1).unwrap();
+    assert!(matches!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(1)
+            .unwrap()
+            .as_slice(),
+        [RuntimeSideEffect::DispatchNativeShellAction { .. }]
+    ));
+    let target = actor
+        .service
+        .capture_agent_lifecycle_target(&primary, "%1")
+        .unwrap();
+    actor
+        .service
+        .pause_agent_lifecycle_target(&primary, &target)
+        .unwrap();
+    let (reply, response) = tokio::sync::oneshot::channel();
+    actor
+        .handle_request(AsyncRuntimeRequest::ClaimNativeShellAction {
+            turn_id: turn_id.clone(),
+            action_id: action.id.clone(),
+            reply,
+        })
+        .await;
+    assert!(response.await.unwrap().unwrap().is_none());
+    assert_eq!(
+        actor
+            .service
+            .pending_native_shell_action_marker(&turn_id, &action.id),
+        Some(marker.as_str())
+    );
+    assert!(actor.refused_dispatch_sources.contains(&source));
+    assert!(!actor.offered_dispatch_sources.contains(&source));
+    actor.drain_timer_side_effects(64).unwrap();
+    assert!(matches!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(1)
+            .unwrap()
+            .as_slice(),
+        [RuntimeSideEffect::DispatchNativeShellAction { .. }]
+    ));
+    assert!(actor.offered_dispatch_sources.contains(&source));
+    assert!(
+        actor
+            .pending_provider_dispatch_side_effects()
+            .unwrap()
+            .is_empty()
+    );
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    actor.service.terminate_all_pane_processes().unwrap();
+}
+
+/// Ordinary strict-producer refusal must not enroll committed recovery. A
+/// deliberately stale recovery key likewise cannot accelerate the genuinely
+/// pending phase: turn/action equality without the exact marker is insufficient.
+/// This is a negative stale-key injection, not simulated successful execution or
+/// proof of an actual patch read/write phase transition.
+#[tokio::test(flavor = "current_thread")]
+async fn ordinary_or_stale_native_source_is_not_accelerated() {
+    for stale in [false, true] {
+        let (mut actor, turn_id, primary, action) = pending_native_at_capacity().await;
+        let marker = actor
+            .service
+            .pending_native_shell_action_marker(&turn_id, &action.id)
+            .unwrap();
+        if stale {
+            actor
+                .refused_dispatch_sources
+                .insert(SourceDispatch::Native(
+                    turn_id.clone(),
+                    action.id.clone(),
+                    format!("{marker}-retired"),
+                ));
+        } else {
+            let effects = actor.pending_provider_dispatch_side_effects().unwrap();
+            assert!(actor.queue_runtime_side_effects(effects).is_err());
+        }
+        actor.drain_timer_side_effects(1).unwrap();
+        assert!(
+            !actor
+                .drain_agent_provider_dispatch_side_effects(1)
+                .unwrap()
+                .iter()
+                .any(|effect| matches!(
+                    effect,
+                    RuntimeSideEffect::DispatchNativeShellAction { .. }
+                ))
+        );
+        assert!(actor.refused_dispatch_sources.is_empty());
+        assert!(actor.offered_dispatch_sources.is_empty());
+        assert!(matches!(
+            actor
+                .pending_provider_dispatch_side_effects()
+                .unwrap()
+                .as_slice(),
+            [RuntimeSideEffect::DispatchNativeShellAction { .. }]
+        ));
+        actor
+            .service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
+        actor.service.terminate_all_pane_processes().unwrap();
+    }
 }
 
 /// A real committed descriptor refusal must recover after capacity drains,

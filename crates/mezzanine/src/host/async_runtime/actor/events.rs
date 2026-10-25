@@ -1320,15 +1320,25 @@ impl AsyncRuntimeSessionActor {
 
     /// Returns whether one native shell action already has a queued dispatch.
     fn native_shell_dispatch_is_already_queued(&self, turn_id: &str, action_id: &str) -> bool {
-        self.side_effect_routes.any_provider(|effect| {
-            matches!(
-                effect,
-                RuntimeSideEffect::DispatchNativeShellAction {
-                    turn_id: queued_turn_id,
-                    action_id: queued_action_id,
-                } if queued_turn_id == turn_id && queued_action_id == action_id
-            )
-        })
+        self.service
+            .pending_native_shell_action_marker(turn_id, action_id)
+            .is_some_and(|marker| {
+                self.offered_dispatch_sources
+                    .contains(&super::SourceDispatch::Native(
+                        turn_id.to_string(),
+                        action_id.to_string(),
+                        marker.to_string(),
+                    ))
+            })
+            || self.side_effect_routes.any_provider(|effect| {
+                matches!(
+                    effect,
+                    RuntimeSideEffect::DispatchNativeShellAction {
+                        turn_id: queued_turn_id,
+                        action_id: queued_action_id,
+                    } if queued_turn_id == turn_id && queued_action_id == action_id
+                )
+            })
     }
 
     /// Reconciles pane-owned synchronized-output timers after a lifecycle mutation.

@@ -155,6 +155,29 @@ impl RuntimeSessionService {
             .collect()
     }
 
+    /// Returns the exact marker of an unclaimed native phase, independently of
+    /// temporary claim inhibition. Claimed phases are excluded even though the
+    /// service retains their dispatch for outcome validation. This read neither
+    /// reserves a completion nor grants worker execution authority.
+    pub(crate) fn pending_native_shell_action_marker(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+    ) -> Option<&str> {
+        let identity = (turn_id.to_string(), action_id.to_string());
+        if self
+            .agent
+            .claimed_native_shell_dispatches
+            .contains_key(&identity)
+        {
+            return None;
+        }
+        self.agent
+            .pending_native_shell_dispatches
+            .get(&identity)
+            .map(|dispatch| dispatch.marker.as_str())
+    }
+
     /// Returns turns whose native shell work has a queued or active owner.
     pub(crate) fn native_shell_progress_turn_ids(&self) -> Vec<String> {
         self.agent

@@ -11941,8 +11941,8 @@ remains all-or-error and MUST NOT gain this committed-only partial transfer.
 This is source-retained dispatch custody, not a second outside-lane holding queue
 for raw effects whose event has already surrendered ownership. No event, action,
 input or provider work may be replayed to recover dispatch.
-For a refused committed provider or approved-external-action descriptor whose
-unclaimed source is still owned by the service, the actor MUST retain only its
+For a refused committed provider, approved-external-action or native-shell
+descriptor whose unclaimed source is still owned by the service, the actor MUST retain only its
 source identity and transfer a fitting descriptor after real lane-drain
 progress. Recovery MUST NOT accelerate ordinary
 provider polls or retry timers. A recovered descriptor offered to a worker MUST
@@ -11954,6 +11954,10 @@ Temporary persistence/readiness barriers MUST retain unclaimed recovery custody;
 a successful claim MUST retire that recovery identity, not accelerate a later
 continuation or replacement action. External claims still allocate and validate
 their existing actor-owned attempt before execution.
+Native recovery identity MUST include the existing exact transaction marker;
+an old phase refusal or offer MUST NOT recover a replacement phase of the same
+turn/action. Only an actual native claim may reserve completion and transfer the
+authorized phase to a worker; a descriptor or recovery identity grants no rights.
 Once an event batch has applied its events, the side effects it produced MUST NOT
 be destroyed by a capacity refusal: the actor MUST admit them to their ordinary
 lanes within a bounded reserve above the configured capacity, in the same
