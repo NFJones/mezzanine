@@ -313,6 +313,13 @@ uses that same recovery path for the adopted compactor only. Queue pressure does
 not require repeating `/compact`. Unrelated pending work keeps normal scheduling,
 and stale preparation callbacks cannot enrol a replacement. A preparing response
 is not proof of inference or publication; transfer failures remain diagnostic.
+Accepted history/bookkeeping completions likewise retain their service sources
+under pressure. Only work becoming ready across that completion enters recovery;
+previously ready ordinary work keeps its scheduling. This may include a newly
+generated title or a provider released from bookkeeping. Stale callbacks cannot
+enrol replacement work, and optional render pressure cannot skip dispatch.
+Transfer diagnostics are bounded and best effort, not proof of durable delivery
+or permission to repeat a prompt or model request.
 Remember recovery uses the original observation ID through dispatch and claim,
 not just the pane. Stop, conversation replacement and a later `/remember` cannot
 give an old descriptor authority over the new request. A failed provider

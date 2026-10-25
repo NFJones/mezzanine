@@ -2722,6 +2722,7 @@ impl AsyncRuntimeSessionActor {
             }
             AsyncRuntimeRequest::CompleteBookkeepingCandidate { work, history } => {
                 let previous_id = self.side_effect_routes.next_transcript_claim_id();
+                let previous_sources = self.ready_dispatch_sources();
                 let receive_owner_current = self
                     .service
                     .agent_shell_store()
@@ -2733,8 +2734,9 @@ impl AsyncRuntimeSessionActor {
                 let result = self.service.complete_bookkeeping_candidate(work, history);
                 if result.as_ref().is_ok_and(|applied| *applied) {
                     let _ = self.service.start_ready_agent_turns();
-                    let _ = self.queue_deferred_pane_io_side_effects_from_service();
-                    let _ = self.queue_pending_provider_dispatch_side_effects();
+                    // Checked adoption can release an existing hidden provider.
+                    let _ = self.queue_fitting_deferred_service_side_effects();
+                    self.queue_newly_ready_dispatch_sources(previous_sources);
                     let _ = self.start_transcript_receipt_admission(
                         previous_id,
                         TranscriptReceiptReply::Startup,
@@ -2808,25 +2810,18 @@ impl AsyncRuntimeSessionActor {
             AsyncRuntimeRequest::CompleteAgentPromptHistoryPreparation { dispatch, history } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let primary_client_id = dispatch.primary_client_id.clone();
+                let previous_sources = self.ready_dispatch_sources();
                 let result = self
                     .service
-                    .complete_agent_prompt_history_preparation(&dispatch, history)
-                    .and_then(|applied| {
-                        if applied {
-                            self.queue_deferred_pane_io_side_effects_from_service()?;
-                            self.queue_pending_provider_dispatch_side_effects()?;
-                            self.queue_runtime_side_effects(vec![
-                                crate::runtime::RuntimeSideEffect::RenderClient {
-                                    client_id: primary_client_id.clone(),
-                                    reason: crate::runtime::RenderInvalidationReason::AgentPrompt,
-                                },
-                            ])?;
-                        }
-                        Ok(applied)
-                    });
+                    .complete_agent_prompt_history_preparation(&dispatch, history);
                 let should_notify =
                     result.as_ref().is_ok_and(|applied| *applied) || result.is_err();
-                if result.is_err() {
+                if should_notify {
+                    // Adoption is already accepted. Service pressure must neither
+                    // consume its sources nor short-circuit dispatch transfer.
+                    // Previously eligible work keeps its ordinary producer owner.
+                    let _ = self.queue_fitting_deferred_service_side_effects();
+                    self.queue_newly_ready_dispatch_sources(previous_sources);
                     let _ = self.queue_runtime_side_effects(vec![
                         crate::runtime::RuntimeSideEffect::RenderClient {
                             client_id: primary_client_id,

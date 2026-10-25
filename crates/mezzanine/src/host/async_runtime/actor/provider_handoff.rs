@@ -85,6 +85,48 @@ impl SourceDispatch {
 }
 
 impl AsyncRuntimeSessionActor {
+    /// Captures eligible, not-yet-queued source identities before an accepted
+    /// worker completion. This is readiness evidence, not ownership or a claim:
+    /// bookkeeping may release an existing blocked source as well as start one.
+    pub(super) fn ready_dispatch_sources(
+        &self,
+    ) -> Result<std::collections::BTreeSet<SourceDispatch>> {
+        Ok(self
+            .pending_provider_dispatch_side_effects()?
+            .iter()
+            .filter_map(|effect| SourceDispatch::from_effect(effect, &self.service))
+            .collect())
+    }
+
+    /// Transfers only sources that became ready across one serialized accepted
+    /// completion. Previously eligible work retains ordinary producer scheduling;
+    /// stale callbacks must not call this helper. The service still owns every
+    /// payload and existing committed admission retains exact refused identities.
+    /// Projection/admission diagnostics are bounded and best effort, never a
+    /// substitute for source custody or permission to replay completed work.
+    pub(super) fn queue_newly_ready_dispatch_sources(
+        &mut self,
+        previous: Result<std::collections::BTreeSet<SourceDispatch>>,
+    ) {
+        let transfer = previous.and_then(|previous| {
+            let effects = self
+                .pending_provider_dispatch_side_effects()?
+                .into_iter()
+                .filter(|effect| {
+                    SourceDispatch::from_effect(effect, &self.service)
+                        .is_some_and(|source| !previous.contains(&source))
+                })
+                .collect();
+            self.admit_committed_side_effects(effects)
+        });
+        if let Err(error) = transfer {
+            let _ = self.service.append_runtime_diagnostic_event(format!(
+                r#"{{"kind":"accepted_completion_dispatch_transfer_failed","error_kind":"{:?}"}}"#,
+                error.kind(),
+            ));
+        }
+    }
+
     /// Retains identities only after committed admission refuses descriptors.
     /// Ordinary pending tasks keep their established poll/retry scheduling.
     pub(super) fn record_refused_provider_sources(&mut self, effects: &[RuntimeSideEffect]) {

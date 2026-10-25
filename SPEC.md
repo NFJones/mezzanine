@@ -11970,6 +11970,15 @@ It MUST NOT enrol unrelated pending families, or let a stale/cancelled completio
 enrol replacement work. The initial preparing response is not inference or
 publication success; transfer failure is a bounded content-free diagnostic,
 not permission to repeat the command or request construction.
+Accepted prompt-history and checked-bookkeeping completions MUST preserve
+service-owned deferred sources through fitting transfer, not a destructive
+strict drain. Only dispatch sources becoming ready across that serialized
+completion enter committed admission: this includes newly admitted auxiliary
+work or existing work released by bookkeeping, not previously eligible ordinary
+producers. Stale callbacks MUST NOT enrol replacement work. Transfer failure
+MUST attempt a bounded content-free diagnostic; diagnostic persistence remains
+best effort and does not replace exact retained source custody. Optional render
+admission failure MUST NOT prevent dispatch transfer or imply inference success.
 Remember dispatch and claim MUST carry the existing immutable observation ID.
 Recovery MUST retain only that exact unclaimed request in its original current
 conversation; a stale descriptor MUST NOT claim or suppress a replacement in
