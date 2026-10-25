@@ -129,8 +129,10 @@ External details also expose **Telemetry health** and **Usage coverage**, separa
 from the last reported State. Ordinary observers report `enrolled` while their
 qualified transport remains live or `connection-lost` during a remaining lease;
 legacy launches report `lease-active`. These are not process-death or completion
-claims. Ordinary usage remains `unavailable-source-continuity`; legacy
-`external-reported` coverage is not exhaustive billing proof. Reads do not renew
+claims. Ordinary usage starts as `unavailable-source-continuity` and becomes
+`request-bound-external-reported` only after an actual durable request report.
+Neither this coverage nor legacy `external-reported` proves exhaustive billing
+or recovery of never-received reports. Reads do not renew
 leases, and dead ordinary producers are omitted even before maintenance retires
 their registrations. A delayed maintenance tick does not hide a still-qualified
 connected ordinary observer merely because its last lease deadline passed.

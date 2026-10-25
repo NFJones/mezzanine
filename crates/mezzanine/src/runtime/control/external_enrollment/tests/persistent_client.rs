@@ -2,34 +2,60 @@
 
 use super::*;
 
-/// Forwards an already kernel-qualified stream unchanged and classifies only
-/// the fixed retired-source error. Private framed bytes remain transient and
-/// are never stored in the shared diagnostic or printed.
+/// Observes an already kernel-qualified stream and classifies the fixed retired
+/// error. One explicit fault fixture can withhold the first complete committed
+/// usage reply and close the connection before the client reads any ACK bytes.
+/// Private framed bytes remain transient and are never printed or retained in
+/// shared diagnostics; the loss witness is only an atomic Boolean.
 struct RetiredReplySpy<S> {
     stream: S,
     pending: Vec<u8>,
     rejected: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    lose_commit: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    close_after_loss: bool,
 }
 
 impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for RetiredReplySpy<S> {
-    /// Delegates actual native sender collection without replacing any bytes.
+    /// Delegates native sender reads except for the armed postcommit EOF; no
+    /// incoming request bytes or native sender evidence are manufactured.
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
+        if self.close_after_loss {
+            return std::task::Poll::Ready(Ok(()));
+        }
         std::pin::Pin::new(&mut self.stream).poll_read(cx, buf)
     }
 }
 
 impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for RetiredReplySpy<S> {
-    /// Observes only bytes actually written and preserves partial-write/error
-    /// results, so classification never manufactures a native acknowledgment.
+    /// Except for the explicitly armed fault, observes only actual writes. The
+    /// fault requires a whole encoded frame in this call; changed framing fails
+    /// its mandatory loss assertion rather than silently claiming coverage.
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
+        if let Some(lost) = self.lose_commit.as_ref()
+            && !lost.load(std::sync::atomic::Ordering::SeqCst)
+            && let Ok((body, consumed)) = crate::control::decode_control_frame(buf, 8192)
+            && consumed == buf.len()
+            && let Ok(reply) = serde_json::from_str::<serde_json::Value>(&body)
+            && reply["result"]["accepted"] == true
+            && reply["result"]["durable"] == true
+            && reply["result"]["applied"] == true
+            && reply["result"]["coverage"]["source"] == "external-reported"
+        {
+            lost.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.close_after_loss = true;
+            // The actor already committed. Consume the fixture writer's frame
+            // without delivering it, then EOF the server read to close the real
+            // socket. This models reply loss, never an unexecuted expense.
+            return std::task::Poll::Ready(Ok(buf.len()));
+        }
         let result = std::pin::Pin::new(&mut self.stream).poll_write(cx, buf);
         if let std::task::Poll::Ready(Ok(written)) = &result {
             if self.pending.len().saturating_add(*written) <= 8320 {
@@ -79,6 +105,24 @@ impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for RetiredReplySpy
 async fn external_enrollment_installed_request_accounting_has_durable_native_ack() {
     qualify_installed_node_entry(
         "request-accounting-ordinary-fixture.mjs",
+        "persistent_client.mjs",
+        2,
+        1,
+        false,
+        None,
+    )
+    .await;
+}
+
+/// Drops the first actual durable usage ACK after actor/storage commit, before
+/// any reply bytes reach the ordinary producer. Its same native process must
+/// reconnect with the original source/ticket, receive applied=false and retire;
+/// exact database counts below forbid recharging or silently skipping the fault.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit installed Node path and built mez helper required; offline only"]
+async fn external_enrollment_installed_request_accounting_recovers_lost_commit_ack() {
+    qualify_installed_node_entry(
+        "request-accounting-lost-ack-fixture.mjs",
         "persistent_client.mjs",
         2,
         1,
@@ -387,10 +431,12 @@ async fn qualify_installed_node_entry_result(
     let mut service = RuntimeServiceFixture::new().control_socket(&path).build();
     let pi_usage = script_name == "pi-usage-ordinary-fixture.mjs";
     let request_handoff = script_name == "request-accounting-ordinary-fixture.mjs";
-    let request_accounting = request_handoff || pi_usage;
+    let request_ack_loss = script_name == "request-accounting-lost-ack-fixture.mjs";
+    let request_accounting = request_handoff || request_ack_loss || pi_usage;
     let pi_loss = script_name == "pi-loss-ordinary-fixture.mjs";
     let pi_retired = script_name == "pi-retired-source-ordinary-fixture.mjs";
     let retired_rejected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let committed_reply_lost = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     if request_accounting || pi_loss {
         service.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
             directory.join("usage.sqlite"),
@@ -491,6 +537,7 @@ async fn qualify_installed_node_entry_result(
             }
             let handle = handle.clone();
             let retired_rejected = retired_rejected.clone();
+            let lose_commit = request_ack_loss.then(|| committed_reply_lost.clone());
             tasks.spawn(async move {
                 let mut connection = ControlConnectionState::new(true, false);
                 connection
@@ -507,6 +554,8 @@ async fn qualify_installed_node_entry_result(
                     stream: qualified,
                     pending: Vec::new(),
                     rejected: retired_rejected,
+                    lose_commit,
+                    close_after_loss: false,
                 };
                 serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
                     &mut observed,
@@ -566,6 +615,11 @@ async fn qualify_installed_node_entry_result(
         retired_rejected.load(std::sync::atomic::Ordering::SeqCst),
         pi_retired,
         "actual native retired-source conflict classification"
+    );
+    assert_eq!(
+        committed_reply_lost.load(std::sync::atomic::Ordering::SeqCst),
+        request_ack_loss,
+        "fixture must actually withhold one committed native usage reply"
     );
     if pi_retired {
         assert!(
@@ -733,21 +787,23 @@ async fn qualify_installed_node_entry_result(
                 .unwrap(),
             expected_requests as i64
         );
+        for table in ["external_usage_streams", "external_usage_sources"] {
+            assert_eq!(
+                database
+                    .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+        }
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM token_usage_events", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            expected_requests as i64
+        );
         if pi_usage {
-            assert_eq!(
-                database
-                    .query_row("SELECT count(*) FROM external_usage_streams", [], |row| row
-                        .get::<_, i64>(0))
-                    .unwrap(),
-                1
-            );
-            assert_eq!(
-                database
-                    .query_row("SELECT count(*) FROM external_usage_sources", [], |row| row
-                        .get::<_, i64>(0))
-                    .unwrap(),
-                1
-            );
             assert!(exit.service.agent_shell_store().get("%1").is_none());
             let status = exit.service.runtime_agent_status_display("%1").unwrap();
             assert!(status.contains("pi-offline-provider"));

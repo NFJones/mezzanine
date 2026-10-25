@@ -891,6 +891,23 @@ restart or cross-process resume/fork remains unqualified until a vendor-backed
 continuation witness and persistent outcome recovery or supported cumulative
 source are implemented; unavailable history is a gap, never a new charge.
 
+The installed shared-client acceptance fixtures exercise two separate supported
+cases through real native Unix admission and temporary SQLite storage:
+
+- Same-client socket reconnect after the server commits a report but its whole
+  first durable ACK is withheld. The original ticket/report survives; the retry
+  returns `durable: true, applied: false`. The source, stream, request,
+  observation and expense-event counts stay one, with the original input total.
+- Same-live observer replacement. A fresh successor-local ticket recovers the
+  original marker/time/source witness/origin; replay does not recharge expense.
+  Old client tickets do not transfer, and changed finalized counters are denied.
+
+These are shared-client synthetic-producer checks, not six vendor SDK/loader
+certifications. A successful reconnect does not authorize a different native
+source, restore a missing control-service anchor, or turn a pending outcome into
+an acknowledged commit. Repeated loss or exhausted client retry remains visibly
+unavailable; there is no guaranteed no-gap delivery during permanent outage.
+
 Adapters must capture begin readiness before each genuine new provider request
 and associate its exact final outcome; missing readiness is a coverage gap, not
 zero usage. Historical/resumed/fork-inherited completed events must not get new
@@ -1300,10 +1317,14 @@ launch. Pending proof is neither live observer attestation nor renewal authority
 observed proof expiry still reports loss. This is separate
 from the last vendor-reported `status`; connection loss does not mean completion
 or producer death. Browser details and agent discovery include the same health
-and `usage_coverage`, which is `unavailable-source-continuity` for ordinary runs
-or `external-reported` for legacy reports (not exhaustive invoice evidence).
-`usage: "unavailable-source-continuity"` is explicit: ordinary usage RPCs are
-rejected until durable source continuity exists, not billed under fresh owners.
+and `usage_coverage`. Ordinary runs initially show
+`unavailable-source-continuity`; an actually committed supported request report
+enables `request-bound-external-reported`. Legacy reports use `external-reported`.
+None proves exhaustive invoice coverage. Enrollment's
+`usage: "unavailable-source-continuity"` is an initial capability/coverage
+disclosure, not a blanket claim that request-bound usage RPCs are absent.
+Reporting still requires original native readiness and a durable mapped source;
+missing continuity must never be billed under a freshly allocated replacement.
 
 #### Installed-source assembled evidence boundary
 

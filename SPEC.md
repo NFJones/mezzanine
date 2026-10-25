@@ -1662,6 +1662,13 @@ Unreported sources remain unavailable; actually committed request reports expose
 `request-bound-external-reported` coverage, not exhaustive accounting. Vendor
 producers, legacy OpenCode layout handoff and broader
 cross-process resume/fork attachment qualification remain separate work.
+Same-client socket reconnect after a committed-but-lost usage acknowledgment
+MUST retain the original ticket, normalized report, source witness, admission
+time and origin. Retry MUST freshly qualify that same native source; a durable
+duplicate acknowledgment MUST NOT add another expense or allocate another
+accounting namespace. Observer replacement MUST NOT transfer predecessor-local
+tickets or credentials. Neither supported case permits namespace-only activation
+after control-service replacement or guarantees delivery of never-received data.
 Declared curated Claude creators MAY use fixed `curated-usage-begin/end`
 helpers with public original generation/witness/session/request selectors only.
 Curated usage and heartbeat callbacks MUST narrow only the bounded indexed
