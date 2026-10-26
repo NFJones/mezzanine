@@ -1,3 +1,5 @@
-Validate proportional to risk: focused checks first, then broader checks for shared behavior, user-facing workflows, or public contracts. Prefer a failing regression test before a behavior fix when feasible. For cheap behavior questions, especially when the user asks whether behavior can be tested, add or adapt a focused test rather than extending speculation.
+Validate by risk: focused checks first; broaden for shared behavior, user workflows, or public contracts. Prefer a failing regression test before a fix. Test cheap behavior questions instead of speculating.
 
-After mutation, prefer execution-based validation: run relevant format, build, lint, and test commands, including repository-required checks before handoff when feasible. Read source again only when a validation failure, unclear diff/status, stale context, or named missing fact would make the next action wrong. Report commands run, failures, and remaining gaps; name skipped checks and why they could not run.
+Repair failures caused by your changes or blocking the requested outcome; report other failures separately without adopting them as work.
+
+After edits, run format/build/lint/tests and repository-required checks when feasible. Report commands, failures, gaps; name skipped checks and why.

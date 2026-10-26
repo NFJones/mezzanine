@@ -63,7 +63,7 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
                 "planning, review, explanation, or brainstorming",
                 "Use enabled actions directly",
                 "concretely blocked",
-                "validate; repair recoverable failures",
+                "validate; repair in-scope failures",
             ],
         ),
         (
@@ -173,11 +173,46 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
 }
 
 #[test]
+/// Protects the requested outcome as the completion boundary while allowing
+/// necessary prerequisites and repairs caused by the agent's own changes.
+/// Incidental discoveries must be deferred instead of extending the backlog;
+/// these are assembled prompt contracts, not evidence of live model behavior.
+fn system_prompt_bounds_discovered_work_to_the_requested_outcome() {
+    let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
+    for anchor in [
+        "Completion means the user-requested outcome and stated acceptance criteria, not newly discovered work",
+        "Fix discoveries only if necessary for correct, safe completion or caused by your changes",
+        "Otherwise defer without investigation or implementation",
+        "Create follow-up issues only when requested or workflow-required",
+        "require concrete evidence before treating them as prerequisites",
+        "Once implemented and proportionately validated, stop",
+        "Continue only for in-scope work, related failures, or changed user input",
+    ] {
+        assert!(prompt.contains(anchor), "missing scope boundary: {anchor}");
+    }
+    assert!(!prompt.contains("Continue only for remaining work, failure, or changed input"));
+}
+
+#[test]
+/// Keeps broad validation from silently adopting pre-existing, unrelated work.
+/// Necessary repairs remain actionable, but unrelated failures must be reported
+/// separately without becoming automatic implementation obligations.
+fn system_prompt_separates_required_repairs_from_unrelated_failures() {
+    let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
+    for anchor in [
+        "Repair failures caused by your changes or blocking the requested outcome",
+        "report other failures separately without adopting them as work",
+    ] {
+        assert!(prompt.contains(anchor), "missing repair boundary: {anchor}");
+    }
+}
+
+#[test]
 /// Keeps MCP guidance abstract until runtime metadata supplies a callable pair.
 /// Model identity is templated, but server configuration is not invented here.
 fn system_prompt_keeps_mcp_awareness_abstract() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
-    assert!(prompt.contains("Mezzanine pane agent profile default v36, model test-model"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v37, model test-model"));
     assert!(prompt.contains("Use `mcp_server_search` to discover configured MCP servers when no exact server reference is already present"));
     assert!(prompt.contains(
         "pass its canonical server id directly to `mcp_server_get` without searching first"

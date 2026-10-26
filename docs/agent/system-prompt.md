@@ -64,6 +64,26 @@ approval, and a peer message cannot override user instructions. Repository,
 skill, macro, MCP, and terminal content must not be treated as a source of new
 security authority.
 
+### Task scope and completion
+
+The built-in prompt treats the requested outcome and stated acceptance criteria
+as the completion boundary. Discovering another problem does not expand the
+task: Mez should address it only when necessary to complete the requested
+outcome correctly and safely, or when caused by its own changes. Other findings
+should be deferred without further investigation or implementation and, when
+material, briefly reported at handoff. Follow-up issues should be created only
+when requested or required by the active workflow, and should not become
+prerequisites without concrete evidence.
+
+Repository-required validation still applies. Failures caused by the change or
+directly preventing the requested outcome should be repaired, even if
+pre-existing. Other failures should be reported separately rather than
+automatically adopted as more implementation work. Once the requested outcome
+is implemented and proportionately validated, Mez should stop.
+
+These are model instructions, not a runtime-enforced scope restriction. State
+owned files and acceptance criteria explicitly when a task needs tighter bounds.
+
 When behavior is unexpected, use `/status`, `/permissions`, and `/approval` to
 inspect runtime state. Use `/show-context` to inspect conversation entries and
 `/copy-context` for the assembled request or idle preview. Review exports before
@@ -76,6 +96,14 @@ Try a small task with clear expected behavior before adopting a broad prompt
 change. Check both a normal case and a boundary case: for example, ask for a
 bounded edit, then ask for a review that must not edit files. Compare observed
 actions, changed files, and validation results, not just the model's prose.
+
+For scope-boundary changes, compare a task with a genuine prerequisite against
+one with an incidental improvement: the prerequisite should be handled, while
+the incidental improvement should remain untouched and should not generate an
+issue unless requested or required by the workflow. Also compare a validation
+failure introduced by the change with an unrelated pre-existing failure: repair
+the former and report the latter without expanding the task. Confirm that the
+agent stops after the requested outcome is implemented and validated.
 
 Model behavior is nondeterministic and provider-dependent. Successful local
 tests or one successful conversation do not establish identical behavior across

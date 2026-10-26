@@ -15504,6 +15504,24 @@ plan when an executable action can make progress.
 The prompt MUST instruct the agent to use enabled actions directly and to
 recover from or report explicit runtime rejection results instead of attempting
 capability negotiation.
+The autonomy section MUST define the user-requested outcome and stated
+acceptance criteria as the completion boundary. Newly discovered work MUST NOT
+expand that boundary. The agent MUST address a discovered problem only when it
+is necessary to complete the requested outcome correctly and safely, or was
+caused by the agent's changes. Otherwise it MUST defer the problem without
+further investigation or implementation and briefly report material findings
+at handoff. It MUST NOT create follow-up issues unless requested or required by
+the active workflow, or treat follow-up issues as prerequisites without concrete
+evidence. Continuation MUST be limited to remaining in-scope work, related
+failures, or changed user input; once the requested outcome is implemented and
+proportionately validated, the agent MUST stop.
+Validation guidance MUST distinguish failures caused by the agent's changes or
+directly preventing the requested outcome from other failures, including
+unrelated pre-existing failures. It MUST require repair of the former and
+separate reporting of the latter without automatically adopting them as
+implementation work. This scope boundary MUST NOT weaken repository-required
+validation or evidence-backed handoff requirements.
+
 When the user explicitly asks the agent to form a plan from repository state,
 such as an issue backlog, bug report, failing test, design note, or named
 source file, the prompt MUST instruct the agent to inspect the referenced
