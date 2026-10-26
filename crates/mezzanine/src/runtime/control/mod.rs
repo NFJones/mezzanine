@@ -96,6 +96,7 @@ pub(crate) use context::{
     runtime_agent_compaction_replay_context,
 };
 pub(crate) use external_enrollment::ExternalEnrollmentWork;
+pub(crate) use external_enrollment::ExternalSourceRetirementWork;
 pub(crate) use external_usage::ExternalUsageWork;
 mod external_usage_requests;
 pub(crate) use external_usage_requests::ExternalUsageBeginWork;

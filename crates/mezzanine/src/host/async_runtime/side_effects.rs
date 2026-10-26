@@ -1477,6 +1477,27 @@ where
                         }
                     }
                 }
+                RuntimeSideEffect::PersistExternalSourceRetirement { work } => {
+                    let path = work.path().to_path_buf();
+                    match persist_external_source_retirement(work).await {
+                        Ok(()) => {
+                            report.completed = report.completed.saturating_add(1);
+                            batch.push(RuntimeEvent::Persistence(PersistenceEvent::Completed {
+                                target: PersistenceTarget::TokenUsage,
+                                path,
+                                bytes: 0,
+                            }));
+                        }
+                        Err(error) => {
+                            report.failed = report.failed.saturating_add(1);
+                            batch.push(RuntimeEvent::Persistence(PersistenceEvent::Failed {
+                                target: PersistenceTarget::TokenUsage,
+                                path,
+                                error: error.message().to_string(),
+                            }));
+                        }
+                    }
+                }
                 RuntimeSideEffect::SettleAgentProviderPersistence { work } => {
                     let turn_id = work.turn.turn_id.clone();
                     let generation = work.generation;
@@ -2080,6 +2101,16 @@ async fn persist_token_usage_event(
             ))
         })??;
     Ok(())
+}
+
+/// Retires one actor-sealed source on the existing persistence blocking lane.
+/// Join failure retains truthful uncertainty, never raw panic payloads or replay.
+async fn persist_external_source_retirement(
+    work: crate::runtime::ExternalSourceRetirementWork,
+) -> Result<()> {
+    tokio::task::spawn_blocking(move || work.execute())
+        .await
+        .map_err(|_| MezError::invalid_state("external source retirement worker join failed"))?
 }
 
 /// Settles actor-validated provider memory and issue work on Tokio's blocking pool.

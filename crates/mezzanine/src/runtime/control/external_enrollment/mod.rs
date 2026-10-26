@@ -50,6 +50,8 @@ mod recovery;
 mod rotation;
 mod source;
 mod source_clock;
+mod source_retirement;
+pub(crate) use source_retirement::ExternalSourceRetirementWork;
 mod targets;
 use producer::ProducerEvidence;
 pub(super) use recovery::LiveSourceAnchors;
@@ -161,7 +163,7 @@ pub(crate) struct ExternalEnrollmentWork {
     /// Original native proposal and write outcomes survive worker return. Only
     /// a separate actual actor grant can start acceptance; neither stored state
     /// nor these inputs alone grant replacement-control authority.
-    source_preparation: Arc<OnceLock<source::NativeSourcePreparation>>,
+    source_preparation: Arc<source_retirement::NativeSourceSlot>,
     /// Private first-admission reply retained only during off-actor publication.
     /// Never serialized into the activation ledger or exposed through Debug.
     source_publication: Option<SecretString>,
@@ -492,6 +494,13 @@ impl RuntimeSessionService {
         let source_store = self.persistence.cloned_token_usage_store();
         self.prune_external_source_anchors();
         self.sync_external_ancestry_budget();
+        let source_preparation = if source_store.is_some() && curated.is_none() {
+            self.control
+                .external_sources()
+                .reserve_activation_metadata()
+        } else {
+            Arc::new(source_retirement::NativeSourceSlot::unreserved())
+        };
         let registry = self.control.external_agents_mut();
         // An existing run needs a worker reservation, not another binding slot.
         // This is only a candidate lookup: native observation and commit fences
@@ -550,7 +559,7 @@ impl RuntimeSessionService {
             source_store,
             source_owner: Arc::new(OnceLock::new()),
             source_created: Arc::new(OnceLock::new()),
-            source_preparation: Arc::new(OnceLock::new()),
+            source_preparation,
             source_publication: None,
             #[cfg(test)]
             worker_gate: registry.enrollments.worker_gate.clone(),
@@ -828,7 +837,9 @@ impl RuntimeSessionService {
             .as_ref()
             .ok_or_else(|| MezError::invalid_state("external enrollment owner disappeared"))?;
         work.record_source_actor_admission(digest, binding.generation);
-        Ok(enrollment_response(binding, enrollment, &work.session_id))
+        let response = enrollment_response(binding, enrollment, &work.session_id);
+        self.retain_external_source_activation(digest, work);
+        Ok(response)
     }
 }
 

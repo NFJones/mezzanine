@@ -432,6 +432,7 @@ pub(super) fn runtime_side_effect_is_durable_persistence(effect: &RuntimeSideEff
             | RuntimeSideEffect::PersistPromptHistory { .. }
             | RuntimeSideEffect::PersistCommandPromptHistory { .. }
             | RuntimeSideEffect::PersistTokenUsage { .. }
+            | RuntimeSideEffect::PersistExternalSourceRetirement { .. }
             | RuntimeSideEffect::SettleAgentProviderPersistence { .. }
             | RuntimeSideEffect::PersistRegistry { .. }
     )
@@ -476,6 +477,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::PersistSessionArchive { .. } => "persist-session-archive",
         RuntimeSideEffect::PersistSavedSessionRetention { .. } => "persist-saved-session-retention",
         RuntimeSideEffect::PersistTokenUsage { .. } => "persist-token-usage",
+        RuntimeSideEffect::PersistExternalSourceRetirement { .. } => "persist-source-retirement",
         RuntimeSideEffect::SettleAgentProviderPersistence { .. } => {
             "settle-agent-provider-persistence"
         }

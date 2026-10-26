@@ -107,9 +107,25 @@ struct BoundSourceAnchor {
     accepted_resume: Option<SourceResume>,
     expires: u64,
     retired: bool,
+    /// Exact prepared/admitted metadata survives disposable observer handles.
+    activation: Option<Arc<source_retirement::NativeSourceSlot>>,
 }
 
 impl BoundSourceAnchor {
+    /// Latches metadata retirement before dropping proof; duplicate calls own
+    /// no new persistence work and cannot undo the absorbing source fence.
+    fn retire(&mut self) -> Option<ExternalSourceRetirementWork> {
+        if self.retired {
+            return None;
+        }
+        let work = self.activation.as_ref().and_then(|slot| slot.retire());
+        self.retired = true;
+        self.revision = self.revision.saturating_add(1);
+        self.ancestry = None;
+        self.accepted_resume = None;
+        work
+    }
+
     /// Matches every original native source/routing dimension. This selection
     /// grants no authority; retained and newly captured lifetimes are also fenced.
     fn matches(&self, work: &ExternalEnrollmentWork) -> bool {
@@ -188,6 +204,8 @@ impl BoundSourceAnchor {
 pub(in crate::runtime::control) struct LiveSourceAnchors {
     anchors: BTreeMap<String, BoundSourceAnchor>,
     budget: Arc<UnixAncestryBudget>,
+    /// Bounds active, queued and physically running metadata custody together.
+    metadata_budget: Arc<tokio::sync::Semaphore>,
     /// Small fixture-only quota exercises fail-closed exhaustion without load.
     #[cfg(test)]
     limit: Option<usize>,
@@ -205,9 +223,15 @@ impl LiveSourceAnchors {
         Self {
             anchors: BTreeMap::new(),
             budget,
+            metadata_budget: Arc::new(tokio::sync::Semaphore::new(MAX_BINDINGS)),
             #[cfg(test)]
             limit: None,
         }
+    }
+
+    /// Reserves before preparation; registry reset cannot reset this shared pool.
+    pub(super) fn reserve_activation_metadata(&self) -> Arc<source_retirement::NativeSourceSlot> {
+        source_retirement::NativeSourceSlot::reserve(self.metadata_budget.clone())
     }
 
     /// Returns the fixed production bound or an explicit test-owned small bound.
@@ -276,9 +300,13 @@ impl RuntimeSessionService {
 
     /// Snapshot/session replacement invalidates every retained source, including
     /// one whose disposable registration already disappeared. Keep retired
-    /// lifetime fences, but release ancestry and any accepted transition input.
+    /// memory fences, but release ancestry and any accepted transition input.
+    /// This is NOT native source-lifetime retirement: no tombstone is queued.
     pub(in crate::runtime::control) fn retire_all_external_source_anchors(&mut self) {
         for anchor in self.control.external_sources_mut().anchors.values_mut() {
+            if let Some(slot) = anchor.activation.take() {
+                slot.invalidate_acceptance();
+            }
             if !anchor.retired {
                 anchor.retired = true;
                 anchor.revision = anchor.revision.saturating_add(1);
@@ -337,22 +365,31 @@ impl RuntimeSessionService {
             })
             .collect::<Vec<_>>();
         for owner in ended {
-            self.control.external_sources_mut().anchors.remove(&owner);
+            if let Some(mut anchor) = self.control.external_sources_mut().anchors.remove(&owner)
+                && let Some(work) = anchor.retire()
+            {
+                self.persistence.queue_token_usage(
+                    crate::runtime::RuntimeSideEffect::PersistExternalSourceRetirement { work },
+                );
+            }
         }
         // Registry loss may leave this anchor as the only ancestry owner. A
         // vanished intermediate ancestor is not producer/root death and must
         // not evict replay/instance fences or allow a fresh-label takeover.
+        let mut retirements = Vec::new();
         for anchor in self.control.external_sources_mut().anchors.values_mut() {
             if anchor
                 .ancestry
                 .as_ref()
                 .is_some_and(|ancestry| !ancestry.is_live())
             {
-                anchor.retired = true;
-                anchor.revision = anchor.revision.saturating_add(1);
-                anchor.accepted_resume = None;
-                anchor.ancestry = None;
+                retirements.extend(anchor.retire());
             }
+        }
+        for work in retirements {
+            self.persistence.queue_token_usage(
+                crate::runtime::RuntimeSideEffect::PersistExternalSourceRetirement { work },
+            );
         }
     }
 
@@ -419,11 +456,39 @@ impl RuntimeSessionService {
             accepted_resume: enrollment.accepted_resume.clone(),
             expires: binding.expires,
             retired: false,
+            activation: prior.and_then(|prior| prior.activation.clone()),
         };
         self.control
             .external_sources_mut()
             .anchors
             .insert(owner, anchor);
+    }
+
+    /// Attaches only an actual admitted preparation to the current native source.
+    /// No private reply/credential or current store lookup is retained here.
+    pub(super) fn retain_external_source_activation(
+        &mut self,
+        digest: [u8; 32],
+        work: &ExternalEnrollmentWork,
+    ) {
+        if work
+            .source_preparation
+            .get()
+            .and_then(|preparation| preparation.admission.get())
+            .is_none()
+        {
+            return;
+        }
+        let Some(binding) = self.control.external_agents().bindings.get(&digest) else {
+            return;
+        };
+        let owner = binding.accounting_owner.clone();
+        if let Some(anchor) = self.control.external_sources_mut().anchors.get_mut(&owner)
+            && anchor.digest == digest
+            && !anchor.retired
+        {
+            anchor.activation = Some(work.source_preparation.clone());
+        }
     }
 
     /// Synchronizes only bounded metadata; never performs database/process I/O.
@@ -462,13 +527,18 @@ impl RuntimeSessionService {
     /// Invalidates currentness BEFORE the central retirement drops ancestry or
     /// publishes terminal state. Pending/replay work cannot resurrect that owner.
     pub(in crate::runtime::control) fn retire_external_source_anchor(&mut self, digest: [u8; 32]) {
-        for anchor in self.control.external_sources_mut().anchors.values_mut() {
-            if anchor.digest == digest && !anchor.retired {
-                anchor.retired = true;
-                anchor.revision = anchor.revision.saturating_add(1);
-                anchor.ancestry = None;
-                anchor.accepted_resume = None;
-            }
+        let work = self
+            .control
+            .external_sources_mut()
+            .anchors
+            .values_mut()
+            .filter(|anchor| anchor.digest == digest)
+            .filter_map(BoundSourceAnchor::retire)
+            .collect::<Vec<_>>();
+        for work in work {
+            self.persistence.queue_token_usage(
+                crate::runtime::RuntimeSideEffect::PersistExternalSourceRetirement { work },
+            );
         }
     }
 

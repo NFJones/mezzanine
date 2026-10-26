@@ -5,9 +5,11 @@
 //! finite admission pool then retains the private reply through off-actor clock
 //! and SQLite work, followed by a fresh actor/currentness check. Reply loss does
 //! not replay admission or persistence; original write outcomes remain cached.
-//! These internal facts do not yet enable cold recovery: durable retirement and
-//! renewal are separate unfinished integration. Optional metadata failure never
-//! invents durable success or changes independently qualified lifecycle rights.
+//! These internal facts do not yet enable cold recovery: required retirement
+//! acknowledgment/reconciliation and renewal remain unfinished. Source-lifetime
+//! retirement already closes acceptance and queues an optional exact tombstone.
+//! Optional metadata failure never invents durable success or changes
+//! independently qualified lifecycle rights.
 
 use super::*;
 
@@ -69,14 +71,11 @@ impl ExternalEnrollmentWork {
                 "external source publication evidence expired",
             ));
         }
-        self.source_preparation
-            .get()
-            .ok_or_else(|| MezError::invalid_state("external source preparation disappeared"))?
-            .accept(
-                self.source_store
-                    .as_ref()
-                    .ok_or_else(|| MezError::invalid_state("external source store disappeared"))?,
-            )
+        self.source_preparation.accept(
+            self.source_store
+                .as_ref()
+                .ok_or_else(|| MezError::invalid_state("external source store disappeared"))?,
+        )
     }
 }
 

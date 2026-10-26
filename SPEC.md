@@ -1702,7 +1702,23 @@ publication MUST recheck original registry/binding/producer/root/instance and
 deadline; stale callbacks MUST NOT release a replacement owner's numeric slot.
 Neither native observation nor actor code itself writes Accepted. Optional
 metadata failure preserves only the existing lifecycle-only reply, not a claim
-of durable recovery. Durable retirement, renewal and cold admission remain
+of durable recovery. Original prepared/admitted metadata MUST remain attached
+to its bounded source lifetime across observer replacement. At most 256 source
+metadata slots MAY be retained across active anchors, queued work and physical
+workers; exhaustion leaves optional metadata unavailable, never unbounded work.
+Logical native source retirement MUST close future acceptance before releasing
+proof and queue at most one exact tombstone on the existing persistence lane.
+This is the logical authority fence, including expired disconnected-observer
+leases and invalid retained ancestry; a tombstone MUST NOT be described as proof
+of physical process death or necessarily an explicit vendor SourceEnd event.
+Acceptance and retirement I/O MUST serialize off actor. Already admitted I/O
+may finish; retirement then tombstones its exact resulting revision. Retirement MUST match
+the original proposal and actual revision; stale handles MUST NOT retire a
+successor. Control/snapshot invalidation alone MUST NOT create a native-lifetime
+tombstone. Only positive worker evidence establishes durable retirement; a
+cached failure remains unavailable without automatic write replay. This optional
+pipeline does NOT yet provide a durable end acknowledgment or cold-recovery
+guarantee. Retirement failure reconciliation, renewal and cold admission remain
 unfinished; Accepted records describe historical admission, not current liveness.
 Existing same-live ownership and namespace-only activation refusals remain in
 force; a stored Accepted flag alone MUST NOT authorize recovery or reporting.

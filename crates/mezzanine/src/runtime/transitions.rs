@@ -1138,6 +1138,12 @@ pub enum RuntimeSideEffect {
         /// Immutable idempotent usage event to append.
         event: TokenUsageEvent,
     },
+    /// Persist one exact source-lifetime tombstone outside the actor. The sealed
+    /// work retains its finite metadata permit through physical worker completion.
+    PersistExternalSourceRetirement {
+        /// Original source proposal and destination, never caller-selected.
+        work: crate::runtime::ExternalSourceRetirementWork,
+    },
     /// Settle actor-validated provider memory and issue actions on a blocking worker.
     SettleAgentProviderPersistence {
         /// Immutable repositories, action context, and execution state.

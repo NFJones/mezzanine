@@ -937,8 +937,20 @@ native and publication phases share the 32-admission bound. Final publication
 rechecks the exact registry/binding/producer/root/instance/deadline, and duplicate
 or replacement-owner callbacks cannot release another reservation. Optional
 metadata failure still yields only the existing lifecycle-only semantics, never
-a durable-recovery promise. Durable retirement, renewal and typed cold-service
-recovery remain implementation work. Accepted is historical admission, not
+a durable-recovery promise. Original source metadata is retained across observer
+rotation under a separate 256-slot lifetime/queued/physical-worker bound. Source
+retirement closes acceptance immediately and queues one exact tombstone on the
+existing off-actor persistence lane; acceptance and retirement I/O serialize.
+Retirement is the logical source-authority boundary: an expired disconnected
+observer lease can retire it while the actual producer/root remain alive. A
+tombstone proves neither physical process exit nor an explicit vendor end event.
+The original proposal/revision and destination remain fixed, stale observer
+handles cannot retire successors, and only a successful worker proves a durable
+tombstone. A failed outcome is cached, not silently retried or acknowledged as
+durable. Snapshot/control invalidation alone is not a native lifetime end and
+does not write a tombstone. No new end/durable-recovery acknowledgment is promised:
+retirement failure reconciliation, renewal and typed cold-service recovery remain
+implementation work. Accepted is historical admission, not
 current liveness, native authority or
 a new RPC capability. Existing namespace-only activation refusal remains intact;
 schema upgrade does not make full-service restart recovery supported.

@@ -6,7 +6,10 @@
 //! native source and ancestry, supply a same-boot clock, and fence publication
 //! and retirement. Native observation writes only Prepared for a newly allocated
 //! ordinary socket source. Actual actor registration can seal a second off-actor
-//! acceptance write; retirement, renewal and cold recovery are not integrated.
+//! acceptance write. Logical source retirement queues an exact tombstone on the
+//! existing persistence lane, retaining its original proposal and cached outcome.
+//! Required retirement acknowledgment/reconciliation, renewal and cold recovery
+//! are not integrated; failed optional writes cannot be called durable success.
 //! Curated and existing source paths are unchanged. Accepted is historical
 //! admission, not a persisted assertion of current liveness or a control right.
 //!

@@ -17,12 +17,16 @@ use crate::storage::token_usage::{ExternalSourceKey, NativeSourceKind, NativeSou
 #[derive(Debug)]
 pub(super) struct NativeSourcePreparation {
     key: ExternalSourceKey,
+    /// Original repository snapshot; retirement never retargets a new store.
+    store: crate::storage::token_usage::TokenUsageStore,
     activation: crate::storage::token_usage::ExternalSourceActivation,
     receipt: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
     /// Sealed only after the actor actually registered this original source.
     pub(super) admission: OnceLock<super::publication::SourceActorAdmission>,
     /// Original acceptance outcome, shared by worker clones without replay.
     acceptance: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
+    /// Original retirement result, retained without automatic write replay.
+    retirement: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
 }
 
 impl NativeSourcePreparation {
@@ -54,10 +58,12 @@ impl NativeSourcePreparation {
         .ok()?;
         Some(Self {
             key,
+            store: work.source_store.as_ref()?.clone(),
             activation,
             receipt: OnceLock::new(),
             admission: OnceLock::new(),
             acceptance: OnceLock::new(),
+            retirement: OnceLock::new(),
         })
     }
 
@@ -113,6 +119,40 @@ impl NativeSourcePreparation {
             .map_err(Clone::clone)
     }
 
+    /// Returns the originally captured store, not a current configuration lookup.
+    pub(super) fn original_store(&self) -> &crate::storage::token_usage::TokenUsageStore {
+        &self.store
+    }
+
+    /// Reconciles only the exact immutable proposal, then tombstones its actual
+    /// revision. Called under the slot's worker-only lock after logical retire.
+    /// A cached failure is retained, not silently retried or called success.
+    pub(super) fn retire(&self) -> Result<()> {
+        self.retirement
+            .get_or_init(|| {
+                let receipt = self
+                    .store
+                    .external_source_activation(&self.key)?
+                    .filter(|receipt| receipt.activation == self.activation)
+                    .ok_or_else(|| {
+                        MezError::conflict("external source retirement proposal changed")
+                    })?;
+                if receipt.state
+                    == crate::storage::token_usage::ExternalSourceActivationState::Retired
+                {
+                    return Ok(receipt);
+                }
+                self.store.retire_external_source_activation(
+                    &self.key,
+                    &self.activation,
+                    receipt.revision,
+                )
+            })
+            .as_ref()
+            .map(|_| ())
+            .map_err(Clone::clone)
+    }
+
     /// Exposes this fixture's original cached write result, not a constructor,
     /// retry trigger or substitute for native/actor admission.
     #[cfg(test)]
@@ -161,11 +201,12 @@ impl ExternalEnrollmentWork {
             let resolved = store.resolve_external_source_owner(&key).ok()?;
             let _ = self.source_created.set(resolved.created);
             if resolved.created
+                && self.source_preparation.has_reservation()
                 && let Some(preparation) = NativeSourcePreparation::capture(self, producer, key)
             {
                 // Publish immutable inputs before I/O so a lost/failed write
                 // cannot cause this worker to mint a different attempt.
-                if self.source_preparation.set(preparation).is_ok()
+                if self.source_preparation.set(preparation)
                     && let Some(original) = self.source_preparation.get()
                 {
                     original.prepare(store);
