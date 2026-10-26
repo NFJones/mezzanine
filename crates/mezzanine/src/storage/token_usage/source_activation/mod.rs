@@ -12,7 +12,9 @@
 //! worker-owned recovery CAS requires positive unchanged-predecessor evidence;
 //! unknown mutations never replay or create/migrate storage merely on read.
 //! A separate explicit server end method requires exact worker proof. The client
-//! has finite same-service end-ACK recovery; renewal/fences/cold recovery remain unfinished.
+//! has finite same-service end-ACK recovery. An inert renewal CAS stores a separate
+//! bounded checkpoint without rewriting the original proposal; native runtime
+//! renewal, persisted observer fences and cold recovery remain unfinished.
 //! Exhausted or unknown optional writes remain unavailable.
 //! Curated and existing source paths are unchanged. Accepted is historical
 //! admission, not a persisted assertion of current liveness or a control right.
@@ -26,6 +28,9 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{ExternalSourceKey, MezError, Result, TokenUsageStore, sqlite_i64};
+
+mod renewal;
+pub(crate) use renewal::ExternalSourceRenewal;
 
 /// Same-boot retention window, not a public reconnect or delivery guarantee.
 const MAX_ACTIVATION_WINDOW_MS: u64 = 60_000;
@@ -119,6 +124,8 @@ pub(crate) struct ExternalSourceActivationReceipt {
     pub(crate) revision: u64,
     /// Current durable stage; preparation and retirement are not acceptance.
     pub(crate) state: ExternalSourceActivationState,
+    /// Optional latest inert lease checkpoint; original proposal stays exact.
+    pub(crate) renewal: Option<ExternalSourceRenewal>,
 }
 
 impl ExternalSourceActivationReceipt {
@@ -126,7 +133,10 @@ impl ExternalSourceActivationReceipt {
     /// same-boot native ownership, ancestry and current actor authorization.
     pub(crate) fn is_accepted_at(&self, now_boot_ms: u64) -> bool {
         self.state == ExternalSourceActivationState::Accepted
-            && self.activation.contains_boot_time(now_boot_ms)
+            && self.renewal.as_ref().map_or_else(
+                || self.activation.contains_boot_time(now_boot_ms),
+                |renewal| renewal.contains_boot_time(now_boot_ms),
+            )
     }
 }
 
@@ -170,7 +180,8 @@ fn load_receipt(
     let row = connection
         .query_row(
             "SELECT substr(attempt,1,33),substr(ancestry,1,33),prepared_at_boot_ms,
-             expires_at_boot_ms,revision,state FROM external_usage_source_activations WHERE owner=?1",
+             expires_at_boot_ms,revision,state,renewed_at_boot_ms,renewed_until_boot_ms
+             FROM external_usage_source_activations WHERE owner=?1",
             [owner],
             |row| {
                 Ok((
@@ -180,11 +191,15 @@ fn load_receipt(
                     super::store::row_u64(row, 3)?,
                     super::store::row_u64(row, 4)?,
                     row.get::<_, i64>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
                 ))
             },
         )
         .optional()?;
-    let Some((attempt, ancestry, prepared, expires, revision, state)) = row else {
+    let Some((attempt, ancestry, prepared, expires, revision, state, renewed_at, renewed_until)) =
+        row
+    else {
         return Ok(None);
     };
     if revision == 0 {
@@ -201,10 +216,42 @@ fn load_receipt(
         expires,
     )
     .map_err(|_| invalid_stored_activation())?;
+    let state = ExternalSourceActivationState::from_stored(state)?;
+    let renewal = match (renewed_at, renewed_until) {
+        (None, None) => {
+            let valid = match state {
+                ExternalSourceActivationState::Prepared => revision == 1,
+                ExternalSourceActivationState::Accepted => revision == 2,
+                ExternalSourceActivationState::Retired => matches!(revision, 2 | 3),
+            };
+            if !valid {
+                return Err(invalid_stored_activation());
+            }
+            None
+        }
+        (Some(start), Some(end)) => {
+            let renewal = ExternalSourceRenewal::new(
+                u64::try_from(start).map_err(|_| invalid_stored_activation())?,
+                u64::try_from(end).map_err(|_| invalid_stored_activation())?,
+            )
+            .map_err(|_| invalid_stored_activation())?;
+            if state == ExternalSourceActivationState::Prepared
+                || revision < 3
+                || (state == ExternalSourceActivationState::Retired && revision < 4)
+                || renewal.renewed_at_boot_ms < prepared
+                || renewal.expires_at_boot_ms <= expires
+            {
+                return Err(invalid_stored_activation());
+            }
+            Some(renewal)
+        }
+        _ => return Err(invalid_stored_activation()),
+    };
     Ok(Some(ExternalSourceActivationReceipt {
         activation,
         revision,
-        state: ExternalSourceActivationState::from_stored(state)?,
+        state,
+        renewal,
     }))
 }
 
@@ -295,6 +342,7 @@ impl TokenUsageStore {
             activation: activation.clone(),
             revision: 1,
             state: ExternalSourceActivationState::Prepared,
+            renewal: None,
         })
     }
 
@@ -402,6 +450,7 @@ impl TokenUsageStore {
             activation: activation.clone(),
             revision,
             state: target,
+            renewal: previous.renewal,
         })
     }
 

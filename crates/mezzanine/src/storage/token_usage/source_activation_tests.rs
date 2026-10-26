@@ -3,7 +3,9 @@
 //! Synthetic native metadata exercises storage identity only; none of these
 //! tests attests a real producer or grants enrollment/reporting authority.
 
-use super::source_activation::{ExternalSourceActivation, ExternalSourceActivationState};
+use super::source_activation::{
+    ExternalSourceActivation, ExternalSourceActivationState, ExternalSourceRenewal,
+};
 use super::*;
 
 /// Owns only this test's unique temporary database directory.
@@ -85,6 +87,574 @@ fn external_source_activation_inspection_does_not_create_or_migrate() {
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
             version
+        );
+    }
+}
+
+/// Rebuilds only this generated fixture's activation table in its exact v8
+/// shape, preserving all seven original fields and unrelated ledger tables.
+/// Both migration controls use this helper; it never opens user storage.
+fn v8_activation_fixture(database: &rusqlite::Connection) {
+    database.execute_batch("CREATE TEMP TABLE fixture_v8_rows AS SELECT owner,attempt,ancestry,prepared_at_boot_ms,expires_at_boot_ms,revision,state FROM external_usage_source_activations;
+        DROP TABLE external_usage_source_activations;
+        CREATE TABLE external_usage_source_activations (
+        owner TEXT PRIMARY KEY NOT NULL CHECK(length(owner)=36),
+        attempt BLOB NOT NULL CHECK(typeof(attempt)='blob' AND length(attempt)=32),
+        ancestry BLOB NOT NULL CHECK(typeof(ancestry)='blob' AND length(ancestry)=32),
+        prepared_at_boot_ms INTEGER NOT NULL CHECK(prepared_at_boot_ms>0),
+        expires_at_boot_ms INTEGER NOT NULL CHECK(expires_at_boot_ms>prepared_at_boot_ms AND expires_at_boot_ms-prepared_at_boot_ms<=60000),
+        revision INTEGER NOT NULL CHECK(revision>0),state INTEGER NOT NULL CHECK(state IN (0,1,2)),
+        FOREIGN KEY(owner) REFERENCES external_usage_sources(owner));
+        INSERT INTO external_usage_source_activations SELECT * FROM fixture_v8_rows;
+        DROP TABLE fixture_v8_rows; PRAGMA user_version=8;").unwrap();
+}
+
+/// An existing v8 accepted fact is not a renewal. Opening the new writer schema
+/// must add empty checkpoint fields without changing original proposal/revision,
+/// mapping or unrelated accounting data; repeated opening is inert.
+#[test]
+fn external_source_activation_v8_renewal_migration_preserves_original_facts() {
+    let fixture = Fixture::new();
+    let source = key("v8-renewal");
+    let owner = fixture.store.external_source_owner(&source).unwrap();
+    let proposal = activation(1, 2, 100, 200);
+    fixture
+        .store
+        .prepare_external_source_activation(&source, &proposal)
+        .unwrap();
+    let original = fixture
+        .store
+        .accept_external_source_activation(&source, &proposal, 1, 101)
+        .unwrap();
+    let database = rusqlite::Connection::open(fixture.store.path()).unwrap();
+    v8_activation_fixture(&database);
+    database.execute_batch("INSERT INTO token_usage_events(id,observed_at,provider,model,input_tokens,output_tokens,reasoning_tokens,harness,event_source,reasoning_known) VALUES('migration-v8-expense',100,'fixture','model',10,3,0,'pi','external',0);").unwrap();
+    let before: String = database
+        .query_row("SELECT owner FROM external_usage_sources", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(before, owner);
+    drop(database);
+    for _ in 0..2 {
+        drop(fixture.store.open().unwrap());
+        let database = rusqlite::Connection::open(fixture.store.path()).unwrap();
+        let columns = database
+            .prepare("PRAGMA table_info(external_usage_source_activations)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            columns.iter().any(|name| name == "renewed_at_boot_ms"),
+            "writer failed to migrate the renewal checkpoint"
+        );
+        let empty: bool = database.query_row("SELECT renewed_at_boot_ms IS NULL AND renewed_until_boot_ms IS NULL FROM external_usage_source_activations", [], |row| row.get(0)).unwrap();
+        assert!(empty, "migration invented a renewal");
+        assert_eq!(
+            database
+                .query_row(
+                    "SELECT count(*),sum(input_tokens),sum(output_tokens) FROM token_usage_events",
+                    [],
+                    |row| Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?
+                    ))
+                )
+                .unwrap(),
+            (1, 10, 3)
+        );
+        assert_eq!(
+            fixture.store.external_source_activation(&source).unwrap(),
+            Some(original.clone())
+        );
+        assert_eq!(fixture.store.external_source_owner(&source).unwrap(), owner);
+    }
+}
+
+/// A conflicting second column makes migration fail AFTER its first alteration.
+/// SQLite must roll back both version and physical shape, retaining the original
+/// accepted row and source owner rather than partially publishing new evidence.
+#[test]
+fn external_source_activation_v8_renewal_migration_failure_is_atomic() {
+    let fixture = Fixture::new();
+    let source = key("v8-renewal-collision");
+    let owner = fixture.store.external_source_owner(&source).unwrap();
+    let proposal = activation(1, 2, 100, 200);
+    fixture
+        .store
+        .prepare_external_source_activation(&source, &proposal)
+        .unwrap();
+    fixture
+        .store
+        .accept_external_source_activation(&source, &proposal, 1, 101)
+        .unwrap();
+    let database = rusqlite::Connection::open(fixture.store.path()).unwrap();
+    v8_activation_fixture(&database);
+    database.execute_batch("ALTER TABLE external_usage_source_activations ADD COLUMN renewed_until_boot_ms INTEGER;").unwrap();
+    assert!(
+        fixture.store.open().is_err(),
+        "conflicting migration unexpectedly succeeded"
+    );
+    let version: i64 = database
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 8);
+    let columns = database
+        .prepare("PRAGMA table_info(external_usage_source_activations)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        !columns.iter().any(|name| name == "renewed_at_boot_ms"),
+        "failed migration retained its first alteration"
+    );
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT owner,revision,state FROM external_usage_source_activations",
+                [],
+                |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?
+                ))
+            )
+            .unwrap(),
+        (owner, 2, 1)
+    );
+}
+
+/// A renewal preserves the original proposal while extending only its accepted
+/// clock facts. An exact lost-ACK retry performs no second UPDATE, and a stale
+/// retirement cannot erase the newer checkpoint. Final retirement is absorbing.
+#[test]
+fn external_source_activation_renewal_replay_and_retirement_are_exact() {
+    let fixture = Fixture::new();
+    let store = &fixture.store;
+    let source = key("renewal-exact");
+    let owner = store.external_source_owner(&source).unwrap();
+    let proposal = activation(1, 2, 100, 200);
+    store
+        .prepare_external_source_activation(&source, &proposal)
+        .unwrap();
+    store
+        .accept_external_source_activation(&source, &proposal, 1, 101)
+        .unwrap();
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    database.execute_batch("CREATE TABLE fixture_renewal_writes(n INTEGER); INSERT INTO fixture_renewal_writes VALUES(0);
+        CREATE TRIGGER fixture_count_renewals AFTER UPDATE ON external_usage_source_activations BEGIN UPDATE fixture_renewal_writes SET n=n+1; END;").unwrap();
+    let renewal = ExternalSourceRenewal::new(150, 250).unwrap();
+    let renewed = store
+        .renew_external_source_activation(&source, &proposal, 2, &renewal, 150)
+        .unwrap();
+    assert_eq!(renewed.activation, proposal);
+    assert_eq!(renewed.renewal, Some(renewal));
+    assert_eq!(renewed.revision, 3);
+    assert!(
+        !renewed.is_accepted_at(149),
+        "rollback used the original earlier window"
+    );
+    assert!(renewed.is_accepted_at(150));
+    assert!(
+        renewed.is_accepted_at(225),
+        "renewal did not extend beyond original expiry"
+    );
+    assert!(!renewed.is_accepted_at(250));
+    assert_eq!(
+        store.external_source_activation(&source).unwrap(),
+        Some(renewed.clone())
+    );
+    assert_eq!(
+        store
+            .renew_external_source_activation(&source, &proposal, 2, &renewal, 160)
+            .unwrap(),
+        renewed
+    );
+    assert_eq!(
+        database
+            .query_row("SELECT n FROM fixture_renewal_writes", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(
+        store
+            .retire_external_source_activation(&source, &proposal, 2)
+            .is_err()
+    );
+    let retired = store
+        .retire_external_source_activation(&source, &proposal, 3)
+        .unwrap();
+    assert_eq!(retired.revision, 4);
+    assert_eq!(retired.activation, proposal);
+    assert_eq!(retired.renewal, Some(renewal));
+    assert!(!retired.is_accepted_at(175));
+    assert!(
+        store
+            .renew_external_source_activation(
+                &source,
+                &proposal,
+                3,
+                &ExternalSourceRenewal::new(175, 275).unwrap(),
+                175
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .prepare_external_source_activation(&source, &proposal)
+            .is_err()
+    );
+    assert_eq!(store.external_source_owner(&source).unwrap(), owner);
+    assert_eq!(
+        store.external_source_activation(&source).unwrap(),
+        Some(retired)
+    );
+}
+
+/// Consecutive checkpoints use the latest live window, never the immutable first
+/// expiry. Old successful proposals cannot rewind a later renewal, and retirement
+/// retains the final checkpoint without a fresh source or accounting owner.
+#[test]
+fn external_source_activation_renewal_uses_latest_window_across_multiple_checkpoints() {
+    let fixture = Fixture::new();
+    let store = &fixture.store;
+    let source = key("renewal-multiple");
+    store.external_source_owner(&source).unwrap();
+    let proposal = activation(1, 2, 100, 200);
+    store
+        .prepare_external_source_activation(&source, &proposal)
+        .unwrap();
+    store
+        .accept_external_source_activation(&source, &proposal, 1, 101)
+        .unwrap();
+    let first = ExternalSourceRenewal::new(150, 250).unwrap();
+    store
+        .renew_external_source_activation(&source, &proposal, 2, &first, 150)
+        .unwrap();
+    let second = ExternalSourceRenewal::new(225, 325).unwrap();
+    let current = store
+        .renew_external_source_activation(&source, &proposal, 3, &second, 225)
+        .unwrap();
+    assert_eq!(current.activation, proposal);
+    assert_eq!(current.revision, 4);
+    assert_eq!(current.renewal, Some(second));
+    assert!(!current.is_accepted_at(224));
+    assert!(current.is_accepted_at(300));
+    assert!(!current.is_accepted_at(325));
+    assert!(
+        store
+            .renew_external_source_activation(&source, &proposal, 2, &first, 230)
+            .is_err()
+    );
+    assert!(
+        store
+            .accept_external_source_activation(&source, &proposal, 1, 230)
+            .is_err()
+    );
+    assert_eq!(
+        store.external_source_activation(&source).unwrap(),
+        Some(current)
+    );
+    let retired = store
+        .retire_external_source_activation(&source, &proposal, 4)
+        .unwrap();
+    assert_eq!(retired.revision, 5);
+    assert_eq!(retired.renewal, Some(second));
+}
+
+/// Synthetic clocks qualify only storage predicates, not native liveness. Missing
+/// or Prepared facts, expired/rolled-back windows, changed proposals, stale
+/// revisions and nonmonotonic extensions all refuse without changing the row.
+#[test]
+fn external_source_activation_renewal_clock_and_stage_refusals_preserve_source() {
+    for (start, end) in [(0, 1), (100, 100), (200, 100), (1, 60_002), (1, u64::MAX)] {
+        assert!(ExternalSourceRenewal::new(start, end).is_err());
+    }
+    assert!(ExternalSourceRenewal::new(1, 60_001).is_ok());
+    let fixture = Fixture::new();
+    let store = &fixture.store;
+    let source = key("renewal-refusal");
+    store.external_source_owner(&source).unwrap();
+    let proposal = activation(1, 2, 100, 200);
+    let renewal = ExternalSourceRenewal::new(150, 250).unwrap();
+    assert!(
+        store
+            .renew_external_source_activation(&source, &proposal, 2, &renewal, 150)
+            .is_err()
+    );
+    let prepared = store
+        .prepare_external_source_activation(&source, &proposal)
+        .unwrap();
+    assert!(
+        store
+            .renew_external_source_activation(&source, &proposal, 2, &renewal, 150)
+            .is_err()
+    );
+    assert_eq!(
+        store.external_source_activation(&source).unwrap(),
+        Some(prepared)
+    );
+    let accepted = store
+        .accept_external_source_activation(&source, &proposal, 1, 101)
+        .unwrap();
+    for (revision, start, end, now) in [
+        (2, 90, 250, 99),
+        (2, 200, 300, 200),
+        (2, 190, 290, 189),
+        (2, 150, 190, 150),
+        (2, 90, 250, 150),
+        (0, 150, 250, 150),
+        (1, 150, 250, 150),
+        (3, 150, 250, 150),
+        (i64::MAX as u64, 150, 250, 150),
+    ] {
+        assert!(
+            store
+                .renew_external_source_activation(
+                    &source,
+                    &proposal,
+                    revision,
+                    &ExternalSourceRenewal::new(start, end).unwrap(),
+                    now
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store.external_source_activation(&source).unwrap(),
+            Some(accepted.clone())
+        );
+    }
+    for changed in [
+        activation(2, 2, 100, 200),
+        activation(1, 3, 100, 200),
+        activation(1, 2, 101, 200),
+        activation(1, 2, 100, 201),
+    ] {
+        assert!(
+            store
+                .renew_external_source_activation(&source, &changed, 2, &renewal, 150)
+                .is_err()
+        );
+    }
+    let renewed = store
+        .renew_external_source_activation(&source, &proposal, 2, &renewal, 150)
+        .unwrap();
+    for (revision, start, end, now) in [
+        (2, 160, 260, 160),
+        (3, 140, 300, 160),
+        (3, 150, 250, 160),
+        (3, 240, 350, 250),
+    ] {
+        assert!(
+            store
+                .renew_external_source_activation(
+                    &source,
+                    &proposal,
+                    revision,
+                    &ExternalSourceRenewal::new(start, end).unwrap(),
+                    now
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store.external_source_activation(&source).unwrap(),
+            Some(renewed.clone())
+        );
+    }
+}
+
+/// Two generated-store writers may race for the SAME revision, but cannot both
+/// install different checkpoints. A renewal versus original-revision retirement
+/// has one winner too; the survivor can then be retired at its exact current row.
+#[test]
+fn external_source_activation_renewal_concurrency_is_revision_fenced() {
+    for retire_race in [false, true] {
+        let fixture = Fixture::new();
+        let source = key("renewal-race");
+        fixture.store.external_source_owner(&source).unwrap();
+        let proposal = activation(1, 2, 100, 200);
+        fixture
+            .store
+            .prepare_external_source_activation(&source, &proposal)
+            .unwrap();
+        fixture
+            .store
+            .accept_external_source_activation(&source, &proposal, 1, 101)
+            .unwrap();
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let workers = (0..2)
+            .map(|index| {
+                let (gate, store, source, proposal) = (
+                    gate.clone(),
+                    fixture.store.clone(),
+                    source.clone(),
+                    proposal.clone(),
+                );
+                std::thread::spawn(move || {
+                    gate.wait();
+                    if retire_race && index == 1 {
+                        store.retire_external_source_activation(&source, &proposal, 2)
+                    } else {
+                        store.renew_external_source_activation(
+                            &source,
+                            &proposal,
+                            2,
+                            &ExternalSourceRenewal::new(150 + index, 300 + index).unwrap(),
+                            170,
+                        )
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        gate.wait();
+        let outcomes = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 1);
+        let current = fixture
+            .store
+            .external_source_activation(&source)
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.revision, 3);
+        assert_eq!(current.activation, proposal);
+        if current.state == ExternalSourceActivationState::Accepted {
+            assert!(current.renewal.is_some());
+            let retired = fixture
+                .store
+                .retire_external_source_activation(&source, &proposal, 3)
+                .unwrap();
+            assert_eq!(retired.revision, 4);
+        } else {
+            assert_eq!(current.state, ExternalSourceActivationState::Retired);
+        }
+    }
+}
+
+/// A failed SQL mutation retains the original receipt and representative expense.
+/// After removing only this generated trigger, an explicitly retried immutable
+/// proposal may commit once; unchanged retry reconciles without another revision.
+#[test]
+fn external_source_activation_renewal_write_failure_preserves_expense() {
+    let fixture = Fixture::new();
+    let store = &fixture.store;
+    let source = key("renewal-fault");
+    store.external_source_owner(&source).unwrap();
+    let proposal = activation(1, 2, 100, 200);
+    store
+        .prepare_external_source_activation(&source, &proposal)
+        .unwrap();
+    let original = store
+        .accept_external_source_activation(&source, &proposal, 1, 101)
+        .unwrap();
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    database.execute_batch("INSERT INTO token_usage_events(id,observed_at,provider,model,input_tokens,output_tokens,reasoning_tokens,harness,event_source,reasoning_known) VALUES('renewal-fixture-expense',100,'fixture','model',10,3,0,'pi','external',0);
+        CREATE TRIGGER fixture_refuse_renewal BEFORE UPDATE ON external_usage_source_activations BEGIN SELECT RAISE(FAIL,'fixture renewal failure'); END;").unwrap();
+    let renewal = ExternalSourceRenewal::new(150, 250).unwrap();
+    assert!(
+        store
+            .renew_external_source_activation(&source, &proposal, 2, &renewal, 150)
+            .is_err()
+    );
+    assert_eq!(
+        store.external_source_activation(&source).unwrap(),
+        Some(original)
+    );
+    database
+        .execute_batch("DROP TRIGGER fixture_refuse_renewal")
+        .unwrap();
+    let renewed = store
+        .renew_external_source_activation(&source, &proposal, 2, &renewal, 150)
+        .unwrap();
+    assert_eq!(
+        store
+            .renew_external_source_activation(&source, &proposal, 2, &renewal, 160)
+            .unwrap(),
+        renewed
+    );
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT count(*),sum(input_tokens),sum(output_tokens) FROM token_usage_events",
+                [],
+                |row| Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?
+                ))
+            )
+            .unwrap(),
+        (1, 10, 3)
+    );
+}
+
+/// Damaged paired/type/window/stage metadata cannot fall back to the original
+/// accepted window or be overwritten into valid-looking evidence. Only this
+/// generated database bypasses SQL checks to exercise strict reader validation.
+#[test]
+fn external_source_activation_renewal_malformed_checkpoints_fail_closed() {
+    let fixture = Fixture::new();
+    let store = &fixture.store;
+    let source = key("renewal-malformed");
+    store.external_source_owner(&source).unwrap();
+    let proposal = activation(1, 2, 100, 200);
+    store
+        .prepare_external_source_activation(&source, &proposal)
+        .unwrap();
+    store
+        .accept_external_source_activation(&source, &proposal, 1, 101)
+        .unwrap();
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    database
+        .execute_batch("PRAGMA ignore_check_constraints=ON")
+        .unwrap();
+    for fields in [
+        "renewed_at_boot_ms=150,renewed_until_boot_ms=NULL,revision=3",
+        "renewed_at_boot_ms=NULL,renewed_until_boot_ms=250,revision=3",
+        "renewed_at_boot_ms=150.5,renewed_until_boot_ms=250,revision=3",
+        "renewed_at_boot_ms=-1,renewed_until_boot_ms=250,revision=3",
+        "renewed_at_boot_ms=150,renewed_until_boot_ms=150,revision=3",
+        "renewed_at_boot_ms=150,renewed_until_boot_ms=60151,revision=3",
+        "renewed_at_boot_ms=50,renewed_until_boot_ms=250,revision=3",
+        "renewed_at_boot_ms=150,renewed_until_boot_ms=190,revision=3",
+        "renewed_at_boot_ms=150,renewed_until_boot_ms=250,revision=2",
+        "renewed_at_boot_ms=150,renewed_until_boot_ms=250,revision=3,state=0",
+        "renewed_at_boot_ms=150,renewed_until_boot_ms=250,revision=3,state=2",
+        "renewed_at_boot_ms=NULL,renewed_until_boot_ms=NULL,revision=3,state=1",
+        "renewed_at_boot_ms=NULL,renewed_until_boot_ms=NULL,revision=4,state=2",
+    ] {
+        database.execute_batch("UPDATE external_usage_source_activations SET renewed_at_boot_ms=NULL,renewed_until_boot_ms=NULL,revision=2,state=1").unwrap();
+        database
+            .execute_batch(&format!(
+                "UPDATE external_usage_source_activations SET {fields}"
+            ))
+            .unwrap();
+        assert!(
+            store.external_source_activation(&source).is_err(),
+            "invalid checkpoint accepted: {fields}"
+        );
+        assert!(
+            store
+                .renew_external_source_activation(
+                    &source,
+                    &proposal,
+                    3,
+                    &ExternalSourceRenewal::new(175, 275).unwrap(),
+                    175
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .retire_external_source_activation(&source, &proposal, 3)
+                .is_err()
         );
     }
 }
@@ -216,7 +786,7 @@ fn external_source_activation_migration_keeps_legacy_mappings_inert() {
         database
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        8
+        super::store::SCHEMA_VERSION
     );
     assert_eq!(store.external_source_owner(&source).unwrap(), owner);
     assert_eq!(
@@ -814,12 +1384,42 @@ fn external_source_activation_corrupt_rows_and_revision_exhaustion_fail_closed()
             .retire_external_source_activation(&source, &proposal, i64::MAX as u64)
             .is_err()
     );
+    assert!(
+        store.external_source_activation(&source).is_err(),
+        "Prepared/MAX cannot be valid renewal history"
+    );
     assert_eq!(
+        database
+            .query_row(
+                "SELECT revision FROM external_usage_source_activations",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        i64::MAX
+    );
+    database.execute_batch("UPDATE external_usage_source_activations SET state=1,renewed_at_boot_ms=150,renewed_until_boot_ms=250").unwrap();
+    let maximum = store.external_source_activation(&source).unwrap().unwrap();
+    assert_eq!(maximum.revision, i64::MAX as u64);
+    assert!(maximum.is_accepted_at(175));
+    assert!(
         store
-            .external_source_activation(&source)
-            .unwrap()
-            .unwrap()
-            .revision,
-        i64::MAX as u64
+            .renew_external_source_activation(
+                &source,
+                &proposal,
+                i64::MAX as u64,
+                &ExternalSourceRenewal::new(175, 275).unwrap(),
+                175
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .retire_external_source_activation(&source, &proposal, i64::MAX as u64)
+            .is_err()
+    );
+    assert_eq!(
+        store.external_source_activation(&source).unwrap(),
+        Some(maximum)
     );
 }

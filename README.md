@@ -62,7 +62,8 @@ does not activate paid search or change the default backend.
 Ordinary Pi/OpenCode integrations installed by bootstrap distinguish logical
 retirement from verified durable source-end acknowledgment, with bounded
 same-intent reply-loss recovery. Exhaustion remains unavailable; this does not
-imply a durable inbox or cold-service recovery.
+imply a durable inbox or cold-service recovery. Stored lifetime checkpoints alone
+cannot renew or restore harness authority.
 
 ## Why Mezzanine?
 

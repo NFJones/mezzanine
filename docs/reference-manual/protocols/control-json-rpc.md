@@ -908,7 +908,7 @@ source, restore a missing control-service anchor, or turn a pending outcome into
 an acknowledged commit. Repeated loss or exhausted client retry remains visibly
 unavailable; there is no guaranteed no-gap delivery during permanent outage.
 
-Telemetry schema 8 introduces an internal source-activation metadata ledger.
+Telemetry schema9 extends the internal source-activation ledger introduced in8.
 Migration preserves existing namespace, request origin and expense rows and does
 not manufacture accepted facts for legacy mappings. Worker-side primitives can
 record one exact prepared/accepted/retired attempt per mapped source, reconcile
@@ -918,6 +918,20 @@ There is a 65,536-record cap with explicit refusal, not eviction. Decoding and
 revision arithmetic are checked; malformed/future state and migration collisions
 fail closed. The ledger contains no native IDs/paths, launch credentials or
 callback/transcript content, and its transitions do not charge expense.
+
+Schema9 keeps the original activation proposal unchanged and adds a separate
+optional latest renewal checkpoint(start/expiry boot milliseconds) in the same
+bounded row. The window remains at most60 seconds. Migration adds NULL values,
+preserving original receipts, request origins and expense; migration failure
+rolls back columns and version together. A worker-only CAS can extend only an
+already-live Accepted record at its exact revision. Start cannot move backward,
+expiry must advance, and an exact committed retry performs no second update.
+Prepared/expired/retired/stale/conflicting or exhausted facts refuse; final
+retirement preserves the checkpoint. Paired fields, numeric types, bounds and
+stage/revision grammar are checked on read, including with damaged SQL checks.
+This is a storage prerequisite, NOT a new RPC or automatically enabled native
+renewal. Fresh native clock/source proof, actor ownership, finite worker custody
+and publication fencing remain runtime work; cold recovery is still unavailable.
 
 The native worker now prepares metadata only for a newly allocated ordinary
 socket source, after real retained ancestry and native boot evidence. The digest

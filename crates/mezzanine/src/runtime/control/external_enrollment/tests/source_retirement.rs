@@ -784,7 +784,15 @@ async fn external_source_retirement_changed_proof_cannot_spend_fresh_recovery() 
         "UPDATE external_usage_source_activations SET attempt=X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'",
         "DELETE FROM external_usage_source_activations",
     ] {
+        // Deliberately corrupt only this fixture; the worker's separate reader
+        // must reject malformed proof even when SQL checks were bypassed.
+        database
+            .pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
         database.execute_batch(changed).unwrap();
+        database
+            .pragma_update(None, "ignore_check_constraints", false)
+            .unwrap();
         let before: (i64, Option<i64>, Option<i64>) = database
             .query_row(
                 "SELECT count(*),min(state),min(revision) FROM external_usage_source_activations",
@@ -876,7 +884,14 @@ async fn external_source_retirement_failure_is_retained_without_write_replay() {
         "UPDATE external_usage_source_activations SET state=2,revision=3,attempt=X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'",
         "DELETE FROM external_usage_source_activations",
     ] {
+        // Exercise decoder/reconciliation failure, not merely CHECK refusal.
+        database
+            .pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
         database.execute_batch(changed).unwrap();
+        database
+            .pragma_update(None, "ignore_check_constraints", false)
+            .unwrap();
         let native = retained.clone();
         let result = tokio::task::spawn_blocking(move || native.execute())
             .await

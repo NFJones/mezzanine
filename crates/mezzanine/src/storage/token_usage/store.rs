@@ -13,7 +13,7 @@ use super::{
     set_private_file_permissions, sqlite_i64,
 };
 
-pub(super) const SCHEMA_VERSION: i64 = 8;
+pub(super) const SCHEMA_VERSION: i64 = 9;
 const SECONDS_PER_DAY: u64 = 86_400;
 
 /// One immutable provider/model usage delta.
@@ -360,7 +360,7 @@ fn initialize_schema(
                  PRAGMA user_version = 1;",
             )?;
         }
-        1 | 2 | 3 | 4 | 5 | 6 | 7 | SCHEMA_VERSION => {}
+        1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | SCHEMA_VERSION => {}
         future if future > SCHEMA_VERSION => {
             return Err(MezError::invalid_state(format!(
                 "token usage database schema version {future} is newer than supported version {SCHEMA_VERSION}"
@@ -436,6 +436,23 @@ fn initialize_schema(
             state INTEGER NOT NULL CHECK(state IN (0,1,2)),
             FOREIGN KEY(owner) REFERENCES external_usage_sources(owner));
             PRAGMA user_version=8;",
+        )?;
+    }
+    if version < 9 {
+        transaction.execute_batch(
+            "ALTER TABLE external_usage_source_activations ADD COLUMN renewed_at_boot_ms INTEGER NULL
+                CHECK(renewed_at_boot_ms IS NULL OR (typeof(renewed_at_boot_ms)='integer' AND renewed_at_boot_ms>0));
+             ALTER TABLE external_usage_source_activations ADD COLUMN renewed_until_boot_ms INTEGER NULL CHECK(
+                (renewed_at_boot_ms IS NULL AND renewed_until_boot_ms IS NULL AND
+                    ((state=0 AND revision=1) OR (state=1 AND revision=2) OR (state=2 AND revision IN (2,3)))) OR
+                (renewed_at_boot_ms IS NOT NULL AND renewed_until_boot_ms IS NOT NULL
+                    AND typeof(renewed_until_boot_ms)='integer'
+                    AND renewed_at_boot_ms>=prepared_at_boot_ms
+                    AND renewed_until_boot_ms>renewed_at_boot_ms
+                    AND renewed_until_boot_ms-renewed_at_boot_ms<=60000
+                    AND renewed_until_boot_ms>expires_at_boot_ms
+                    AND ((state=1 AND revision>=3) OR (state=2 AND revision>=4))));
+             PRAGMA user_version=9;",
         )?;
     }
     transaction.commit()?;

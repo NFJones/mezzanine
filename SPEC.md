@@ -1669,7 +1669,7 @@ duplicate acknowledgment MUST NOT add another expense or allocate another
 accounting namespace. Observer replacement MUST NOT transfer predecessor-local
 tickets or credentials. Neither supported case permits namespace-only activation
 after control-service replacement or guarantees delivery of never-received data.
-Telemetry schema 8 adds an INTERNAL inert source-activation receipt ledger, not
+Telemetry schema 9 extends the INTERNAL inert source-activation receipt ledger introduced in8, not
 another expense store or a new enrollment permission. Version-7 mappings MUST
 migrate without fabricated accepted receipts or changed expense/request origins.
 Each exact mapped namespace MAY retain one fixed-size prepared/accepted/retired
@@ -1682,6 +1682,21 @@ MUST refuse new records at 65536 without pruning accepted or retired facts;
 reads MUST bound metadata decoding and reject malformed state or arithmetic.
 Migration MUST be transactional and refuse unknown future versions. These facts
 MUST NOT serialize credentials, native IDs/paths or callback/transcript payloads.
+Schema9 MUST retain the immutable initial attempt/ancestry/window and MAY store
+one separate latest renewal checkpoint in the SAME row: paired integer boot-clock
+start/expiry, positive and at most60000ms apart. Migration from8 MUST add NULL
+checkpoints without inventing renewal, changing revisions or recharging expense;
+failed migration MUST roll back both columns and version. An off-actor storage
+CAS MAY extend only the SAME still-live Accepted fact at its exact revision,
+with nondecreasing start and strictly later expiry. Exact committed retry MUST
+return its existing checkpoint without another write; conflicting/stale proposals,
+clock rollback, expiry, retirement and revision exhaustion MUST refuse. Retirement
+MUST preserve the checkpoint and remain absorbing. Decoding MUST reject partial,
+wrong-type or impossible stage/revision/checkpoint combinations rather than
+falling back to an earlier window. These are INERT storage primitives: runtime
+renewal still requires independently fresh same-boot native proof, current actor
+authorization, bounded worker custody and publication fences; this schema change
+MUST NOT itself enable renewal, cold admission, status restoration or action replay.
 For newly allocated ordinary socket sources, the off-actor native-observation
 phase MAY write only Prepared from actual retained ancestry and a suspend-aware
 native clock. Fingerprints MUST bind the original source/kind and ordered
