@@ -71,6 +71,7 @@ mod claim_admission;
 mod coalesce;
 mod construction;
 mod drain;
+mod enrollment;
 mod events;
 mod external_usage_retry;
 mod handle;

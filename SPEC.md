@@ -1682,8 +1682,8 @@ MUST refuse new records at 65536 without pruning accepted or retired facts;
 reads MUST bound metadata decoding and reject malformed state or arithmetic.
 Migration MUST be transactional and refuse unknown future versions. These facts
 MUST NOT serialize credentials, native IDs/paths or callback/transcript payloads.
-For newly allocated ordinary socket sources, the existing off-actor enrollment
-worker MAY write only Prepared from actual retained ancestry and a suspend-aware
+For newly allocated ordinary socket sources, the off-actor native-observation
+phase MAY write only Prepared from actual retained ancestry and a suspend-aware
 native clock. Fingerprints MUST bind the original source/kind and ordered
 UID/incarnation chain THROUGH the pane root, not its out-of-scope parent. Linux
 CLOCK_BOOTTIME MUST have verified zero time-namespace offsets with matching
@@ -1694,8 +1694,16 @@ The original proposal and write outcome MUST remain immutable through worker
 return; optional preparation failure MUST NOT change existing native admission
 or reporting authority. Existing/curated sources MUST NOT silently acquire new
 attempts through this path. Abandoned preparation MUST remain non-authorizing.
-Actor acceptance/retirement integration, renewal and cold admission remain
-unfinished; ordinary registration MUST NOT itself mark these receipts Accepted.
+Only actual successful actor registration MAY seal a one-shot acceptance grant.
+The same bounded enrollment lane MAY retain its private reply while a second
+off-actor worker commits that exact prepared revision and caches the outcome.
+Native and publication reservations together MUST stay within 32. Final reply
+publication MUST recheck original registry/binding/producer/root/instance and
+deadline; stale callbacks MUST NOT release a replacement owner's numeric slot.
+Neither native observation nor actor code itself writes Accepted. Optional
+metadata failure preserves only the existing lifecycle-only reply, not a claim
+of durable recovery. Durable retirement, renewal and cold admission remain
+unfinished; Accepted records describe historical admission, not current liveness.
 Existing same-live ownership and namespace-only activation refusals remain in
 force; a stored Accepted flag alone MUST NOT authorize recovery or reporting.
 Declared curated Claude creators MAY use fixed `curated-usage-begin/end`

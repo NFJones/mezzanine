@@ -930,9 +930,16 @@ produce no fabricated window. The original proposal and write outcome survive
 worker return, without automatic retry. Optional preparation failure leaves
 existing native lifecycle/reporting checks unchanged; abandoned work remains
 Prepared and cannot activate the old namespace. Existing/curated source behavior
-does not gain new activation attempts here. Ordinary registration never marks
-the row Accepted. Actor-qualified acceptance/retirement, renewal and typed
-cold-service recovery remain implementation work. An Accepted row is not native authority or
+does not gain new activation attempts here. Actual successful actor registration
+can seal one exact acceptance grant. A second off-actor worker commits its
+prepared revision before releasing the retained reply in the healthy case;
+native and publication phases share the 32-admission bound. Final publication
+rechecks the exact registry/binding/producer/root/instance/deadline, and duplicate
+or replacement-owner callbacks cannot release another reservation. Optional
+metadata failure still yields only the existing lifecycle-only semantics, never
+a durable-recovery promise. Durable retirement, renewal and typed cold-service
+recovery remain implementation work. Accepted is historical admission, not
+current liveness, native authority or
 a new RPC capability. Existing namespace-only activation refusal remains intact;
 schema upgrade does not make full-service restart recovery supported.
 

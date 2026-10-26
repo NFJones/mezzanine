@@ -18,13 +18,13 @@ mod external_requests;
 mod external_sources;
 mod history;
 mod projects;
-// The native worker uses preparation only, not an admission path. Remove this
-// narrow expectation when acceptance/retirement/recovery adopt the remaining API.
+// Native workers use preparation and actor-qualified acceptance, not cold
+// admission. Remove this narrow expectation when retirement/recovery adopt the API.
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "source acceptance and retirement integration remains unfinished"
+        reason = "source retirement and cold recovery integration remains unfinished"
     )
 )]
 mod source_activation;
@@ -50,7 +50,9 @@ pub(crate) use external::{
 };
 pub(crate) use external_requests::ExternalRequestOrigin;
 pub(crate) use external_sources::{ExternalSourceKey, NativeSourceKind, NativeSourceWitness};
-pub(crate) use source_activation::{ExternalSourceActivation, ExternalSourceActivationReceipt};
+pub(crate) use source_activation::{
+    ExternalSourceActivation, ExternalSourceActivationReceipt, ExternalSourceActivationState,
+};
 pub(crate) use store::{TokenUsageEvent, TokenUsageStore};
 
 /// Exact rolling windows displayed by `/status --extended`.

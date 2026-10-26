@@ -45,6 +45,7 @@ mod cursor;
 mod helper;
 mod helper_usage;
 mod producer;
+mod publication;
 mod recovery;
 mod rotation;
 mod source;
@@ -57,6 +58,7 @@ use recovery::{ResumeAdmission, SourceResume};
 /// Actor-owned reservations consumed on every completion, including reply loss.
 #[derive(Debug, Default)]
 pub(super) struct EnrollmentAdmissions {
+    /// Shared native/publication pool; sealed work carries the exact phase.
     pending: BTreeSet<u64>,
     next: u64,
     /// Registry incarnation fences reused numeric reservation IDs after reset.
@@ -119,7 +121,9 @@ pub(super) struct EnrollmentBinding {
     token: SecretString,
 }
 
-/// Immutable native observation work; no credential exists before actor commit.
+/// Immutable native observation and sealed post-admission publication work.
+/// No credential exists before actor commit; a private reply may be retained only
+/// for the worker's optional acceptance phase after actual registration.
 #[derive(Debug, Clone)]
 pub(crate) struct ExternalEnrollmentWork {
     admission: u64,
@@ -154,9 +158,13 @@ pub(crate) struct ExternalEnrollmentWork {
     source_owner: Arc<OnceLock<Option<String>>>,
     /// Atomic lookup novelty; existing rows cannot recreate missing live owners.
     source_created: Arc<OnceLock<bool>>,
-    /// Original prepared-only native inputs and write outcome survive worker
-    /// return. They grant no actor acceptance or replacement-control authority.
+    /// Original native proposal and write outcomes survive worker return. Only
+    /// a separate actual actor grant can start acceptance; neither stored state
+    /// nor these inputs alone grant replacement-control authority.
     source_preparation: Arc<OnceLock<source::NativeSourcePreparation>>,
+    /// Private first-admission reply retained only during off-actor publication.
+    /// Never serialized into the activation ledger or exposed through Debug.
+    source_publication: Option<SecretString>,
     /// Deterministic test-owned barrier proving native work does not hold actor.
     #[cfg(test)]
     pub(crate) worker_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
@@ -543,6 +551,7 @@ impl RuntimeSessionService {
             source_owner: Arc::new(OnceLock::new()),
             source_created: Arc::new(OnceLock::new()),
             source_preparation: Arc::new(OnceLock::new()),
+            source_publication: None,
             #[cfg(test)]
             worker_gate: registry.enrollments.worker_gate.clone(),
             #[cfg(test)]
@@ -623,6 +632,11 @@ impl RuntimeSessionService {
         ) {
             return Err(MezError::conflict(
                 "external enrollment reservation owner changed",
+            ));
+        }
+        if work.source_publication_was_scheduled() {
+            return Err(MezError::conflict(
+                "external enrollment native phase already settled",
             ));
         }
         if !self
@@ -813,6 +827,7 @@ impl RuntimeSessionService {
             .enrollment
             .as_ref()
             .ok_or_else(|| MezError::invalid_state("external enrollment owner disappeared"))?;
+        work.record_source_actor_admission(digest, binding.generation);
         Ok(enrollment_response(binding, enrollment, &work.session_id))
     }
 }

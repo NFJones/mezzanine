@@ -2,6 +2,39 @@
 
 use super::*;
 
+/// The installed qualification wrapper must not inline an entire native actor
+/// workflow in its caller's default-stack future. Measure the actual opaque
+/// future type without constructing/polling it or spawning any native resource;
+/// this frame budget is not a guarantee of whole-call-stack usage or OS support.
+#[test]
+fn external_enrollment_installed_fixture_future_is_bounded() {
+    /// Reads only a function's concrete returned future layout, never calls it.
+    fn bytes<F>(
+        _: fn(&'static str, &'static str, usize, usize, bool, Option<&'static str>) -> F,
+    ) -> usize {
+        std::mem::size_of::<F>()
+    }
+    let size = bytes(qualify_installed_node_entry);
+    eprintln!("installed qualification wrapper future bytes={size}");
+    /// Measures the actor run state without constructing or polling an actor.
+    fn actor_bytes<F>(_: fn(crate::host::async_runtime::AsyncRuntimeSessionActor) -> F) -> usize {
+        std::mem::size_of::<F>()
+    }
+    let actor = actor_bytes(crate::host::async_runtime::AsyncRuntimeSessionActor::run);
+    eprintln!("installed qualification actor-run future bytes={actor}");
+    eprintln!(
+        "installed qualification layouts work={} binding={} enrollment={} error={}",
+        std::mem::size_of::<ExternalEnrollmentWork>(),
+        std::mem::size_of::<LaunchBinding>(),
+        std::mem::size_of::<EnrollmentBinding>(),
+        std::mem::size_of::<MezError>()
+    );
+    assert!(
+        size <= 112 * 1024,
+        "installed qualification wrapper future exceeds 112KiB: {size}"
+    );
+}
+
 /// Observes an already kernel-qualified stream and classifies the fixed retired
 /// error. One explicit fault fixture can withhold the first complete committed
 /// usage reply and close the connection before the client reads any ACK bytes.
@@ -428,7 +461,9 @@ async fn qualify_installed_node_entry_result(
     };
     install().unwrap().apply().unwrap();
     assert!(install().unwrap().changed_paths().is_empty());
+    eprintln!("installed qualification stage=installed");
     let mut service = RuntimeServiceFixture::new().control_socket(&path).build();
+    eprintln!("installed qualification stage=service-built");
     let pi_usage = script_name == "pi-usage-ordinary-fixture.mjs";
     let request_handoff = script_name == "request-accounting-ordinary-fixture.mjs";
     let request_ack_loss = script_name == "request-accounting-lost-ack-fixture.mjs";
@@ -443,6 +478,7 @@ async fn qualify_installed_node_entry_result(
         ));
     }
     service.start_initial_pane_process(None).unwrap();
+    eprintln!("installed qualification stage=pane-started");
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../scripts")
         .join(script_name)
@@ -495,6 +531,13 @@ async fn qualify_installed_node_entry_result(
     let clients = service.session().clients().len();
     let (handle, actor) =
         AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    eprintln!("installed qualification stage=actor-constructed");
+    // A single owned task gives actor polling its own heap-backed task boundary,
+    // rather than nesting it under install/server/timeout/join poll frames. This
+    // keeps the production current-thread stack and concurrency unchanged. The
+    // JoinSet aborts on unwind; normal completion still requires shutdown+join.
+    let mut actor_task = tokio::task::JoinSet::new();
+    actor_task.spawn(actor.run());
     let server = async {
         let mut tasks = tokio::task::JoinSet::new();
         let mut producer = None;
@@ -539,6 +582,7 @@ async fn qualify_installed_node_entry_result(
             let retired_rejected = retired_rejected.clone();
             let lose_commit = request_ack_loss.then(|| committed_reply_lost.clone());
             tasks.spawn(async move {
+                eprintln!("installed qualification stage=connection-started");
                 let mut connection = ControlConnectionState::new(true, false);
                 connection
                     .bind_authenticated_peer(AuthenticatedPeer::unix_user(origin.uid()))
@@ -557,6 +601,7 @@ async fn qualify_installed_node_entry_result(
                     lose_commit,
                     close_after_loss: false,
                 };
+                eprintln!("installed qualification stage=connection-serving");
                 serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
                     &mut observed,
                     AuthenticatedPeer::unix_user(crate::runtime::current_effective_uid()),
@@ -572,6 +617,7 @@ async fn qualify_installed_node_entry_result(
                 )
                 .await
                 .unwrap();
+                eprintln!("installed qualification stage=connection-served");
                 assert!(!connection.initialized());
                 assert!(connection.caller_client_id().is_none());
                 assert!(connection.unix_origin().unwrap().writer_confirmed());
@@ -599,7 +645,11 @@ async fn qualify_installed_node_entry_result(
     };
     let ((child_status, reached_final_assertion), mut exit) = tokio::time::timeout(
         Duration::from_secs(if pi_usage { 300 } else { 25 }),
-        async { tokio::join!(server, actor.run()) },
+        async {
+            tokio::join!(server, async {
+                actor_task.join_next().await.unwrap().unwrap()
+            })
+        },
     )
     .await
     .unwrap();

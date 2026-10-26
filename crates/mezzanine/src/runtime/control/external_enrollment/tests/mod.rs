@@ -1272,6 +1272,12 @@ async fn external_enrollment_ordinary_unix_actor_roundtrip() {
     let Some(mut fixture) = fixture("flow").await else {
         return;
     };
+    let store = crate::storage::token_usage::TokenUsageStore::new(
+        fixture.directory.join("wire-activation.sqlite"),
+    );
+    store.initialize(current_unix_seconds()).unwrap();
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    fixture.service.set_token_usage_store(store);
     let service = std::mem::replace(&mut fixture.service, RuntimeServiceFixture::new().build());
     let clients = service.session().clients().len();
     let (handle, actor) =
@@ -1283,7 +1289,14 @@ async fn external_enrollment_ordinary_unix_actor_roundtrip() {
             &mut fixture.connection,
             AsyncRuntimeControlConnectionConfig::new(8192, crate::runtime::current_effective_uid())
                 .unwrap(),
-            |served, _| served >= 4,
+            |served, _| {
+                if served == 1 {
+                    assert_eq!(database.query_row("SELECT state,revision FROM external_usage_source_activations", [],
+                        |row| Ok((row.get::<_, i64>(0)?,row.get::<_, i64>(1)?))).unwrap(), (1,2),
+                        "healthy optional acceptance must commit before the first Unix reply finishes");
+                }
+                served >= 4
+            },
         )
         .await
         .unwrap();

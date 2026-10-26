@@ -10,8 +10,8 @@
 use super::*;
 use crate::storage::token_usage::{ExternalSourceKey, NativeSourceKind, NativeSourceWitness};
 
-/// Frozen first-allocation inputs and the original storage outcome. This is
-/// prepared-only evidence, not acceptance or a reusable launch credential.
+/// Frozen first-allocation inputs and original preparation/acceptance outcomes.
+/// These facts alone are not native authority or a reusable launch credential.
 /// Retaining the exact proposal permits later explicit reconciliation rather
 /// than regenerating an attempt after an ambiguous write. No retry runs here.
 #[derive(Debug)]
@@ -19,6 +19,10 @@ pub(super) struct NativeSourcePreparation {
     key: ExternalSourceKey,
     activation: crate::storage::token_usage::ExternalSourceActivation,
     receipt: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
+    /// Sealed only after the actor actually registered this original source.
+    pub(super) admission: OnceLock<super::publication::SourceActorAdmission>,
+    /// Original acceptance outcome, shared by worker clones without replay.
+    acceptance: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
 }
 
 impl NativeSourcePreparation {
@@ -52,16 +56,61 @@ impl NativeSourcePreparation {
             key,
             activation,
             receipt: OnceLock::new(),
+            admission: OnceLock::new(),
+            acceptance: OnceLock::new(),
         })
     }
 
-    /// Performs at most one prepared-only write on the existing native worker.
-    /// Cache both success and error with the immutable proposal; no Accepted
-    /// transition or implicit mutation replay is permitted in this phase.
+    /// Performs at most one prepared-only write on the original native worker.
+    /// Cache both success and error with the immutable proposal. Acceptance
+    /// requires a separately sealed actual actor admission and worker phase.
     fn prepare(&self, store: &crate::storage::token_usage::TokenUsageStore) {
         let _ = self
             .receipt
             .get_or_init(|| store.prepare_external_source_activation(&self.key, &self.activation));
+    }
+
+    /// Pure inspection used by the actor; no storage read or new attempt occurs.
+    pub(super) fn outcome_is_prepared(&self) -> bool {
+        self.receipt.get().is_some_and(|result| {
+            result.as_ref().is_ok_and(|receipt| {
+                receipt.state
+                    == crate::storage::token_usage::ExternalSourceActivationState::Prepared
+                    && receipt.revision == 1
+            })
+        })
+    }
+
+    /// Requires an actual actor grant and original successful preparation, then
+    /// performs at most one exact acceptance write on the existing worker. A
+    /// failed or ambiguous result is immutable; it is not silently retried.
+    pub(super) fn accept(
+        &self,
+        store: &crate::storage::token_usage::TokenUsageStore,
+    ) -> Result<()> {
+        self.admission
+            .get()
+            .ok_or_else(|| MezError::forbidden("external source actor admission unavailable"))?;
+        let prepared = self
+            .receipt
+            .get()
+            .and_then(|result| result.as_ref().ok())
+            .ok_or_else(|| MezError::conflict("external source preparation unavailable"))?;
+        self.acceptance
+            .get_or_init(|| {
+                let now = super::source_clock::native_boot_millis().ok_or_else(|| {
+                    MezError::conflict("external source activation clock unavailable")
+                })?;
+                store.accept_external_source_activation(
+                    &self.key,
+                    &self.activation,
+                    prepared.revision,
+                    now,
+                )
+            })
+            .as_ref()
+            .map(|_| ())
+            .map_err(Clone::clone)
     }
 
     /// Exposes this fixture's original cached write result, not a constructor,

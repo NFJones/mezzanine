@@ -370,7 +370,7 @@ impl AsyncRuntimeSessionActor {
         clippy::too_many_arguments,
         reason = "ordered control framing and native admission own independent state"
     )]
-    fn dispatch_external_enrollment_observation(
+    pub(super) fn dispatch_external_enrollment_observation(
         &self,
         request_id: String,
         prepared: crate::Result<Box<crate::runtime::ExternalEnrollmentWork>>,
@@ -410,7 +410,7 @@ impl AsyncRuntimeSessionActor {
             // Native reads cannot be hard-cancelled. Keep the reservation until
             // this worker actually finishes, even after its cooperative budget;
             // late evidence is rejected by observe/actor commit, never admitted.
-            let result = tokio::task::spawn_blocking(move || worker.observe())
+            let result = tokio::task::spawn_blocking(move || worker.execute_enrollment())
                 .await
                 .map_err(|_| MezError::invalid_state("external enrollment worker failed"))
                 .and_then(|result| result);
@@ -1913,27 +1913,18 @@ impl AsyncRuntimeSessionActor {
                 work,
                 result,
                 connection,
-                mut output_prefix,
+                output_prefix,
                 consumed,
                 reply,
             } => {
-                let body = self
-                    .service
-                    .complete_external_enrollment(*work, result, &connection);
-                output_prefix.extend_from_slice(&encode_control_body(&body));
-                // First enrollment must arm idle maintenance even after reply
-                // loss; event notification alone does not schedule timers.
-                let settlement = self.queue_shell_lifecycle_timer_side_effects().map(|_| {
-                    AsyncControlInputResult {
-                        output: output_prefix,
-                        consumed,
-                        connection,
-                        connection_cleanup: None,
-                        terminal_lifecycle_flush: None,
-                    }
-                });
-                let _ = reply.send(settlement);
-                self.notify_event_delivery();
+                self.complete_enrollment_input(
+                    work,
+                    result,
+                    connection,
+                    output_prefix,
+                    consumed,
+                    reply,
+                );
                 false
             }
             AsyncRuntimeRequest::CompleteExternalUsageInput {
