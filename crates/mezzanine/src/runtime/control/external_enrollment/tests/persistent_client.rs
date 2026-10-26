@@ -668,6 +668,33 @@ async fn qualify_installed_node_entry_result(
         };
         let reached_final_assertion =
             !fail_child || tokio::fs::read_to_string(&eof_stage).await.ok().as_deref() == Some("2");
+        if source_end || pi_source_end {
+            // The client must already have received the real required end ACK.
+            // A later optional-metadata drain cannot substitute for that proof.
+            let usage = directory.join("usage.sqlite");
+            let tombstone = tokio::task::spawn_blocking(move || {
+                rusqlite::Connection::open(usage).unwrap().query_row(
+                    "SELECT count(*),min(state),min(revision) FROM external_usage_source_activations",
+                    [], |row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?))
+                ).unwrap()
+            }).await.unwrap();
+            assert_eq!(tombstone, (if pi_source_end { 4 } else { 1 }, 2, 3));
+        }
+        // Match production's separate metadata consumer. Warm handoff now
+        // queues a finite observer publication; connection EOF alone does not
+        // settle its actor reservation. Execute/observe the real work rather
+        // than clearing IDs or weakening the final pending-empty assertion.
+        crate::host::async_runtime::run_async_persistence_side_effect_service(
+            &handle,
+            crate::host::async_runtime::AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 2,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 2,
+        )
+        .await
+        .unwrap();
         handle.shutdown().await.unwrap();
         (child_status, reached_final_assertion)
     };
@@ -752,7 +779,8 @@ async fn qualify_installed_node_entry_result(
     assert_eq!(binding.retired, !helper_callback);
     if source_end || pi_source_end {
         // The installed client required a real exact receipt before exiting.
-        // No persistence-service drain is used to substitute for its end worker.
+        // The same tombstone was checked BEFORE optional metadata draining, so
+        // that consumer cannot substitute for the required end worker's proof.
         let database = rusqlite::Connection::open(directory.join("usage.sqlite")).unwrap();
         let receipt: (i64, i64, i64) = database
             .query_row(

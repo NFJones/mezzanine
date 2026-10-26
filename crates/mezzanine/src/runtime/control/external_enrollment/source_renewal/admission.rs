@@ -19,6 +19,21 @@ pub(super) struct RenewalActorScope {
 impl RuntimeSessionService {
     /// Nonblocking actor admission following actual connected-observer renewal.
     pub(in crate::runtime::control) fn queue_external_source_renewal(&mut self, digest: [u8; 32]) {
+        self.queue_external_source_metadata(digest, false);
+    }
+
+    /// Follows actual warm handoff registration, never payload-only admission.
+    /// Publication changes public metadata, not native/control/accounting rights.
+    pub(in crate::runtime::control::external_enrollment) fn queue_external_source_observer_publication(
+        &mut self,
+        digest: [u8; 32],
+    ) {
+        self.queue_external_source_metadata(digest, true);
+    }
+
+    /// Common finite lane with distinct lifetime pacing versus explicit actor
+    /// handoff. Both share original slot/native proof/physical permit/currentness.
+    fn queue_external_source_metadata(&mut self, digest: [u8; 32], observer_change: bool) {
         if self.require_live().is_err() {
             return;
         }
@@ -77,10 +92,44 @@ impl RuntimeSessionService {
             run: enrollment.run_generation,
             epoch: enrollment.epoch,
         };
-        let Some(work) = slot.prepare_renewal(origin, ancestry) else {
+        let observer = if observer_change {
+            let Some(previous_scope) = self.current_external_source_observer_scope(digest) else {
+                return;
+            };
+            let previous = previous_scope.current();
+            let mut nonce = [0; 32];
+            rand::rng().fill_bytes(&mut nonce);
+            let Ok(change) = previous.propose(previous.generation(), &enrollment.instance, nonce)
+            else {
+                return;
+            };
+            let next_scope = super::source_observer::ObserverScope::new(previous);
+            Some((
+                previous_scope,
+                super::source_observer::ObserverMutation {
+                    change,
+                    scope: next_scope,
+                },
+            ))
+        } else {
+            None
+        };
+        let previous_scope = observer.as_ref().map(|(previous, _)| previous.clone());
+        let Some(work) =
+            slot.prepare_metadata(origin, ancestry, observer.map(|(_, mutation)| mutation))
+        else {
             return;
         };
-        if !slot.admit_renewal_tick() {
+        // We now hold the original physical permit. A predecessor may have
+        // committed between our snapshot and this acquisition; never replace
+        // its known G2 scope with a pending proposal captured against G1.
+        if let Some(previous) = &previous_scope
+            && let Some(observer) = &work.0.observer
+            && previous.current().as_ref() != observer.scope.current().as_ref()
+        {
+            return;
+        }
+        if !observer_change && !slot.admit_renewal_tick() {
             return;
         }
         if work.0.scope.set(scope).is_err() {
@@ -89,6 +138,24 @@ impl RuntimeSessionService {
         let admissions = &mut self.control.external_agents_mut().enrollments;
         admissions.next = admission;
         if !admissions.pending.insert(admission) {
+            return;
+        }
+        if let Some(previous) = previous_scope
+            && !self.install_external_source_observer_scope(
+                digest,
+                &previous,
+                work.0
+                    .observer
+                    .as_ref()
+                    .map(|observer| observer.scope.clone())
+                    .unwrap_or(previous.clone()),
+            )
+        {
+            self.control
+                .external_agents_mut()
+                .enrollments
+                .pending
+                .remove(&admission);
             return;
         }
         self.persistence.queue_token_usage(

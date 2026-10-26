@@ -51,6 +51,7 @@ mod rotation;
 mod source;
 mod source_clock;
 mod source_end;
+mod source_observer;
 pub(crate) use source_end::ExternalSourceEndWork;
 mod source_retirement;
 pub(crate) use source_retirement::ExternalSourceRetirementWork;

@@ -160,14 +160,14 @@ impl NativeSourceSlot {
         self.renewal_worker.clone().try_acquire_owned().ok()
     }
 
-    /// Runs only off actor under the same I/O lock as acceptance and retirement.
-    /// A queued attempt cannot pass control invalidation or logical retirement;
-    /// native proof and clock qualification happen afresh inside this boundary.
-    pub(super) fn renew_native(
+    /// Runs an admitted lifetime or observer mutation under the ONE original
+    /// source I/O fence. The operation receipt is sealed before releasing it.
+    pub(super) fn update_native_metadata(
         &self,
         origin: &Arc<UnixOriginProcess>,
         ancestry: &UnixAncestryWitness,
         deadline: Instant,
+        observer: Option<&super::source_observer::ObserverMutation>,
     ) -> Result<()> {
         let _guard = self
             .io
@@ -178,9 +178,14 @@ impl NativeSourceSlot {
                 "external source renewal owner expired or retired",
             ));
         }
-        self.get()
-            .ok_or_else(|| MezError::invalid_state("external source preparation disappeared"))?
-            .renew_native(origin, ancestry, deadline)?;
+        let preparation = self
+            .get()
+            .ok_or_else(|| MezError::invalid_state("external source preparation disappeared"))?;
+        if observer.is_some() {
+            preparation.update_native_metadata(origin, ancestry, deadline, observer)?;
+        } else {
+            preparation.renew_native(origin, ancestry, deadline)?;
+        }
         if self.retired.load(Ordering::Acquire) || Instant::now() >= deadline {
             return Err(MezError::conflict(
                 "external source renewal owner expired or retired",
@@ -195,10 +200,12 @@ impl NativeSourceSlot {
         self.retired.store(true, Ordering::Release);
     }
 
-    /// Clones only an already retired admitted obligation for a required reply.
-    /// The anchor owner additionally proves logical source retirement; control
-    /// invalidation alone must never call this to manufacture an end intent.
-    pub(super) fn retired_work(self: &Arc<Self>) -> Option<ExternalSourceRetirementWork> {
+    /// Retains the ended anchor's exact observer operation, including a pending
+    /// commit receipt. Control invalidation alone is still not a logical end.
+    pub(super) fn retired_work_scoped(
+        self: &Arc<Self>,
+        observer: Arc<super::source_observer::ObserverScope>,
+    ) -> Option<ExternalSourceRetirementWork> {
         let preparation = self.get()?;
         preparation.admission.get()?;
         self.retired
@@ -206,13 +213,24 @@ impl NativeSourceSlot {
             .then(|| ExternalSourceRetirementWork {
                 slot: self.clone(),
                 store: preparation.original_store().clone(),
+                observer,
             })
     }
 
     /// Atomically latches actor-owned source retirement before proof is dropped.
     /// Only an actually admitted preparation produces one sealed persistence
     /// work item; duplicate retirement cannot queue a second owner.
+    #[cfg(test)]
     pub(super) fn retire(self: &Arc<Self>) -> Option<ExternalSourceRetirementWork> {
+        self.retire_scoped(self.get()?.initial_observer_scope())
+    }
+
+    /// Latches whole-source closure without changing its physical worker pool.
+    /// Queued retirement owns this observer scope, not a mutable newest pointer.
+    pub(super) fn retire_scoped(
+        self: &Arc<Self>,
+        observer: Arc<super::source_observer::ObserverScope>,
+    ) -> Option<ExternalSourceRetirementWork> {
         let preparation = self.get()?;
         preparation.admission.get()?;
         if self.retired.swap(true, Ordering::AcqRel) {
@@ -221,6 +239,7 @@ impl NativeSourceSlot {
         Some(ExternalSourceRetirementWork {
             slot: self.clone(),
             store: preparation.original_store().clone(),
+            observer,
         })
     }
 }
@@ -230,6 +249,7 @@ impl NativeSourceSlot {
 pub(crate) struct ExternalSourceRetirementWork {
     slot: Arc<NativeSourceSlot>,
     store: crate::storage::token_usage::TokenUsageStore,
+    observer: Arc<super::source_observer::ObserverScope>,
 }
 
 impl std::fmt::Debug for ExternalSourceRetirementWork {
@@ -304,7 +324,7 @@ impl ExternalSourceRetirementWork {
             .get()
             .ok_or_else(|| MezError::invalid_state("external source preparation disappeared"))?;
         preparation
-            .retire()
+            .retire_observer(&self.observer.current())
             .or_else(|original| preparation.recover_retirement().map_err(|_| original))
     }
 }

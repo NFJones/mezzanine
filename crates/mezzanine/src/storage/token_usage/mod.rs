@@ -43,7 +43,7 @@ pub(crate) use external_requests::ExternalRequestOrigin;
 pub(crate) use external_sources::{ExternalSourceKey, NativeSourceKind, NativeSourceWitness};
 pub(crate) use source_activation::{
     ExternalSourceActivation, ExternalSourceActivationReceipt, ExternalSourceActivationState,
-    ExternalSourceObserverFence, ExternalSourceRenewal,
+    ExternalSourceObserverChange, ExternalSourceObserverFence, ExternalSourceRenewal,
 };
 pub(crate) use store::{TokenUsageEvent, TokenUsageStore};
 

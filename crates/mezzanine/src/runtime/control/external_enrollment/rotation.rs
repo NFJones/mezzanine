@@ -180,6 +180,7 @@ impl RuntimeSessionService {
             &format!("external-registration:{old_generation}"),
             None,
         );
+        self.queue_external_source_observer_publication(replacement_digest);
         Ok(response)
     }
 }

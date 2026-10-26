@@ -69,6 +69,8 @@ this does not restore authority after full control-service replacement.
 Initial public replay-fence metadata is stored without credentials; its presence
 alone does not authorize observer takeover or cold recovery.
 Retirement and its recovery stay bound to the original captured observer fence.
+Qualified same-live observer handoff publishes its new fence through bounded
+native metadata work; this still does not provide cold-service recovery.
 
 ## Why Mezzanine?
 

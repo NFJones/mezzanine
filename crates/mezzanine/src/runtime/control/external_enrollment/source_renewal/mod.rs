@@ -1,9 +1,13 @@
-//! Sealed native renewal work with paced actor admission and completion fencing.
+//! Sealed native lifetime/observer metadata work on one bounded publication lane.
 //!
 //! One original source slot supplies a physical permit and its retirement/I/O
 //! fence. Clones share one cached result, including ambiguity/failure; executing
 //! again never replenishes a mutation allowance. Workers independently verify
 //! original-kind writer/ancestry/boot-clock evidence and use the captured store.
+//! Idle maintenance selects lifetime renewal; actual warm rotation/resume selects
+//! an immutable observer CAS without extending the window. Both share the one
+//! original source physical permit and I/O lock. The observer's exact commit is
+//! sealed under that lock so current retirement can resolve its pending scope.
 //! Existing idle maintenance selects current ordinary bindings; the existing
 //! persistence lane executes work and returns an opaque observed-join receipt.
 //! Final actor checks precede metadata health publication, never new observer
@@ -18,6 +22,7 @@ struct RenewalAttempt {
     slot: Arc<source_retirement::NativeSourceSlot>,
     origin: Arc<UnixOriginProcess>,
     ancestry: Arc<UnixAncestryWitness>,
+    observer: Option<super::source_observer::ObserverMutation>,
     deadline: Instant,
     outcome: OnceLock<Result<()>>,
     /// Absorbing even when initialization unwinds before caching its outcome.
@@ -71,16 +76,29 @@ impl source_retirement::NativeSourceSlot {
     /// payload-selected identity/store. Actor admission selects a current
     /// binding/registry and applies pacing before enqueueing this internal work.
     /// The worker independently rejects foreign evidence and stale native proof.
+    #[cfg(test)]
     pub(super) fn prepare_renewal(
         self: &Arc<Self>,
         origin: Arc<UnixOriginProcess>,
         ancestry: Arc<UnixAncestryWitness>,
+    ) -> Option<ExternalSourceRenewalWork> {
+        self.prepare_metadata(origin, ancestry, None)
+    }
+
+    /// Uses the same one-source physical permit for either bounded metadata
+    /// operation. A new observer cannot mint another worker or source lifetime.
+    pub(super) fn prepare_metadata(
+        self: &Arc<Self>,
+        origin: Arc<UnixOriginProcess>,
+        ancestry: Arc<UnixAncestryWitness>,
+        observer: Option<super::source_observer::ObserverMutation>,
     ) -> Option<ExternalSourceRenewalWork> {
         let permit = self.reserve_renewal()?;
         Some(ExternalSourceRenewalWork(Arc::new(RenewalAttempt {
             slot: self.clone(),
             origin,
             ancestry,
+            observer,
             deadline: Instant::now().checked_add(ADMISSION_BUDGET)?,
             outcome: OnceLock::new(),
             started: AtomicBool::new(false),
@@ -94,6 +112,16 @@ impl source_retirement::NativeSourceSlot {
 }
 
 impl ExternalSourceRenewalWork {
+    /// Content-free operation class captured by the immutable native intent.
+    /// Observer publication never claims a lifetime window was extended.
+    pub(crate) fn operation_name(&self) -> &'static str {
+        if self.0.observer.is_some() {
+            "native-source-observer"
+        } else {
+            "native-source-renewal"
+        }
+    }
+
     /// Existing persistence-lane executor observes the actual blocking join.
     /// Caller-supplied completion events cannot manufacture this private receipt.
     pub(crate) async fn execute_persistence(&self) -> bool {
@@ -134,10 +162,12 @@ impl ExternalSourceRenewalWork {
         if self.0.panic_before_io.swap(false, Ordering::AcqRel) {
             panic!("owned renewal worker fixture panic");
         }
-        let result = self
-            .0
-            .slot
-            .renew_native(&self.0.origin, &self.0.ancestry, self.0.deadline);
+        let result = self.0.slot.update_native_metadata(
+            &self.0.origin,
+            &self.0.ancestry,
+            self.0.deadline,
+            self.0.observer.as_ref(),
+        );
         let _ = self.0.outcome.set(result.clone());
         (true, result)
     }

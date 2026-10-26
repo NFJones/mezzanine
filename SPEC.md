@@ -1742,8 +1742,28 @@ both bounded recovery-predecessor checks and fresh tombstone acknowledgment.
 Reading a newer fence or another observer's equal-numbered tombstone MUST NOT
 transfer authority, replenish recovery work or replace the original outcome.
 Concurrent public-fence change and old-fence retirement MUST have at most one
-mutation winner. Runtime observer takeover/current-fence publication and
-typed cold-service recovery remain unfinished; storage CAS alone MUST NOT enable them.
+mutation winner. Actual same-live observer rotation/resume MAY queue observer
+metadata publication on the existing finite native metadata lane. It MUST share
+the original source physical worker permit/I/O fence, preserve lifetime window,
+revision/checkpoint/namespace/expense, and requalify original-kind native writer,
+ancestry and bracketed boot-clock evidence. Lifetime renewal pacing MUST NOT
+become an immediate replay allowance for a failed observer intent.
+The current anchor MUST capture a bounded immutable observer-operation scope
+(predecessor plus its own committed receipt, not an unbounded parent chain).
+Record its exact successful observer CAS receipt under the source I/O lock BEFORE
+fallible postchecks or lock release. Current retirement MUST resolve THAT scope
+under the same lock after its logical fence prevents pending writes. Thus end
+before mutation retires the exact predecessor; end after mutation retires its
+own committed successor even before final metadata acknowledgment. Old scopes
+cannot learn unrelated newer facts. If a predecessor committed while the actor
+was sampling the next proposal, physical-permit acquisition MUST be followed by
+snapshot revalidation before replacing the known scope.
+Only actual worker join and current registry/admission/binding/run/epoch/native
+checks permit final metadata health publication; stale/duplicate results cannot
+consume replacement IDs or clear another owner's health. Optional metadata
+failure preserves independently qualified warm rights, not cold readiness.
+Typed full-control cold-service recovery remains unfinished; neither the storage
+CAS nor same-live publication alone enables it.
 For newly allocated ordinary socket sources, the off-actor native-observation
 phase MAY write only Prepared from actual retained ancestry and a suspend-aware
 native clock. Fingerprints MUST bind the original source/kind and ordered

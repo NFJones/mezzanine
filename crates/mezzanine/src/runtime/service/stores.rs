@@ -190,7 +190,7 @@ impl RuntimeSessionService {
                 }
                 serde_json::json!({ "worker":"async-persistence", "target":"token-usage",
                     "state":match completed { Some(true) => "completed", Some(false) => "failed", None => "discarded" },
-                    "operation":"native-source-renewal" }).to_string()
+                    "operation":work.operation_name() }).to_string()
             }
             crate::runtime::PersistenceEvent::Completed {
                 target,

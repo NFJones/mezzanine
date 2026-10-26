@@ -156,6 +156,19 @@ impl NativeSourcePreparation {
         ancestry: &UnixAncestryWitness,
         deadline: Instant,
     ) -> Result<()> {
+        self.update_native_metadata(origin, ancestry, deadline, None)
+    }
+
+    /// Shares exact original-kind native/clock qualification with lifetime
+    /// renewal. Observer updates preserve the existing lifetime window and seal
+    /// their own commit receipt before any fallible postcommit proof checks.
+    pub(super) fn update_native_metadata(
+        &self,
+        origin: &Arc<UnixOriginProcess>,
+        ancestry: &UnixAncestryWitness,
+        deadline: Instant,
+        observer: Option<&super::source_observer::ObserverMutation>,
+    ) -> Result<()> {
         let unavailable = || MezError::conflict("external source renewal proof unavailable");
         self.admission.get().ok_or_else(unavailable)?;
         let previous = self
@@ -183,15 +196,29 @@ impl NativeSourcePreparation {
         if after < before || !previous.is_accepted_at(after) || Instant::now() >= deadline {
             return Err(unavailable());
         }
-        let expires = before.checked_add(60_000).ok_or_else(unavailable)?;
-        let renewal = crate::storage::token_usage::ExternalSourceRenewal::new(before, expires)?;
-        self.store.renew_external_source_activation(
-            &self.key,
-            &self.activation,
-            previous.revision,
-            &renewal,
-            after,
-        )?;
+        let receipt = if let Some(observer) = observer {
+            let receipt = self.store.advance_external_source_observer(
+                &self.key,
+                &self.activation,
+                previous.revision,
+                &observer.change,
+                after,
+            )?;
+            observer
+                .scope
+                .committed(receipt.observer.clone().ok_or_else(unavailable)?)?;
+            receipt
+        } else {
+            let expires = before.checked_add(60_000).ok_or_else(unavailable)?;
+            let renewal = crate::storage::token_usage::ExternalSourceRenewal::new(before, expires)?;
+            self.store.renew_external_source_activation(
+                &self.key,
+                &self.activation,
+                previous.revision,
+                &renewal,
+                after,
+            )?
+        };
         if Instant::now() >= deadline
             || !origin.observer_connected()
             || !ancestry.is_live()
@@ -200,7 +227,7 @@ impl NativeSourcePreparation {
             return Err(unavailable());
         }
         let completed = super::source_clock::native_boot_millis().ok_or_else(unavailable)?;
-        if completed < after || completed >= expires || Instant::now() >= deadline {
+        if completed < after || !receipt.is_accepted_at(completed) || Instant::now() >= deadline {
             return Err(unavailable());
         }
         Ok(())
@@ -209,6 +236,11 @@ impl NativeSourcePreparation {
     /// Returns the originally captured store, not a current configuration lookup.
     pub(super) fn original_store(&self) -> &crate::storage::token_usage::TokenUsageStore {
         &self.store
+    }
+
+    /// Initial actor cache seed only; these bytes are not native authority.
+    pub(super) fn initial_observer_scope(&self) -> Arc<super::source_observer::ObserverScope> {
+        super::source_observer::ObserverScope::new(Arc::new(self.observer.clone()))
     }
 
     /// Returns only this genuine fixture's captured selectors/public fence for
@@ -232,7 +264,17 @@ impl NativeSourcePreparation {
     /// then tombstones its actual revision. A newer stored fence is not adopted.
     /// Called under the slot's worker-only lock after logical retire.
     /// A cached failure is retained, not silently retried or called success.
+    #[cfg(test)]
     pub(super) fn retire(&self) -> Result<()> {
+        self.retire_observer(&self.observer)
+    }
+
+    /// The actor's immutable operation scope is resolved under original source
+    /// I/O ownership; never substitute the latest stored observer as a target.
+    pub(super) fn retire_observer(
+        &self,
+        expected: &crate::storage::token_usage::ExternalSourceObserverFence,
+    ) -> Result<()> {
         self.retirement
             .get_or_init(|| {
                 let receipt = self
@@ -253,7 +295,7 @@ impl NativeSourcePreparation {
                 {
                     None
                 } else {
-                    Some(self.observer.clone())
+                    Some(expected.clone())
                 };
                 if receipt.observer != observer {
                     return Err(MezError::conflict(

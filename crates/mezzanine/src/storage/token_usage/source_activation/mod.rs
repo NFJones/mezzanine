@@ -15,8 +15,9 @@
 //! has finite same-service end-ACK recovery. An inert renewal CAS stores a separate
 //! bounded checkpoint without rewriting the original proposal. Native runtime
 //! renewal is paced and actor-fenced. Schema10 stores bounded public observer
-//! digests initialized only by the sealed acceptance worker; observer takeover
-//! admission/publication and typed cold recovery remain unfinished.
+//! digests initialized only by the sealed acceptance worker. Same-live observer
+//! handoff now updates them through freshly native-qualified bounded work and
+//! final actor fencing; typed full-control cold recovery remains unfinished.
 //! Exhausted or unknown optional writes remain unavailable.
 //! Curated and existing source paths are unchanged. Accepted is historical
 //! admission, not a persisted assertion of current liveness or a control right.
@@ -33,15 +34,8 @@ use super::{ExternalSourceKey, MezError, Result, TokenUsageStore, sqlite_i64};
 
 mod renewal;
 pub(crate) use renewal::ExternalSourceRenewal;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "public observer takeover admission remains unfinished"
-    )
-)]
 mod observers;
-pub(crate) use observers::ExternalSourceObserverFence;
+pub(crate) use observers::{ExternalSourceObserverChange, ExternalSourceObserverFence};
 
 /// Same-boot retention window, not a public reconnect or delivery guarantee.
 const MAX_ACTIVATION_WINDOW_MS: u64 = 60_000;

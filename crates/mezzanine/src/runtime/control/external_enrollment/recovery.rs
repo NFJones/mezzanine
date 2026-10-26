@@ -109,6 +109,8 @@ struct BoundSourceAnchor {
     retired: bool,
     /// Exact prepared/admitted metadata survives disposable observer handles.
     activation: Option<Arc<source_retirement::NativeSourceSlot>>,
+    /// Current immutable metadata operation; physical source custody is shared.
+    observer_scope: Option<Arc<super::source_observer::ObserverScope>>,
 }
 
 impl BoundSourceAnchor {
@@ -118,7 +120,10 @@ impl BoundSourceAnchor {
         if self.retired {
             return None;
         }
-        let work = self.activation.as_ref().and_then(|slot| slot.retire());
+        let work = self
+            .activation
+            .as_ref()
+            .and_then(|slot| slot.retire_scoped(self.observer_scope.clone()?));
         self.retired = true;
         self.revision = self.revision.saturating_add(1);
         self.ancestry = None;
@@ -212,6 +217,48 @@ pub(in crate::runtime::control) struct LiveSourceAnchors {
 }
 
 impl LiveSourceAnchors {
+    /// Pure current-scope lookup; caller separately qualifies binding identity.
+    pub(super) fn observer_scope(
+        &self,
+        digest: [u8; 32],
+    ) -> Option<Arc<super::source_observer::ObserverScope>> {
+        self.anchors
+            .values()
+            .find(|anchor| anchor.digest == digest && !anchor.retired)?
+            .observer_scope
+            .clone()
+    }
+
+    /// Installs only against the exact previously captured scope and open source.
+    /// No database lookup, ancestry traversal or physical budget reset occurs.
+    pub(super) fn install_observer_scope(
+        &mut self,
+        digest: [u8; 32],
+        previous: &Arc<super::source_observer::ObserverScope>,
+        next: Arc<super::source_observer::ObserverScope>,
+    ) -> bool {
+        let Some(anchor) = self
+            .anchors
+            .values_mut()
+            .find(|anchor| anchor.digest == digest && !anchor.retired)
+        else {
+            return false;
+        };
+        if anchor
+            .activation
+            .as_ref()
+            .is_none_or(|slot| !slot.renewal_is_open())
+            || anchor
+                .observer_scope
+                .as_ref()
+                .is_none_or(|current| !Arc::ptr_eq(current, previous))
+        {
+            return false;
+        }
+        anchor.observer_scope = Some(next);
+        true
+    }
+
     /// Keeps existing idle maintenance scheduled while native fences are held.
     pub(in crate::runtime::control) fn is_empty(&self) -> bool {
         self.anchors.is_empty()
@@ -457,6 +504,7 @@ impl RuntimeSessionService {
             expires: binding.expires,
             retired: false,
             activation: prior.and_then(|prior| prior.activation.clone()),
+            observer_scope: prior.and_then(|prior| prior.observer_scope.clone()),
         };
         self.control
             .external_sources_mut()
@@ -517,6 +565,10 @@ impl RuntimeSessionService {
             && !anchor.retired
         {
             anchor.activation = Some(work.source_preparation.clone());
+            anchor.observer_scope = work
+                .source_preparation
+                .get()
+                .map(|preparation| preparation.initial_observer_scope());
         }
     }
 
@@ -582,8 +634,12 @@ impl RuntimeSessionService {
             .anchors
             .values()
             .find(|anchor| anchor.digest == digest && anchor.retired)
-            .and_then(|anchor| anchor.activation.as_ref())
-            .and_then(|slot| slot.retired_work())
+            .and_then(|anchor| {
+                anchor
+                    .activation
+                    .as_ref()?
+                    .retired_work_scoped(anchor.observer_scope.clone()?)
+            })
     }
 
     /// Preserves the original predecessor/newest-instance guards even when an
@@ -861,6 +917,7 @@ impl RuntimeSessionService {
             &format!("external-registration:{}", anchor.generation),
             None,
         );
+        self.queue_external_source_observer_publication(digest);
         Ok(response)
     }
 }

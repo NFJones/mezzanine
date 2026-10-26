@@ -953,7 +953,7 @@ an existing accounting namespace. The actual actor-sealed acceptance worker
 initializes only digests of the public instance and operation, generation1 and
 one seen instance. Its closed version1 binary form is107..4171 bytes with at most
 128 sorted unique instance digests, checked again on reads even if SQL checks are
-damaged. A dormant exact-fence CAS advances the independent public generation
+damaged. An exact-fence CAS advances the independent public generation
 without changing native lifetime revision/window/checkpoint or charging expense.
 Exact intent replay is inert; old IDs, stale predecessors, unknown legacy state,
 expiry/retirement and capacity/generation exhaustion refuse without eviction.
@@ -964,7 +964,20 @@ retain their original public fence before I/O. The SQLite mutation, committed
 retry, bounded recovery and tombstone reply all require that SAME fence as well
 as the original source/revision; NULL is exact unknown/Prepared, not a wildcard.
 An old worker cannot learn a stored successor's fence or acknowledge its equal-
-revision tombstone. This prerequisite does not publish a new current observer.
+revision tombstone.
+
+Actual same-live observer rotation/resume now queues native observer metadata on
+the existing bounded renewal/persistence lane, sharing the original source's
+one physical worker permit and I/O lock. It independently verifies original-kind
+writer/ancestry/boot-clock evidence and preserves lifetime window/revision,
+namespace, checkpoint and expense. The anchor retains one immutable operation
+scope (predecessor plus its own committed receipt, no parent chain). Its exact
+commit is recorded under the source lock before postchecks/unlock, so end before
+mutation closes the predecessor and end after mutation closes its own successor,
+including before final actor acknowledgment. Failed intents remain cached; no
+blind write replay or new physical budget is allowed. Final metadata health still
+requires observed worker join and current actor/native ownership checks. This
+same-live integration does not enable recovery after full control replacement.
 
 The native worker now prepares metadata only for a newly allocated ordinary
 socket source, after real retained ancestry and native boot evidence. The digest
