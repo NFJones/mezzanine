@@ -87,6 +87,15 @@ impl ExternalSourceActivation {
         self.ancestry == *digest
     }
 
+    /// Public immutable attempt selector, not ancestry, a credential or proof
+    /// of current liveness. Equality never authorizes namespace activation.
+    pub(crate) fn public_id(&self) -> String {
+        self.attempt
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
     /// Checks the captured half-open window without refreshing or extending it.
     fn contains_boot_time(&self, now_boot_ms: u64) -> bool {
         self.prepared_at_boot_ms <= now_boot_ms && now_boot_ms < self.expires_at_boot_ms

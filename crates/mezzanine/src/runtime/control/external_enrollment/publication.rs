@@ -13,6 +13,30 @@
 
 use super::*;
 
+/// Closed public historical source selector. This is deliberately distinct from
+/// private observer handles and same-live recovery. Decimal generation is text
+/// so SQLite's full checked range cannot be truncated by a JavaScript number.
+/// No native identity, ancestry, path, namespace, time or credential is exposed.
+#[derive(serde::Serialize)]
+struct AcceptedSourceReceipt {
+    protocol: &'static str,
+    activation_id: String,
+    observer_generation: String,
+}
+
+impl AcceptedSourceReceipt {
+    /// Builds only from an actually successful sealed acceptance cache, never
+    /// from a caller-provided Ok, current namespace or guessed generation.
+    fn from_preparation(preparation: &source::NativeSourcePreparation) -> Option<Self> {
+        let receipt = preparation.accepted_receipt()?;
+        Some(Self {
+            protocol: "external-source-activation/1",
+            activation_id: receipt.activation.public_id(),
+            observer_generation: receipt.observer.as_ref()?.generation().to_string(),
+        })
+    }
+}
+
 /// Unserialized evidence that the original actor really registered this source.
 /// Construction is local to the successful registration handoff, not the worker.
 #[derive(Debug)]
@@ -178,12 +202,33 @@ impl RuntimeSessionService {
                     "external source publication evidence changed",
                 ));
             }
-            work.source_publication
+            let body = work
+                .source_publication
                 .as_ref()
                 .map(|body| body.expose_secret().to_string())
                 .ok_or_else(|| {
                     MezError::invalid_state("external source publication reply disappeared")
-                })
+                })?;
+            let receipt = work
+                .source_preparation
+                .get()
+                .and_then(AcceptedSourceReceipt::from_preparation);
+            let Some(receipt) = receipt else {
+                return Ok(body);
+            };
+            let unavailable =
+                || MezError::invalid_state("external source publication reply invalid");
+            let mut reply: serde_json::Value =
+                serde_json::from_str(&body).map_err(|_| unavailable())?;
+            let result = reply
+                .get_mut("result")
+                .and_then(serde_json::Value::as_object_mut)
+                .ok_or_else(unavailable)?;
+            result.insert(
+                "source_receipt".into(),
+                serde_json::to_value(receipt).map_err(|_| unavailable())?,
+            );
+            serde_json::to_string(&reply).map_err(|_| unavailable())
         })();
         result.unwrap_or_else(|error| {
             super::super::runtime_json_rpc_error(&work.request_id, error.kind(), error.message())

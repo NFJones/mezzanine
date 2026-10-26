@@ -146,6 +146,18 @@ impl NativeSourcePreparation {
             .map_err(Clone::clone)
     }
 
+    /// Exposes only the original worker's successful actor-qualified acceptance
+    /// cache. Injected completion, preparation and failed writes yield no receipt;
+    /// this historical fact is not fresh native proof or cold admission.
+    pub(super) fn accepted_receipt(
+        &self,
+    ) -> Option<&crate::storage::token_usage::ExternalSourceActivationReceipt> {
+        self.admission.get()?;
+        self.acceptance.get()?.as_ref().ok().filter(|receipt| {
+            receipt.state == crate::storage::token_usage::ExternalSourceActivationState::Accepted
+        })
+    }
+
     /// Requalifies the exact original native source and bracketed boot clock on
     /// a blocking worker, then extends only its current accepted store revision.
     /// The immutable original proposal/store never changes. This is inert metadata,

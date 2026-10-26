@@ -8,6 +8,11 @@ use std::path::{Path, PathBuf};
 /// by observation itself. New locks/journals/roots or content writes are visible.
 type Observation = (PathBuf, u64, u32, i64, i64, Option<Vec<u8>>);
 
+/// Deliberate independent pin to the current compiled OpenCode manifest. Earlier
+/// source-end work advanced it to13; historical7..10 byte/layout fixtures below
+/// remain independently frozen and must upgrade to this exact revision.
+const CURRENT_OPENCODE_REVISION: u64 = 13;
+
 /// Returns bounded fixture observations for exact read-only comparisons.
 fn snapshot(root: &Path) -> Vec<Observation> {
     fn walk(root: &Path, path: &Path, rows: &mut Vec<Observation>) {
@@ -95,7 +100,7 @@ fn bootstrap_binary_upgrades_historical_opencode_layouts() {
             let mut receipt: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
             let manifest = &mut receipt["manifest"];
-            assert_eq!(manifest["revision"], 11);
+            assert_eq!(manifest["revision"], CURRENT_OPENCODE_REVISION);
             manifest["revision"] = revision.into();
             let entries = manifest["entries"].as_array_mut().unwrap();
             if revision == 7 {
@@ -155,11 +160,11 @@ fn bootstrap_binary_upgrades_historical_opencode_layouts() {
             assert_eq!(snapshot(&home), before);
             let upgraded = invoke(&[]);
             assert_eq!(upgraded["result"], "upgraded");
-            assert_eq!(upgraded["manifest_revision"], 11);
+            assert_eq!(upgraded["manifest_revision"], CURRENT_OPENCODE_REVISION);
             assert_eq!(upgraded["runtime_verification"], "not-performed");
             let current: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
-            assert_eq!(current["manifest"]["revision"], 11);
+            assert_eq!(current["manifest"]["revision"], CURRENT_OPENCODE_REVISION);
             let registration = current["manifest"]["entries"]
                 .as_array()
                 .unwrap()

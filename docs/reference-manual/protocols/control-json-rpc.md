@@ -979,6 +979,23 @@ blind write replay or new physical budget is allowed. Final metadata health stil
 requires observed worker join and current actor/native ownership checks. This
 same-live integration does not enable recovery after full control replacement.
 
+Successful initial native acceptance can add a closed historical `source_receipt`
+to the enrollment result:
+
+```json
+{"protocol":"external-source-activation/1","activation_id":"<64 lower-case hexadecimal characters>","observer_generation":"1"}
+```
+
+The activation ID selects only the original random attempt; it contains no native
+identity, path, accounting owner or credential. Observer generation is decimal
+**text**, not a potentially truncated JavaScript number. Only the original
+actor-qualified worker's successful acceptance cache supplies it after final
+publication checks. Prepared, unexecuted or failed acceptance has no such field;
+caller-provided success cannot fabricate it. This is initial historical evidence,
+not a current-observer checkpoint, liveness/expiry guarantee, namespace permission
+or recovery acknowledgment. Existing shared-client same-live recovery is unchanged;
+typed full-control admission and client consumption remain unimplemented.
+
 The native worker now prepares metadata only for a newly allocated ordinary
 socket source, after real retained ancestry and native boot evidence. The digest
 binds source/kind and ordered UID/incarnation ancestors through the root; no raw

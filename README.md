@@ -71,6 +71,8 @@ alone does not authorize observer takeover or cold recovery.
 Retirement and its recovery stay bound to the original captured observer fence.
 Qualified same-live observer handoff publishes its new fence through bounded
 native metadata work; this still does not provide cold-service recovery.
+Successful initial acceptance also returns a public historical source receipt,
+not a credential or permission to recover a source.
 
 ## Why Mezzanine?
 

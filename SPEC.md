@@ -1764,6 +1764,19 @@ consume replacement IDs or clear another owner's health. Optional metadata
 failure preserves independently qualified warm rights, not cold readiness.
 Typed full-control cold-service recovery remains unfinished; neither the storage
 CAS nor same-live publication alone enables it.
+The initial actor-qualified acceptance reply MAY contain `source_receipt` only
+from the original worker's successful acceptance cache, after the existing final
+registry/admission/binding/native checks. Its closed shape is
+`{"protocol":"external-source-activation/1","activation_id":"<64 lower-case hex>","observer_generation":"<positive decimal>"}`.
+The ID is the immutable random public activation attempt, NOT native identity or
+a private launch token. Generation MUST be decimal TEXT so SQLite's full checked
+integer range cannot be truncated by JavaScript number conversion. Preparation,
+missing/failed acceptance or an injected successful completion MUST NOT invent
+this field. Optional metadata failure MUST omit it, preserving qualified warm
+lifecycle behavior. It is a HISTORICAL initial-acceptance selector, not evidence
+of current liveness, latest observer, unexpired/unretired state, accounting
+namespace authority or successful recovery. Existing same-live receipt semantics
+remain separate. Full-control admission and shared-client use are still missing.
 For newly allocated ordinary socket sources, the off-actor native-observation
 phase MAY write only Prepared from actual retained ancestry and a suspend-aware
 native clock. Fingerprints MUST bind the original source/kind and ordered

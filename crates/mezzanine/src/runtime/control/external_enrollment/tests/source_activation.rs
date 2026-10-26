@@ -7,6 +7,96 @@
 
 use super::*;
 
+/// The actual two-phase native acceptance must expose a closed, explicitly
+/// versioned historical source receipt, not require copying test-only selectors
+/// or private launch handles. It grants no cold/native authority by itself.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_activation_reply_contains_only_public_accepted_source_receipt() {
+    let Some((_fixture, _store, publication, ready)) =
+        super::source_activation_fixture::accepted_source().await
+    else {
+        return;
+    };
+    let receipt = ready
+        .get("source_receipt")
+        .expect("accepted native source receipt missing");
+    let object = receipt.as_object().unwrap();
+    assert_eq!(object.len(), 3);
+    assert_eq!(receipt["protocol"], "external-source-activation/1");
+    let id = receipt["activation_id"].as_str().unwrap();
+    assert_eq!(id.len(), 64);
+    assert!(
+        id.bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
+    assert_ne!(id, "0".repeat(64));
+    assert_eq!(receipt["observer_generation"], "1");
+    let (_, activation, _) = publication
+        .source_preparation
+        .get()
+        .unwrap()
+        .observer_scope_for_tests();
+    assert_eq!(id, activation.public_id());
+    assert!(
+        !receipt
+            .to_string()
+            .contains(ready["launch_token"].as_str().unwrap())
+    );
+    assert!(
+        ready.get("recovery").is_none(),
+        "historical receipt invented recovery"
+    );
+}
+
+/// An actual actor grant and prepared row are not an acceptance receipt. A
+/// caller-supplied successful completion without executing the acceptance worker
+/// preserves lifecycle-only registration and cannot expose accepted-source facts.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_activation_injected_success_cannot_create_public_receipt() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    let store =
+        crate::storage::token_usage::TokenUsageStore::new(fixture.directory.join("receipt.sqlite"));
+    fixture.service.set_token_usage_store(store.clone());
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&request(), &fixture.connection)
+        .unwrap();
+    let native = work.clone();
+    let observed = tokio::task::spawn_blocking(move || native.execute_enrollment())
+        .await
+        .unwrap();
+    let body =
+        fixture
+            .service
+            .complete_external_enrollment(work.clone(), observed, &fixture.connection);
+    let publication = fixture
+        .service
+        .begin_external_source_publication(work, body)
+        .unwrap();
+    let reply: serde_json::Value =
+        serde_json::from_str(&fixture.service.complete_external_source_publication(
+            publication,
+            Ok(()),
+            &fixture.connection,
+        ))
+        .unwrap();
+    assert_eq!(reply["result"]["registered"], true);
+    assert!(reply["result"].get("source_receipt").is_none());
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT state,revision FROM external_usage_source_activations",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            )
+            .unwrap(),
+        (0, 1)
+    );
+}
+
 /// A genuinely native observation and actual sealed actor acceptance persist
 /// only the bounded versioned public fence. No supplied PID/parent capability
 /// or storage-only fake stands in for the generated ordinary producer.
@@ -201,11 +291,17 @@ async fn external_source_activation_actor_grant_publication_is_exact_and_bounded
     let reply: serde_json::Value =
         serde_json::from_str(&fixture.service.complete_external_source_publication(
             publication.clone(),
-            accepted,
+            Err(MezError::conflict(
+                "fixture outer completion acknowledgment lost",
+            )),
             &fixture.connection,
         ))
         .unwrap();
     assert_eq!(reply["result"]["registered"], true);
+    assert_eq!(
+        reply["result"]["source_receipt"]["protocol"], "external-source-activation/1",
+        "real accepted cache was replaced by outer completion feedback"
+    );
     assert!(
         fixture
             .service
@@ -312,6 +408,10 @@ async fn external_source_activation_publication_failure_is_not_replayed() {
         .unwrap();
     assert_eq!(reply["result"]["registered"], true);
     assert_eq!(reply["result"]["usage"], "unavailable-source-continuity");
+    assert!(
+        reply["result"].get("source_receipt").is_none(),
+        "failed acceptance fabricated a source receipt"
+    );
     assert_eq!(
         database
             .query_row(
