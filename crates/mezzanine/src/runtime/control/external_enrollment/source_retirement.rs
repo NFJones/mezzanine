@@ -7,10 +7,11 @@
 //! Retirement includes logical lease/authority expiry, not only native exit;
 //! metadata never claims that a still-live producer has physically died.
 //! SQLite and mutex acquisition occur solely on blocking workers. Original
-//! outcomes remain cached, including errors. After failure, one read-only check
-//! may establish the exact committed tombstone/revision without writing again.
+//! outcomes remain cached, including errors. After failure, a read may establish
+//! the exact committed tombstone or prove the original predecessor uncommitted.
+//! Only the latter allows one separately cached recovery CAS, never blind replay.
 //! Missing/changed/unavailable evidence preserves the original failure. This
-//! owner provides neither blind retries nor cold-recovery or end-ACK authority.
+//! owner provides neither unbounded retries nor cold-recovery/end-ACK authority.
 
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -146,10 +147,10 @@ impl ExternalSourceRetirementWork {
         self.store.path()
     }
 
-    /// Runs only off actor. A failed write is followed by one read-only exact
-    /// tombstone check, never mutation replay. Positive durable evidence may
-    /// reconcile a lost receipt without overwriting the original cached error.
-    /// Absent/changed/unknown evidence preserves the original failure.
+    /// Runs only off actor. An exact committed tombstone reconciles a lost reply;
+    /// a positively unchanged predecessor permits at most one recovery CAS.
+    /// Both outcomes stay cached; unknown/changed state cannot authorize writes
+    /// or replace the original failure. Native authority always remains closed.
     pub(crate) fn execute(&self) -> Result<()> {
         let _guard = self
             .slot
@@ -167,7 +168,7 @@ impl ExternalSourceRetirementWork {
             .ok_or_else(|| MezError::invalid_state("external source preparation disappeared"))?;
         preparation
             .retire()
-            .or_else(|original| preparation.reconcile_retirement().map_err(|_| original))
+            .or_else(|original| preparation.recover_retirement().map_err(|_| original))
     }
 }
 

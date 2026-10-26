@@ -1722,9 +1722,15 @@ complete proposal and exact target revision captured before its CAS, in Retired
 state. Inspection MUST NOT create, migrate or initialize missing/legacy storage;
 unknown schemas, missing/changed/not-retired records MUST retain the original
 failure. Exact committed tombstone evidence MAY complete persistence without
-repeating a mutation or replacing its original error. This optional
+repeating a mutation or replacing its original error. A read proving the exact
+original predecessor stage/revision/proposal still uncommitted MAY authorize ONE
+separately cached metadata-only recovery CAS. Its writer MUST recheck the exact
+proposal/revision; changed or unavailable evidence MUST NOT replenish attempts.
+Original and recovery outcomes MUST remain immutable. An uncertain recovery
+result MAY reconcile by exact read-only tombstone evidence, never a third write.
+Exhaustion MUST remain unavailable and MUST NOT reopen native authority. This optional
 pipeline does NOT yet provide a durable end acknowledgment or cold-recovery
-guarantee. Uncommitted-retirement recovery, renewal and cold admission remain
+guarantee. Required end publication, renewal and cold admission remain
 unfinished; Accepted records describe historical admission, not current liveness.
 Existing same-live ownership and namespace-only activation refusals remain in
 force; a stored Accepted flag alone MUST NOT authorize recovery or reporting.

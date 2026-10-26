@@ -8,10 +8,11 @@
 //! ordinary socket source. Actual actor registration can seal a second off-actor
 //! acceptance write. Logical source retirement queues an exact tombstone on the
 //! existing persistence lane, retaining its original proposal and cached outcome.
-//! Lost retirement receipts may reconcile only from an existing exact tombstone,
-//! never by replaying a failed mutation or creating/migrating storage on read.
-//! Required end acknowledgment, uncommitted-retirement recovery, renewal and cold
-//! recovery are not integrated; unknown optional writes remain unavailable.
+//! Lost retirement receipts may reconcile from an existing exact tombstone. One
+//! worker-owned recovery CAS requires positive unchanged-predecessor evidence;
+//! unknown mutations never replay or create/migrate storage merely on read.
+//! Required end acknowledgment, renewal and cold recovery are not integrated;
+//! exhausted or unknown optional writes remain unavailable.
 //! Curated and existing source paths are unchanged. Accepted is historical
 //! admission, not a persisted assertion of current liveness or a control right.
 //!

@@ -13,7 +13,8 @@ use crate::storage::token_usage::{ExternalSourceKey, NativeSourceKind, NativeSou
 /// Frozen first-allocation inputs and original preparation/acceptance outcomes.
 /// These facts alone are not native authority or a reusable launch credential.
 /// Retaining the exact proposal permits later explicit reconciliation rather
-/// than regenerating an attempt after an ambiguous write. No retry runs here.
+/// than regenerating an attempt after an ambiguous write. One bounded recovery
+/// CAS requires positive exact-predecessor evidence; unknown writes never replay.
 #[derive(Debug)]
 pub(super) struct NativeSourcePreparation {
     key: ExternalSourceKey,
@@ -29,6 +30,11 @@ pub(super) struct NativeSourcePreparation {
     retirement: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
     /// Exact target revision captured BEFORE the original CAS can commit.
     retirement_revision: OnceLock<u64>,
+    /// Original predecessor stage, never inferred from a later changed row.
+    retirement_state: OnceLock<crate::storage::token_usage::ExternalSourceActivationState>,
+    /// At most one recovery write; errors cannot replenish its attempt budget.
+    retirement_recovery:
+        OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
     /// Per-fixture loss AFTER the real tombstone commits, never fake authority.
     #[cfg(test)]
     retirement_ack_lost: std::sync::atomic::AtomicBool,
@@ -70,6 +76,8 @@ impl NativeSourcePreparation {
             acceptance: OnceLock::new(),
             retirement: OnceLock::new(),
             retirement_revision: OnceLock::new(),
+            retirement_state: OnceLock::new(),
+            retirement_recovery: OnceLock::new(),
             #[cfg(test)]
             retirement_ack_lost: std::sync::atomic::AtomicBool::new(false),
         })
@@ -158,20 +166,14 @@ impl NativeSourcePreparation {
                         MezError::invalid_state("external source retirement revision exhausted")
                     })?;
                 let _ = self.retirement_revision.set(revision);
+                let _ = self.retirement_state.set(receipt.state);
                 let retired = self.store.retire_external_source_activation(
                     &self.key,
                     &self.activation,
                     receipt.revision,
                 )?;
                 #[cfg(test)]
-                if self
-                    .retirement_ack_lost
-                    .swap(false, std::sync::atomic::Ordering::AcqRel)
-                {
-                    return Err(MezError::invalid_state(
-                        "fixture retirement acknowledgment lost",
-                    ));
-                }
+                self.maybe_lose_retirement_ack_for_tests()?;
                 Ok(retired)
             })
             .as_ref()
@@ -207,6 +209,78 @@ impl NativeSourcePreparation {
                 "external source retirement evidence unavailable",
             ))
         }
+    }
+
+    /// Allows one persistence-only recovery after a read proves that the exact
+    /// original predecessor is still uncommitted. The ordinary store CAS then
+    /// rechecks proposal/revision under writer ownership. A changed/unknown row
+    /// never authorizes a retry; neither cached result is replaced. Call only
+    /// under the original slot's blocking-worker mutex after logical closure.
+    pub(super) fn recover_retirement(&self) -> Result<()> {
+        use crate::storage::token_usage::ExternalSourceActivationState;
+        if self.admission.get().is_none() || self.retirement.get().is_none() {
+            return Err(MezError::invalid_state(
+                "external source retirement evidence unavailable",
+            ));
+        }
+        let target = self.retirement_revision.get().copied().ok_or_else(|| {
+            MezError::invalid_state("external source retirement target unavailable")
+        })?;
+        let receipt = self
+            .store
+            .external_source_activation(&self.key)?
+            .filter(|receipt| receipt.activation == self.activation)
+            .ok_or_else(|| MezError::conflict("external source retirement proposal changed"))?;
+        if receipt.state == ExternalSourceActivationState::Retired && receipt.revision == target {
+            return Ok(());
+        }
+        if self.retirement_state.get() != Some(&receipt.state)
+            || !matches!(
+                receipt.state,
+                ExternalSourceActivationState::Prepared | ExternalSourceActivationState::Accepted
+            )
+            || receipt.revision.checked_add(1) != Some(target)
+        {
+            return Err(MezError::conflict(
+                "external source retirement predecessor changed",
+            ));
+        }
+        let _ = self.retirement_recovery.get_or_init(|| {
+            let retired = self.store.retire_external_source_activation(
+                &self.key,
+                &self.activation,
+                receipt.revision,
+            )?;
+            #[cfg(test)]
+            self.maybe_lose_retirement_ack_for_tests()?;
+            Ok(retired)
+        });
+        // Neither a lost receipt nor cached success may override fresh
+        // contradictory evidence. This read cannot replenish the one CAS.
+        self.reconcile_retirement()
+    }
+
+    /// Suppresses only a fixture's receipt AFTER either real CAS commits.
+    #[cfg(test)]
+    fn maybe_lose_retirement_ack_for_tests(&self) -> Result<()> {
+        if self
+            .retirement_ack_lost
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            Err(MezError::invalid_state(
+                "fixture retirement acknowledgment lost",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Inspects the separately cached bounded recovery, never a retry trigger.
+    #[cfg(test)]
+    pub(super) fn recovery_outcome_for_tests(
+        &self,
+    ) -> Option<&Result<crate::storage::token_usage::ExternalSourceActivationReceipt>> {
+        self.retirement_recovery.get()
     }
 
     /// Arms a fixture-only lost receipt after an actual successful store commit.

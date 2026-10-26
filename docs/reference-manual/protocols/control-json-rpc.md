@@ -952,9 +952,16 @@ pre-CAS target revision in Retired state, without repeating the write. Receipt
 inspection opens existing current-schema storage read-only; it cannot create or
 migrate missing/legacy storage. Missing, changed, not-retired or unavailable
 evidence preserves the original failure, never fabricated durable success.
+If a read instead proves the original predecessor stage/revision/proposal is
+still uncommitted, the same worker may make one separately cached recovery CAS.
+Writer-side proposal/revision checks remain authoritative. Both outcomes stay
+immutable; a lost recovery receipt can reconcile read-only, never cause a third
+write. Changed/unknown state and exhausted recovery remain unavailable, with
+native authority closed. This is finite metadata recovery, not callback or
+provider replay, a new namespace or a fresh source lifetime.
 Snapshot/control invalidation alone is not a native lifetime end and
 does not write a tombstone. No new end/durable-recovery acknowledgment is promised:
-uncommitted-retirement recovery, renewal and typed cold-service recovery remain
+required end publication, renewal and typed cold-service recovery remain
 implementation work. Accepted is historical admission, not
 current liveness, native authority or
 a new RPC capability. Existing namespace-only activation refusal remains intact;
