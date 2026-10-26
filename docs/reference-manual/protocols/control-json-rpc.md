@@ -908,7 +908,7 @@ source, restore a missing control-service anchor, or turn a pending outcome into
 an acknowledged commit. Repeated loss or exhausted client retry remains visibly
 unavailable; there is no guaranteed no-gap delivery during permanent outage.
 
-Telemetry schema9 extends the internal source-activation ledger introduced in8.
+Telemetry schema10 extends the internal source-activation ledger introduced in8.
 Migration preserves existing namespace, request origin and expense rows and does
 not manufacture accepted facts for legacy mappings. Worker-side primitives can
 record one exact prepared/accepted/retired attempt per mapped source, reconcile
@@ -945,7 +945,21 @@ slot, store, root, observer, deadline and retirement. Injected/duplicate/stale
 completions cannot manufacture success or consume another incarnation's IDs.
 Unavailable metadata does not retire a healthy observer or recharge expense;
 another paced qualified intent is not replay of the failed attempt. Persisted
-public observer fences and typed cold recovery remain unavailable.
+public observer takeover and typed cold recovery remain unavailable.
+
+Schema10 additionally stores bounded public replay-fence metadata on that same
+row. Schema9 migration leaves it NULL/unknown; it cannot invent an observer from
+an existing accounting namespace. The actual actor-sealed acceptance worker
+initializes only digests of the public instance and operation, generation1 and
+one seen instance. Its closed version1 binary form is107..4171 bytes with at most
+128 sorted unique instance digests, checked again on reads even if SQL checks are
+damaged. A dormant exact-fence CAS advances the independent public generation
+without changing native lifetime revision/window/checkpoint or charging expense.
+Exact intent replay is inert; old IDs, stale predecessors, unknown legacy state,
+expiry/retirement and capacity/generation exhaustion refuse without eviction.
+Raw identifiers/credentials are not stored. This initial capture/storage work is
+NOT runtime observer handoff, retirement authorization or cold-service admission;
+those still require fresh native and final actor/publication integration.
 
 The native worker now prepares metadata only for a newly allocated ordinary
 socket source, after real retained ancestry and native boot evidence. The digest

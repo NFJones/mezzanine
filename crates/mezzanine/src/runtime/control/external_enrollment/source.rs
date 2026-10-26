@@ -21,6 +21,8 @@ pub(super) struct NativeSourcePreparation {
     /// Original repository snapshot; retirement never retargets a new store.
     store: crate::storage::token_usage::TokenUsageStore,
     activation: crate::storage::token_usage::ExternalSourceActivation,
+    /// Public instance/operation digests only; never a private launch credential.
+    observer: crate::storage::token_usage::ExternalSourceObserverFence,
     receipt: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
     /// Sealed only after the actor actually registered this original source.
     pub(super) admission: OnceLock<super::publication::SourceActorAdmission>,
@@ -71,6 +73,11 @@ impl NativeSourcePreparation {
             key,
             store: work.source_store.as_ref()?.clone(),
             activation,
+            observer: crate::storage::token_usage::ExternalSourceObserverFence::initial(
+                &work.observer_instance,
+                attempt,
+            )
+            .ok()?,
             receipt: OnceLock::new(),
             admission: OnceLock::new(),
             acceptance: OnceLock::new(),
@@ -123,11 +130,12 @@ impl NativeSourcePreparation {
                 let now = super::source_clock::native_boot_millis().ok_or_else(|| {
                     MezError::conflict("external source activation clock unavailable")
                 })?;
-                store.accept_external_source_activation(
+                store.accept_external_source_activation_with_observer(
                     &self.key,
                     &self.activation,
                     prepared.revision,
                     now,
+                    Some(&self.observer),
                 )
             })
             .as_ref()

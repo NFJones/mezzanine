@@ -7,6 +7,20 @@
 
 use super::*;
 
+/// A genuinely native observation and actual sealed actor acceptance persist
+/// only the bounded versioned public fence. No supplied PID/parent capability
+/// or storage-only fake stands in for the generated ordinary producer.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_activation_public_fence_requires_actual_acceptance() {
+    let Some((_fixture, store, _publication, _ready)) =
+        super::source_activation_fixture::accepted_source().await
+    else {
+        return;
+    };
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    assert_eq!(database.query_row("SELECT state,revision,typeof(observer_fence),length(observer_fence) FROM external_usage_source_activations", [], |row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,String>(2)?,row.get::<_,Option<i64>>(3)?))).unwrap(), (1,2,"blob".into(),Some(107)));
+}
+
 /// Replacing the reservation owner invalidates a late publication even when a
 /// new owner reuses its numeric slot. Only synthetic quota metadata is inserted;
 /// the original grant and source proof are from a genuine native registration.
@@ -93,6 +107,17 @@ async fn external_source_activation_actor_grant_publication_is_exact_and_bounded
         .await
         .unwrap();
     assert!(observed.is_ok(), "{observed:?}");
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    assert!(
+        database
+            .query_row(
+                "SELECT observer_fence IS NULL FROM external_usage_source_activations",
+                [],
+                |row| row.get::<_, bool>(0)
+            )
+            .unwrap(),
+        "native observation invented accepted observer facts"
+    );
     assert!(
         fixture
             .service

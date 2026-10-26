@@ -66,6 +66,8 @@ imply a durable inbox or cold-service recovery. Stored lifetime checkpoints alon
 cannot renew or restore harness authority. Connected ordinary observers renew
 optional lifetime metadata through bounded, freshly native-qualified maintenance;
 this does not restore authority after full control-service replacement.
+Initial public replay-fence metadata is stored without credentials; its presence
+alone does not authorize observer takeover or cold recovery.
 
 ## Why Mezzanine?
 

@@ -1669,10 +1669,10 @@ duplicate acknowledgment MUST NOT add another expense or allocate another
 accounting namespace. Observer replacement MUST NOT transfer predecessor-local
 tickets or credentials. Neither supported case permits namespace-only activation
 after control-service replacement or guarantees delivery of never-received data.
-Telemetry schema 9 extends the INTERNAL inert source-activation receipt ledger introduced in8, not
+Telemetry schema 10 extends the INTERNAL inert source-activation receipt ledger introduced in8, not
 another expense store or a new enrollment permission. Version-7 mappings MUST
 migrate without fabricated accepted receipts or changed expense/request origins.
-Each exact mapped namespace MAY retain one fixed-size prepared/accepted/retired
+Each exact mapped namespace MAY retain one bounded prepared/accepted/retired
 record with server attempt and native ancestry digests, a revision and a positive
 same-boot clock window of at most 60000ms. Preparation MUST NOT mean acceptance;
 acceptance MUST use the exact prepared payload/revision within that window.
@@ -1720,7 +1720,22 @@ deadline and retirement before reporting metadata completion. Stale/duplicate
 results MUST NOT clear another owner's health or consume reused reservation IDs.
 Failure remains optional metadata unavailability with paced new qualified intents,
 not immediate replay, source revival or changed lifecycle/accounting authority.
-Persisted public observer fences and typed cold-service recovery remain unfinished.
+Schema10 adds a nullable bounded public-observer fence to that SAME row. Version9
+migration MUST preserve owner/proposal/window/revision/checkpoint/expense and leave
+the fence NULL/unknown, never infer history from a namespace. New actor-qualified
+initial acceptance MAY atomically store version1 public instance/operation digests,
+an independent positive SQLite-range public generation and sorted unique seen
+instance digests (maximum128; encoded107..4171 bytes). Prepared MUST have no fence.
+Readers MUST bound bytes and reject wrong type, unknown version, partial fields,
+zero/overflow counters, duplicates/order errors or missing current membership.
+An inert exact-fence CAS MAY advance only a live Accepted source's public observer
+generation, preserving lifetime revision/window/checkpoint and all expense. Exact
+committed intent retry MUST do no write; stale predecessor/seen old instance or
+capacity/exhaustion MUST refuse without eviction. Retirement preserves the fence.
+No raw instance/callback content, native IDs/paths or private credential may be
+stored. Initial fences are not native proof, observer lifecycle publication or
+permissions. Runtime observer takeover (including old-retirement fencing) and
+typed cold-service recovery remain unfinished; storage CAS alone MUST NOT enable them.
 For newly allocated ordinary socket sources, the off-actor native-observation
 phase MAY write only Prepared from actual retained ancestry and a suspend-aware
 native clock. Fingerprints MUST bind the original source/kind and ordered

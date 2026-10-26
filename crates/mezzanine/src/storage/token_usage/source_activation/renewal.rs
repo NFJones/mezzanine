@@ -116,6 +116,7 @@ impl TokenUsageStore {
             revision,
             state: ExternalSourceActivationState::Accepted,
             renewal: Some(*renewal),
+            observer: previous.observer,
         })
     }
 }

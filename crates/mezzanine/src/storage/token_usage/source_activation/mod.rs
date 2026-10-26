@@ -13,13 +13,15 @@
 //! unknown mutations never replay or create/migrate storage merely on read.
 //! A separate explicit server end method requires exact worker proof. The client
 //! has finite same-service end-ACK recovery. An inert renewal CAS stores a separate
-//! bounded checkpoint without rewriting the original proposal; native runtime
-//! renewal, persisted observer fences and cold recovery remain unfinished.
+//! bounded checkpoint without rewriting the original proposal. Native runtime
+//! renewal is paced and actor-fenced. Schema10 stores bounded public observer
+//! digests initialized only by the sealed acceptance worker; observer takeover
+//! admission/publication and typed cold recovery remain unfinished.
 //! Exhausted or unknown optional writes remain unavailable.
 //! Curated and existing source paths are unchanged. Accepted is historical
 //! admission, not a persisted assertion of current liveness or a control right.
 //!
-//! Each mapped namespace retains at most one fixed-size record, including its
+//! Each mapped namespace retains at most one bounded record, including its
 //! retired tombstone. Preparation is not acceptance. Exact retries reconcile
 //! committed facts; changed/stale attempts cannot replace them. Expiry never
 //! deletes a record or turns it into a new namespace. No paths, native PIDs,
@@ -31,6 +33,15 @@ use super::{ExternalSourceKey, MezError, Result, TokenUsageStore, sqlite_i64};
 
 mod renewal;
 pub(crate) use renewal::ExternalSourceRenewal;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "public observer takeover admission remains unfinished"
+    )
+)]
+mod observers;
+pub(crate) use observers::ExternalSourceObserverFence;
 
 /// Same-boot retention window, not a public reconnect or delivery guarantee.
 const MAX_ACTIVATION_WINDOW_MS: u64 = 60_000;
@@ -131,6 +142,8 @@ pub(crate) struct ExternalSourceActivationReceipt {
     pub(crate) state: ExternalSourceActivationState,
     /// Optional latest inert lease checkpoint; original proposal stays exact.
     pub(crate) renewal: Option<ExternalSourceRenewal>,
+    /// Optional public replay fence, never native proof or a bearer capability.
+    pub(crate) observer: Option<ExternalSourceObserverFence>,
 }
 
 impl ExternalSourceActivationReceipt {
@@ -185,7 +198,8 @@ fn load_receipt(
     let row = connection
         .query_row(
             "SELECT substr(attempt,1,33),substr(ancestry,1,33),prepared_at_boot_ms,
-             expires_at_boot_ms,revision,state,renewed_at_boot_ms,renewed_until_boot_ms
+             expires_at_boot_ms,revision,state,renewed_at_boot_ms,renewed_until_boot_ms,
+             substr(CAST(observer_fence AS BLOB),1,4172),typeof(observer_fence)
              FROM external_usage_source_activations WHERE owner=?1",
             [owner],
             |row| {
@@ -198,12 +212,24 @@ fn load_receipt(
                     row.get::<_, i64>(5)?,
                     row.get::<_, Option<i64>>(6)?,
                     row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, Option<Vec<u8>>>(8)?,
+                    row.get::<_, String>(9)?,
                 ))
             },
         )
         .optional()?;
-    let Some((attempt, ancestry, prepared, expires, revision, state, renewed_at, renewed_until)) =
-        row
+    let Some((
+        attempt,
+        ancestry,
+        prepared,
+        expires,
+        revision,
+        state,
+        renewed_at,
+        renewed_until,
+        observer_bytes,
+        observer_kind,
+    )) = row
     else {
         return Ok(None);
     };
@@ -252,11 +278,22 @@ fn load_receipt(
         }
         _ => return Err(invalid_stored_activation()),
     };
+    let observer = match (observer_bytes, observer_kind.as_str()) {
+        (None, "null") => None,
+        (Some(bytes), "blob")
+            if state != ExternalSourceActivationState::Prepared
+                && !(state == ExternalSourceActivationState::Retired && revision == 2) =>
+        {
+            Some(ExternalSourceObserverFence::decode(&bytes)?)
+        }
+        _ => return Err(invalid_stored_activation()),
+    };
     Ok(Some(ExternalSourceActivationReceipt {
         activation,
         revision,
         state,
         renewal,
+        observer,
     }))
 }
 
@@ -348,12 +385,14 @@ impl TokenUsageStore {
             revision: 1,
             state: ExternalSourceActivationState::Prepared,
             renewal: None,
+            observer: None,
         })
     }
 
     /// Commits exact prepared acceptance only within its original same-boot
     /// window. Exact committed retry reconciles the existing revision without
     /// another write. This fact alone cannot activate or attest a native source.
+    #[cfg(test)]
     pub(crate) fn accept_external_source_activation(
         &self,
         key: &ExternalSourceKey,
@@ -361,6 +400,28 @@ impl TokenUsageStore {
         expected_revision: u64,
         now_boot_ms: u64,
     ) -> Result<ExternalSourceActivationReceipt> {
+        self.accept_external_source_activation_with_observer(
+            key,
+            activation,
+            expected_revision,
+            now_boot_ms,
+            None,
+        )
+    }
+
+    /// Initializes only an inert public fence in the same acceptance transaction.
+    /// Native/actor proof remains the caller's responsibility, never these bytes.
+    pub(crate) fn accept_external_source_activation_with_observer(
+        &self,
+        key: &ExternalSourceKey,
+        activation: &ExternalSourceActivation,
+        expected_revision: u64,
+        now_boot_ms: u64,
+        observer: Option<&ExternalSourceObserverFence>,
+    ) -> Result<ExternalSourceActivationReceipt> {
+        if observer.is_some_and(|observer| !observer.is_initial()) {
+            return Err(invalid_stored_activation());
+        }
         if !activation.contains_boot_time(now_boot_ms) {
             return Err(MezError::conflict(
                 "external source activation clock unavailable or expired",
@@ -371,6 +432,7 @@ impl TokenUsageStore {
             activation,
             expected_revision,
             ExternalSourceActivationState::Accepted,
+            observer,
         )
     }
 
@@ -388,6 +450,7 @@ impl TokenUsageStore {
             activation,
             expected_revision,
             ExternalSourceActivationState::Retired,
+            None,
         )
     }
 
@@ -399,6 +462,7 @@ impl TokenUsageStore {
         activation: &ExternalSourceActivation,
         expected_revision: u64,
         target: ExternalSourceActivationState,
+        observer: Option<&ExternalSourceObserverFence>,
     ) -> Result<ExternalSourceActivationReceipt> {
         if expected_revision == 0 {
             return Err(MezError::invalid_args(
@@ -422,6 +486,13 @@ impl TokenUsageStore {
             ));
         }
         if previous.state == target && previous.revision == revision {
+            if target == ExternalSourceActivationState::Accepted
+                && previous.observer.as_ref() != observer
+            {
+                return Err(MezError::conflict(
+                    "external source observer acceptance changed",
+                ));
+            }
             return Ok(previous);
         }
         let allowed = matches!(
@@ -439,12 +510,18 @@ impl TokenUsageStore {
                 "external source activation is stale or retired",
             ));
         }
+        let observer = if target == ExternalSourceActivationState::Accepted {
+            observer.cloned()
+        } else {
+            previous.observer
+        };
         if tx.execute(
-            "UPDATE external_usage_source_activations SET revision=?1,state=?2 WHERE owner=?3",
+            "UPDATE external_usage_source_activations SET revision=?1,state=?2,observer_fence=?4 WHERE owner=?3",
             params![
                 sqlite_i64(revision, "activation revision")?,
                 target.stored(),
-                owner
+                owner,
+                observer.as_ref().map(ExternalSourceObserverFence::encode)
             ],
         )? != 1
         {
@@ -456,6 +533,7 @@ impl TokenUsageStore {
             revision,
             state: target,
             renewal: previous.renewal,
+            observer,
         })
     }
 

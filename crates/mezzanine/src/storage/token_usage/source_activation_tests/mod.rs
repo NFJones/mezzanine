@@ -1,5 +1,8 @@
 //! Generated-store tests for inert, bounded native source activation receipts.
 //!
+//! Observer-fence cases live in a focused child; all fixtures remain synthetic
+//! storage metadata, never producer attestation or admission authority.
+//!
 //! Synthetic native metadata exercises storage identity only; none of these
 //! tests attests a real producer or grants enrollment/reporting authority.
 
@@ -7,6 +10,7 @@ use super::source_activation::{
     ExternalSourceActivation, ExternalSourceActivationState, ExternalSourceRenewal,
 };
 use super::*;
+mod observers;
 
 /// Owns only this test's unique temporary database directory.
 struct Fixture {
