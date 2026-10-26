@@ -12,6 +12,8 @@ mod source_activation_fixture;
 mod source_checkpoint;
 mod source_observer_publication;
 mod source_observer_retirement;
+mod source_projection;
+mod source_projection_missing_alias;
 mod source_renewal;
 mod source_retirement;
 use crate::test_support::runtime::RuntimeServiceFixture;

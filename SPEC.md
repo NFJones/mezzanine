@@ -1872,13 +1872,31 @@ MUST preserve request marker/origin/admission time/model/counters/observed clock
 transport credentials alone change. Duplicate durable acknowledgment adds zero,
 while distinct legitimate observations add once. Old reservation completion or
 release cannot consume the replacement incarnation's IDs.
-This server contract currently preserves durable expense/request provenance and
-reset behavior established in the recovered projection. Prior pane-view reset
-baselines and unreplayed actor projections are control-local and are NOT yet
-persisted/reconstructed across full replacement. Current warm checkpoint export,
-strict shared-client cold selection/consumption, artifact updates and assembled
-ordinary-client replacement tests remain required engineering; no completed
-automatic recovery/full-accounting guarantee is implied by this server slice.
+The required cold worker MUST capture one bounded read-only source-wide snapshot
+of committed immutable-observation checkpoints after its real claim. It MUST
+validate exact native mapping/owner/harness, canonical aliases and independently
+recomputed owner/model/project/category stream digests. Distinct aliases MUST NOT
+multiply an absolute checkpoint. Missing/corrupt/foreign/legacy-mode or over-bound
+evidence MUST refuse, never become a valid partial/zero snapshot. Reads MUST NOT
+create stores, migrate schemas, add aliases/events or emit new expense. Bound the
+read to65536 aliases plus one overflow row and4096 unique projected streams.
+In that SAME read transaction, every retained completed request marker MUST have
+its exact same-owner/event/request alias. Bound completed-marker validation to
+65536 plus one overflow row too. Missing or mis-owned aliases MUST refuse even
+when the remaining alias scan would appear genuinely empty or partially valid;
+do not synthesize missing expense from markers or silently omit that partition.
+Before private readiness, actor adoption MUST preflight ALL identity/capacity
+checks including existing stream reservations, then install absolute revisions
+without replacing newer checkpoints or existing reset baselines. No database or
+native ancestry walk may occur on actor. An exact committed claim can retry its
+same intent after capacity returns; it cannot mint another claim or recharge
+history. Final lifetime checks MUST follow bounded snapshot adoption as well.
+This restores unreplayed committed model partitions without replaying their
+reports or prior lifecycle status. Prior pane-view reset baselines are still
+control-local and NOT yet persisted/reconstructed across full replacement;
+only resets established in the recovered projection are currently qualified.
+The shared client/checkpoint/artifact/installed workflow contract above does not
+turn that remaining reset work into an environment or manual-acceptance gate.
 For newly allocated ordinary socket sources, the off-actor native-observation
 phase MAY write only Prepared from actual retained ancestry and a suspend-aware
 native clock. Fingerprints MUST bind the original source/kind and ordered

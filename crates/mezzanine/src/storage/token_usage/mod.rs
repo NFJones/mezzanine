@@ -19,6 +19,7 @@ mod external_sources;
 mod history;
 mod projects;
 mod source_activation;
+mod source_projection;
 mod store;
 
 pub(crate) use external_attempt::{
@@ -45,6 +46,7 @@ pub(crate) use source_activation::{
     ExternalSourceActivation, ExternalSourceActivationReceipt, ExternalSourceActivationState,
     ExternalSourceObserverChange, ExternalSourceObserverFence, ExternalSourceRenewal,
 };
+pub(crate) use source_projection::ExternalSourceUsageSnapshot;
 pub(crate) use store::{TokenUsageEvent, TokenUsageStore};
 
 /// Exact rolling windows displayed by `/status --extended`.

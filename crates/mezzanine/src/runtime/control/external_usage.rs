@@ -986,6 +986,87 @@ impl RuntimeSessionService {
             .collect()
     }
 
+    /// Adopts absolute source checkpoints before a cold private reply. Preflight
+    /// validates every partition/capacity/owner before mutating ANY projection.
+    /// No storage, charged delta, request replay or lifecycle status is produced.
+    pub(super) fn restore_external_source_usage(
+        &mut self,
+        digest: [u8; 32],
+        generation: u64,
+        snapshot: &crate::storage::token_usage::ExternalSourceUsageSnapshot,
+    ) -> Result<()> {
+        let binding = self
+            .control
+            .external_agents()
+            .bindings
+            .get(&digest)
+            .filter(|binding| {
+                binding.generation == generation
+                    && !binding.retired
+                    && binding.accounting_owner == snapshot.owner
+                    && binding.harness == snapshot.harness
+            })
+            .ok_or_else(|| MezError::conflict("external source checkpoint owner changed"))?;
+        let pane = binding.pane_id.clone();
+        let process = binding.process.clone();
+        let projection = self.control.external_usage_mut();
+        let mut occupied = projection
+            .streams
+            .keys()
+            .chain(projection.reservations.keys())
+            .collect::<BTreeSet<_>>();
+        #[cfg(test)]
+        let limit = projection.stream_limit.unwrap_or(MAX_PROJECTED_STREAMS);
+        #[cfg(not(test))]
+        let limit = MAX_PROJECTED_STREAMS;
+        for partition in &snapshot.partitions {
+            occupied.insert(&partition.commit.stream_id);
+            if occupied.len() > limit {
+                return Err(MezError::new(
+                    crate::error::MezErrorKind::RateLimited,
+                    "external source checkpoint projection capacity unavailable",
+                ));
+            }
+            if let Some(stream) = projection.streams.get(&partition.commit.stream_id)
+                && (stream.pane_id != pane
+                    || !stream.process.same_incarnation(&process)
+                    || stream.harness != snapshot.harness
+                    || stream.project != partition.project
+                    || stream.model != partition.model
+                    || stream.members.is_some()
+                    || (partition.commit.revision > stream.revision
+                        && partition.commit.totals.difference(stream.totals).is_err())
+                    || (stream.revision == partition.commit.revision
+                        && stream.totals != partition.commit.totals))
+            {
+                return Err(MezError::conflict(
+                    "external source checkpoint projection changed",
+                ));
+            }
+        }
+        for partition in &snapshot.partitions {
+            let stream = projection
+                .streams
+                .entry(partition.commit.stream_id.clone())
+                .or_insert_with(|| ProjectedStream {
+                    pane_id: pane.clone(),
+                    process: process.clone(),
+                    harness: snapshot.harness.clone(),
+                    model: partition.model.clone(),
+                    project: partition.project.clone(),
+                    revision: 0,
+                    totals: partition.commit.totals.zero_like(),
+                    reset_baseline: partition.commit.totals.zero_like(),
+                    members: None,
+                });
+            if partition.commit.revision > stream.revision {
+                stream.revision = partition.commit.revision;
+                stream.totals = partition.commit.totals;
+            }
+        }
+        Ok(())
+    }
+
     /// Moves only the pane-view baseline; durable deduplication remains intact.
     pub(crate) fn reset_external_token_usage(&mut self, pane_id: &str) -> bool {
         let mut changed = false;

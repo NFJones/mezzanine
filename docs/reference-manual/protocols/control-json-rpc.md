@@ -1065,12 +1065,23 @@ origin/time and observed clock; only transport credentials change, after retryin
 the original begin when its one-use readiness was consumed. Ledger duplicates
 remain inert and distinct new expense adds once, without provider/action replay.
 
-This is a server-native contract, NOT automatic ordinary-client recovery yet.
-The shared client does not currently select/consume it, and there is no current
-warm checkpoint export. Pre-replacement pane reset baselines/unreplayed actor
-projections remain control-local; only durable expense and request provenance
-plus resets established after recovery are qualified here. Those reconstruction
-and client/artifact/assembled-workflow gaps remain open, not platform gates.
+The shared persistent client selects this explicit path after an answered
+same-live refusal, using its validated known public checkpoint as described above.
+The real required worker also reads every source-owned committed immutable
+observation partition in one read-only transaction. It independently validates
+owner/model/project/category stream identity, deduplicates aliases and bounds
+the source to65536 aliases/4096 unique streams. Missing/corrupt/foreign/legacy
+mode or over-cap evidence refuses, without creating/migrating storage or emitting
+expense. The same read transaction independently checks every retained completed
+request's same-owner/event/request alias (bounded65536 plus one overflow row).
+Deleting or mis-owning an alias cannot become a valid empty/partial snapshot.
+No missing expense is synthesized from a request marker. Actor publication
+preflights the complete projection plus reservations before adopting absolute
+revisions; no replay is needed for an unreplayed model
+and newer checkpoints/existing reset baselines never roll backwards.
+Pre-replacement pane reset baselines remain control-local and are not yet
+durably reconstructed; only resets established after recovery are qualified.
+That remaining implementation is separate from platform/SDK verification.
 
 The native worker now prepares metadata only for a newly allocated ordinary
 socket source, after real retained ancestry and native boot evidence. The digest
@@ -1168,8 +1179,9 @@ The client does not persist credentials or provide a durable unsent-end inbox.
 This supports finite same-service reply-loss recovery, not general outage or
 full-service replacement. Server-native renewal, observer fences and explicit
 cold admission are implemented separately above; automatic client consumption
-is supported by the shared persistent client, while full accounting projection/
-pre-replacement reset reconstruction remains separate unfinished engineering.
+is supported by the shared persistent client with source-wide committed
+observation projection. Pre-replacement reset reconstruction remains separate
+unfinished engineering.
 Other curated/helper clients are not silently upgraded to this source contract.
 
 Adapters must capture begin readiness before each genuine new provider request

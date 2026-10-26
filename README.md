@@ -77,8 +77,10 @@ The server supports explicitly requested same-native-source cold claims with
 fresh proof and exact durable fencing. The shared persistent client retains
 validated public checkpoints and can automatically recover after an answered
 same-live refusal without changing an incurred report or recharging its replay.
-Cross-replacement pane reset and unreplayed projection reconstruction remain
-separate unfinished accounting work; no never-received-data guarantee is implied.
+Cold publication restores bounded committed observation partitions, including
+models whose reports are not replayed. Pre-replacement pane reset persistence
+remains separate unfinished accounting work; no never-received-data guarantee
+is implied.
 
 ## Why Mezzanine?
 

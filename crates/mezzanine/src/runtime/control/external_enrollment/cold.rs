@@ -215,14 +215,34 @@ impl RuntimeSessionService {
             return Err(unavailable());
         }
         let grant = preparation.admission.get().ok_or_else(unavailable)?;
+        self.control
+            .external_agents()
+            .bindings
+            .get(&grant.digest())
+            .filter(|binding| binding.generation == grant.generation() && !binding.retired)
+            .and_then(|binding| binding.enrollment.as_ref())
+            .filter(|enrollment| enrollment.accepted_cold_resume == work.cold_resume)
+            .ok_or_else(unavailable)?;
+        // Projection preflight/adoption precedes exposing the private binding.
+        // Its snapshot is sealed by the actual required native worker only.
+        self.restore_external_source_usage(
+            grant.digest(),
+            grant.generation(),
+            preparation.usage_snapshot().ok_or_else(unavailable)?,
+        )?;
+        // Snapshot adoption is bounded but not constant-time. Its historical
+        // expense is independent of registration; it cannot extend eligibility
+        // or let an expired private grant escape after that projection work.
+        let now = source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        if !receipt.is_accepted_at(now) || !work.source_preparation.renewal_is_open() {
+            return Err(unavailable());
+        }
         let enrollment = self
             .control
             .external_agents_mut()
             .bindings
             .get_mut(&grant.digest())
-            .filter(|binding| binding.generation == grant.generation() && !binding.retired)
             .and_then(|binding| binding.enrollment.as_mut())
-            .filter(|enrollment| enrollment.accepted_cold_resume == work.cold_resume)
             .ok_or_else(unavailable)?;
         enrollment.cold_published = true;
         self.record_external_source_anchor(grant.digest());

@@ -32,6 +32,8 @@ pub(super) struct NativeSourcePreparation {
     pub(super) admission: OnceLock<super::publication::SourceActorAdmission>,
     /// Original acceptance outcome, shared by worker clones without replay.
     acceptance: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
+    /// Actual required-worker read; never supplied through completion feedback.
+    usage_snapshot: OnceLock<Arc<crate::storage::token_usage::ExternalSourceUsageSnapshot>>,
     /// Original retirement result, retained without automatic write replay.
     retirement: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
     /// Exact target captured before CAS, or from an already committed tombstone.
@@ -90,6 +92,7 @@ impl NativeSourcePreparation {
             receipt: OnceLock::new(),
             admission: OnceLock::new(),
             acceptance: OnceLock::new(),
+            usage_snapshot: OnceLock::new(),
             retirement: OnceLock::new(),
             retirement_revision: OnceLock::new(),
             retirement_state: OnceLock::new(),
@@ -198,11 +201,28 @@ impl NativeSourcePreparation {
                 {
                     return Err(MezError::conflict("durable source claim changed"));
                 }
+                let snapshot = self.store.external_source_usage_snapshot(&self.key)?;
+                if Instant::now() >= deadline {
+                    return Err(MezError::conflict(
+                        "external source checkpoint deadline elapsed",
+                    ));
+                }
+                self.usage_snapshot.set(Arc::new(snapshot)).map_err(|_| {
+                    MezError::conflict("external source checkpoint already captured")
+                })?;
                 Ok(receipt)
             })
             .as_ref()
             .map(|_| ())
             .map_err(Clone::clone)
+    }
+
+    /// Exposes only the actual cold worker's snapshot after cached acceptance.
+    pub(super) fn usage_snapshot(
+        &self,
+    ) -> Option<&crate::storage::token_usage::ExternalSourceUsageSnapshot> {
+        self.accepted_receipt()?;
+        self.usage_snapshot.get().map(Arc::as_ref)
     }
 
     /// Performs at most one prepared-only write on the original native worker.
