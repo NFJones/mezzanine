@@ -47,6 +47,48 @@ fn key(session: &str) -> ExternalSourceKey {
     .unwrap()
 }
 
+/// Receipt inspection cannot turn missing storage into a fresh database or
+/// migrate a legacy schema into apparently current evidence. Existing current
+/// inert mappings still return None, while legacy/future versions stay intact.
+#[test]
+fn external_source_activation_inspection_does_not_create_or_migrate() {
+    let fixture = Fixture::new();
+    let source = key("read-only-inspection");
+    assert!(fixture.store.external_source_activation(&source).is_err());
+    assert!(!fixture.root.exists(), "receipt inspection created storage");
+    fixture.store.external_source_owner(&source).unwrap();
+    assert!(
+        fixture
+            .store
+            .external_source_activation(&source)
+            .unwrap()
+            .is_none()
+    );
+    let database = rusqlite::Connection::open(fixture.store.path()).unwrap();
+    database.execute_batch("BEGIN IMMEDIATE").unwrap();
+    assert!(
+        fixture
+            .store
+            .external_source_activation(&source)
+            .unwrap()
+            .is_none(),
+        "receipt read requested writer ownership"
+    );
+    database.execute_batch("ROLLBACK").unwrap();
+    for version in [7, super::store::SCHEMA_VERSION + 1] {
+        database
+            .pragma_update(None, "user_version", version)
+            .unwrap();
+        assert!(fixture.store.external_source_activation(&source).is_err());
+        assert_eq!(
+            database
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            version
+        );
+    }
+}
+
 /// SQLite text length/substr may stop at NUL, while a BLOB of UUID bytes can
 /// satisfy length checks too. Neither malformed source mapping may alias the
 /// distinct legitimate owner's accepted receipt through ANY activation API.

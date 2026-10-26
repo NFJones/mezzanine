@@ -7,8 +7,10 @@
 //! Retirement includes logical lease/authority expiry, not only native exit;
 //! metadata never claims that a still-live producer has physically died.
 //! SQLite and mutex acquisition occur solely on blocking workers. Original
-//! outcomes remain cached, including errors; this owner provides neither blind
-//! retries nor cold-recovery authority or a successful-durability promise.
+//! outcomes remain cached, including errors. After failure, one read-only check
+//! may establish the exact committed tombstone/revision without writing again.
+//! Missing/changed/unavailable evidence preserves the original failure. This
+//! owner provides neither blind retries nor cold-recovery or end-ACK authority.
 
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -144,8 +146,10 @@ impl ExternalSourceRetirementWork {
         self.store.path()
     }
 
-    /// Runs only off actor. Retains the original exact result and never replaces
-    /// a changed proposal, retries a failed mutation, or reactivates any source.
+    /// Runs only off actor. A failed write is followed by one read-only exact
+    /// tombstone check, never mutation replay. Positive durable evidence may
+    /// reconcile a lost receipt without overwriting the original cached error.
+    /// Absent/changed/unknown evidence preserves the original failure.
     pub(crate) fn execute(&self) -> Result<()> {
         let _guard = self
             .slot
@@ -157,10 +161,13 @@ impl ExternalSourceRetirementWork {
                 "external source retirement was not admitted",
             ));
         }
-        self.slot
+        let preparation = self
+            .slot
             .get()
-            .ok_or_else(|| MezError::invalid_state("external source preparation disappeared"))?
+            .ok_or_else(|| MezError::invalid_state("external source preparation disappeared"))?;
+        preparation
             .retire()
+            .or_else(|original| preparation.reconcile_retirement().map_err(|_| original))
     }
 }
 

@@ -8,8 +8,10 @@
 //! ordinary socket source. Actual actor registration can seal a second off-actor
 //! acceptance write. Logical source retirement queues an exact tombstone on the
 //! existing persistence lane, retaining its original proposal and cached outcome.
-//! Required retirement acknowledgment/reconciliation, renewal and cold recovery
-//! are not integrated; failed optional writes cannot be called durable success.
+//! Lost retirement receipts may reconcile only from an existing exact tombstone,
+//! never by replaying a failed mutation or creating/migrating storage on read.
+//! Required end acknowledgment, uncommitted-retirement recovery, renewal and cold
+//! recovery are not integrated; unknown optional writes remain unavailable.
 //! Curated and existing source paths are unchanged. Accepted is historical
 //! admission, not a persisted assertion of current liveness or a control right.
 //!
@@ -205,15 +207,29 @@ fn load_receipt(
 }
 
 impl TokenUsageStore {
-    /// Reads facts under one coherent SQLite snapshot. No legacy mapping is
-    /// upgraded into an activation and no reporting/lifecycle rights are granted.
+    /// Reads an existing current-schema store under one coherent read-only
+    /// SQLite snapshot. Never creates/migrates storage, changes journal mode or
+    /// upgrades a legacy mapping into evidence. Missing/unknown storage is an
+    /// error, not an empty valid ledger. Grants no native/reporting authority.
+    /// SQLite may use its normal coordination sidecars; no data is mutated.
     /// Call only on an off-actor worker.
     pub(crate) fn external_source_activation(
         &self,
         key: &ExternalSourceKey,
     ) -> Result<Option<ExternalSourceActivationReceipt>> {
-        let mut connection = self.open()?;
+        let mut connection =
+            crate::storage::shared_sqlite::open_shared_database_read_only(self.path())?
+                .ok_or_else(|| {
+                    MezError::invalid_state("external source activation store unavailable")
+                })?;
+        connection.busy_timeout(std::time::Duration::from_millis(250))?;
         let tx = connection.transaction()?;
+        let version: i64 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version != super::store::SCHEMA_VERSION {
+            return Err(MezError::invalid_state(
+                "external source activation schema unavailable",
+            ));
+        }
         let owner = mapped_owner(&tx, key)?;
         load_receipt(&tx, &owner)
     }

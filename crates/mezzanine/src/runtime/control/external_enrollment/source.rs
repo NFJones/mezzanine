@@ -27,6 +27,11 @@ pub(super) struct NativeSourcePreparation {
     acceptance: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
     /// Original retirement result, retained without automatic write replay.
     retirement: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
+    /// Exact target revision captured BEFORE the original CAS can commit.
+    retirement_revision: OnceLock<u64>,
+    /// Per-fixture loss AFTER the real tombstone commits, never fake authority.
+    #[cfg(test)]
+    retirement_ack_lost: std::sync::atomic::AtomicBool,
 }
 
 impl NativeSourcePreparation {
@@ -64,6 +69,9 @@ impl NativeSourcePreparation {
             admission: OnceLock::new(),
             acceptance: OnceLock::new(),
             retirement: OnceLock::new(),
+            retirement_revision: OnceLock::new(),
+            #[cfg(test)]
+            retirement_ack_lost: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -142,15 +150,81 @@ impl NativeSourcePreparation {
                 {
                     return Ok(receipt);
                 }
-                self.store.retire_external_source_activation(
+                let revision = receipt
+                    .revision
+                    .checked_add(1)
+                    .filter(|revision| *revision <= i64::MAX as u64)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("external source retirement revision exhausted")
+                    })?;
+                let _ = self.retirement_revision.set(revision);
+                let retired = self.store.retire_external_source_activation(
                     &self.key,
                     &self.activation,
                     receipt.revision,
-                )
+                )?;
+                #[cfg(test)]
+                if self
+                    .retirement_ack_lost
+                    .swap(false, std::sync::atomic::Ordering::AcqRel)
+                {
+                    return Err(MezError::invalid_state(
+                        "fixture retirement acknowledgment lost",
+                    ));
+                }
+                Ok(retired)
             })
             .as_ref()
             .map(|_| ())
             .map_err(Clone::clone)
+    }
+
+    /// Reconciles a previously attempted retirement by read-only exact facts.
+    /// No failed write is repeated and the original cached outcome is retained.
+    /// A prepared/accepted/changed/missing receipt cannot be reported retired.
+    pub(super) fn reconcile_retirement(&self) -> Result<()> {
+        if self.admission.get().is_none() || self.retirement.get().is_none() {
+            return Err(MezError::invalid_state(
+                "external source retirement evidence unavailable",
+            ));
+        }
+        let revision = self.retirement_revision.get().ok_or_else(|| {
+            MezError::invalid_state("external source retirement target unavailable")
+        })?;
+        if self
+            .store
+            .external_source_activation(&self.key)?
+            .is_some_and(|receipt| {
+                receipt.activation == self.activation
+                    && receipt.revision == *revision
+                    && receipt.state
+                        == crate::storage::token_usage::ExternalSourceActivationState::Retired
+            })
+        {
+            Ok(())
+        } else {
+            Err(MezError::conflict(
+                "external source retirement evidence unavailable",
+            ))
+        }
+    }
+
+    /// Arms a fixture-only lost receipt after an actual successful store commit.
+    /// The original native preparation and actor grant must already exist.
+    #[cfg(test)]
+    pub(super) fn lose_retirement_ack_for_tests(&self) {
+        assert!(self.admission.get().is_some());
+        assert!(self.retirement.get().is_none());
+        self.retirement_ack_lost
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Inspects the original outcome without replacing it by reconciled truth.
+    #[cfg(test)]
+    pub(super) fn retirement_outcome_for_tests(
+        &self,
+    ) -> Option<&Result<crate::storage::token_usage::ExternalSourceActivationReceipt>> {
+        self.retirement.get()
     }
 
     /// Exposes this fixture's original cached write result, not a constructor,

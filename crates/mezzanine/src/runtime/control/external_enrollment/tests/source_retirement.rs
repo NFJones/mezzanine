@@ -161,108 +161,160 @@ async fn accepted_source() -> Option<(
 /// Observer handoff preserves the original source receipt and its finite permit.
 /// A stale old handle cannot retire the successor. Current source retirement
 /// queues exactly once and the actual actor persistence service writes Retired3,
-/// without changing any expense or reusing registration credentials.
+/// without changing any expense or reusing registration credentials. Both the
+/// normal result and real commit-before-lost-receipt case write exactly once;
+/// read-only reconciliation preserves the original failure and original store.
 #[tokio::test(flavor = "current_thread")]
 async fn external_source_retirement_survives_rotation_and_uses_persistence_worker() {
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeSessionActor, AsyncRuntimeSideEffectServiceConfig,
         run_async_persistence_side_effect_service,
     };
-    let Some((mut fixture, store, publication, ready)) = accepted_source().await else {
-        return;
-    };
-    let old_digest = *fixture
-        .service
-        .control
-        .external_agents()
-        .bindings
-        .keys()
-        .next()
-        .unwrap();
-    let mut replacement = request();
-    let mut params: serde_json::Value =
-        serde_json::from_str(replacement.params.as_deref().unwrap()).unwrap();
-    params["observer_instance"] = serde_json::json!("fixture-instance-successor");
-    params["predecessor_generation"] = ready["generation"].clone();
-    replacement.params = Some(params.to_string());
-    let work = fixture
-        .service
-        .prepare_external_enrollment(&replacement, &fixture.connection)
-        .unwrap();
-    let native = work.clone();
-    let observed = tokio::task::spawn_blocking(move || native.execute_enrollment())
-        .await
-        .unwrap();
-    let rotated: serde_json::Value = serde_json::from_str(
-        &fixture
+    for lose_ack in [false, true] {
+        let Some((mut fixture, store, publication, ready)) = accepted_source().await else {
+            return;
+        };
+        let old_digest = *fixture
             .service
-            .complete_external_enrollment(work, observed, &fixture.connection),
-    )
-    .unwrap();
-    assert_eq!(rotated["result"]["registered"], true);
-    assert_ne!(rotated["result"]["generation"], ready["generation"]);
-    fixture.service.retire_external_agent_binding(old_digest);
-    assert!(
+            .control
+            .external_agents()
+            .bindings
+            .keys()
+            .next()
+            .unwrap();
+        let mut replacement = request();
+        let mut params: serde_json::Value =
+            serde_json::from_str(replacement.params.as_deref().unwrap()).unwrap();
+        params["observer_instance"] = serde_json::json!("fixture-instance-successor");
+        params["predecessor_generation"] = ready["generation"].clone();
+        replacement.params = Some(params.to_string());
+        let work = fixture
+            .service
+            .prepare_external_enrollment(&replacement, &fixture.connection)
+            .unwrap();
+        let native = work.clone();
+        let observed = tokio::task::spawn_blocking(move || native.execute_enrollment())
+            .await
+            .unwrap();
+        let rotated: serde_json::Value = serde_json::from_str(
+            &fixture
+                .service
+                .complete_external_enrollment(work, observed, &fixture.connection),
+        )
+        .unwrap();
+        assert_eq!(rotated["result"]["registered"], true);
+        assert_ne!(rotated["result"]["generation"], ready["generation"]);
+        fixture.service.retire_external_agent_binding(old_digest);
+        assert!(
+            fixture
+                .service
+                .persistence
+                .take_token_usage_effects()
+                .is_empty()
+        );
+        let database = rusqlite::Connection::open(store.path()).unwrap();
+        assert_eq!(state(&database), (1, 2));
+        let digest = *fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .keys()
+            .next()
+            .unwrap();
+        assert_ne!(digest, old_digest);
+        let replacement_store = crate::storage::token_usage::TokenUsageStore::new(
+            fixture.directory.join("replacement.sqlite"),
+        );
         fixture
             .service
-            .persistence
-            .take_token_usage_effects()
-            .is_empty()
-    );
-    let database = rusqlite::Connection::open(store.path()).unwrap();
-    assert_eq!(state(&database), (1, 2));
-    let digest = *fixture
-        .service
-        .control
-        .external_agents()
-        .bindings
-        .keys()
-        .next()
+            .set_token_usage_store(replacement_store.clone());
+        database.execute_batch("CREATE TABLE retirement_write_count (id INTEGER); CREATE TRIGGER count_retirement_write AFTER UPDATE ON external_usage_source_activations WHEN NEW.state=2 BEGIN INSERT INTO retirement_write_count VALUES(1); END;").unwrap();
+        if lose_ack {
+            publication
+                .source_preparation
+                .get()
+                .unwrap()
+                .lose_retirement_ack_for_tests();
+        }
+        fixture.service.retire_external_agent_binding(digest);
+        fixture.service.retire_all_external_source_anchors();
+        let effects = fixture.service.persistence.take_token_usage_effects();
+        assert_eq!(effects.len(), 1);
+        assert_eq!(state(&database), (1, 2), "actor did not touch SQLite");
+        let crate::runtime::RuntimeSideEffect::PersistExternalSourceRetirement { work: duplicate } =
+            &effects[0]
+        else {
+            panic!("missing retirement work")
+        };
+        let duplicate = duplicate.clone();
+        assert_eq!(duplicate.path(), store.path());
+        let (handle, actor) = AsyncRuntimeSessionActor::new(
+            RuntimeServiceFixture::new().build(),
+            AsyncRuntimeActorConfig::default(),
+        )
         .unwrap();
-    assert_ne!(digest, old_digest);
-    fixture.service.retire_external_agent_binding(digest);
-    fixture.service.retire_all_external_source_anchors();
-    let effects = fixture.service.persistence.take_token_usage_effects();
-    assert_eq!(effects.len(), 1);
-    assert_eq!(state(&database), (1, 2), "actor did not touch SQLite");
-    let (handle, actor) = AsyncRuntimeSessionActor::new(
-        RuntimeServiceFixture::new().build(),
-        AsyncRuntimeActorConfig::default(),
-    )
-    .unwrap();
-    let mut owned = tokio::task::JoinSet::new();
-    owned.spawn(actor.run());
-    handle.queue_runtime_side_effects(effects).await.unwrap();
-    let report = run_async_persistence_side_effect_service(
-        &handle,
-        AsyncRuntimeSideEffectServiceConfig {
-            max_polls: 2,
-            drain_limit: 8,
-            idle_interval: Duration::from_millis(1),
-        },
-        |polls, _| polls >= 2,
-    )
-    .await
-    .unwrap();
-    assert_eq!(report.completed, 1);
-    assert_eq!(report.failed, 0);
-    handle.shutdown().await.unwrap();
-    owned.join_next().await.unwrap().unwrap();
-    assert_eq!(state(&database), (2, 3));
-    let native = publication.clone();
-    assert!(
-        tokio::task::spawn_blocking(move || native.execute_enrollment())
+        let mut owned = tokio::task::JoinSet::new();
+        owned.spawn(actor.run());
+        handle.queue_runtime_side_effects(effects).await.unwrap();
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 2,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.failed, 0);
+        handle.shutdown().await.unwrap();
+        owned.join_next().await.unwrap().unwrap();
+        assert_eq!(state(&database), (2, 3));
+        assert!(
+            !replacement_store.path().exists(),
+            "retirement retargeted the current store"
+        );
+        assert_eq!(
+            publication
+                .source_preparation
+                .get()
+                .unwrap()
+                .retirement_outcome_for_tests()
+                .unwrap()
+                .is_err(),
+            lose_ack,
+            "reconciliation must not overwrite the original write result"
+        );
+        tokio::task::spawn_blocking(move || duplicate.execute())
             .await
             .unwrap()
-            .is_err()
-    );
-    assert_eq!(
-        database
-            .query_row("SELECT count(*) FROM token_usage_events", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
+            .unwrap();
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM retirement_write_count", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1,
+            "lost receipt must not cause a second write"
+        );
+        let native = publication.clone();
+        assert!(
+            tokio::task::spawn_blocking(move || native.execute_enrollment())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM token_usage_events", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
 }
 
 /// A real SQLite failure leaves Accepted2 unchanged and retains the original
@@ -300,11 +352,35 @@ async fn external_source_retirement_failure_is_retained_without_write_replay() {
     database
         .execute_batch("DROP TRIGGER reject_retirement")
         .unwrap();
+    let retained = work.clone();
     let again = tokio::task::spawn_blocking(move || work.execute())
         .await
         .unwrap();
-    assert_eq!(again.unwrap_err().message(), failure.unwrap_err().message());
+    let original = failure.unwrap_err().message().to_owned();
+    assert_eq!(again.unwrap_err().message(), original);
     assert_eq!(state(&database), (1, 2));
+    database
+        .execute_batch(
+            "CREATE TABLE original_activation AS SELECT * FROM external_usage_source_activations;",
+        )
+        .unwrap();
+    for changed in [
+        "UPDATE external_usage_source_activations SET state=2,revision=2",
+        "UPDATE external_usage_source_activations SET state=2,revision=3,attempt=X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'",
+        "DELETE FROM external_usage_source_activations",
+    ] {
+        database.execute_batch(changed).unwrap();
+        let native = retained.clone();
+        let result = tokio::task::spawn_blocking(move || native.execute())
+            .await
+            .unwrap();
+        assert_eq!(
+            result.unwrap_err().message(),
+            original,
+            "changed or missing tombstone must preserve original failure"
+        );
+        database.execute_batch("DELETE FROM external_usage_source_activations; INSERT INTO external_usage_source_activations SELECT * FROM original_activation;").unwrap();
+    }
     let native = publication.clone();
     assert!(
         tokio::task::spawn_blocking(move || native.execute_enrollment())

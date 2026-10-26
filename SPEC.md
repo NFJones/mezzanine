@@ -1716,9 +1716,15 @@ may finish; retirement then tombstones its exact resulting revision. Retirement 
 the original proposal and actual revision; stale handles MUST NOT retire a
 successor. Control/snapshot invalidation alone MUST NOT create a native-lifetime
 tombstone. Only positive worker evidence establishes durable retirement; a
-cached failure remains unavailable without automatic write replay. This optional
+failed original outcome MUST remain cached. The same bounded off-actor work MAY
+perform one read-only reconciliation after failure, requiring the original key,
+complete proposal and exact target revision captured before its CAS, in Retired
+state. Inspection MUST NOT create, migrate or initialize missing/legacy storage;
+unknown schemas, missing/changed/not-retired records MUST retain the original
+failure. Exact committed tombstone evidence MAY complete persistence without
+repeating a mutation or replacing its original error. This optional
 pipeline does NOT yet provide a durable end acknowledgment or cold-recovery
-guarantee. Retirement failure reconciliation, renewal and cold admission remain
+guarantee. Uncommitted-retirement recovery, renewal and cold admission remain
 unfinished; Accepted records describe historical admission, not current liveness.
 Existing same-live ownership and namespace-only activation refusals remain in
 force; a stored Accepted flag alone MUST NOT authorize recovery or reporting.

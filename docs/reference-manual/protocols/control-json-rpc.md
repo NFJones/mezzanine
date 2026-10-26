@@ -946,10 +946,15 @@ observer lease can retire it while the actual producer/root remain alive. A
 tombstone proves neither physical process exit nor an explicit vendor end event.
 The original proposal/revision and destination remain fixed, stale observer
 handles cannot retire successors, and only a successful worker proves a durable
-tombstone. A failed outcome is cached, not silently retried or acknowledged as
-durable. Snapshot/control invalidation alone is not a native lifetime end and
+tombstone. A failed original outcome stays cached. The bounded worker can
+reconcile a lost receipt by reading the original key, complete proposal and
+pre-CAS target revision in Retired state, without repeating the write. Receipt
+inspection opens existing current-schema storage read-only; it cannot create or
+migrate missing/legacy storage. Missing, changed, not-retired or unavailable
+evidence preserves the original failure, never fabricated durable success.
+Snapshot/control invalidation alone is not a native lifetime end and
 does not write a tombstone. No new end/durable-recovery acknowledgment is promised:
-retirement failure reconciliation, renewal and typed cold-service recovery remain
+uncommitted-retirement recovery, renewal and typed cold-service recovery remain
 implementation work. Accepted is historical admission, not
 current liveness, native authority or
 a new RPC capability. Existing namespace-only activation refusal remains intact;
