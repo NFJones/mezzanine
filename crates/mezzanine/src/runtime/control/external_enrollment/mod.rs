@@ -39,6 +39,7 @@ const MAX_OBSERVER_INSTANCES: usize = 128;
 
 mod codex;
 mod codex_order;
+mod cold;
 mod copilot;
 mod curated;
 mod cursor;
@@ -51,6 +52,7 @@ mod rotation;
 mod source;
 mod source_clock;
 mod source_end;
+mod source_history;
 mod source_observer;
 pub(crate) use source_end::ExternalSourceEndWork;
 mod source_retirement;
@@ -108,6 +110,13 @@ pub(super) struct EnrollmentBinding {
     accepted_resume: Option<SourceResume>,
     /// True only for durable recovery that created a fresh missing projection.
     recovered_projection: bool,
+    /// Exact explicit cold intent; private reply stays withheld until published.
+    accepted_cold_resume: Option<cold::ColdSourceResume>,
+    cold_published: bool,
+    /// Bounded predecessor digests; old IDs cannot exploit private-gen reuse.
+    historical_instances: Option<crate::storage::token_usage::ExternalSourceObserverFence>,
+    /// Exact durable uncertainty intent preceding this warm admission.
+    history_nonce: Option<[u8; 32]>,
     /// Inherited fixed diagnostic only; no lifecycle/candidate state survives.
     resume_usage_gap: Option<crate::integrations::bootstrap::pi_ipc::UsageGapReason>,
     /// Bounded retired-instance fence; old instances cannot reclaim this run.
@@ -148,6 +157,10 @@ pub(crate) struct ExternalEnrollmentWork {
     predecessor_generation: Option<u64>,
     /// Public receipt selector; native lifetime evidence remains mandatory.
     source_resume: Option<SourceResume>,
+    /// Public cold selectors only; fresh original-kind native proof is required.
+    cold_resume: Option<cold::ColdSourceResume>,
+    /// New warm identity must durably fence incomplete history before admission.
+    warm_history: Option<Arc<source_history::WarmHistoryPlan>>,
     /// Retained control-owner revision captured before native work is reserved.
     resume_admission: Option<ResumeAdmission>,
     deadline: Instant,
@@ -270,7 +283,20 @@ impl ExternalEnrollmentWork {
             helper.observe_usage(self)?;
         }
         if self.helper.is_none() {
+            if let Some(history) = &self.warm_history {
+                history.execute(self)?;
+            }
             self.observe_source_owner(&ProducerEvidence::Socket(self.origin.clone()));
+        }
+        if self.cold_resume.is_some()
+            && self
+                .source_preparation
+                .get()
+                .is_none_or(|preparation| !preparation.is_cold())
+        {
+            return Err(MezError::conflict(
+                "durable source native proof unavailable",
+            ));
         }
         Ok(())
     }
@@ -456,7 +482,8 @@ impl RuntimeSessionService {
         let display_name = text(&params, "display_name", 128)?;
         let observer_instance = text(&params, "observer_instance", 128)?;
         let source_resume = SourceResume::from_params(&params)?;
-        if source_resume.is_some() && curated.is_some() {
+        let cold_resume = cold::ColdSourceResume::from_params(&params)?;
+        if (source_resume.is_some() || cold_resume.is_some()) && curated.is_some() {
             return Err(MezError::invalid_args(
                 "source resume requires a persistent socket producer",
             ));
@@ -555,6 +582,8 @@ impl RuntimeSessionService {
             observer_instance,
             predecessor_generation,
             source_resume,
+            cold_resume,
+            warm_history: None,
             resume_admission: None,
             deadline: Instant::now() + ADMISSION_BUDGET,
             helper: None,
@@ -582,6 +611,7 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         }
+        work.warm_history = self.capture_external_warm_history(&work);
         Ok(work)
     }
 
@@ -714,9 +744,27 @@ impl RuntimeSessionService {
         }
         self.reconcile_external_agent_registrations();
         if work.source_resume.is_some() {
+            if work
+                .warm_history
+                .as_ref()
+                .is_some_and(|history| !history.was_recorded())
+            {
+                return Err(MezError::conflict("source history was not durably fenced"));
+            }
             return self.commit_external_source_resume(work, connection);
         }
-        self.validate_external_source_initial(work)?;
+        if work
+            .warm_history
+            .as_ref()
+            .is_some_and(|history| !history.was_recorded())
+        {
+            return Err(MezError::conflict("source history was not durably fenced"));
+        }
+        if work.cold_resume.is_none() {
+            self.validate_external_source_initial(work)?;
+        } else {
+            self.validate_cold_control_owner(work)?;
+        }
         let existing =
             self.control
                 .external_agents()
@@ -736,6 +784,11 @@ impl RuntimeSessionService {
                 })
                 .map(|(digest, _)| *digest);
         if let Some(digest) = existing {
+            if work.cold_resume.is_some() && !self.cold_reply_is_published(work) {
+                return Err(MezError::conflict(
+                    "durable source current publication unavailable",
+                ));
+            }
             return self.replace_or_retry_external_observer(digest, work, connection);
         }
         if work.predecessor_generation.is_some() {
@@ -768,6 +821,7 @@ impl RuntimeSessionService {
         }
         let generation = next_generation
             .checked_add(1)
+            .filter(|generation| work.cold_resume.is_none() || *generation <= 9_007_199_254_740_991)
             .ok_or_else(|| MezError::invalid_state("external enrollment generation exhausted"))?;
         *next_generation = generation;
         let mut bytes = [0u8; 32];
@@ -803,7 +857,14 @@ impl RuntimeSessionService {
                     instance: work.observer_instance.clone(),
                     predecessor_generation: None,
                     accepted_resume: None,
-                    recovered_projection: false,
+                    recovered_projection: work.cold_resume.is_some(),
+                    accepted_cold_resume: work.cold_resume.clone(),
+                    cold_published: false,
+                    history_nonce: None,
+                    historical_instances: work
+                        .source_preparation
+                        .get()
+                        .and_then(|preparation| preparation.inherited_instance_fence()),
                     resume_usage_gap: None,
                     instances: BTreeSet::from([work.observer_instance.clone()]),
                     observers: vec![Arc::downgrade(&work.origin)],
@@ -861,7 +922,12 @@ fn enrollment_response(
         "generation":binding.generation,"external_session_id":session,"registered":true,"controls":[],
         "expires_at_unix_seconds":binding.expires,"lease_seconds":60,"usage":"unavailable-source-continuity"});
     if enrollment.recovered_projection {
-        response["recovery"] = serde_json::json!({"kind":"same-live-source","next_sequence":1});
+        response["recovery"] = serde_json::json!({"kind":if enrollment.accepted_cold_resume.is_some(){"durable-native-source"}else{"same-live-source"},"next_sequence":1});
+    }
+    if enrollment.cold_published
+        && let Some(selector) = &enrollment.accepted_cold_resume
+    {
+        response["source_receipt"] = selector.successor_receipt();
     }
     response.to_string()
 }

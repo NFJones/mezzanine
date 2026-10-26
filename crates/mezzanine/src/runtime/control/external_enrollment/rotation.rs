@@ -23,6 +23,12 @@ impl RuntimeSessionService {
         work: &ExternalEnrollmentWork,
         connection: &ControlConnectionState,
     ) -> Result<String> {
+        let history_slot = self
+            .current_external_source_renewal_slot(digest)
+            .filter(|slot| {
+                slot.get()
+                    .is_some_and(|preparation| preparation.outcome_is_prepared())
+            });
         let (registry, next_generation) = self.control.external_agents_and_generation_mut();
         let binding = registry
             .bindings
@@ -40,6 +46,12 @@ impl RuntimeSessionService {
             .enrollment
             .as_mut()
             .ok_or_else(|| MezError::invalid_state("external enrollment owner disappeared"))?;
+        // A real native registration is still tentative until its REQUIRED
+        // cold claim publishes. No different ordinary/warm instance may borrow
+        // that tentative authority to bypass the second phase.
+        if enrollment.accepted_cold_resume.is_some() && !enrollment.cold_published {
+            return Err(MezError::conflict("durable source publication pending"));
+        }
         let curated = work.curated.as_ref();
         if let Some(curated) = curated {
             curated.authorize_existing(work, enrollment)?;
@@ -50,6 +62,14 @@ impl RuntimeSessionService {
             return Err(MezError::conflict("external observer evidence expired"));
         }
         if enrollment.instance == work.observer_instance {
+            if enrollment.accepted_cold_resume.is_some()
+                && work.source_resume.is_none()
+                && enrollment.accepted_cold_resume != work.cold_resume
+            {
+                return Err(MezError::conflict(
+                    "explicit durable source resume required",
+                ));
+            }
             if enrollment.accepted_resume.is_some() && work.source_resume.is_none() {
                 return Err(MezError::conflict("explicit source resume required"));
             }
@@ -69,7 +89,26 @@ impl RuntimeSessionService {
                 enrollment_response(binding, enrollment, &work.session_id)
             });
         }
-        if enrollment.instances.contains(&work.observer_instance) {
+        if let Some(slot) = &history_slot
+            && work
+                .warm_history
+                .as_ref()
+                .is_none_or(|history| !history.recorded_for(slot, digest, binding.generation))
+        {
+            return Err(MezError::conflict(
+                "new observer requires a fresh durable history fence",
+            ));
+        }
+        if enrollment.instances.contains(&work.observer_instance)
+            || enrollment
+                .historical_instances
+                .as_ref()
+                .is_some_and(|fence| {
+                    fence
+                        .contains_instance(&work.observer_instance)
+                        .unwrap_or(true)
+                })
+        {
             return Err(MezError::conflict("external observer instance has retired"));
         }
         if work.predecessor_generation != Some(binding.generation) {
@@ -135,6 +174,9 @@ impl RuntimeSessionService {
         enrollment.predecessor_generation = Some(old_generation);
         enrollment.accepted_resume = work.source_resume.clone();
         enrollment.recovered_projection = false;
+        enrollment.accepted_cold_resume = None;
+        enrollment.cold_published = false;
+        enrollment.history_nonce = work.warm_history.as_ref().map(|plan| plan.nonce);
         enrollment.resume_usage_gap = None;
         enrollment.instances.insert(work.observer_instance.clone());
         enrollment.token = SecretString::from(token);

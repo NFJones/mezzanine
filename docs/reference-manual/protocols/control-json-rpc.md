@@ -908,7 +908,7 @@ source, restore a missing control-service anchor, or turn a pending outcome into
 an acknowledged commit. Repeated loss or exhausted client retry remains visibly
 unavailable; there is no guaranteed no-gap delivery during permanent outage.
 
-Telemetry schema10 extends the internal source-activation ledger introduced in8.
+Telemetry schema11 extends the internal source-activation ledger introduced in8.
 Migration preserves existing namespace, request origin and expense rows and does
 not manufacture accepted facts for legacy mappings. Worker-side primitives can
 record one exact prepared/accepted/retired attempt per mapped source, reconcile
@@ -918,6 +918,16 @@ There is a 65,536-record cap with explicit refusal, not eviction. Decoding and
 revision arithmetic are checked; malformed/future state and migration collisions
 fail closed. The ledger contains no native IDs/paths, launch credentials or
 callback/transcript content, and its transitions do not charge expense.
+
+Schema11 stores one fixed32-byte history-gap intent before a NEW warm observer
+can be admitted on a retained known source. If that write fails, the new
+transition refuses while old current authority survives. Optional later observer
+publication includes the complete admitted ID set and atomically clears only
+its own gap; later intents fence older repairs. This closes the case where B's
+publication fails and C would otherwise persist only A/C, forgetting retired B.
+Cold recovery refuses unresolved history. Pre11 migration preserves original
+records/expense but marks completeness unknown, not retroactively proven. Reads
+do not create/migrate a store. No public nonce supplies native authority.
 
 Schema9 keeps the original activation proposal unchanged and adds a separate
 optional latest renewal checkpoint(start/expiry boot milliseconds) in the same
@@ -994,7 +1004,55 @@ publication checks. Prepared, unexecuted or failed acceptance has no such field;
 caller-provided success cannot fabricate it. This is initial historical evidence,
 not a current-observer checkpoint, liveness/expiry guarantee, namespace permission
 or recovery acknowledgment. Existing shared-client same-live recovery is unchanged;
-typed full-control admission and client consumption remain unimplemented.
+the independently qualified explicit server cold path follows below, while
+automatic shared-client consumption remains unimplemented.
+
+### Explicit same-native-source cold admission (server contract)
+
+An ordinary persistent `agent/external/enroll` request can select:
+
+```json
+{"durable_source_resume":{"receipt":{"protocol":"external-source-activation/1","activation_id":"<64 lower-case hex>","observer_generation":"1"},"operation_id":"<64 lower-case nonzero hex>"}}
+```
+
+This closed input is mutually exclusive with `source_resume`, predecessor and
+curated modes. Generation is canonical positive decimal text below the maximum
+incrementable SQLite integer; numeric/leading-zero/unknown/null fields reject
+before work reservation. Keep the exact operation ID for retries, never regenerate
+it on ambiguous completion. These public selectors are not credentials.
+Retained same-control anchors/fences must use their existing same-live path,
+not cold admission to replace physical budgets or override memory retirement.
+Only an exact already-published cold intent may retry within that control owner.
+Pending cold grants cannot be borrowed by ordinary/warm replacements, helper
+lookup or retained-anchor recovery. Timer-queue refusal before claim transfer
+discards only the exact unexposed memory grant, not another durable winner.
+
+The native worker freshly proves the SAME original socket producer/root/boot/
+UID/kind/harness/session/ordered ancestry and exact accepted activation, then
+reads the existing owner without namespace allocation. Prepared, expired,
+retired, unknown legacy fence, different source or stale intent refuses. Actual
+actor registration is followed by a REQUIRED exact observer claim before any
+private reply: original lifetime/window/checkpoint/expense stay unchanged. Only
+an identical own claim can reconcile predecessor+1; other newer rows are not
+adopted. Inherited seen-instance digests prevent old-label/private-generation ABA.
+Final publication/replay rechecks current ownership, store and the bounded native
+suspend-aware boot clock without actor database work or ancestry traversal.
+Failure discards only its unexposed memory grant, not another winner's durable
+source. Stale callbacks cannot remove replacement reservations or authority.
+
+Success returns `recovery:{"kind":"durable-native-source","next_sequence":1}`
+and the exact claim's successor `source_receipt`. Exact published retry retains
+its private handle. Replayed reports keep their original marker, counters, model,
+origin/time and observed clock; only transport credentials change, after retrying
+the original begin when its one-use readiness was consumed. Ledger duplicates
+remain inert and distinct new expense adds once, without provider/action replay.
+
+This is a server-native contract, NOT automatic ordinary-client recovery yet.
+The shared client does not currently select/consume it, and there is no current
+warm checkpoint export. Pre-replacement pane reset baselines/unreplayed actor
+projections remain control-local; only durable expense and request provenance
+plus resets established after recovery are qualified here. Those reconstruction
+and client/artifact/assembled-workflow gaps remain open, not platform gates.
 
 The native worker now prepares metadata only for a newly allocated ordinary
 socket source, after real retained ancestry and native boot evidence. The digest
@@ -1090,7 +1148,9 @@ cooperatively; it cannot interrupt blocked OS calls or a suspended event loop.
 A lost/exhausted acknowledgment does not prove the tombstone failed to commit.
 The client does not persist credentials or provide a durable unsent-end inbox.
 This supports finite same-service reply-loss recovery, not general outage or
-full-service replacement. Renewal, public observer fences and typed cold admission remain unfinished.
+full-service replacement. Server-native renewal, observer fences and explicit
+cold admission are implemented separately above; automatic client consumption
+and full accounting projection/reset reconstruction remain unfinished.
 Other curated/helper clients are not silently upgraded to this source contract.
 
 Adapters must capture begin readiness before each genuine new provider request

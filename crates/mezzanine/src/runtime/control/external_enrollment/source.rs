@@ -10,7 +10,7 @@
 use super::*;
 use crate::storage::token_usage::{ExternalSourceKey, NativeSourceKind, NativeSourceWitness};
 
-/// Frozen first-allocation inputs and original preparation/acceptance outcomes.
+/// Frozen initial/recovered activation and original native/acceptance outcomes.
 /// These facts alone are not native authority or a reusable launch credential.
 /// Retaining the exact proposal permits later explicit reconciliation rather
 /// than regenerating an attempt after an ambiguous write. One bounded recovery
@@ -23,6 +23,10 @@ pub(super) struct NativeSourcePreparation {
     activation: crate::storage::token_usage::ExternalSourceActivation,
     /// Public instance/operation digests only; never a private launch credential.
     observer: crate::storage::token_usage::ExternalSourceObserverFence,
+    /// Exact current operation scope, shared with the anchor and retirement.
+    observer_scope: Arc<super::source_observer::ObserverScope>,
+    /// Freshly native-qualified explicit recovery of an existing activation.
+    cold: Option<super::source_observer::ObserverMutation>,
     receipt: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
     /// Sealed only after the actor actually registered this original source.
     pub(super) admission: OnceLock<super::publication::SourceActorAdmission>,
@@ -71,15 +75,18 @@ impl NativeSourcePreparation {
             attempt, digest, before, expires,
         )
         .ok()?;
+        let observer = crate::storage::token_usage::ExternalSourceObserverFence::initial(
+            &work.observer_instance,
+            attempt,
+        )
+        .ok()?;
         Some(Self {
             key,
             store: work.source_store.as_ref()?.clone(),
             activation,
-            observer: crate::storage::token_usage::ExternalSourceObserverFence::initial(
-                &work.observer_instance,
-                attempt,
-            )
-            .ok()?,
+            observer_scope: super::source_observer::ObserverScope::new(Arc::new(observer.clone())),
+            observer,
+            cold: None,
             receipt: OnceLock::new(),
             admission: OnceLock::new(),
             acceptance: OnceLock::new(),
@@ -93,6 +100,111 @@ impl NativeSourcePreparation {
         })
     }
 
+    /// Reproves exact original-kind native continuity and same-boot eligibility
+    /// BEFORE any grant. No namespace or activation write occurs in this phase.
+    fn capture_cold(
+        work: &ExternalEnrollmentWork,
+        producer: &ProducerEvidence,
+        key: ExternalSourceKey,
+    ) -> Option<Self> {
+        let selector = work.cold_resume.as_ref()?;
+        let before = super::source_clock::native_boot_millis()?;
+        let stored = work
+            .source_store
+            .as_ref()?
+            .external_source_activation(&key)
+            .ok()??;
+        if !work
+            .source_store
+            .as_ref()?
+            .external_source_history_complete(&key)
+            .ok()?
+        {
+            return None;
+        }
+        if !stored.is_accepted_at(before) || !selector.matches_activation(&stored.activation) {
+            return None;
+        }
+        let mut preparation = Self::capture(work, producer, key)?;
+        let after = super::source_clock::native_boot_millis()?;
+        if after < before
+            || !stored.is_accepted_at(after)
+            || !stored
+                .activation
+                .same_native_ancestry(&preparation.activation)
+        {
+            return None;
+        }
+        let observer = stored.observer.as_ref()?;
+        let mutation = selector.mutation(observer, &work.observer_instance).ok()?;
+        preparation.activation = stored.activation.clone();
+        preparation.observer = observer.clone();
+        preparation.observer_scope = mutation.scope.clone();
+        preparation.cold = Some(mutation);
+        preparation.receipt.set(Ok(stored)).ok()?;
+        Some(preparation)
+    }
+
+    /// Private evidence of this worker's native-qualified recovery mode.
+    pub(super) fn is_cold(&self) -> bool {
+        self.cold.is_some()
+    }
+
+    /// Retain predecessor seen-ID digests across control replacement without
+    /// reconstructing raw historical labels or dropping their absorbing fence.
+    pub(super) fn inherited_instance_fence(
+        &self,
+    ) -> Option<crate::storage::token_usage::ExternalSourceObserverFence> {
+        self.is_cold().then(|| self.observer.clone())
+    }
+
+    /// Cached native-phase eligibility, rechecked against the constant-time
+    /// suspend-aware boot clock before an exact already-published cold retry.
+    pub(super) fn cold_observation_is_accepted_at(&self, now: u64) -> bool {
+        self.is_cold()
+            && self.receipt.get().is_some_and(|result| {
+                result
+                    .as_ref()
+                    .is_ok_and(|receipt| receipt.is_accepted_at(now))
+            })
+    }
+
+    /// Required cold publication executes only AFTER actual sealed actor grant,
+    /// under the slot I/O lock. Shared native metadata qualification seals the
+    /// exact commit into this scope before postchecks. Cache failures/ambiguity;
+    /// reread only the exact own result, never adopt an unrelated newer fence.
+    pub(super) fn accept_cold(
+        &self,
+        origin: &Arc<UnixOriginProcess>,
+        ancestry: &UnixAncestryWitness,
+        deadline: Instant,
+    ) -> Result<()> {
+        self.acceptance
+            .get_or_init(|| {
+                let mutation = self
+                    .cold
+                    .as_ref()
+                    .ok_or_else(|| MezError::conflict("durable source claim unavailable"))?;
+                self.update_native_metadata(origin, ancestry, deadline, Some(mutation))?;
+                let receipt = self
+                    .store
+                    .external_source_activation(&self.key)?
+                    .ok_or_else(|| MezError::conflict("durable source claim disappeared"))?;
+                let now = super::source_clock::native_boot_millis()
+                    .ok_or_else(|| MezError::conflict("durable source clock unavailable"))?;
+                if receipt.activation != self.activation
+                    || !receipt.is_accepted_at(now)
+                    || receipt.observer.as_ref() != Some(mutation.scope.current().as_ref())
+                {
+                    return Err(MezError::conflict("durable source claim changed"));
+                }
+                Ok(receipt)
+            })
+            .as_ref()
+            .map(|_| ())
+            .map_err(Clone::clone)
+    }
+
     /// Performs at most one prepared-only write on the original native worker.
     /// Cache both success and error with the immutable proposal. Acceptance
     /// requires a separately sealed actual actor admission and worker phase.
@@ -102,13 +214,17 @@ impl NativeSourcePreparation {
             .get_or_init(|| store.prepare_external_source_activation(&self.key, &self.activation));
     }
 
-    /// Pure inspection used by the actor; no storage read or new attempt occurs.
+    /// Pure phase eligibility: actual Prepared initial work or freshly native-
+    /// qualified Accepted cold predecessor. Neither is the cold claim itself.
     pub(super) fn outcome_is_prepared(&self) -> bool {
         self.receipt.get().is_some_and(|result| {
             result.as_ref().is_ok_and(|receipt| {
-                receipt.state
+                (receipt.state
                     == crate::storage::token_usage::ExternalSourceActivationState::Prepared
-                    && receipt.revision == 1
+                    && receipt.revision == 1)
+                    || (self.is_cold()
+                        && receipt.state
+                            == crate::storage::token_usage::ExternalSourceActivationState::Accepted)
             })
         })
     }
@@ -156,6 +272,51 @@ impl NativeSourcePreparation {
         self.acceptance.get()?.as_ref().ok().filter(|receipt| {
             receipt.state == crate::storage::token_usage::ExternalSourceActivationState::Accepted
         })
+    }
+
+    /// Reprove the original native source before recording history uncertainty.
+    /// This neither admits an observer nor extends a lifetime. Prepared rows
+    /// retain the marker through their independent later initial acceptance.
+    pub(super) fn mark_observer_history(
+        &self,
+        origin: &Arc<UnixOriginProcess>,
+        ancestry: &UnixAncestryWitness,
+        deadline: Instant,
+        previous: &crate::storage::token_usage::ExternalSourceObserverFence,
+        nonce: [u8; 32],
+    ) -> Result<()> {
+        let unavailable = || MezError::conflict("source history native proof unavailable");
+        self.admission.get().ok_or_else(unavailable)?;
+        let before = super::source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        let native = origin.reobserve().map_err(|_| unavailable())?;
+        let digest = ancestry
+            .continuity_digest(origin.uid(), native)
+            .map_err(|_| unavailable())?;
+        if !origin.writer_confirmed()
+            || !self.activation.matches_native_ancestry(&digest)
+            || origin.reobserve().map_err(|_| unavailable())? != native
+            || !ancestry.is_live()
+            || Instant::now() >= deadline
+        {
+            return Err(unavailable());
+        }
+        let after = super::source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        if after < before {
+            return Err(unavailable());
+        }
+        self.store.mark_external_source_history_gap(
+            &self.key,
+            &self.activation,
+            previous,
+            nonce,
+        )?;
+        if Instant::now() >= deadline
+            || !ancestry.is_live()
+            || origin.reobserve().map_err(|_| unavailable())? != native
+        {
+            return Err(unavailable());
+        }
+        Ok(())
     }
 
     /// Requalifies the exact original native source and bracketed boot clock on
@@ -209,13 +370,24 @@ impl NativeSourcePreparation {
             return Err(unavailable());
         }
         let receipt = if let Some(observer) = observer {
-            let receipt = self.store.advance_external_source_observer(
-                &self.key,
-                &self.activation,
-                previous.revision,
-                &observer.change,
-                after,
-            )?;
+            let receipt = if observer.history_nonce.is_some() {
+                self.store.advance_external_source_observer_history(
+                    &self.key,
+                    &self.activation,
+                    previous.revision,
+                    &observer.change,
+                    after,
+                    observer.history_nonce,
+                )?
+            } else {
+                self.store.advance_external_source_observer(
+                    &self.key,
+                    &self.activation,
+                    previous.revision,
+                    &observer.change,
+                    after,
+                )?
+            };
             observer
                 .scope
                 .committed(receipt.observer.clone().ok_or_else(unavailable)?)?;
@@ -250,9 +422,9 @@ impl NativeSourcePreparation {
         &self.store
     }
 
-    /// Initial actor cache seed only; these bytes are not native authority.
+    /// Exact initial/cold operation scope; these bytes are not native authority.
     pub(super) fn initial_observer_scope(&self) -> Arc<super::source_observer::ObserverScope> {
-        super::source_observer::ObserverScope::new(Arc::new(self.observer.clone()))
+        self.observer_scope.clone()
     }
 
     /// Returns only this genuine fixture's captured selectors/public fence for
@@ -518,6 +690,15 @@ impl ExternalEnrollmentWork {
             .ok()?;
             if matches!(producer, ProducerEvidence::VerifiedParent(_)) {
                 return store.external_source_owner(&key).ok();
+            }
+            if self.cold_resume.is_some() {
+                let owner = store.find_external_source_owner(&key).ok()??;
+                let preparation = NativeSourcePreparation::capture_cold(self, producer, key)?;
+                if !self.source_preparation.set(preparation) {
+                    return None;
+                }
+                let _ = self.source_created.set(false);
+                return Some(owner);
             }
             let resolved = store.resolve_external_source_owner(&key).ok()?;
             let _ = self.source_created.set(resolved.created);

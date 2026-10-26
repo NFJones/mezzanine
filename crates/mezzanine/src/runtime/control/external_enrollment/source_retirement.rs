@@ -112,6 +112,56 @@ impl NativeSourceSlot {
             .accept(store)
     }
 
+    /// Worker-only pre-admission gap write shares source retirement's I/O fence.
+    /// A failure cannot establish new warm identity; current authority survives.
+    pub(super) fn mark_observer_history(
+        &self,
+        origin: &Arc<UnixOriginProcess>,
+        ancestry: &UnixAncestryWitness,
+        deadline: Instant,
+        previous: &crate::storage::token_usage::ExternalSourceObserverFence,
+        nonce: [u8; 32],
+    ) -> Result<()> {
+        let _guard = self
+            .io
+            .lock()
+            .map_err(|_| MezError::invalid_state("source history worker failed"))?;
+        if self.retired.load(Ordering::Acquire) {
+            return Err(MezError::conflict("source history retired"));
+        }
+        self.get()
+            .ok_or_else(|| MezError::conflict("source history preparation unavailable"))?
+            .mark_observer_history(origin, ancestry, deadline, previous, nonce)
+    }
+
+    /// Cold acceptance shares the original I/O fence and exact captured store,
+    /// but must reprove native ownership and commit its observer claim. Initial
+    /// allocation keeps its separately sealed original acceptance path.
+    pub(super) fn accept_for_work(
+        &self,
+        store: &crate::storage::token_usage::TokenUsageStore,
+        origin: &Arc<UnixOriginProcess>,
+        ancestry: &UnixAncestryWitness,
+        deadline: Instant,
+    ) -> Result<()> {
+        let preparation = self
+            .get()
+            .ok_or_else(|| MezError::conflict("external source preparation disappeared"))?;
+        if !preparation.is_cold() {
+            return self.accept(store);
+        }
+        let _guard = self
+            .io
+            .lock()
+            .map_err(|_| MezError::invalid_state("external source metadata worker failed"))?;
+        if self.retired.load(Ordering::Acquire) || preparation.original_store() != store {
+            return Err(MezError::conflict(
+                "durable source activation owner changed",
+            ));
+        }
+        preparation.accept_cold(origin, ancestry, deadline)
+    }
+
     /// Nonblocking pacing across observer rotation and registry changes. A new
     /// tick is a distinct qualified intent, never replay of an earlier attempt.
     pub(super) fn admit_renewal_tick(&self) -> bool {

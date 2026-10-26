@@ -105,6 +105,9 @@ struct BoundSourceAnchor {
     predecessor: Option<u64>,
     instances: BTreeSet<String>,
     accepted_resume: Option<SourceResume>,
+    historical_instances: Option<crate::storage::token_usage::ExternalSourceObserverFence>,
+    history_nonce: Option<[u8; 32]>,
+    cold_pending: bool,
     expires: u64,
     retired: bool,
     /// Exact prepared/admitted metadata survives disposable observer handles.
@@ -144,6 +147,7 @@ impl BoundSourceAnchor {
     /// Checks metadata and original native chain without mutating lease/proof.
     fn qualify(&self, work: &ExternalEnrollmentWork) -> Result<()> {
         if !self.matches(work)
+            || self.cold_pending
             || self.version != work.version
             || self.registration.display_name != work.display_name
             || self.retired
@@ -186,7 +190,13 @@ impl BoundSourceAnchor {
                 ));
             }
         } else {
-            if self.instances.contains(&work.observer_instance) {
+            if self.instances.contains(&work.observer_instance)
+                || self.historical_instances.as_ref().is_some_and(|fence| {
+                    fence
+                        .contains_instance(&work.observer_instance)
+                        .unwrap_or(true)
+                })
+            {
                 return Err(MezError::conflict("external observer instance has retired"));
             }
             if work.predecessor_generation != Some(self.generation) {
@@ -368,13 +378,29 @@ impl RuntimeSessionService {
     pub(super) fn external_source_anchor_limit_for_tests(&mut self, limit: usize) {
         self.control.external_sources_mut().limit = Some(limit);
     }
-    /// Existing durable mappings never activate a missing service source owner.
-    /// Only this exact worker's newly created mapping may accompany ordinary
-    /// first allocation. Failed/abandoned earlier admission remains unavailable.
+    /// Namespace-only activation remains forbidden. Ordinary first allocation
+    /// requires this worker's new mapping; explicit cold recovery additionally
+    /// requires its sealed fresh native read of an accepted exact activation and
+    /// a later required actor-qualified observer claim. Prepared stays inert.
     pub(super) fn validate_external_source_mapping_allocation(
         &self,
         work: &ExternalEnrollmentWork,
     ) -> Result<()> {
+        if work.cold_resume.is_some() {
+            return if work.source_owner.get().is_some_and(Option::is_some)
+                && work.source_created.get() == Some(&false)
+                && work
+                    .source_preparation
+                    .get()
+                    .is_some_and(|preparation| preparation.is_cold())
+            {
+                Ok(())
+            } else {
+                Err(MezError::conflict(
+                    "durable source native proof unavailable",
+                ))
+            };
+        }
         if work.source_owner.get().is_some_and(Option::is_some)
             && work.source_created.get() != Some(&true)
         {
@@ -383,6 +409,95 @@ impl RuntimeSessionService {
             ));
         }
         Ok(())
+    }
+
+    /// Capture a gap intent only for an actual NEW observer on a retained
+    /// source that could be cold-eligible. Same-instance retries do not mutate
+    /// history, and no namespace lookup or storage work runs on actor.
+    pub(super) fn capture_external_warm_history(
+        &self,
+        work: &ExternalEnrollmentWork,
+    ) -> Option<Arc<super::source_history::WarmHistoryPlan>> {
+        if work.cold_resume.is_some() || work.curated.is_some() || work.helper.is_some() {
+            return None;
+        }
+        let anchor = self
+            .control
+            .external_sources()
+            .anchors
+            .values()
+            .find(|anchor| {
+                anchor.pane_id == work.pane_id
+                    && anchor.process.same_incarnation(&work.process)
+                    && anchor.harness == work.harness
+                    && anchor.registration.external_session_id == work.session_id
+                    && anchor.producer.matches_socket(&work.origin)
+            })?;
+        if anchor.cold_pending || anchor.instance == work.observer_instance {
+            return None;
+        }
+        let slot = anchor.activation.clone()?;
+        let preparation = slot.get()?;
+        if !preparation.outcome_is_prepared() {
+            return None;
+        }
+        preparation.admission.get()?;
+        Some(super::source_history::WarmHistoryPlan::new(
+            slot,
+            anchor.observer_scope.as_ref()?.current(),
+            (anchor.digest, anchor.generation),
+        ))
+    }
+
+    /// Cold recovery cannot bypass retained same-control authority/fences or
+    /// replace its physical source slot. Only its exact published retry is a
+    /// same-control exception; native observation still independently rechecks.
+    pub(super) fn validate_cold_control_owner(&self, work: &ExternalEnrollmentWork) -> Result<()> {
+        let Some(selector) = work.cold_resume.as_ref() else {
+            return Ok(());
+        };
+        let retained = self
+            .control
+            .external_sources()
+            .anchors
+            .values()
+            .any(|anchor| {
+                anchor.pane_id == work.pane_id
+                    && anchor.process.same_incarnation(&work.process)
+                    && anchor.harness == work.harness
+                    && anchor.registration.external_session_id == work.session_id
+                    && anchor.producer.matches_socket(&work.origin)
+            });
+        if !retained {
+            return Ok(());
+        }
+        let exact = self
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .any(|binding| {
+                !binding.retired
+                    && binding.pane_id == work.pane_id
+                    && binding.process.same_incarnation(&work.process)
+                    && binding.harness == work.harness
+                    && binding.registration.as_ref().is_some_and(|registration| {
+                        registration.external_session_id == work.session_id
+                    })
+                    && binding.enrollment.as_ref().is_some_and(|enrollment| {
+                        enrollment.cold_published
+                            && enrollment.accepted_cold_resume.as_ref() == Some(selector)
+                            && enrollment.instance == work.observer_instance
+                            && enrollment.producer.matches_socket(&work.origin)
+                    })
+            });
+        if exact {
+            Ok(())
+        } else {
+            Err(MezError::conflict(
+                "same-live source authority retained; cold replacement unavailable",
+            ))
+        }
     }
 
     /// Restores the disposable registry's alias to the original service budget.
@@ -501,6 +616,9 @@ impl RuntimeSessionService {
             predecessor: enrollment.predecessor_generation,
             instances,
             accepted_resume: enrollment.accepted_resume.clone(),
+            historical_instances: enrollment.historical_instances.clone(),
+            history_nonce: enrollment.history_nonce,
+            cold_pending: enrollment.accepted_cold_resume.is_some() && !enrollment.cold_published,
             expires: binding.expires,
             retired: false,
             activation: prior.and_then(|prior| prior.activation.clone()),
@@ -539,6 +657,24 @@ impl RuntimeSessionService {
             return None;
         }
         anchor.activation.clone()
+    }
+
+    /// Removes only a failed unexposed cold grant's exact memory anchor. No
+    /// durable retirement is implied; somebody else's winning fence stays intact.
+    pub(super) fn discard_unpublished_source_anchor(&mut self, digest: [u8; 32]) {
+        self.control
+            .external_sources_mut()
+            .anchors
+            .retain(|_, anchor| {
+                if anchor.digest == digest {
+                    if let Some(slot) = &anchor.activation {
+                        slot.invalidate_acceptance();
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
     }
 
     /// Attaches only an actual admitted preparation to the current native source.
@@ -655,6 +791,9 @@ impl RuntimeSessionService {
             .values()
             .find(|anchor| anchor.matches(work))
         {
+            if anchor.cold_pending {
+                return Err(MezError::conflict("durable source publication pending"));
+            }
             if anchor.retired {
                 return Err(MezError::conflict("external native source has retired"));
             }
@@ -703,6 +842,32 @@ impl RuntimeSessionService {
         work: &ExternalEnrollmentWork,
     ) -> Result<Option<ResumeAdmission>> {
         if work.curated.is_some() {
+            return Ok(None);
+        }
+        if self
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .any(|binding| {
+                !binding.retired
+                    && binding.pane_id == work.pane_id
+                    && binding.process.same_incarnation(&work.process)
+                    && binding.harness == work.harness
+                    && binding.registration.as_ref().is_some_and(|registration| {
+                        registration.external_session_id == work.session_id
+                    })
+                    && binding.enrollment.as_ref().is_some_and(|enrollment| {
+                        enrollment.accepted_cold_resume.is_some()
+                            && !enrollment.cold_published
+                            && enrollment.producer.matches_socket(&work.origin)
+                    })
+            })
+        {
+            return Err(MezError::conflict("durable source publication pending"));
+        }
+        if work.cold_resume.is_some() {
+            self.validate_cold_control_owner(work)?;
             return Ok(None);
         }
         let Some(selector) = &work.source_resume else {
@@ -864,6 +1029,14 @@ impl RuntimeSessionService {
                 predecessor_generation: work.predecessor_generation,
                 accepted_resume: work.source_resume.clone(),
                 recovered_projection: true,
+                accepted_cold_resume: None,
+                cold_published: false,
+                history_nonce: work
+                    .warm_history
+                    .as_ref()
+                    .map(|plan| plan.nonce)
+                    .or(anchor.history_nonce),
+                historical_instances: anchor.historical_instances.clone(),
                 resume_usage_gap: anchor.gap,
                 instances,
                 observers: vec![Arc::downgrade(&work.origin)],

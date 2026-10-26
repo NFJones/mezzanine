@@ -3,6 +3,175 @@
 use super::*;
 use crate::storage::token_usage::ExternalSourceObserverFence;
 
+/// An older repair cannot clear a later pre-admission intent. Exact current
+/// full-history repair preserves native lifetime/expense and includes skipped
+/// IDs without weakening the codec's bounded counter/seen-set invariants.
+#[test]
+fn external_source_history_newer_intent_fences_older_repair() {
+    let (fixture, source, activation, first) = accepted();
+    let before = fixture
+        .store
+        .external_source_activation(&source)
+        .unwrap()
+        .unwrap();
+    fixture
+        .store
+        .mark_external_source_history_gap(&source, &activation, &first, [11; 32])
+        .unwrap();
+    let older = first
+        .propose_with_history(
+            1,
+            "B",
+            [12; 32],
+            &std::collections::BTreeSet::from([
+                "PUBLIC_OBSERVER_CANARY".to_owned(),
+                "B".to_owned(),
+            ]),
+        )
+        .unwrap();
+    fixture
+        .store
+        .mark_external_source_history_gap(&source, &activation, &first, [13; 32])
+        .unwrap();
+    assert!(
+        fixture
+            .store
+            .advance_external_source_observer_history(
+                &source,
+                &activation,
+                2,
+                &older,
+                1002,
+                Some([11; 32])
+            )
+            .is_err()
+    );
+    assert!(
+        !fixture
+            .store
+            .external_source_history_complete(&source)
+            .unwrap()
+    );
+    assert_eq!(
+        fixture.store.external_source_activation(&source).unwrap(),
+        Some(before)
+    );
+    let all = std::collections::BTreeSet::from([
+        "PUBLIC_OBSERVER_CANARY".to_owned(),
+        "B".to_owned(),
+        "C".to_owned(),
+    ]);
+    let newer = first.propose_with_history(1, "C", [14; 32], &all).unwrap();
+    let repaired = fixture
+        .store
+        .advance_external_source_observer_history(
+            &source,
+            &activation,
+            2,
+            &newer,
+            1003,
+            Some([13; 32]),
+        )
+        .unwrap();
+    assert!(
+        fixture
+            .store
+            .external_source_history_complete(&source)
+            .unwrap()
+    );
+    assert_eq!(repaired.activation, activation);
+    assert_eq!(repaired.revision, 2);
+    assert!(repaired.renewal.is_none());
+    assert!(
+        repaired
+            .observer
+            .as_ref()
+            .unwrap()
+            .contains_instance("B")
+            .unwrap()
+    );
+    assert!(
+        fixture
+            .store
+            .advance_external_source_observer_history(
+                &source,
+                &activation,
+                2,
+                &older,
+                1004,
+                Some([11; 32])
+            )
+            .is_err()
+    );
+    assert_eq!(
+        fixture.store.external_source_activation(&source).unwrap(),
+        Some(repaired)
+    );
+}
+
+/// Old optional-publication rows cannot retroactively prove complete history.
+/// Readonly refuses schema10; intentional write migration preserves every
+/// original fact while marking legacy completeness unknown, repeatedly inert.
+#[test]
+fn external_source_history_schema10_migration_never_invents_completeness() {
+    let (fixture, source, activation, _) = accepted();
+    let before = fixture
+        .store
+        .external_source_activation(&source)
+        .unwrap()
+        .unwrap();
+    let database = rusqlite::Connection::open(fixture.store.path()).unwrap();
+    database.execute_batch("ALTER TABLE external_usage_source_activations DROP COLUMN observer_history_gap; PRAGMA user_version=10;").unwrap();
+    assert!(
+        fixture
+            .store
+            .external_source_history_complete(&source)
+            .is_err()
+    );
+    assert_eq!(
+        database
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        10
+    );
+    assert_eq!(
+        fixture
+            .store
+            .prepare_external_source_activation(&source, &activation)
+            .unwrap(),
+        before
+    );
+    assert!(
+        !fixture
+            .store
+            .external_source_history_complete(&source)
+            .unwrap()
+    );
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT observer_history_gap FROM external_usage_source_activations",
+                [],
+                |row| row.get::<_, Vec<u8>>(0)
+            )
+            .unwrap(),
+        vec![0; 32]
+    );
+    assert_eq!(
+        fixture
+            .store
+            .prepare_external_source_activation(&source, &activation)
+            .unwrap(),
+        before
+    );
+    assert!(
+        !fixture
+            .store
+            .external_source_history_complete(&source)
+            .unwrap()
+    );
+}
+
 /// Owns one generated accepted row; synthetic metadata is not native authority.
 fn accepted() -> (
     Fixture,
@@ -465,7 +634,7 @@ fn external_source_observer_schema9_migration_is_inert() {
         .renew_external_source_activation(&source, &activation, 2, &renewal, 1101)
         .unwrap();
     let database = rusqlite::Connection::open(fixture.store.path()).unwrap();
-    database.execute_batch("ALTER TABLE external_usage_source_activations DROP COLUMN observer_fence; PRAGMA user_version=9;").unwrap();
+    database.execute_batch("ALTER TABLE external_usage_source_activations DROP COLUMN observer_history_gap; ALTER TABLE external_usage_source_activations DROP COLUMN observer_fence; PRAGMA user_version=9;").unwrap();
     assert!(fixture.store.external_source_activation(&source).is_err());
     let receipt = fixture
         .store
@@ -497,7 +666,7 @@ fn external_source_observer_schema9_migration_is_inert() {
         database
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        10
+        super::super::store::SCHEMA_VERSION
     );
     let invented = ExternalSourceObserverFence::initial("invented", [9; 32])
         .unwrap()
@@ -630,7 +799,12 @@ fn external_source_observer_migration_failure_preserves_existing_rows() {
             .unwrap(),
         9
     );
-    database.execute_batch("PRAGMA user_version=11").unwrap();
+    database
+        .execute_batch(&format!(
+            "PRAGMA user_version={}",
+            super::super::store::SCHEMA_VERSION + 1
+        ))
+        .unwrap();
     assert!(fixture.store.external_source_activation(&source).is_err());
     assert!(
         fixture
@@ -638,7 +812,12 @@ fn external_source_observer_migration_failure_preserves_existing_rows() {
             .prepare_external_source_activation(&source, &activation)
             .is_err()
     );
-    database.execute_batch("PRAGMA user_version=10").unwrap();
+    database
+        .execute_batch(&format!(
+            "PRAGMA user_version={}",
+            super::super::store::SCHEMA_VERSION
+        ))
+        .unwrap();
     assert_eq!(
         fixture
             .store

@@ -1,6 +1,9 @@
 //! Ordinary pane-process admission tests, with no supplied PID/token/fd3 proof.
 
 use super::*;
+mod cold_source_failures;
+mod cold_source_history;
+mod cold_source_recovery;
 mod curated_request_client;
 mod curated_usage;
 mod root_replacement;

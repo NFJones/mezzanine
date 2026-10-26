@@ -229,7 +229,7 @@ async fn external_source_resume_unreplayed_stream_and_reset_baselines_are_retain
 
 /// Constructs a finalized fixture report with a frozen original clock. Retrying
 /// it never rebuilds IDs, model/counters or source-origin metadata.
-fn report(
+pub(super) fn report(
     receipt: &serde_json::Value,
     marker: &str,
     event: &str,
@@ -429,7 +429,7 @@ async fn enroll(fixture: &mut Fixture, request: &JsonRpcRequest) -> serde_json::
 
 /// Supplies only the native handle and opaque original marker; origin and source
 /// accounting namespace are daemon-owned facts, never supplied request fields.
-fn begin(receipt: &serde_json::Value, marker: &str) -> JsonRpcRequest {
+pub(super) fn begin(receipt: &serde_json::Value, marker: &str) -> JsonRpcRequest {
     crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"begin","method":"agent/external/usage-begin","params":{
         "launch_token":receipt["result"]["launch_token"],"generation":receipt["result"]["generation"],
         "external_session_id":receipt["result"]["external_session_id"],"request_id":marker,
@@ -437,7 +437,7 @@ fn begin(receipt: &serde_json::Value, marker: &str) -> JsonRpcRequest {
 }
 
 /// Executes the production durable readiness worker and exact actor settlement.
-async fn ready(fixture: &mut Fixture, request: &JsonRpcRequest) -> serde_json::Value {
+pub(super) async fn ready(fixture: &mut Fixture, request: &JsonRpcRequest) -> serde_json::Value {
     let work = fixture
         .service
         .prepare_external_usage_begin(request, &fixture.connection)
@@ -455,7 +455,7 @@ async fn ready(fixture: &mut Fixture, request: &JsonRpcRequest) -> serde_json::V
 }
 
 /// Executes one immutable normalized observation, including storage conflicts.
-async fn finish(fixture: &mut Fixture, request: &JsonRpcRequest) -> serde_json::Value {
+pub(super) async fn finish(fixture: &mut Fixture, request: &JsonRpcRequest) -> serde_json::Value {
     let work = fixture
         .service
         .prepare_external_usage_end(request, &fixture.connection)

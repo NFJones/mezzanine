@@ -42,9 +42,11 @@ impl ObserverScope {
 }
 
 /// Secret-free immutable CAS proposal plus its exact operation-local receipt.
+#[derive(Debug)]
 pub(super) struct ObserverMutation {
     pub(super) change: ExternalSourceObserverChange,
     pub(super) scope: Arc<ObserverScope>,
+    pub(super) history_nonce: Option<[u8; 32]>,
 }
 
 impl RuntimeSessionService {

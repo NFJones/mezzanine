@@ -99,8 +99,12 @@ impl RuntimeSessionService {
             let previous = previous_scope.current();
             let mut nonce = [0; 32];
             rand::rng().fill_bytes(&mut nonce);
-            let Ok(change) = previous.propose(previous.generation(), &enrollment.instance, nonce)
-            else {
+            let Ok(change) = previous.propose_with_history(
+                previous.generation(),
+                &enrollment.instance,
+                nonce,
+                &enrollment.instances,
+            ) else {
                 return;
             };
             let next_scope = super::source_observer::ObserverScope::new(previous);
@@ -109,6 +113,7 @@ impl RuntimeSessionService {
                 super::source_observer::ObserverMutation {
                     change,
                     scope: next_scope,
+                    history_nonce: enrollment.history_nonce,
                 },
             ))
         } else {

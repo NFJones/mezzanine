@@ -111,6 +111,42 @@ pub(super) fn valid_uuid(value: &str) -> bool {
 }
 
 impl TokenUsageStore {
+    /// Readonly exact lookup for a freshly native-qualified explicit recovery.
+    /// Absence never allocates another namespace or adopts a newest source.
+    pub(crate) fn find_external_source_owner(
+        &self,
+        key: &ExternalSourceKey,
+    ) -> Result<Option<String>> {
+        let Some(connection) =
+            crate::storage::shared_sqlite::open_shared_database_read_only(self.path())?
+        else {
+            return Ok(None);
+        };
+        connection.busy_timeout(std::time::Duration::from_millis(250))?;
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version != super::store::SCHEMA_VERSION {
+            return Err(MezError::invalid_state(
+                "external source identity schema unavailable",
+            ));
+        }
+        let row: Option<(String, String)> = connection
+            .query_row(
+                "SELECT harness,owner FROM external_usage_sources WHERE witness=?1",
+                [&key.digest],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        row.map(|(harness, owner)| {
+            if harness != key.harness || !valid_uuid(&owner) {
+                return Err(MezError::invalid_state(
+                    "stored external source identity is invalid",
+                ));
+            }
+            Ok(owner)
+        })
+        .transpose()
+    }
+
     /// Resolves one server-issued owner under bounded immediate writer admission.
     /// Reopen/concurrent callers recover the same owner; capacity exhaustion is
     /// explicit and never prunes replay authority. Call only off the actor.
@@ -194,6 +230,45 @@ impl TokenUsageStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Missing and older schema probes must not create directories, initialize
+    /// WAL/schema, change permissions or rewrite existing fixture bytes.
+    #[test]
+    fn external_source_readonly_lookup_never_creates_or_migrates() {
+        use std::os::unix::fs::MetadataExt;
+        let directory = store().path().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&directory).unwrap();
+        let missing = TokenUsageStore::new(directory.join("missing/usage.sqlite"));
+        assert_eq!(
+            missing
+                .find_external_source_owner(&key("readonly"))
+                .unwrap(),
+            None
+        );
+        assert!(!missing.path().parent().unwrap().exists());
+        let old = TokenUsageStore::new(directory.join("old.sqlite"));
+        let database = rusqlite::Connection::open(old.path()).unwrap();
+        database.execute_batch("CREATE TABLE sentinel(value INTEGER); INSERT INTO sentinel VALUES(42); PRAGMA user_version=10;").unwrap();
+        let before = std::fs::read(old.path()).unwrap();
+        let mode = std::fs::metadata(old.path()).unwrap().mode();
+        assert!(old.find_external_source_owner(&key("readonly")).is_err());
+        assert_eq!(std::fs::read(old.path()).unwrap(), before);
+        assert_eq!(std::fs::metadata(old.path()).unwrap().mode(), mode);
+        assert_eq!(
+            database
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            10
+        );
+        assert_eq!(
+            database
+                .query_row("SELECT value FROM sentinel", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            42
+        );
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     /// Mapping novelty belongs to the same immediate transaction as the owner
     /// allocation. Concurrent callers observe exactly one newly created row;

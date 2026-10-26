@@ -1,11 +1,13 @@
-//! Actor-qualified optional source acceptance using the existing enrollment lane.
+//! Actor-qualified initial/cold acceptance using the existing enrollment lane.
 //!
 //! Native observation can prepare but never accept a receipt. Only successful
 //! actor registration seals the exact binding digest/generation below. The same
 //! finite admission pool then retains the private reply through off-actor clock
 //! and SQLite work, followed by a fresh actor/currentness check. Reply loss does
 //! not replay admission or persistence; original write outcomes remain cached.
-//! These internal facts do not enable cold recovery. Native lifetime renewal and
+//! Explicit cold recovery requires fresh original-kind native evidence and its
+//! own committed exact observer claim BEFORE exposing a private reply. Initial
+//! acceptance metadata remains optional. Native lifetime renewal and
 //! same-live observer-fence updates use the bounded metadata lane. Source-lifetime
 //! retirement already closes acceptance and queues an optional exact tombstone.
 //! Optional metadata failure never invents durable success or changes
@@ -47,6 +49,16 @@ pub(super) struct SourceActorAdmission {
     generation: u64,
     /// One actor handoff only, even after the original publication settles.
     scheduled: OnceLock<()>,
+}
+
+impl SourceActorAdmission {
+    /// Pure exact grant selectors for unexposed cold-publication cleanup only.
+    pub(super) fn digest(&self) -> [u8; 32] {
+        self.digest
+    }
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
 }
 
 impl ExternalEnrollmentWork {
@@ -95,18 +107,24 @@ impl ExternalEnrollmentWork {
                 "external source publication evidence expired",
             ));
         }
-        self.source_preparation.accept(
+        self.source_preparation.accept_for_work(
             self.source_store
                 .as_ref()
                 .ok_or_else(|| MezError::invalid_state("external source store disappeared"))?,
+            &self.origin,
+            self.ancestry
+                .get()
+                .ok_or_else(|| MezError::conflict("external source ancestry unavailable"))?,
+            self.deadline,
         )
     }
 }
 
 impl RuntimeSessionService {
     /// Moves the already-consumed native reservation into bounded publication
-    /// custody. No database, ancestry walk or clock read occurs on the actor.
-    /// Without an actual grant, preserve the original lifecycle-only response.
+    /// custody. No database, ancestry walk or mutex wait occurs on the actor.
+    /// Missing first-allocation metadata preserves lifecycle-only replies; a
+    /// required unexposed cold claim instead fails and discards memory authority.
     pub(crate) fn begin_external_source_publication(
         &mut self,
         mut work: ExternalEnrollmentWork,
@@ -118,7 +136,7 @@ impl RuntimeSessionService {
             .filter(|preparation| preparation.outcome_is_prepared())
             .and_then(|preparation| preparation.admission.get());
         let Some(grant) = grant else {
-            return Err(body);
+            return Err(self.reject_unpublished_cold(&work, body));
         };
         let admissions = &mut self.control.external_agents_mut().enrollments;
         if work.is_source_publication()
@@ -127,7 +145,7 @@ impl RuntimeSessionService {
             || grant.scheduled.set(()).is_err()
             || !admissions.pending.insert(work.admission)
         {
-            return Err(body);
+            return Err(self.reject_unpublished_cold(&work, body));
         }
         work.source_publication = Some(SecretString::from(body));
         #[cfg(test)]
@@ -214,6 +232,9 @@ impl RuntimeSessionService {
                 .get()
                 .and_then(AcceptedSourceReceipt::from_preparation);
             let Some(receipt) = receipt else {
+                if work.cold_resume.is_some() {
+                    return Err(MezError::conflict("durable source claim was not accepted"));
+                }
                 return Ok(body);
             };
             let unavailable =
@@ -228,8 +249,15 @@ impl RuntimeSessionService {
                 "source_receipt".into(),
                 serde_json::to_value(receipt).map_err(|_| unavailable())?,
             );
-            serde_json::to_string(&reply).map_err(|_| unavailable())
+            let reply = serde_json::to_string(&reply).map_err(|_| unavailable())?;
+            if work.cold_resume.is_some() {
+                self.publish_cold_claim(&work)?;
+            }
+            Ok(reply)
         })();
+        if result.is_err() {
+            self.discard_unpublished_cold(&work);
+        }
         result.unwrap_or_else(|error| {
             super::super::runtime_json_rpc_error(&work.request_id, error.kind(), error.message())
         })

@@ -1669,7 +1669,7 @@ duplicate acknowledgment MUST NOT add another expense or allocate another
 accounting namespace. Observer replacement MUST NOT transfer predecessor-local
 tickets or credentials. Neither supported case permits namespace-only activation
 after control-service replacement or guarantees delivery of never-received data.
-Telemetry schema 10 extends the INTERNAL inert source-activation receipt ledger introduced in8, not
+Telemetry schema 11 extends the INTERNAL inert source-activation receipt ledger introduced in8, not
 another expense store or a new enrollment permission. Version-7 mappings MUST
 migrate without fabricated accepted receipts or changed expense/request origins.
 Each exact mapped namespace MAY retain one bounded prepared/accepted/retired
@@ -1762,8 +1762,29 @@ Only actual worker join and current registry/admission/binding/run/epoch/native
 checks permit final metadata health publication; stale/duplicate results cannot
 consume replacement IDs or clear another owner's health. Optional metadata
 failure preserves independently qualified warm rights, not cold readiness.
-Typed full-control cold-service recovery remains unfinished; neither the storage
-CAS nor same-live publication alone enables it.
+Schema11 MUST durably record history uncertainty BEFORE a NEW warm observer on
+a retained prepared/accepted source can be admitted. This off-actor original-
+kind native-qualified write stores one fixed32-byte inert intent in the same
+row, without changing namespace, initial proposal, lifetime or expense. Failure
+to record it refuses that new observer transition; the old current authority is
+not retired. Same-instance retries do not create a new history intent. Actual
+actor adoption MUST require the cached successful write and recheck the current
+physical source, including requests prepared before an anchor existed.
+The mark MUST bind the actual actor predecessor digest/generation captured at
+prepare. Cached success for that predecessor cannot authorize a later binding
+merely because a supplied future predecessor number eventually becomes current.
+Optional observer publication MUST include ALL admitted actor instance digests,
+not merely the latest ID, and clear ONLY its exact gap intent in the SAME CAS.
+Later intents fence older repairs. A single warm repair can cover multiple
+skipped IDs; its monotonic public counter MUST continue to cover the bounded
+seen set. Cold admission and its actual claim transaction MUST refuse any gap.
+Migrated pre11 rows MUST retain their original data but be marked history-
+unknown; optional old publication cannot retroactively prove completeness.
+Gap reads MUST bound decoding and remain readonly/current-schema-only. No nonce
+or namespace lookup substitutes for fresh native authority or actual admission.
+Neither a storage CAS nor same-live publication alone enables cold recovery.
+The explicit server cold-admission contract below is independently qualified;
+automatic shared-client cold recovery remains unfinished.
 The initial actor-qualified acceptance reply MAY contain `source_receipt` only
 from the original worker's successful acceptance cache, after the existing final
 registry/admission/binding/native checks. Its closed shape is
@@ -1776,7 +1797,60 @@ this field. Optional metadata failure MUST omit it, preserving qualified warm
 lifecycle behavior. It is a HISTORICAL initial-acceptance selector, not evidence
 of current liveness, latest observer, unexpired/unretired state, accounting
 namespace authority or successful recovery. Existing same-live receipt semantics
-remain separate. Full-control admission and shared-client use are still missing.
+remain separate. A successful explicit cold claim can return its own successor
+receipt; current warm checkpoint export/shared-client consumption remain missing.
+
+Ordinary persistent socket enrollment MAY explicitly supply closed
+`durable_source_resume={receipt:{protocol:"external-source-activation/1",activation_id:<64 lower-case hex>,observer_generation:<canonical positive decimal text>},operation_id:<64 lower-case nonzero hex>}`.
+Unknown/null/unsafe fields, numeric or noncanonical generation, zero IDs and
+mixed same-live/predecessor/curated modes MUST fail before reservations. This
+public operation MUST be frozen across retries; it grants no authority itself.
+Retained same-control source authority/retirement MUST NOT be bypassed through
+cold admission or replaced with another physical slot. Only an exact already-
+published cold intent may retry under that same control owner; recheck this at
+prepare and actual registration, not solely before off-actor work.
+An unpublished cold registration MUST NOT supply ordinary/warm rotation, helper
+or retained-anchor recovery authority. Final successful claim publication updates
+the matching anchor. Any pre-claim actor exit, including mandatory timer-queue
+refusal, MUST perform exact unexposed memory cleanup without a durable end.
+The native worker MUST independently capture original-kind writer, UID/birth,
+root/producer/boot/harness/session and ordered live ancestry under the existing
+deadline/budget, perform readonly EXACT existing-owner lookup and match the
+original immutable activation ID/ancestry plus current Accepted, known public
+fence and latest unexpired same-boot window. It MUST NOT allocate a new namespace,
+use newest-owner lookup, promote Prepared/legacy NULL or refresh expiry from the
+new observation. Actual actor registration MUST precede a required exact observer
+claim on the same finite publication/I/O owner. Claiming changes ONLY the public
+fence, preserving original activation, lifetime revision/checkpoint and expense.
+Distinct claims MUST name the exact predecessor; an identical committed intent
+can replay only its own instance/operation at predecessor+1. Initial no-op or a
+later unrelated fence MUST NOT qualify. Keep inherited bounded seen-ID digests
+through cold/warm/missing-registration anchors, so old labels cannot exploit
+coincident private numeric generations after control replacement.
+No private ready reply may escape until real cached claim success and final
+registry/admission/binding/native/store checks pass. Because suspend can expire
+boot windows without advancing Instant, final cold publication/replay MUST also
+check the constant-time native suspend-aware boot clock; no database, ancestry
+traversal or mutex waiting may occur on actor. Failed phase transfer, injected
+success or claim failure MUST discard only the exact unexposed memory grant,
+detach its anchor before central retirement and NEVER queue a tombstone for
+another durable winner. Stale registry callbacks cannot consume or clean up
+replacement authority. Already committed exact claim facts remain available to
+freshly native-qualified same-intent retry, not blind write replay.
+Successful cold replies use explicit `recovery.kind="durable-native-source"` and
+`next_sequence=1`, distinct from same-live recovery; same-service exact replies
+retain their private handle and successor receipt. Retained original reports
+MUST preserve request marker/origin/admission time/model/counters/observed clock;
+transport credentials alone change. Duplicate durable acknowledgment adds zero,
+while distinct legitimate observations add once. Old reservation completion or
+release cannot consume the replacement incarnation's IDs.
+This server contract currently preserves durable expense/request provenance and
+reset behavior established in the recovered projection. Prior pane-view reset
+baselines and unreplayed actor projections are control-local and are NOT yet
+persisted/reconstructed across full replacement. Current warm checkpoint export,
+strict shared-client cold selection/consumption, artifact updates and assembled
+ordinary-client replacement tests remain required engineering; no completed
+automatic recovery/full-accounting guarantee is implied by this server slice.
 For newly allocated ordinary socket sources, the off-actor native-observation
 phase MAY write only Prepared from actual retained ancestry and a suspend-aware
 native clock. Fingerprints MUST bind the original source/kind and ordered

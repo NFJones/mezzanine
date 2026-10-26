@@ -188,6 +188,11 @@ impl RuntimeSessionService {
         let enrollment = binding.enrollment.as_ref().ok_or_else(|| {
             MezError::forbidden("external helper requires an independently enrolled producer")
         })?;
+        if enrollment.accepted_cold_resume.is_some() && !enrollment.cold_published {
+            return Err(MezError::forbidden(
+                "external helper producer publication pending",
+            ));
+        }
         let registration = binding
             .registration
             .as_ref()
@@ -248,6 +253,8 @@ impl RuntimeSessionService {
             observer_instance: enrollment.instance.clone(),
             predecessor_generation: None,
             source_resume: None,
+            cold_resume: None,
+            warm_history: None,
             resume_admission: None,
             deadline: Instant::now() + ADMISSION_BUDGET,
             curated: None,

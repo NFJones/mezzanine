@@ -13,7 +13,7 @@ use super::{
     set_private_file_permissions, sqlite_i64,
 };
 
-pub(super) const SCHEMA_VERSION: i64 = 10;
+pub(super) const SCHEMA_VERSION: i64 = 11;
 const SECONDS_PER_DAY: u64 = 86_400;
 
 /// One immutable provider/model usage delta.
@@ -360,7 +360,7 @@ fn initialize_schema(
                  PRAGMA user_version = 1;",
             )?;
         }
-        1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | SCHEMA_VERSION => {}
+        1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | SCHEMA_VERSION => {}
         future if future > SCHEMA_VERSION => {
             return Err(MezError::invalid_state(format!(
                 "token usage database schema version {future} is newer than supported version {SCHEMA_VERSION}"
@@ -461,6 +461,14 @@ fn initialize_schema(
              CHECK(observer_fence IS NULL OR (state IN (1,2) AND typeof(observer_fence)='blob'
                 AND length(observer_fence) BETWEEN 107 AND 4171));
              PRAGMA user_version=10;",
+        )?;
+    }
+    if version < 11 {
+        transaction.execute_batch(
+            "ALTER TABLE external_usage_source_activations ADD COLUMN observer_history_gap BLOB NULL
+             CHECK(observer_history_gap IS NULL OR (typeof(observer_history_gap)='blob' AND length(observer_history_gap)=32));
+             UPDATE external_usage_source_activations SET observer_history_gap=zeroblob(32);
+             PRAGMA user_version=11;",
         )?;
     }
     transaction.commit()?;

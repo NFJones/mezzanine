@@ -17,9 +17,12 @@
 //! renewal is paced and actor-fenced. Schema10 stores bounded public observer
 //! digests initialized only by the sealed acceptance worker. Same-live observer
 //! handoff now updates them through freshly native-qualified bounded work and
-//! final actor fencing; typed full-control cold recovery remains unfinished.
+//! final actor fencing. Schema11 durably marks warm history uncertainty before
+//! new observer admission; only exact complete-history publication clears it.
+//! Explicit runtime cold admission requires fresh native proof and its required
+//! claim/final publication, never this storage record alone.
 //! Exhausted or unknown optional writes remain unavailable.
-//! Curated and existing source paths are unchanged. Accepted is historical
+//! Curated paths are unchanged. Accepted is historical
 //! admission, not a persisted assertion of current liveness or a control right.
 //!
 //! Each mapped namespace retains at most one bounded record, including its
@@ -32,6 +35,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{ExternalSourceKey, MezError, Result, TokenUsageStore, sqlite_i64};
 
+mod history;
 mod renewal;
 pub(crate) use renewal::ExternalSourceRenewal;
 mod observers;
@@ -85,6 +89,11 @@ impl ExternalSourceActivation {
     /// Compares only inert native continuity metadata; equality grants no authority.
     pub(crate) fn matches_native_ancestry(&self, digest: &[u8; 32]) -> bool {
         self.ancestry == *digest
+    }
+
+    /// Compares inert continuity fingerprints without exposing native operands.
+    pub(crate) fn same_native_ancestry(&self, other: &Self) -> bool {
+        self.ancestry == other.ancestry
     }
 
     /// Public immutable attempt selector, not ancestry, a credential or proof

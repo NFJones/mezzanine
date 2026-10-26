@@ -2,8 +2,8 @@
 //!
 //! Digests bind only public instance/operation identifiers, never a launch token,
 //! source attestation or general capability. The independent observer generation
-//! does not alter native lifetime revisions/checkpoints. Native takeover and its
-//! final actor publication remain separate, unfinished runtime responsibilities.
+//! does not alter native lifetime revisions/checkpoints. Native proof, actual
+//! admission and final publication remain separate runtime responsibilities.
 //! Legacy NULL is unknown, not an initial fence inferred from namespace ownership.
 
 use super::*;
@@ -39,6 +39,13 @@ pub(crate) struct ExternalSourceObserverChange {
     next: ExternalSourceObserverFence,
 }
 
+impl ExternalSourceObserverChange {
+    /// Pure expected result of this exact proposal, not proof it committed.
+    pub(crate) fn next_fence(&self) -> &ExternalSourceObserverFence {
+        &self.next
+    }
+}
+
 impl ExternalSourceObserverFence {
     /// Hashes bounded public IDs with separate domains; does not attest a source.
     pub(crate) fn initial(instance: &str, operation: [u8; 32]) -> Result<Self> {
@@ -60,6 +67,39 @@ impl ExternalSourceObserverFence {
     /// Public counter only, never a private launch/control generation.
     pub(crate) fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Bounded public history membership only, never permission to admit an ID.
+    pub(crate) fn contains_instance(&self, instance: &str) -> Result<bool> {
+        Ok(self.seen.binary_search(&instance_digest(instance)?).is_ok())
+    }
+
+    /// Complete actor-owned history may include IDs whose earlier optional
+    /// publication failed. Merge all of them into one bounded immutable CAS;
+    /// never infer that publishing just the current ID repairs an old gap.
+    pub(crate) fn propose_with_history(
+        &self,
+        predecessor: u64,
+        instance: &str,
+        operation: [u8; 32],
+        instances: &std::collections::BTreeSet<String>,
+    ) -> Result<ExternalSourceObserverChange> {
+        let mut change = self.propose(predecessor, instance, operation)?;
+        for instance in instances {
+            let digest = instance_digest(instance)?;
+            if let Err(index) = change.next.seen.binary_search(&digest) {
+                if change.next.seen.len() >= MAX_INSTANCES {
+                    return Err(MezError::conflict(
+                        "external source observer history capacity exhausted",
+                    ));
+                }
+                change.next.seen.insert(index, digest);
+            }
+        }
+        // The v1 codec requires the counter to cover its distinct seen IDs.
+        // Repair may cover multiple skipped admissions in this single CAS.
+        change.next.generation = change.next.generation.max(change.next.seen.len() as u64);
+        Ok(change)
     }
 
     /// Exact original-current replay is inert; any changed intent must name the
@@ -215,6 +255,28 @@ impl TokenUsageStore {
         change: &ExternalSourceObserverChange,
         now_boot_ms: u64,
     ) -> Result<ExternalSourceActivationReceipt> {
+        self.advance_external_source_observer_history(
+            key,
+            activation,
+            expected_revision,
+            change,
+            now_boot_ms,
+            None,
+        )
+    }
+
+    /// Same exact-fence transaction plus one captured pre-admission gap intent.
+    /// A later warm proposal replaces that intent, preventing an older worker
+    /// from certifying completeness over a not-yet-captured admission.
+    pub(crate) fn advance_external_source_observer_history(
+        &self,
+        key: &ExternalSourceKey,
+        activation: &ExternalSourceActivation,
+        expected_revision: u64,
+        change: &ExternalSourceObserverChange,
+        now_boot_ms: u64,
+        history_nonce: Option<[u8; 32]>,
+    ) -> Result<ExternalSourceActivationReceipt> {
         if expected_revision < 2 || expected_revision > i64::MAX as u64 {
             return Err(invalid_stored_activation());
         }
@@ -227,6 +289,15 @@ impl TokenUsageStore {
                 "external source observer activation unavailable",
             ));
         }
+        let gap = super::history::read_gap(&tx, &owner)?;
+        if gap != history_nonce {
+            if gap.is_none() && previous.observer.as_ref() == Some(&change.next) {
+                return Ok(previous);
+            }
+            return Err(MezError::conflict(
+                "external source observer history changed",
+            ));
+        }
         if previous.observer.as_ref() == Some(&change.next) {
             return Ok(previous);
         }
@@ -235,8 +306,8 @@ impl TokenUsageStore {
         {
             return Err(MezError::conflict("external source observer fence changed"));
         }
-        if tx.execute("UPDATE external_usage_source_activations SET observer_fence=?1 WHERE owner=?2 AND revision=?3 AND state=1 AND observer_fence=?4",
-            params![change.next.encode(), owner, sqlite_i64(expected_revision, "activation revision")?, change.previous.encode()])? != 1 { return Err(invalid_stored_activation()); }
+        if tx.execute("UPDATE external_usage_source_activations SET observer_fence=?1,observer_history_gap=NULL WHERE owner=?2 AND revision=?3 AND state=1 AND observer_fence=?4 AND observer_history_gap IS ?5",
+            params![change.next.encode(), owner, sqlite_i64(expected_revision, "activation revision")?, change.previous.encode(), history_nonce.as_ref().map(|nonce|nonce.as_slice())])? != 1 { return Err(invalid_stored_activation()); }
         tx.commit()?;
         previous.observer = Some(change.next.clone());
         Ok(previous)

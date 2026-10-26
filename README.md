@@ -73,6 +73,9 @@ Qualified same-live observer handoff publishes its new fence through bounded
 native metadata work; this still does not provide cold-service recovery.
 Successful initial acceptance also returns a public historical source receipt,
 not a credential or permission to recover a source.
+The server supports explicitly requested same-native-source cold claims with
+fresh proof and exact durable fencing; shared-client automatic cold recovery,
+current warm checkpoint export and cross-replacement pane resets remain unfinished.
 
 ## Why Mezzanine?
 
