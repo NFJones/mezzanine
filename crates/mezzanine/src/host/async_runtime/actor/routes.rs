@@ -367,6 +367,7 @@ impl RuntimeSideEffectRouter {
                 | RuntimeSideEffect::PersistCommandPromptHistory { .. }
                 | RuntimeSideEffect::PersistTokenUsage { .. }
                 | RuntimeSideEffect::PersistExternalSourceRetirement { .. }
+                | RuntimeSideEffect::PersistExternalSourceRenewal { .. }
                 | RuntimeSideEffect::SettleAgentProviderPersistence { .. }
                 | RuntimeSideEffect::PersistRegistry { .. }
         ));

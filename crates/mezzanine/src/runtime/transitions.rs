@@ -618,6 +618,11 @@ pub enum AsyncHookEvent {
 /// Event emitted by an async persistence worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PersistenceEvent {
+    /// Opaque physically joined native renewal, requiring final actor fencing.
+    ExternalSourceRenewalCompleted {
+        /// Original source and exact actor admission; no caller-supplied result.
+        work: crate::runtime::ExternalSourceRenewalWork,
+    },
     /// Worker outcome for one exact actor-owned transcript append claim.
     TranscriptClaim {
         /// Nonzero identity assigned when the append entered the actor queue.
@@ -1143,6 +1148,11 @@ pub enum RuntimeSideEffect {
     PersistExternalSourceRetirement {
         /// Original source proposal and destination, never caller-selected.
         work: crate::runtime::ExternalSourceRetirementWork,
+    },
+    /// Renew one current native source outside the actor, with bounded custody.
+    PersistExternalSourceRenewal {
+        /// Opaque actor-sealed original source and immutable attempt.
+        work: crate::runtime::ExternalSourceRenewalWork,
     },
     /// Settle actor-validated provider memory and issue actions on a blocking worker.
     SettleAgentProviderPersistence {

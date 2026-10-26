@@ -63,7 +63,9 @@ Ordinary Pi/OpenCode integrations installed by bootstrap distinguish logical
 retirement from verified durable source-end acknowledgment, with bounded
 same-intent reply-loss recovery. Exhaustion remains unavailable; this does not
 imply a durable inbox or cold-service recovery. Stored lifetime checkpoints alone
-cannot renew or restore harness authority.
+cannot renew or restore harness authority. Connected ordinary observers renew
+optional lifetime metadata through bounded, freshly native-qualified maintenance;
+this does not restore authority after full control-service replacement.
 
 ## Why Mezzanine?
 

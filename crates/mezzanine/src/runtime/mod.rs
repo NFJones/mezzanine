@@ -262,6 +262,7 @@ pub(crate) use config::{
 mod control;
 pub(crate) use control::ExternalEnrollmentWork;
 pub(crate) use control::ExternalSourceEndWork;
+pub(crate) use control::ExternalSourceRenewalWork;
 pub(crate) use control::ExternalSourceRetirementWork;
 pub(crate) use control::ExternalUsageBeginWork;
 pub(crate) use control::ExternalUsageWork;

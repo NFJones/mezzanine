@@ -97,6 +97,7 @@ pub(crate) use context::{
 };
 pub(crate) use external_enrollment::ExternalEnrollmentWork;
 pub(crate) use external_enrollment::ExternalSourceEndWork;
+pub(crate) use external_enrollment::ExternalSourceRenewalWork;
 pub(crate) use external_enrollment::ExternalSourceRetirementWork;
 pub(crate) use external_usage::ExternalUsageWork;
 mod external_usage_requests;

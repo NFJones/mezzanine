@@ -181,6 +181,17 @@ impl RuntimeSessionService {
                 })
                 .to_string()
             }
+            crate::runtime::PersistenceEvent::ExternalSourceRenewalCompleted { work } => {
+                let completed = self.complete_external_source_renewal(&work);
+                match completed {
+                    Some(true) => self.persistence.clear_token_usage_health_error(),
+                    Some(false) => self.persistence.record_token_usage_write_gap(),
+                    None => {}
+                }
+                serde_json::json!({ "worker":"async-persistence", "target":"token-usage",
+                    "state":match completed { Some(true) => "completed", Some(false) => "failed", None => "discarded" },
+                    "operation":"native-source-renewal" }).to_string()
+            }
             crate::runtime::PersistenceEvent::Completed {
                 target,
                 path,

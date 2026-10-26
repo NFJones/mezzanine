@@ -18,15 +18,6 @@ mod external_requests;
 mod external_sources;
 mod history;
 mod projects;
-// Native workers use preparation, actor-qualified acceptance and retirement,
-// not cold admission. Remove this expectation when recovery adopts the API.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "cold source recovery validation remains unfinished"
-    )
-)]
 mod source_activation;
 mod store;
 

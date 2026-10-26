@@ -464,6 +464,35 @@ impl RuntimeSessionService {
             .insert(owner, anchor);
     }
 
+    /// Selects only the exact current ordinary anchor/epoch and its original slot.
+    /// No native walk, clock read, database access or mutex wait occurs here.
+    pub(super) fn current_external_source_renewal_slot(
+        &self,
+        digest: [u8; 32],
+    ) -> Option<Arc<source_retirement::NativeSourceSlot>> {
+        let binding = self.control.external_agents().bindings.get(&digest)?;
+        let enrollment = binding.enrollment.as_ref()?;
+        let anchor = self
+            .control
+            .external_sources()
+            .anchors
+            .get(&binding.accounting_owner)?;
+        if binding.retired
+            || anchor.retired
+            || anchor.digest != digest
+            || anchor.generation != binding.generation
+            || anchor.run_generation != enrollment.run_generation
+            || anchor.epoch != enrollment.epoch
+            || anchor.pane_id != binding.pane_id
+            || anchor.process != binding.process
+            || anchor.harness != binding.harness
+            || !anchor.producer.same_owner(&enrollment.producer)
+        {
+            return None;
+        }
+        anchor.activation.clone()
+    }
+
     /// Attaches only an actual admitted preparation to the current native source.
     /// No private reply/credential or current store lookup is retained here.
     pub(super) fn retain_external_source_activation(

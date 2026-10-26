@@ -514,7 +514,8 @@ impl RuntimeSessionService {
     /// independent of callback cadence. No legacy launch is renewed this way.
     pub(crate) fn renew_connected_external_observers(&mut self) {
         let now = current_unix_seconds();
-        for binding in self.control.external_agents_mut().bindings.values_mut() {
+        let mut renewed = Vec::new();
+        for (digest, binding) in &mut self.control.external_agents_mut().bindings {
             if !binding.retired
                 && binding
                     .enrollment
@@ -522,9 +523,13 @@ impl RuntimeSessionService {
                     .is_some_and(|enrollment| enrollment.idle_renewable())
             {
                 binding.expires = now.saturating_add(LEASE_SECONDS);
+                renewed.push(*digest);
             }
         }
         self.refresh_external_source_diagnostics();
+        for digest in renewed {
+            self.queue_external_source_renewal(digest);
+        }
     }
 
     /// Expires missing renewal or replaced pane roots without claiming death.

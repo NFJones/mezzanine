@@ -54,15 +54,8 @@ mod source_end;
 pub(crate) use source_end::ExternalSourceEndWork;
 mod source_retirement;
 pub(crate) use source_retirement::ExternalSourceRetirementWork;
-// Native worker prerequisite only; current maintenance admission is unfinished.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "native renewal actor admission remains unfinished"
-    )
-)]
 mod source_renewal;
+pub(crate) use source_renewal::ExternalSourceRenewalWork;
 mod targets;
 use producer::ProducerEvidence;
 pub(super) use recovery::LiveSourceAnchors;

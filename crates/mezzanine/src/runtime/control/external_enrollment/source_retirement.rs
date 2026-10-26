@@ -14,10 +14,10 @@
 //! owner provides neither unbounded retries nor cold-recovery authority. Required
 //! end replies use a separate actor-fenced publication over this same exact work.
 //! A separate one-per-source physical renewal worker shares this I/O fence and
-//! retains immutable outcomes; automatic maintenance admission remains unfinished.
+//! retains immutable outcomes through paced admission and final actor fencing.
 
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Pointer-sized enrollment reference to finite metadata and worker custody.
 pub(super) struct NativeSourceSlot {
@@ -28,6 +28,9 @@ pub(super) struct NativeSourceSlot {
     end_publication: Arc<tokio::sync::Semaphore>,
     /// One physical renewal attempt across clones and old control generations.
     renewal_worker: Arc<tokio::sync::Semaphore>,
+    /// Monotonic scheduling only, never a persisted native lifetime clock.
+    renewal_clock: Instant,
+    next_renewal_ms: AtomicU64,
     /// Never acquired on actor; serializes actual acceptance/retirement I/O.
     io: std::sync::Mutex<()>,
 }
@@ -60,6 +63,8 @@ impl NativeSourceSlot {
             retired: AtomicBool::new(false),
             end_publication: Arc::new(tokio::sync::Semaphore::new(1)),
             renewal_worker: Arc::new(tokio::sync::Semaphore::new(1)),
+            renewal_clock: Instant::now(),
+            next_renewal_ms: AtomicU64::new(30_000),
             io: std::sync::Mutex::new(()),
         }
     }
@@ -102,6 +107,44 @@ impl NativeSourceSlot {
         self.get()
             .ok_or_else(|| MezError::invalid_state("external source preparation disappeared"))?
             .accept(store)
+    }
+
+    /// Nonblocking pacing across observer rotation and registry changes. A new
+    /// tick is a distinct qualified intent, never replay of an earlier attempt.
+    pub(super) fn admit_renewal_tick(&self) -> bool {
+        let Ok(now) = u64::try_from(self.renewal_clock.elapsed().as_millis()) else {
+            return false;
+        };
+        let due = self.next_renewal_ms.load(Ordering::Acquire);
+        let Some(next) = now.checked_add(30_000) else {
+            return false;
+        };
+        now >= due
+            && self
+                .next_renewal_ms
+                .compare_exchange(due, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+    }
+
+    /// Current configuration must still name the captured repository. This is
+    /// only a pure destination check; the worker separately validates stored facts.
+    pub(super) fn renewal_store_matches(
+        &self,
+        store: &crate::storage::token_usage::TokenUsageStore,
+    ) -> bool {
+        self.get()
+            .is_some_and(|preparation| preparation.original_store().path() == store.path())
+    }
+
+    /// Pure final-publication fence; does not wait for I/O or renew any clock.
+    pub(super) fn renewal_is_open(&self) -> bool {
+        !self.retired.load(Ordering::Acquire)
+    }
+
+    /// Changes only an injectable scheduling hint, never native proof/time.
+    #[cfg(test)]
+    pub(super) fn make_renewal_due_for_tests(&self) {
+        self.next_renewal_ms.store(0, Ordering::Release);
     }
 
     /// Reserves one worker only for an actually admitted original preparation.

@@ -1707,8 +1707,20 @@ and retirement I/O MUST serialize off actor under the same source fence. Deadlin
 native/observer loss or latched retirement MUST refuse current worker success;
 a late committed metadata fact is not a new authority or fresh publication.
 The two-second worker budget is cooperative, not blocked-syscall preemption.
-Current-binding/registry selection, paced maintenance admission and final actor
-publication remain unfinished; the worker alone MUST NOT enable automatic renewal.
+Existing connected-observer idle maintenance MAY admit ordinary-source metadata
+renewal at most once per 30-second monotonic scheduling interval. That hint MUST
+NOT replace native boot-clock qualification. Admission MUST share the existing
+32-slot native/publication bound and capture the exact registry incarnation,
+binding generation, run/observer epoch, original slot and configured repository.
+No SQLite, native ancestry walk or mutex wait may occur on the actor. The existing
+persistence lane MUST observe the physical worker join before returning an opaque
+completion; a supplied success/event alone MUST NOT consume pending admission.
+Final actor publication MUST recheck those owners, the same live observer/root,
+deadline and retirement before reporting metadata completion. Stale/duplicate
+results MUST NOT clear another owner's health or consume reused reservation IDs.
+Failure remains optional metadata unavailability with paced new qualified intents,
+not immediate replay, source revival or changed lifecycle/accounting authority.
+Persisted public observer fences and typed cold-service recovery remain unfinished.
 For newly allocated ordinary socket sources, the off-actor native-observation
 phase MAY write only Prepared from actual retained ancestry and a suspend-aware
 native clock. Fingerprints MUST bind the original source/kind and ordered

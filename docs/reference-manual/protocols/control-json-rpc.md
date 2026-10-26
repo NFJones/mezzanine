@@ -929,15 +929,23 @@ expiry must advance, and an exact committed retry performs no second update.
 Prepared/expired/retired/stale/conflicting or exhausted facts refuse; final
 retirement preserves the checkpoint. Paired fields, numeric types, bounds and
 stage/revision grammar are checked on read, including with damaged SQL checks.
-This is a storage prerequisite, NOT a new RPC or automatically enabled native
-renewal. An internal worker can now requalify an originally admitted ordinary
+This does not add an RPC or enable cold recovery. An internal worker requalifies
+an originally admitted ordinary
 source's native writer, live observer, exact retained ancestry and boot clocks,
 sharing one physical permit/cached outcome and the acceptance/retirement I/O
 fence. It performs one immutable CAS at most; repeated execution cannot retry a
 failed write. Its two-second deadline is cooperative, not syscall preemption;
 late metadata commitment is not public success or fresh admission authority.
-Current-binding/registry selection, paced maintenance admission and final actor
-publication are not wired yet. Cold recovery remains unavailable.
+Connected ordinary observers now schedule optional lifetime metadata from existing
+idle maintenance, at most once per 30-second monotonic scheduling interval. The
+existing 32-slot native/publication admission bound, original physical permit and
+repository are retained. The persistence lane returns an opaque actual-join
+receipt; final actor checks bind registry incarnation, binding/run/observer epoch,
+slot, store, root, observer, deadline and retirement. Injected/duplicate/stale
+completions cannot manufacture success or consume another incarnation's IDs.
+Unavailable metadata does not retire a healthy observer or recharge expense;
+another paced qualified intent is not replay of the failed attempt. Persisted
+public observer fences and typed cold recovery remain unavailable.
 
 The native worker now prepares metadata only for a newly allocated ordinary
 socket source, after real retained ancestry and native boot evidence. The digest

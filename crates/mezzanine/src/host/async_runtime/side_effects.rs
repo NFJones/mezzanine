@@ -1498,6 +1498,16 @@ where
                         }
                     }
                 }
+                RuntimeSideEffect::PersistExternalSourceRenewal { work } => {
+                    if work.execute_persistence().await {
+                        report.completed = report.completed.saturating_add(1);
+                    } else {
+                        report.failed = report.failed.saturating_add(1);
+                    }
+                    batch.push(RuntimeEvent::Persistence(
+                        PersistenceEvent::ExternalSourceRenewalCompleted { work },
+                    ));
+                }
                 RuntimeSideEffect::SettleAgentProviderPersistence { work } => {
                     let turn_id = work.turn.turn_id.clone();
                     let generation = work.generation;
