@@ -42,10 +42,18 @@ pub(crate) fn candidate_manifest() -> Manifest {
     entries.extend(super::persistent_client::entries("extensions/mezzanine"));
     Manifest {
         harness: "pi".into(),
-        revision: 14,
+        revision: 15,
         vendor_version: super::pi::RELEASE.into(),
         entries,
     }
+}
+
+/// Exact revision-14 layout before bounded lost-end-ACK recovery.
+pub(super) fn historical_one_shot_end_manifest() -> Manifest {
+    let mut manifest = candidate_manifest();
+    manifest.revision = 14;
+    super::history::freeze_one_shot_end_transport(&mut manifest);
+    manifest
 }
 
 /// Exact revision-13 layout before required source-end acknowledgments.

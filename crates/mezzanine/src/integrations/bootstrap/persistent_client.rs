@@ -211,13 +211,13 @@ mod tests {
         use super::super::installer::Operation;
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
-            assert_eq!(current.revision, if harness == "pi" { 14 } else { 12 });
+            assert_eq!(current.revision, if harness == "pi" { 15 } else { 13 });
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), if harness == "pi" { 12 } else { 26 });
+            assert_eq!(history.len(), if harness == "pi" { 13 } else { 30 });
             assert!(history.iter().any(|manifest| manifest.revision == 8));
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
-            assert_eq!(immediate.revision, if harness == "pi" { 13 } else { 11 });
+            assert_eq!(immediate.revision, if harness == "pi" { 14 } else { 12 });
             let frozen = immediate
                 .entries
                 .iter()
@@ -226,13 +226,14 @@ mod tests {
             assert_eq!(
                 frozen.artifact,
                 Artifact::File {
-                    bytes: include_bytes!("history/persistent_client_pre_end.mjs").to_vec()
+                    bytes: super::super::history::persistent_client_one_shot_end()
                 }
             );
             if harness == "pi" {
-                assert_eq!(history[1].revision, 12);
-                assert_eq!(history[2].revision, 11);
-                let pre_resume = history[2]
+                assert_eq!(history[1].revision, 13);
+                assert_eq!(history[2].revision, 12);
+                assert_eq!(history[3].revision, 11);
+                let pre_resume = history[3]
                     .entries
                     .iter()
                     .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
@@ -247,7 +248,7 @@ mod tests {
                     history
                         .iter()
                         .map(|manifest| manifest.revision)
-                        .eq((2..=13).rev())
+                        .eq((2..=14).rev())
                 );
             }
             let request = immediate

@@ -118,10 +118,15 @@ test("source end requires an exact durable receipt and never falls back to logic
   const receipt = { protocol: "external-source-end/1", retired: true, durable: true, generation: 1 };
   for (const outcome of [receipt, { retired: true }, { ...receipt, durable: false },
     { ...receipt, generation: 2 }, { ...receipt, generation: 1.5 },
-    { ...receipt, protocol: "external-source-end/2" }, { ...receipt, extra: true }, null, "lost", "duplicate"]) {
+    { ...receipt, protocol: "external-source-end/2" }, { ...receipt, extra: true }, null, "lost", "duplicate", "rpc-error"]) {
     const f = await fixture((request, socket) => {
       if (request.method === "agent/external/enroll") return enrollment(request);
       if (outcome === "lost") { socket.destroy(); return; }
+      if (outcome === "rpc-error") {
+        const body = JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32006, message: "PRIVATE_END_ERROR_CANARY" } });
+        socket.end(`Content-Length: ${Buffer.byteLength(body)}\r\nContent-Type: application/vnd.mezzanine.control+json; version=1\r\n\r\n${body}`);
+        return;
+      }
       if (outcome === "duplicate") {
         const body = `{"jsonrpc":"2.0","id":${JSON.stringify(request.id)},"result":{"protocol":"external-source-end/1","retired":true,"durable":true,"generation":1,"generat\\u0069on":1}}`;
         socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\nContent-Type: application/vnd.mezzanine.control+json; version=1\r\n\r\n${body}`);
@@ -140,12 +145,110 @@ test("source end requires an exact durable receipt and never falls back to logic
       assert.equal((await client.presentation("running")).delivered, false);
       assert.equal(client.successor("instance-b"), undefined);
       assert.equal(client.status().sourceEnd, outcome === receipt ? "durable" : "unavailable");
-      assert.deepEqual(f.requests.map(request => request.method), ["agent/external/enroll", "agent/external/source-end"]);
+      assert.deepEqual(f.requests.map(request => request.method), ["agent/external/enroll", "agent/external/source-end", ...(outcome === "lost" ? ["agent/external/source-end"] : [])]);
       assert.deepEqual(Object.keys(f.requests[1].params).sort(), ["external_session_id", "generation", "launch_token"]);
       assert.equal(f.requests[1].params.generation, 1);
       assert(!JSON.stringify(client.status()).includes("launch_token"));
+      assert(!JSON.stringify([first, client.status()]).includes("PRIVATE_END_ERROR_CANARY"));
     } finally { client.detach(); await f.close(); }
   }
+});
+
+/** A lost end ACK is not permission to enroll or restore telemetry. Only one
+ * fresh peer-verified connection may resend the exact original end selector;
+ * repeated callers cannot replenish this finite allowance. */
+test("source end recovers one lost ACK without re-enrollment or a renewed retry budget", async () => {
+  for (const permanent of [false, true]) {
+    let ends = 0;
+    const f = await fixture((request, socket) => {
+      if (request.method === "agent/external/enroll") return enrollment(request);
+      if (request.method !== "agent/external/source-end") throw new Error("unexpected recovery operation");
+      if (++ends === 1 || permanent) { socket.destroy(); return; }
+      return { protocol: "external-source-end/1", retired: true, durable: true, generation: 1 };
+    });
+    const client = createPersistentTelemetryClient(f.options);
+    try {
+      assert.equal(await client.start(), true);
+      const [first, duplicate] = await Promise.all([client.end(), client.end()]);
+      assert.equal(first.durable === true, !permanent);
+      assert.deepEqual(duplicate, first);
+      assert.deepEqual(await client.end(), first);
+      assert.equal(ends, 2, "end allowance was missing or replenished");
+      assert.deepEqual(f.requests.map(request => request.method), ["agent/external/enroll", "agent/external/source-end", "agent/external/source-end"]);
+      assert.deepEqual(f.requests[1].params, f.requests[2].params, "recovery changed original end selectors");
+      assert.notEqual(f.requests[1].id, f.requests[2].id, "wire IDs must distinguish exchanges, not source intents");
+      assert.equal(client.status().sourceEnd, permanent ? "unavailable" : "durable");
+      assert.equal(await client.start(), false);
+      assert.equal((await client.presentation("running")).delivered, false);
+      assert.equal(client.successor("instance-b"), undefined);
+      assert(!JSON.stringify(client.status()).includes("launch_token"));
+    } finally { client.detach(); await f.close(); }
+  }
+});
+
+/** Real exchange timers, not repeated callers, exhaust the retained end intent.
+ * No wall-clock latency SLA is inferred; the outer watchdog bounds a hung test. */
+test("two silent end exchanges settle unavailable without renewing the horizon", { timeout: 12000 }, async () => {
+  const f = await fixture(request => request.method === "agent/external/enroll" ? enrollment(request) : undefined);
+  const client = createPersistentTelemetryClient(f.options);
+  try {
+    assert.equal(await client.start(), true);
+    const ended = await client.end();
+    assert.equal(ended.delivered, false);
+    assert.deepEqual(await client.end(), ended);
+    assert.equal(client.status().sourceEnd, "unavailable");
+    assert.deepEqual(f.requests.map(request => request.method), ["agent/external/enroll", "agent/external/source-end", "agent/external/source-end"]);
+    assert.deepEqual(f.requests[1].params, f.requests[2].params);
+  } finally { client.detach(); await f.close(); }
+});
+
+/** Disposal during the one recovery exchange is absorbing. A late typed reply
+ * cannot publish success, revive telemetry, or grant another end allowance. */
+test("end recovery cannot publish a late ACK after explicit detach", async () => {
+  let ends = 0, held, enter;
+  const second = new Promise(resolve => { enter = resolve; });
+  const f = await fixture((request, socket) => {
+    if (request.method === "agent/external/enroll") return enrollment(request);
+    if (++ends === 1) { socket.destroy(); return; }
+    held = { request, socket }; enter();
+  });
+  const client = createPersistentTelemetryClient(f.options);
+  try {
+    assert.equal(await client.start(), true);
+    const pending = client.end();
+    await second;
+    assert.equal(client.status().phase, "ending");
+    client.detach();
+    const body = JSON.stringify({ jsonrpc: "2.0", id: held.request.id,
+      result: { protocol: "external-source-end/1", retired: true, durable: true, generation: 1 } });
+    held.socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\nContent-Type: application/vnd.mezzanine.control+json; version=1\r\n\r\n${body}`);
+    assert.equal((await pending).delivered, false);
+    assert.equal((await client.end()).delivered, false);
+    assert.equal(client.status().sourceEnd, "unavailable");
+    assert.equal(await client.start(), false);
+    assert.equal(ends, 2);
+  } finally { client.detach(); await f.close(); }
+});
+
+/** A vanished helper invalidates the fresh connection before any end resend.
+ * The small generated wrapper delegates actual peer checking to the built
+ * helper; only this fixture-owned wrapper is removed, never the real binary. */
+test("end recovery rechecks helper metadata and refuses a disappeared verifier", async () => {
+  let peer;
+  const f = await fixture((request, socket) => {
+    if (request.method === "agent/external/enroll") return enrollment(request);
+    rmSync(peer); socket.destroy();
+  });
+  peer = `${f.options.env.MEZ.split("\x1f")[0]}.peer`;
+  writeFileSync(peer, `#!/bin/sh\nexec '${helper.replaceAll("'", "'\\''")}' "$@"\n`, { mode: 0o700 });
+  const client = createPersistentTelemetryClient({ ...f.options, peerHelper: peer });
+  try {
+    assert.equal(await client.start(), true);
+    assert.equal((await client.end()).delivered, false);
+    assert.equal((await client.end()).delivered, false);
+    assert.deepEqual(f.requests.map(request => request.method), ["agent/external/enroll", "agent/external/source-end"]);
+    assert.equal(client.status().sourceEnd, "unavailable");
+  } finally { client.detach(); await f.close(); }
 });
 
 /** Pi's logical terminal observation used to dispose the credential before an

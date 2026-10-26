@@ -1744,17 +1744,23 @@ Failure/capacity/deadline may follow logical closure but MUST NOT claim durabili
 reopen authority or replenish the source's finite write allowance. Public worker
 failures MUST expose fixed bounded persistence-failure text, not raw SQLite,
 trigger, schema or open diagnostics; private original/recovery errors stay cached.
-The installed shared persistent client (Pi14/OpenCode12) MUST use this explicit
+The installed shared persistent client (Pi15/OpenCode13) MUST use this explicit
 end method, never logical deregistration fallback. It MUST validate exactly the
 four receipt fields and captured safe generation before reporting durable end.
 Its one terminal publication follows all previously accepted ordinary callbacks
 (at most16); closing MUST reject new callbacks/start/successor admission. Repeated
 end callers and Pi's already-retired terminal observation MUST share that one
-publication without waiting on their own serial successor. Only the existing
-bounded exchange is attempted; a lost/invalid ACK is unavailable even if storage
-committed. No re-enrollment, automatic effect replay, private credential persistence
-or durable unsent-end inbox is implied. Curated/helper paths without this source
-contract remain separate. End-ACK outage recovery, renewal and cold admission
+publication without waiting on their own serial successor. End publication MAY
+use at most two exchanges under a single 5,000 ms monotonic budget, with existing per-phase
+limits narrowed by remaining time. Only transport loss/exchange timeout permits
+a peer-verified fresh connection and the SAME frozen original end selectors;
+it MUST NOT enroll, restore telemetry, reset ordinals or replenish server mutation
+allowances. Protocol/RPC/peer-proof refusal and explicit disposal MUST NOT retry.
+The budget is cooperative, not a claim to interrupt blocked OS syscalls or event
+loop suspension. Lost/exhausted/invalid ACK remains unavailable even if committed.
+No general outage guarantee, automatic provider/action/callback replay, persisted
+credential or durable unsent-end inbox is implied. Curated/helper paths without
+this source contract remain separate. Renewal, persisted observer fences and cold admission
 remain unfinished; Accepted records describe historical admission, not current liveness.
 Existing same-live ownership and namespace-only activation refusals remain in
 force; a stored Accepted flag alone MUST NOT authorize recovery or reporting.

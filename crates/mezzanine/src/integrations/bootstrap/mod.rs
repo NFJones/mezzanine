@@ -213,8 +213,18 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         ),
         _ => return Vec::new(),
     };
-    // Current and immediate pre-end layouts share the same resume ancestry.
+    let one_shot_opencode = [
+        opencode_artifact::manifest(),
+        opencode_artifact::jsonc_manifest(),
+        opencode_artifact::nested_manifest(false),
+        opencode_artifact::nested_manifest(true),
+    ]
+    .into_iter()
+    .map(opencode_artifact::historical_one_shot_end_manifest)
+    .any(|candidate| candidate == *manifest);
+    // Current, one-shot and pre-end layouts share the same resume ancestry.
     let current_opencode = compiled_variant_matches(manifest, &opencode_artifact::manifest())
+        || one_shot_opencode
         || [
             opencode_artifact::manifest(),
             opencode_artifact::jsonc_manifest(),
@@ -244,6 +254,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     }
     let current_pi = manifest.harness == "pi"
         && (*manifest == pi_artifact::candidate_manifest()
+            || *manifest == pi_artifact::historical_one_shot_end_manifest()
             || *manifest == pi_artifact::historical_end_manifest());
     let revision10_pi =
         manifest.harness == "pi" && *manifest == pi_artifact::historical_usage_manifest();
@@ -373,8 +384,14 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         if current_pi {
             history.insert(0, pi_artifact::historical_resume_manifest());
         }
-        if manifest.harness == "pi" && *manifest == pi_artifact::candidate_manifest() {
+        if manifest.harness == "pi"
+            && (*manifest == pi_artifact::candidate_manifest()
+                || *manifest == pi_artifact::historical_one_shot_end_manifest())
+        {
             history.insert(0, pi_artifact::historical_end_manifest());
+        }
+        if manifest.harness == "pi" && *manifest == pi_artifact::candidate_manifest() {
+            history.insert(0, pi_artifact::historical_one_shot_end_manifest());
         }
         if opencode_history {
             history.insert(
@@ -387,10 +404,18 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
                     opencode_artifact::historical_pre_resume_manifest(manifest.clone()),
                 );
             }
-            if compiled_variant_matches(manifest, &opencode_artifact::manifest()) {
+            if one_shot_opencode
+                || compiled_variant_matches(manifest, &opencode_artifact::manifest())
+            {
                 history.insert(
                     0,
                     opencode_artifact::historical_end_manifest(manifest.clone()),
+                );
+            }
+            if compiled_variant_matches(manifest, &opencode_artifact::manifest()) {
+                history.insert(
+                    0,
+                    opencode_artifact::historical_one_shot_end_manifest(manifest.clone()),
                 );
             }
             // The newly effective loader layout cannot redefine which shipped
@@ -404,13 +429,15 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
                 opencode_artifact::nested_manifest(false),
                 opencode_artifact::nested_manifest(true),
             ] {
-                for revision in [7, 8, 9, 10, 11] {
+                for revision in [7, 8, 9, 10, 11, 12] {
                     if revision >= manifest.revision {
                         continue;
                     }
                     let mut snapshot = layout.clone();
                     snapshot.revision = revision;
-                    if revision == 11 {
+                    if revision == 12 {
+                        history::freeze_one_shot_end_transport(&mut snapshot);
+                    } else if revision == 11 {
                         history::freeze_pre_end_transport(&mut snapshot);
                     } else if revision == 10 {
                         history::freeze_pre_resume_transport(&mut snapshot);

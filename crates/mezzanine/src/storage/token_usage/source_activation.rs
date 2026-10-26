@@ -11,8 +11,8 @@
 //! Lost retirement receipts may reconcile from an existing exact tombstone. One
 //! worker-owned recovery CAS requires positive unchanged-predecessor evidence;
 //! unknown mutations never replay or create/migrate storage merely on read.
-//! A separate explicit server end method requires exact worker proof; automatic
-//! end-ACK outage recovery, renewal and cold recovery are not yet implemented.
+//! A separate explicit server end method requires exact worker proof. The client
+//! has finite same-service end-ACK recovery; renewal/fences/cold recovery remain unfinished.
 //! Exhausted or unknown optional writes remain unavailable.
 //! Curated and existing source paths are unchanged. Accepted is historical
 //! admission, not a persisted assertion of current liveness or a control right.

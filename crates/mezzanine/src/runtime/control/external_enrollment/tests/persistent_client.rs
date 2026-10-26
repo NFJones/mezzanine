@@ -45,6 +45,7 @@ struct RetiredReplySpy<S> {
     pending: Vec<u8>,
     rejected: std::sync::Arc<std::sync::atomic::AtomicBool>,
     lose_commit: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    lose_end: bool,
     close_after_loss: bool,
 }
 
@@ -77,16 +78,20 @@ impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for RetiredReplySpy
             && let Ok((body, consumed)) = crate::control::decode_control_frame(buf, 8192)
             && consumed == buf.len()
             && let Ok(reply) = serde_json::from_str::<serde_json::Value>(&body)
-            && reply["result"]["accepted"] == true
             && reply["result"]["durable"] == true
-            && reply["result"]["applied"] == true
-            && reply["result"]["coverage"]["source"] == "external-reported"
+            && ((self.lose_end
+                && reply["result"]["protocol"] == "external-source-end/1"
+                && reply["result"]["retired"] == true)
+                || (!self.lose_end
+                    && reply["result"]["accepted"] == true
+                    && reply["result"]["applied"] == true
+                    && reply["result"]["coverage"]["source"] == "external-reported"))
         {
             lost.store(true, std::sync::atomic::Ordering::SeqCst);
             self.close_after_loss = true;
             // The actor already committed. Consume the fixture writer's frame
             // without delivering it, then EOF the server read to close the real
-            // socket. This models reply loss, never an unexecuted expense.
+            // socket. This models reply loss, never an unexecuted expense/end.
             return std::task::Poll::Ready(Ok(buf.len()));
         }
         let result = std::pin::Pin::new(&mut self.stream).poll_write(cx, buf);
@@ -156,6 +161,24 @@ async fn external_enrollment_installed_request_accounting_has_durable_native_ack
 async fn external_enrollment_installed_request_accounting_recovers_lost_commit_ack() {
     qualify_installed_node_entry(
         "request-accounting-lost-ack-fixture.mjs",
+        "persistent_client.mjs",
+        2,
+        1,
+        false,
+        None,
+    )
+    .await;
+}
+
+/// The end worker commits/inspects the real original tombstone before the first
+/// reply is lost. A fresh native connection from the SAME producer must recover
+/// its exact end receipt without enrollment or telemetry revival. One source at
+/// Retired3 below forbids treating a new activation/mutation as recovery.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit installed Node path and built mez helper required; offline only"]
+async fn external_enrollment_installed_source_end_recovers_lost_commit_ack() {
+    qualify_installed_node_entry(
+        "source-end-lost-ack-ordinary-fixture.mjs",
         "persistent_client.mjs",
         2,
         1,
@@ -468,7 +491,8 @@ async fn qualify_installed_node_entry_result(
     let request_handoff = script_name == "request-accounting-ordinary-fixture.mjs";
     let request_ack_loss = script_name == "request-accounting-lost-ack-fixture.mjs";
     let request_accounting = request_handoff || request_ack_loss || pi_usage;
-    let source_end = script_name == "persistent-client-ordinary-fixture.mjs";
+    let end_ack_loss = script_name == "source-end-lost-ack-ordinary-fixture.mjs";
+    let source_end = script_name == "persistent-client-ordinary-fixture.mjs" || end_ack_loss;
     let pi_source_end = script_name == "pi-persistent-ordinary-fixture.mjs";
     let pi_loss = script_name == "pi-loss-ordinary-fixture.mjs";
     let pi_retired = script_name == "pi-retired-source-ordinary-fixture.mjs";
@@ -582,7 +606,8 @@ async fn qualify_installed_node_entry_result(
             }
             let handle = handle.clone();
             let retired_rejected = retired_rejected.clone();
-            let lose_commit = request_ack_loss.then(|| committed_reply_lost.clone());
+            let lose_commit =
+                (request_ack_loss || end_ack_loss).then(|| committed_reply_lost.clone());
             tasks.spawn(async move {
                 eprintln!("installed qualification stage=connection-started");
                 let mut connection = ControlConnectionState::new(true, false);
@@ -601,6 +626,7 @@ async fn qualify_installed_node_entry_result(
                     pending: Vec::new(),
                     rejected: retired_rejected,
                     lose_commit,
+                    lose_end: end_ack_loss,
                     close_after_loss: false,
                 };
                 eprintln!("installed qualification stage=connection-serving");
@@ -670,8 +696,8 @@ async fn qualify_installed_node_entry_result(
     );
     assert_eq!(
         committed_reply_lost.load(std::sync::atomic::Ordering::SeqCst),
-        request_ack_loss,
-        "fixture must actually withhold one committed native usage reply"
+        request_ack_loss || end_ack_loss,
+        "fixture must actually withhold one committed native usage/end reply"
     );
     if pi_retired {
         assert!(
@@ -754,6 +780,7 @@ async fn qualify_installed_node_entry_result(
             || request_accounting
             || pi_loss
             || pi_retired
+            || end_ack_loss
         {
             1
         } else {

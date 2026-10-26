@@ -5,6 +5,8 @@
 //! Fixed helper references remain generated for the installing executable only;
 //! unknown historical paths/bytes never become installer authority.
 
+mod one_shot_end;
+
 /// Exact Pi entry bytes shipped in revisions 2 and 3 before ordinary activation.
 pub(super) const PI_ENTRY_V3: &[u8] = br#"/**
  * Best-effort Pi directory-extension entry point.
@@ -403,6 +405,27 @@ pub(super) fn freeze_pre_end_transport(manifest: &mut super::installer::Manifest
         ) {
             entry.artifact = super::reconciliation::Artifact::File {
                 bytes: include_bytes!("history/persistent_client_pre_end.mjs").to_vec(),
+            };
+        }
+    }
+}
+
+/// Returns exact Pi14/OpenCode12 one-shot transport bytes from frozen data.
+/// The reconstruction reads frozen predecessor data, never the active client.
+pub(super) fn persistent_client_one_shot_end() -> Vec<u8> {
+    one_shot_end::bytes()
+}
+
+/// Restores only the fixed client slots of the deployed one-shot manifests.
+pub(super) fn freeze_one_shot_end_transport(manifest: &mut super::installer::Manifest) {
+    for entry in &mut manifest.entries {
+        if matches!(
+            entry.path.as_str(),
+            "extensions/mezzanine/persistent_client.mjs"
+                | "plugins/mezzanine/persistent_client.mjs"
+        ) {
+            entry.artifact = super::reconciliation::Artifact::File {
+                bytes: persistent_client_one_shot_end(),
             };
         }
     }

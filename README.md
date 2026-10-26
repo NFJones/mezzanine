@@ -60,8 +60,9 @@ Shared HTTP execution keeps wire payloads out of transport diagnostics. The
 does not activate paid search or change the default backend.
 
 Ordinary Pi/OpenCode integrations installed by bootstrap distinguish logical
-retirement from verified durable source-end acknowledgment. A lost acknowledgment
-remains unavailable; it does not imply a durable inbox or cold-service recovery.
+retirement from verified durable source-end acknowledgment, with bounded
+same-intent reply-loss recovery. Exhaustion remains unavailable; this does not
+imply a durable inbox or cold-service recovery.
 
 ## Why Mezzanine?
 

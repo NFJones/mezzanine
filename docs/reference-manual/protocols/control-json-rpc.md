@@ -992,7 +992,7 @@ trigger, schema or file-open diagnostics; internal cached errors are retained.
 An identical authorized retry can inspect the original tombstone, never mint another mutation allowance or
 reactivate a source. Legacy/curated/no-metadata sources cannot claim this receipt.
 Synchronous-only dispatch rejects this method rather than performing actor I/O.
-Pi14/OpenCode12 install the shared client's required-end path by default, with
+Pi15/OpenCode13 install the shared client's required-end path by default, with
 no additional user enable command. `end()` accepts only the exact four-field
 receipt above with the original captured safe generation; logical-only, malformed,
 extra/duplicate-field, wrong-generation or lost replies remain unavailable.
@@ -1001,10 +1001,19 @@ refuses new ordinary admission, and caches the same end disposition for repeated
 callers. A Pi terminal observation that already closed logically publishes end
 before disposing its private handle; accepted lifecycle and durable end are
 separate facts. Neither path waits on an end queued behind itself.
-There is one bounded exchange, no automatic reconnect/re-enrollment or logical
-fallback. A lost acknowledgment does not prove the tombstone failed to commit.
-The client does not persist credentials or provide a durable unsent-end inbox;
-end-ACK outage recovery, renewal and typed cold admission remain unfinished.
+There are at most two exchanges within a single 5,000 ms monotonic publication budget,
+not a new budget per caller or retry. Connection/helper/exchange phases use their
+existing smaller limits, further narrowed by remaining time. Transport loss or
+exchange timeout can open a fresh peer-verified connection to resend only the
+SAME frozen original credential/generation/session end selectors. This never
+enrolls, renews telemetry, resets observation sequences or grants a new server
+write allowance. Protocol/RPC/peer-verification refusal and explicit detach do
+not retry. Delayed replies remain transport-attempt fenced. The budget is checked
+cooperatively; it cannot interrupt blocked OS calls or a suspended event loop.
+A lost/exhausted acknowledgment does not prove the tombstone failed to commit.
+The client does not persist credentials or provide a durable unsent-end inbox.
+This supports finite same-service reply-loss recovery, not general outage or
+full-service replacement. Renewal, public observer fences and typed cold admission remain unfinished.
 Other curated/helper clients are not silently upgraded to this source contract.
 
 Adapters must capture begin readiness before each genuine new provider request
