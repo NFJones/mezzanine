@@ -439,18 +439,37 @@ impl TokenUsageStore {
     /// Tombstones an exact prepared/accepted attempt, including after expiry.
     /// Old or changed work cannot retire another attempt/revision. Call off actor;
     /// the native owner must fence retirement before dropping its live proof.
+    #[cfg(test)]
     pub(crate) fn retire_external_source_activation(
         &self,
         key: &ExternalSourceKey,
         activation: &ExternalSourceActivation,
         expected_revision: u64,
     ) -> Result<ExternalSourceActivationReceipt> {
+        self.retire_external_source_activation_with_observer(
+            key,
+            activation,
+            expected_revision,
+            None,
+        )
+    }
+
+    /// Tombstones only the exact captured public observer as well as lifetime
+    /// revision. None means an exact unknown/Prepared fence, NEVER a wildcard.
+    /// The comparison also fences already-committed retry acknowledgment.
+    pub(crate) fn retire_external_source_activation_with_observer(
+        &self,
+        key: &ExternalSourceKey,
+        activation: &ExternalSourceActivation,
+        expected_revision: u64,
+        observer: Option<&ExternalSourceObserverFence>,
+    ) -> Result<ExternalSourceActivationReceipt> {
         self.transition_source_activation(
             key,
             activation,
             expected_revision,
             ExternalSourceActivationState::Retired,
-            None,
+            observer,
         )
     }
 
@@ -483,6 +502,13 @@ impl TokenUsageStore {
         if previous.activation != *activation {
             return Err(MezError::conflict(
                 "external source activation attempt changed",
+            ));
+        }
+        if target == ExternalSourceActivationState::Retired
+            && previous.observer.as_ref() != observer
+        {
+            return Err(MezError::conflict(
+                "external source retirement observer changed",
             ));
         }
         if previous.state == target && previous.revision == revision {

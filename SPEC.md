@@ -1734,7 +1734,15 @@ committed intent retry MUST do no write; stale predecessor/seen old instance or
 capacity/exhaustion MUST refuse without eviction. Retirement preserves the fence.
 No raw instance/callback content, native IDs/paths or private credential may be
 stored. Initial fences are not native proof, observer lifecycle publication or
-permissions. Runtime observer takeover (including old-retirement fencing) and
+permissions. Retirement mutations and committed-retry reconciliation MUST compare
+the exact caller-captured public fence in addition to proposal/lifetime revision;
+NULL is an exact unknown/Prepared fence, not a wildcard. The native worker MUST
+freeze its original observer before retirement I/O and include that fence in
+both bounded recovery-predecessor checks and fresh tombstone acknowledgment.
+Reading a newer fence or another observer's equal-numbered tombstone MUST NOT
+transfer authority, replenish recovery work or replace the original outcome.
+Concurrent public-fence change and old-fence retirement MUST have at most one
+mutation winner. Runtime observer takeover/current-fence publication and
 typed cold-service recovery remain unfinished; storage CAS alone MUST NOT enable them.
 For newly allocated ordinary socket sources, the off-actor native-observation
 phase MAY write only Prepared from actual retained ancestry and a suspend-aware

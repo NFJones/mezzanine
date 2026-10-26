@@ -10,6 +10,9 @@
 //! outcomes remain cached, including errors. After failure, a read may establish
 //! the exact committed tombstone or prove the original predecessor uncommitted.
 //! Only the latter allows one separately cached recovery CAS, never blind replay.
+//! The original public observer fence is captured before I/O and compared in
+//! mutation, recovery and reply reconciliation. Reading a successor's current
+//! fence or same-numbered tombstone never transfers retirement authority.
 //! Missing/changed/unavailable evidence preserves the original failure. This
 //! owner provides neither unbounded retries nor cold-recovery authority. Required
 //! end replies use a separate actor-fenced publication over this same exact work.

@@ -34,6 +34,8 @@ pub(super) struct NativeSourcePreparation {
     retirement_revision: OnceLock<u64>,
     /// Original predecessor stage, never inferred from a later changed row.
     retirement_state: OnceLock<crate::storage::token_usage::ExternalSourceActivationState>,
+    /// Frozen observer at the original attempt, never learned from a successor.
+    retirement_observer: OnceLock<Option<crate::storage::token_usage::ExternalSourceObserverFence>>,
     /// At most one recovery write; errors cannot replenish its attempt budget.
     retirement_recovery:
         OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
@@ -84,6 +86,7 @@ impl NativeSourcePreparation {
             retirement: OnceLock::new(),
             retirement_revision: OnceLock::new(),
             retirement_state: OnceLock::new(),
+            retirement_observer: OnceLock::new(),
             retirement_recovery: OnceLock::new(),
             #[cfg(test)]
             retirement_ack_lost: std::sync::atomic::AtomicBool::new(false),
@@ -208,8 +211,26 @@ impl NativeSourcePreparation {
         &self.store
     }
 
-    /// Reconciles only the exact immutable proposal, then tombstones its actual
-    /// revision. Called under the slot's worker-only lock after logical retire.
+    /// Returns only this genuine fixture's captured selectors/public fence for
+    /// storage-race controls; never constructs native proof or a launch token.
+    #[cfg(test)]
+    pub(super) fn observer_scope_for_tests(
+        &self,
+    ) -> (
+        crate::storage::token_usage::ExternalSourceKey,
+        crate::storage::token_usage::ExternalSourceActivation,
+        crate::storage::token_usage::ExternalSourceObserverFence,
+    ) {
+        (
+            self.key.clone(),
+            self.activation.clone(),
+            self.observer.clone(),
+        )
+    }
+
+    /// Reconciles only the exact immutable proposal and OUR captured observer,
+    /// then tombstones its actual revision. A newer stored fence is not adopted.
+    /// Called under the slot's worker-only lock after logical retire.
     /// A cached failure is retained, not silently retried or called success.
     pub(super) fn retire(&self) -> Result<()> {
         self.retirement
@@ -221,6 +242,25 @@ impl NativeSourcePreparation {
                     .ok_or_else(|| {
                         MezError::conflict("external source retirement proposal changed")
                     })?;
+                // Prepared (or its Retired2 tombstone) has no accepted observer.
+                // Every accepted source must still carry OUR original fence;
+                // reading a newer row cannot transfer retirement authority.
+                let observer = if receipt.state
+                    == crate::storage::token_usage::ExternalSourceActivationState::Prepared
+                    || (receipt.state
+                        == crate::storage::token_usage::ExternalSourceActivationState::Retired
+                        && receipt.revision == 2)
+                {
+                    None
+                } else {
+                    Some(self.observer.clone())
+                };
+                if receipt.observer != observer {
+                    return Err(MezError::conflict(
+                        "external source retirement observer changed",
+                    ));
+                }
+                let _ = self.retirement_observer.set(observer.clone());
                 if receipt.state
                     == crate::storage::token_usage::ExternalSourceActivationState::Retired
                 {
@@ -236,10 +276,11 @@ impl NativeSourcePreparation {
                     })?;
                 let _ = self.retirement_revision.set(revision);
                 let _ = self.retirement_state.set(receipt.state);
-                let retired = self.store.retire_external_source_activation(
+                let retired = self.store.retire_external_source_activation_with_observer(
                     &self.key,
                     &self.activation,
                     receipt.revision,
+                    observer.as_ref(),
                 )?;
                 #[cfg(test)]
                 self.maybe_lose_retirement_ack_for_tests()?;
@@ -252,7 +293,8 @@ impl NativeSourcePreparation {
 
     /// Reconciles a previously attempted retirement by read-only exact facts.
     /// No failed write is repeated and the original cached outcome is retained.
-    /// A prepared/accepted/changed/missing receipt cannot be reported retired.
+    /// A prepared/accepted/changed/missing receipt or another observer's equal-
+    /// revision tombstone cannot be reported retired by this original attempt.
     pub(super) fn reconcile_retirement(&self) -> Result<()> {
         if self.admission.get().is_none() || self.retirement.get().is_none() {
             return Err(MezError::invalid_state(
@@ -268,6 +310,7 @@ impl NativeSourcePreparation {
             .is_some_and(|receipt| {
                 receipt.activation == self.activation
                     && receipt.revision == *revision
+                    && self.retirement_observer.get() == Some(&receipt.observer)
                     && receipt.state
                         == crate::storage::token_usage::ExternalSourceActivationState::Retired
             })
@@ -298,7 +341,10 @@ impl NativeSourcePreparation {
         let receipt = self
             .store
             .external_source_activation(&self.key)?
-            .filter(|receipt| receipt.activation == self.activation)
+            .filter(|receipt| {
+                receipt.activation == self.activation
+                    && self.retirement_observer.get() == Some(&receipt.observer)
+            })
             .ok_or_else(|| MezError::conflict("external source retirement proposal changed"))?;
         if receipt.state == ExternalSourceActivationState::Retired && receipt.revision == target {
             return Ok(());
@@ -315,10 +361,14 @@ impl NativeSourcePreparation {
             ));
         }
         let _ = self.retirement_recovery.get_or_init(|| {
-            let retired = self.store.retire_external_source_activation(
+            let observer = self.retirement_observer.get().ok_or_else(|| {
+                MezError::conflict("external source retirement observer unavailable")
+            })?;
+            let retired = self.store.retire_external_source_activation_with_observer(
                 &self.key,
                 &self.activation,
                 receipt.revision,
+                observer.as_ref(),
             )?;
             #[cfg(test)]
             self.maybe_lose_retirement_ack_for_tests()?;

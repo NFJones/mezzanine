@@ -190,7 +190,12 @@ fn external_source_observer_renewal_retirement_and_expiry_conserve() {
     );
     let retired = fixture
         .store
-        .retire_external_source_activation(&source, &activation, 3)
+        .retire_external_source_activation_with_observer(
+            &source,
+            &activation,
+            3,
+            second.observer.as_ref(),
+        )
         .unwrap();
     assert_eq!(retired.observer, second.observer);
     let reopened = TokenUsageStore::new(fixture.store.path());
@@ -202,6 +207,104 @@ fn external_source_observer_renewal_retirement_and_expiry_conserve() {
         reopened
             .advance_external_source_observer(&source, &activation, 3, &proposal, 1104)
             .is_err()
+    );
+}
+
+/// Retirement must name the exact public fence even when native revision did
+/// not change. None is not a wildcard, and the wrong observer cannot adopt an
+/// already-committed same-revision tombstone as its own durable acknowledgment.
+#[test]
+fn external_source_observer_retirement_binds_fence_and_exact_retry() {
+    let (fixture, source, activation, first) = accepted();
+    let proposal = first.propose(1, "second", [4; 32]).unwrap();
+    let second = fixture
+        .store
+        .advance_external_source_observer(&source, &activation, 2, &proposal, 1002)
+        .unwrap();
+    for observer in [None, Some(&first)] {
+        assert!(
+            fixture
+                .store
+                .retire_external_source_activation_with_observer(&source, &activation, 2, observer)
+                .is_err()
+        );
+        assert_eq!(
+            fixture.store.external_source_activation(&source).unwrap(),
+            Some(second.clone())
+        );
+    }
+    let retired = fixture
+        .store
+        .retire_external_source_activation_with_observer(
+            &source,
+            &activation,
+            2,
+            second.observer.as_ref(),
+        )
+        .unwrap();
+    assert_eq!(retired.revision, 3);
+    assert_eq!(
+        fixture
+            .store
+            .retire_external_source_activation_with_observer(
+                &source,
+                &activation,
+                2,
+                second.observer.as_ref()
+            )
+            .unwrap(),
+        retired
+    );
+    assert!(
+        fixture
+            .store
+            .retire_external_source_activation_with_observer(&source, &activation, 2, Some(&first))
+            .is_err()
+    );
+    assert!(
+        fixture
+            .store
+            .retire_external_source_activation_with_observer(&source, &activation, 2, None)
+            .is_err()
+    );
+}
+
+/// Competing public handoff and original retirement share one actual SQLite
+/// writer boundary. Either the original exact fence retires or the public fence
+/// changes; the loser cannot also mutate or retire the winning successor.
+#[test]
+fn external_source_observer_retirement_races_handoff_without_two_winners() {
+    let (fixture, source, activation, first) = accepted();
+    let proposal = first.propose(1, "second", [4; 32]).unwrap();
+    let gate = std::sync::Barrier::new(2);
+    let (retired, changed) = std::thread::scope(|scope| {
+        let retire = scope.spawn(|| {
+            gate.wait();
+            fixture
+                .store
+                .retire_external_source_activation_with_observer(
+                    &source,
+                    &activation,
+                    2,
+                    Some(&first),
+                )
+        });
+        let change = scope.spawn(|| {
+            gate.wait();
+            fixture
+                .store
+                .advance_external_source_observer(&source, &activation, 2, &proposal, 1002)
+        });
+        (retire.join().unwrap(), change.join().unwrap())
+    });
+    assert_eq!(
+        usize::from(retired.is_ok()) + usize::from(changed.is_ok()),
+        1
+    );
+    let winner = retired.or(changed).unwrap();
+    assert_eq!(
+        fixture.store.external_source_activation(&source).unwrap(),
+        Some(winner)
     );
 }
 

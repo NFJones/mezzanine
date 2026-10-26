@@ -958,8 +958,13 @@ without changing native lifetime revision/window/checkpoint or charging expense.
 Exact intent replay is inert; old IDs, stale predecessors, unknown legacy state,
 expiry/retirement and capacity/generation exhaustion refuse without eviction.
 Raw identifiers/credentials are not stored. This initial capture/storage work is
-NOT runtime observer handoff, retirement authorization or cold-service admission;
-those still require fresh native and final actor/publication integration.
+NOT runtime observer handoff or cold-service admission; those still require fresh
+native and final actor/publication integration. Current retirement workers now
+retain their original public fence before I/O. The SQLite mutation, committed
+retry, bounded recovery and tombstone reply all require that SAME fence as well
+as the original source/revision; NULL is exact unknown/Prepared, not a wildcard.
+An old worker cannot learn a stored successor's fence or acknowledge its equal-
+revision tombstone. This prerequisite does not publish a new current observer.
 
 The native worker now prepares metadata only for a newly allocated ordinary
 socket source, after real retained ancestry and native boot evidence. The digest

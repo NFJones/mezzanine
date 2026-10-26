@@ -68,6 +68,7 @@ optional lifetime metadata through bounded, freshly native-qualified maintenance
 this does not restore authority after full control-service replacement.
 Initial public replay-fence metadata is stored without credentials; its presence
 alone does not authorize observer takeover or cold recovery.
+Retirement and its recovery stay bound to the original captured observer fence.
 
 ## Why Mezzanine?
 
