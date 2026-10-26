@@ -1697,6 +1697,18 @@ falling back to an earlier window. These are INERT storage primitives: runtime
 renewal still requires independently fresh same-boot native proof, current actor
 authorization, bounded worker custody and publication fences; this schema change
 MUST NOT itself enable renewal, cold admission, status restoration or action replay.
+An internal native renewal worker MAY requalify an originally actor-admitted
+ordinary source using a verified current socket writer/observer, exact retained
+ancestry digest and fresh bracketed same-boot clocks. At most one physical renewal
+worker MAY be admitted per original metadata slot; its permit MUST remain held
+through clones, control invalidation and physical completion. Clones MUST
+share one cached success/failure and never replay the CAS. Acceptance, renewal
+and retirement I/O MUST serialize off actor under the same source fence. Deadline,
+native/observer loss or latched retirement MUST refuse current worker success;
+a late committed metadata fact is not a new authority or fresh publication.
+The two-second worker budget is cooperative, not blocked-syscall preemption.
+Current-binding/registry selection, paced maintenance admission and final actor
+publication remain unfinished; the worker alone MUST NOT enable automatic renewal.
 For newly allocated ordinary socket sources, the off-actor native-observation
 phase MAY write only Prepared from actual retained ancestry and a suspend-aware
 native clock. Fingerprints MUST bind the original source/kind and ordered

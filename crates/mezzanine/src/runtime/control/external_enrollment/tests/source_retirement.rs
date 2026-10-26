@@ -158,6 +158,232 @@ async fn accepted_source() -> Option<(
     Some((fixture, store, publication, ready["result"].clone()))
 }
 
+/// A genuine original actor admission and fresh retained native writer/ancestry
+/// permit one renewal worker. Clones hold one physical slot and one cached CAS;
+/// original proposal/owner stay exact and retirement then advances the new row.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_native_renewal_worker_is_exact_and_bounded() {
+    let Some((mut fixture, store, publication, ready)) = accepted_source().await else {
+        return;
+    };
+    let _observer = crate::runtime::UnixOriginStream::new(
+        &mut fixture.socket,
+        Some(publication.origin.clone()),
+    );
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    let original = database.query_row("SELECT owner,attempt,ancestry,prepared_at_boot_ms,expires_at_boot_ms FROM external_usage_source_activations", [], |row| Ok((row.get::<_, String>(0)?,row.get::<_, Vec<u8>>(1)?,row.get::<_, Vec<u8>>(2)?,row.get::<_, i64>(3)?,row.get::<_, i64>(4)?))).unwrap();
+    database.execute_batch("CREATE TABLE renewal_updates(n INTEGER); INSERT INTO renewal_updates VALUES(0); CREATE TRIGGER count_renewal AFTER UPDATE ON external_usage_source_activations BEGIN UPDATE renewal_updates SET n=n+1; END;").unwrap();
+    let work = publication.prepare_source_renewal().unwrap();
+    assert!(
+        publication.prepare_source_renewal().is_none(),
+        "physical renewal capacity was replenished"
+    );
+    assert!(!format!("{work:?}").contains(&original.0));
+    for _ in 0..2 {
+        let native = work.clone();
+        tokio::task::spawn_blocking(move || native.execute())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert_eq!(state(&database), (1, 3));
+    assert_eq!(
+        database
+            .query_row("SELECT n FROM renewal_updates", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    let unchanged = database.query_row("SELECT owner,attempt,ancestry,prepared_at_boot_ms,expires_at_boot_ms FROM external_usage_source_activations", [], |row| Ok((row.get::<_, String>(0)?,row.get::<_, Vec<u8>>(1)?,row.get::<_, Vec<u8>>(2)?,row.get::<_, i64>(3)?,row.get::<_, i64>(4)?))).unwrap();
+    assert!(original == unchanged, "renewal rewrote original proposal");
+    let checkpoint: (i64, i64) = database.query_row("SELECT renewed_at_boot_ms,renewed_until_boot_ms FROM external_usage_source_activations", [], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+    assert!(checkpoint.0 >= original.3 && checkpoint.1 > original.4);
+    assert_eq!(checkpoint.1 - checkpoint.0, 60_000);
+    drop(work);
+    assert!(
+        publication.prepare_source_renewal().is_some(),
+        "last clone did not release physical custody"
+    );
+    drop(ready);
+    let digest = *fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .keys()
+        .next()
+        .unwrap();
+    fixture.service.retire_external_agent_binding(digest);
+    let effects = fixture.service.persistence.take_token_usage_effects();
+    let retirement = effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            crate::runtime::RuntimeSideEffect::PersistExternalSourceRetirement { work } => {
+                Some(work)
+            }
+            _ => None,
+        })
+        .unwrap();
+    tokio::task::spawn_blocking(move || retirement.execute())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state(&database), (2, 4));
+}
+
+/// Fresh native observation alone never seals actor admission. A prepared-only
+/// ordinary source cannot obtain a renewal permit or become Accepted by renewal.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_native_renewal_worker_requires_actor_admission() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    let store = crate::storage::token_usage::TokenUsageStore::new(
+        fixture.directory.join("renewal-unpublished.sqlite"),
+    );
+    fixture.service.set_token_usage_store(store.clone());
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&request(), &fixture.connection)
+        .unwrap();
+    let native = work.clone();
+    tokio::task::spawn_blocking(move || native.execute_enrollment())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(work.prepare_source_renewal().is_none());
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    assert_eq!(state(&database), (0, 1));
+}
+
+/// Failure is immutable for this admitted attempt: removing a generated SQL
+/// fault cannot turn a clone's repeat execute into another write allowance.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_native_renewal_worker_caches_failure_without_replay() {
+    let Some((mut fixture, store, publication, _ready)) = accepted_source().await else {
+        return;
+    };
+    let _observer = crate::runtime::UnixOriginStream::new(
+        &mut fixture.socket,
+        Some(publication.origin.clone()),
+    );
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    database.execute_batch("CREATE TRIGGER reject_renewal BEFORE UPDATE ON external_usage_source_activations BEGIN SELECT RAISE(FAIL,'renewal fixture refusal'); END;").unwrap();
+    let work = publication.prepare_source_renewal().unwrap();
+    let native = work.clone();
+    let failed = tokio::task::spawn_blocking(move || native.execute())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        failed.message().contains("renewal fixture refusal"),
+        "worker never reached the actual SQL fault"
+    );
+    database
+        .execute_batch("DROP TRIGGER reject_renewal")
+        .unwrap();
+    let native = work.clone();
+    let repeated = tokio::task::spawn_blocking(move || native.execute())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(failed.message(), repeated.message());
+    assert_eq!(state(&database), (1, 2));
+    assert!(publication.prepare_source_renewal().is_none());
+}
+
+/// A queued worker cannot pass deadline, logical retirement or control-owner
+/// invalidation merely because its exact native producer/socket remains alive.
+/// Refusal leaves the stored accepted row unchanged and creates no fresh rights.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_native_renewal_worker_fences_stale_owners() {
+    for mode in [0, 1, 2] {
+        let Some((mut fixture, store, publication, _ready)) = accepted_source().await else {
+            return;
+        };
+        let _observer = crate::runtime::UnixOriginStream::new(
+            &mut fixture.socket,
+            Some(publication.origin.clone()),
+        );
+        let mut work = publication.prepare_source_renewal().unwrap();
+        match mode {
+            0 => work.expire_for_tests(),
+            1 => {
+                let io = publication.source_preparation.hold_io_for_tests();
+                publication.source_preparation.retire().unwrap();
+                drop(io);
+            }
+            _ => publication.source_preparation.invalidate_acceptance(),
+        }
+        let native = work.clone();
+        assert!(
+            tokio::task::spawn_blocking(move || native.execute())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        let database = rusqlite::Connection::open(store.path()).unwrap();
+        assert_eq!(state(&database), (1, 2));
+    }
+}
+
+/// A retained live producer and previously verified writer are not proof of an
+/// active observer transport. The direct fixture's adapter has already dropped;
+/// renewal must refuse without changing metadata or inventing observer custody.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_native_renewal_worker_requires_live_observer() {
+    let Some((_fixture, store, publication, _ready)) = accepted_source().await else {
+        return;
+    };
+    assert!(publication.origin.is_live());
+    assert!(publication.origin.writer_confirmed());
+    assert!(!publication.origin.observer_connected());
+    let work = publication.prepare_source_renewal().unwrap();
+    assert!(
+        tokio::task::spawn_blocking(move || work.execute())
+            .await
+            .unwrap()
+            .is_err()
+    );
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    assert_eq!(state(&database), (1, 2));
+}
+
+/// Another genuinely qualified producer/ancestry pair still cannot extend this
+/// source's activation. No payload PID or synthetic native witness supplies the
+/// negative control; both source stores must retain their original Accepted2.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_native_renewal_worker_rejects_foreign_native_source() {
+    let Some((_first_fixture, first_store, first, _first_ready)) = accepted_source().await else {
+        return;
+    };
+    let Some((mut second_fixture, second_store, second, _second_ready)) = accepted_source().await
+    else {
+        return;
+    };
+    let _observer = crate::runtime::UnixOriginStream::new(
+        &mut second_fixture.socket,
+        Some(second.origin.clone()),
+    );
+    let foreign = first
+        .source_preparation
+        .prepare_renewal(
+            second.origin.clone(),
+            second.ancestry.get().unwrap().clone(),
+        )
+        .unwrap();
+    assert!(
+        tokio::task::spawn_blocking(move || foreign.execute())
+            .await
+            .unwrap()
+            .is_err()
+    );
+    for store in [first_store, second_store] {
+        let database = rusqlite::Connection::open(store.path()).unwrap();
+        assert_eq!(state(&database), (1, 2));
+    }
+}
+
 /// Required end replies need actual worker proof, not supplied success. Logical
 /// closure precedes storage, a fresh identical request may obtain the original
 /// committed tombstone, and duplicate completion cannot reuse a reservation.

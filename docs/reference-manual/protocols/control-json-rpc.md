@@ -930,8 +930,14 @@ Prepared/expired/retired/stale/conflicting or exhausted facts refuse; final
 retirement preserves the checkpoint. Paired fields, numeric types, bounds and
 stage/revision grammar are checked on read, including with damaged SQL checks.
 This is a storage prerequisite, NOT a new RPC or automatically enabled native
-renewal. Fresh native clock/source proof, actor ownership, finite worker custody
-and publication fencing remain runtime work; cold recovery is still unavailable.
+renewal. An internal worker can now requalify an originally admitted ordinary
+source's native writer, live observer, exact retained ancestry and boot clocks,
+sharing one physical permit/cached outcome and the acceptance/retirement I/O
+fence. It performs one immutable CAS at most; repeated execution cannot retry a
+failed write. Its two-second deadline is cooperative, not syscall preemption;
+late metadata commitment is not public success or fresh admission authority.
+Current-binding/registry selection, paced maintenance admission and final actor
+publication are not wired yet. Cold recovery remains unavailable.
 
 The native worker now prepares metadata only for a newly allocated ordinary
 socket source, after real retained ancestry and native boot evidence. The digest

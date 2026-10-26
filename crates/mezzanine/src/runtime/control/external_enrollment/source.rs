@@ -135,6 +135,66 @@ impl NativeSourcePreparation {
             .map_err(Clone::clone)
     }
 
+    /// Requalifies the exact original native source and bracketed boot clock on
+    /// a blocking worker, then extends only its current accepted store revision.
+    /// The immutable original proposal/store never changes. This is inert metadata,
+    /// not observer admission, public publication or cold recovery authority.
+    pub(super) fn renew_native(
+        &self,
+        origin: &Arc<UnixOriginProcess>,
+        ancestry: &UnixAncestryWitness,
+        deadline: Instant,
+    ) -> Result<()> {
+        let unavailable = || MezError::conflict("external source renewal proof unavailable");
+        self.admission.get().ok_or_else(unavailable)?;
+        let previous = self
+            .store
+            .external_source_activation(&self.key)?
+            .filter(|receipt| receipt.activation == self.activation)
+            .ok_or_else(unavailable)?;
+        let before = super::source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        if !origin.writer_confirmed() || !origin.observer_connected() {
+            return Err(unavailable());
+        }
+        let native = origin.reobserve().map_err(|_| unavailable())?;
+        let digest = ancestry
+            .continuity_digest(origin.uid(), native)
+            .map_err(|_| unavailable())?;
+        if !self.activation.matches_native_ancestry(&digest)
+            || origin.reobserve().map_err(|_| unavailable())? != native
+            || !origin.observer_connected()
+            || !ancestry.is_live()
+            || Instant::now() >= deadline
+        {
+            return Err(unavailable());
+        }
+        let after = super::source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        if after < before || !previous.is_accepted_at(after) || Instant::now() >= deadline {
+            return Err(unavailable());
+        }
+        let expires = before.checked_add(60_000).ok_or_else(unavailable)?;
+        let renewal = crate::storage::token_usage::ExternalSourceRenewal::new(before, expires)?;
+        self.store.renew_external_source_activation(
+            &self.key,
+            &self.activation,
+            previous.revision,
+            &renewal,
+            after,
+        )?;
+        if Instant::now() >= deadline
+            || !origin.observer_connected()
+            || !ancestry.is_live()
+            || origin.reobserve().map_err(|_| unavailable())? != native
+        {
+            return Err(unavailable());
+        }
+        let completed = super::source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        if completed < after || completed >= expires || Instant::now() >= deadline {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+
     /// Returns the originally captured store, not a current configuration lookup.
     pub(super) fn original_store(&self) -> &crate::storage::token_usage::TokenUsageStore {
         &self.store

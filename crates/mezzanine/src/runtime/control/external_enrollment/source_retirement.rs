@@ -13,6 +13,8 @@
 //! Missing/changed/unavailable evidence preserves the original failure. This
 //! owner provides neither unbounded retries nor cold-recovery authority. Required
 //! end replies use a separate actor-fenced publication over this same exact work.
+//! A separate one-per-source physical renewal worker shares this I/O fence and
+//! retains immutable outcomes; automatic maintenance admission remains unfinished.
 
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +26,8 @@ pub(super) struct NativeSourceSlot {
     retired: AtomicBool,
     /// One required reply worker per original source, across registry resets.
     end_publication: Arc<tokio::sync::Semaphore>,
+    /// One physical renewal attempt across clones and old control generations.
+    renewal_worker: Arc<tokio::sync::Semaphore>,
     /// Never acquired on actor; serializes actual acceptance/retirement I/O.
     io: std::sync::Mutex<()>,
 }
@@ -55,6 +59,7 @@ impl NativeSourceSlot {
             permit: None,
             retired: AtomicBool::new(false),
             end_publication: Arc::new(tokio::sync::Semaphore::new(1)),
+            renewal_worker: Arc::new(tokio::sync::Semaphore::new(1)),
             io: std::sync::Mutex::new(()),
         }
     }
@@ -97,6 +102,45 @@ impl NativeSourceSlot {
         self.get()
             .ok_or_else(|| MezError::invalid_state("external source preparation disappeared"))?
             .accept(store)
+    }
+
+    /// Reserves one worker only for an actually admitted original preparation.
+    /// The physical permit stays with every clone until its final owner drops.
+    pub(super) fn reserve_renewal(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        self.get()?.admission.get()?;
+        if self.retired.load(Ordering::Acquire) {
+            return None;
+        }
+        self.renewal_worker.clone().try_acquire_owned().ok()
+    }
+
+    /// Runs only off actor under the same I/O lock as acceptance and retirement.
+    /// A queued attempt cannot pass control invalidation or logical retirement;
+    /// native proof and clock qualification happen afresh inside this boundary.
+    pub(super) fn renew_native(
+        &self,
+        origin: &Arc<UnixOriginProcess>,
+        ancestry: &UnixAncestryWitness,
+        deadline: Instant,
+    ) -> Result<()> {
+        let _guard = self
+            .io
+            .lock()
+            .map_err(|_| MezError::invalid_state("external source metadata worker failed"))?;
+        if self.retired.load(Ordering::Acquire) || Instant::now() >= deadline {
+            return Err(MezError::conflict(
+                "external source renewal owner expired or retired",
+            ));
+        }
+        self.get()
+            .ok_or_else(|| MezError::invalid_state("external source preparation disappeared"))?
+            .renew_native(origin, ancestry, deadline)?;
+        if self.retired.load(Ordering::Acquire) || Instant::now() >= deadline {
+            return Err(MezError::conflict(
+                "external source renewal owner expired or retired",
+            ));
+        }
+        Ok(())
     }
 
     /// Closes only old control-owner acceptance. Snapshot replacement is not a

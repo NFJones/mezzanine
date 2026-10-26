@@ -77,6 +77,11 @@ impl ExternalSourceActivation {
         })
     }
 
+    /// Compares only inert native continuity metadata; equality grants no authority.
+    pub(crate) fn matches_native_ancestry(&self, digest: &[u8; 32]) -> bool {
+        self.ancestry == *digest
+    }
+
     /// Checks the captured half-open window without refreshing or extending it.
     fn contains_boot_time(&self, now_boot_ms: u64) -> bool {
         self.prepared_at_boot_ms <= now_boot_ms && now_boot_ms < self.expires_at_boot_ms
