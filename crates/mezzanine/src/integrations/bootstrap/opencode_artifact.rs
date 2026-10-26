@@ -10,7 +10,7 @@ pub(crate) fn manifest() -> Manifest {
     let mut manifest = Manifest {
         harness: "opencode".into(),
         vendor_version: "best-effort".into(),
-        revision: 13,
+        revision: 14,
         entries: vec![
             Entry {
                 path: "plugins/mezzanine.js".into(),
@@ -72,6 +72,13 @@ pub(super) fn nested_manifest(jsonc: bool) -> Manifest {
             *pointer = "/tui/plugin".into();
         }
     }
+    candidate
+}
+
+/// Exact bounded-end transport for every deployed revision13 loader layout.
+pub(super) fn historical_bounded_end_manifest(mut candidate: Manifest) -> Manifest {
+    candidate.revision = 13;
+    super::history::freeze_bounded_end_transport(&mut candidate);
     candidate
 }
 

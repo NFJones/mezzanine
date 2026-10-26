@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 type Observation = (PathBuf, u64, u32, i64, i64, Option<Vec<u8>>);
 
 /// Deliberate independent pin to the current compiled OpenCode manifest. Earlier
-/// source-end work advanced it to13; historical7..10 byte/layout fixtures below
+/// cold-client work advances it to14; historical7..10 byte/layout fixtures below
 /// remain independently frozen and must upgrade to this exact revision.
-const CURRENT_OPENCODE_REVISION: u64 = 13;
+const CURRENT_OPENCODE_REVISION: u64 = 14;
 
 /// Returns bounded fixture observations for exact read-only comparisons.
 fn snapshot(root: &Path) -> Vec<Observation> {

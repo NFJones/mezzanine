@@ -211,13 +211,13 @@ mod tests {
         use super::super::installer::Operation;
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
-            assert_eq!(current.revision, if harness == "pi" { 15 } else { 13 });
+            assert_eq!(current.revision, if harness == "pi" { 16 } else { 14 });
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), if harness == "pi" { 13 } else { 30 });
+            assert_eq!(history.len(), if harness == "pi" { 14 } else { 34 });
             assert!(history.iter().any(|manifest| manifest.revision == 8));
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
-            assert_eq!(immediate.revision, if harness == "pi" { 14 } else { 12 });
+            assert_eq!(immediate.revision, if harness == "pi" { 15 } else { 13 });
             let frozen = immediate
                 .entries
                 .iter()
@@ -226,14 +226,26 @@ mod tests {
             assert_eq!(
                 frozen.artifact,
                 Artifact::File {
-                    bytes: super::super::history::persistent_client_one_shot_end()
+                    bytes: super::super::history::persistent_client_bounded_end()
                 }
             );
             if harness == "pi" {
-                assert_eq!(history[1].revision, 13);
-                assert_eq!(history[2].revision, 12);
-                assert_eq!(history[3].revision, 11);
-                let pre_resume = history[3]
+                assert_eq!(history[1].revision, 14);
+                let one_shot = history[1]
+                    .entries
+                    .iter()
+                    .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
+                    .unwrap();
+                assert_eq!(
+                    one_shot.artifact,
+                    Artifact::File {
+                        bytes: super::super::history::persistent_client_one_shot_end()
+                    }
+                );
+                assert_eq!(history[2].revision, 13);
+                assert_eq!(history[3].revision, 12);
+                assert_eq!(history[4].revision, 11);
+                let pre_resume = history[4]
                     .entries
                     .iter()
                     .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
@@ -248,7 +260,7 @@ mod tests {
                     history
                         .iter()
                         .map(|manifest| manifest.revision)
-                        .eq((2..=14).rev())
+                        .eq((2..=15).rev())
                 );
             }
             let request = immediate

@@ -67,6 +67,163 @@ function enrollment(request, generation = 1, epoch = 1) {
     usage: "unavailable-source-continuity" };
 }
 
+/** Parser/transport contract only: real sockets/native peer verification, but
+ * fake receipts are NOT server admission proof (qualified separately in Rust). */
+test("answered warm refusal uses frozen explicit cold intent and preserves original accounting report", async () => {
+  const initial = { protocol: "external-source-activation/1", activation_id: "f".repeat(64), observer_generation: "1" };
+  const successor = { ...initial, observer_generation: "2" };
+  let cold, ends = 0;
+  const f = await fixture((request, socket) => {
+    if (request.method === "agent/external/enroll") {
+      if (request.params.durable_source_resume) {
+        cold = request.params;
+        return { ...enrollment(request, 1, 1), run_id: 9, launch_token: "d".repeat(43), observer_witness: "e".repeat(64),
+          recovery: { kind: "durable-native-source", next_sequence: 1 }, source_receipt: successor };
+      }
+      if (request.params.source_resume) {
+        const body = JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "same-live source unavailable" } });
+        socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\nContent-Type: application/vnd.mezzanine.control+json; version=1\r\n\r\n${body}`); return;
+      }
+      return { ...enrollment(request), source_receipt: initial };
+    }
+    if (request.method === "agent/external/usage-begin") return { protocol: "external-request/1", accepted: true, request_id: request.params.request_id,
+      admitted_at: 100, source_witness: "c".repeat(64), origin: "unattributed", controls: [] };
+    if (request.method === "agent/external/usage-end") {
+      if (++ends === 1) { socket.destroy(); return; } // committed, reply lost
+      return { accepted: true, durable: true, applied: false, revision: 1, coverage: { source: "external-reported", reasoning_known: false } };
+    }
+    return { changed: true, sequence: request.params.sequence };
+  });
+  const client = createPersistentTelemetryClient(f.options);
+  try {
+    const ticket = await client.beginRequest("a".repeat(64)); assert(ticket);
+    const report = { event_id: "b".repeat(64), observed_at: 101, provider: "fixture", model: "original-model", counters: { input_tokens: 10, output_tokens: 3 } };
+    assert.equal((await client.endRequest(ticket, report)).durable, true, "existing bounded report retry should finish after automatic cold admission");
+    assert.deepEqual(cold.durable_source_resume.receipt, initial);
+    assert.match(cold.durable_source_resume.operation_id, /^[a-f0-9]{64}$/);
+    assert.equal(cold.source_resume, undefined); assert.equal(cold.predecessor_generation, undefined);
+    const sent = f.requests.filter(request => request.method === "agent/external/usage-end");
+    const strip = ({ launch_token, generation, ...frozen }) => frozen;
+    assert.deepEqual(strip(sent[0].params), strip(sent[1].params));
+    assert.notEqual(sent[0].params.launch_token, sent[1].params.launch_token);
+    assert.equal(client.status().run, 9); assert.equal(client.status().epoch, 1);
+  } finally { client.detach(); await f.close(); }
+});
+
+test("warm successor automatically captures its current checkpoint before later cold recovery", async () => {
+  const source = { protocol: "external-source-activation/1", activation_id: "f".repeat(64), observer_generation: "1" };
+  let replaced = false, captured, coldAccepted = false, coldAttempts = 0;
+  const f = await fixture((request, socket) => {
+    if (request.method === "agent/external/renew") return { agent_id: "fixture", generation: 2, expires_at_unix_seconds: 999,
+      source_receipt: { ...source, observer_generation: "2" } };
+    if (request.method === "agent/external/enroll") {
+      if (request.params.observer_instance === "instance-a") return { ...enrollment(request), source_receipt: source };
+      if (request.params.durable_source_resume && ++coldAttempts === 1) {
+        coldAccepted = true;
+        captured = request.params.durable_source_resume;
+        return { ...enrollment(request, 1, 1), run_id: 4, launch_token: "e".repeat(43), observer_witness: "e".repeat(64),
+          source_receipt: { ...source, observer_generation: "3" }, recovery: { kind: "durable-native-source", next_sequence: 1 } };
+      }
+      if (!replaced) return enrollment(request, 2, 2);
+      // Mirror real same-instance predecessor/retained-cold guards: a cold
+      // binding has no predecessor, and its later warm retry must preserve it.
+      if (coldAccepted && !request.params.durable_source_resume && request.params.predecessor_generation === undefined) {
+        return { ...enrollment(request, 1, 1), run_id: 4, launch_token: "e".repeat(43), observer_witness: "e".repeat(64),
+          source_receipt: { ...source, observer_generation: "3" }, recovery: { kind: "durable-native-source", next_sequence: 1 } };
+      }
+      const body = JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "same-live source unavailable" } });
+      socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\nContent-Type: application/vnd.mezzanine.control+json; version=1\r\n\r\n${body}`); return;
+    }
+    return { changed: true, sequence: request.params.sequence };
+  });
+  const parent = createPersistentTelemetryClient(f.options); let child;
+  try {
+    assert.equal(await parent.start(), true); child = parent.successor("instance-b"); assert(child);
+    assert.equal(await child.start(), true);
+    assert.equal((await child.presentation("running")).delivered, true); // ordered behind checkpoint probe
+    assert.equal(f.requests.filter(request => request.method === "agent/external/renew").length, 1);
+    replaced = true; child.disconnect(); assert.equal(await child.start(), true);
+    assert.equal(captured.receipt.observer_generation, "2");
+    assert.equal((await child.presentation("ready")).delivered, true);
+    assert.equal(f.requests.at(-1).params.sequence, 1);
+    child.disconnect(); assert.equal(await child.start(), true, "accepted cold successor must reconnect without its original warm predecessor");
+    assert.equal((await child.presentation("running")).delivered, true);
+    assert.equal(f.requests.at(-1).params.sequence, 2); assert.equal(coldAttempts, 1);
+  } finally { child?.detach(); parent.detach(); await f.close(); }
+});
+
+test("lost cold reply retains exact intent and repeated accepted cold handle never resets twice", async () => {
+  const source = { protocol: "external-source-activation/1", activation_id: "f".repeat(64), observer_generation: "1" };
+  const coldRequests = []; let committed = false;
+  const f = await fixture((request, socket) => {
+    if (request.method === "agent/external/enroll") {
+      if (!request.params.source_resume && !request.params.durable_source_resume) return { ...enrollment(request), source_receipt: source };
+      if (request.params.source_resume && !committed) {
+        const body = JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "same-live unavailable" } });
+        socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\nContent-Type: application/vnd.mezzanine.control+json; version=1\r\n\r\n${body}`); return;
+      }
+      if (request.params.durable_source_resume) {
+        coldRequests.push(request.params);
+        if (!committed) { committed = true; socket.destroy(); return; }
+      }
+      return { ...enrollment(request), launch_token: "d".repeat(43), observer_witness: "e".repeat(64), source_receipt: { ...source, observer_generation: "2" },
+        recovery: { kind: "durable-native-source", next_sequence: 1 } };
+    }
+    return { changed: true, sequence: request.params.sequence };
+  });
+  const client = createPersistentTelemetryClient(f.options);
+  try {
+    assert.equal(await client.start(), true); client.disconnect();
+    assert.equal(await client.start(), false); assert.equal(await client.start(), true);
+    assert.equal(coldRequests.length, 2); assert.deepEqual(coldRequests[0], coldRequests[1]);
+    assert.equal((await client.presentation("running")).delivered, true);
+    client.disconnect(); assert.equal(await client.start(), true);
+    assert.equal((await client.presentation("ready")).delivered, true);
+    assert.equal(f.requests.at(-1).params.sequence, 2);
+  } finally { client.detach(); await f.close(); }
+});
+
+test("known checkpoint cannot turn warm transport loss into permission to switch modes", async () => {
+  const source = { protocol: "external-source-activation/1", activation_id: "f".repeat(64), observer_generation: "1" };
+  const resumes = [];
+  const f = await fixture((request, socket) => {
+    assert.equal(request.params.durable_source_resume, undefined);
+    if (!request.params.source_resume) return { ...enrollment(request), source_receipt: source };
+    resumes.push(request.params);
+    if (resumes.length === 1) { socket.destroy(); return; }
+    return { ...enrollment(request, 2, 2), launch_token: "d".repeat(43), observer_witness: "e".repeat(64),
+      source_receipt: { ...source, observer_generation: "2" }, recovery: { kind: "same-live-source", next_sequence: 1 } };
+  });
+  const client = createPersistentTelemetryClient(f.options);
+  try {
+    assert.equal(await client.start(), true); client.disconnect();
+    assert.equal(await client.start(), false); assert.equal(await client.start(), true);
+    assert.deepEqual(resumes[0], resumes[1]); assert.equal(resumes.length, 2);
+  } finally { client.detach(); await f.close(); }
+});
+
+test("cold parser rejects missing or mismatched typed claim and source checkpoint", async () => {
+  const source = { protocol: "external-source-activation/1", activation_id: "f".repeat(64), observer_generation: "1" };
+  for (const change of [result => { delete result.recovery; }, result => { result.recovery.kind = "same-live-source"; },
+    result => { result.source_receipt.observer_generation = "3"; }, result => { result.source_receipt.observer_generation = 2; },
+    result => { result.source_receipt.activation_id = "e".repeat(64); }, result => { result.launch_token = "a".repeat(43); },
+    result => { result.observer_epoch = 2; }]) {
+    const f = await fixture((request, socket) => {
+      if (!request.params.source_resume && !request.params.durable_source_resume) return { ...enrollment(request), source_receipt: source };
+      if (request.params.source_resume) {
+        const body = JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "same-live unavailable" } });
+        socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\nContent-Type: application/vnd.mezzanine.control+json; version=1\r\n\r\n${body}`); return;
+      }
+      const result = { ...enrollment(request), launch_token: "d".repeat(43), observer_witness: "e".repeat(64),
+        source_receipt: { ...source, observer_generation: "2" }, recovery: { kind: "durable-native-source", next_sequence: 1 } };
+      change(result); return result;
+    });
+    const client = createPersistentTelemetryClient(f.options);
+    try { assert.equal(await client.start(), true); client.disconnect(); assert.equal(await client.start(), false); }
+    finally { client.detach(); await f.close(); }
+  }
+});
+
 test("lifecycle pressure refuses accounting explicitly, then retries its same frozen report", async () => {
   let held, entered;
   const started = new Promise(resolve => { entered = resolve; });

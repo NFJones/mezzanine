@@ -8,6 +8,7 @@
  * telemetry. Invalid/exhausted ACKs remain unavailable, not proof of no commit.
  * No durable unsent-end inbox or persisted credential is provided. */
 import { Socket } from "node:net";
+import { randomBytes } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import childProcess from "node:child_process";
@@ -161,11 +162,27 @@ function resumeSelector(input) {
 }
 
 /** Exact typed ordinal basis, not generic enrollment/transport success. */
-function recoveryReceipt(input) {
+function recoveryReceipt(input, kind = "same-live-source") {
   return input && typeof input === "object" && !Array.isArray(input)
     && Object.keys(input).length === 2
     && Object.keys(input).every(key => ["kind", "next_sequence"].includes(key))
-    && input.kind === "same-live-source" && input.next_sequence === 1;
+    && input.kind === kind && input.next_sequence === 1;
+}
+
+/** Public selectors only: decimal text must never round through Number. */
+function sourceReceipt(input) {
+  try {
+    if (!input || typeof input !== "object" || Array.isArray(input)
+        || Object.keys(input).length !== 3
+        || Object.keys(input).some(key => !["protocol", "activation_id", "observer_generation"].includes(key))) return;
+    const { protocol, activation_id, observer_generation } = input;
+    if (protocol !== "external-source-activation/1"
+        || typeof activation_id !== "string" || !/^[a-f0-9]{64}$/.test(activation_id)
+        || /^0+$/.test(activation_id) || typeof observer_generation !== "string"
+        || !/^[1-9][0-9]{0,18}$/.test(observer_generation)
+        || BigInt(observer_generation) > 9223372036854775807n) return;
+    return Object.freeze({ protocol, activation_id, observer_generation });
+  } catch { /* metadata/getters never supply native authority */ }
 }
 
 /** Exact immutable historical end proof, not logical retirement or helper exit. */
@@ -197,12 +214,15 @@ export function createPersistentTelemetryClient(options) {
   const initialResume = suppliedResume === undefined ? undefined : resumeSelector(suppliedResume);
   const initialRun = options?.sourceRun;
   const initialEpoch = options?.sourceEpoch;
+  const suppliedCheckpoint = options?.sourceReceipt;
+  const initialCheckpoint = suppliedCheckpoint === undefined ? undefined : sourceReceipt(suppliedCheckpoint);
   const helper = options?.peerHelper;
   const valid = route && ["claude", "codex", "copilot", "opencode", "cursor", "pi"].includes(metadata.harness)
     && text(metadata.version, 128) && text(metadata.external_session_id, 128)
     && text(metadata.display_name, 128) && text(metadata.observer_instance, 128)
     && (metadata.predecessor_generation === undefined || positive(metadata.predecessor_generation))
-    && (suppliedResume === undefined || (initialResume && positive(initialRun) && positive(initialEpoch)));
+    && (suppliedResume === undefined || (initialResume && positive(initialRun) && positive(initialEpoch)))
+    && (suppliedCheckpoint === undefined || initialCheckpoint);
   let socket;
   let phase = "loaded";
   let handle;
@@ -220,7 +240,13 @@ export function createPersistentTelemetryClient(options) {
   // An unknown reply retains the exact request and original predecessor/selector.
   // Only a validated receipt ends this attempt. No newest-owner/bare fallback.
   let pendingEnrollment;
+  // Future requests follow the accepted projection, not the original parent's
+  // predecessor. Frozen pending requests remain untouched after reply loss.
+  let enrollmentMetadata = metadata;
   let acceptedRecovery;
+  let acceptedRecoveryKind;
+  let sourceCheckpoint = initialCheckpoint;
+  let enrollmentRefusedAttempt;
   let closing = false;
   let ending;
   let endPublication;
@@ -261,6 +287,10 @@ export function createPersistentTelemetryClient(options) {
       const completed = inflight;
       inflight = undefined;
       clearTimeout(completed.timer);
+      const error = value.error;
+      if (completed.method === "agent/external/enroll" && error && typeof error === "object" && !Array.isArray(error)
+          && Object.keys(error).every(key => ["code", "message", "data"].includes(key))
+          && Number.isSafeInteger(error.code) && typeof error.message === "string") enrollmentRefusedAttempt = current;
       if (completed.endGeneration !== undefined && !sourceEndReceipt(value.result, completed.endGeneration)) {
         lose(current); completed.resolve(undefined); return;
       }
@@ -281,7 +311,7 @@ export function createPersistentTelemetryClient(options) {
       if (wait <= 0) { lose(current, "timeout"); resolve(undefined); return; }
       const timer = setTimeout(() => lose(current, "timeout"), wait);
       timer.unref();
-      inflight = { id, timer, resolve,
+      inflight = { id, timer, resolve, method,
         endGeneration: method === "agent/external/source-end" ? params.generation : undefined };
       socket.write(frame);
     } catch { lose(current, "transport"); resolve(undefined); }
@@ -290,6 +320,7 @@ export function createPersistentTelemetryClient(options) {
   // or renew telemetry; end recovery can use it solely to close the frozen source.
   const connect = (current, deadline = Infinity) => (async () => {
     lossReason = undefined;
+    enrollmentRefusedAttempt = undefined;
     phase = "connecting";
     if (!positive(current) || current !== attempt || disposed || !trustedPaths(route, helper)) { lose(current); return false; }
     const wait = remaining(deadline, 1000);
@@ -328,6 +359,25 @@ export function createPersistentTelemetryClient(options) {
     serial = result.then(() => { pending--; }, () => { pending--; });
     return result;
   };
+  // Existing authenticated renewal carries only a cached historical checkpoint.
+  // A warm publication may still be pending; bounded paced probes never infer
+  // its success or block lifecycle indefinitely. No background polling owner.
+  const refreshCheckpoint = async (captured, current) => {
+    const deadline = performance.now() + 2000;
+    for (const delay of [0, 100, 250]) {
+      if (delay) await new Promise(resolve => { const timer = setTimeout(resolve, delay); timer.unref(); });
+      if (disposed || phase !== "enrolled" || current !== attempt || handle !== captured || remaining(deadline, 1) <= 0) return;
+      const result = await exchange("agent/external/renew", params(), current, deadline);
+      if (!result) return;
+      if (result.generation !== captured.generation || !text(result.agent_id, 128) || !positive(result.expires_at_unix_seconds)) { lose(current); return; }
+      if (!Object.hasOwn(result, "source_receipt")) continue;
+      const checkpoint = sourceReceipt(result.source_receipt);
+      if (!checkpoint || (sourceCheckpoint && (checkpoint.activation_id !== sourceCheckpoint.activation_id
+          || BigInt(checkpoint.observer_generation) < BigInt(sourceCheckpoint.observer_generation)))) { lose(current); return; }
+      sourceCheckpoint = checkpoint;
+      return;
+    }
+  };
   const start = () => {
     if (disposed || !valid) return Promise.resolve(false);
     if (phase === "enrolled") return Promise.resolve(true);
@@ -335,15 +385,28 @@ export function createPersistentTelemetryClient(options) {
     if (!pendingEnrollment) {
       const selectors = handle ? resumeSelector({ observer_witness: handle.witness, generation: handle.generation }) : initialResume;
       pendingEnrollment = Object.freeze({
-        request: Object.freeze({ ...metadata, ...(selectors ? { source_resume: selectors } : {}) }),
+        request: Object.freeze({ ...enrollmentMetadata, ...(selectors ? { source_resume: selectors } : {}) }),
         selectors, previous: handle, run: handle?.run ?? initialRun, epoch: handle?.epoch ?? initialEpoch,
       });
     }
-    const enrollment = pendingEnrollment;
+    let enrollment = pendingEnrollment;
     const current = ++attempt;
     starting = (async () => {
       if (!await connect(current)) return false;
-      const result = await exchange("agent/external/enroll", enrollment.request, current);
+      let result = await exchange("agent/external/enroll", enrollment.request, current);
+      // An answered warm refusal is distinct from an unknown transport outcome.
+      // Cold is a new explicitly typed same-source proof attempt, never initial
+      // enrollment or newest-owner fallback. Freeze it across ambiguous replies.
+      if (!result && !enrollment.cold && enrollment.selectors && sourceCheckpoint
+          && BigInt(sourceCheckpoint.observer_generation) < 9223372036854775807n
+          && enrollmentRefusedAttempt === current && phase === "connecting" && current === attempt && !disposed) {
+        const { predecessor_generation, ...coldMetadata } = enrollmentMetadata;
+        enrollment = Object.freeze({ ...enrollment, cold: true, checkpoint: sourceCheckpoint,
+          request: Object.freeze({ ...coldMetadata, durable_source_resume: Object.freeze({ receipt: sourceCheckpoint, operation_id: randomBytes(32).toString("hex") }) }) });
+        pendingEnrollment = enrollment;
+        enrollmentRefusedAttempt = undefined;
+        result = await exchange("agent/external/enroll", enrollment.request, current);
+      }
       if (current !== attempt || disposed || phase !== "connecting"
           || !result || result.protocol !== "external-agent/1" || result.registered !== true
           || !Array.isArray(result.controls) || result.controls.length !== 0
@@ -354,13 +417,26 @@ export function createPersistentTelemetryClient(options) {
           || result.usage !== "unavailable-source-continuity") { lose(current); return false; }
       const next = Object.freeze({ token: result.launch_token, generation: result.generation,
         witness: result.observer_witness, run: result.run_id, epoch: result.observer_epoch });
+      const checkpoint = Object.hasOwn(result, "source_receipt") ? sourceReceipt(result.source_receipt) : undefined;
+      if ((Object.hasOwn(result, "source_receipt") && !checkpoint) || (checkpoint && sourceCheckpoint
+          && (checkpoint.activation_id !== sourceCheckpoint.activation_id
+            || BigInt(checkpoint.observer_generation) < BigInt(sourceCheckpoint.observer_generation)))) { lose(current); return false; }
       const recovered = Object.hasOwn(result, "recovery");
       const unchanged = sameHandle(handle, next);
       if (recovered) {
-        if (!enrollment.selectors || !recoveryReceipt(result.recovery)) { lose(current); return false; }
+        const kind = enrollment.cold ? "durable-native-source" : unchanged && sameHandle(acceptedRecovery, next) ? acceptedRecoveryKind : "same-live-source";
+        if (!enrollment.selectors || !recoveryReceipt(result.recovery, kind)) { lose(current); return false; }
+        if (enrollment.cold && (!checkpoint || checkpoint.activation_id !== enrollment.checkpoint.activation_id
+            || BigInt(checkpoint.observer_generation) !== BigInt(enrollment.checkpoint.observer_generation) + 1n)) { lose(current); return false; }
         if (unchanged) {
           // A repeated already-accepted receipt cannot reset an advanced ordinal.
           if (!sameHandle(acceptedRecovery, next)) { lose(current); return false; }
+        } else if (enrollment.cold) {
+          if (next.epoch !== 1 || next.witness === enrollment.selectors.observer_witness
+              || (enrollment.previous && next.token === enrollment.previous.token)) { lose(current); return false; }
+          sequence = 0;
+          acceptedRecovery = next;
+          acceptedRecoveryKind = kind;
         } else {
           const epoch = enrollment.epoch + 1;
           if (!positive(epoch) || next.epoch !== epoch || next.run !== enrollment.run
@@ -368,7 +444,10 @@ export function createPersistentTelemetryClient(options) {
               || (enrollment.previous && next.token === enrollment.previous.token)) { lose(current); return false; }
           sequence = 0;
           acceptedRecovery = next;
+          acceptedRecoveryKind = kind;
         }
+      } else if (enrollment.cold) {
+        lose(current); return false;
       } else if (handle && !unchanged) {
         // Reconnect is not permission to infer a new projection from credentials.
         lose(current); return false;
@@ -380,9 +459,19 @@ export function createPersistentTelemetryClient(options) {
             || next.witness === enrollment.selectors.observer_witness) { lose(current); return false; }
       }
       handle = next;
+      if (checkpoint) sourceCheckpoint = checkpoint;
+      if (enrollment.cold) {
+        const { predecessor_generation, ...acceptedMetadata } = enrollmentMetadata;
+        enrollmentMetadata = Object.freeze(acceptedMetadata);
+      }
       pendingEnrollment = undefined;
       phase = "enrolled";
-      return true;
+      if (!checkpoint && sourceCheckpoint && enrollment.selectors && !enrollment.cold) {
+        // Queue behind any operation whose start() this is executing inside;
+        // never await work placed behind that same serial operation.
+        void enqueue(() => refreshCheckpoint(next, current));
+      }
+      return phase === "enrolled" && current === attempt && !disposed;
     })().catch(() => { lose(current); return false; });
     starting.then(() => { if (current === attempt && phase !== "enrolled") starting = undefined; });
     return starting;
@@ -478,6 +567,7 @@ export function createPersistentTelemetryClient(options) {
         predecessor: handle.generation, peerHelper: helper,
         sourceResume: { observer_witness: handle.witness, generation: handle.generation },
         sourceRun: handle.run, sourceEpoch: handle.epoch,
+        sourceReceipt: sourceCheckpoint,
         env: { MEZ: route.encoded, MEZ_PANE: route.pane } });
     },
     end() {

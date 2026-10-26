@@ -46,6 +46,7 @@ struct RetiredReplySpy<S> {
     rejected: std::sync::Arc<std::sync::atomic::AtomicBool>,
     lose_commit: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     lose_end: bool,
+    cold_ready: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     close_after_loss: bool,
 }
 
@@ -101,6 +102,13 @@ impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for RetiredReplySpy
                 if let Ok((body, consumed)) =
                     crate::control::decode_control_frame(&self.pending, 8192)
                 {
+                    if let Ok(reply) = serde_json::from_str::<serde_json::Value>(&body)
+                        && reply["result"]["recovery"]["kind"] == "durable-native-source"
+                        && reply["result"]["source_receipt"]["observer_generation"] == "2"
+                        && let Some(witness) = &self.cold_ready
+                    {
+                        witness.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
                     if let Ok(reply) = serde_json::from_str::<serde_json::Value>(&body)
                         && reply["error"]["message"] == "external native source has retired"
                         && reply["error"]["code"] == -32006
@@ -161,6 +169,25 @@ async fn external_enrollment_installed_request_accounting_has_durable_native_ack
 async fn external_enrollment_installed_request_accounting_recovers_lost_commit_ack() {
     qualify_installed_node_entry(
         "request-accounting-lost-ack-fixture.mjs",
+        "persistent_client.mjs",
+        2,
+        1,
+        false,
+        None,
+    )
+    .await;
+}
+
+/// The installed client loses a real committed ACK, not a fabricated result.
+/// After exact old connection/actor settlement, replace the ENTIRE control
+/// component and reopen storage while retaining original pane/process custody.
+/// The SAME ordinary native producer must cold-claim, dedup its frozen report
+/// and charge a distinct new7 once, with no supplied parent capability/provider.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit installed Node path and built mez helper required; offline only"]
+async fn external_enrollment_installed_request_accounting_recovers_full_control_replacement() {
+    qualify_installed_node_entry(
+        "request-accounting-cold-recovery-fixture.mjs",
         "persistent_client.mjs",
         2,
         1,
@@ -489,7 +516,9 @@ async fn qualify_installed_node_entry_result(
     eprintln!("installed qualification stage=service-built");
     let pi_usage = script_name == "pi-usage-ordinary-fixture.mjs";
     let request_handoff = script_name == "request-accounting-ordinary-fixture.mjs";
-    let request_ack_loss = script_name == "request-accounting-lost-ack-fixture.mjs";
+    let control_replacement = script_name == "request-accounting-cold-recovery-fixture.mjs";
+    let request_ack_loss =
+        script_name == "request-accounting-lost-ack-fixture.mjs" || control_replacement;
     let request_accounting = request_handoff || request_ack_loss || pi_usage;
     let end_ack_loss = script_name == "source-end-lost-ack-ordinary-fixture.mjs";
     let source_end = script_name == "persistent-client-ordinary-fixture.mjs" || end_ack_loss;
@@ -498,6 +527,7 @@ async fn qualify_installed_node_entry_result(
     let pi_retired = script_name == "pi-retired-source-ordinary-fixture.mjs";
     let retired_rejected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let committed_reply_lost = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cold_ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     if request_accounting || pi_loss || source_end || pi_source_end {
         service.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
             directory.join("usage.sqlite"),
@@ -555,7 +585,7 @@ async fn qualify_installed_node_entry_result(
         .write_runtime_pane_input("%1", command.as_bytes())
         .unwrap();
     let clients = service.session().clients().len();
-    let (handle, actor) =
+    let (mut handle, actor) =
         AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
     eprintln!("installed qualification stage=actor-constructed");
     // A single owned task gives actor polling its own heap-backed task boundary,
@@ -568,6 +598,32 @@ async fn qualify_installed_node_entry_result(
         let mut tasks = tokio::task::JoinSet::new();
         let mut producer = None;
         for ordinal in 0..connections {
+            if control_replacement && ordinal == 1 {
+                // Actual connection EOF and actor join precede reconstruction.
+                // Native pane/process owners remain in the returned service.
+                tasks.join_next().await.unwrap().unwrap();
+                assert!(committed_reply_lost.load(std::sync::atomic::Ordering::SeqCst));
+                handle.shutdown().await.unwrap();
+                let mut previous = actor_task.join_next().await.unwrap().unwrap();
+                previous.service.retire_all_external_source_anchors();
+                previous.service.control = crate::runtime::control::RuntimeControlComponent::new(
+                    crate::control::ControlIdempotencyCache::default(),
+                    mez_agent::messaging::MessageService::default(),
+                    None,
+                );
+                previous.service.set_token_usage_store(
+                    crate::storage::token_usage::TokenUsageStore::new(
+                        directory.join("usage.sqlite"),
+                    ),
+                );
+                let (replacement, actor) = AsyncRuntimeSessionActor::new(
+                    previous.service,
+                    AsyncRuntimeActorConfig::default(),
+                )
+                .unwrap();
+                handle = replacement;
+                actor_task.spawn(actor.run());
+            }
             let (mut stream, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
                 .await
                 .unwrap_or_else(|_| {
@@ -608,6 +664,7 @@ async fn qualify_installed_node_entry_result(
             let retired_rejected = retired_rejected.clone();
             let lose_commit =
                 (request_ack_loss || end_ack_loss).then(|| committed_reply_lost.clone());
+            let observed_cold = control_replacement.then(|| cold_ready.clone());
             tasks.spawn(async move {
                 eprintln!("installed qualification stage=connection-started");
                 let mut connection = ControlConnectionState::new(true, false);
@@ -627,6 +684,7 @@ async fn qualify_installed_node_entry_result(
                     rejected: retired_rejected,
                     lose_commit,
                     lose_end: end_ack_loss,
+                    cold_ready: observed_cold,
                     close_after_loss: false,
                 };
                 eprintln!("installed qualification stage=connection-serving");
@@ -696,18 +754,13 @@ async fn qualify_installed_node_entry_result(
         .await
         .unwrap();
         handle.shutdown().await.unwrap();
-        (child_status, reached_final_assertion)
+        let exit = actor_task.join_next().await.unwrap().unwrap();
+        (child_status, reached_final_assertion, exit)
     };
-    let ((child_status, reached_final_assertion), mut exit) = tokio::time::timeout(
-        Duration::from_secs(if pi_usage { 300 } else { 25 }),
-        async {
-            tokio::join!(server, async {
-                actor_task.join_next().await.unwrap().unwrap()
-            })
-        },
-    )
-    .await
-    .unwrap();
+    let (child_status, reached_final_assertion, mut exit) =
+        tokio::time::timeout(Duration::from_secs(if pi_usage { 300 } else { 25 }), server)
+            .await
+            .unwrap();
     if !reached_final_assertion {
         exit.service.terminate_all_pane_processes().unwrap();
         panic!("ordinary fixture did not reach the intentional post-EOF assertion");
@@ -725,6 +778,11 @@ async fn qualify_installed_node_entry_result(
         committed_reply_lost.load(std::sync::atomic::Ordering::SeqCst),
         request_ack_loss || end_ack_loss,
         "fixture must actually withhold one committed native usage/end reply"
+    );
+    assert_eq!(
+        cold_ready.load(std::sync::atomic::Ordering::SeqCst),
+        control_replacement,
+        "actual required cold claim/reply must occur after control replacement"
     );
     if pi_retired {
         assert!(
@@ -863,8 +921,18 @@ async fn qualify_installed_node_entry_result(
         }
     }
     if request_accounting {
-        let expected_requests = if pi_usage { 4105_u64 } else { 1 };
-        let expected_input = expected_requests * 10;
+        let expected_requests = if pi_usage {
+            4105_u64
+        } else if control_replacement {
+            2
+        } else {
+            1
+        };
+        let expected_input = if control_replacement {
+            17
+        } else {
+            expected_requests * 10
+        };
         assert!(binding.enrollment.as_ref().unwrap().request_reports_seen);
         assert_eq!(
             exit.service

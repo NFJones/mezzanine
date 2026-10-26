@@ -351,8 +351,12 @@ impl RuntimeSessionService {
                     .filter(|registration| registration.external_session_id == external_session_id)
                     .ok_or_else(|| MezError::conflict("external registration unavailable"))?;
                 binding.expires = current_unix_seconds().saturating_add(LEASE_SECONDS);
-                Ok(serde_json::json!({"agent_id":registration.agent_id.as_str(),"generation":binding.generation,
-                    "expires_at_unix_seconds":binding.expires}).to_string())
+                let mut response = serde_json::json!({"agent_id":registration.agent_id.as_str(),"generation":binding.generation,
+                    "expires_at_unix_seconds":binding.expires});
+                if let Some(checkpoint) = self.external_source_checkpoint(digest) {
+                    response["source_receipt"] = checkpoint;
+                }
+                Ok(response.to_string())
             }
             "agent/external/deregister" => {
                 let external_session_id = text(&params, "external_session_id", 128)?;

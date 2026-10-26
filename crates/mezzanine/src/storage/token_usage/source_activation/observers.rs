@@ -74,6 +74,11 @@ impl ExternalSourceObserverFence {
         Ok(self.seen.binary_search(&instance_digest(instance)?).is_ok())
     }
 
+    /// Byte-exact current public label, not a grant or a liveness assertion.
+    pub(crate) fn is_current_instance(&self, instance: &str) -> Result<bool> {
+        Ok(self.current == instance_digest(instance)?)
+    }
+
     /// Complete actor-owned history may include IDs whose earlier optional
     /// publication failed. Merge all of them into one bounded immutable CAS;
     /// never infer that publishing just the current ID repairs an old gap.

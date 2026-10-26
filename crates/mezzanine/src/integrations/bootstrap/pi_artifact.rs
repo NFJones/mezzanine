@@ -42,10 +42,18 @@ pub(crate) fn candidate_manifest() -> Manifest {
     entries.extend(super::persistent_client::entries("extensions/mezzanine"));
     Manifest {
         harness: "pi".into(),
-        revision: 15,
+        revision: 16,
         vendor_version: super::pi::RELEASE.into(),
         entries,
     }
+}
+
+/// Exact revision15 before explicit automatic native cold recovery.
+pub(super) fn historical_bounded_end_manifest() -> Manifest {
+    let mut manifest = candidate_manifest();
+    manifest.revision = 15;
+    super::history::freeze_bounded_end_transport(&mut manifest);
+    manifest
 }
 
 /// Exact revision-14 layout before bounded lost-end-ACK recovery.

@@ -1003,9 +1003,27 @@ actor-qualified worker's successful acceptance cache supplies it after final
 publication checks. Prepared, unexecuted or failed acceptance has no such field;
 caller-provided success cannot fabricate it. This is initial historical evidence,
 not a current-observer checkpoint, liveness/expiry guarantee, namespace permission
-or recovery acknowledgment. Existing shared-client same-live recovery is unchanged;
-the independently qualified explicit server cold path follows below, while
-automatic shared-client consumption remains unimplemented.
+or recovery acknowledgment. Authenticated `agent/external/renew` can additionally
+return this closed field from the current observer's actual cached acceptance or
+committed operation. A pending warm successor cannot export the predecessor as
+its own checkpoint. This performs no actor database read and promises historical
+evidence, not fresh durable eligibility; cold independently checks the live store.
+
+The shared persistent client retains validated public checkpoints in memory and
+copies only those public selectors to a successor, not private credentials or
+accounting tickets. Known-source warm transitions refresh through at most three
+serialized authenticated renewals (0/100/250ms pacing, one2-second horizon). Only
+an answered same-live RPC refusal can select one explicit cold intent. Transport
+loss retains the exact previous intent instead. The cold operation/checkpoint is
+frozen across reply loss and never becomes bare initial/newest-owner lookup.
+Typed cold success requires the same activation, exact successor DECIMAL TEXT
+generation, initial observer epoch and changed private handle/witness. Exact
+accepted retries do not reset lifecycle ordinals twice. Original request/report
+identity, witness, origin, admission time and normalized counters remain unchanged;
+no provider work or historical charge is replayed. A never-received checkpoint,
+unresolved history gap or expired/retired/changed source remains unavailable.
+Current Pi16/OpenCode14 artifacts include this client; their exact previous
+Pi15/OpenCode13 bundles remain recognized independently frozen installer history.
 
 ### Explicit same-native-source cold admission (server contract)
 
@@ -1150,7 +1168,8 @@ The client does not persist credentials or provide a durable unsent-end inbox.
 This supports finite same-service reply-loss recovery, not general outage or
 full-service replacement. Server-native renewal, observer fences and explicit
 cold admission are implemented separately above; automatic client consumption
-and full accounting projection/reset reconstruction remain unfinished.
+is supported by the shared persistent client, while full accounting projection/
+pre-replacement reset reconstruction remains separate unfinished engineering.
 Other curated/helper clients are not silently upgraded to this source contract.
 
 Adapters must capture begin readiness before each genuine new provider request

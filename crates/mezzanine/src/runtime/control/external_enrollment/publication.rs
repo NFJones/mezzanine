@@ -121,6 +121,48 @@ impl ExternalEnrollmentWork {
 }
 
 impl RuntimeSessionService {
+    /// Historical current-observer checkpoint from actual acceptance/claim
+    /// caches. Credential authentication is separate. No actor database read,
+    /// namespace lookup or native authority is inferred from these public bytes.
+    pub(in crate::runtime::control) fn external_source_checkpoint(
+        &self,
+        digest: [u8; 32],
+    ) -> Option<serde_json::Value> {
+        let binding = self.control.external_agents().bindings.get(&digest)?;
+        let enrollment = binding.enrollment.as_ref()?;
+        if binding.retired
+            || (enrollment.accepted_cold_resume.is_some() && !enrollment.cold_published)
+            || !binding.has_current_telemetry(current_unix_seconds())
+            || !self.pane_process_identity_is_current(&binding.pane_id, &binding.process)
+            || !enrollment.provenance_is_live()
+        {
+            return None;
+        }
+        let slot = self.current_external_source_renewal_slot(digest)?;
+        if !self
+            .persistence
+            .cloned_token_usage_store()
+            .is_some_and(|store| slot.renewal_store_matches(&store))
+        {
+            return None;
+        }
+        let accepted = slot.get()?.accepted_receipt()?;
+        let scope = self.current_external_source_observer_scope(digest)?;
+        let fence = scope.current();
+        if !fence.is_current_instance(&enrollment.instance).ok()? {
+            return None;
+        }
+        if !scope.has_committed() && accepted.observer.as_ref() != Some(fence.as_ref()) {
+            return None;
+        }
+        serde_json::to_value(AcceptedSourceReceipt {
+            protocol: "external-source-activation/1",
+            activation_id: accepted.activation.public_id(),
+            observer_generation: fence.generation().to_string(),
+        })
+        .ok()
+    }
+
     /// Moves the already-consumed native reservation into bounded publication
     /// custody. No database, ancestry walk or mutex wait occurs on the actor.
     /// Missing first-allocation metadata preserves lifecycle-only replies; a

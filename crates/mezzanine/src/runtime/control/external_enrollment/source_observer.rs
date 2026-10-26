@@ -33,6 +33,11 @@ impl ObserverScope {
         self.committed.get().unwrap_or(&self.previous).clone()
     }
 
+    /// Only the actual SQL worker records this, before fallible postchecks.
+    pub(super) fn has_committed(&self) -> bool {
+        self.committed.get().is_some()
+    }
+
     /// Records only this operation's actual SQL receipt before lock release.
     pub(super) fn committed(&self, fence: ExternalSourceObserverFence) -> Result<()> {
         self.committed

@@ -1784,7 +1784,8 @@ Gap reads MUST bound decoding and remain readonly/current-schema-only. No nonce
 or namespace lookup substitutes for fresh native authority or actual admission.
 Neither a storage CAS nor same-live publication alone enables cold recovery.
 The explicit server cold-admission contract below is independently qualified;
-automatic shared-client cold recovery remains unfinished.
+the shared persistent client consumes it as described below. Durable pane reset
+and unreplayed projection reconstruction are separate accounting obligations.
 The initial actor-qualified acceptance reply MAY contain `source_receipt` only
 from the original worker's successful acceptance cache, after the existing final
 registry/admission/binding/native checks. Its closed shape is
@@ -1798,7 +1799,34 @@ lifecycle behavior. It is a HISTORICAL initial-acceptance selector, not evidence
 of current liveness, latest observer, unexpired/unretired state, accounting
 namespace authority or successful recovery. Existing same-live receipt semantics
 remain separate. A successful explicit cold claim can return its own successor
-receipt; current warm checkpoint export/shared-client consumption remain missing.
+receipt. Authenticated `agent/external/renew` MAY also export `source_receipt`
+from the exact current observer's actual acceptance/committed-operation cache.
+Pending warm handoff MUST NOT export its predecessor as the new observer's
+checkpoint. Current binding/anchor/process/native/store checks MUST remain in
+force; exporting the cached historical fact MUST NOT perform actor SQLite or
+claim fresh persisted liveness, expiry extension or history completeness.
+
+The shared persistent client MUST validate the closed receipt and retain its
+canonical decimal generation as text/checked BigInt, never a JavaScript Number.
+Known-source warm handoffs MAY refresh it through at most3 authenticated renewals
+on their existing serial RPC owner, paced0/100/250ms under one2000ms monotonic
+horizon. Missing/failed metadata cannot invent a checkpoint or make lifecycle
+installation mean durable readiness. No background polling owner is introduced.
+After an ANSWERED standard RPC refusal of an explicitly selected same-live
+recovery, and only with a known original source checkpoint, the client MAY freeze
+one explicit `durable_source_resume` intent and independently reprove through
+the cold contract. A transport-lost warm response MUST retain its original warm
+intent; it is not evidence to switch modes. Cold must remove mixed same-live/
+predecessor fields, preserve its EXACT checkpoint/operation across lost replies,
+and never fall back to initial/newest/namespace-only activation.
+Cold readiness MUST require its typed `durable-native-source` ordinal basis,
+same activation and exact successor public generation plus a new private handle/
+witness and initial observer epoch. Already accepted exact receipts MUST NOT
+reset advanced ordinals twice. Original accounting ticket/marker/source witness,
+admission time, expense origin and frozen report bytes MUST survive; recovery
+changes transport credentials, not the observation or provider work. No received
+checkpoint, expired/unknown/retired history or changed native source stays
+unavailable. A public selector is not a persisted credential or unsent-data inbox.
 
 Ordinary persistent socket enrollment MAY explicitly supply closed
 `durable_source_resume={receipt:{protocol:"external-source-activation/1",activation_id:<64 lower-case hex>,observer_generation:<canonical positive decimal text>},operation_id:<64 lower-case nonzero hex>}`.

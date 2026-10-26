@@ -5,6 +5,7 @@
 //! Fixed helper references remain generated for the installing executable only;
 //! unknown historical paths/bytes never become installer authority.
 
+mod bounded_end;
 mod one_shot_end;
 
 /// Exact Pi entry bytes shipped in revisions 2 and 3 before ordinary activation.
@@ -405,6 +406,26 @@ pub(super) fn freeze_pre_end_transport(manifest: &mut super::installer::Manifest
         ) {
             entry.artifact = super::reconciliation::Artifact::File {
                 bytes: include_bytes!("history/persistent_client_pre_end.mjs").to_vec(),
+            };
+        }
+    }
+}
+
+/// Restores exact Pi15/OpenCode13 bounded-end bytes before cold recovery.
+pub(super) fn persistent_client_bounded_end() -> Vec<u8> {
+    bounded_end::bytes()
+}
+
+/// Restores only fixed slots, never receipt-selected paths or source bytes.
+pub(super) fn freeze_bounded_end_transport(manifest: &mut super::installer::Manifest) {
+    for entry in &mut manifest.entries {
+        if matches!(
+            entry.path.as_str(),
+            "extensions/mezzanine/persistent_client.mjs"
+                | "plugins/mezzanine/persistent_client.mjs"
+        ) {
+            entry.artifact = super::reconciliation::Artifact::File {
+                bytes: persistent_client_bounded_end(),
             };
         }
     }

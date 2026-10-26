@@ -9,6 +9,7 @@ mod curated_usage;
 mod root_replacement;
 mod source_activation;
 mod source_activation_fixture;
+mod source_checkpoint;
 mod source_observer_publication;
 mod source_observer_retirement;
 mod source_renewal;
