@@ -111,8 +111,107 @@ test("loading and invalid discovery remain inert; no native controls or usage su
   }
 });
 
+/** End acknowledgment is a separate exact typed persistence receipt. These
+ * socket/parser fixtures do not claim native enrollment authority; the Rust
+ * installed producer fixture qualifies that independently. */
+test("source end requires an exact durable receipt and never falls back to logical deregistration", async () => {
+  const receipt = { protocol: "external-source-end/1", retired: true, durable: true, generation: 1 };
+  for (const outcome of [receipt, { retired: true }, { ...receipt, durable: false },
+    { ...receipt, generation: 2 }, { ...receipt, generation: 1.5 },
+    { ...receipt, protocol: "external-source-end/2" }, { ...receipt, extra: true }, null, "lost", "duplicate"]) {
+    const f = await fixture((request, socket) => {
+      if (request.method === "agent/external/enroll") return enrollment(request);
+      if (outcome === "lost") { socket.destroy(); return; }
+      if (outcome === "duplicate") {
+        const body = `{"jsonrpc":"2.0","id":${JSON.stringify(request.id)},"result":{"protocol":"external-source-end/1","retired":true,"durable":true,"generation":1,"generat\\u0069on":1}}`;
+        socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\nContent-Type: application/vnd.mezzanine.control+json; version=1\r\n\r\n${body}`);
+        return;
+      }
+      return outcome;
+    });
+    const client = createPersistentTelemetryClient(f.options);
+    try {
+      assert.equal(await client.start(), true);
+      const first = await client.end();
+      assert.equal(first.delivered, outcome === receipt);
+      assert.equal(first.durable === true, outcome === receipt);
+      assert.deepEqual(await client.end(), first, "duplicate end changed its disposition");
+      assert.equal(await client.start(), false);
+      assert.equal((await client.presentation("running")).delivered, false);
+      assert.equal(client.successor("instance-b"), undefined);
+      assert.equal(client.status().sourceEnd, outcome === receipt ? "durable" : "unavailable");
+      assert.deepEqual(f.requests.map(request => request.method), ["agent/external/enroll", "agent/external/source-end"]);
+      assert.deepEqual(Object.keys(f.requests[1].params).sort(), ["external_session_id", "generation", "launch_token"]);
+      assert.equal(f.requests[1].params.generation, 1);
+      assert(!JSON.stringify(client.status()).includes("launch_token"));
+    } finally { client.detach(); await f.close(); }
+  }
+});
+
+/** Pi's logical terminal observation used to dispose the credential before an
+ * explicit end could run. It must wait for the same typed durable receipt and
+ * keep accepted lifecycle evidence distinct from end persistence evidence. */
+test("Pi terminal observation publishes required end before disposing its handle", async () => {
+  for (const durable of [false, true]) {
+    const f = await fixture(request => {
+      if (request.method === "agent/external/enroll") return enrollment(request);
+      if (request.method === "agent/external/pi-observation") return { accepted: true, retired: true, sequence: request.params.sequence };
+      return { protocol: "external-source-end/1", retired: true, durable, generation: 1 };
+    });
+    const client = createPersistentTelemetryClient(f.options);
+    try {
+      assert.equal(await client.start(), true);
+      const observed = await client.piObservation({ type: "session_shutdown", reason: "quit" });
+      assert.equal(observed.delivered, true);
+      assert.equal(observed.retired, true);
+      assert.equal(observed.durable, durable);
+      assert.equal((await client.end()).durable === true, durable);
+      assert.deepEqual(f.requests.map(request => request.method), ["agent/external/enroll", "agent/external/pi-observation", "agent/external/source-end"]);
+    } finally { client.detach(); await f.close(); }
+  }
+});
+
+/** A full ordinary queue must drain accepted work before its one terminal
+ * publication. Closing refuses new callbacks and cannot bypass FIFO or grow a
+ * second end owner. A Pi terminal event and explicit end must not await each
+ * other through their own serial queue. */
+test("end drains a full accepted queue and joins a Pi publication already in flight", async () => {
+  for (const pi of [false, true]) {
+    let held, enter;
+    const started = new Promise(resolve => { enter = resolve; });
+    const f = await fixture((request, socket) => {
+      if (request.method === "agent/external/enroll") return enrollment(request);
+      if ((pi && request.method === "agent/external/source-end") || (!pi && request.params.sequence === 1)) {
+        held = { request, socket }; enter(); return;
+      }
+      if (request.method === "agent/external/source-end") return { protocol: "external-source-end/1", retired: true, durable: true, generation: 1 };
+      return { changed: true, accepted: true, retired: pi, sequence: request.params.sequence };
+    });
+    const client = createPersistentTelemetryClient(f.options);
+    try {
+      assert.equal(await client.start(), true);
+      const accepted = pi ? [client.piObservation({ type: "session_shutdown", reason: "quit" })]
+        : Array.from({ length: 16 }, () => client.presentation("running"));
+      await started;
+      const end = client.end();
+      assert.equal(client.status().sourceEnd, "pending");
+      assert.equal((await client.presentation("running")).delivered, false);
+      const result = pi ? { protocol: "external-source-end/1", retired: true, durable: true, generation: 1 }
+        : { changed: true, sequence: 1 };
+      const body = JSON.stringify({ jsonrpc: "2.0", id: held.request.id, result });
+      held.socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\nContent-Type: application/vnd.mezzanine.control+json; version=1\r\n\r\n${body}`);
+      assert((await Promise.all(accepted)).every(result => result.delivered));
+      assert.equal((await end).durable, true);
+      assert.equal((await client.end()).durable, true);
+      assert.equal(f.requests.filter(request => request.method === "agent/external/source-end").length, 1);
+      if (!pi) assert.deepEqual(f.requests.slice(1, -1).map(request => request.params.sequence), Array.from({ length: 16 }, (_, index) => index + 1));
+    } finally { client.detach(); await f.close(); }
+  }
+});
+
 test("native peer-verified producer sends only fixed lifecycle metadata", async () => {
   const f = await fixture(request => request.method === "agent/external/enroll" ? enrollment(request)
+    : request.method === "agent/external/source-end" ? { protocol: "external-source-end/1", retired: true, durable: true, generation: request.params.generation }
     : { changed: true, sequence: request.params.sequence, retired: true });
   const client = createPersistentTelemetryClient(f.options);
   try {
@@ -134,6 +233,7 @@ test("native peer-verified producer sends only fixed lifecycle metadata", async 
 test("shared persistent client supports only six canonical labels without adapter attestation", async () => {
   for (const harness of ["claude", "codex", "copilot", "opencode", "cursor", "pi"]) {
     const f = await fixture(request => request.method === "agent/external/enroll" ? enrollment(request)
+      : request.method === "agent/external/source-end" ? { protocol: "external-source-end/1", retired: true, durable: true, generation: request.params.generation }
       : { changed: true, sequence: request.params.sequence, retired: true });
     const client = createPersistentTelemetryClient({ ...f.options, harness });
     try {

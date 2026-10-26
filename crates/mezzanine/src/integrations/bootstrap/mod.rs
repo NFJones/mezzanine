@@ -213,7 +213,17 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         ),
         _ => return Vec::new(),
     };
-    let current_opencode = compiled_variant_matches(manifest, &opencode_artifact::manifest());
+    // Current and immediate pre-end layouts share the same resume ancestry.
+    let current_opencode = compiled_variant_matches(manifest, &opencode_artifact::manifest())
+        || [
+            opencode_artifact::manifest(),
+            opencode_artifact::jsonc_manifest(),
+            opencode_artifact::nested_manifest(false),
+            opencode_artifact::nested_manifest(true),
+        ]
+        .into_iter()
+        .map(opencode_artifact::historical_end_manifest)
+        .any(|candidate| candidate == *manifest);
     let revision10_opencode = [
         opencode_artifact::manifest(),
         opencode_artifact::jsonc_manifest(),
@@ -232,7 +242,9 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     {
         return Vec::new();
     }
-    let current_pi = manifest.harness == "pi" && *manifest == pi_artifact::candidate_manifest();
+    let current_pi = manifest.harness == "pi"
+        && (*manifest == pi_artifact::candidate_manifest()
+            || *manifest == pi_artifact::historical_end_manifest());
     let revision10_pi =
         manifest.harness == "pi" && *manifest == pi_artifact::historical_usage_manifest();
     let revision11_pi =
@@ -361,6 +373,9 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         if current_pi {
             history.insert(0, pi_artifact::historical_resume_manifest());
         }
+        if manifest.harness == "pi" && *manifest == pi_artifact::candidate_manifest() {
+            history.insert(0, pi_artifact::historical_end_manifest());
+        }
         if opencode_history {
             history.insert(
                 0,
@@ -370,6 +385,12 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
                 history.insert(
                     0,
                     opencode_artifact::historical_pre_resume_manifest(manifest.clone()),
+                );
+            }
+            if compiled_variant_matches(manifest, &opencode_artifact::manifest()) {
+                history.insert(
+                    0,
+                    opencode_artifact::historical_end_manifest(manifest.clone()),
                 );
             }
             // The newly effective loader layout cannot redefine which shipped
@@ -383,13 +404,15 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
                 opencode_artifact::nested_manifest(false),
                 opencode_artifact::nested_manifest(true),
             ] {
-                for revision in [7, 8, 9, 10] {
-                    if revision10_opencode && revision == 10 {
+                for revision in [7, 8, 9, 10, 11] {
+                    if revision >= manifest.revision {
                         continue;
                     }
                     let mut snapshot = layout.clone();
                     snapshot.revision = revision;
-                    if revision == 10 {
+                    if revision == 11 {
+                        history::freeze_pre_end_transport(&mut snapshot);
+                    } else if revision == 10 {
                         history::freeze_pre_resume_transport(&mut snapshot);
                     } else if revision == 9 {
                         history::freeze_revision9_transport(&mut snapshot);

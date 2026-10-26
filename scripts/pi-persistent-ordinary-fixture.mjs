@@ -64,4 +64,5 @@ try {
   replacement({ type: "session_shutdown", reason: "quit" }, session);
   await globalThis[ownerKey].tail;
   assert.equal(globalThis[ownerKey].closed, true);
+  assert.equal(globalThis[ownerKey].client.status().sourceEnd, "durable");
 } finally { globalThis[ownerKey]?.client?.detach(); clearTimeout(lifetime); }

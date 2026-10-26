@@ -59,6 +59,10 @@ Shared HTTP execution keeps wire payloads out of transport diagnostics. The
 [authenticated-search foundation](docs/reference-manual/agent-actions.md#http-execution-and-authenticated-search-foundation)
 does not activate paid search or change the default backend.
 
+Ordinary Pi/OpenCode integrations installed by bootstrap distinguish logical
+retirement from verified durable source-end acknowledgment. A lost acknowledgment
+remains unavailable; it does not imply a durable inbox or cold-service recovery.
+
 ## Why Mezzanine?
 
 - **A real multiplexer, not an agent wrapper:** persistent windows and panes,

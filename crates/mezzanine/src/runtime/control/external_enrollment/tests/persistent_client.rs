@@ -468,11 +468,13 @@ async fn qualify_installed_node_entry_result(
     let request_handoff = script_name == "request-accounting-ordinary-fixture.mjs";
     let request_ack_loss = script_name == "request-accounting-lost-ack-fixture.mjs";
     let request_accounting = request_handoff || request_ack_loss || pi_usage;
+    let source_end = script_name == "persistent-client-ordinary-fixture.mjs";
+    let pi_source_end = script_name == "pi-persistent-ordinary-fixture.mjs";
     let pi_loss = script_name == "pi-loss-ordinary-fixture.mjs";
     let pi_retired = script_name == "pi-retired-source-ordinary-fixture.mjs";
     let retired_rejected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let committed_reply_lost = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    if request_accounting || pi_loss {
+    if request_accounting || pi_loss || source_end || pi_source_end {
         service.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
             directory.join("usage.sqlite"),
         ));
@@ -722,6 +724,19 @@ async fn qualify_installed_node_entry_result(
         .max_by_key(|binding| binding.generation)
         .unwrap();
     assert_eq!(binding.retired, !helper_callback);
+    if source_end || pi_source_end {
+        // The installed client required a real exact receipt before exiting.
+        // No persistence-service drain is used to substitute for its end worker.
+        let database = rusqlite::Connection::open(directory.join("usage.sqlite")).unwrap();
+        let receipt: (i64, i64, i64) = database
+            .query_row(
+                "SELECT count(*), min(state), min(revision) FROM external_usage_source_activations",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(receipt, (if pi_source_end { 4 } else { 1 }, 2, 3));
+    }
     if helper_callback {
         assert!(binding.enrollment.as_ref().unwrap().producer.is_live());
         assert_eq!(binding.enrollment.as_ref().unwrap().observers.len(), 1);

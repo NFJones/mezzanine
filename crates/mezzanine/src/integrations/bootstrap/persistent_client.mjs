@@ -2,7 +2,10 @@
  * Loading performs no I/O. The producer owns its socket; a fixed native helper
  * verifies peer UID on a borrowed descriptor. No vendor launch, general RPC,
  * transcript reads, output pollution or fabricated usage. Accounting retries
- * restore only the same original marker/report, never vendor/provider work. */
+ * restore only the same original marker/report, never vendor/provider work.
+ * End uses one bounded explicit durable publication, never logical fallback or
+ * re-enrollment. Lost/invalid acknowledgments remain unavailable, not proof of
+ * failure to commit. This client does not provide a durable unsent-end inbox. */
 import { Socket } from "node:net";
 import { lstatSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
@@ -160,6 +163,15 @@ function recoveryReceipt(input) {
     && input.kind === "same-live-source" && input.next_sequence === 1;
 }
 
+/** Exact immutable historical end proof, not logical retirement or helper exit. */
+function sourceEndReceipt(input, generation) {
+  return input && typeof input === "object" && !Array.isArray(input)
+    && Object.keys(input).length === 4
+    && Object.keys(input).every(key => ["protocol", "retired", "durable", "generation"].includes(key))
+    && input.protocol === "external-source-end/1" && input.retired === true
+    && input.durable === true && positive(input.generation) && input.generation === generation;
+}
+
 /** Private handle identity includes the credential; numeric generation alone
  * cannot identify a projection after an ephemeral registry is reconstructed. */
 const sameHandle = (a, b) => a && b && ["token", "generation", "witness", "run", "epoch"].every(key => a[key] === b[key]);
@@ -204,6 +216,11 @@ export function createPersistentTelemetryClient(options) {
   // Only a validated receipt ends this attempt. No newest-owner/bare fallback.
   let pendingEnrollment;
   let acceptedRecovery;
+  let closing = false;
+  let ending;
+  let endPublication;
+  let endOutcome;
+  let endState = "not-requested";
   const lose = current => {
     if (current !== attempt) return;
     phase = "connection-lost";
@@ -254,7 +271,7 @@ export function createPersistentTelemetryClient(options) {
     } catch { lose(current); resolve(undefined); }
   });
   const enqueue = operation => {
-    if (pending >= 16 || disposed) return Promise.resolve(unavailable());
+    if (pending >= 16 || disposed || closing) return Promise.resolve(unavailable());
     pending++;
     const result = serial.then(operation).catch(unavailable);
     serial = result.then(() => { pending--; }, () => { pending--; });
@@ -340,14 +357,35 @@ export function createPersistentTelemetryClient(options) {
   };
   const params = () => ({ launch_token: handle.token, generation: handle.generation,
     external_session_id: metadata.external_session_id });
+  // Runs on the existing serial owner, including directly inside a terminal Pi
+  // observation. Never await an end queued BEHIND that same observation.
+  const publishEnd = () => endPublication ??= (async () => {
+    if (endOutcome) return endOutcome;
+    closing = true;
+    endState = "pending";
+    const captured = handle;
+    const current = attempt;
+    const result = !disposed && phase === "enrolled" && captured
+      && await exchange("agent/external/source-end", params(), current);
+    const durable = !disposed && captured === handle && current === attempt
+      && sourceEndReceipt(result, captured?.generation);
+    endOutcome = Object.freeze(durable ? { delivered: true, durable: true } : unavailable());
+    endState = durable ? "durable" : "unavailable";
+    disposed = true;
+    lose(current);
+    handle = undefined;
+    pendingEnrollment = undefined;
+    acceptedRecovery = undefined;
+    return endOutcome;
+  })();
   const accounting = createRequestAccountingClient({ enqueue,
     async exchange(method, payload) {
       if (!await start()) return;
       return exchange(method, { ...params(), ...payload }, attempt);
     } });
-  return Object.freeze({ start, ...accounting,
+  return Object.freeze({ start: () => closing ? Promise.resolve(false) : start(), ...accounting,
     status() { return Object.freeze({ phase, usage: accounting.accountingStatus(),
-      run: handle?.run, epoch: handle?.epoch }); },
+      run: handle?.run, epoch: handle?.epoch, sourceEnd: endState }); },
     captureHelperObservation(state) {
       if (phase !== "enrolled" || !states.has(state) || projectionMode === "pi") return Promise.resolve(undefined);
       const capturedHandle = handle;
@@ -383,12 +421,15 @@ export function createPersistentTelemetryClient(options) {
         const result = await exchange("agent/external/pi-observation", { ...params(), sequence: ++sequence, event }, attempt);
         const accepted = result?.accepted === true && result.sequence === sequence && typeof result.retired === "boolean";
         if (!accepted) lose(attempt);
-        if (accepted && result.retired) { disposed = true; lose(attempt); }
+        if (accepted && result.retired) {
+          const ended = await publishEnd();
+          return { delivered: true, retired: true, durable: ended.durable === true };
+        }
         return accepted ? { delivered: true, retired: result.retired } : unavailable();
       });
     },
     successor(instance) {
-      if (disposed || !handle || !text(instance, 128) || instance === metadata.observer_instance) return;
+      if (disposed || closing || !handle || !text(instance, 128) || instance === metadata.observer_instance) return;
       return createPersistentTelemetryClient({ harness: metadata.harness, version: metadata.version,
         session: metadata.external_session_id, displayName: metadata.display_name, instance,
         predecessor: handle.generation, peerHelper: helper,
@@ -397,13 +438,22 @@ export function createPersistentTelemetryClient(options) {
         env: { MEZ: route.encoded, MEZ_PANE: route.pane } });
     },
     end() {
-      if (pending >= 16 || disposed) { disposed = true; lose(attempt); return Promise.resolve(unavailable()); }
-      return enqueue(async () => {
-        const result = phase === "enrolled" && await exchange("agent/external/deregister", params(), attempt);
-        disposed = true;
-        lose(attempt);
-        return result?.retired === true ? { delivered: true } : unavailable();
-      });
+      if (endOutcome) return Promise.resolve(endOutcome);
+      if (endPublication) return endPublication;
+      if (ending) return ending;
+      if (disposed) {
+        endState = "unavailable";
+        endOutcome = Object.freeze(unavailable());
+        disposed = true; lose(attempt);
+        return Promise.resolve(endOutcome);
+      }
+      // One terminal obligation, not another ordinary queued callback. Existing
+      // accepted work drains first; closing rejects any new ordinary admission.
+      // This cannot grow beyond one promise per source or replenish attempts.
+      ending = serial.then(publishEnd).catch(unavailable);
+      closing = true;
+      endState = "pending";
+      return ending;
     },
     disconnect() { lose(attempt); },
     detach() { disposed = true; lose(attempt); },

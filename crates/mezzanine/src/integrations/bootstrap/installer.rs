@@ -1282,11 +1282,11 @@ mod tests {
                 super::super::compiled_manifest(harness, None).unwrap()
             };
             let mut targets = super::super::compiled_history(&current);
-            assert_eq!(targets.len(), if harness == "pi" { 11 } else { 5 });
+            assert_eq!(targets.len(), if harness == "pi" { 12 } else { 5 });
             if harness == "pi" {
-                assert_eq!(current.revision, 13);
+                assert_eq!(current.revision, 14);
                 assert!(
-                    (2..=12)
+                    (2..=13)
                         .all(|revision| targets.iter().any(|target| target.revision == revision))
                 );
             }
@@ -1561,14 +1561,14 @@ mod tests {
             let history = super::super::compiled_history(&current);
             assert_eq!(
                 history.len(),
-                if harness == "pi" { 11 } else { 22 },
+                if harness == "pi" { 12 } else { 26 },
                 "all frozen targets must remain qualified for {harness}"
             );
             if harness == "pi" {
-                assert_eq!(current.revision, 13);
-                assert_eq!(history[0].revision, 12);
+                assert_eq!(current.revision, 14);
+                assert_eq!(history[0].revision, 13);
                 assert!(
-                    (2..=12)
+                    (2..=13)
                         .all(|revision| history.iter().any(|target| target.revision == revision))
                 );
             }

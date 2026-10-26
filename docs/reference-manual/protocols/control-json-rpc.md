@@ -992,9 +992,20 @@ trigger, schema or file-open diagnostics; internal cached errors are retained.
 An identical authorized retry can inspect the original tombstone, never mint another mutation allowance or
 reactivate a source. Legacy/curated/no-metadata sources cannot claim this receipt.
 Synchronous-only dispatch rejects this method rather than performing actor I/O.
-Existing installed clients still use logical deregistration until their explicit
-required-end integration is implemented; no automatic-client/cold-recovery
-guarantee follows from this server endpoint alone.
+Pi14/OpenCode12 install the shared client's required-end path by default, with
+no additional user enable command. `end()` accepts only the exact four-field
+receipt above with the original captured safe generation; logical-only, malformed,
+extra/duplicate-field, wrong-generation or lost replies remain unavailable.
+Its one terminal obligation follows the existing at-most16 accepted callbacks,
+refuses new ordinary admission, and caches the same end disposition for repeated
+callers. A Pi terminal observation that already closed logically publishes end
+before disposing its private handle; accepted lifecycle and durable end are
+separate facts. Neither path waits on an end queued behind itself.
+There is one bounded exchange, no automatic reconnect/re-enrollment or logical
+fallback. A lost acknowledgment does not prove the tombstone failed to commit.
+The client does not persist credentials or provide a durable unsent-end inbox;
+end-ACK outage recovery, renewal and typed cold admission remain unfinished.
+Other curated/helper clients are not silently upgraded to this source contract.
 
 Adapters must capture begin readiness before each genuine new provider request
 and associate its exact final outcome; missing readiness is a coverage gap, not

@@ -42,17 +42,25 @@ pub(crate) fn candidate_manifest() -> Manifest {
     entries.extend(super::persistent_client::entries("extensions/mezzanine"));
     Manifest {
         harness: "pi".into(),
-        revision: 13,
+        revision: 14,
         vendor_version: super::pi::RELEASE.into(),
         entries,
     }
+}
+
+/// Exact revision-13 layout before required source-end acknowledgments.
+pub(super) fn historical_end_manifest() -> Manifest {
+    let mut manifest = candidate_manifest();
+    manifest.revision = 13;
+    super::history::freeze_pre_end_transport(&mut manifest);
+    manifest
 }
 
 /// Exact revision-12 layout before finite pending-report recovery. Both changed
 /// Pi producer slots come from independent pre-edit snapshots; unchanged shared
 /// transport retains its original compiled bytes, not receipt-derived authority.
 pub(super) fn historical_resume_manifest() -> Manifest {
-    let mut manifest = candidate_manifest();
+    let mut manifest = historical_end_manifest();
     manifest.revision = 12;
     for entry in &mut manifest.entries {
         let bytes = match entry.path.as_str() {

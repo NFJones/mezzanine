@@ -1744,9 +1744,18 @@ Failure/capacity/deadline may follow logical closure but MUST NOT claim durabili
 reopen authority or replenish the source's finite write allowance. Public worker
 failures MUST expose fixed bounded persistence-failure text, not raw SQLite,
 trigger, schema or open diagnostics; private original/recovery errors stay cached.
-This server endpoint does not yet make installed clients use required end publication or
-enable cold recovery. Client integration, renewal and cold admission remain
-unfinished; Accepted records describe historical admission, not current liveness.
+The installed shared persistent client (Pi14/OpenCode12) MUST use this explicit
+end method, never logical deregistration fallback. It MUST validate exactly the
+four receipt fields and captured safe generation before reporting durable end.
+Its one terminal publication follows all previously accepted ordinary callbacks
+(at most16); closing MUST reject new callbacks/start/successor admission. Repeated
+end callers and Pi's already-retired terminal observation MUST share that one
+publication without waiting on their own serial successor. Only the existing
+bounded exchange is attempted; a lost/invalid ACK is unavailable even if storage
+committed. No re-enrollment, automatic effect replay, private credential persistence
+or durable unsent-end inbox is implied. Curated/helper paths without this source
+contract remain separate. End-ACK outage recovery, renewal and cold admission
+remain unfinished; Accepted records describe historical admission, not current liveness.
 Existing same-live ownership and namespace-only activation refusals remain in
 force; a stored Accepted flag alone MUST NOT authorize recovery or reporting.
 Declared curated Claude creators MAY use fixed `curated-usage-begin/end`

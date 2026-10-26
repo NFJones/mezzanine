@@ -392,6 +392,22 @@ pub(super) fn persistent_client_v6() -> Vec<u8> {
     include_bytes!("history/persistent_client_v6.mjs").to_vec()
 }
 
+/// Exact shared transport deployed with Pi13/OpenCode11, before durable end.
+/// Only fixed compiled client slots can be frozen, never receipt-provided paths.
+pub(super) fn freeze_pre_end_transport(manifest: &mut super::installer::Manifest) {
+    for entry in &mut manifest.entries {
+        if matches!(
+            entry.path.as_str(),
+            "extensions/mezzanine/persistent_client.mjs"
+                | "plugins/mezzanine/persistent_client.mjs"
+        ) {
+            entry.artifact = super::reconciliation::Artifact::File {
+                bytes: include_bytes!("history/persistent_client_pre_end.mjs").to_vec(),
+            };
+        }
+    }
+}
+
 /// Freezes the pre-resume deployed transport (Pi10/11 and OpenCode10) without
 /// deriving historical byte authority from the new active parser.
 pub(super) fn freeze_pre_resume_transport(manifest: &mut super::installer::Manifest) {
@@ -584,6 +600,10 @@ mod tests {
             "b01a4baee8c198b0edea9bf4adf03ae2c217a74c597d48502694cee69c7267d9"
         );
         for (bytes, expected) in [
+            (
+                include_bytes!("history/persistent_client_pre_end.mjs").as_slice(),
+                "cff4c0f87382004f80f3f3e08fae1dde9e8a5fec20ad9119fb6e84398595ad39",
+            ),
             (
                 include_bytes!("history/request_accounting_v8.mjs").as_slice(),
                 "9e467c36fb253c2d9ab5a234c7260dcc91d68a92b5d4d50aa357ea5836c1ed7b",

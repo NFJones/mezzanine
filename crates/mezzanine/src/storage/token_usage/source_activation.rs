@@ -12,7 +12,7 @@
 //! worker-owned recovery CAS requires positive unchanged-predecessor evidence;
 //! unknown mutations never replay or create/migrate storage merely on read.
 //! A separate explicit server end method requires exact worker proof; automatic
-//! client integration, renewal and cold recovery are not yet implemented.
+//! end-ACK outage recovery, renewal and cold recovery are not yet implemented.
 //! Exhausted or unknown optional writes remain unavailable.
 //! Curated and existing source paths are unchanged. Accepted is historical
 //! admission, not a persisted assertion of current liveness or a control right.

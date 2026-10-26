@@ -31,5 +31,8 @@ try {
   assert.equal((await replacement.presentation("complete")).delivered, true);
   assert.equal(replacement.status().run, original.run);
   assert.equal(replacement.status().epoch, 2);
-  assert.equal((await replacement.end()).delivered, true);
+  const ended = await replacement.end();
+  assert.equal(ended.delivered, true);
+  assert.equal(ended.durable, true);
+  assert.equal(replacement.status().sourceEnd, "durable");
 } finally { old.detach(); replacement?.detach(); clearTimeout(lifetime); }
