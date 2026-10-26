@@ -1728,9 +1728,24 @@ separately cached metadata-only recovery CAS. Its writer MUST recheck the exact
 proposal/revision; changed or unavailable evidence MUST NOT replenish attempts.
 Original and recovery outcomes MUST remain immutable. An uncertain recovery
 result MAY reconcile by exact read-only tombstone evidence, never a third write.
-Exhaustion MUST remain unavailable and MUST NOT reopen native authority. This optional
-pipeline does NOT yet provide a durable end acknowledgment or cold-recovery
-guarantee. Required end publication, renewal and cold admission remain
+Exhaustion MUST remain unavailable and MUST NOT reopen native authority.
+`agent/external/deregister` remains logical-only. The explicit bounded async
+`agent/external/source-end` method MUST authenticate that same exact native
+credential/generation/session, close logically, then retain a required reply
+through off-actor retirement and fresh exact tombstone inspection. Its versioned
+`external-source-end/1` success MUST contain `retired:true`, `durable:true` and the
+original observer `generation`. Supplied success, queued work or a cached result
+without worker inspection MUST NOT authorize that reply. Completion MUST consume
+its exact registry-incarnation reservation and recheck the retired binding,
+connection and original source-slot identity. Pending end publications share the
+32-slot enrollment pool and allow only one physical reply worker per source;
+the latter permit MUST survive registry invalidation and all worker clones.
+Failure/capacity/deadline may follow logical closure but MUST NOT claim durability,
+reopen authority or replenish the source's finite write allowance. Public worker
+failures MUST expose fixed bounded persistence-failure text, not raw SQLite,
+trigger, schema or open diagnostics; private original/recovery errors stay cached.
+This server endpoint does not yet make installed clients use required end publication or
+enable cold recovery. Client integration, renewal and cold admission remain
 unfinished; Accepted records describe historical admission, not current liveness.
 Existing same-live ownership and namespace-only activation refusals remain in
 force; a stored Accepted flag alone MUST NOT authorize recovery or reporting.

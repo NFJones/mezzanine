@@ -628,6 +628,7 @@ pub(crate) const PRIMARY_CONTROL_METHODS: &[&str] = &[
     "agent/external/register",
     "agent/external/renew",
     "agent/external/deregister",
+    "agent/external/source-end",
     "agent/external/usage",
     "agent/external/usage-begin",
     "agent/external/usage-end",

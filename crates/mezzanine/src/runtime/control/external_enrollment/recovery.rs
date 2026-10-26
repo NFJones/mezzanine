@@ -542,6 +542,21 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Selects only an explicitly ended exact source, never an old observer or
+    /// a slot whose acceptance was merely invalidated by control replacement.
+    pub(super) fn retired_external_source_work(
+        &self,
+        digest: [u8; 32],
+    ) -> Option<ExternalSourceRetirementWork> {
+        self.control
+            .external_sources()
+            .anchors
+            .values()
+            .find(|anchor| anchor.digest == digest && anchor.retired)
+            .and_then(|anchor| anchor.activation.as_ref())
+            .and_then(|slot| slot.retired_work())
+    }
+
     /// Preserves the original predecessor/newest-instance guards even when an
     /// old caller tries to bypass explicit recovery through initial enrollment.
     pub(super) fn validate_external_source_initial(

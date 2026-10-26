@@ -50,6 +50,8 @@ mod recovery;
 mod rotation;
 mod source;
 mod source_clock;
+mod source_end;
+pub(crate) use source_end::ExternalSourceEndWork;
 mod source_retirement;
 pub(crate) use source_retirement::ExternalSourceRetirementWork;
 mod targets;

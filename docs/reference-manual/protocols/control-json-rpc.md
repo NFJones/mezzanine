@@ -960,12 +960,41 @@ write. Changed/unknown state and exhausted recovery remain unavailable, with
 native authority closed. This is finite metadata recovery, not callback or
 provider replay, a new namespace or a fresh source lifetime.
 Snapshot/control invalidation alone is not a native lifetime end and
-does not write a tombstone. No new end/durable-recovery acknowledgment is promised:
-required end publication, renewal and typed cold-service recovery remain
-implementation work. Accepted is historical admission, not
+does not write a tombstone. The explicit required server endpoint below is
+distinct from unchanged logical deregistration. Automatic installed-client use,
+renewal and typed cold-service recovery remain implementation work. Accepted is historical admission, not
 current liveness, native authority or
 a new RPC capability. Existing namespace-only activation refusal remains intact;
 schema upgrade does not make full-service restart recovery supported.
+
+`agent/external/source-end` accepts exactly `launch_token`, `generation` and
+`external_session_id` on the authenticated capability-only Unix connection,
+using the same exact producer/UID/session authorization as deregistration.
+It requires one frame of at most 8192 bytes, with a request ID of at most 256
+encoded bytes. Logical closure precedes bounded off-actor metadata work. Only
+fresh worker inspection of the original exact tombstone permits a result:
+
+```json
+{"protocol":"external-source-end/1","retired":true,"durable":true,"generation":1}
+```
+
+This is a historical end acknowledgment, not physical death, renewed telemetry
+or a general capability. The actor rechecks its registry incarnation, reservation,
+original retired observer binding and native connection before publication.
+End replies share the existing 32 pending enrollment slots, with one physical
+publication per original source retained across resets/clones. The total
+publication admission horizon is the existing two seconds; cooperative worker
+custody continues until actual completion even if a caller disconnects.
+Missing metadata, capacity, expired/stale publication or failed storage returns
+an error even if logical closure already occurred. Worker failures expose
+fixed bounded persistence-failure text rather than private SQLite,
+trigger, schema or file-open diagnostics; internal cached errors are retained.
+An identical authorized retry can inspect the original tombstone, never mint another mutation allowance or
+reactivate a source. Legacy/curated/no-metadata sources cannot claim this receipt.
+Synchronous-only dispatch rejects this method rather than performing actor I/O.
+Existing installed clients still use logical deregistration until their explicit
+required-end integration is implemented; no automatic-client/cold-recovery
+guarantee follows from this server endpoint alone.
 
 Adapters must capture begin readiness before each genuine new provider request
 and associate its exact final outcome; missing readiness is a coverage gap, not

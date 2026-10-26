@@ -5,8 +5,8 @@
 //! finite admission pool then retains the private reply through off-actor clock
 //! and SQLite work, followed by a fresh actor/currentness check. Reply loss does
 //! not replay admission or persistence; original write outcomes remain cached.
-//! These internal facts do not yet enable cold recovery: required retirement
-//! acknowledgment/reconciliation and renewal remain unfinished. Source-lifetime
+//! These internal facts do not yet enable cold recovery: installed-client
+//! required-end integration and renewal remain unfinished. Source-lifetime
 //! retirement already closes acceptance and queues an optional exact tombstone.
 //! Optional metadata failure never invents durable success or changes
 //! independently qualified lifecycle rights.

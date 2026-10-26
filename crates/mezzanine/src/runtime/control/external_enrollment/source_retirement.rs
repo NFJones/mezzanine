@@ -11,7 +11,8 @@
 //! the exact committed tombstone or prove the original predecessor uncommitted.
 //! Only the latter allows one separately cached recovery CAS, never blind replay.
 //! Missing/changed/unavailable evidence preserves the original failure. This
-//! owner provides neither unbounded retries nor cold-recovery/end-ACK authority.
+//! owner provides neither unbounded retries nor cold-recovery authority. Required
+//! end replies use a separate actor-fenced publication over this same exact work.
 
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +22,8 @@ pub(super) struct NativeSourceSlot {
     preparation: OnceLock<source::NativeSourcePreparation>,
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
     retired: AtomicBool,
+    /// One required reply worker per original source, across registry resets.
+    end_publication: Arc<tokio::sync::Semaphore>,
     /// Never acquired on actor; serializes actual acceptance/retirement I/O.
     io: std::sync::Mutex<()>,
 }
@@ -51,6 +54,7 @@ impl NativeSourceSlot {
             preparation: OnceLock::new(),
             permit: None,
             retired: AtomicBool::new(false),
+            end_publication: Arc::new(tokio::sync::Semaphore::new(1)),
             io: std::sync::Mutex::new(()),
         }
     }
@@ -101,6 +105,20 @@ impl NativeSourceSlot {
         self.retired.store(true, Ordering::Release);
     }
 
+    /// Clones only an already retired admitted obligation for a required reply.
+    /// The anchor owner additionally proves logical source retirement; control
+    /// invalidation alone must never call this to manufacture an end intent.
+    pub(super) fn retired_work(self: &Arc<Self>) -> Option<ExternalSourceRetirementWork> {
+        let preparation = self.get()?;
+        preparation.admission.get()?;
+        self.retired
+            .load(Ordering::Acquire)
+            .then(|| ExternalSourceRetirementWork {
+                slot: self.clone(),
+                store: preparation.original_store().clone(),
+            })
+    }
+
     /// Atomically latches actor-owned source retirement before proof is dropped.
     /// Only an actually admitted preparation produces one sealed persistence
     /// work item; duplicate retirement cannot queue a second owner.
@@ -142,6 +160,35 @@ impl PartialEq for ExternalSourceRetirementWork {
 impl Eq for ExternalSourceRetirementWork {}
 
 impl ExternalSourceRetirementWork {
+    /// Physical reply custody outlives numeric actor reservations and clones.
+    pub(super) fn reserve_publication(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
+        self.slot
+            .end_publication
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                MezError::new(
+                    crate::error::MezErrorKind::RateLimited,
+                    "external source end already pending",
+                )
+            })
+    }
+
+    /// Verifies current exact tombstone evidence after the existing bounded
+    /// retirement operation; a historical cached success alone is not a reply.
+    pub(super) fn execute_for_publication(&self) -> Result<()> {
+        self.execute()?;
+        let _guard = self
+            .slot
+            .io
+            .lock()
+            .map_err(|_| MezError::invalid_state("external source metadata worker failed"))?;
+        self.slot
+            .get()
+            .ok_or_else(|| MezError::invalid_state("external source preparation disappeared"))?
+            .reconcile_retirement()
+    }
+
     /// Original immutable destination for existing persistence health reporting.
     pub(crate) fn path(&self) -> &std::path::Path {
         self.store.path()

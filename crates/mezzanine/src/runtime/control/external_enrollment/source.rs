@@ -28,7 +28,7 @@ pub(super) struct NativeSourcePreparation {
     acceptance: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
     /// Original retirement result, retained without automatic write replay.
     retirement: OnceLock<Result<crate::storage::token_usage::ExternalSourceActivationReceipt>>,
-    /// Exact target revision captured BEFORE the original CAS can commit.
+    /// Exact target captured before CAS, or from an already committed tombstone.
     retirement_revision: OnceLock<u64>,
     /// Original predecessor stage, never inferred from a later changed row.
     retirement_state: OnceLock<crate::storage::token_usage::ExternalSourceActivationState>,
@@ -156,6 +156,7 @@ impl NativeSourcePreparation {
                 if receipt.state
                     == crate::storage::token_usage::ExternalSourceActivationState::Retired
                 {
+                    let _ = self.retirement_revision.set(receipt.revision);
                     return Ok(receipt);
                 }
                 let revision = receipt

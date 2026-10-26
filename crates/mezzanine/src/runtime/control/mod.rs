@@ -96,6 +96,7 @@ pub(crate) use context::{
     runtime_agent_compaction_replay_context,
 };
 pub(crate) use external_enrollment::ExternalEnrollmentWork;
+pub(crate) use external_enrollment::ExternalSourceEndWork;
 pub(crate) use external_enrollment::ExternalSourceRetirementWork;
 pub(crate) use external_usage::ExternalUsageWork;
 mod external_usage_requests;
@@ -1416,7 +1417,7 @@ impl RuntimeSessionService {
 
         if matches!(
             request.method.as_str(),
-            "agent/external/usage-begin" | "agent/external/usage-end"
+            "agent/external/usage-begin" | "agent/external/usage-end" | "agent/external/source-end"
         ) {
             return runtime_json_rpc_error(
                 &request.id,

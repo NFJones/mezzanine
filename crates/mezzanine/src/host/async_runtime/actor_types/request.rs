@@ -463,6 +463,21 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Original reply owner, possibly disconnected while observation ran.
         reply: oneshot::Sender<Result<AsyncControlInputResult>>,
     },
+    /// Settles exact durable source-end proof before publishing its reply.
+    CompleteExternalSourceEndInput {
+        /// Exact finite reply reservation and sealed historical retirement.
+        work: Box<crate::runtime::ExternalSourceEndWork>,
+        /// Worker result, independently backed by the work's stored proof.
+        result: Result<()>,
+        /// Original uninitialized producer connection.
+        connection: ControlConnectionState,
+        /// Already accepted preceding replies.
+        output_prefix: Vec<u8>,
+        /// Bytes consumed through the original frame.
+        consumed: usize,
+        /// Original reply owner, retained despite disconnection.
+        reply: oneshot::Sender<Result<AsyncControlInputResult>>,
+    },
     /// Completes an actor-admitted external usage commit without replaying work.
     CompleteExternalUsageInput {
         /// Immutable credential-free attribution captured before storage work.
@@ -1525,6 +1540,7 @@ impl AsyncRuntimeRequest {
             | Self::CompleteStatusControlInput { .. }
             | Self::CompleteTerminalStatusCommand { .. }
             | Self::CompleteExternalEnrollmentInput { .. }
+            | Self::CompleteExternalSourceEndInput { .. }
             | Self::CompleteExternalUsageInput { .. }
             | Self::CompleteExternalUsageBeginInput { .. }
             | Self::CompleteSnapshotControlInput { .. }

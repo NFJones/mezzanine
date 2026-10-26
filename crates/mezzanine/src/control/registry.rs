@@ -672,6 +672,15 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         ]),
     },
     ControlMethodSpec {
+        method: "agent/external/source-end",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "launch_token",
+            "generation",
+            "external_session_id",
+        ]),
+    },
+    ControlMethodSpec {
         method: "agent/external/cursor-observe",
         dispatch: ControlDispatchKind::ExternalAgent,
         params_schema: ControlParamsSchema::Allowed(&[

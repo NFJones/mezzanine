@@ -158,6 +158,381 @@ async fn accepted_source() -> Option<(
     Some((fixture, store, publication, ready["result"].clone()))
 }
 
+/// Required end replies need actual worker proof, not supplied success. Logical
+/// closure precedes storage, a fresh identical request may obtain the original
+/// committed tombstone, and duplicate completion cannot reuse a reservation.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_end_requires_worker_proof_and_exact_publication() {
+    let Some((mut fixture, store, publication, ready)) = accepted_source().await else {
+        return;
+    };
+    let end = crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":41,"method":"agent/external/source-end","params":{"launch_token":ready["launch_token"],"generation":ready["generation"],"external_session_id":"session-a"}}).to_string()).unwrap();
+    let slot = publication.source_preparation.clone();
+    let guard = slot.hold_io_for_tests();
+    let first = fixture
+        .service
+        .prepare_external_source_end(&end, &fixture.connection)
+        .unwrap();
+    drop(guard);
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    assert_eq!(state(&database), (1, 2), "actor end performed SQLite work");
+    let rejected: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_source_end(first, Ok(()), &fixture.connection),
+    )
+    .unwrap();
+    assert!(
+        rejected.get("error").is_some(),
+        "supplied success became durable proof"
+    );
+    let work = fixture
+        .service
+        .prepare_external_source_end(&end, &fixture.connection)
+        .unwrap();
+    let duplicate = work.clone();
+    let native = work.clone();
+    let outcome = tokio::task::spawn_blocking(move || native.execute())
+        .await
+        .unwrap();
+    assert!(outcome.is_ok());
+    let body: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_source_end(work, outcome, &fixture.connection),
+    )
+    .unwrap();
+    assert_eq!(body["result"]["protocol"], "external-source-end/1");
+    assert_eq!(body["result"]["durable"], true);
+    assert_eq!(body["result"]["generation"], ready["generation"]);
+    assert_eq!(state(&database), (2, 3));
+    let again: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_source_end(duplicate, Ok(()), &fixture.connection),
+    )
+    .unwrap();
+    assert!(again.get("error").is_some());
+    assert_eq!(
+        fixture.service.persistence.take_token_usage_effects().len(),
+        1,
+        "end replay queued another original retirement"
+    );
+}
+
+/// Both actual framed actor ingress paths retain the reply while I/O is gated.
+/// A second rejected request remains responsive, then real commit precedes the
+/// durable acknowledgment. No parent-supplied capability replaces native proof.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_end_actor_frames_wait_for_commit_and_keep_control_live() {
+    use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+    for (snapshots, lose_reply) in [(false, false), (true, false), (false, true)] {
+        let Some((mut fixture, store, _publication, ready)) = accepted_source().await else {
+            return;
+        };
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let settled = Arc::new(tokio::sync::Notify::new());
+        fixture
+            .service
+            .control
+            .external_agents_mut()
+            .enrollments
+            .settled = Some(settled.clone());
+        fixture
+            .service
+            .control
+            .external_agents_mut()
+            .enrollments
+            .worker_gate = Some((started.clone(), release.clone()));
+        let service = std::mem::replace(&mut fixture.service, RuntimeServiceFixture::new().build());
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let mut owned = tokio::task::JoinSet::new();
+        owned.spawn(actor.run());
+        let body = serde_json::json!({"jsonrpc":"2.0","id":43,"method":"agent/external/source-end","params":{"launch_token":ready["launch_token"],"generation":ready["generation"],"external_session_id":"session-a"}}).to_string();
+        let input = crate::control::encode_control_body(&body);
+        let client = handle.clone();
+        let connection = fixture.connection.clone();
+        let repository = crate::storage::snapshot::SnapshotRepository::new(
+            fixture.directory.join("end-snapshots"),
+        );
+        let pending = tokio::spawn(async move {
+            if snapshots {
+                client
+                    .handle_control_input_for_connection_with_snapshots(
+                        input, 8192, connection, repository,
+                    )
+                    .await
+            } else {
+                client
+                    .handle_control_input_for_connection(input, 8192, connection)
+                    .await
+            }
+        });
+        started.notified().await;
+        assert!(
+            !pending.is_finished(),
+            "durable reply preceded worker proof"
+        );
+        let database = rusqlite::Connection::open(store.path()).unwrap();
+        assert_eq!(state(&database), (1, 2));
+        let invalid = crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","id":44,"method":"agent/external/source-end","params":{}}"#,
+        );
+        let sibling = handle
+            .handle_control_input_for_connection(invalid, 8192, fixture.connection.clone())
+            .await
+            .unwrap();
+        let (body, _) = crate::control::decode_control_frame(&sibling.output, 8192).unwrap();
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&body)
+                .unwrap()
+                .get("error")
+                .is_some()
+        );
+        assert!(!pending.is_finished());
+        if lose_reply {
+            // Receiver cancellation only, not a claimed process/socket crash.
+            pending.abort();
+            assert!(pending.await.unwrap_err().is_cancelled());
+            release.notify_one();
+            settled.notified().await;
+            assert_eq!(state(&database), (2, 3));
+            handle.shutdown().await.unwrap();
+            fixture.service = owned.join_next().await.unwrap().unwrap().service;
+            assert!(
+                fixture
+                    .service
+                    .control
+                    .external_agents()
+                    .enrollments
+                    .pending
+                    .is_empty()
+            );
+            continue;
+        }
+        release.notify_one();
+        let result = pending.await.unwrap().unwrap();
+        assert!(!result.connection.initialized());
+        let (body, consumed) = crate::control::decode_control_frame(&result.output, 8192).unwrap();
+        assert_eq!(consumed, result.output.len());
+        assert!(!body.contains(ready["launch_token"].as_str().unwrap()));
+        let reply: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(reply["result"]["durable"], true);
+        assert_eq!(state(&database), (2, 3));
+        handle.shutdown().await.unwrap();
+        fixture.service = owned.join_next().await.unwrap().unwrap().service;
+    }
+}
+
+/// Failed storage cannot publish durability or restore native authority; a
+/// later request cannot renew an exhausted write allowance. Conversely, real
+/// worker proof cannot publish into a changed observer binding generation.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_end_storage_failure_and_changed_binding_refuse_success() {
+    for failed_store in [false, true] {
+        let Some((mut fixture, store, publication, ready)) = accepted_source().await else {
+            return;
+        };
+        let end = crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":45,"method":"agent/external/source-end","params":{"launch_token":ready["launch_token"],"generation":ready["generation"],"external_session_id":"session-a"}}).to_string()).unwrap();
+        let database = rusqlite::Connection::open(store.path()).unwrap();
+        if failed_store {
+            database.execute_batch("CREATE TRIGGER reject_end AFTER UPDATE ON external_usage_source_activations WHEN NEW.state=2 BEGIN SELECT RAISE(ABORT,'fixture-private-storage-marker'); END;").unwrap();
+        }
+        let work = fixture
+            .service
+            .prepare_external_source_end(&end, &fixture.connection)
+            .unwrap();
+        let native = work.clone();
+        let result = tokio::task::spawn_blocking(move || native.execute())
+            .await
+            .unwrap();
+        assert_eq!(result.is_err(), failed_store);
+        assert!(
+            fixture
+                .service
+                .control
+                .external_agents()
+                .bindings
+                .values()
+                .all(|binding| binding.retired)
+        );
+        if !failed_store {
+            // Negative only: no new native observer is authorized by this edit.
+            fixture
+                .service
+                .control
+                .external_agents_mut()
+                .bindings
+                .values_mut()
+                .next()
+                .unwrap()
+                .generation += 1;
+        }
+        let response =
+            fixture
+                .service
+                .complete_external_source_end(work, result, &fixture.connection);
+        if failed_store {
+            assert!(
+                publication
+                    .source_preparation
+                    .get()
+                    .unwrap()
+                    .retirement_outcome_for_tests()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap_err()
+                    .message()
+                    .contains("fixture-private-storage-marker"),
+                "original private cause was not retained"
+            );
+            assert!(
+                !response.contains("fixture-private-storage-marker"),
+                "private storage diagnostic escaped into source-end reply"
+            );
+        }
+        let reply: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert!(reply.get("error").is_some());
+        assert!(
+            fixture
+                .service
+                .control
+                .external_agents()
+                .enrollments
+                .pending
+                .is_empty()
+        );
+        if failed_store {
+            database.execute_batch("DROP TRIGGER reject_end").unwrap();
+            let retry = fixture
+                .service
+                .prepare_external_source_end(&end, &fixture.connection)
+                .unwrap();
+            let native = retry.clone();
+            let result = tokio::task::spawn_blocking(move || native.execute())
+                .await
+                .unwrap();
+            assert!(result.is_err());
+            let reply: serde_json::Value = serde_json::from_str(
+                &fixture
+                    .service
+                    .complete_external_source_end(retry, result, &fixture.connection),
+            )
+            .unwrap();
+            assert!(reply.get("error").is_some());
+            assert_eq!(
+                state(&database),
+                (1, 2),
+                "new end request replenished recovery writes"
+            );
+        }
+    }
+}
+
+/// Required replies share the existing finite admission pool. Exhaustion never
+/// claims durability; invalidated reservations cannot consume replacement IDs.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_end_capacity_and_registry_fences_are_exact() {
+    let Some((mut fixture, _, _, ready)) = accepted_source().await else {
+        return;
+    };
+    let end = crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":42,"method":"agent/external/source-end","params":{"launch_token":ready["launch_token"],"generation":ready["generation"],"external_session_id":"session-a"}}).to_string()).unwrap();
+    // Capacity metadata only, never a substitute for actual native admission.
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .enrollments
+        .pending
+        .extend((0..MAX_PENDING).map(|id| id as u64));
+    assert!(
+        fixture
+            .service
+            .prepare_external_source_end(&end, &fixture.connection)
+            .is_err()
+    );
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .enrollments
+        .pending
+        .clear();
+    let old = fixture
+        .service
+        .prepare_external_source_end(&end, &fixture.connection)
+        .unwrap();
+    let physical = old.clone();
+    let old_id = fixture.service.control.external_agents().enrollments.next;
+    fixture.service.invalidate_external_enrollment_admissions();
+    assert!(
+        fixture
+            .service
+            .prepare_external_source_end(&end, &fixture.connection)
+            .is_err(),
+        "registry reset released physical reply capacity"
+    );
+    // Reused numeric metadata is not replacement work or native authority.
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .enrollments
+        .pending
+        .insert(old_id);
+    let stale: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_source_end(old, Ok(()), &fixture.connection),
+    )
+    .unwrap();
+    assert!(stale.get("error").is_some());
+    assert_eq!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .len(),
+        1
+    );
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .enrollments
+        .pending
+        .clear();
+    drop(physical);
+    let current = fixture
+        .service
+        .prepare_external_source_end(&end, &fixture.connection)
+        .unwrap();
+    let native = current.clone();
+    let result = tokio::task::spawn_blocking(move || native.execute())
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_source_end(current, result, &fixture.connection),
+    )
+    .unwrap();
+    assert_eq!(body["result"]["durable"], true);
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
+    );
+}
+
 /// Observer handoff preserves the original source receipt and its finite permit.
 /// A stale old handle cannot retire the successor. Current source retirement
 /// queues exactly once and the actual actor persistence service writes Retired3,

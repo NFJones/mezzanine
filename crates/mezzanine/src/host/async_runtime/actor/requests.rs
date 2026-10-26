@@ -1447,6 +1447,19 @@ impl AsyncRuntimeSessionActor {
                     return false;
                 }
                 if let Some((id, consumed, prepared)) =
+                    self.prepare_external_source_end_input(&input, max_content_length, &connection)
+                {
+                    self.dispatch_external_source_end(
+                        id,
+                        prepared,
+                        connection,
+                        Vec::new(),
+                        consumed,
+                        reply,
+                    );
+                    return false;
+                }
+                if let Some((id, consumed, prepared)) =
                     self.prepare_external_usage_begin_input(&input, max_content_length, &connection)
                 {
                     self.dispatch_external_usage_begin(
@@ -1679,6 +1692,19 @@ impl AsyncRuntimeSessionActor {
                     self.prepare_external_enrollment_input(&input, max_content_length, &connection)
                 {
                     self.dispatch_external_enrollment_observation(
+                        id,
+                        prepared,
+                        connection,
+                        output_prefix,
+                        consumed_prefix.saturating_add(consumed),
+                        reply,
+                    );
+                    return false;
+                }
+                if let Some((id, consumed, prepared)) =
+                    self.prepare_external_source_end_input(&input, max_content_length, &connection)
+                {
+                    self.dispatch_external_source_end(
                         id,
                         prepared,
                         connection,
@@ -1925,6 +1951,28 @@ impl AsyncRuntimeSessionActor {
                     consumed,
                     reply,
                 );
+                false
+            }
+            AsyncRuntimeRequest::CompleteExternalSourceEndInput {
+                work,
+                result,
+                connection,
+                mut output_prefix,
+                consumed,
+                reply,
+            } => {
+                let body = self
+                    .service
+                    .complete_external_source_end(*work, result, &connection);
+                output_prefix.extend_from_slice(&encode_control_body(&body));
+                let _ = reply.send(Ok(AsyncControlInputResult {
+                    output: output_prefix,
+                    consumed,
+                    connection,
+                    connection_cleanup: None,
+                    terminal_lifecycle_flush: None,
+                }));
+                self.notify_event_delivery();
                 false
             }
             AsyncRuntimeRequest::CompleteExternalUsageInput {
