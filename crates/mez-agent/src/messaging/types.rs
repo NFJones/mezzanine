@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex};
 use mez_core::ids::{AgentId, IdFactory, PaneId, WindowId};
 use serde::{Deserialize, Serialize};
 
+use super::pending_limits::PendingDeliveryLimits;
+
 /// Defines the MMP PROTOCOL const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -736,6 +738,8 @@ pub struct MessageService {
     /// Pending delivery references share the canonical occurrence with replay.
     /// No payload is cloned when its optional replay reference is evicted.
     pub(super) pending: BTreeMap<MessageSequence, Arc<QueuedEnvelope>>,
+    /// Destination-owned custody policy, never supplied by message snapshots.
+    pub(super) pending_limits: PendingDeliveryLimits,
     /// Retained messages keyed by sequence for indexed delivery lookup.
     pub(super) queued_by_sequence: BTreeMap<MessageSequence, Arc<QueuedEnvelope>>,
     /// Retained sequence numbers grouped by normalized recipient selector.

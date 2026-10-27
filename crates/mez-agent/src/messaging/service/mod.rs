@@ -14,6 +14,7 @@ use std::sync::Arc;
 use mez_core::ids::{AgentId, IdFactory, PaneId, StableId, WindowId};
 
 use super::error::{MessageError, MessageErrorKind, Result};
+use super::pending_limits::PendingDeliveryLimits;
 
 use super::types::{
     AcceptedMessage, AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus,
@@ -88,6 +89,7 @@ impl MessageService {
             accepted_messages: HashMap::new(),
             queue: VecDeque::new(),
             pending: Default::default(),
+            pending_limits: PendingDeliveryLimits::default(),
             queued_by_sequence: Default::default(),
             queued_by_recipient: HashMap::new(),
             subscription_order: Default::default(),
@@ -98,6 +100,24 @@ impl MessageService {
             retention_bytes: retention_bytes.max(1),
             queued_bytes: 0,
         }
+    }
+
+    /// Constructs independent replay and narrowed custody budgets.
+    ///
+    /// Replay limits retain the existing minimum of one. Pending limits must be
+    /// positive and cannot exceed production ceilings; invalid policy returns
+    /// `InvalidArgs` before constructing state. This is a trusted construction
+    /// API, not a wire/config setting. Supply the same policy explicitly when
+    /// restoring snapshots into a narrowed destination.
+    pub fn with_pending_limits(
+        retention_messages: usize,
+        retention_bytes: usize,
+        pending_limits: PendingDeliveryLimits,
+    ) -> Result<Self> {
+        let pending_limits = pending_limits.validate()?;
+        let mut service = Self::with_limits(retention_messages, retention_bytes);
+        service.pending_limits = pending_limits;
+        Ok(service)
     }
 
     /// Runs the accept operation for this subsystem.
@@ -545,6 +565,7 @@ mod tests {
     mod fresh_retirement;
     mod objectives;
     mod pending;
+    mod pending_limits;
     mod recipient_binding;
     mod shared_retirement;
 

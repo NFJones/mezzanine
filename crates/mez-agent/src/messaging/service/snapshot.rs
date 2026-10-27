@@ -103,9 +103,24 @@ impl MessageService {
         }
     }
 
-    /// Rebuilds durable local message protocol state from a validated snapshot.
+    /// Rebuilds validated local message state under production custody ceilings.
+    /// Narrowed destinations must use `from_snapshot_state_with_pending_limits`:
+    /// snapshots contain delivery facts, never authority to select a policy.
     pub fn from_snapshot_state(snapshot: &MessageServiceSnapshot) -> Result<Self> {
-        validate_message_service_snapshot(snapshot)?;
+        Self::from_snapshot_state_with_pending_limits(snapshot, PendingDeliveryLimits::default())
+    }
+
+    /// Restores delivery facts under explicitly supplied destination budgets.
+    /// Invalid policy or over-cap custody (including legacy reconstruction)
+    /// returns `InvalidArgs`; no accepted source is evicted to satisfy a limit.
+    /// Other integrity/legacy-unknown failures retain their existing error kind.
+    /// Policy is not serialized and cannot be enlarged by a snapshot field.
+    pub fn from_snapshot_state_with_pending_limits(
+        snapshot: &MessageServiceSnapshot,
+        pending_limits: PendingDeliveryLimits,
+    ) -> Result<Self> {
+        let pending_limits = pending_limits.validate()?;
+        validate_message_service_snapshot(snapshot, pending_limits)?;
         let registration_floors = snapshot
             .registration_floors
             .as_deref()
@@ -329,6 +344,7 @@ impl MessageService {
             accepted_messages,
             queue,
             pending,
+            pending_limits,
             queued_by_sequence: Default::default(),
             queued_by_recipient: HashMap::new(),
             subscription_order,
@@ -345,7 +361,7 @@ impl MessageService {
         if snapshot.schema_version < 7 {
             // Legacy snapshots cannot bypass new custody bounds. Reconstruct
             // only provable retained source; pre-upgrade evicted mail is unknown.
-            super::pending::validate_pending_snapshot(&service.snapshot_state())?;
+            super::pending::validate_pending_snapshot(&service.snapshot_state(), pending_limits)?;
         }
         Ok(service)
     }

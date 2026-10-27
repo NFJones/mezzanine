@@ -14311,6 +14311,16 @@ provably-unaccepted `capacity` without partial fanout or prior-source mutation.
 These internal ceilings are independent of the replay window; there is no new
 configuration key or acceptance-atomic disk backing in this increment.
 
+Trusted service construction MAY inject independently smaller positive custody
+budgets for occurrences, unique payload bytes, frozen recipient slots and slots
+per exact recipient interval. Zero or values above the production ceilings MUST
+reject before construction/restoration. Destination policy is not message or
+snapshot authority: snapshots MUST NOT choose or enlarge it. Default restoration
+uses production ceilings; narrowed destinations MUST explicitly supply their
+policy at restore. Both current and reconstructed legacy custody MUST fit that
+policy without discarding accepted source. These are construction-time budgets,
+not model/wire/config controls; optional replay retention remains independent.
+
 Schema7 MUST store each canonical source exactly once in replay or custody-only
 rows, including explicit committed-recipient subsets. Commits MUST reference
 genuine exact offers and agree with any still-active exact recipient cursor.

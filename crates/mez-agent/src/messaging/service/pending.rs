@@ -8,15 +8,6 @@
 
 use super::*;
 
-/// Maximum independently pending payload occurrences.
-const MAX_PENDING_MESSAGES: usize = 1000;
-/// Maximum unique pending payload bytes; fanout never multiplies this charge.
-const MAX_PENDING_BYTES: usize = 1024 * 1024;
-/// Maximum frozen obligations while their occurrence remains pending.
-const MAX_PENDING_OBLIGATIONS: usize = 4096;
-/// Maximum pending obligations belonging to any exact recipient interval.
-const MAX_PENDING_PER_RECIPIENT: usize = 256;
-
 impl MessageService {
     /// Checks exact occurrence commit evidence without inferring it from a
     /// mutable cursor. Poison preserves custody and fails closed for selection.
@@ -60,12 +51,12 @@ impl MessageService {
                 *per_recipient.entry(binding).or_insert(0usize) += 1;
             }
         }
-        if self.pending.len() >= MAX_PENDING_MESSAGES
-            || bytes > MAX_PENDING_BYTES
-            || obligations > MAX_PENDING_OBLIGATIONS
+        if self.pending.len() >= self.pending_limits.messages
+            || bytes > self.pending_limits.payload_bytes
+            || obligations > self.pending_limits.recipient_obligations
             || per_recipient
                 .values()
-                .any(|count| *count > MAX_PENDING_PER_RECIPIENT)
+                .any(|count| *count > self.pending_limits.per_recipient)
         {
             return Err(MessageError::new(
                 MessageErrorKind::Capacity,
@@ -170,7 +161,10 @@ impl MessageService {
 }
 
 /// Validates finite custody and explicit commit evidence before restoration.
-pub(super) fn validate_pending_snapshot(snapshot: &MessageServiceSnapshot) -> Result<()> {
+pub(super) fn validate_pending_snapshot(
+    snapshot: &MessageServiceSnapshot,
+    limits: PendingDeliveryLimits,
+) -> Result<()> {
     if snapshot.schema_version < 7 {
         if snapshot.custody_messages.is_some()
             || snapshot.canonical_messages().any(|row| {
@@ -293,12 +287,12 @@ pub(super) fn validate_pending_snapshot(snapshot: &MessageServiceSnapshot) -> Re
                 .or_insert(0usize) += 1;
         }
     }
-    if messages > MAX_PENDING_MESSAGES
-        || bytes > MAX_PENDING_BYTES
-        || obligations > MAX_PENDING_OBLIGATIONS
+    if messages > limits.messages
+        || bytes > limits.payload_bytes
+        || obligations > limits.recipient_obligations
         || per_recipient
             .values()
-            .any(|count| *count > MAX_PENDING_PER_RECIPIENT)
+            .any(|count| *count > limits.per_recipient)
     {
         return Err(MessageError::invalid_args(
             "snapshot MMP pending custody exceeds capacity",

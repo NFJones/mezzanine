@@ -226,6 +226,16 @@ do not add a config knob, disk spool, fair deferred-send scheduler, or durable
 acceptance. Permanent loss of recipients can currently exhaust custody until
 the unfinished terminal-outcome handoff is supplied.
 
+Trusted in-process callers can narrow each custody budget using
+`PendingDeliveryLimits` with `MessageService::with_pending_limits`. Values must
+be positive and cannot exceed the ceilings above. No wire/config control is
+introduced. Policy is destination-owned, not saved in schema7 message state:
+`from_snapshot_state` explicitly uses production defaults, while a narrowed
+destination must use `from_snapshot_state_with_pending_limits` with its policy.
+Over-cap current or reconstructed legacy custody is refused, never truncated.
+Replay limits and payload validation remain independent; a pending byte budget
+does not enlarge the maximum individually acceptable envelope.
+
 The retained recipient set is bounded independently of payload bytes: at most
 4096 records and 1 MiB logical metadata, charging 160 bytes plus each UTF-8 ID's
 length. New sends reserve the whole fanout before sequence allocation. Capacity
