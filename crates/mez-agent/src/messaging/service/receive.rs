@@ -32,7 +32,7 @@ impl MessageService {
             });
         }
         let batch = self
-            .receive_after_indexed(cursor, identity, now_ms, limit, usize::MAX)
+            .receive_after_indexed(cursor, identity, now_ms, limit, usize::MAX, false)
             .batch;
         self.record_delivery_offers(&batch, now_ms)?;
         Ok(batch)
@@ -46,6 +46,7 @@ impl MessageService {
         now_ms: u64,
         limit: usize,
         max_payload_bytes: usize,
+        include_committed: bool,
     ) -> IndexedReceiveSelection {
         let selectors = recipient_selectors(identity);
         let mut next_by_selector = std::collections::BinaryHeap::new();
@@ -82,6 +83,7 @@ impl MessageService {
             if !expired(queued, now_ms)
                 && audience_matches(identity, &queued.audience)
                 && self.accepted_recipient(queued, &identity.agent_id)
+                && (include_committed || !self.recipient_has_committed(queued, &identity.agent_id))
             {
                 if payload_bytes.saturating_add(message_bytes) > max_payload_bytes {
                     break;

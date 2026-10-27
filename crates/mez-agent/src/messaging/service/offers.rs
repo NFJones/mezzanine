@@ -78,7 +78,7 @@ impl MessageService {
 }
 
 /// Reads the pre-reserved slot belonging to one immutable recipient binding.
-fn offered_at(queued: &QueuedEnvelope, recipient: &AgentId) -> Result<Option<u64>> {
+pub(super) fn offered_at(queued: &QueuedEnvelope, recipient: &AgentId) -> Result<Option<u64>> {
     let Some(index) = queued
         .recipient_bindings
         .iter()
@@ -115,7 +115,7 @@ pub(super) fn offers_from_snapshot(row: &MessageQueuedEnvelopeSnapshot) -> Vec<O
 /// Rejects missing, duplicate, foreign or already-expired claimed offers.
 /// Schema5 has provable recipients but no offer evidence: require re-selection.
 pub(super) fn validate_delivery_offer_snapshot(snapshot: &MessageServiceSnapshot) -> Result<()> {
-    for row in &snapshot.retained_messages {
+    for row in snapshot.canonical_messages() {
         if snapshot.schema_version < 6 {
             if row.offered_recipients.is_some() {
                 return Err(MessageError::invalid_args(

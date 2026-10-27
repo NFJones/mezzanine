@@ -1,8 +1,8 @@
 //! Bounded retained-message storage and its derived lookup indexes.
 //!
-//! Enqueue assigns one occurrence sequence before retention pruning. Accepted
-//! message receipts and retired-owner floors remain bounded by the same queue;
-//! no independent delivery store or cursor authority is introduced here.
+//! Enqueue reserves custody before assigning an occurrence or pruning replay.
+//! Replay and pending references share the same immutable occurrence; delivery
+//! indexes, receipts and provenance survive until both references are released.
 
 use super::*;
 
@@ -20,6 +20,7 @@ impl MessageService {
             return Err(MessageError::invalid_args(MMP_PAYLOAD_TOO_LARGE_MESSAGE));
         }
         self.reserve_recipient_bindings(&recipient_bindings, size)?;
+        self.reserve_pending_delivery(&recipient_bindings, size)?;
         let sequence = self.next_sequence;
         self.next_sequence = self
             .next_sequence
@@ -31,15 +32,20 @@ impl MessageService {
             envelope,
             audience,
             offered_at_ms: std::sync::Mutex::new(vec![None; recipient_bindings.len()]),
+            acknowledged: std::sync::Mutex::new(vec![false; recipient_bindings.len()]),
+            ack_expiry_observed_at_ms: std::sync::Mutex::new(None),
             recipient_bindings,
             accepted_at_ms: now_ms,
         });
         self.insert_queue_indexes(&queued);
+        self.pending.insert(sequence, queued.clone());
         self.queue.push_back(queued);
         while self.queue.len() > self.retention_messages || self.queued_bytes > self.retention_bytes
         {
             if let Some(removed) = self.queue.pop_front() {
-                self.remove_queue_indexes(&removed);
+                if !self.pending.contains_key(&removed.sequence) {
+                    self.remove_queue_indexes(&removed);
+                }
                 self.queued_bytes = self
                     .queued_bytes
                     .saturating_sub(removed.envelope.payload.len());
@@ -53,7 +59,12 @@ impl MessageService {
     pub(super) fn rebuild_queue_indexes(&mut self) {
         self.queued_by_sequence.clear();
         self.queued_by_recipient.clear();
-        let retained = self.queue.iter().cloned().collect::<Vec<_>>();
+        let retained = self
+            .queue
+            .iter()
+            .chain(self.pending.values())
+            .cloned()
+            .collect::<Vec<_>>();
         for queued in retained {
             self.insert_queue_indexes(&queued);
         }
@@ -70,7 +81,7 @@ impl MessageService {
     }
 
     /// Removes an evicted occurrence and any empty recipient index.
-    fn remove_queue_indexes(&mut self, queued: &QueuedEnvelope) {
+    pub(super) fn remove_queue_indexes(&mut self, queued: &QueuedEnvelope) {
         self.queued_by_sequence.remove(&queued.sequence);
         if let Some(sequences) = self.queued_by_recipient.get_mut(&queued.envelope.recipient) {
             sequences.remove(&queued.sequence);
@@ -83,8 +94,8 @@ impl MessageService {
     /// Retires idempotency records once their canonical envelopes are evicted.
     pub(super) fn prune_accepted_messages_to_retained_queue(&mut self) {
         let retained_ids = self
-            .queue
-            .iter()
+            .queued_by_sequence
+            .values()
             .map(|queued| queued.envelope.id.clone())
             .collect::<HashSet<_>>();
         self.accepted_messages
@@ -97,7 +108,10 @@ impl MessageService {
     /// avoids all-floors-by-all-mail scans or cloning large objectives per enqueue.
     /// A projection can never synthesize a new sender version or rewrite mail.
     pub(super) fn prune_retired_delivery_floors(&mut self) {
-        let Some(oldest_retained_sequence) = self.queue.front().map(|queued| queued.sequence)
+        let Some(oldest_retained_sequence) = self
+            .queued_by_sequence
+            .first_key_value()
+            .map(|(sequence, _)| *sequence)
         else {
             self.retired_delivery_floors.clear();
             return;
@@ -123,7 +137,7 @@ impl MessageService {
                 (HashMap<&Option<String>, MessageSequence>, MessageSequence),
             > = HashMap::new();
             if !known.is_empty() {
-                for queued in &self.queue {
+                for queued in self.queued_by_sequence.values() {
                     let sender = &queued.envelope.sender;
                     let Some(objectives) = known.get(&sender.agent_id) else {
                         continue;

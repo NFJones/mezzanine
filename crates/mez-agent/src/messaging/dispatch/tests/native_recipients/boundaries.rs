@@ -541,7 +541,7 @@ fn raw_native_ids_preserve_capacity_and_retention_bounds() {
             .iter()
             .map(|message| message.envelope.id.as_str())
             .collect::<Vec<_>>(),
-        ["bounded-1", "bounded-2"]
+        ["bounded-0", "bounded-1", "bounded-2"]
     );
     assert_eq!(
         service

@@ -252,13 +252,16 @@ fn recipient_binding_snapshot_rejects_incomplete_or_conflicting_evidence() {
 
 /// The entire fanout metadata reservation succeeds or fails before allocating
 /// a sequence. A capacity failure preserves every existing receipt and payload;
-/// ordinary FIFO replacement may reuse only the history it actually evicts.
+/// optional FIFO history may release metadata only after all recipients commit.
 #[test]
 fn recipient_binding_capacity_is_atomic_and_reuses_evicted_metadata() {
     let mut service = MessageService::with_limits(1, 1024);
     let sender = service.register_agent(None, None, "sender", Vec::new());
-    for _ in 0..4096 {
-        service.register_agent(None, None, "worker", Vec::new());
+    let workers = (0..4096)
+        .map(|_| service.register_agent(None, None, "worker", Vec::new()))
+        .collect::<Vec<_>>();
+    for worker in &workers {
+        service.subscribe(&worker.agent_id).unwrap();
     }
     assert_eq!(
         service
@@ -272,6 +275,24 @@ fn recipient_binding_capacity_is_atomic_and_reuses_evicted_metadata() {
             .queued_recipients,
         4096
     );
+    let before = service.snapshot_state();
+    assert_eq!(
+        service
+            .accept_at_with_scope(
+                &sender.agent_id,
+                session_mail(&sender, "pending-cannot-evict"),
+                MessageScope::Session,
+                2
+            )
+            .unwrap_err()
+            .kind(),
+        MessageErrorKind::Capacity
+    );
+    assert_eq!(service.snapshot_state(), before);
+    for worker in &workers {
+        service.receive_subscribed(&worker.agent_id, 2, 1).unwrap();
+        service.advance_subscription(&worker.agent_id, 1).unwrap();
+    }
     service
         .accept_at_with_scope(
             &sender.agent_id,

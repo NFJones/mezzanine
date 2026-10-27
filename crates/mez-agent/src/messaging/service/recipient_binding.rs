@@ -10,8 +10,8 @@ use super::*;
 const MAX_RECIPIENT_BINDINGS: usize = 4096;
 /// Conservative logical metadata bound, independently of payload retention.
 const MAX_RECIPIENT_BINDING_BYTES: usize = 1024 * 1024;
-/// Per-record charge covers the ID allocation, sequence and container overhead.
-const RECIPIENT_BINDING_OVERHEAD: usize = 128;
+/// Per-record charge covers ID, binding, offer, commit and container overhead.
+const RECIPIENT_BINDING_OVERHEAD: usize = 160;
 
 /// Computes a conservative checked logical charge for immutable recipient IDs.
 fn binding_bytes<'a>(ids: impl Iterator<Item = &'a str>) -> usize {
@@ -58,8 +58,8 @@ impl MessageService {
     }
 
     /// Reserves all recipient metadata before sequence allocation or mutation.
-    /// Optional history that this enqueue already evicts does not consume the
-    /// candidate budget. This remains replay storage, NOT pending custody.
+    /// Fully committed history that this enqueue already evicts does not
+    /// consume the candidate budget. Pending references are always charged.
     pub(super) fn reserve_recipient_bindings(
         &self,
         incoming: &[(AgentId, MessageSequence)],
@@ -77,7 +77,11 @@ impl MessageService {
         }
         let mut count = incoming.len();
         let mut bytes = binding_bytes(incoming.iter().map(|(id, _)| id.as_str()));
-        for queued in retained {
+        let mut seen = HashSet::new();
+        for queued in retained.chain(self.pending.values()) {
+            if !seen.insert(queued.sequence) {
+                continue;
+            }
             count = count.saturating_add(queued.recipient_bindings.len());
             bytes = bytes.saturating_add(binding_bytes(
                 queued.recipient_bindings.iter().map(|(id, _)| id.as_str()),
@@ -155,7 +159,7 @@ pub(super) fn validate_recipient_bindings(
             )
         })
         .collect::<HashMap<_, _>>();
-    for row in &snapshot.retained_messages {
+    for row in snapshot.canonical_messages() {
         let bindings = row.recipient_bindings.as_ref().ok_or_else(|| {
             MessageError::invalid_args("snapshot MMP accepted recipients are required")
         })?;

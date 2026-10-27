@@ -662,6 +662,13 @@ pub(super) struct QueuedEnvelope {
     /// permits shared read APIs to record offers without mutating any payload,
     /// registration or cursor. Entries cannot outlive this bounded occurrence.
     pub(super) offered_at_ms: Mutex<Vec<Option<u64>>>,
+    /// Exact recipient commits in immutable binding order, independent of a
+    /// later subscription replacement or recipient retirement.
+    pub(super) acknowledged: Mutex<Vec<bool>>,
+    /// Genuine later ACK endpoint selection time that proved this occurrence
+    /// expired before an unoffered prefix was skipped. Not a delivery commit or
+    /// terminal disposition; retained independently of endpoint replay lifetime.
+    pub(super) ack_expiry_observed_at_ms: Mutex<Option<u64>>,
     /// Stores the accepted at ms value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -726,6 +733,9 @@ pub struct MessageService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) queue: VecDeque<Arc<QueuedEnvelope>>,
+    /// Pending delivery references share the canonical occurrence with replay.
+    /// No payload is cloned when its optional replay reference is evicted.
+    pub(super) pending: BTreeMap<MessageSequence, Arc<QueuedEnvelope>>,
     /// Retained messages keyed by sequence for indexed delivery lookup.
     pub(super) queued_by_sequence: BTreeMap<MessageSequence, Arc<QueuedEnvelope>>,
     /// Retained sequence numbers grouped by normalized recipient selector.
@@ -832,11 +842,26 @@ pub struct MessageServiceSnapshot {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub retained_messages: Vec<MessageQueuedEnvelopeSnapshot>,
+    /// Schema7 canonical sources that have pending recipients but no replay
+    /// reference. A source appears here OR in retained_messages, never both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custody_messages: Option<Vec<MessageQueuedEnvelopeSnapshot>>,
     /// Stores the accepted messages value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub accepted_messages: Vec<MessageAcceptedSnapshot>,
+}
+
+impl MessageServiceSnapshot {
+    /// Iterates every canonical source once without allocating or cloning mail.
+    pub(super) fn canonical_messages(
+        &self,
+    ) -> impl Iterator<Item = &MessageQueuedEnvelopeSnapshot> {
+        self.retained_messages
+            .iter()
+            .chain(self.custody_messages.iter().flatten())
+    }
 }
 
 /// Serializable MMP sender or registered agent identity.
@@ -956,6 +981,14 @@ pub struct MessageQueuedEnvelopeSnapshot {
     /// offer before any new ACK; it never infers an offer from acceptance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offered_recipients: Option<Vec<MessageRecipientOfferSnapshot>>,
+    /// Schema7 exact committed recipients. Commits require genuine offer
+    /// evidence and survive cursor/registration retirement independently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acknowledged_recipients: Option<Vec<String>>,
+    /// Schema7 bounded proof that a cumulative ACK legitimately skipped this
+    /// expired, unoffered prefix. This is not an offer or recipient commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ack_expiry_observed_at_ms: Option<u64>,
 }
 
 /// Private selected-occurrence evidence, not an application commit receipt.

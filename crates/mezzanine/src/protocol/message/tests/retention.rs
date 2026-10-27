@@ -70,14 +70,14 @@ fn queue_retention_evicts_oldest_messages() {
     assert_eq!(received[0].id, "m2");
 }
 
-/// Verifies that accepted-message deduplication state follows the bounded
-/// retained delivery queue. Retrying a recently retained message remains
-/// idempotent, but messages evicted from the replay window no longer keep a
-/// cloned envelope alive indefinitely.
+/// Accepted-message deduplication follows canonical pending custody as well as
+/// optional history. Evicting unread replay cannot permit a conflicting retry;
+/// a real recipient ACK releases custody without replaying the sender's effect.
 #[test]
 fn accepted_message_retention_tracks_retained_queue() {
     let mut service = MessageService::with_limits(1, 1024);
     let sender = service.register_agent(None, None, "default", Vec::new());
+    service.subscribe(&sender.agent_id).unwrap();
     let mut first = envelope(sender.clone());
     first.id = "m1".to_string();
     let mut second = envelope(sender.clone());
@@ -92,6 +92,22 @@ fn accepted_message_retention_tracks_retained_queue() {
     let snapshot = service.snapshot_state();
 
     assert_eq!(snapshot.retained_messages.len(), 1);
-    assert_eq!(snapshot.accepted_messages.len(), 1);
-    assert_eq!(snapshot.accepted_messages[0].envelope.id, "m2");
+    assert_eq!(snapshot.accepted_messages.len(), 2);
+    assert_eq!(snapshot.custody_messages.as_ref().unwrap().len(), 1);
+    let selected = service.receive_subscribed(&sender.agent_id, 1, 10).unwrap();
+    assert_eq!(
+        selected
+            .messages
+            .iter()
+            .map(|row| row.envelope.id.as_str())
+            .collect::<Vec<_>>(),
+        ["m1", "m2"]
+    );
+    service
+        .advance_subscription(&sender.agent_id, selected.messages[0].sequence)
+        .unwrap();
+    let committed = service.snapshot_state();
+    assert!(committed.custody_messages.as_ref().unwrap().is_empty());
+    assert_eq!(committed.accepted_messages.len(), 1);
+    assert_eq!(committed.accepted_messages[0].envelope.id, "m2");
 }

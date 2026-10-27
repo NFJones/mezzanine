@@ -11,6 +11,9 @@
 //! Schema6 preserves selected-recipient offers for cumulative ACK validation.
 //! Schema5 restores proven bindings without inventing unknown offers; a fresh
 //! sequenced selection is required before advancing an uncommitted cursor.
+//! Schema7 stores each replay/custody source once and preserves exact recipient
+//! commits independently of retired cursors. Legacy mail supplies only provable
+//! retained custody; unknown evicted source is never reconstructed.
 
 use super::snapshot_validation::validate_message_service_snapshot;
 use super::*;
@@ -63,7 +66,7 @@ impl MessageService {
 
         MessageServiceSnapshot {
             protocol: MMP_PROTOCOL.to_string(),
-            schema_version: 6,
+            schema_version: 7,
             next_sequence: self.next_sequence,
             retention_messages: self.retention_messages,
             retention_bytes: self.retention_bytes,
@@ -84,6 +87,18 @@ impl MessageService {
             subscriptions,
             retired_delivery_floors,
             retained_messages,
+            custody_messages: Some({
+                let replay = self
+                    .queue
+                    .iter()
+                    .map(|row| row.sequence)
+                    .collect::<HashSet<_>>();
+                self.pending
+                    .values()
+                    .filter(|row| !replay.contains(&row.sequence))
+                    .map(|row| queued_envelope_snapshot(row))
+                    .collect()
+            }),
             accepted_messages,
         }
     }
@@ -160,9 +175,15 @@ impl MessageService {
             );
         }
         let mut queue = VecDeque::new();
+        let mut pending = std::collections::BTreeMap::new();
         let mut retained_envelopes = HashMap::new();
         let mut queued_bytes = 0usize;
-        for retained in &snapshot.retained_messages {
+        let replay_sequences = snapshot
+            .retained_messages
+            .iter()
+            .map(|row| row.sequence)
+            .collect::<HashSet<_>>();
+        for retained in snapshot.canonical_messages() {
             if snapshot.schema_version == 1 {
                 continue;
             }
@@ -170,9 +191,42 @@ impl MessageService {
                 &retained.envelope,
                 snapshot.schema_version,
             )?);
-            queued_bytes = queued_bytes.saturating_add(envelope.payload.len());
+            if replay_sequences.contains(&retained.sequence) {
+                queued_bytes = queued_bytes.saturating_add(envelope.payload.len());
+            }
             retained_envelopes.insert(envelope.id.clone(), envelope.clone());
-            queue.push_back(Arc::new(QueuedEnvelope {
+            let acknowledged = retained
+                .recipient_bindings
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .map(|binding| {
+                    if snapshot.schema_version >= 7 {
+                        retained
+                            .acknowledged_recipients
+                            .as_deref()
+                            .unwrap_or(&[])
+                            .contains(&binding.recipient)
+                    } else {
+                        // Legacy offers plus a still-exact subscription prove an ACK;
+                        // absent/retired cursor evidence remains conservatively pending.
+                        registration_floors.iter().any(|(id, floor)| {
+                            id.as_str() == binding.recipient
+                                && *floor == binding.registered_after_sequence
+                        }) && subscriptions.iter().any(|(id, cursor)| {
+                            id.as_str() == binding.recipient
+                                && cursor.last_sequence >= retained.sequence
+                        }) && retained
+                            .offered_recipients
+                            .as_deref()
+                            .unwrap_or(&[])
+                            .iter()
+                            .any(|offer| offer.recipient == binding.recipient)
+                    }
+                })
+                .collect::<Vec<_>>();
+            let is_pending = acknowledged.iter().any(|ack| !ack);
+            let queued = Arc::new(QueuedEnvelope {
                 sequence: retained.sequence,
                 envelope,
                 audience: audience_from_snapshot(retained.audience.as_ref())?,
@@ -190,7 +244,17 @@ impl MessageService {
                     .collect::<Result<Vec<_>>>()?,
                 accepted_at_ms: retained.accepted_at_ms,
                 offered_at_ms: std::sync::Mutex::new(super::offers::offers_from_snapshot(retained)),
-            }));
+                acknowledged: std::sync::Mutex::new(acknowledged),
+                ack_expiry_observed_at_ms: std::sync::Mutex::new(
+                    retained.ack_expiry_observed_at_ms,
+                ),
+            });
+            if is_pending {
+                pending.insert(queued.sequence, queued.clone());
+            }
+            if replay_sequences.contains(&queued.sequence) {
+                queue.push_back(queued);
+            }
         }
         let mut accepted_messages = HashMap::new();
         for accepted in &snapshot.accepted_messages {
@@ -226,12 +290,14 @@ impl MessageService {
         // or keeping independent tombstones after that mail has evicted.
         let recipient_ids = queue
             .iter()
+            .chain(pending.values())
             .filter_map(|queued| match &queued.envelope.recipient {
                 Recipient::Agent(agent_id) => Some(agent_id),
                 _ => None,
             });
         let bound_recipient_ids = queue
             .iter()
+            .chain(pending.values())
             .flat_map(|queued| queued.recipient_bindings.iter().map(|(id, _)| id));
         let ids = IdFactory::after_existing_ids(
             registered
@@ -262,6 +328,7 @@ impl MessageService {
             retired_delivery_floors,
             accepted_messages,
             queue,
+            pending,
             queued_by_sequence: Default::default(),
             queued_by_recipient: HashMap::new(),
             subscription_order,
@@ -275,6 +342,11 @@ impl MessageService {
         service.rebuild_queue_indexes();
         service.prune_accepted_messages_to_retained_queue();
         service.prune_retired_delivery_floors();
+        if snapshot.schema_version < 7 {
+            // Legacy snapshots cannot bypass new custody bounds. Reconstruct
+            // only provable retained source; pre-upgrade evicted mail is unknown.
+            super::pending::validate_pending_snapshot(&service.snapshot_state())?;
+        }
         Ok(service)
     }
 }

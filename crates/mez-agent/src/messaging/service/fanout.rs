@@ -50,6 +50,7 @@ impl MessageService {
                 now_ms,
                 limit_per_recipient.min(remaining_messages),
                 remaining_payload_bytes,
+                false,
             );
             self.fanout_diagnostics.sequence_lookups = self
                 .fanout_diagnostics

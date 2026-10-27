@@ -22,6 +22,15 @@ fn mail(sender: &SenderIdentity, target: &AgentId, id: &str) -> Envelope {
     }
 }
 
+/// Commits genuine offers before testing optional-history provenance release.
+fn commit_through(service: &mut MessageService, target: &AgentId, sequence: u64) {
+    if service.subscription(target).is_none() {
+        service.subscribe_from_retained_start(target).unwrap();
+    }
+    service.receive_subscribed(target, 20, usize::MAX).unwrap();
+    service.advance_subscription(target, sequence).unwrap();
+}
+
 /// A disconnected raw sender must leave byte-equivalent queue/receipt evidence
 /// for other recipients. Restore must reserve its retained numeric identity,
 /// allocate a distinct hello identity and preserve exact receipt idempotency.
@@ -113,6 +122,7 @@ fn fresh_authored_floor_evicts_without_weakening_reusable_pane_floor() {
             11,
         )
         .unwrap();
+    commit_through(&mut service, &target.agent_id, second.sequence);
     assert!(service.retire_agent_identity(&pane.agent_id));
     assert!(
         service
@@ -306,6 +316,7 @@ fn objective_history_fixture() -> (MessageService, SenderIdentity) {
     service
         .retire_fresh_observational_identity(&raw.agent_id)
         .unwrap();
+    commit_through(&mut service, &target.agent_id, 3);
     (service, target)
 }
 
@@ -370,7 +381,7 @@ fn fresh_objective_versions_prune_monotonically_with_authored_fifo() {
 fn fresh_recurring_objective_reorders_after_prefix_eviction() {
     let mut service = MessageService::with_limits(3, 4096);
     let target = service.register_agent(None, None, "target", Vec::new());
-    let cursor = service.subscribe(&target.agent_id).unwrap();
+    service.subscribe(&target.agent_id).unwrap();
     let raw = service
         .register_agent_with_objective(None, None, "raw", Vec::new(), Some("A"))
         .unwrap();
@@ -388,6 +399,8 @@ fn fresh_recurring_objective_reorders_after_prefix_eviction() {
             )
             .unwrap();
     }
+    commit_through(&mut service, &target.agent_id, 3);
+    let cursor = service.subscription(&target.agent_id).unwrap().clone();
     service
         .retire_fresh_observational_identity(&raw.agent_id)
         .unwrap();
@@ -451,9 +464,11 @@ fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
     service.retire_agent_identity(&pane.agent_id);
     let mut legacy = service.snapshot_state();
     legacy.schema_version = 3;
+    legacy.custody_messages = None;
     legacy.registration_floors = None;
     for row in &mut legacy.retained_messages {
         row.recipient_bindings = None;
+        row.acknowledged_recipients = None;
     }
     assert_eq!(legacy.retired_delivery_floors.len(), 1);
     assert!(
@@ -485,7 +500,7 @@ fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
 fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
     let (service, _) = objective_history_fixture();
     let before = service.snapshot_state();
-    assert_eq!(before.schema_version, 6);
+    assert_eq!(before.schema_version, 7);
     let mut corruptions = Vec::new();
     let mut empty = before.clone();
     empty.retired_delivery_floors[0].fresh_sender_versions = Some(Vec::new());
@@ -558,7 +573,7 @@ fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
     unsent_anchor.retired_delivery_floors[0].identity.objective = Some("C unsent".to_string());
     corruptions.push(unsent_anchor);
     let mut unsupported = before.clone();
-    unsupported.schema_version = 7;
+    unsupported.schema_version = 8;
     corruptions.push(unsupported);
     let mut active = before.clone();
     active
@@ -699,6 +714,7 @@ fn fresh_recipient_is_reserved_after_authored_floor_evicts() {
             10,
         )
         .unwrap();
+    commit_through(&mut service, &sender.agent_id, 1);
     service
         .accept_at_with_scope(
             &sender.agent_id,

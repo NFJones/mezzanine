@@ -4,12 +4,13 @@ use super::*;
 use std::sync::Arc;
 
 /// A framed accepted broadcast remains available to a slow subscribed peer
-/// after another matching reusable identity retires. Actual frame encoding and
+/// after another matching reusable identity retires and unrelated traffic evicts
+/// its replay reference. Actual frame encoding and
 /// cursor settlement must deliver the same original occurrence exactly once,
 /// without a resend or a second sender acceptance.
 #[test]
 fn framed_fanout_survives_generic_recipient_retirement() {
-    let mut service = MessageService::default();
+    let mut service = MessageService::with_limits(1, 1024);
     let mut sender = MessageConnection::default();
     handle_mmp_frame(
         &encode_mmp_body(r#"{"protocol":"mmp/1","type":"hello","role":"sender"}"#),
@@ -54,7 +55,30 @@ fn framed_fanout_survives_generic_recipient_retirement() {
         1
     );
     assert!(service.retire_agent_identity(&first.agent_id));
+    let mut pressure = body.clone();
+    pressure["id"] = serde_json::json!("framed-pressure");
+    pressure["recipient"] =
+        serde_json::json!({"agent_id": sender.agent_id.as_ref().unwrap().as_str()});
+    let (reply, _) = handle_mmp_frame(
+        &encode_mmp_body(&pressure.to_string()),
+        4096,
+        &mut service,
+        &mut sender,
+        12,
+    )
+    .unwrap();
+    let (reply, _) = decode_mmp_frame(&reply, 4096).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&reply).unwrap()["status"],
+        "accepted"
+    );
     let snapshot = service.snapshot_state();
+    assert_eq!(snapshot.retained_messages.len(), 1);
+    assert_eq!(snapshot.retained_messages[0].envelope.id, "framed-pressure");
+    assert_eq!(
+        snapshot.custody_messages.as_ref().unwrap()[0].envelope.id,
+        "framed-original"
+    );
     let mut service = MessageService::from_snapshot_state(&snapshot).unwrap();
     assert_eq!(
         service
@@ -93,7 +117,18 @@ fn framed_fanout_survives_generic_recipient_retirement() {
     );
     assert_eq!(
         service.snapshot_state().accepted_messages,
-        snapshot.accepted_messages
+        snapshot
+            .accepted_messages
+            .into_iter()
+            .filter(|accepted| accepted.envelope.id != "framed-original")
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        service
+            .snapshot_state()
+            .custody_messages
+            .unwrap()
+            .is_empty()
     );
 }
 

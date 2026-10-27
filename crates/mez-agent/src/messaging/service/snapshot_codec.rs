@@ -127,6 +127,27 @@ pub(super) fn queued_envelope_snapshot(queued: &QueuedEnvelope) -> MessageQueued
                 })
                 .collect(),
         ),
+        acknowledged_recipients: Some(
+            queued
+                .acknowledged
+                .lock()
+                .ok()
+                .map(|commits| {
+                    queued
+                        .recipient_bindings
+                        .iter()
+                        .zip(commits.iter())
+                        .filter(|(_, committed)| **committed)
+                        .map(|((id, _), _)| id.to_string())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
+        ack_expiry_observed_at_ms: queued
+            .ack_expiry_observed_at_ms
+            .lock()
+            .ok()
+            .and_then(|observed| *observed),
     }
 }
 

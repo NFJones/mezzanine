@@ -22,9 +22,9 @@ fn generic_retirement_preserves_partially_acknowledged_fanout() {
     assert_shared_retirement(true);
 }
 
-/// Non-destructive retirement does not enlarge count/byte replay budgets or
-/// retain receipts/floors forever. Direct mail stays inaccessible after owner
-/// loss, then normal FIFO eviction releases that occurrence and its receipt.
+/// Non-destructive retirement does not enlarge count/byte replay budgets.
+/// Unacknowledged direct mail stays inaccessible after owner loss and retains
+/// custody/receipt/floor pending an explicit terminal delivery disposition.
 #[test]
 fn generic_retirement_keeps_existing_replay_bounds() {
     let mut service = MessageService::with_limits(2, 32);
@@ -69,9 +69,9 @@ fn generic_retirement_keeps_existing_replay_bounds() {
     }
     assert_eq!(service.queue.len(), 2);
     assert_eq!(service.queued_bytes, 32);
-    assert!(!service.accepted_messages.contains_key("retired-direct"));
+    assert!(service.accepted_messages.contains_key("retired-direct"));
     assert!(
-        !service
+        service
             .retired_delivery_floors
             .contains_key(&target.agent_id)
     );

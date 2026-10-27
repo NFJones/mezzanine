@@ -11,7 +11,7 @@ use super::*;
 /// Rejects cross-record contradictions before constructing any live state.
 /// Fresh provenance is explicit schema4 data; legacy schemas never adopt it.
 pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Result<()> {
-    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1..=6) {
+    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1..=7) {
         return Err(MessageError::invalid_args(
             "snapshot MMP state has unsupported protocol or schema version",
         ));
@@ -37,6 +37,7 @@ pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapsho
         }
     }
     let mut presence_ids = HashSet::new();
+    super::pending::validate_pending_snapshot(snapshot)?;
     validate_recipient_bindings(snapshot, &registered_by_id)?;
     super::offers::validate_delivery_offer_snapshot(snapshot)?;
     for presence in &snapshot.presence {
@@ -106,7 +107,7 @@ pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapsho
             }
             if let Some(snapshots) = floor.fresh_sender_versions.as_ref() {
                 if snapshots.is_empty()
-                    || snapshots.len() > snapshot.retained_messages.len()
+                    || snapshots.len() > snapshot.canonical_messages().count()
                     || identity.pane_id.is_some()
                     || identity.window_id.is_some()
                 {
@@ -165,8 +166,11 @@ pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapsho
     if snapshot.schema_version >= 2 {
         let mut retained_sequences = HashSet::new();
         let mut previous_sequence = 0;
-        for retained in &snapshot.retained_messages {
-            if !fresh_sender_versions.is_empty() && retained.sequence <= previous_sequence {
+        for retained in snapshot.canonical_messages() {
+            if snapshot.schema_version < 7
+                && !fresh_sender_versions.is_empty()
+                && retained.sequence <= previous_sequence
+            {
                 return Err(MessageError::invalid_args(
                     "fresh MMP sender evidence requires canonical retained FIFO order",
                 ));
@@ -183,7 +187,13 @@ pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapsho
                 ));
             }
             max_sequence = max_sequence.max(retained.sequence);
-            queued_bytes = queued_bytes.saturating_add(retained.envelope.payload.len());
+            if snapshot
+                .retained_messages
+                .iter()
+                .any(|row| std::ptr::eq(row, retained))
+            {
+                queued_bytes = queued_bytes.saturating_add(retained.envelope.payload.len());
+            }
             let envelope = envelope_from_snapshot(&retained.envelope, snapshot.schema_version)?;
             if registered_by_id.get(envelope.sender.agent_id.as_str())
                 != Some(&&retained.envelope.sender)

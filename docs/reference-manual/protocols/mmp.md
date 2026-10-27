@@ -201,18 +201,39 @@ other recipients' offer/cursor evidence. In particular, retirement of a fast
 fanout recipient cannot delete a slow recipient's unread copy. The existing
 delivery floor and frozen registration bindings prevent a replacement owner or
 late matching registration from acquiring old mail. Direct-only retained mail
-may remain as bounded replay evidence even after its recipient retires; it is
-not evidence of delivery or a terminal disposition. This does not implement
-history-independent pending custody or expiry/retirement outcome handoff.
+may remain as bounded evidence even after its recipient retires; it is not
+evidence of delivery or a terminal disposition. Unsatisfied expired/retired
+obligations remain conservatively charged: typed expiry/retirement outcome
+handoff is still unfinished, not silently treated as a successful ACK.
+
+Accepted same-runtime custody is independent of optional replay history. The
+pending and replay references share the original immutable occurrence; replay
+FIFO eviction cannot discard unread direct mail or a slow fanout recipient's
+obligation, acceptance receipt, offer evidence or required sender provenance.
+Sequenced receive/fanout returns custody-only mail in original acceptance order.
+Unsequenced replay/history views remain optional bounded history. Subscribing
+late cannot skip accepted unread mail; repeated subscriptions preserve their
+cursor. Explicit reconstruction can inspect committed retained evidence without
+redelivering it as new work.
+
+Internal pending ceilings are 1000 occurrences, 1 MiB unique payload, 4096 frozen
+recipient slots and 256 slots per exact recipient interval, independently of
+the replay window. Fanout charges the shared payload once; committed slots are
+conservatively charged until the last recipient commits the occurrence. The
+last exact offered ACK releases pending custody, not a remaining replay
+reference. Capacity is reserved before assigning sequence/success. These limits
+do not add a config knob, disk spool, fair deferred-send scheduler, or durable
+acceptance. Permanent loss of recipients can currently exhaust custody until
+the unfinished terminal-outcome handoff is supplied.
 
 The retained recipient set is bounded independently of payload bytes: at most
-4096 records and 1 MiB logical metadata, charging 128 bytes plus each UTF-8 ID's
+4096 records and 1 MiB logical metadata, charging 160 bytes plus each UTF-8 ID's
 length. New sends reserve the whole fanout before sequence allocation. Capacity
 rejection (`code: "capacity"`, `status: "rejected"`, no accepted receipt) leaves
-the prior queue unchanged. Only history that the ordinary replay count/byte
-policy would actually evict may release metadata for the new send. This is not
-yet history-independent pending custody: existing FIFO replay eviction and the
-socket write-versus-application-commit limitation below remain unchanged.
+the prior accepted set unchanged. Only fully committed history that the ordinary
+replay count/byte policy actually evicts may release metadata for the new send.
+Binding/offer/commit metadata counts the deduplicated replay/custody union.
+The socket write-versus-application-commit limitation below remains unchanged.
 
 `recipient` is an object with exactly one supported selector: `agent_id`,
 `pane_id`, `window_id`, `role`, `capability`, `group`, or `session: true`.
@@ -303,13 +324,13 @@ at shutdown; independently registered pane-less identities remain untouched.
 Cleanup ownership corruption is critical and reaches completion after pane
 termination, rather than being reported as a successful peer closure.
 
-Private MMP snapshot schema6 retains schema4's distinction of fresh raw sender provenance from
+Private MMP snapshot schema7 retains schema4's distinction of fresh raw sender provenance from
 reusable delivery floors. It preserves the exact objective versions in retained
 authored mail, including when the current objective changed again without a
 send. Every version must be referenced by canonical mail and agree on immutable
 agent/project/pane/window/role/capabilities; mail, receipts and audience are not
-rewritten. FIFO eviction removes only unreferenced versions, then the empty raw
-floor. This bounds version count by retained authored occurrences, not by the
+rewritten. Releasing the final replay/custody reference removes unreferenced
+versions, then the empty raw floor. This bounds version count by canonical authored occurrences, not by the
 payload-only byte budget. Schemas1–3 reject the fresh-version field even when
 empty. Active/reusable-owner exact validation is unchanged; this is not general
 live-owner objective-history repair or a raw reconnect/rebind operation.
@@ -338,8 +359,26 @@ before new cursor advancement. One optional clock slot is preallocated per
 accepted binding within the existing metadata reservation, not an unbounded ACK
 history. Offers remain tied to the original registration through retirement and
 opaque-ID reuse, and cannot establish application consumption or reconnect
-rights. Replay FIFO eviction still drops unread mail: independent pending
-custody remains unimplemented, so this fence alone does not repair that loss.
+rights.
+
+Schema7 adds custody-only sources and exact committed-recipient subsets. Each
+source appears once, in either replay or custody-only rows; indexes and pending
+references are rebuilt from it. Missing/duplicate/foreign sources, forged commits
+without genuine offers, commits beyond a still-exact live cursor, inconsistent
+receipts and over-cap custody reject before adoption.
+An active exact cursor cannot hide explicitly uncommitted live mail. Legitimate
+unoffered expired prefixes retain a bounded ACK-endpoint expiry observation,
+even after that endpoint leaves replay. This is neither a recipient offer nor
+a commit or terminal outcome; invalid TTL/exclusion evidence rejects.
+Snapshot round trips retain
+fast-recipient commits even after that recipient retires, leaving slow recipients
+independent. Schema5/6 can reconstruct only provable retained obligations, not
+unknown evicted history. Unknown commits remain conservatively pending only
+where the cursor permits selection. An advanced exact schema5/6 cursor without
+the retained recipient's own offer evidence explicitly refuses restoration,
+rather than inventing commits, rewinding or adopting inaccessible pending mail.
+Over-cap legacy state also refuses rather than dropping source. Snapshot support
+is not an acceptance-atomic disk write or transparent application/workflow restart.
 
 ## Payloads and MAAP bridge
 

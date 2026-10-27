@@ -20,7 +20,7 @@ pub enum MessageErrorKind {
     NotFound,
     /// Authenticated connection state does not authorize the operation.
     Forbidden,
-    /// A bounded recipient-metadata reservation was not accepted.
+    /// A bounded recipient-metadata or pending-custody reservation was not accepted.
     Capacity,
 }
 

@@ -1154,7 +1154,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
         .retire_fresh_observational_identity(&raw.agent_id)
         .unwrap();
     let message_state = message_service.snapshot_state();
-    assert_eq!(message_state.schema_version, 6);
+    assert_eq!(message_state.schema_version, 7);
     assert_eq!(
         message_state.retired_delivery_floors[0]
             .fresh_sender_versions

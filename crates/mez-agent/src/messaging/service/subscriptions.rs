@@ -6,14 +6,25 @@
 use super::*;
 
 impl MessageService {
-    /// Subscribes a registered identity to messages after the current high-water.
+    /// Subscribes after current history without skipping accepted unread mail.
     pub fn subscribe(&mut self, recipient: &AgentId) -> Result<DeliveryCursor> {
+        if let Some(cursor) = self.subscriptions.get(recipient) {
+            return Ok(cursor.clone());
+        }
         self.registered.get(recipient).ok_or_else(|| {
             MessageError::forbidden("delivery subscription requires registered agent")
         })?;
         let cursor = DeliveryCursor {
             recipient: recipient.clone(),
-            last_sequence: self.last_sequence(),
+            last_sequence: self
+                .pending
+                .values()
+                .find(|queued| {
+                    self.accepted_recipient(queued, recipient)
+                        && !self.recipient_has_committed(queued, recipient)
+                })
+                .map(|queued| queued.sequence - 1)
+                .unwrap_or(self.last_sequence()),
         };
         self.subscription_order
             .insert(recipient.as_str().to_string(), recipient.clone());
@@ -24,6 +35,9 @@ impl MessageService {
     /// Subscribes from retained history, preserving any retired-owner floor.
     /// Unlike [`Self::subscribe`], unread messages accepted while idle remain visible.
     pub fn subscribe_from_retained_start(&mut self, recipient: &AgentId) -> Result<DeliveryCursor> {
+        if let Some(cursor) = self.subscriptions.get(recipient) {
+            return Ok(cursor.clone());
+        }
         self.registered.get(recipient).ok_or_else(|| {
             MessageError::forbidden("delivery subscription requires registered agent")
         })?;
@@ -83,7 +97,7 @@ impl MessageService {
             last_sequence: 0,
         };
         Ok(self
-            .receive_after_indexed(&start, identity, now_ms, usize::MAX, usize::MAX)
+            .receive_after_indexed(&start, identity, now_ms, usize::MAX, usize::MAX, true)
             .batch
             .messages
             .into_iter()

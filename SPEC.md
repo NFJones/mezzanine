@@ -14267,7 +14267,7 @@ live or historical delivery rights. Existing availability, selector and project
 audience checks continue to constrain delivery; frozen membership is not a
 permission grant.
 
-Private message snapshot schema6 MUST preserve active registration sequence
+Private message snapshot schema7 MUST preserve active registration sequence
 floors and each retained occurrence's exact recipient bindings. The floor is
 the acceptance high-water at registration: any mail belonging to a previous
 registration falls at or below the replacement floor. Restoring schemas2–4 with
@@ -14284,10 +14284,51 @@ envelope, its acceptance receipt, or another recipient's offer/cursor evidence.
 Reusable identity retirement MUST preserve its delivery floor while relevant
 canonical replay remains. A replacement registration and late selector match
 MUST NOT acquire the retired registration's mail. Retained direct-only mail MAY
-remain as bounded replay evidence without a live recipient; that does not prove
-delivery or a terminal outcome. Replay-pressure pending custody and explicit
-expiry/retirement dispositions are separate guarantees, not supplied by this
-non-destructive retirement transition.
+remain as bounded evidence without a live recipient; that does not prove
+delivery or a terminal outcome. Unsatisfied retired/expired obligations MUST
+remain conservatively charged until an explicit terminal-outcome owner settles
+them; retirement or expiry alone MUST NOT fabricate recipient commit. Typed
+expiry/retirement disposition handoff remains a separate unfinished guarantee.
+
+Accepted same-runtime delivery custody MUST be independent of optional replay
+retention. A pending reference and replay reference MUST share the original
+immutable occurrence, sequence, audience and frozen recipient bindings. Replay
+count/byte eviction MUST NOT release an unsatisfied obligation, its acceptance
+receipt, offer evidence or required sender provenance. Sequenced live receive
+and fanout MUST select unread custody-only occurrences in acceptance order.
+Unsequenced replay/history views remain bounded optional history, not delivery
+acknowledgements. New or repeated subscriptions MUST NOT skip accepted unread
+mail or rewind committed delivery. Reconstruction may explicitly inspect
+committed retained evidence without creating a new delivery obligation.
+
+Custody MUST reserve before sequence allocation or success: at most 1000 pending
+occurrences, 1 MiB unique pending payload, 4096 frozen recipient slots and 256
+slots per exact recipient interval. Shared payload bytes are charged once.
+Conservatively, committed fanout slots remain charged until the occurrence's
+last recipient commits. The final exact offered ACK releases the pending
+reference; optional replay may still retain it. A full budget MUST return typed
+provably-unaccepted `capacity` without partial fanout or prior-source mutation.
+These internal ceilings are independent of the replay window; there is no new
+configuration key or acceptance-atomic disk backing in this increment.
+
+Schema7 MUST store each canonical source exactly once in replay or custody-only
+rows, including explicit committed-recipient subsets. Commits MUST reference
+genuine exact offers and agree with any still-active exact recipient cursor.
+An active exact cursor MUST NOT conceal an explicitly uncommitted live row.
+A genuinely skipped unoffered expired prefix MUST retain a bounded observed
+expiry witness from the later ACK endpoint, independently of that endpoint's
+replay lifetime. The witness MUST agree with the original TTL boundary and MUST
+NOT be represented as an offer, recipient commit or terminal disposition.
+Restore MUST validate source ordering/uniqueness, receipts, bindings, offers,
+commits and all custody/metadata bounds before adoption. Schema5/6 restoration
+can reconstruct only provable retained obligations, conservatively retaining
+unknown commits only where the cursor still permits selection; it MUST NOT
+invent previously evicted source. A schema5/6 exact cursor beyond retained mail
+without its own offer evidence MUST explicitly refuse custody restoration:
+neither infer a commit, rewind the cursor, nor strand live pending capacity.
+Over-cap legacy custody MUST refuse rather than discard accepted mail. Snapshot
+capture remains distinct from acceptance-atomic durability or transparent
+workflow restart.
 
 New recipient cursor advancement MUST end at an occurrence actually offered
 to that exact acceptance-time recipient registration. Every earlier retained
@@ -14307,15 +14348,17 @@ selection before new ACK advancement. Offer metadata is pre-reserved as one
 optional clock slot per accepted binding within the existing logical metadata
 charge; receive MUST NOT allocate another growing offer history. Offer evidence
 is not recipient application consumption, same-daemon reconnect authority,
-history-independent pending custody or acceptance-atomic disk durability.
+or acceptance-atomic disk durability.
 
 Retained recipient metadata has independent internal ceilings of 4096 records
-and 1 MiB logical charged bytes (128 bytes plus the UTF-8 ID length per record).
-An enqueue MAY reuse only metadata belonging to replay rows that its existing
-count/payload policy actually evicts. Reservation failure MUST reject the entire
+and 1 MiB logical charged bytes (160 bytes plus the UTF-8 ID length per record).
+The charge includes binding, offer, commit and container overhead across the
+deduplicated replay/custody union. An enqueue MAY reuse only metadata belonging
+to fully committed replay rows that its count/payload policy actually evicts.
+Reservation failure MUST reject the entire
 send with `capacity` before sequence allocation or receipt/queue mutation; no
-partial fanout or accepted result is permitted. These are replay metadata
-bounds, not a pending-delivery spool or an acceptance-atomic disk guarantee.
+partial fanout or accepted result is permitted. These are in-memory metadata
+bounds, not a disk spool or an acceptance-atomic persistence guarantee.
 
 For messages sent from one sender to one recipient over one logical channel,
 delivery order MUST match acceptance order.

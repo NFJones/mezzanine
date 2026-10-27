@@ -42,6 +42,7 @@ use recipient_binding::validate_recipient_bindings;
 use snapshot_codec::*;
 mod fanout;
 mod offers;
+mod pending;
 mod receive;
 mod retention;
 mod subscriptions;
@@ -86,6 +87,7 @@ impl MessageService {
             retired_delivery_floors: HashMap::new(),
             accepted_messages: HashMap::new(),
             queue: VecDeque::new(),
+            pending: Default::default(),
             queued_by_sequence: Default::default(),
             queued_by_recipient: HashMap::new(),
             subscription_order: Default::default(),
@@ -226,7 +228,7 @@ impl MessageService {
         let mut last_authored: Option<MessageSequence> = None;
         let mut versions = Vec::new();
         let mut objectives = HashSet::new();
-        for queued in &self.queue {
+        for queued in self.queued_by_sequence.values() {
             if queued.envelope.sender.agent_id == *agent_id {
                 if !same_immutable_sender(&queued.envelope.sender, identity) {
                     return Err(MessageError::invalid_state(
@@ -290,8 +292,8 @@ impl MessageService {
     /// change another recipient's cursor, or forget its acceptance receipt.
     /// The reusable delivery floor and frozen registration bindings prevent a
     /// later owner of this opaque id from acquiring old live or historical mail.
-    /// Ordinary replay budgets still bound retained source; this transition
-    /// does not supply pending custody or a terminal delivery disposition.
+    /// Replay and pending custody retain source independently; this transition
+    /// does not supply a terminal delivery disposition.
     pub fn retire_agent_identity(&mut self, agent_id: &AgentId) -> bool {
         self.retire_observational_identity(agent_id)
     }
@@ -325,7 +327,9 @@ impl MessageService {
         if sequence <= cursor.last_sequence {
             return Ok(cursor.clone());
         }
-        self.validate_delivery_ack(recipient, cursor.last_sequence, sequence)?;
+        let after = cursor.last_sequence;
+        self.validate_delivery_ack(recipient, after, sequence)?;
+        self.commit_pending_ack(recipient, after, sequence)?;
         // Validation above proves this exact subscription exists; no mutation
         // or callback intervenes before the actor-owned cursor commit.
         let cursor = self
@@ -336,11 +340,8 @@ impl MessageService {
         Ok(cursor.clone())
     }
 
-    /// Runs the receive for operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Returns optional unsequenced replay history, not the pending inbox.
+    /// Use sequenced receive/fanout for delivery and its exact offer evidence.
     pub fn receive_for(&self, recipient: &AgentId, now_ms: u64) -> Vec<Envelope> {
         self.queue
             .iter()
@@ -543,6 +544,7 @@ mod tests {
     mod acknowledgements;
     mod fresh_retirement;
     mod objectives;
+    mod pending;
     mod recipient_binding;
     mod shared_retirement;
 
@@ -864,7 +866,7 @@ mod tests {
                 .unwrap();
 
             let snapshot = service.snapshot_state();
-            assert_eq!(snapshot.schema_version, 6);
+            assert_eq!(snapshot.schema_version, 7);
             assert!(
                 snapshot
                     .registered_agents
@@ -1097,6 +1099,7 @@ mod tests {
 
             let mut legacy = service.snapshot_state();
             legacy.schema_version = 1;
+            legacy.custody_messages = None;
             legacy.registration_floors = None;
             for identity in &mut legacy.registered_agents {
                 identity.project_scope = None;
@@ -1108,6 +1111,7 @@ mod tests {
                 message.audience = None;
                 message.recipient_bindings = None;
                 message.offered_recipients = None;
+                message.acknowledged_recipients = None;
                 message.envelope.sender.project_scope = None;
             }
             for message in &mut legacy.accepted_messages {
