@@ -337,3 +337,59 @@ fn pending_limits_do_not_retarget_replay_or_payload_validation() {
         );
     }
 }
+
+/// Recovery can inspect only genuine offers for the current recipient interval,
+/// including custody-only mail after replay eviction and TTL expiry. Inspection
+/// must not create an offer for another row or advance the cursor.
+#[test]
+fn pending_offered_reconciliation_survives_replay_eviction_and_expiry() {
+    let mut service =
+        MessageService::with_pending_limits(1, 1024, PendingDeliveryLimits::default()).unwrap();
+    let sender = service.register_agent(None, None, "sender", Vec::new());
+    let target = service.register_agent(None, None, "target", Vec::new());
+    service
+        .subscribe_from_retained_start(&target.agent_id)
+        .unwrap();
+    let mut first = envelope(&sender, "offered-expiring", 1);
+    first.ttl_ms = Some(10);
+    let accepted = service
+        .accept_at_with_scope(&sender.agent_id, first, MessageScope::Session, 100)
+        .unwrap();
+    service
+        .receive_subscribed(&target.agent_id, 100, 1)
+        .unwrap();
+    service
+        .accept_at_with_scope(
+            &sender.agent_id,
+            envelope(&sender, "unoffered", 1),
+            MessageScope::Session,
+            100,
+        )
+        .unwrap();
+    assert_eq!(service.queue.len(), 1);
+    let before = service.snapshot_state();
+    let offered = service
+        .offered_uncommitted_deliveries(&target.agent_id)
+        .unwrap();
+    assert_eq!(offered.len(), 1);
+    assert_eq!(offered[0].sequence, accepted.sequence);
+    assert_eq!(service.snapshot_state(), before);
+    assert!(
+        service
+            .receive_subscribed(&target.agent_id, 111, 10)
+            .unwrap()
+            .messages
+            .iter()
+            .all(|row| row.sequence != accepted.sequence)
+    );
+    service
+        .advance_subscription(&target.agent_id, accepted.sequence)
+        .unwrap();
+    assert!(
+        service
+            .offered_uncommitted_deliveries(&target.agent_id)
+            .unwrap()
+            .iter()
+            .all(|row| row.sequence != accepted.sequence)
+    );
+}

@@ -2,10 +2,48 @@
 //!
 //! Live reads retain presence and TTL filtering. Historical reconstruction
 //! deliberately preserves acceptance-time evidence without advancing cursors.
+//! Interrupted native commits can inspect existing exact offers outside live
+//! filtering; that projection creates no authority and requires independent
+//! canonical-context evidence before the caller acknowledges an occurrence.
 
 use super::*;
 
 impl MessageService {
+    /// Projects previously offered, uncommitted occurrences for exact-owner
+    /// context reconciliation, independent of current TTL and presence. This
+    /// neither creates offers nor acknowledges delivery; callers must prove
+    /// canonical commit before advancing the subscription. Pending custody is
+    /// included even when disposable replay has evicted the occurrence.
+    /// Returns Forbidden without a subscription and InvalidState when offer
+    /// evidence is unavailable; no acknowledgement state changes on error.
+    pub fn offered_uncommitted_deliveries(
+        &self,
+        recipient: &AgentId,
+    ) -> Result<Vec<SequencedEnvelope>> {
+        let cursor = self
+            .subscriptions
+            .get(recipient)
+            .ok_or_else(|| MessageError::forbidden("agent has no delivery subscription"))?;
+        self.queued_by_sequence
+            .range((
+                std::ops::Bound::Excluded(cursor.last_sequence),
+                std::ops::Bound::Unbounded,
+            ))
+            .filter(|(_, row)| {
+                self.accepted_recipient(row, recipient)
+                    && !self.recipient_is_terminal(row, recipient)
+            })
+            .filter_map(|(_, row)| match super::offers::offered_at(row, recipient) {
+                Ok(Some(_)) => Some(Ok(SequencedEnvelope {
+                    sequence: row.sequence,
+                    envelope: row.envelope.clone(),
+                })),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect()
+    }
+
     /// Subscribes after current history without skipping accepted unread mail.
     pub fn subscribe(&mut self, recipient: &AgentId) -> Result<DeliveryCursor> {
         if let Some(cursor) = self.subscriptions.get(recipient) {

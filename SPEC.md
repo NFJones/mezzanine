@@ -14313,6 +14313,12 @@ and originating-action/workflow handoff integration remain unfinished; the
 existing product sweep does not yet call this API. Pending terminal candidates
 therefore remain conservatively charged until a trusted caller maintains them.
 
+Before live TTL filtering, the native delivery sweep MUST reconcile previously
+offered occurrences already present as canonical peer-message events in the
+same agent's context. This recovery MUST include custody-only occurrences and
+MUST NOT create offers, context events or provider work. An offered occurrence
+without canonical commit MUST NOT be acknowledged by reconciliation.
+
 Accepted same-runtime delivery custody MUST be independent of optional replay
 retention. A pending reference and replay reference MUST share the original
 immutable occurrence, sequence, audience and frozen recipient bindings. Replay

@@ -22,5 +22,6 @@ mod objectives;
 mod presentation;
 mod receive_commit;
 mod snapshot_recovery;
+mod terminal_maintenance;
 mod turn_lifecycle;
 mod unavailable_recovery;

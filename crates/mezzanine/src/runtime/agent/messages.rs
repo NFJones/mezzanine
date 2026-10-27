@@ -209,6 +209,62 @@ impl RuntimeSessionService {
         Ok(committed)
     }
 
+    /// Finishes interrupted context-before-cursor commits before live TTL
+    /// filtering hides their source. Only exact offered occurrences with a
+    /// canonical event in their owning agent's context authorize ACK; the
+    /// first uncommitted own occurrence stops cumulative advancement. No event,
+    /// turn, provider work or presentation is created by reconciliation.
+    fn reconcile_committed_runtime_peer_messages(&mut self) -> Result<()> {
+        let recipients = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .map(|turn| turn.agent_id.clone())
+            .collect::<BTreeSet<_>>();
+        for recipient in recipients {
+            let Some(recipient) = AgentId::opaque(recipient) else {
+                continue;
+            };
+            if self
+                .control
+                .message_service()
+                .subscription(&recipient)
+                .is_none()
+            {
+                continue;
+            }
+            let offered = self
+                .control
+                .message_service()
+                .offered_uncommitted_deliveries(&recipient)?;
+            for message in offered {
+                let label = crate::runtime::control::runtime_peer_message_block_label(
+                    message.sequence,
+                    &message.envelope.id,
+                );
+                let committed = self.agent_turn_ledger().turns().iter().any(|turn| {
+                    turn.agent_id == recipient.as_str()
+                        && self
+                            .agent_turn_contexts()
+                            .get(&turn.turn_id)
+                            .is_some_and(|context| {
+                                context.blocks().iter().any(|block| {
+                                    block.source == mez_agent::ContextSourceKind::PeerMessage
+                                        && block.label == label
+                                })
+                            })
+                });
+                if !committed {
+                    break;
+                }
+                self.control
+                    .message_service_mut()
+                    .advance_subscription(&recipient, message.sequence)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Fairly reacquires capacity and settles one parked peer wait after model
     /// mail or authoritative owned-child failure committed to its turn context.
     ///
@@ -355,6 +411,11 @@ impl RuntimeSessionService {
                 orphan_groups.push((recipient, turn_id, identities));
             }
         }
+        // Decide admission from the original live delivery evidence, then
+        // settle canonical transport commits before orphan cleanup can remove
+        // their contexts. ACK recovery must not grant an expired queued turn
+        // new scheduler authority.
+        self.reconcile_committed_runtime_peer_messages()?;
         for (_, _, identities) in &orphan_groups {
             for identity in identities {
                 self.agent

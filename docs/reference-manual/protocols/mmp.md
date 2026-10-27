@@ -251,6 +251,12 @@ do not add a config knob, disk spool, fair deferred-send scheduler, or durable
 acceptance. Permanent loss of recipients can still exhaust product custody
 until the lower terminal maintenance/handoff is integrated there.
 
+Native sweeps first reconcile interrupted context-before-cursor commits using
+the exact previously offered occurrence, including custody outside replay.
+Expiry does not turn an already canonical input into undelivered mail. An offer
+without a canonical peer event remains unacknowledged; reconciliation itself
+does not create context or wake a provider.
+
 Trusted in-process callers can narrow each custody budget using
 `PendingDeliveryLimits` with `MessageService::with_pending_limits`. Values must
 be positive and cannot exceed the ceilings above. No wire/config control is

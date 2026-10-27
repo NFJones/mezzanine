@@ -503,7 +503,9 @@ fn runtime_receive_commit_fault_windows_recover_one_context_cursor_and_row() {
 /// recoverable fault, but the durable cursor remains before the delivery. A
 /// later sweep at an expired timestamp must neither enqueue scheduler work nor
 /// claim a provider task. This prevents a partial receive commit from becoming
-/// executable solely because its turn metadata happened to be present.
+/// executable solely because its turn metadata happened to be present. The
+/// already canonical input is nevertheless acknowledged before cleanup so
+/// terminal maintenance cannot misclassify it as undelivered mail.
 #[test]
 fn runtime_post_context_pre_cursor_expiry_does_not_admit_provider_work() {
     let mut service = test_runtime_service();
@@ -608,7 +610,7 @@ fn runtime_post_context_pre_cursor_expiry_does_not_admit_provider_work() {
             .subscription(&recipient.agent_id)
             .unwrap()
             .last_sequence,
-        delivery.sequence.saturating_sub(1)
+        delivery.sequence
     );
     service.terminate_all_pane_processes().unwrap();
 }
