@@ -20,6 +20,8 @@ pub enum MessageErrorKind {
     NotFound,
     /// Authenticated connection state does not authorize the operation.
     Forbidden,
+    /// A bounded recipient-metadata reservation was not accepted.
+    Capacity,
 }
 
 /// One typed failure from MMP body processing or deterministic service state.

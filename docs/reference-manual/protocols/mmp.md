@@ -188,6 +188,22 @@ unavailable target. `session` is an explicit visibility widening request, not
 authorization to execute work. The service records the resolved audience at
 acceptance; later runtime membership changes do not rewrite queued audiences.
 
+Acceptance also freezes the exact eligible recipient registrations. A late
+registration, previously offline peer, or newly matching sparse metadata cannot
+acquire old fanout. Reusing an opaque ID after retirement starts a new interval;
+neither live nor historical reads inherit the old owner's mail. Current
+availability, selector and audience checks still apply, so acceptance does not
+grant permission or bypass project isolation.
+
+The retained recipient set is bounded independently of payload bytes: at most
+4096 records and 1 MiB logical metadata, charging 128 bytes plus each UTF-8 ID's
+length. New sends reserve the whole fanout before sequence allocation. Capacity
+rejection (`code: "capacity"`, `status: "rejected"`, no accepted receipt) leaves
+the prior queue unchanged. Only history that the ordinary replay count/byte
+policy would actually evict may release metadata for the new send. This is not
+yet history-independent pending custody: existing FIFO replay eviction and the
+socket write-versus-application-commit limitation below remain unchanged.
+
 `recipient` is an object with exactly one supported selector: `agent_id`,
 `pane_id`, `window_id`, `role`, `capability`, `group`, or `session: true`.
 Multiple independent selectors are rejected. A selector such as
@@ -269,7 +285,7 @@ at shutdown; independently registered pane-less identities remain untouched.
 Cleanup ownership corruption is critical and reaches completion after pane
 termination, rather than being reported as a successful peer closure.
 
-Private MMP snapshot schema4 distinguishes fresh raw sender provenance from
+Private MMP snapshot schema5 retains schema4's distinction of fresh raw sender provenance from
 reusable delivery floors. It preserves the exact objective versions in retained
 authored mail, including when the current objective changed again without a
 send. Every version must be referenced by canonical mail and agree on immutable
@@ -279,11 +295,22 @@ floor. This bounds version count by retained authored occurrences, not by the
 payload-only byte budget. Schemas1–3 reject the fresh-version field even when
 empty. Active/reusable-owner exact validation is unchanged; this is not general
 live-owner objective-history repair or a raw reconnect/rebind operation.
-Snapshot restoration also reserves direct recipient IDs still referenced by
+Snapshot restoration also reserves exact recipient binding IDs still referenced by
 retained mail, including raw non-senders and senders whose authored floor has
 already evicted. A fresh generated owner cannot acquire that recipient's old
-direct mail through historical reads. This uses existing bounded mail rather
+direct or fanout mail through historical reads. This uses existing bounded mail rather
 than restoring idle registrations or keeping extra identity tombstones.
+
+Schema5 records each active registration's acceptance sequence floor and each
+retained occurrence's exact accepted recipient intervals. A floor is the last
+accepted sequence before registration; all mail for an earlier registration is
+at or below a replacement's floor. Capture/restore preserves these facts, not
+arbitrary reconnect authority. Schemas2–4 with retained mail are explicitly
+refused as unknown acceptance-time recipients; the service does not guess a
+recipient set from current registrations, nor rewrite the input snapshot.
+Empty-mail legacy snapshots still restore, while schema1 retains its existing
+audience-less-mail discard policy. This format version does not promise an
+acceptance-atomic disk write or transparent workflow restart.
 
 ## Payloads and MAAP bridge
 

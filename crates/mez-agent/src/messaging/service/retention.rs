@@ -12,12 +12,14 @@ impl MessageService {
         &mut self,
         envelope: Arc<Envelope>,
         audience: ResolvedMessageAudience,
+        recipient_bindings: Vec<(AgentId, MessageSequence)>,
         now_ms: u64,
     ) -> Result<MessageSequence> {
         let size = envelope.payload.len();
         if size > self.retention_bytes {
             return Err(MessageError::invalid_args(MMP_PAYLOAD_TOO_LARGE_MESSAGE));
         }
+        self.reserve_recipient_bindings(&recipient_bindings, size)?;
         let sequence = self.next_sequence;
         self.next_sequence = self
             .next_sequence
@@ -28,6 +30,7 @@ impl MessageService {
             sequence,
             envelope,
             audience,
+            recipient_bindings,
             accepted_at_ms: now_ms,
         });
         self.insert_queue_indexes(&queued);

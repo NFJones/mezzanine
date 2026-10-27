@@ -21,9 +21,9 @@ pub use types::{
     MessageConnection, MessageDeliveryCursorSnapshot, MessageDeliverySnapshot,
     MessageEnvelopeSnapshot, MessageExtensionFieldSnapshot, MessageFanoutDiagnostics,
     MessageIdentitySnapshot, MessagePresenceSnapshot, MessageQueuedEnvelopeSnapshot,
-    MessageRecipientSnapshot, MessageScope, MessageSequence, MessageService,
-    MessageServiceSnapshot, PresenceRecord, ProjectMembership, ProjectScopeId, Recipient,
-    SenderIdentity, SequencedEnvelope, TaskResultPayload, TaskState, TaskStatusPayload,
+    MessageRecipientBindingSnapshot, MessageRecipientSnapshot, MessageScope, MessageSequence,
+    MessageService, MessageServiceSnapshot, PresenceRecord, ProjectMembership, ProjectScopeId,
+    Recipient, SenderIdentity, SequencedEnvelope, TaskResultPayload, TaskState, TaskStatusPayload,
 };
 pub use validation::{
     MMP_OBJECTIVE_MAX_BYTES, MMP_OBJECTIVE_PROMPT_BLOCK_BYTES, MMP_OBJECTIVE_PROMPT_BLOCK_LINES,

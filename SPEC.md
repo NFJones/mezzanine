@@ -14258,6 +14258,34 @@ A sender MUST receive `ack` when a message is accepted for delivery.
 A sender MUST receive `error` when a message is rejected, undeliverable, or
 expired before delivery.
 
+Acceptance MUST freeze the exact eligible recipient registrations as well as
+the resolved audience. Later registration, return from offline presence, sparse
+selector metadata reconciliation, or project membership changes MUST NOT grant
+an old occurrence to a recipient not selected at acceptance. Retiring and
+reusing an opaque recipient ID MUST NOT transfer the former registration's
+live or historical delivery rights. Existing availability, selector and project
+audience checks continue to constrain delivery; frozen membership is not a
+permission grant.
+
+Private message snapshot schema5 MUST preserve active registration sequence
+floors and each retained occurrence's exact recipient bindings. The floor is
+the acceptance high-water at registration: any mail belonging to a previous
+registration falls at or below the replacement floor. Restoring schemas2–4 with
+retained mail MUST report unknown acceptance-time recipients rather than invent
+them from current selector membership; the original snapshot remains untouched.
+Legacy empty-mail snapshots remain restorable, and schema1 retains its existing
+audience-less-mail discard behavior. Recipient binding IDs MUST remain reserved
+for generated-ID allocation while their canonical mail is retained, including
+fanout targets that authored no messages.
+
+Retained recipient metadata has independent internal ceilings of 4096 records
+and 1 MiB logical charged bytes (128 bytes plus the UTF-8 ID length per record).
+An enqueue MAY reuse only metadata belonging to replay rows that its existing
+count/payload policy actually evicts. Reservation failure MUST reject the entire
+send with `capacity` before sequence allocation or receipt/queue mutation; no
+partial fanout or accepted result is permitted. These are replay metadata
+bounds, not a pending-delivery spool or an acceptance-atomic disk guarantee.
+
 For messages sent from one sender to one recipient over one logical channel,
 delivery order MUST match acceptance order.
 
@@ -14270,7 +14298,7 @@ secrets.
 
 The baseline error codes are `unsupported_protocol`, `malformed_frame`,
 `invalid_envelope`, `unauthorized`, `not_found`, `expired`, `payload_too_large`,
-`rate_limited`, `policy_denied`, and `internal_error`.
+`rate_limited`, `capacity`, `policy_denied`, and `internal_error`.
 
 ### 12.8 Payloads
 

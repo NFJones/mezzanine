@@ -654,6 +654,8 @@ pub(super) struct QueuedEnvelope {
     pub(super) envelope: Arc<Envelope>,
     /// Audience resolved from the authenticated sender at acceptance time.
     pub(super) audience: ResolvedMessageAudience,
+    /// Exact eligible registrations captured at acceptance, not live selectors.
+    pub(super) recipient_bindings: Vec<(AgentId, MessageSequence)>,
     /// Stores the accepted at ms value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -692,6 +694,9 @@ pub struct MessageService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) registered: HashMap<AgentId, SenderIdentity>,
+    /// Acceptance high-water at insertion of each current registration.
+    /// Sparse metadata reconciliation retains this interval; retirement ends it.
+    pub(super) registration_floors: HashMap<AgentId, MessageSequence>,
     /// Stores the presence value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -798,6 +803,10 @@ pub struct MessageServiceSnapshot {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub registered_agents: Vec<MessageIdentitySnapshot>,
+    /// Schema5 exact active registration intervals. Legacy absence never
+    /// supplies acceptance-time recipient evidence for retained mail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration_floors: Option<Vec<MessageRecipientBindingSnapshot>>,
     /// Stores the presence value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -934,6 +943,21 @@ pub struct MessageQueuedEnvelopeSnapshot {
     /// Resolved routing audience captured when the message was accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<MessageAudienceSnapshot>,
+    /// Schema5 exact eligible registrations captured before acceptance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient_bindings: Option<Vec<MessageRecipientBindingSnapshot>>,
+}
+
+/// Private snapshot evidence of one exact recipient registration interval.
+/// Registrations without intervening accepted mail can share a sequence floor:
+/// there is no intervening occurrence to transfer. Older mail always falls at
+/// or below a replacement's floor and cannot belong to that replacement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageRecipientBindingSnapshot {
+    /// Exact opaque recipient ID, never a selector or display alias.
+    pub recipient: String,
+    /// Acceptance high-water immediately before registration.
+    pub registered_after_sequence: MessageSequence,
 }
 
 /// Serializable accepted MMP message idempotency record.

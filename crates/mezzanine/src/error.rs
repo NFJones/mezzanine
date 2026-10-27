@@ -339,6 +339,9 @@ impl From<mez_agent::messaging::MessageError> for MezError {
                 Self::new(MezErrorKind::NotFound, error.message())
             }
             mez_agent::messaging::MessageErrorKind::Forbidden => Self::forbidden(error.message()),
+            mez_agent::messaging::MessageErrorKind::Capacity => {
+                Self::invalid_state(error.message())
+            }
         }
     }
 }

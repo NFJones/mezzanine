@@ -77,7 +77,10 @@ impl MessageService {
                 continue;
             };
             let message_bytes = queued.envelope.payload.len();
-            if !expired(queued, now_ms) && audience_matches(identity, &queued.audience) {
+            if !expired(queued, now_ms)
+                && audience_matches(identity, &queued.audience)
+                && self.accepted_recipient(queued, &identity.agent_id)
+            {
                 if payload_bytes.saturating_add(message_bytes) > max_payload_bytes {
                     break;
                 }

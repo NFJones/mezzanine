@@ -432,9 +432,9 @@ fn fresh_recurring_objective_reorders_after_prefix_eviction() {
     );
 }
 
-/// Schema3 generic reusable floors remain independently restorable after the
-/// schema4 bump. The fresh-version field must be absent rather than silently
-/// adopting new provenance into legacy delivery-interval semantics.
+/// Legacy reusable floors do not establish acceptance-time recipients. Schema3
+/// mail is preserved in the caller's snapshot but explicitly refused rather
+/// than assigned to whichever registrations currently match its selector.
 #[test]
 fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
     let mut service = MessageService::default();
@@ -451,6 +451,10 @@ fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
     service.retire_agent_identity(&pane.agent_id);
     let mut legacy = service.snapshot_state();
     legacy.schema_version = 3;
+    legacy.registration_floors = None;
+    for row in &mut legacy.retained_messages {
+        row.recipient_bindings = None;
+    }
     assert_eq!(legacy.retired_delivery_floors.len(), 1);
     assert!(
         legacy.retired_delivery_floors[0]
@@ -464,10 +468,14 @@ fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
             .is_none()
     );
     let decoded: MessageServiceSnapshot = serde_json::from_value(encoded).unwrap();
-    let restored = MessageService::from_snapshot_state(&decoded).unwrap();
-    let mut roundtrip = restored.snapshot_state();
-    roundtrip.schema_version = 3;
-    assert_eq!(roundtrip, legacy);
+    let error = MessageService::from_snapshot_state(&decoded).unwrap_err();
+    assert_eq!(error.kind(), MessageErrorKind::InvalidState);
+    assert!(
+        error
+            .message()
+            .contains("acceptance-time recipients are unknown")
+    );
+    assert_eq!(decoded, legacy);
 }
 
 /// Fresh schema4 evidence must be an exact nonempty unique projection of real
@@ -477,7 +485,7 @@ fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
 fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
     let (service, _) = objective_history_fixture();
     let before = service.snapshot_state();
-    assert_eq!(before.schema_version, 4);
+    assert_eq!(before.schema_version, 5);
     let mut corruptions = Vec::new();
     let mut empty = before.clone();
     empty.retired_delivery_floors[0].fresh_sender_versions = Some(Vec::new());
@@ -550,7 +558,7 @@ fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
     unsent_anchor.retired_delivery_floors[0].identity.objective = Some("C unsent".to_string());
     corruptions.push(unsent_anchor);
     let mut unsupported = before.clone();
-    unsupported.schema_version = 5;
+    unsupported.schema_version = 6;
     corruptions.push(unsupported);
     let mut active = before.clone();
     active

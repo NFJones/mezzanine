@@ -260,6 +260,7 @@ fn error_code(kind: MessageErrorKind) -> &'static str {
         MessageErrorKind::InvalidArgs => "invalid_envelope",
         MessageErrorKind::Forbidden => "unauthorized",
         MessageErrorKind::NotFound => "not_found",
+        MessageErrorKind::Capacity => "capacity",
         _ => "internal_error",
     }
 }

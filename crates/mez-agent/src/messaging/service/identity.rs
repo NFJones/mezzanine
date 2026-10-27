@@ -84,6 +84,8 @@ impl MessageService {
         identity: SenderIdentity,
         updated_at_ms: u64,
     ) -> SenderIdentity {
+        self.registration_floors
+            .insert(identity.agent_id.clone(), self.last_sequence());
         self.registered
             .insert(identity.agent_id.clone(), identity.clone());
         self.presence.insert(

@@ -4,8 +4,10 @@
 //! sparse delivery floors; queue indexes remain projections of retained mail.
 //! Schema4 records exact fresh raw sender objective versions without rewriting
 //! envelopes or receipts. Legacy reusable floor semantics remain independent.
-//! Restoration reserves retained direct-recipient IDs independently of sender
-//! floors so a fresh owner cannot acquire another identity's canonical mail.
+//! Schema5 freezes exact recipient registration intervals as well. Restoration
+//! reserves all retained recipient IDs independently of sender floors, including
+//! selector-based fanout targets. Legacy retained mail with unknown recipients
+//! is refused explicitly; snapshot capture is not acceptance-atomic durability.
 
 use super::snapshot_validation::validate_message_service_snapshot;
 use super::*;
@@ -58,11 +60,23 @@ impl MessageService {
 
         MessageServiceSnapshot {
             protocol: MMP_PROTOCOL.to_string(),
-            schema_version: 4,
+            schema_version: 5,
             next_sequence: self.next_sequence,
             retention_messages: self.retention_messages,
             retention_bytes: self.retention_bytes,
             registered_agents,
+            registration_floors: Some({
+                let mut floors = self
+                    .registration_floors
+                    .iter()
+                    .map(|(id, floor)| MessageRecipientBindingSnapshot {
+                        recipient: id.to_string(),
+                        registered_after_sequence: *floor,
+                    })
+                    .collect::<Vec<_>>();
+                floors.sort_by(|a, b| a.recipient.cmp(&b.recipient));
+                floors
+            }),
             presence,
             subscriptions,
             retired_delivery_floors,
@@ -74,6 +88,18 @@ impl MessageService {
     /// Rebuilds durable local message protocol state from a validated snapshot.
     pub fn from_snapshot_state(snapshot: &MessageServiceSnapshot) -> Result<Self> {
         validate_message_service_snapshot(snapshot)?;
+        let registration_floors = snapshot
+            .registration_floors
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(|binding| {
+                Ok((
+                    parse_opaque_id(&binding.recipient, "MMP recipient registration")?,
+                    binding.registered_after_sequence,
+                ))
+            })
+            .collect::<Result<HashMap<_, _>>>()?;
         let mut registered = HashMap::new();
         for identity in &snapshot.registered_agents {
             let identity = sender_identity_from_snapshot(identity, snapshot.schema_version)?;
@@ -147,6 +173,18 @@ impl MessageService {
                 sequence: retained.sequence,
                 envelope,
                 audience: audience_from_snapshot(retained.audience.as_ref())?,
+                recipient_bindings: retained
+                    .recipient_bindings
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|binding| {
+                        Ok((
+                            parse_opaque_id(&binding.recipient, "MMP accepted recipient")?,
+                            binding.registered_after_sequence,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
                 accepted_at_ms: retained.accepted_at_ms,
             }));
         }
@@ -188,15 +226,33 @@ impl MessageService {
                 Recipient::Agent(agent_id) => Some(agent_id),
                 _ => None,
             });
+        let bound_recipient_ids = queue
+            .iter()
+            .flat_map(|queued| queued.recipient_bindings.iter().map(|(id, _)| id));
         let ids = IdFactory::after_existing_ids(
             registered
                 .keys()
                 .chain(retired_delivery_floors.keys())
+                .chain(bound_recipient_ids)
                 .chain(recipient_ids),
         );
         let mut service = Self {
             ids,
             registered,
+            registration_floors: if snapshot.schema_version >= 5 {
+                registration_floors
+            } else {
+                snapshot
+                    .registered_agents
+                    .iter()
+                    .map(|identity| {
+                        Ok((
+                            parse_opaque_id(&identity.agent_id, "MMP registration")?,
+                            snapshot.next_sequence - 1,
+                        ))
+                    })
+                    .collect::<Result<HashMap<_, _>>>()?
+            },
             presence,
             subscriptions,
             retired_delivery_floors,

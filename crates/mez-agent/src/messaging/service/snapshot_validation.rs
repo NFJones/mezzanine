@@ -11,7 +11,7 @@ use super::*;
 /// Rejects cross-record contradictions before constructing any live state.
 /// Fresh provenance is explicit schema4 data; legacy schemas never adopt it.
 pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Result<()> {
-    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1..=4) {
+    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1..=5) {
         return Err(MessageError::invalid_args(
             "snapshot MMP state has unsupported protocol or schema version",
         ));
@@ -37,6 +37,7 @@ pub(super) fn validate_message_service_snapshot(snapshot: &MessageServiceSnapsho
         }
     }
     let mut presence_ids = HashSet::new();
+    validate_recipient_bindings(snapshot, &registered_by_id)?;
     for presence in &snapshot.presence {
         sender_identity_from_snapshot(&presence.identity, snapshot.schema_version)?;
         parse_presence_status(&presence.status)?;

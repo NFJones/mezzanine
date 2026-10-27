@@ -111,6 +111,7 @@ impl MessageService {
             .queue
             .iter()
             .filter(|queued| queued.sequence <= sequence)
+            .filter(|queued| self.accepted_recipient(queued, recipient))
             .filter(|queued| recipient_matches(identity, &queued.envelope.recipient))
             .filter(|queued| audience_matches(identity, &queued.audience))
             .filter(|queued| sequences.insert(queued.sequence))

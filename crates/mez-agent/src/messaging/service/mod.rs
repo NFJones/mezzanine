@@ -22,10 +22,10 @@ use super::types::{
     MessageAcceptedSnapshot, MessageAudienceSnapshot, MessageDeliveryCursorSnapshot,
     MessageDeliverySnapshot, MessageEnvelopeSnapshot, MessageExtensionFieldSnapshot,
     MessageFanoutDiagnostics, MessageIdentitySnapshot, MessagePresenceSnapshot,
-    MessageQueuedEnvelopeSnapshot, MessageRecipientSnapshot, MessageRetiredDeliveryFloorSnapshot,
-    MessageScope, MessageSequence, MessageService, MessageServiceSnapshot, PresenceRecord,
-    ProjectScopeId, QueuedEnvelope, Recipient, ResolvedMessageAudience, RetiredDeliveryFloor,
-    SenderIdentity, SequencedEnvelope,
+    MessageQueuedEnvelopeSnapshot, MessageRecipientBindingSnapshot, MessageRecipientSnapshot,
+    MessageRetiredDeliveryFloorSnapshot, MessageScope, MessageSequence, MessageService,
+    MessageServiceSnapshot, PresenceRecord, ProjectScopeId, QueuedEnvelope, Recipient,
+    ResolvedMessageAudience, RetiredDeliveryFloor, SenderIdentity, SequencedEnvelope,
 };
 use super::validation::{
     normalize_objective, normalize_optional_objective, validate_message_type, validate_protocol,
@@ -34,9 +34,11 @@ use super::validation::{
 
 mod discovery;
 mod identity;
+mod recipient_binding;
 mod snapshot;
 mod snapshot_codec;
 mod snapshot_validation;
+use recipient_binding::validate_recipient_bindings;
 use snapshot_codec::*;
 mod fanout;
 mod receive;
@@ -77,6 +79,7 @@ impl MessageService {
         Self {
             ids: IdFactory::default(),
             registered: HashMap::new(),
+            registration_floors: HashMap::new(),
             presence: HashMap::new(),
             subscriptions: HashMap::new(),
             retired_delivery_floors: HashMap::new(),
@@ -149,7 +152,8 @@ impl MessageService {
             return Err(MessageError::conflict(MMP_DUPLICATE_MESSAGE_ID_MESSAGE));
         }
 
-        let queued_recipients = self.matching_recipients(&envelope, &audience).len();
+        let recipient_bindings = self.capture_recipient_bindings(&envelope, &audience)?;
+        let queued_recipients = recipient_bindings.len();
         if queued_recipients == 0 {
             return Err(MessageError::new(
                 MessageErrorKind::NotFound,
@@ -161,7 +165,12 @@ impl MessageService {
         }
         let message_id = envelope.id.clone();
         let accepted_envelope = Arc::new(envelope);
-        let sequence = self.enqueue(accepted_envelope.clone(), audience.clone(), now_ms)?;
+        let sequence = self.enqueue(
+            accepted_envelope.clone(),
+            audience.clone(),
+            recipient_bindings,
+            now_ms,
+        )?;
 
         let delivery = Delivery {
             accepted: true,
@@ -251,6 +260,7 @@ impl MessageService {
     /// consuming its former interval; unrelated recipients retain their mail.
     pub fn retire_observational_identity(&mut self, agent_id: &AgentId) -> bool {
         let identity = self.registered.remove(agent_id);
+        self.registration_floors.remove(agent_id);
         self.presence.remove(agent_id);
         self.subscriptions.remove(agent_id);
         self.subscription_order.remove(agent_id.as_str());
@@ -282,6 +292,7 @@ impl MessageService {
     pub fn retire_agent_identity(&mut self, agent_id: &AgentId) -> bool {
         let identity = self.registered.get(agent_id).cloned();
         let removed = self.registered.remove(agent_id).is_some();
+        self.registration_floors.remove(agent_id);
         self.presence.remove(agent_id);
         self.subscriptions.remove(agent_id);
         self.subscription_order.remove(agent_id.as_str());
@@ -355,6 +366,7 @@ impl MessageService {
             .filter(|queued| {
                 self.registered.get(recipient).is_some_and(|identity| {
                     self.recipient_is_available(&identity.agent_id)
+                        && self.accepted_recipient(queued, recipient)
                         && recipient_matches(identity, &queued.envelope.recipient)
                         && audience_matches(identity, &queued.audience)
                 })
@@ -380,24 +392,18 @@ impl MessageService {
             .collect()
     }
 
-    /// Runs the matching recipients operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn matching_recipients(
-        &self,
-        envelope: &Envelope,
-        audience: &ResolvedMessageAudience,
-    ) -> Vec<&SenderIdentity> {
-        self.registered
-            .values()
-            .filter(|identity| {
-                self.recipient_is_available(&identity.agent_id)
-                    && recipient_matches(identity, &envelope.recipient)
-                    && audience_matches(identity, audience)
+    /// Checks exact acceptance membership and the still-live registration
+    /// interval. Mutable selector metadata never grants old delivery rights.
+    fn accepted_recipient(&self, queued: &QueuedEnvelope, recipient: &AgentId) -> bool {
+        self.registration_floors
+            .get(recipient)
+            .is_some_and(|floor| {
+                queued.sequence > *floor
+                    && queued
+                        .recipient_bindings
+                        .iter()
+                        .any(|(id, accepted_floor)| id == recipient && accepted_floor == floor)
             })
-            .collect()
     }
 
     /// Runs the recipient is available operation for this subsystem.
@@ -554,6 +560,7 @@ mod tests {
 
     mod fresh_retirement;
     mod objectives;
+    mod recipient_binding;
 
     mod retirement {
         use super::*;
@@ -873,7 +880,7 @@ mod tests {
                 .unwrap();
 
             let snapshot = service.snapshot_state();
-            assert_eq!(snapshot.schema_version, 4);
+            assert_eq!(snapshot.schema_version, 5);
             assert!(
                 snapshot
                     .registered_agents
@@ -1106,6 +1113,7 @@ mod tests {
 
             let mut legacy = service.snapshot_state();
             legacy.schema_version = 1;
+            legacy.registration_floors = None;
             for identity in &mut legacy.registered_agents {
                 identity.project_scope = None;
             }
@@ -1114,6 +1122,7 @@ mod tests {
             }
             for message in &mut legacy.retained_messages {
                 message.audience = None;
+                message.recipient_bindings = None;
                 message.envelope.sender.project_scope = None;
             }
             for message in &mut legacy.accepted_messages {

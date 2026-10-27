@@ -93,6 +93,16 @@ pub(super) fn queued_envelope_snapshot(queued: &QueuedEnvelope) -> MessageQueued
         accepted_at_ms: queued.accepted_at_ms,
         envelope: envelope_snapshot(&queued.envelope),
         audience: Some(audience_snapshot(&queued.audience)),
+        recipient_bindings: Some(
+            queued
+                .recipient_bindings
+                .iter()
+                .map(|(recipient, floor)| MessageRecipientBindingSnapshot {
+                    recipient: recipient.to_string(),
+                    registered_after_sequence: *floor,
+                })
+                .collect(),
+        ),
     }
 }
 
