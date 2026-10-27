@@ -528,3 +528,11 @@ its shell authority and re-arms local discovery while agent mode is visible.
 
 Use [Workflows](workflows.md) for bounded investigation, implementation, and
 recovery patterns.
+
+Fish transaction payloads use a non-interactive terminal reader and a pipe into
+Fish's frame validator. Command, sidecar, and artifact records stay out of the
+interactive editor; corrupt frames prevent child execution. The reader stops at
+the transaction sentinel, preserving queued parent commands. On Linux and macOS,
+encoded wrapper source waits for the Fish receiver's raw ownership acknowledgment.
+The foreign loader's terminator acknowledgment also completes before the next
+wrapper trigger, so it cannot be mistaken for that trigger's readiness signal.

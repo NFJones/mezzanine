@@ -326,6 +326,8 @@ builtin printf '\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=
 
 #[cfg(test)]
 mod tests {
+    mod payload;
+
     use super::*;
     use mez_agent::shell::{
         FishPrivateSourceInput, PanePathResolutionRequest, ShellClassification, ShellTransaction,
@@ -407,6 +409,38 @@ mod tests {
         fn write_shell_delivery(&mut self, delivery: &ShellInputDelivery) -> Vec<u8> {
             #[cfg(not(target_os = "macos"))]
             {
+                // The production async owner waits for the canonical Fish
+                // trigger on every host. Drive that same boundary while still
+                // responding to terminal queries from a freshly staged child.
+                if matches!(
+                    delivery.pacing,
+                    mez_mux::process::ShellInputPacing::GeneratedSource
+                ) && let Some(end) = delivery
+                    .bytes
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map(|index| index + 1)
+                    && mez_mux::process::shell_input_record_starts_fish_receiver(
+                        &delivery.bytes[..end],
+                    )
+                {
+                    let mut output = Vec::new();
+                    loop {
+                        let pending = self.read_available_output(64 * 1024).unwrap();
+                        if pending.is_empty() {
+                            break;
+                        }
+                        output.extend(pending);
+                    }
+                    self.process.write_input(&delivery.bytes[..end]).unwrap();
+                    let mut trigger_output = Vec::new();
+                    extend_fish_output_until(self, &mut trigger_output, |bytes| {
+                        bytes.contains(&0x1e)
+                    });
+                    output.extend(trigger_output);
+                    self.process.write_input(&delivery.bytes[end..]).unwrap();
+                    return output;
+                }
                 self.process
                     .write_shell_delivery(delivery)
                     .expect("managed Fish shell delivery should remain writable");

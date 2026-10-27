@@ -48,7 +48,7 @@ pub use pane::PaneProcess;
 pub use pane::{
     PTY_INPUT_WRITE_CHUNK_BYTES, SHELL_INPUT_RECORD_ACK_BYTE, loader_input_record_requires_ack,
     receiver_input_record_requires_ack, shell_input_record_requires_ack,
-    write_pty_fd_nonblocking_io,
+    shell_input_record_starts_fish_receiver, write_pty_fd_nonblocking_io,
 };
 #[doc(hidden)]
 pub use process_ancestry::{

@@ -117,7 +117,6 @@ fn spawn_argv_pty_process_inner(
         output_closed: false,
         #[cfg(target_os = "macos")]
         shell_input_acknowledgements_supported: false,
-        #[cfg(target_os = "macos")]
         shell_input_acknowledgements_seen: 0,
         #[cfg(target_os = "macos")]
         launch_environment: Vec::new(),
@@ -281,7 +280,6 @@ pub(super) fn spawn_pane_process_retained(
         output_closed: false,
         #[cfg(target_os = "macos")]
         shell_input_acknowledgements_supported: explicit_command.is_none(),
-        #[cfg(target_os = "macos")]
         shell_input_acknowledgements_seen: 0,
         #[cfg(target_os = "macos")]
         launch_environment,

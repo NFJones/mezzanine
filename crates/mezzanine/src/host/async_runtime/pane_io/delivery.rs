@@ -9,7 +9,7 @@ use super::{Duration, Instant, PaneProcessInstance, RuntimeSideEffect};
 use mez_mux::process::{
     PTY_INPUT_WRITE_CHUNK_BYTES, SHELL_INPUT_RECORD_ACK_BYTE, ShellInputDelivery, ShellInputPacing,
     loader_input_record_requires_ack, receiver_input_record_requires_ack,
-    shell_input_record_requires_ack,
+    shell_input_record_requires_ack, shell_input_record_starts_fish_receiver,
 };
 
 /// Maximum time one shell-input record may make no transport progress.
@@ -249,7 +249,12 @@ fn record_wait(
     final_record: bool,
     pacing_enabled: bool,
 ) -> Result<Option<ShellInputProgressWait>, &'static str> {
-    if !pacing_enabled {
+    if matches!(delivery.pacing, ShellInputPacing::GeneratedSource)
+        && shell_input_record_starts_fish_receiver(record)
+    {
+        return Ok(Some(ShellInputProgressWait::Acknowledgement));
+    }
+    if !pacing_enabled && !matches!(delivery.pacing, ShellInputPacing::LoaderAcknowledged) {
         return Ok(None);
     }
     match delivery.pacing {
@@ -305,6 +310,40 @@ pub(super) fn filter_shell_input_acknowledgements(bytes: &mut Vec<u8>) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the Fish ownership trigger requires a fresh acknowledgement
+    /// even when general Darwin pacing and shell capability probing are off.
+    /// Ordinary generated input keeps its platform policy, and visible prompt
+    /// output must not release the trigger's pending acknowledgement wait.
+    #[test]
+    fn fish_receiver_trigger_requires_acknowledgement_on_every_host() {
+        let record = b"__mez_agent_wrapper_receive '__MEZ_WRAPPER_SOURCE_END_marker__'\n";
+        let delivery =
+            ShellInputDelivery::generated_source_for_transaction(record.to_vec(), "marker");
+        for pacing in [false, true] {
+            for supported in [false, true] {
+                assert_eq!(
+                    record_wait(&delivery, record, supported, true, pacing),
+                    Ok(Some(ShellInputProgressWait::Acknowledgement))
+                );
+            }
+        }
+        assert_eq!(
+            record_wait(&delivery, b"printf ordinary\n", false, false, false),
+            Ok(None)
+        );
+        let effect = RuntimeSideEffect::WritePaneShellInput {
+            pane_id: "p1".into(),
+            delivery,
+        };
+        let mut pending = PendingShellInputDelivery::from_effect(&effect)
+            .unwrap()
+            .unwrap();
+        pending.record_write(record.len(), false).unwrap();
+        assert!(!pending.observe_output(true, 0));
+        assert!(pending.is_waiting_for_acknowledgement());
+        assert!(pending.observe_output(false, 1));
+    }
 
     /// Verifies adapter-owned shell delivery rejects an oversized logical
     /// record while it is still pure pending state, before a pane driver can
@@ -392,6 +431,10 @@ mod tests {
             } else {
                 Ok(None)
             }
+        );
+        assert_eq!(
+            record_wait(&delivery, b"MEZ_LOADER_END_marker\n", false, true, false),
+            Ok(Some(ShellInputProgressWait::Acknowledgement))
         );
         assert_eq!(
             record_wait(&delivery, b"MEZ_LOADER_END_marker\n", false, true, true),

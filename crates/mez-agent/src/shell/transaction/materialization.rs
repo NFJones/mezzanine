@@ -180,16 +180,14 @@ pub(super) fn fish_command_file_materialization(
     } else {
         "true"
     };
-    let posix_payload_reader = (acknowledge_payload_records
-        && input_sidecar.is_none()
-        && artifacts.is_empty())
-    .then(|| {
-        let source = "end=$1; output=$2; receive_status=$3; seen_end=0; while IFS= read -r record; do if [ \"$record\" = \"$end\" ]; then seen_end=1; printf '\\036'; break; fi; case \"$record\" in 'C '*) if [ \"$receive_status\" -eq 0 ]; then printf '%s\\n' \"${record#C }\" >>\"$output\" || receive_status=$?; fi ;; *) receive_status=1 ;; esac; printf '\\036'; done; [ \"$seen_end\" -eq 1 ] || receive_status=1; exit \"$receive_status\"";
-        format!(
-            "command /bin/sh -c {} sh \"$MEZ_COMMAND_END\" \"$MEZ_COMMAND_B64\" \"$MEZ_WRITE_STATUS\"",
-            fish_quote(source)
-        )
-    });
+    // Only POSIX read owns the terminal. Fish reads the resulting pipe so its
+    // interactive line editor cannot consume protocol records or query replies.
+    // Stop at the sentinel rather than copying stdin past this transaction.
+    let reader_source = "end=$1; while IFS= read -r record; do printf '%s\\n' \"$record\" || exit 1; [ \"$record\" = \"$end\" ] && exit 0; done; exit 1";
+    let posix_payload_reader = format!(
+        "command /bin/sh -c {} sh \"$MEZ_COMMAND_END\" | begin",
+        fish_quote(reader_source)
+    );
     let acknowledge_command_record = format!(
         "string replace -r '^C ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status; {acknowledge}"
     );
@@ -252,15 +250,8 @@ pub(super) fn fish_command_file_materialization(
         start_marker_line.to_string(),
         receiver_ready_marker_line.to_string(),
     ]);
-    if let Some(posix_payload_reader) = posix_payload_reader {
-        lines.extend([
-            posix_payload_reader,
-            "set MEZ_WRITE_STATUS $status".to_string(),
-            "if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string(),
-            "set MEZ_COMMAND_SEEN_END 1".to_string(),
-            "end".to_string(),
-        ]);
-    } else {
+    lines.push(posix_payload_reader);
+    {
         lines.extend([
             "while read -l MEZ_COMMAND_LINE".to_string(),
             "if test \"$MEZ_COMMAND_LINE\" = \"$MEZ_COMMAND_END\"".to_string(),
@@ -322,6 +313,11 @@ pub(super) fn fish_command_file_materialization(
             ]);
         }
         lines.push("end".to_string());
+        lines.push("end".to_string());
+        lines.push("set -l MEZ_COMMAND_READER_STATUS $pipestatus[1]".to_string());
+        lines.push(
+            "if test \"$MEZ_COMMAND_READER_STATUS\" -ne 0; set MEZ_WRITE_STATUS 1; end".to_string(),
+        );
     }
     lines.extend([
         "if test \"$MEZ_WRITE_STATUS\" -eq 0; and test \"$MEZ_COMMAND_SEEN_END\" != 1".to_string(),

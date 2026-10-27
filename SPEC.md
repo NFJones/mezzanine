@@ -10135,12 +10135,24 @@ Managed Bash RX2 and Zsh private-source data MUST use the same bounded logical-
 frame pacing principle: physical RX2 FRAME and DATA records MUST stream without
 waits, validated FRAME_END records MUST require one fresh acknowledgement, and
 the authenticated source END MUST require the final acknowledgement. A maximum
+one-mebibyte source MUST require fewer than fifty acknowledgement waits while
+retaining the portable physical record bound.
+
+Fish deferred command, sidecar, and artifact payload receivers MUST read records
+through a non-interactive POSIX terminal reader into a pipe, so Fish's interactive
+line editor cannot consume protocol records. The reader MUST stop at the exact
+transaction sentinel without consuming queued parent input. Fish MUST retain
+frame validation and logical acknowledgement ownership, and reader failure MUST
+prevent child execution.
+
 The canonical managed-Fish wrapper-receiver trigger MUST require the receiver's
 explicit raw acknowledgement before the first encoded source record can be
 written. Buffered startup, prompt, or other unrelated pane output MUST NOT
 satisfy that first-trigger wait.
-one-mebibyte source MUST require fewer than fifty acknowledgement waits while
-retaining the portable physical record bound.
+On every host, the preceding foreign loader MUST receive its terminator
+acknowledgement before releasing the next delivery, so that acknowledgement
+cannot release a later Fish ownership trigger.
+
 Unrelated pane output MUST NOT satisfy that wait. Missing negotiation, write
 failure, cancellation, process retirement, or a bounded per-record progress
 timeout MUST discard only the matching unsent delivery tail, fail the affected

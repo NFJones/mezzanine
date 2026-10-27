@@ -1603,7 +1603,7 @@ fn fish_receiver_renders_acknowledged_payload_contract() {
     assert!(input.payload_receiver_acknowledgements);
     assert!(wrapper.contains("command /bin/sh -c"), "{wrapper}");
     assert!(
-        !wrapper.contains("while read -l MEZ_COMMAND_LINE"),
+        wrapper.contains("| begin\nwhile read -l MEZ_COMMAND_LINE"),
         "{wrapper}"
     );
     assert!(wrapper.contains("printf '\\033]133;C;"));

@@ -24,7 +24,6 @@ use super::process_metadata::{
     process_executable_path_for_pid, process_name_for_pid,
 };
 use super::pty::{PTY_IO_CHUNK_BYTES, pty_size};
-#[cfg(target_os = "macos")]
 use super::types::ShellInputPacing;
 use super::types::{PaneExitStatus, ShellInputDelivery};
 
@@ -54,9 +53,17 @@ pub const SHELL_INPUT_RECORD_ACK_BYTE: u8 = 0x1e;
 /// Reports whether a generated shell-input record requests acknowledgement.
 #[doc(hidden)]
 pub fn shell_input_record_requires_ack(record: &[u8]) -> bool {
-    record.ends_with(b"printf '\\036'\n")
-        || (record.starts_with(b"__mez_agent_wrapper_receive '__MEZ_WRAPPER_SOURCE_END_")
-            && record.ends_with(b"__'\n"))
+    record.ends_with(b"printf '\\036'\n") || shell_input_record_starts_fish_receiver(record)
+}
+
+/// Reports whether a record transfers terminal ownership to the Fish receiver.
+///
+/// This fixed trigger requires a fresh raw acknowledgement on every host before
+/// encoded source may enter the terminal; prompt output cannot release it.
+#[doc(hidden)]
+pub fn shell_input_record_starts_fish_receiver(record: &[u8]) -> bool {
+    record.starts_with(b"__mez_agent_wrapper_receive '__MEZ_WRAPPER_SOURCE_END_")
+        && record.ends_with(b"__'\n")
 }
 
 /// Reports whether one deferred receiver record completes a logical frame.
@@ -248,10 +255,9 @@ pub struct PaneProcess {
     pub(super) shell_input_acknowledgements_supported: bool,
     /// Monotonic count of shell-record acknowledgement bytes read from the PTY.
     ///
-    /// macOS shell pacing snapshots this counter before writing a record and
+    /// Shell receiver handoff snapshots this counter before writing a record and
     /// waits for it to advance, avoiding repeated scans of the retained output
     /// backlog. Saturation preserves monotonic comparisons over process life.
-    #[cfg(target_os = "macos")]
     pub(super) shell_input_acknowledgements_seen: usize,
     /// Exact environment requested when this pane was spawned on macOS.
     ///
@@ -447,7 +453,8 @@ impl PaneProcess {
     /// consumes the first one, overflowing the shell's own typeahead buffer.
     /// macOS therefore waits for fresh pane output after every record while
     /// retaining that output in the ordinary backlog. Other Unix hosts use the
-    /// normal streaming writer.
+    /// normal streaming writer after the Fish receiver ownership trigger has
+    /// received its fresh raw acknowledgement.
     pub fn write_shell_input(&mut self, input: &[u8]) -> Result<()> {
         self.write_shell_delivery(&ShellInputDelivery::generated_source(input.to_vec()))
     }
@@ -459,7 +466,45 @@ impl PaneProcess {
             .map_err(|error| MezError::invalid_args(error.to_string()))?;
         let input = delivery.bytes.as_slice();
         #[cfg(not(target_os = "macos"))]
-        return self.write_input(input);
+        {
+            if input.is_empty() {
+                return Ok(());
+            }
+            if matches!(delivery.pacing, ShellInputPacing::LoaderAcknowledged) {
+                if !delivery.receiver_acknowledgements {
+                    return Err(MezError::invalid_state(
+                        "loader-acknowledged shell delivery was not negotiated",
+                    ));
+                }
+                self.buffer_available_output_for_write()?;
+                let baseline = self.shell_input_acknowledgements_seen;
+                self.write_input(input)?;
+                if !self.wait_for_shell_input_ack_after(baseline, PANE_INPUT_WRITE_STALL_TIMEOUT)? {
+                    return Err(MezError::invalid_state(
+                        "foreign loader did not acknowledge its terminator",
+                    ));
+                }
+                return Ok(());
+            }
+            if matches!(delivery.pacing, ShellInputPacing::GeneratedSource)
+                && let Some(end) = input
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map(|index| index + 1)
+                && shell_input_record_starts_fish_receiver(&input[..end])
+            {
+                self.buffer_available_output_for_write()?;
+                let baseline = self.shell_input_acknowledgements_seen;
+                self.write_input(&input[..end])?;
+                if !self.wait_for_shell_input_ack_after(baseline, PANE_INPUT_WRITE_STALL_TIMEOUT)? {
+                    return Err(MezError::invalid_state(
+                        "Fish wrapper receiver did not acknowledge terminal ownership",
+                    ));
+                }
+                return self.write_input(&input[end..]);
+            }
+            self.write_input(input)
+        }
 
         #[cfg(target_os = "macos")]
         {
@@ -570,7 +615,6 @@ impl PaneProcess {
     }
 
     /// Waits until the pane shell emits one additional record acknowledgement.
-    #[cfg(target_os = "macos")]
     fn wait_for_shell_input_ack_after(
         &mut self,
         acknowledgement_count: usize,
@@ -679,7 +723,6 @@ impl PaneProcess {
                     ) {
                         break;
                     }
-                    #[cfg(target_os = "macos")]
                     {
                         self.shell_input_acknowledgements_seen = self
                             .shell_input_acknowledgements_seen
@@ -1061,7 +1104,6 @@ pub(super) fn drain_output_backlog(backlog: &mut VecDeque<u8>, max_bytes: usize)
 }
 
 /// Counts shell-record acknowledgement bytes in one newly read PTY chunk.
-#[cfg(any(target_os = "macos", test))]
 pub(super) fn shell_input_acknowledgement_count(bytes: &[u8]) -> usize {
     bytes
         .iter()
