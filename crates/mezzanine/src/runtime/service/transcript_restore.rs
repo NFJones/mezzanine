@@ -333,7 +333,7 @@ impl RuntimeSessionService {
                 self.terminal_history_limit(),
                 self.terminal_history_rotate_lines(),
             )?;
-            let mut target_session = AgentShellSession {
+            let target_session = AgentShellSession {
                 session_id: conversation_id.clone(),
                 pane_id: pane_id.clone(),
                 project_scope: target_project_scope.clone(),
@@ -403,12 +403,6 @@ impl RuntimeSessionService {
             } else {
                 false
             };
-            if diagnostic.is_some() && !diagnostic_already_recorded {
-                target_session.transcript_entries =
-                    target_session.transcript_entries.saturating_add(1);
-                target_session.transcript_high_water =
-                    target_session.transcript_high_water.saturating_add(1);
-            }
             let diagnostic_already_presented = diagnostic.is_some_and(|diagnostic| {
                 presentation_entries.iter().any(|entry| {
                     entry.source_text.as_deref() == Some(diagnostic)
@@ -476,8 +470,10 @@ impl RuntimeSessionService {
                 if let (Some(turn_id), Some(diagnostic)) = (running_turn_id.as_deref(), diagnostic)
                     && !diagnostic_already_recorded
                 {
+                    #[cfg(test)]
+                    store.run_restart_intervening_append_for_tests()?;
                     let sequence = next_transcript_sequence(&store, &conversation_id)?;
-                    store.append(&TranscriptEntry {
+                    let entry = TranscriptEntry {
                         conversation_id: conversation_id.clone(),
                         sequence,
                         created_at_unix_seconds: restored_at,
@@ -486,7 +482,10 @@ impl RuntimeSessionService {
                         agent_id: format!("agent-{pane_id}"),
                         pane_id: pane_id.clone(),
                         content: diagnostic.to_string(),
-                    })?;
+                    };
+                    store.append(&entry)?;
+                    self.agent_shell_store_mut()
+                        .record_transcript_append(&pane_id, std::slice::from_ref(&entry))?;
                     self.invalidate_agent_prompt_selector_extra_candidates();
                 }
                 if let Some(diagnostic) = diagnostic

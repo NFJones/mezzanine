@@ -490,12 +490,13 @@ impl AgentShellStore {
         Ok(session)
     }
 
-    /// Records newly persisted transcript entries for the pane conversation.
+    /// Records a count-only increment when the caller owns a contiguous lane.
+    /// Callers observing assigned rows use `record_transcript_append` so unseen
+    /// intervening writers cannot be mistaken for a shorter sequence frontier.
     ///
-    /// The counter tracks durable transcript entries in the active raw replay
-    /// window, not completed turns. Compaction may retain a bounded recent
-    /// transcript tail, and context assembly uses this count as the exact raw
-    /// replay window after the compacted summary.
+    /// These counters describe admitted transcript rows rather than completed
+    /// turns or confirmed durability. A known contiguous increment advances
+    /// both domains; compaction may retain a smaller exact raw suffix.
     pub fn record_transcript_entries(
         &mut self,
         pane_id: &str,
@@ -508,6 +509,46 @@ impl AgentShellStore {
         session.transcript_high_water = session
             .transcript_high_water
             .saturating_add(u64::try_from(entries).unwrap_or(u64::MAX));
+        Ok(session)
+    }
+
+    /// Observes a caller-qualified contiguous append at its assigned sequences.
+    /// Intervening rows from another writer advance both the logical frontier
+    /// and physical raw window. Overlapping retries count only the new suffix.
+    /// The caller owns row-content/admission validation; this method performs
+    /// no I/O. An absent pane, foreign conversation, invalid sequence span or
+    /// impossible existing position fails before either counter changes.
+    pub fn record_transcript_append(
+        &mut self,
+        pane_id: &str,
+        entries: &[crate::transcript::TranscriptEntry],
+    ) -> AgentShellSessionResult<&AgentShellSession> {
+        let session = self.session_mut(pane_id)?;
+        AgentTranscriptPosition {
+            logical_high_water: session.transcript_high_water,
+            active_raw_entries: session.transcript_entries,
+        }
+        .validate()?;
+        if entries
+            .iter()
+            .any(|entry| entry.sequence == 0 || entry.conversation_id != session.session_id)
+            || entries
+                .windows(2)
+                .any(|pair| pair[0].sequence.checked_add(1) != Some(pair[1].sequence))
+        {
+            return Err(AgentShellSessionError::invalid_args(
+                "transcript append does not match its conversation or contiguous sequence span",
+            ));
+        }
+        let high_water = entries
+            .last()
+            .map_or(session.transcript_high_water, |entry| entry.sequence)
+            .max(session.transcript_high_water);
+        let added = high_water - session.transcript_high_water;
+        // The validated raw count is at most the old frontier, so this sum is
+        // bounded by the new frontier even when the latter is u64::MAX.
+        session.transcript_entries += added;
+        session.transcript_high_water = high_water;
         Ok(session)
     }
 
@@ -1361,6 +1402,67 @@ mod tests {
         let error = store.finish_turn("%1", "turn-2").unwrap_err();
 
         assert_eq!(error.kind(), crate::AgentShellSessionErrorKind::InvalidArgs);
+    }
+
+    /// Assigned append positions include intervening writers and count only the
+    /// new suffix on a retry. Foreign or reordered rows fail atomically. This
+    /// is a pure session-state contract; archive/admission proof is caller-owned.
+    #[test]
+    fn agent_shell_assigned_append_observes_gaps_and_rejects_foreign_rows() {
+        let mut store = AgentShellStore::default();
+        let cid = store
+            .enter_or_resume("%assigned")
+            .unwrap()
+            .session_id
+            .clone();
+        store.record_transcript_entries("%assigned", 3).unwrap();
+        let row = |sequence, conversation_id: &str| crate::transcript::TranscriptEntry {
+            conversation_id: conversation_id.into(),
+            sequence,
+            created_at_unix_seconds: 1,
+            role: crate::transcript::TranscriptRole::Assistant,
+            turn_id: "assigned-turn".into(),
+            agent_id: "agent-%assigned".into(),
+            pane_id: "%assigned".into(),
+            content: "qualified row".into(),
+        };
+        store
+            .record_transcript_append("%assigned", &[row(5, &cid), row(6, &cid)])
+            .unwrap();
+        assert_eq!(
+            (
+                store.get("%assigned").unwrap().transcript_high_water,
+                store.get("%assigned").unwrap().transcript_entries
+            ),
+            (6, 6)
+        );
+        store
+            .retain_recent_transcript_entries("%assigned", 2)
+            .unwrap();
+        store
+            .record_transcript_append("%assigned", &[row(8, &cid)])
+            .unwrap();
+        let before = store.get("%assigned").unwrap().clone();
+        assert_eq!(
+            (before.transcript_high_water, before.transcript_entries),
+            (8, 4)
+        );
+        store
+            .record_transcript_append("%assigned", &[row(7, &cid), row(8, &cid)])
+            .unwrap();
+        assert_eq!(store.get("%assigned").unwrap(), &before);
+        for invalid in [
+            vec![row(9, "foreign")],
+            vec![row(10, &cid), row(9, &cid)],
+            vec![row(0, &cid)],
+        ] {
+            assert!(
+                store
+                    .record_transcript_append("%assigned", &invalid)
+                    .is_err()
+            );
+            assert_eq!(store.get("%assigned").unwrap(), &before);
+        }
     }
 
     /// Compaction changes the raw replay count without moving the logical

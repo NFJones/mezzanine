@@ -9,6 +9,8 @@ use super::*;
 use mez_core::ids::ClientId;
 
 mod diagnostics;
+/// Captured source cutoffs and later physical/logical row positions.
+mod late_append;
 /// Canonical selective summaries and physical prefix accounting.
 mod selective;
 

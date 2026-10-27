@@ -502,7 +502,7 @@ impl RuntimeSessionService {
             .insert(candidate.persistence_key.clone());
         if still_bound && !work.read.frozen_completion {
             self.agent_shell_store_mut()
-                .record_transcript_entries(&turn.pane_id, entries.len())?;
+                .record_transcript_append(&turn.pane_id, &entries)?;
             self.record_pane_transcript_ref(
                 &turn.pane_id,
                 format!("transcript:{}:{}", turn.pane_id, turn.conversation_id),
@@ -948,7 +948,7 @@ impl RuntimeSessionService {
             let _ = self.agent.agent_persisted_execution_transcripts.pop_first();
         }
         self.agent_shell_store_mut()
-            .record_transcript_entries(&turn.pane_id, entries.len())?;
+            .record_transcript_append(&turn.pane_id, &entries)?;
         self.record_pane_transcript_ref(
             &turn.pane_id,
             format!("transcript:{}:{conversation_id}", turn.pane_id),
@@ -957,11 +957,16 @@ impl RuntimeSessionService {
     }
 
     /// Persists an MCP authorization-reset boundary and fresh safe catalog after compaction.
+    /// Manual publication supplies its checked next logical sequence so this
+    /// step needs no additional archive read or mutation lock. Other producers
+    /// retain their existing allocation path. Sequence exhaustion fails before
+    /// any control row is queued or written.
     pub(crate) fn persist_mcp_compaction_epoch_transcript(
         &mut self,
         pane_id: &str,
         conversation_id: &str,
         catalog_snapshot: Option<String>,
+        checked_next_sequence: Option<u64>,
     ) -> Result<usize> {
         let Some(session) = self.agent_shell_store().get(pane_id) else {
             return Ok(0);
@@ -972,7 +977,9 @@ impl RuntimeSessionService {
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(0);
         };
-        let sequence = if self.persistence.transcript_uses_adapter() {
+        let sequence = if let Some(sequence) = checked_next_sequence {
+            sequence
+        } else if self.persistence.transcript_uses_adapter() {
             self.persistence
                 .deferred_transcript_next_sequence(conversation_id)
                 .map(Ok)
@@ -980,6 +987,10 @@ impl RuntimeSessionService {
         } else {
             next_transcript_sequence(&store, conversation_id)?
         };
+        let additional = if catalog_snapshot.is_some() { 2 } else { 1 };
+        sequence
+            .checked_add(additional)
+            .ok_or_else(|| MezError::invalid_state("MCP compaction sequence span is exhausted"))?;
         let entry = TranscriptEntry {
             conversation_id: conversation_id.to_string(),
             sequence,
@@ -1044,7 +1055,7 @@ impl RuntimeSessionService {
             self.append_transcript_with_admission_observation(&store, &entries, false)?;
         }
         self.agent_shell_store_mut()
-            .record_transcript_entries(pane_id, entries.len())?;
+            .record_transcript_append(pane_id, &entries)?;
         self.record_pane_transcript_ref(
             pane_id,
             format!("transcript:{pane_id}:{conversation_id}"),
@@ -1257,7 +1268,7 @@ impl RuntimeSessionService {
             let _ = self.agent.agent_persisted_execution_transcripts.pop_first();
         }
         self.agent_shell_store_mut()
-            .record_transcript_entries(&turn.pane_id, entries.len())?;
+            .record_transcript_append(&turn.pane_id, &entries)?;
         self.record_pane_transcript_ref(
             &turn.pane_id,
             format!("transcript:{}:{}", turn.pane_id, turn.conversation_id),

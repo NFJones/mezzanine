@@ -1082,7 +1082,8 @@ fn runtime_restart_objective_metadata_failure_restores_prior_pane_state() {
 /// writer descriptor must remain excluded until the coherent replay pair is
 /// adopted; diagnostic appends must subsequently acquire the lane without a
 /// recursive-lock hang. Repeated restore preserves the frontier and records
-/// exactly one interruption diagnostic.
+/// exactly one interruption diagnostic. A real intervening writer after lease
+/// release also prevents predicted append cardinality from faking a frontier.
 #[test]
 fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
     let mut service = test_runtime_service();
@@ -1152,6 +1153,16 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
     // Probe the real mutation lane immediately before runtime adoption. The
     // routed diagnostic then exercises release before a fresh durable append.
     transcript_store.require_restart_replay_lease_for_tests();
+    transcript_store.set_restart_intervening_append_for_tests(TranscriptEntry {
+        conversation_id: conversation_id.clone(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::Assistant,
+        turn_id: "intervening-restart-writer".into(),
+        agent_id: "agent-%other".into(),
+        pane_id: "%other".into(),
+        content: "actual row between replay adoption and diagnostic allocation".into(),
+    });
     let mut restored = test_runtime_service();
     restored.session.id = service.session().id.clone();
     restored.set_agent_transcript_store(transcript_store.clone());

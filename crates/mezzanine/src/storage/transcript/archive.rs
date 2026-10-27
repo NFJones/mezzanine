@@ -121,6 +121,30 @@ enum StagedActivePayload {
 }
 
 impl AgentTranscriptStore {
+    /// Installs one real test row to append after restart replay adoption.
+    #[cfg(test)]
+    pub(crate) fn set_restart_intervening_append_for_tests(
+        &self,
+        entry: mez_agent::TranscriptEntry,
+    ) {
+        *self.restart_intervening_append.lock().unwrap() = Some(entry);
+    }
+
+    /// Executes the owned fixture write without sleeps or scheduler assumptions.
+    /// The caller has released its replay lease, so this uses ordinary append.
+    #[cfg(test)]
+    pub(crate) fn run_restart_intervening_append_for_tests(&self) -> Result<()> {
+        let entry = self
+            .restart_intervening_append
+            .lock()
+            .map_err(|_| MezError::invalid_state("restart append test probe poisoned"))?
+            .take();
+        if let Some(entry) = entry {
+            self.append(&entry)?;
+        }
+        Ok(())
+    }
+
     /// Enables an actual competing-writer lock check at restart adoption.
     /// This observes native exclusion without threads or timing assumptions.
     #[cfg(test)]

@@ -15,6 +15,9 @@ impl AgentTranscriptStore {
     /// and matching physical prefix. Missing/corrupt history, changed summaries,
     /// changed rows and a split range fail before metadata or archive mutation.
     /// A baseline of `None` qualifies absence, rather than skipping the check.
+    /// Returns the next checked logical sequence from this publication lane,
+    /// including deduplicated pending reservations. Conflicting pending rows or
+    /// exhausted sequences fail before publication; no second read is needed.
     pub(crate) fn save_compaction_prefix_with_proof(
         &self,
         conversation_id: &str,
@@ -22,7 +25,8 @@ impl AgentTranscriptStore {
         summary: &str,
         frozen_rows: &[TranscriptEntry],
         baseline: &Option<AgentCompactionEpoch>,
-    ) -> Result<()> {
+        pending: &[TranscriptEntry],
+    ) -> Result<u64> {
         let lease = self.acquire_conversation_lock(conversation_id)?;
         let previous = self.compaction_epoch(conversation_id)?;
         if &previous != baseline {
@@ -33,15 +37,20 @@ impl AgentTranscriptStore {
         let previous_boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
         let view = self.conversation_transcript_view_locked(
             conversation_id,
-            ConversationTranscriptRead::Through(through_sequence),
+            ConversationTranscriptRead::All,
             true,
-            &[],
+            pending,
             &lease,
         )?;
+        let next_sequence = view.logical.last().map_or(Ok(1), |row| {
+            row.sequence.checked_add(1).ok_or_else(|| {
+                MezError::invalid_state("compaction transcript sequence is exhausted")
+            })
+        })?;
         let selected = view
             .committed
             .into_iter()
-            .filter(|row| row.sequence > previous_boundary)
+            .filter(|row| row.sequence > previous_boundary && row.sequence <= through_sequence)
             .collect::<Vec<_>>();
         if selected != frozen_rows {
             return Err(MezError::conflict(
@@ -70,6 +79,7 @@ impl AgentTranscriptStore {
             },
             None,
             Some(baseline),
-        )
+        )?;
+        Ok(next_sequence)
     }
 }

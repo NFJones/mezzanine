@@ -728,6 +728,8 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             archive_recovery_read_barrier: Arc::new(Mutex::new(None)),
             #[cfg(test)]
+            restart_intervening_append: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
             check_restart_replay_lease: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             presentation_lock_barrier: Arc::new(Mutex::new(None)),
@@ -779,6 +781,8 @@ impl AgentTranscriptStore {
             fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
             fail_fork_cleanup: Arc::new(AtomicBool::new(false)),
             archive_recovery_read_barrier: Arc::new(Mutex::new(None)),
+            restart_intervening_append: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
             check_restart_replay_lease: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             presentation_lock_barrier: Arc::new(Mutex::new(None)),

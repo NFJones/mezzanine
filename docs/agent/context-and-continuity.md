@@ -74,6 +74,10 @@ Model replay reads its compaction projection and checked transcript window
 together, so an epoch change cannot splice one summary to a separately read tail.
 Captured pending rows remain distinct from durable history until storage settles.
 
+Rows appended after a compactor's source was captured stay in retained history.
+Runtime counters follow assigned sequence positions, including intervening writers;
+a shorter model representation does not remove those physical rows.
+
 The saved entry total describes the archive. It can exceed the raw history
 retained for model replay after compaction. Resume reconstructs that replay
 count separately from the archive's logical sequence frontier; further

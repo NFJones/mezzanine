@@ -2594,11 +2594,9 @@ impl RuntimeSessionService {
                 "manual compaction candidate context is unavailable",
             ));
         };
-        let session = self
-            .agent_shell_store()
+        self.agent_shell_store()
             .get(&task.pane_id)
             .filter(|session| session.session_id == task.conversation_id)
-            .cloned()
             .ok_or_else(|| MezError::invalid_state("manual compaction session is unavailable"))?;
         let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
             MezError::invalid_state("manual compaction candidate requires transcript storage")
@@ -2606,14 +2604,14 @@ impl RuntimeSessionService {
         let pending = self
             .persistence
             .pending_transcript_entries(&task.conversation_id);
-        let entries = store
-            .conversation_transcript_view(
-                &task.conversation_id,
-                crate::storage::transcript::ConversationTranscriptRead::All,
-                task.transcript_entries > pending.len() as u64,
-                &pending,
-            )?
-            .logical;
+        let snapshot =
+            store.conversation_replay_snapshot(&task.conversation_id, &pending, |_| {
+                Some((
+                    crate::storage::transcript::ConversationTranscriptRead::All,
+                    task.transcript_entries > pending.len() as u64,
+                ))
+            })?;
+        let entries = snapshot.view.logical;
         if task
             .frozen_compaction_rows
             .iter()
@@ -2623,16 +2621,7 @@ impl RuntimeSessionService {
                 "summary correction frozen manual source changed",
             ));
         }
-        let post_plan_entries = session
-            .transcript_entries
-            .saturating_sub(task.transcript_entries);
-        let retained_count = task
-            .retained_transcript_entries
-            .saturating_add(post_plan_entries);
-        let retained_count = usize::try_from(retained_count).unwrap_or(usize::MAX);
-        let first_retained = entries.len().saturating_sub(retained_count);
-        let retained_entries = &entries[first_retained..];
-        let previous_epoch = store.compaction_epoch(&task.conversation_id)?;
+        let previous_epoch = snapshot.epoch;
         if task
             .frozen_compaction_epoch
             .as_ref()
@@ -2647,6 +2636,8 @@ impl RuntimeSessionService {
                 .as_ref()
                 .map_or(0, |epoch| epoch.through_sequence)
         });
+        let first_retained = entries.partition_point(|row| row.sequence <= boundary);
+        let retained_entries = &entries[first_retained..];
         let ranges = previous_epoch.as_ref().map_or(Vec::new(), |epoch| {
             epoch
                 .ranges
@@ -2833,6 +2824,8 @@ impl RuntimeSessionService {
             &task.model_profile,
             summary,
         );
+        let mut published_boundary = None;
+        let mut checked_next_sequence = None;
         if let Some(store) = self.persistence.cloned_transcript_store() {
             let previous = store.compaction_epoch(&task.conversation_id)?;
             let previous_boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
@@ -2843,13 +2836,17 @@ impl RuntimeSessionService {
                         "manual prefix cannot publish a selective proposal",
                     ));
                 }
-                store.save_compaction_prefix_with_proof(
+                let pending = self
+                    .persistence
+                    .pending_transcript_entries(&task.conversation_id);
+                checked_next_sequence = Some(store.save_compaction_prefix_with_proof(
                     &task.conversation_id,
                     boundary,
                     &content,
                     &task.frozen_compaction_rows,
                     baseline,
-                )?;
+                    &pending,
+                )?);
             } else if let Some(projection) = projection {
                 let prior_ranges = previous
                     .as_ref()
@@ -2898,6 +2895,7 @@ impl RuntimeSessionService {
             } else {
                 store.save_compaction_epoch(&task.conversation_id, boundary, &content)?;
             }
+            published_boundary = Some(boundary);
         } else if task.compacted_through_sequence.is_some() {
             return Err(MezError::invalid_state(
                 "durable compaction requires a transcript store",
@@ -2921,15 +2919,27 @@ impl RuntimeSessionService {
             pane_id,
             &task.conversation_id,
             mcp_catalog_snapshot,
+            checked_next_sequence,
         )?;
+        let retained = if let Some(boundary) = published_boundary {
+            self.agent_shell_store()
+                .get(pane_id)
+                .ok_or_else(|| MezError::invalid_state("compaction session disappeared"))?
+                .transcript_high_water
+                .checked_sub(boundary)
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "published compaction boundary exceeds logical frontier",
+                    )
+                })?
+        } else {
+            task.retained_transcript_entries
+                .saturating_add(post_plan_transcript_entries)
+                .saturating_add(mcp_epoch_entries as u64)
+        };
         let remaining_transcript_entries = self
             .agent_shell_store_mut()
-            .retain_recent_transcript_entries(
-                pane_id,
-                task.retained_transcript_entries
-                    .saturating_add(post_plan_transcript_entries)
-                    .saturating_add(mcp_epoch_entries as u64),
-            )?
+            .retain_recent_transcript_entries(pane_id, retained)?
             .transcript_entries;
         let now = current_unix_seconds().max(1);
         let memory_id =

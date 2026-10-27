@@ -351,6 +351,9 @@ pub struct AgentTranscriptStore {
     /// One-shot deterministic handshake after recovery reads a journal, before locking.
     #[cfg(test)]
     pub(super) archive_recovery_read_barrier: Arc<Mutex<Option<ArchiveRecoveryReadBarrier>>>,
+    /// One actual intervening writer row after adoption, before restart diagnostics.
+    #[cfg(test)]
+    pub(super) restart_intervening_append: Arc<Mutex<Option<mez_agent::TranscriptEntry>>>,
     /// Enables a competing nonblocking writer probe at restart replay adoption.
     #[cfg(test)]
     pub(super) check_restart_replay_lease: Arc<AtomicBool>,

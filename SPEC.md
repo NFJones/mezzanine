@@ -10447,6 +10447,14 @@ draft without changing current prompt state. Missing or corrupt required epochs
 MUST fail closed. Uncovered rows retain ordinary revision and pane-identity CAS
 checks and remain editable; no edit may delete the epoch, recompact history, or
 replay actions to bypass this protection.
+Accepted transcript appends MUST observe their actual assigned sequence frontier,
+including intervening rows from other writers, rather than advance a frontier by
+local append cardinality. Retry overlap MUST NOT count the same suffix twice.
+After durable compaction, retained physical row counts and candidate replay MUST
+follow the published boundary and checked logical history, including later rows.
+Manual-prefix publication MUST carry its checked next logical sequence into MCP
+compaction-control allocation, including captured pending rows, without another
+archive read, a stale cached cursor, or renumbering prior receipts.
 Saved archive/display row counts, logical sequence frontiers, and active raw
 replay counts MUST remain distinct. Resume and restart MUST reconstruct the
 logical frontier from checked contiguous history and the raw count from its

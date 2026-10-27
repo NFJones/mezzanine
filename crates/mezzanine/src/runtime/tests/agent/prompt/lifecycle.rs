@@ -2872,9 +2872,18 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
             .collect::<Vec<_>>(),
         ["captured parent decision", "captured parent result"]
     );
+    // Adopt both counters from the real checked archive and epoch, just as
+    // resume does. A count-only edit would leave the captured frontier at two
+    // while expecting this new fork to include the third durable row.
+    let position = transcript_store
+        .lock_resume_replay_snapshot(&parent.session_id, true)
+        .unwrap()
+        .position;
+    assert_eq!(position.logical_high_water, 3);
+    assert_eq!(position.active_raw_entries, 2);
     service
         .agent_shell_store_mut()
-        .retain_recent_transcript_entries("%1", 2)
+        .restore_transcript_position("%1", position)
         .unwrap();
     let compacted_fork = service
         .spawn_runtime_subagent(

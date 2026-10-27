@@ -18,13 +18,21 @@ fn prefix_proof_accepts_matching_epoch_and_preserves_later_rows() {
         .collect::<Vec<_>>();
     store.append_many(&rows[..3]).unwrap();
     store
-        .save_compaction_prefix_with_proof("source", 1, "first summary", &rows[..1], &None)
+        .save_compaction_prefix_with_proof("source", 1, "first summary", &rows[..1], &None, &[])
         .unwrap();
     let baseline = store.compaction_epoch("source").unwrap();
     store.append(&rows[3]).unwrap();
-    store
-        .save_compaction_prefix_with_proof("source", 3, "later summary", &rows[1..3], &baseline)
+    let next = store
+        .save_compaction_prefix_with_proof(
+            "source",
+            3,
+            "later summary",
+            &rows[1..3],
+            &baseline,
+            &[],
+        )
         .unwrap();
+    assert_eq!(next, 5);
     assert_eq!(store.inspect("source").unwrap(), rows);
     assert_eq!(
         store
@@ -65,7 +73,8 @@ fn prefix_proof_rejects_changed_epoch_and_qualified_absence() {
                     3,
                     "stale result",
                     &rows[1..],
-                    &baseline
+                    &baseline,
+                    &[],
                 )
                 .is_err()
         );
@@ -88,10 +97,56 @@ fn prefix_proof_rejects_changed_physical_source() {
     stale.content = "different captured row".into();
     assert!(
         store
-            .save_compaction_prefix_with_proof("source", 1, "summary", &[stale], &None)
+            .save_compaction_prefix_with_proof("source", 1, "summary", &[stale], &None, &[])
             .is_err()
     );
     assert!(store.compaction_epoch("source").unwrap().is_none());
     assert_eq!(store.inspect("source").unwrap(), [row]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Publication carries a checked pending suffix into its allocation frontier.
+/// Exact overlap is deduplicated, whereas an overlapping content conflict or a
+/// missing pending sequence rejects before changing the durable epoch.
+#[test]
+fn prefix_proof_returns_checked_pending_frontier_and_rejects_conflicts() {
+    let root = temp_root("prefix-proof-pending-frontier");
+    let store = AgentTranscriptStore::new(root.clone());
+    let rows = (1..=4)
+        .map(|sequence| entry("source", sequence, TranscriptRole::Assistant))
+        .collect::<Vec<_>>();
+    store.append_many(&rows[..2]).unwrap();
+    assert_eq!(
+        store
+            .save_compaction_prefix_with_proof(
+                "source",
+                1,
+                "summary",
+                &rows[..1],
+                &None,
+                &rows[1..3],
+            )
+            .unwrap(),
+        4
+    );
+    let baseline = store.compaction_epoch("source").unwrap();
+    let mut conflict = rows[1].clone();
+    conflict.content = "conflicting reservation".into();
+    for pending in [vec![conflict], vec![rows[3].clone()]] {
+        assert!(
+            store
+                .save_compaction_prefix_with_proof(
+                    "source",
+                    2,
+                    "rejected summary",
+                    &rows[1..2],
+                    &baseline,
+                    &pending,
+                )
+                .is_err()
+        );
+        assert_eq!(store.compaction_epoch("source").unwrap(), baseline);
+        assert_eq!(store.inspect("source").unwrap(), rows[..2]);
+    }
     fs::remove_dir_all(root).unwrap();
 }
