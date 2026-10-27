@@ -1992,8 +1992,11 @@ The budget is cooperative, not a claim to interrupt blocked OS syscalls or event
 loop suspension. Lost/exhausted/invalid ACK remains unavailable even if committed.
 No general outage guarantee, automatic provider/action/callback replay, persisted
 credential or durable unsent-end inbox is implied. Curated/helper paths without
-this source contract remain separate. Renewal, persisted observer fences and cold admission
-remain unfinished; Accepted records describe historical admission, not current liveness.
+this source contract remain separate. Server-native renewal, persisted observer
+fences and explicit cold admission follow the independently qualified contracts
+above; the shared persistent client consumes that recovery contract. An Accepted
+record alone describes historical admission, not current liveness, and MUST NOT
+authorize recovery or reporting.
 Existing same-live ownership and namespace-only activation refusals remain in
 force; a stored Accepted flag alone MUST NOT authorize recovery or reporting.
 Declared curated Claude creators MAY use fixed `curated-usage-begin/end`

@@ -1193,8 +1193,9 @@ This supports finite same-service reply-loss recovery, not general outage or
 full-service replacement. Server-native renewal, observer fences and explicit
 cold admission are implemented separately above; automatic client consumption
 is supported by the shared persistent client with source-wide committed
-observation projection. Pre-replacement reset reconstruction remains separate
-unfinished engineering.
+observation projection. Telemetry schema12 retains durable view-reset baselines;
+cold recovery restores them with the committed source snapshot before readiness,
+as specified above. Migration cannot recover reset baselines lost before schema12.
 Other curated/helper clients are not silently upgraded to this source contract.
 
 Adapters must capture begin readiness before each genuine new provider request
