@@ -183,3 +183,55 @@ test("finite active tickets refuse rather than evict; explicit abandonment frees
   assert.equal(f.client.abandonRequest(tickets[0]).reason, "unreported-request-abandoned");
   assert(await f.client.beginRequest("f".repeat(64)));
 });
+
+/** Keep every ticket alive deliberately: WeakMap alone does not bound retained
+ * settled state when a normal caller owns long-lived request records. Only the
+ * newest 128 ACKs may remain locally replayable; expiry never sends old work. */
+test("settled receipt cache has an independent 128-ticket FIFO replay horizon", async () => {
+  const f = fixture((method, params) => method.endsWith("begin") ? ready(params.request_id) : committed(true));
+  const held = [];
+  for (let index = 0; index < 129; index++) {
+    const id = index.toString(16).padStart(64, "0");
+    const ticket = await f.client.beginRequest(id);
+    const sample = { ...report(), event_id: (index + 1000).toString(16).padStart(64, "0") };
+    assert.equal((await f.client.endRequest(ticket, sample)).durable, true);
+    held.push({ ticket, sample });
+    if (index === 127) {
+      const before = f.requests.length;
+      assert.equal((await f.client.endRequest(held[0].ticket, held[0].sample)).durable, true);
+      assert.equal(f.requests.length, before);
+    }
+  }
+  const before = f.requests.length;
+  assert.equal((await f.client.endRequest(held[0].ticket, held[0].sample)).durable, false);
+  assert.equal((await f.client.endRequest(held[1].ticket, held[1].sample)).durable, true);
+  assert.equal((await f.client.endRequest(held[128].ticket, held[128].sample)).durable, true);
+  const changed = { ...held[128].sample, counters: { input_tokens: 11, output_tokens: 3 } };
+  assert.equal((await f.client.endRequest(held[128].ticket, changed)).reason, "immutable-report-conflict");
+  assert.equal(f.requests.length, before);
+});
+
+/** Receipt-cache pressure can forget settled local evidence, never a pending
+ * original report. Its retained normalized bytes still retry immutably after
+ * other requests settle; provider operations are absent from this fixture. */
+test("settled receipt eviction cannot discard an unacknowledged request", async () => {
+  const pendingId = "f".repeat(64);
+  let deliverPending = false;
+  const f = fixture((method, params) => method.endsWith("begin") ? ready(params.request_id)
+    : params.request_id === pendingId && !deliverPending ? undefined : committed(true));
+  const pending = await f.client.beginRequest(pendingId);
+  assert.equal((await f.client.endRequest(pending, report())).durable, false);
+  const held = [];
+  for (let index = 0; index < 129; index++) {
+    const ticket = await f.client.beginRequest(index.toString(16).padStart(64, "0"));
+    assert.equal((await f.client.endRequest(ticket, report())).durable, true);
+    held.push(ticket);
+  }
+  const before = f.requests.length;
+  assert.equal((await f.client.endRequest(pending, { ...report(), model: "changed" })).reason, "immutable-report-conflict");
+  assert.equal(f.requests.length, before);
+  deliverPending = true;
+  assert.equal((await f.client.endRequest(pending, report())).durable, true);
+  assert.equal(f.requests.filter(row => row.method.endsWith("end") && row.params.request_id === pendingId).length, 3);
+  assert.equal(held.length, 129);
+});

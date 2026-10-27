@@ -105,7 +105,7 @@ pub(super) fn historical_claude_module_v1(helper: &std::path::Path) -> Result<St
             "20cbc1c0ce6f66836a4fa0200bc98418d7b78941138e575fd4d5c6bae9101a2e",
         ),
         (
-            include_bytes!("request_accounting.mjs").as_slice(),
+            include_bytes!("history/request_accounting_pre_receipt_bound.mjs").as_slice(),
             "43788869b5404f5a098513da7bba66463fd084731b7bd6f76bd9809eff134053",
         ),
         (
@@ -229,6 +229,39 @@ pub(super) fn historical_claude_module_v4(helper: &std::path::Path) -> Result<St
         include_str!("history/curated_client_claude_v4.mjs"),
         include_str!("history/claude_request_step_v4.mjs"),
     )
+}
+
+/// Guards the shipped revision-5 graph while its unchanged inputs remain active.
+/// Future source edits must supply independent snapshots rather than redefine
+/// historical module ownership. Accounting bytes are frozen by its manifest.
+pub(super) fn historical_claude_module_v5(helper: &std::path::Path) -> Result<String> {
+    use sha2::Digest;
+    historical_claude_module_v4(helper)?;
+    for (bytes, expected) in [
+        (
+            include_bytes!("curated_module.mjs").as_slice(),
+            "87db659ad7a77fc35178e6cbdf3840028129f056aa7ac1e12de673b484386ae2",
+        ),
+        (
+            include_bytes!("curated_client.mjs").as_slice(),
+            "1376398079a8c98804ca77902589ce1fb875cff28d63ceb383e6aabfef2b15e0",
+        ),
+        (
+            include_bytes!("claude_request_step.mjs").as_slice(),
+            "8e2b9382cfaba48af30e314fe394558d61e549e92aff96862c4984b6b91bd159",
+        ),
+    ] {
+        let actual = sha2::Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if actual != expected {
+            return Err(MezError::invalid_state(
+                "Claude historical revision-5 source changed",
+            ));
+        }
+    }
+    module_source(helper, 10_000)
 }
 
 /// One-pass insertion preserves literal helper filenames even when they contain

@@ -211,13 +211,13 @@ mod tests {
         use super::super::installer::Operation;
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
-            assert_eq!(current.revision, if harness == "pi" { 16 } else { 14 });
+            assert_eq!(current.revision, if harness == "pi" { 17 } else { 15 });
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), if harness == "pi" { 14 } else { 34 });
+            assert_eq!(history.len(), if harness == "pi" { 15 } else { 38 });
             assert!(history.iter().any(|manifest| manifest.revision == 8));
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
-            assert_eq!(immediate.revision, if harness == "pi" { 15 } else { 13 });
+            assert_eq!(immediate.revision, if harness == "pi" { 16 } else { 14 });
             let frozen = immediate
                 .entries
                 .iter()
@@ -226,12 +226,25 @@ mod tests {
             assert_eq!(
                 frozen.artifact,
                 Artifact::File {
+                    bytes: include_bytes!("persistent_client.mjs").to_vec()
+                }
+            );
+            let bounded = &history[1];
+            assert_eq!(bounded.revision, if harness == "pi" { 15 } else { 13 });
+            assert_eq!(
+                bounded
+                    .entries
+                    .iter()
+                    .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
+                    .unwrap()
+                    .artifact,
+                Artifact::File {
                     bytes: super::super::history::persistent_client_bounded_end()
                 }
             );
             if harness == "pi" {
-                assert_eq!(history[1].revision, 14);
-                let one_shot = history[1]
+                assert_eq!(history[2].revision, 14);
+                let one_shot = history[2]
                     .entries
                     .iter()
                     .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
@@ -242,10 +255,10 @@ mod tests {
                         bytes: super::super::history::persistent_client_one_shot_end()
                     }
                 );
-                assert_eq!(history[2].revision, 13);
-                assert_eq!(history[3].revision, 12);
-                assert_eq!(history[4].revision, 11);
-                let pre_resume = history[4]
+                assert_eq!(history[3].revision, 13);
+                assert_eq!(history[4].revision, 12);
+                assert_eq!(history[5].revision, 11);
+                let pre_resume = history[5]
                     .entries
                     .iter()
                     .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
@@ -260,7 +273,7 @@ mod tests {
                     history
                         .iter()
                         .map(|manifest| manifest.revision)
-                        .eq((2..=15).rev())
+                        .eq((2..=16).rev())
                 );
             }
             let request = immediate
@@ -271,7 +284,8 @@ mod tests {
             assert_eq!(
                 request.artifact,
                 Artifact::File {
-                    bytes: include_bytes!("request_accounting.mjs").to_vec()
+                    bytes: include_bytes!("history/request_accounting_pre_receipt_bound.mjs")
+                        .to_vec()
                 }
             );
             use sha2::Digest;
@@ -283,10 +297,12 @@ mod tests {
                 "188bb22dcd6c9199807ab6a7930d116f0f0dfd12afa02c2d2700a867fdfe6f15"
             );
             assert_eq!(
-                sha2::Sha256::digest(include_bytes!("request_accounting.mjs"))
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>(),
+                sha2::Sha256::digest(include_bytes!(
+                    "history/request_accounting_pre_receipt_bound.mjs"
+                ))
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
                 "43788869b5404f5a098513da7bba66463fd084731b7bd6f76bd9809eff134053"
             );
             for previous in history {

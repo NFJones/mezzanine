@@ -10,7 +10,7 @@ pub(crate) fn manifest() -> Manifest {
     let mut manifest = Manifest {
         harness: "opencode".into(),
         vendor_version: "best-effort".into(),
-        revision: 14,
+        revision: 15,
         entries: vec![
             Entry {
                 path: "plugins/mezzanine.js".into(),
@@ -72,6 +72,14 @@ pub(super) fn nested_manifest(jsonc: bool) -> Manifest {
             *pointer = "/tui/plugin".into();
         }
     }
+    candidate
+}
+
+/// Exact revision-14 cold-source graph before bounded settled receipts.
+/// Preserve only enumerated old accounting bytes for each compiled layout.
+pub(super) fn historical_receipt_manifest(mut candidate: Manifest) -> Manifest {
+    candidate.revision = 14;
+    super::history::freeze_pre_receipt_bound(&mut candidate);
     candidate
 }
 
@@ -173,7 +181,7 @@ mod tests {
             nested_manifest(true),
         ];
         for old_layout in &layouts {
-            for revision in [7, 8, 9, 10] {
+            for revision in [7, 8, 9, 10, 14] {
                 let old = super::super::compiled_history(old_layout)
                     .into_iter()
                     .find(|candidate| candidate.revision == revision)

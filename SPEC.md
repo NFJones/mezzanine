@@ -2067,7 +2067,7 @@ them. Expense/report time uses the immutable admitted request boundary for exact
 replay. Old owners, child loops and pressure MUST never borrow a newest binding.
 This source capability does not install/enable the mod or certify exhaustive,
 auxiliary, cross-process resumed/forked or invoice coverage.
-Claude revision5 MUST share sixteen slots between active producers and retained
+Claude revision6 MUST share sixteen slots between active producers and retained
 unacknowledged normalized outcomes. Failed durable delivery MUST retain only the
 original report, client-local readiness ticket and exact still-live observer;
 callback replay MUST NOT replace its payload or multiply pending obligations.
@@ -2083,7 +2083,12 @@ revision1–4 module/client/step inputs MUST remain independently frozen or guar
 for same-helper upgrades; receipt paths cannot authenticate executable relocation.
 The installed shared request client MUST retain only validated content-free
 reports and client-local tickets captured before genuine new requests. It MUST
-refuse beyond128 active tickets without silently evicting unacknowledged expense,
+refuse beyond128 active tickets without silently evicting unacknowledged expense.
+It MUST separately retain at most128 settled receipts in completion FIFO order,
+with only immutable normalized-report comparison evidence and the known durable
+ACK. Reading a cached receipt MUST NOT renew its retention. Eviction makes that
+old ticket unavailable locally without re-beginning, sending a report, rolling
+back ledger expense or weakening pending-report retention. The client MUST
 use the existing finite serialized transport queue, and attempt at most two
 same-marker/same-report deliveries per call. Only typed durable acknowledgment
 may establish delivery; neutral/accepted callback success is insufficient.

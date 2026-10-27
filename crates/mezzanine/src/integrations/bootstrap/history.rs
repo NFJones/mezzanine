@@ -398,6 +398,7 @@ pub(super) fn persistent_client_v6() -> Vec<u8> {
 /// Exact shared transport deployed with Pi13/OpenCode11, before durable end.
 /// Only fixed compiled client slots can be frozen, never receipt-provided paths.
 pub(super) fn freeze_pre_end_transport(manifest: &mut super::installer::Manifest) {
+    freeze_pre_receipt_bound(manifest);
     for entry in &mut manifest.entries {
         if matches!(
             entry.path.as_str(),
@@ -418,6 +419,7 @@ pub(super) fn persistent_client_bounded_end() -> Vec<u8> {
 
 /// Restores only fixed slots, never receipt-selected paths or source bytes.
 pub(super) fn freeze_bounded_end_transport(manifest: &mut super::installer::Manifest) {
+    freeze_pre_receipt_bound(manifest);
     for entry in &mut manifest.entries {
         if matches!(
             entry.path.as_str(),
@@ -439,6 +441,7 @@ pub(super) fn persistent_client_one_shot_end() -> Vec<u8> {
 
 /// Restores only the fixed client slots of the deployed one-shot manifests.
 pub(super) fn freeze_one_shot_end_transport(manifest: &mut super::installer::Manifest) {
+    freeze_pre_receipt_bound(manifest);
     for entry in &mut manifest.entries {
         if matches!(
             entry.path.as_str(),
@@ -455,6 +458,7 @@ pub(super) fn freeze_one_shot_end_transport(manifest: &mut super::installer::Man
 /// Freezes the pre-resume deployed transport (Pi10/11 and OpenCode10) without
 /// deriving historical byte authority from the new active parser.
 pub(super) fn freeze_pre_resume_transport(manifest: &mut super::installer::Manifest) {
+    freeze_pre_receipt_bound(manifest);
     for entry in &mut manifest.entries {
         if matches!(
             entry.path.as_str(),
@@ -472,6 +476,7 @@ pub(super) fn freeze_pre_resume_transport(manifest: &mut super::installer::Manif
 /// (SHA256 68db5b7859b9a98607abdf2410bec1e56324e158cf45746898ef30a8cd3c2d4c).
 /// Request-accounting bytes are unchanged by the new Pi gap projection.
 pub(super) fn freeze_revision9_transport(manifest: &mut super::installer::Manifest) {
+    freeze_pre_receipt_bound(manifest);
     for entry in &mut manifest.entries {
         if matches!(
             entry.path.as_str(),
@@ -610,6 +615,24 @@ const PI_METHOD_V2: &str = r#"    piObservation(input) {
     },
 "#;
 
+/// Freezes exact shared accounting bytes shipped before the settled-cache bound.
+/// Only enumerated code-owned graph slots participate; receipt-supplied paths,
+/// helper locations and current source cannot redefine historical ownership.
+pub(super) fn freeze_pre_receipt_bound(manifest: &mut super::installer::Manifest) {
+    for entry in &mut manifest.entries {
+        if matches!(
+            entry.path.as_str(),
+            "extensions/mezzanine/request_accounting.mjs"
+                | "plugins/mezzanine/request_accounting.mjs"
+                | "skills/mezzanine-telemetry/hooks/request_accounting.mjs"
+        ) {
+            entry.artifact = super::reconciliation::Artifact::File {
+                bytes: include_bytes!("history/request_accounting_pre_receipt_bound.mjs").to_vec(),
+            };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,6 +667,10 @@ mod tests {
             "b01a4baee8c198b0edea9bf4adf03ae2c217a74c597d48502694cee69c7267d9"
         );
         for (bytes, expected) in [
+            (
+                include_bytes!("history/request_accounting_pre_receipt_bound.mjs").as_slice(),
+                "43788869b5404f5a098513da7bba66463fd084731b7bd6f76bd9809eff134053",
+            ),
             (
                 include_bytes!("history/persistent_client_pre_end.mjs").as_slice(),
                 "cff4c0f87382004f80f3f3e08fae1dde9e8a5fec20ad9119fb6e84398595ad39",

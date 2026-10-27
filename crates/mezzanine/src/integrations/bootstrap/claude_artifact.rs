@@ -17,7 +17,7 @@ pub(super) fn manifest() -> Option<Manifest> {
 /// Compiles the exact private mod graph for a trusted code-owned helper path.
 /// The public CLI supplies only current_exe; tests qualify a built fixed helper.
 pub(crate) fn manifest_for_helper(helper: &std::path::Path) -> Result<Manifest> {
-    build_manifest(helper, 5)
+    build_manifest(helper, 6)
 }
 
 /// Exact revision-1 ownership for the same fixed installing executable. No
@@ -44,6 +44,12 @@ pub(super) fn historical_proof_closure_manifest() -> Option<Manifest> {
     build_manifest(&std::env::current_exe().ok()?, 4).ok()
 }
 
+/// Exact revision-5 pending-outcome bundle before bounded settled receipts.
+/// Its independent accounting snapshot cannot borrow new active source bytes.
+pub(super) fn historical_receipt_manifest() -> Option<Manifest> {
+    build_manifest(&std::env::current_exe().ok()?, 5).ok()
+}
+
 /// Builds only current or guarded historical compiled private artifacts.
 fn build_manifest(helper: &std::path::Path, revision: u32) -> Result<Manifest> {
     let prefix = "skills/mezzanine-telemetry";
@@ -52,7 +58,8 @@ fn build_manifest(helper: &std::path::Path, revision: u32) -> Result<Manifest> {
         2 => super::curated_client::historical_claude_module_v2(helper)?,
         3 => super::curated_client::historical_claude_module_v3(helper)?,
         4 => super::curated_client::historical_claude_module_v4(helper)?,
-        5 => super::curated_client::module_source(helper, 10_000)?,
+        5 => super::curated_client::historical_claude_module_v5(helper)?,
+        6 => super::curated_client::module_source(helper, 10_000)?,
         _ => {
             return Err(crate::error::MezError::invalid_state(
                 "Claude compiled revision unavailable",
@@ -72,6 +79,11 @@ fn build_manifest(helper: &std::path::Path, revision: u32) -> Result<Manifest> {
             "curated_request_accounting.mjs" => "hooks/curated_request_accounting.mjs",
             "request_accounting.mjs" => "hooks/request_accounting.mjs",
             _ => unreachable!("compiled curated source graph has only two enumerated siblings"),
+        };
+        let source = if revision <= 5 && name == "request_accounting.mjs" {
+            include_str!("history/request_accounting_pre_receipt_bound.mjs")
+        } else {
+            source
         };
         files.push((path, source.as_bytes().to_vec()));
     }
@@ -97,13 +109,66 @@ mod tests {
         reconciliation::Artifact,
     };
 
+    /// The receipt-cache revision changes only the owned accounting module and
+    /// receipt. The previous current graph remains independently recognizable;
+    /// authored files and its already-qualified lifecycle module are preserved.
+    #[test]
+    fn bootstrap_claude_settled_receipt_upgrade_preserves_previous_graph() {
+        use super::super::installer::{Operation, plan_private};
+        let current = compiled_manifest("claude", None).unwrap();
+        let previous = super::historical_receipt_manifest().unwrap();
+        assert_eq!(previous.revision, 5);
+        let old_source = previous
+            .entries
+            .iter()
+            .find(|entry| entry.path.ends_with("/request_accounting.mjs"))
+            .unwrap();
+        assert_eq!(
+            old_source.artifact,
+            Artifact::File {
+                bytes: include_bytes!("history/request_accounting_pre_receipt_bound.mjs").to_vec(),
+            }
+        );
+        assert!(super::super::compiled_history(&current).contains(&previous));
+        let base = std::env::temp_dir().join(format!(
+            "mez-claude-receipt-cache-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir(&base).unwrap();
+        let home = base.join("home");
+        super::super::fixtures::create_private_directory(&home).unwrap();
+        let root = home.join(".claude");
+        plan_private(&root, &home, &previous, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        std::fs::write(root.join("authored"), b"preserved").unwrap();
+        let upgrade = plan_private(&root, &home, &current, Operation::Install).unwrap();
+        assert_eq!(
+            upgrade.changed_paths(),
+            [
+                "skills/mezzanine-telemetry/hooks/request_accounting.mjs",
+                "@mez-bootstrap-receipt/claude",
+            ]
+        );
+        upgrade.apply().unwrap();
+        assert!(
+            plan_private(&root, &home, &current, Operation::Install)
+                .unwrap()
+                .changed_paths()
+                .is_empty()
+        );
+        assert_eq!(std::fs::read(root.join("authored")).unwrap(), b"preserved");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     /// The compiled Claude adapter must provide the complete literal mod and
     /// pure siblings at the documented user-root autoload placement, not require
     /// a wrapper, fd3, injected helper environment or authored settings rewrite.
     #[test]
     fn bootstrap_claude_artifact_has_complete_ordinary_autoload_bundle() {
         let manifest = compiled_manifest("claude", None).expect("compiled Claude adapter");
-        assert_eq!(manifest.revision, 5);
+        assert_eq!(manifest.revision, 6);
         assert_eq!(manifest.entries.len(), 8);
         assert!(manifest.entries.iter().all(|entry| {
             entry.path.starts_with("skills/mezzanine-telemetry/")
@@ -213,7 +278,7 @@ mod tests {
                 .unwrap()
         };
         assert!(module(&current).contains("pendingRequestReports"));
-        for previous in &history {
+        for previous in history.iter().filter(|previous| previous.revision <= 4) {
             assert!(!module(previous).contains("pendingRequestReports"));
         }
         let previous = history
@@ -239,6 +304,7 @@ mod tests {
             upgrade.changed_paths(),
             [
                 "skills/mezzanine-telemetry/hooks/register.mjs",
+                "skills/mezzanine-telemetry/hooks/request_accounting.mjs",
                 "@mez-bootstrap-receipt/claude",
             ]
         );
@@ -261,8 +327,8 @@ mod tests {
     }
 
     /// Revision3 retains its exact pre-rejection client rather than borrowing
-    /// active closure behavior. Same-helper upgrade to revision5 changes only the
-    /// owned module, repeats without edits, and preserves unrelated authors.
+    /// active closure behavior. Same-helper upgrade changes only owned lifecycle
+    /// and accounting sources, repeats cleanly, and preserves unrelated authors.
     /// Relocated helper bytes cannot select any current compiled history.
     #[test]
     fn bootstrap_claude_artifact_upgrades_guarded_revision3_exactly() {
@@ -270,7 +336,7 @@ mod tests {
         let history = super::super::compiled_history(&current);
         assert_eq!(
             history.iter().map(|m| m.revision).collect::<Vec<_>>(),
-            [4, 3, 2, 1]
+            [5, 4, 3, 2, 1]
         );
         let previous = history
             .iter()
@@ -312,6 +378,7 @@ mod tests {
             upgrade.changed_paths(),
             [
                 "skills/mezzanine-telemetry/hooks/register.mjs",
+                "skills/mezzanine-telemetry/hooks/request_accounting.mjs",
                 "@mez-bootstrap-receipt/claude",
             ]
         );
@@ -393,7 +460,7 @@ mod tests {
     fn bootstrap_claude_artifact_upgrades_guarded_revision1_exactly() {
         let current = compiled_manifest("claude", None).unwrap();
         let history = super::super::compiled_history(&current);
-        assert_eq!(history.len(), 4);
+        assert_eq!(history.len(), 5);
         let previous = history
             .iter()
             .find(|manifest| manifest.revision == 1)

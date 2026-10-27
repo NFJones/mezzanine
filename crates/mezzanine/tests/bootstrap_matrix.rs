@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 type Observation = (PathBuf, u64, u32, i64, i64, Option<Vec<u8>>);
 
 /// Deliberate independent pin to the current compiled OpenCode manifest. Earlier
-/// cold-client work advances it to14; historical7..10 byte/layout fixtures below
+/// settled-receipt work advances it to15; historical7..10 byte/layout fixtures below
 /// remain independently frozen and must upgrade to this exact revision.
-const CURRENT_OPENCODE_REVISION: u64 = 14;
+const CURRENT_OPENCODE_REVISION: u64 = 15;
 
 /// Returns bounded fixture observations for exact read-only comparisons.
 fn snapshot(root: &Path) -> Vec<Observation> {
@@ -131,6 +131,11 @@ fn bootstrap_binary_upgrades_historical_opencode_layouts() {
                             "../src/integrations/bootstrap/history/request_accounting_v8.mjs"
                         )
                         .as_slice(),
+                    ),
+                    "plugins/mezzanine/request_accounting.mjs" => Some(
+                        include_bytes!(
+                            "../src/integrations/bootstrap/history/request_accounting_pre_receipt_bound.mjs"
+                        ).as_slice(),
                     ),
                     _ => None,
                 };

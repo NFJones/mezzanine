@@ -42,10 +42,19 @@ pub(crate) fn candidate_manifest() -> Manifest {
     entries.extend(super::persistent_client::entries("extensions/mezzanine"));
     Manifest {
         harness: "pi".into(),
-        revision: 16,
+        revision: 17,
         vendor_version: super::pi::RELEASE.into(),
         entries,
     }
+}
+
+/// Exact revision-16 cold-source client before bounded settled receipts.
+/// The current transport/producer bytes remain unchanged; accounting is frozen.
+pub(super) fn historical_receipt_manifest() -> Manifest {
+    let mut manifest = candidate_manifest();
+    manifest.revision = 16;
+    super::history::freeze_pre_receipt_bound(&mut manifest);
+    manifest
 }
 
 /// Exact revision15 before explicit automatic native cold recovery.

@@ -172,6 +172,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     if manifest.harness == "claude" {
         return if Some(manifest) == claude_artifact::manifest().as_ref() {
             [
+                claude_artifact::historical_receipt_manifest(),
                 claude_artifact::historical_proof_closure_manifest(),
                 claude_artifact::historical_paired_clear_manifest(),
                 claude_artifact::historical_lifecycle_manifest(),
@@ -213,6 +214,15 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         ),
         _ => return Vec::new(),
     };
+    let receipt_opencode = [
+        opencode_artifact::manifest(),
+        opencode_artifact::jsonc_manifest(),
+        opencode_artifact::nested_manifest(false),
+        opencode_artifact::nested_manifest(true),
+    ]
+    .into_iter()
+    .map(opencode_artifact::historical_receipt_manifest)
+    .any(|candidate| candidate == *manifest);
     let one_shot_opencode = [
         opencode_artifact::manifest(),
         opencode_artifact::jsonc_manifest(),
@@ -233,6 +243,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     .any(|candidate| candidate == *manifest);
     // Current, one-shot and pre-end layouts share the same resume ancestry.
     let current_opencode = compiled_variant_matches(manifest, &opencode_artifact::manifest())
+        || receipt_opencode
         || one_shot_opencode
         || bounded_opencode
         || [
@@ -264,6 +275,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     }
     let current_pi = manifest.harness == "pi"
         && (*manifest == pi_artifact::candidate_manifest()
+            || *manifest == pi_artifact::historical_receipt_manifest()
             || *manifest == pi_artifact::historical_bounded_end_manifest()
             || *manifest == pi_artifact::historical_one_shot_end_manifest()
             || *manifest == pi_artifact::historical_end_manifest());
@@ -397,6 +409,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         }
         if manifest.harness == "pi"
             && (*manifest == pi_artifact::candidate_manifest()
+                || *manifest == pi_artifact::historical_receipt_manifest()
                 || *manifest == pi_artifact::historical_bounded_end_manifest()
                 || *manifest == pi_artifact::historical_one_shot_end_manifest())
         {
@@ -404,12 +417,19 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         }
         if manifest.harness == "pi"
             && (*manifest == pi_artifact::candidate_manifest()
+                || *manifest == pi_artifact::historical_receipt_manifest()
                 || *manifest == pi_artifact::historical_bounded_end_manifest())
         {
             history.insert(0, pi_artifact::historical_one_shot_end_manifest());
         }
-        if manifest.harness == "pi" && *manifest == pi_artifact::candidate_manifest() {
+        if manifest.harness == "pi"
+            && (*manifest == pi_artifact::candidate_manifest()
+                || *manifest == pi_artifact::historical_receipt_manifest())
+        {
             history.insert(0, pi_artifact::historical_bounded_end_manifest());
+        }
+        if manifest.harness == "pi" && *manifest == pi_artifact::candidate_manifest() {
+            history.insert(0, pi_artifact::historical_receipt_manifest());
         }
         if opencode_history {
             history.insert(
@@ -423,6 +443,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
                 );
             }
             if one_shot_opencode
+                || receipt_opencode
                 || bounded_opencode
                 || compiled_variant_matches(manifest, &opencode_artifact::manifest())
             {
@@ -432,6 +453,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
                 );
             }
             if bounded_opencode
+                || receipt_opencode
                 || compiled_variant_matches(manifest, &opencode_artifact::manifest())
             {
                 history.insert(
@@ -439,10 +461,18 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
                     opencode_artifact::historical_one_shot_end_manifest(manifest.clone()),
                 );
             }
-            if compiled_variant_matches(manifest, &opencode_artifact::manifest()) {
+            if receipt_opencode
+                || compiled_variant_matches(manifest, &opencode_artifact::manifest())
+            {
                 history.insert(
                     0,
                     opencode_artifact::historical_bounded_end_manifest(manifest.clone()),
+                );
+            }
+            if compiled_variant_matches(manifest, &opencode_artifact::manifest()) {
+                history.insert(
+                    0,
+                    opencode_artifact::historical_receipt_manifest(manifest.clone()),
                 );
             }
             // The newly effective loader layout cannot redefine which shipped
@@ -456,13 +486,15 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
                 opencode_artifact::nested_manifest(false),
                 opencode_artifact::nested_manifest(true),
             ] {
-                for revision in [7, 8, 9, 10, 11, 12, 13] {
+                for revision in [7, 8, 9, 10, 11, 12, 13, 14] {
                     if revision >= manifest.revision {
                         continue;
                     }
                     let mut snapshot = layout.clone();
                     snapshot.revision = revision;
-                    if revision == 13 {
+                    if revision == 14 {
+                        history::freeze_pre_receipt_bound(&mut snapshot);
+                    } else if revision == 13 {
                         history::freeze_bounded_end_transport(&mut snapshot);
                     } else if revision == 12 {
                         history::freeze_one_shot_end_transport(&mut snapshot);

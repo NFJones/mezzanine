@@ -1022,7 +1022,7 @@ accepted retries do not reset lifecycle ordinals twice. Original request/report
 identity, witness, origin, admission time and normalized counters remain unchanged;
 no provider work or historical charge is replayed. A never-received checkpoint,
 unresolved history gap or expired/retired/changed source remains unavailable.
-Current Pi16/OpenCode14 artifacts include this client; their exact previous
+Current Pi17/OpenCode15 artifacts include this client; their exact previous
 Pi15/OpenCode13 bundles remain recognized independently frozen installer history.
 
 ### Explicit same-native-source cold admission (server contract)
@@ -1255,7 +1255,7 @@ labelled `unavailable`, reasoning unknown, and response model comes from usage.
 Null/missing/unsafe usage remains unavailable; SDK explicit zeros are retained.
 The first admitted request timestamp keeps immutable replay stable. Module source
 support is not bootstrap installation, vendor enablement or exhaustive billing.
-Claude revision5 shares sixteen slots across active request producers and pending
+Claude revision6 shares sixteen slots across active request producers and pending
 final normalized outcomes. After both immediate ACK attempts fail, a later genuine
 main step retries at most one retained original report before its own delegate.
 Failures rotate without eviction; pending retries serialize and repeated markers
@@ -1279,7 +1279,14 @@ their platform dependencies; this is not installation of a curated usage hook.
 Exact revision-8 request and transport snapshots remain upgradeable.
 Tickets are immutable client-instance-local objects; copied or successor tickets cannot
 select credentials. Up to128 active tickets and16 serialized transport operations
-are retained. Unknown fields, unsafe/negative/overflowing counters and invalid
+are retained. A separate completion-FIFO cache holds only the newest128 settled
+receipts, each containing immutable normalized comparison evidence and a known
+durable ACK. The duplicate completed report object is released. Cache reads do
+not refresh retention. An evicted
+ticket returns unavailable locally; it never re-begins or resends historical
+accounting, undoes incurred expense, or evicts an unacknowledged request. This
+is a finite in-memory replay horizon, not a durable receipt guarantee.
+Unknown fields, unsafe/negative/overflowing counters and invalid
 subsets reject before transport; callback selectors are captured once. At most
 two attempts restore the same original marker and resend the same frozen report.
 Only a typed durable ACK marks delivery; retry after a known ACK is local/inert.

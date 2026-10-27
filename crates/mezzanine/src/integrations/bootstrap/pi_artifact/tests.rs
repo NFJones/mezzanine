@@ -66,7 +66,7 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
     let previous = historical_manifest();
     let current = candidate_manifest();
     assert_eq!(previous.revision, 9);
-    assert_eq!(current.revision, 16);
+    assert_eq!(current.revision, 17);
     assert_eq!(previous.entries.len(), 10);
     let revision10 = historical_usage_manifest();
     assert_eq!(revision10.revision, 10);
@@ -188,7 +188,13 @@ fn pi_revision13_history_preserves_frozen_slots_and_rejects_tampered_authority()
         .zip(&revision13.entries)
         .filter_map(|(active, frozen)| (active != frozen).then_some(active.path.as_str()))
         .collect::<Vec<_>>();
-    assert_eq!(end_changes, ["extensions/mezzanine/persistent_client.mjs"]);
+    assert_eq!(
+        end_changes,
+        [
+            "extensions/mezzanine/persistent_client.mjs",
+            "extensions/mezzanine/request_accounting.mjs",
+        ]
+    );
     let changed = revision13
         .entries
         .iter()
@@ -209,10 +215,10 @@ fn pi_revision13_history_preserves_frozen_slots_and_rejects_tampered_authority()
         }
     }
     let history = super::super::compiled_history(&current);
-    assert_eq!(history.len(), 14);
+    assert_eq!(history.len(), 15);
     assert_eq!(
         history.iter().map(|item| item.revision).collect::<Vec<_>>(),
-        (2..=15).rev().collect::<Vec<_>>()
+        (2..=16).rev().collect::<Vec<_>>()
     );
     for manifest in std::iter::once(current).chain(history) {
         for index in 0..manifest.entries.len() {

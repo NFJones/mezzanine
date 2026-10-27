@@ -2,7 +2,9 @@
  * Dependencies are injected; loading opens no sockets, timers or processes.
  * Adapters must begin before a genuine new request and retain its exact ticket.
  * Historical outcomes cannot obtain a ticket implicitly. At most 128 live
- * tickets and 16 queued transport operations are retained; pressure/loss is
+ * tickets, the newest 128 settled receipts, and 16 queued transport operations
+ * are retained; settled-cache eviction makes an old ticket unavailable without
+ * resending it or undoing durable expense. Pressure/loss is
  * explicit, never fabricated zero. Retry resends only one immutable report.
  * Tickets are client-instance-local; they never transfer successor credentials.
  */
@@ -66,7 +68,7 @@ function readiness(result, id) {
 /** Exposes only begin/end/abandon operations, never a generic RPC selector. */
 export function createRequestAccountingClient({ enqueue, exchange }) {
   const live = new Map();
-  const settled = new WeakMap();
+  const settled = new Map();
   let reported = false;
   return Object.freeze({
     accountingStatus() { return reported ? "request-bound-external-reported" : "unavailable-source-continuity"; },
@@ -118,7 +120,11 @@ export function createRequestAccountingClient({ enqueue, exchange }) {
             state.ack = Object.freeze({ delivered: true, durable: true, applied: result.applied, revision: result.revision });
             reported = true;
             live.delete(ticket);
-            settled.set(ticket, state);
+            // Completed payloads are no longer pending producer work. Retain
+            // only immutable comparison evidence and the known durable ACK.
+            state.report = undefined;
+            settled.set(ticket, { fingerprint: state.fingerprint, ack: state.ack });
+            if (settled.size > 128) settled.delete(settled.keys().next().value);
             return state.ack;
           }
         }
