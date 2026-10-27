@@ -1,11 +1,13 @@
-//! Qualified presentation helpers for an independently enrolled producer.
+//! Qualified presentation and request helpers for an independently enrolled producer.
 //!
 //! A private current run handle or bounded daemon-owned selector index narrows
 //! the target. The original public generation fences both paths, and native
 //! direct-parent capture must match that run's retained producer anchor. Parent ancestry alone
 //! never enrolls an owner. Observation stays on the existing bounded worker;
-//! actor settlement rechecks exact authority before the existing presentation
-//! reducer runs. Helpers acquire no role, accounting, lease or observer ownership.
+//! actor settlement rechecks exact authority before presentation or request
+//! settlement. Accounting-only work can serve each canonical native source but
+//! cannot alter presentation ordering or inherit heartbeat rights. Helpers acquire
+//! no role, source/accounting owner, lease or observer ownership.
 
 use super::*;
 
@@ -198,7 +200,7 @@ impl RuntimeSessionService {
             .as_ref()
             .filter(|registration| registration.external_session_id == session_id)
             .ok_or_else(|| MezError::forbidden("external helper session unavailable"))?;
-        if (heartbeat || usage_end)
+        if heartbeat
             && (binding.harness != "claude"
                 || enrollment.curated_observer.is_none()
                 || !matches!(enrollment.producer, ProducerEvidence::VerifiedParent(_)))
@@ -207,7 +209,7 @@ impl RuntimeSessionService {
                 "curated observer proof requires its declared parent source",
             ));
         }
-        if binding.pi_lifecycle.is_some() {
+        if binding.pi_lifecycle.is_some() && !usage_begin && !usage_end {
             return Err(MezError::conflict(
                 "external Pi lifecycle owns presentation sequence",
             ));
@@ -227,7 +229,9 @@ impl RuntimeSessionService {
         payload.remove("launch_token");
         payload.remove("harness");
         let usage_end = if usage_end {
-            if !enrollment.usage_owner_is_durable {
+            if !enrollment.usage_owner_is_durable
+                || !super::helper_usage::supported_harness(&binding.harness)
+            {
                 return Err(MezError::forbidden("curated request namespace unavailable"));
             }
             Some(self.external_request_work_for_binding(request.id.clone(), binding, &params)?)
@@ -348,7 +352,10 @@ impl RuntimeSessionService {
                     && binding.process.same_incarnation(&work.process)
             })
             .ok_or_else(|| MezError::forbidden("external helper run changed"))?;
-        if binding.pi_lifecycle.is_some() {
+        if binding.pi_lifecycle.is_some()
+            && helper.usage_begin.is_none()
+            && helper.usage_end.is_none()
+        {
             return Err(MezError::conflict(
                 "external Pi lifecycle owns presentation sequence",
             ));

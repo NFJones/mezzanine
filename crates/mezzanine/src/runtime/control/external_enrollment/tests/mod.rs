@@ -6,6 +6,7 @@ mod cold_source_history;
 mod cold_source_recovery;
 mod curated_request_client;
 mod curated_usage;
+mod helper_accounting;
 mod root_replacement;
 mod source_activation;
 mod source_activation_fixture;

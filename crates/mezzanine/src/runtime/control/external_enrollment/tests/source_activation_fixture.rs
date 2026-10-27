@@ -11,14 +11,32 @@ pub(super) async fn accepted_source() -> Option<(
     ExternalEnrollmentWork,
     serde_json::Value,
 )> {
+    accepted_source_for_harness("pi").await
+}
+
+/// Qualifies the selected ordinary source through the same real enrollment and
+/// mandatory acceptance publication, without changing a stored owner or binding.
+pub(super) async fn accepted_source_for_harness(
+    harness: &str,
+) -> Option<(
+    Fixture,
+    crate::storage::token_usage::TokenUsageStore,
+    ExternalEnrollmentWork,
+    serde_json::Value,
+)> {
     let mut fixture = fixture("hold").await?;
     let store = crate::storage::token_usage::TokenUsageStore::new(
         fixture.directory.join("retirement.sqlite"),
     );
     fixture.service.set_token_usage_store(store.clone());
+    let mut enrollment = request();
+    let mut params: serde_json::Value =
+        serde_json::from_str(enrollment.params.as_deref().unwrap()).unwrap();
+    params["harness"] = serde_json::json!(harness);
+    enrollment.params = Some(params.to_string());
     let work = fixture
         .service
-        .prepare_external_enrollment(&request(), &fixture.connection)
+        .prepare_external_enrollment(&enrollment, &fixture.connection)
         .unwrap();
     let native = work.clone();
     let observed = tokio::task::spawn_blocking(move || native.execute_enrollment())

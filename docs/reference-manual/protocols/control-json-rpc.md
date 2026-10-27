@@ -1205,6 +1205,18 @@ markers. This contract is external-reported observation, not vendor billing
 attestation. Discovery reports `request-bound-external-reported` only after an
 actual durable request report. Existing enrollment/client support may still lack
 usage producers; legacy layout handoff remains unfinished.
+The shared fixed `harness-source` usage capsule accepts an optional `harness`
+selector for `pi`, `opencode`, `claude`, `codex`, `copilot` or `cursor` (omitted
+means the installed Claude contract). It projects only the fixed
+`agent/external/curated-usage-begin/end` methods. A genuine direct-child helper of
+an already durably mapped native producer can use these typed receipts, including
+socket-enrolled sources. The daemon still proves the exact parent, UID, original
+observer witness/generation/session and pane-root ancestry; the selector grants
+no source authority. Unknown or retired harnesses are unavailable. Accounting
+work does not change Pi presentation ordering or gain heartbeat rights. This
+common plumbing does not provide a vendor counter callback, import historical
+outcomes or install an unavailable source.
+
 Declared curated Claude sources can use `agent/external/curated-usage-begin`
 and `agent/external/curated-usage-end` through the fixed `harness-source` argv
 capsule operations of those names. Public fields are original generation,

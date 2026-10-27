@@ -1,7 +1,8 @@
-//! Fixed public request-accounting capsules for declared curated creators.
+//! Fixed public request-accounting capsules for native direct-child helpers.
 //!
 //! Selectors cannot carry capabilities, PID/project/endpoint/epoch claims or
-//! callback content. Native creator admission remains authoritative. Begin
+//! callback content. Canonical harness names only narrow an already admitted
+//! native producer; same-UID direct-parent proof remains authoritative. Begin
 //! receipt is required before genuine new request work; final normalized reports
 //! retain the same marker. Neutral helper exit never implies durable accounting.
 
@@ -10,6 +11,30 @@ use super::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Explicit canonical selectors reuse one fixed request shape for all six
+    /// adapters; unknown, retired and null names cannot select a generic RPC.
+    #[test]
+    fn harness_source_usage_capsules_select_only_six_canonical_adapters() {
+        let base = serde_json::json!({"operation":"curated-usage-begin","external_session_id":"session-a","generation":1,"observer_witness":"a".repeat(64),"request_id":"b".repeat(64)});
+        for harness in ["pi", "opencode", "claude", "codex", "copilot", "cursor"] {
+            let mut input = base.clone();
+            input["harness"] = serde_json::json!(harness);
+            let parsed = Usage::parse(input.to_string().as_bytes()).unwrap();
+            let request: serde_json::Value = serde_json::from_str(&parsed.request()).unwrap();
+            assert_eq!(request["params"]["harness"], harness);
+            assert_eq!(request["method"], "agent/external/curated-usage-begin");
+        }
+        for harness in [
+            serde_json::Value::Null,
+            serde_json::json!("gemini"),
+            serde_json::json!("unknown"),
+        ] {
+            let mut input = base.clone();
+            input["harness"] = harness;
+            assert!(Usage::parse(input.to_string().as_bytes()).is_err());
+        }
+    }
 
     /// Unique bounded public selectors project only fixed Claude methods;
     /// credentials, unknown payload content, null begin outcomes and numeric
@@ -54,6 +79,8 @@ mod tests {
 #[serde(deny_unknown_fields)]
 pub(super) struct Usage {
     operation: String,
+    #[serde(default = "default_harness")]
+    harness: String,
     external_session_id: String,
     generation: u64,
     observer_witness: String,
@@ -68,6 +95,12 @@ pub(super) struct Usage {
     model: Option<String>,
     #[serde(default)]
     counters: Option<crate::storage::token_usage::ExternalCounters>,
+}
+
+/// Existing installed Claude capsules omit the selector; other ordinary sources
+/// name their canonical harness, still subject to independent native admission.
+fn default_harness() -> String {
+    "claude".into()
 }
 
 /// Canonical opaque selectors cannot store raw event content or case aliases.
@@ -91,6 +124,9 @@ impl Usage {
         if !matches!(
             parsed.operation.as_str(),
             "curated-usage-begin" | "curated-usage-end"
+        ) || !matches!(
+            parsed.harness.as_str(),
+            "pi" | "opencode" | "claude" | "codex" | "copilot" | "cursor"
         ) || !identifier(&parsed.external_session_id, 128)
             || parsed.generation == 0
             || parsed.generation > 9_007_199_254_740_991
@@ -151,7 +187,7 @@ impl Usage {
     }
     /// Selects only the fixed native-creator telemetry method and harness.
     pub(super) fn request(&self) -> String {
-        let mut params = serde_json::json!({"harness":"claude","external_session_id":self.external_session_id,"generation":self.generation,"observer_witness":self.observer_witness,"request_id":self.request_id});
+        let mut params = serde_json::json!({"harness":self.harness,"external_session_id":self.external_session_id,"generation":self.generation,"observer_witness":self.observer_witness,"request_id":self.request_id});
         if self.operation == "curated-usage-end" {
             params["event_id"] = serde_json::json!(self.event_id);
             params["observed_at"] = serde_json::json!(self.observed_at);

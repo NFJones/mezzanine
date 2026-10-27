@@ -1,4 +1,4 @@
-//! Request origins for already-qualified curated creator helpers.
+//! Request origins for direct-child helpers of already-qualified native sources.
 //!
 //! Public selectors narrow an existing declared creator; they never mint source
 //! authority. Native helper observation runs first on the existing bounded
@@ -11,6 +11,15 @@ use super::*;
 use crate::storage::token_usage::{
     AccountingProjectRecord, ExternalRequestOrigin, TokenUsageStore, accounting_origin_for_root,
 };
+
+/// Canonical ordinary adapters supported by the shared request contract. A name
+/// only narrows existing native authority; it never creates or recovers a source.
+pub(super) fn supported_harness(harness: &str) -> bool {
+    matches!(
+        harness,
+        "pi" | "opencode" | "claude" | "codex" | "copilot" | "cursor"
+    )
+}
 
 /// Frozen bounded request metadata, with worker-only publication evidence.
 #[derive(Debug, Clone)]
@@ -36,7 +45,7 @@ impl HelperUsageBegin {
         self.now = now;
     }
 
-    /// Captures only an existing durably mapped declared parent namespace;
+    /// Captures only an existing durably mapped native producer namespace;
     /// unsupported sources and malformed request selectors fail before work.
     pub(super) fn capture(
         service: &RuntimeSessionService,
@@ -46,13 +55,9 @@ impl HelperUsageBegin {
         let source = binding
             .enrollment
             .as_ref()
-            .filter(|source| {
-                source.usage_owner_is_durable
-                    && source.curated_observer.is_some()
-                    && matches!(source.producer, ProducerEvidence::VerifiedParent(_))
-            })
+            .filter(|source| source.usage_owner_is_durable)
             .ok_or_else(|| MezError::forbidden("curated request source unavailable"))?;
-        if binding.harness != "claude"
+        if !supported_harness(&binding.harness)
             || marker.len() != 64
             || !marker
                 .bytes()

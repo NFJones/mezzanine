@@ -1999,6 +1999,17 @@ record alone describes historical admission, not current liveness, and MUST NOT
 authorize recovery or reporting.
 Existing same-live ownership and namespace-only activation refusals remain in
 force; a stored Accepted flag alone MUST NOT authorize recovery or reporting.
+The fixed `curated-usage-begin/end` helper capsules MAY explicitly select one
+canonical harness (`pi`, `opencode`, `claude`, `codex`, `copilot` or `cursor`).
+Omitting the selector retains the installed Claude capsule contract. A selector
+MUST narrow an already durably mapped native producer, never create a source,
+import history or select another owner. Both socket-enrolled producers and
+declared curated creators MUST require the helper's actual same-UID direct-parent
+relationship, original witness/generation/session, root ancestry and sealed worker
+publication. Pi-owned presentation ordering MUST NOT reject accounting-only work
+or be changed by it. Heartbeat and presentation retain their separate source
+restrictions. This common typed helper supplies no vendor request/counter schema
+and cannot make an unavailable vendor source qualified.
 Declared curated Claude creators MAY use fixed `curated-usage-begin/end`
 helpers with public original generation/witness/session/request selectors only.
 Curated usage and heartbeat callbacks MUST narrow only the bounded indexed
