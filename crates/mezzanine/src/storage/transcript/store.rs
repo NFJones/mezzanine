@@ -3222,7 +3222,27 @@ impl AgentTranscriptStore {
         // Hold the append lane throughout validation and inspection. A writer
         // emits the row and its terminator in separate writes, so an unlocked
         // scan can otherwise mistake a healthy in-flight append for corruption.
-        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        let conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        self.conversation_transcript_view_locked(
+            conversation_id,
+            read,
+            committed_prefix_required,
+            pending,
+            &conversation_lock,
+        )
+    }
+
+    /// Reads the checked view while the caller retains this conversation's
+    /// mutation lease. Only transcript-owned snapshot readers may use this
+    /// boundary; acquiring another descriptor here would recursively deadlock.
+    pub(super) fn conversation_transcript_view_locked(
+        &self,
+        conversation_id: &str,
+        read: ConversationTranscriptRead,
+        committed_prefix_required: bool,
+        pending: &[TranscriptEntry],
+        _conversation_lock: &std::fs::File,
+    ) -> Result<ConversationTranscriptView> {
         if self.active_delete_pending(conversation_id)? {
             return Err(MezError::invalid_state(
                 "conversation publication or deletion is incomplete",

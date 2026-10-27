@@ -10457,6 +10457,12 @@ logical frontier and raw count once; compaction retention changes only the raw
 count. Fork work MUST freeze the actual logical source frontier and reject
 missing required history rather than inventing or clamping its cutoff. Loop
 restoration and transactional rollback MUST preserve both domains.
+Ordinary model replay MUST capture its authoritative compaction epoch and
+checked transcript window under one conversation mutation lease, then render
+from that immutable snapshot without rereading storage. Pending rows MUST be
+validated and deduplicated against committed rows under the same lease; their
+presence MUST NOT establish durability for publication. Proposed compaction
+previews MUST use the same canonical renderer without publishing the proposal.
 These runtime counters introduce no persisted field or configuration item;
 existing versioned transcript and checkpoint codecs remain authoritative.
 

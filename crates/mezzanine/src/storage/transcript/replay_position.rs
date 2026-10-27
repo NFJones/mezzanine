@@ -4,9 +4,13 @@
 //! are separate domains. Validation proves the archive is contiguous before its
 //! row count may stand for a sequence frontier. Selective summaries do not
 //! remove physical tail rows; canonical replay applies their coverage later.
-//! This module reads only, writes no metadata, and retains no transcript payload.
+//! Replay readers also capture the epoch and checked row projection under one
+//! lease, so policy cannot combine an old summary with a separately read tail.
+//! This module reads only and writes no metadata. Returned snapshots own their
+//! payload but do not retain the mutation lane beyond the coherent read.
 
-use super::{AgentPresentationEntry, AgentTranscriptStore};
+use super::store::{ConversationTranscriptRead, ConversationTranscriptView};
+use super::{AgentCompactionEpoch, AgentPresentationEntry, AgentTranscriptStore};
 use crate::{MezError, Result};
 use mez_agent::AgentTranscriptPosition;
 
@@ -20,7 +24,45 @@ pub(crate) struct ResumeReplaySnapshot {
     pub(crate) position: AgentTranscriptPosition,
 }
 
+/// Authoritative epoch and checked rows decoded in one mutation lane.
+/// Only the committed rows can justify durable publication; logical rows also
+/// contain checked, deduplicated actor-captured pending appends.
+pub(crate) struct ConversationReplaySnapshot {
+    /// Validated durable prefix/selective projection from this exact read.
+    pub(crate) epoch: Option<AgentCompactionEpoch>,
+    /// Checked archive and logical rows selected using the captured epoch.
+    pub(crate) view: ConversationTranscriptView,
+}
+
 impl AgentTranscriptStore {
+    /// Reads one epoch and its policy-selected checked row window under the same
+    /// mutation lease. The pure selector receives only that epoch and may skip
+    /// row decoding when the captured owner has no replay work. Malformed epoch,
+    /// missing required history, conflicting pending rows, and gaps remain errors.
+    pub(crate) fn conversation_replay_snapshot(
+        &self,
+        conversation_id: &str,
+        pending: &[mez_agent::TranscriptEntry],
+        select: impl FnOnce(Option<&AgentCompactionEpoch>) -> Option<(ConversationTranscriptRead, bool)>,
+    ) -> Result<ConversationReplaySnapshot> {
+        let lease = self.acquire_conversation_lock(conversation_id)?;
+        let epoch = self.compaction_epoch(conversation_id)?;
+        let view = match select(epoch.as_ref()) {
+            Some((read, required)) => self.conversation_transcript_view_locked(
+                conversation_id,
+                read,
+                required,
+                pending,
+                &lease,
+            )?,
+            None => ConversationTranscriptView {
+                committed: Vec::new(),
+                logical: Vec::new(),
+            },
+        };
+        Ok(ConversationReplaySnapshot { epoch, view })
+    }
+
     /// Captures presentation and replay position without racing a transcript
     /// append or epoch publication. Missing required history, malformed rows,
     /// and a boundary beyond the archive fail rather than shorten replay.

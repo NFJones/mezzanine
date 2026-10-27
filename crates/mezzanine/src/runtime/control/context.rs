@@ -4,6 +4,9 @@
 //! local message payload formatting helpers used by the runtime control adapter.
 //! Keeping these routines behind a focused child-module boundary prevents the
 //! control request dispatcher from also owning model-context shaping details.
+//! Durable replay captures its epoch and checked row window under one mutation
+//! lease, then renders without further storage reads. Proposed epochs share that
+//! pure renderer and never publish merely to inspect a candidate context.
 
 use super::super::{ContextBlock, ContextSourceKind, Envelope, TranscriptEntry, TranscriptRole};
 use crate::error::Result;
@@ -69,8 +72,16 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
 ) -> Result<RuntimeAgentTranscriptContext> {
     work.store
         .publish_terminal_compaction_handoffs(&work.inputs.conversation_id)?;
-    let epoch = work.store.compaction_epoch(&work.inputs.conversation_id)?;
-    execute_runtime_agent_history_epoch_with_projection(work, epoch)
+    let snapshot = work.store.conversation_replay_snapshot(
+        &work.inputs.conversation_id,
+        &work.inputs.pending_entries,
+        |epoch| runtime_agent_history_read(&work.inputs, epoch),
+    )?;
+    Ok(runtime_agent_history_epoch_from_snapshot(
+        work.inputs,
+        snapshot.epoch,
+        snapshot.view.logical,
+    ))
 }
 
 /// Projects a proposed epoch through the same replay path without publishing it.
@@ -78,36 +89,70 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
     work: RuntimeAgentHistoryEpochWork,
     epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
 ) -> Result<RuntimeAgentTranscriptContext> {
-    if epoch.is_none()
-        && work.inputs.active_entries == Some(0)
-        && work.inputs.pending_entries.is_empty()
-    {
-        return Ok(RuntimeAgentTranscriptContext {
-            blocks: Vec::new(),
-            execution_events: Vec::new(),
-            provider_history_repair_identity: None,
-        });
+    let entries = match runtime_agent_history_read(&work.inputs, epoch.as_ref()) {
+        Some((read, required)) => {
+            work.store
+                .conversation_transcript_view(
+                    &work.inputs.conversation_id,
+                    read,
+                    required,
+                    &work.inputs.pending_entries,
+                )?
+                .logical
+        }
+        None => Vec::new(),
+    };
+    Ok(runtime_agent_history_epoch_from_snapshot(
+        work.inputs,
+        epoch,
+        entries,
+    ))
+}
+
+/// Selects the existing raw window using only immutable owner and epoch inputs.
+/// A missing read preserves the zero-history fast path without decoding rows.
+fn runtime_agent_history_read(
+    inputs: &RuntimeAgentHistoryEpochInputs,
+    epoch: Option<&crate::storage::transcript::AgentCompactionEpoch>,
+) -> Option<(ConversationTranscriptRead<'static>, bool)> {
+    if epoch.is_none() && inputs.active_entries == Some(0) && inputs.pending_entries.is_empty() {
+        return None;
     }
     if let Some(epoch) = epoch
-        && work
-            .inputs
+        && inputs
             .ephemeral_source_entries
             .is_none_or(|limit| epoch.through_sequence <= limit)
     {
-        let mut entries = work
-            .store
-            .conversation_transcript_view(
-                &work.inputs.conversation_id,
-                ConversationTranscriptRead::After(epoch.through_sequence),
-                true,
-                &work.inputs.pending_entries,
-            )?
-            .logical;
+        return Some((
+            ConversationTranscriptRead::After(epoch.through_sequence),
+            true,
+        ));
+    }
+    let read = inputs.active_entries.map_or(
+        ConversationTranscriptRead::All,
+        ConversationTranscriptRead::Latest,
+    );
+    let required = inputs.ephemeral_source_entries.unwrap_or_default() > 0
+        || inputs.active_entries.unwrap_or_default() > inputs.pending_entries.len();
+    Some((read, required))
+}
+
+/// Builds canonical prefix/selective history from one already checked snapshot.
+/// This pure renderer performs no additional archive or epoch reads.
+fn runtime_agent_history_epoch_from_snapshot(
+    mut inputs: RuntimeAgentHistoryEpochInputs,
+    epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
+    mut entries: Vec<TranscriptEntry>,
+) -> RuntimeAgentTranscriptContext {
+    if let Some(epoch) = epoch
+        && inputs
+            .ephemeral_source_entries
+            .is_none_or(|limit| epoch.through_sequence <= limit)
+    {
         entries.retain(|entry| {
-            entry.conversation_id == work.inputs.conversation_id
+            entry.conversation_id == inputs.conversation_id
                 && entry.sequence > epoch.through_sequence
-                && work
-                    .inputs
+                && inputs
                     .ephemeral_source_entries
                     .is_none_or(|limit| entry.sequence <= limit)
         });
@@ -117,14 +162,14 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
             .ranges
             .iter()
             .filter(|range| {
-                work.inputs
+                inputs
                     .ephemeral_source_entries
                     .is_none_or(|limit| range.through_sequence <= limit)
             })
             .cloned()
             .collect::<Vec<_>>();
         let mut history = runtime_agent_transcript_context_with_ranges(
-            &work.inputs.pane_id,
+            &inputs.pane_id,
             &entries,
             &applicable_ranges,
         );
@@ -137,33 +182,17 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
                         "memory {} (conversation)",
                         mez_agent::memory::canonical_memory_uuid(&format!(
                             "compact-{}",
-                            work.inputs.conversation_id
+                            inputs.conversation_id
                         ))
                     ),
                     epoch.summary,
                 ),
             );
         }
-        return Ok(history);
+        return history;
     }
-    let read = work.inputs.active_entries.map_or(
-        ConversationTranscriptRead::All,
-        ConversationTranscriptRead::Latest,
-    );
-    let required = work.inputs.ephemeral_source_entries.unwrap_or_default() > 0
-        || work.inputs.active_entries.unwrap_or_default() > work.inputs.pending_entries.len();
-    let entries = work
-        .store
-        .conversation_transcript_view(
-            &work.inputs.conversation_id,
-            read,
-            required,
-            &work.inputs.pending_entries,
-        )?
-        .logical;
-    let mut inputs = work.inputs;
     inputs.pending_entries.clear();
-    Ok(runtime_agent_history_epoch_from_entries(inputs, entries))
+    runtime_agent_history_epoch_from_entries(inputs, entries)
 }
 
 /// Immutable compact-memory and durable-transcript inputs for one prompt epoch.

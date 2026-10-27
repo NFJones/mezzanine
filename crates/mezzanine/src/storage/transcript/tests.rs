@@ -10,6 +10,8 @@ mod fork_epoch;
 mod occurrence;
 /// Exact-conversation receipt admission and retirement race coverage.
 mod receipt_admission;
+/// Epoch and row windows share one native mutation lane and pending-row check.
+mod replay_snapshot;
 /// Content edits cannot invalidate an authoritative selective compaction summary.
 mod selective_edit_fence;
 
