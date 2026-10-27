@@ -32,7 +32,7 @@ const MAX_IN_FLIGHT: usize = 32;
 pub(super) struct ExternalUsageProjection {
     pending: BTreeSet<u64>,
     /// Exact control-owner incarnation; full service replacement cannot reuse IDs.
-    incarnation: Arc<()>,
+    pub(super) incarnation: Arc<()>,
     /// Exact actor-held capacity reservations, including canonical group keys.
     pub(super) reservations: BTreeMap<String, usize>,
     next_admission: u64,
@@ -1036,6 +1036,16 @@ impl RuntimeSessionService {
                     || stream.members.is_some()
                     || (partition.commit.revision > stream.revision
                         && partition.commit.totals.difference(stream.totals).is_err())
+                    || (partition.commit.revision < stream.revision
+                        && stream.totals.difference(partition.commit.totals).is_err())
+                    || (stream
+                        .reset_baseline
+                        .difference(partition.reset_baseline)
+                        .is_err()
+                        && partition
+                            .reset_baseline
+                            .difference(stream.reset_baseline)
+                            .is_err())
                     || (stream.revision == partition.commit.revision
                         && stream.totals != partition.commit.totals))
             {
@@ -1056,12 +1066,19 @@ impl RuntimeSessionService {
                     project: partition.project.clone(),
                     revision: 0,
                     totals: partition.commit.totals.zero_like(),
-                    reset_baseline: partition.commit.totals.zero_like(),
+                    reset_baseline: partition.reset_baseline,
                     members: None,
                 });
             if partition.commit.revision > stream.revision {
                 stream.revision = partition.commit.revision;
                 stream.totals = partition.commit.totals;
+            }
+            if stream
+                .reset_baseline
+                .difference(partition.reset_baseline)
+                .is_err()
+            {
+                stream.reset_baseline = partition.reset_baseline;
             }
         }
         Ok(())

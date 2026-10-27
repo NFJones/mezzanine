@@ -69,6 +69,16 @@ async fn external_cold_source_full_control_replacement_replays_original_report_o
     let first_ack = finish(&mut fixture, &frozen).await;
     assert_eq!(first_ack["result"]["durable"], true);
     assert_eq!(first_ack["result"]["applied"], true);
+    let reset = fixture.service.prepare_external_usage_reset("%1").unwrap();
+    let worker = reset.clone();
+    tokio::task::spawn_blocking(move || worker.execute())
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .service
+        .complete_external_usage_reset(&reset)
+        .unwrap();
     let old_ready_work = fixture
         .service
         .prepare_external_usage_begin(&begin(&first, &"d".repeat(64)), &fixture.connection)
@@ -195,11 +205,8 @@ async fn external_cold_source_full_control_replacement_replays_original_report_o
     let duplicate = finish(&mut fixture, &replay).await;
     assert_eq!(duplicate["result"]["durable"], true);
     assert_eq!(duplicate["result"]["applied"], false);
-    // Pane-view reset persistence across FULL control replacement is a separate
-    // unfinished contract: current baselines live in the replaced component.
-    // Here establish a reset in the recovered projection, then require neither
-    // exact replay nor subsequent distinct reports to resurrect its old spend.
-    assert!(fixture.service.reset_external_token_usage("%1"));
+    // The reset happened BEFORE replacement. Cold recovery and exact replay
+    // must not resurrect the already-reset pane expense.
     begin_ready(&mut fixture, &begin(&recovered, &"a".repeat(64))).await;
     assert_eq!(
         finish(&mut fixture, &replay).await["result"]["applied"],

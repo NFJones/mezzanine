@@ -29,6 +29,8 @@ use crate::runtime::{
 pub(crate) enum RuntimeAgentCommandFamily {
     /// Captured status diagnostics and rolling accounting history.
     Status,
+    /// Durable external pane-view resets; no SQLite runs on the actor.
+    ResetStatus,
     /// Catalog displays that walk the configured and project catalogs.
     Catalog,
     /// Provider credential status reads.
@@ -70,6 +72,7 @@ pub(crate) fn off_actor_command_family(
 ) -> Option<RuntimeAgentCommandFamily> {
     match command {
         "status" | "agent-status" => Some(RuntimeAgentCommandFamily::Status),
+        "reset-status" => Some(RuntimeAgentCommandFamily::ResetStatus),
         "list-skills" | "list-macros" => Some(RuntimeAgentCommandFamily::Catalog),
         "auth-status" => Some(RuntimeAgentCommandFamily::AuthStatus),
         "issue" => Some(RuntimeAgentCommandFamily::IssueStore),
@@ -137,6 +140,7 @@ impl RuntimeSessionService {
             return false;
         }
         match command {
+            "reset-status" => true,
             "status" => super::parse_slash_command(input)
                 .ok()
                 .flatten()
@@ -196,9 +200,12 @@ impl RuntimeSessionService {
         if command == "resume" && !super::resume::runtime_agent_resume_args_are_picker(input) {
             self.agent.cancel_agent_command(pane_id);
         }
-        let status_report = if command == "status" {
+        let status_report = if matches!(command, "status" | "reset-status") {
             let slash = super::parse_slash_command(input)?
                 .ok_or_else(|| MezError::invalid_args("status requires slash input"))?;
+            if command == "reset-status" && !slash.args.trim().is_empty() {
+                return Err(MezError::invalid_args("reset-status accepts no arguments"));
+            }
             let options = mez_agent::slash::parse_status_options(&slash.args)
                 .map_err(MezError::invalid_args)?;
             Some(self.prepare_status_report(primary_client_id, pane_id, options)?)
@@ -252,7 +259,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .filter(|session| session.visibility == AgentShellVisibility::Visible)
             .map(|session| session.session_id.as_str());
-        if !matches!(command, "status" | "agent-status")
+        if !matches!(command, "status" | "agent-status" | "reset-status")
             && current_conversation != Some(conversation_id)
         {
             self.take_pending_record_browser_overlay_claim_stack(pane_id, claim_generation);
@@ -283,6 +290,43 @@ impl RuntimeSessionService {
         // Each family names exactly what the worker may read; a command with no
         // family has no off-actor executor yet and keeps executing inline.
         let prepared = match family {
+            RuntimeAgentCommandFamily::ResetStatus => {
+                let Some(owner) = self.take_pending_status_report(pane_id, claim_generation) else {
+                    return self.fail_agent_command_before_claim(
+                        pane_id,
+                        conversation_id,
+                        command,
+                        input,
+                        claim_generation,
+                        "reset acceptance snapshot unavailable",
+                    );
+                };
+                if owner.client != *_primary_client_id || !self.status_report_is_current(&owner) {
+                    self.agent.cancel_matching_agent_command(
+                        pane_id,
+                        conversation_id,
+                        claim_generation,
+                    );
+                    return Ok(None);
+                }
+                let reset = match self.prepare_external_usage_reset(pane_id) {
+                    Ok(reset) => reset,
+                    Err(error) => {
+                        return self.fail_agent_command_before_claim(
+                            pane_id,
+                            conversation_id,
+                            command,
+                            input,
+                            claim_generation,
+                            error.message(),
+                        );
+                    }
+                };
+                RuntimeAgentCommandPrepared::ResetStatus {
+                    owner: Box::new(owner),
+                    reset: Box::new(reset),
+                }
+            }
             RuntimeAgentCommandFamily::Status => {
                 let Some(report) = self.take_pending_status_report(pane_id, claim_generation)
                 else {
@@ -673,6 +717,15 @@ impl RuntimeSessionService {
         work: &RuntimeAgentCommandAsyncWork,
     ) -> RuntimeAgentCommandAsyncOutcome {
         let body = match &work.prepared {
+            RuntimeAgentCommandPrepared::ResetStatus { reset, .. } => match reset.execute() {
+                Ok(()) => "pane_token_usage_reset=true durable=true".to_string(),
+                Err(error) => {
+                    return RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    };
+                }
+            },
             RuntimeAgentCommandPrepared::Status(report) => match report.render() {
                 Ok(body) => body,
                 Err(error) => {
@@ -1112,7 +1165,12 @@ impl RuntimeSessionService {
             // the source display claim was cancelled after successful adoption.
             self.checkpoint_agent_session_metadata()?;
         }
-        if let RuntimeAgentCommandPrepared::Status(report) = &work.prepared {
+        let report = match &work.prepared {
+            RuntimeAgentCommandPrepared::Status(report) => Some(report),
+            RuntimeAgentCommandPrepared::ResetStatus { owner, .. } => Some(owner),
+            _ => None,
+        };
+        if let Some(report) = report {
             if !self.status_report_is_current(report) {
                 self.agent.cancel_matching_agent_command(
                     &work.pane_id,
@@ -1130,8 +1188,11 @@ impl RuntimeSessionService {
             .agent_shell_store()
             .get(&work.pane_id)
             .map(|session| session.session_id.as_str());
-        if !matches!(work.prepared, RuntimeAgentCommandPrepared::Status(_))
-            && current_conversation != Some(work.conversation_id.as_str())
+        if !matches!(
+            work.prepared,
+            RuntimeAgentCommandPrepared::Status(_)
+                | RuntimeAgentCommandPrepared::ResetStatus { .. }
+        ) && current_conversation != Some(work.conversation_id.as_str())
         {
             self.take_pending_record_browser_overlay_claim_stack(
                 &work.pane_id,
@@ -1144,7 +1205,6 @@ impl RuntimeSessionService {
             );
             return Ok(false);
         }
-        let is_failure = matches!(outcome, RuntimeAgentCommandAsyncOutcome::Failed { .. });
         let claimed = self.agent.agent_command_is_claimed(
             &work.pane_id,
             &work.conversation_id,
@@ -1157,6 +1217,23 @@ impl RuntimeSessionService {
             );
             return Ok(false);
         }
+        let outcome = if let RuntimeAgentCommandPrepared::ResetStatus { reset, .. } = &work.prepared
+            && !matches!(
+                outcome,
+                RuntimeAgentCommandAsyncOutcome::Failed { .. }
+                    | RuntimeAgentCommandAsyncOutcome::Projected { failed: true, .. }
+            ) {
+            match self.complete_external_usage_reset(reset) {
+                Ok(()) => outcome,
+                Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                    message: error.message().to_owned(),
+                    kind: error.kind(),
+                },
+            }
+        } else {
+            outcome
+        };
+        let is_failure = matches!(outcome, RuntimeAgentCommandAsyncOutcome::Failed { .. });
         let parent_browser_stack = self
             .take_pending_record_browser_overlay_claim_stack(&work.pane_id, work.claim_generation);
         let body = match outcome {

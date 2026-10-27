@@ -19,6 +19,8 @@ use std::collections::BTreeMap;
 pub(crate) struct SourceUsagePartition {
     /// Canonical checkpoint, not a newly applied expense delta.
     pub(crate) commit: ExternalUsageCommit,
+    /// Durable view-only reset point, never subtracted from global expense.
+    pub(crate) reset_baseline: ExternalCounters,
     /// Frozen request origin, including explicit unattributed state.
     pub(crate) project: Option<AccountingProjectId>,
     /// Original response provider/model, never current registration defaults.
@@ -210,13 +212,15 @@ impl TokenUsageStore {
                         "external source checkpoint stream identity changed",
                     ));
                 }
+                let commit = ExternalUsageCommit {
+                    stream_id: id.clone(),
+                    revision,
+                    totals,
+                    applied: false,
+                };
                 let partition = SourceUsagePartition {
-                    commit: ExternalUsageCommit {
-                        stream_id: id.clone(),
-                        revision,
-                        totals,
-                        applied: false,
-                    },
+                    reset_baseline: super::view_reset::baseline(&tx, &commit)?,
+                    commit,
                     project,
                     model,
                 };
@@ -369,6 +373,166 @@ mod tests {
                 )
                 .unwrap(),
             (3, 17)
+        );
+    }
+
+    /// Reset persists the captured point, not later incurred expense. Repeated
+    /// and reversed reset workers cannot regress a newer accepted baseline;
+    /// source snapshots recover unreplayed model partitions without new charges.
+    #[test]
+    fn source_projection_reset_is_captured_monotonic_and_expense_neutral() {
+        let fixture = Fixture::new();
+        let first = fixture.report('b', "model-a", 10);
+        let other = fixture.report('c', "model-b", 5);
+        let late = fixture.report('d', "model-a", 7);
+        fixture
+            .store
+            .reset_external_usage_view(&[first.clone(), other.clone()])
+            .unwrap();
+        let snapshot = fixture
+            .store
+            .external_source_usage_snapshot(&fixture.key)
+            .unwrap();
+        assert_eq!(snapshot.partitions.len(), 2);
+        assert_eq!(
+            snapshot
+                .partitions
+                .iter()
+                .map(|partition| partition.commit.totals.input_tokens)
+                .sum::<u64>(),
+            22
+        );
+        assert_eq!(
+            snapshot
+                .partitions
+                .iter()
+                .map(|partition| partition.reset_baseline.input_tokens)
+                .sum::<u64>(),
+            15
+        );
+        fixture
+            .store
+            .reset_external_usage_view(std::slice::from_ref(&late))
+            .unwrap();
+        fixture
+            .store
+            .reset_external_usage_view(&[first, other])
+            .unwrap();
+        let snapshot = fixture
+            .store
+            .external_source_usage_snapshot(&fixture.key)
+            .unwrap();
+        assert_eq!(
+            snapshot
+                .partitions
+                .iter()
+                .map(|partition| partition.reset_baseline.input_tokens)
+                .sum::<u64>(),
+            22
+        );
+        let connection = rusqlite::Connection::open(fixture.store.path()).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*),sum(input_tokens) FROM token_usage_events",
+                    [],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+                )
+                .unwrap(),
+            (3, 22)
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM external_usage_view_resets",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            2
+        );
+    }
+
+    /// A failed second member rolls back the first baseline. Forged revision or
+    /// counter evidence refuses; malformed persisted baseline cannot turn into
+    /// a plausible zero pane view. Legacy migration adds no reset facts.
+    #[test]
+    fn source_projection_reset_refuses_partial_corrupt_and_legacy_evidence() {
+        let fixture = Fixture::new();
+        let first = fixture.report('b', "model-a", 10);
+        let connection = rusqlite::Connection::open(fixture.store.path()).unwrap();
+        let mut missing = first.clone();
+        missing.stream_id = "f".repeat(64);
+        assert!(
+            fixture
+                .store
+                .reset_external_usage_view(&[first.clone(), missing])
+                .is_err()
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM external_usage_view_resets",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        let mut forged = first.clone();
+        forged.totals.input_tokens = 9;
+        assert!(fixture.store.reset_external_usage_view(&[forged]).is_err());
+        fixture
+            .store
+            .reset_external_usage_view(std::slice::from_ref(&first))
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE external_usage_view_resets SET revision=revision+1",
+                [],
+            )
+            .unwrap();
+        assert!(
+            fixture
+                .store
+                .external_source_usage_snapshot(&fixture.key)
+                .is_err()
+        );
+        connection
+            .execute_batch("DROP TABLE external_usage_view_resets; PRAGMA user_version=11;")
+            .unwrap();
+        assert!(
+            fixture
+                .store
+                .external_source_usage_snapshot(&fixture.key)
+                .is_err()
+        );
+        fixture.store.initialize(100).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            12
+        );
+        assert_eq!(
+            fixture
+                .store
+                .external_source_usage_snapshot(&fixture.key)
+                .unwrap()
+                .partitions[0]
+                .reset_baseline
+                .input_tokens,
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT sum(input_tokens) FROM token_usage_events",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            10
         );
     }
 

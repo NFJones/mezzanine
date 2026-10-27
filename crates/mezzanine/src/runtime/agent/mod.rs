@@ -2563,12 +2563,17 @@ impl RuntimeSessionService {
     /// Clears cumulative token usage for one pane without changing conversation totals.
     pub(crate) fn reset_agent_token_usage_for_pane(&mut self, pane_id: &str) -> bool {
         let external = self.reset_external_token_usage(pane_id);
+        self.reset_native_token_usage_for_pane(pane_id) || external
+    }
+
+    /// Clears only native pane counters after a durable external reset adopts.
+    /// External checkpoints must keep their independently captured reset point.
+    pub(crate) fn reset_native_token_usage_for_pane(&mut self, pane_id: &str) -> bool {
         self.agent.project_usage_by_pane.remove(pane_id);
         self.agent
             .agent_token_usage_by_pane
             .remove(pane_id)
             .is_some()
-            || external
     }
 
     /// Returns cumulative token usage for one conversation.

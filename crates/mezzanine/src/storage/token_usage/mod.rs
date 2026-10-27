@@ -21,6 +21,7 @@ mod projects;
 mod source_activation;
 mod source_projection;
 mod store;
+mod view_reset;
 
 pub(crate) use external_attempt::{
     ExternalPrecommitPhase, ExternalUsageAdmissionWitness, ExternalUsageAttempt,

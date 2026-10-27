@@ -1669,7 +1669,7 @@ duplicate acknowledgment MUST NOT add another expense or allocate another
 accounting namespace. Observer replacement MUST NOT transfer predecessor-local
 tickets or credentials. Neither supported case permits namespace-only activation
 after control-service replacement or guarantees delivery of never-received data.
-Telemetry schema 11 extends the INTERNAL inert source-activation receipt ledger introduced in8, not
+Telemetry schema 12 retains the INTERNAL inert source-activation receipt ledger introduced in8 and extended through11, not
 another expense store or a new enrollment permission. Version-7 mappings MUST
 migrate without fabricated accepted receipts or changed expense/request origins.
 Each exact mapped namespace MAY retain one bounded prepared/accepted/retired
@@ -1892,11 +1892,28 @@ native ancestry walk may occur on actor. An exact committed claim can retry its
 same intent after capacity returns; it cannot mint another claim or recharge
 history. Final lifetime checks MUST follow bounded snapshot adoption as well.
 This restores unreplayed committed model partitions without replaying their
-reports or prior lifecycle status. Prior pane-view reset baselines are still
-control-local and NOT yet persisted/reconstructed across full replacement;
-only resets established in the recovered projection are currently qualified.
-The shared client/checkpoint/artifact/installed workflow contract above does not
-turn that remaining reset work into an environment or manual-acceptance gate.
+reports or prior lifecycle status. Telemetry schema12 additionally retains one
+view-reset revision/counter fact per existing durable stream. It MUST NOT write
+expense events, change checkpoint totals or grant source authority. Migration
+from11 creates no reset facts and cannot reconstruct pre-upgrade lost baselines.
+An external `/reset-status` MUST use the existing bounded command worker. At
+worker claim, capture at most4096 existing durable member checkpoints from the
+exact current pane/root. The transaction MUST validate every captured member
+before atomically committing baselines; later incurred expense MUST remain
+above the captured point. Older or duplicate workers MUST NOT regress a newer
+baseline. Missing/corrupt/incompatible evidence or capacity MUST refuse, never
+silently downgrade to a memory-only reset. No SQLite runs on the actor.
+The command is pending, not successful, until actual storage evidence is sealed
+and the actor revalidates its command/client/conversation/root/control/store and
+native counter snapshot. A changed group topology or native counter snapshot
+after commit MUST report unavailable adoption rather than hide late expense.
+A committed reset can survive a lost callback even if its old view could not
+adopt; cancellation is not rollback of committed metadata. Cold recovery reads
+reset evidence in the SAME source snapshot transaction, validates revision and
+counter monotonicity, and restores every partition baseline before readiness.
+Existing newer checkpoints/baselines win. Global expense/history and original
+report/provenance/ACK identity remain unchanged. Legacy grouped resets exceeding
+the4096-member command bound refuse explicitly; this is not a new capacity knob.
 For newly allocated ordinary socket sources, the off-actor native-observation
 phase MAY write only Prepared from actual retained ancestry and a suspend-aware
 native clock. Fingerprints MUST bind the original source/kind and ordered
@@ -13902,6 +13919,9 @@ The baseline command capabilities are:
 - `/reset-status`: Clear only the current panes pane-lifetime provider token
   counters. Mez-session totals aggregated from retained conversations MUST remain
   unchanged. Durable rolling token history MUST also remain unchanged.
+  External checkpoint resets commit captured view-baseline metadata off actor
+  before reporting success; later expense remains visible. Qualified same-source
+  cold recovery restores those baselines, without resetting global expense.
 - `/debug-config`: Show effective configuration, layer order, and policy
   diagnostics.
 - `/log-level`: Show or set the pane-local agent log level. Accepted levels

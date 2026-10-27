@@ -486,6 +486,14 @@ impl RuntimeSessionService {
                 if !slash.args.trim().is_empty() {
                     return Err(MezError::invalid_args("reset-status accepts no arguments"));
                 }
+                if self.external_usage_reset_requires_worker(&pane_id) {
+                    return self.dispatch_deferred_agent_shell_command(
+                        primary_client_id,
+                        &pane_id,
+                        "reset-status",
+                        input,
+                    );
+                }
                 let changed = self.reset_agent_token_usage_for_pane(&pane_id);
                 AgentShellCommandOutcome::Display {
                     command: "reset-status".into(),
@@ -667,11 +675,12 @@ impl RuntimeSessionService {
             // delivered through the same visible shell and exact command claim.
             // Never conflate trusted status actions with authenticated control.
             && (origin.is_authenticated_primary_input()
-                || (command == "fork"
+                || (matches!(command.as_str(), "fork" | "reset-status")
                     && origin == AgentShellCommandOrigin::AuthenticatedControlRequest))
             // The deferred decision is service-state aware: a command whose read
             // cannot complete off the actor keeps its synchronous body.
             && self.should_defer_agent_shell_command(command, input)
+            && (command != "reset-status" || self.external_usage_reset_requires_worker(&pane_id))
         {
             return self.dispatch_deferred_agent_shell_command(
                 primary_client_id,

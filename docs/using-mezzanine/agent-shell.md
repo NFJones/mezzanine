@@ -234,6 +234,16 @@ and read snapshot. Rolling sections use age-limited 1/7/30/60/90-day windows.
 Changing project, replacing the conversation or detaching the caller while work
 is pending prevents stale interactive delivery. `/reset-status` clears only the
 pane view, not session partitions or durable history.
+For external harness usage, reset is a pending worker command until captured
+checkpoint baselines commit and the exact pane owner adopts them. Usage arriving
+after capture remains visible. A successfully committed reset survives supported
+same-native-source cold control-service recovery, including models whose reports
+are not replayed; it never recharges or deletes global expense. Storage failure
+does not clear the pane view. If ownership, native counters or grouped membership
+change during a committed reset, adoption is reported unavailable; cancellation
+does not roll back an already committed baseline. One command supports at most
+4096 durable stream members, with explicit refusal above that bound. Old schema
+upgrades cannot reconstruct reset evidence that was never persisted.
 Generated session-title requests contribute reported token usage even when their
 reply is rejected as a title. Their usage is auxiliary: it does not replace the
 latest ordinary request's context/cache sample. Late issued responses settle

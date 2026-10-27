@@ -218,6 +218,14 @@ pub(crate) struct RuntimeAgentCommandAsyncWork {
 pub(crate) enum RuntimeAgentCommandPrepared {
     /// Acceptance-frozen status snapshot; only its worker queries history.
     Status(Box<crate::runtime::commands::RuntimeStatusReportWork>),
+    /// Captured reset points committed off actor, plus the existing exact-pane
+    /// command ownership fence. No success may adopt without the sealed write.
+    ResetStatus {
+        /// Existing report owner supplies client/conversation/root fencing.
+        owner: Box<crate::runtime::commands::RuntimeStatusReportWork>,
+        /// Immutable finite reset and actual worker-result evidence.
+        reset: Box<crate::runtime::control::external_usage_reset::ExternalUsageResetWork>,
+    },
     /// Renders one skill or macro catalog from the captured roots.
     ///
     /// `/list-skills` and `/list-macros` walk the configured user catalog plus

@@ -16,6 +16,7 @@ mod external_telemetry;
 pub(crate) mod external_usage;
 /// Exact-member actor projection and reset reconciliation, without storage I/O.
 mod external_usage_group;
+pub(crate) mod external_usage_reset;
 mod ingress;
 mod lifecycle;
 mod live_snapshot;

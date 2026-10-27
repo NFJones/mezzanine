@@ -908,7 +908,7 @@ source, restore a missing control-service anchor, or turn a pending outcome into
 an acknowledged commit. Repeated loss or exhausted client retry remains visibly
 unavailable; there is no guaranteed no-gap delivery during permanent outage.
 
-Telemetry schema11 extends the internal source-activation ledger introduced in8.
+Telemetry schema12 retains the source-activation ledger introduced in8 and extended through11.
 Migration preserves existing namespace, request origin and expense rows and does
 not manufacture accepted facts for legacy mappings. Worker-side primitives can
 record one exact prepared/accepted/retired attempt per mapped source, reconcile
@@ -1079,9 +1079,22 @@ No missing expense is synthesized from a request marker. Actor publication
 preflights the complete projection plus reservations before adopting absolute
 revisions; no replay is needed for an unreplayed model
 and newer checkpoints/existing reset baselines never roll backwards.
-Pre-replacement pane reset baselines remain control-local and are not yet
-durably reconstructed; only resets established after recovery are qualified.
-That remaining implementation is separate from platform/SDK verification.
+Schema12 also stores one view-reset revision/counter fact per existing stream.
+External `/reset-status` runs on the existing command worker, capturing at most
+4096 current-root durable members at claim. All members validate and commit in
+one transaction; later expense remains above that point. No expense event or
+new stream is created. Older/duplicate resets cannot move baselines backwards.
+Pending is not success: actor adoption requires the actual sealed write plus
+the exact command/client/conversation/root/control/store and native-counter
+snapshot. Failure preserves the live view; an already committed reset may still
+be recovered after a lost callback or stale adoption. Cancellation cannot undo
+that commit. A changed group topology/native snapshot reports unavailable
+adoption rather than dropping late expense. Above4096 members refuses explicitly.
+The cold source worker reads reset evidence in its same coherent transaction;
+revision/counter corruption refuses readiness rather than inventing zero usage.
+Every unreplayed model partition recovers its baseline before readiness, while
+global totals and original report metadata/duplicate ACKs remain unchanged.
+Migration from11 fabricates no reset and cannot recover lost pre-upgrade resets.
 
 The native worker now prepares metadata only for a newly allocated ordinary
 socket source, after real retained ancestry and native boot evidence. The digest

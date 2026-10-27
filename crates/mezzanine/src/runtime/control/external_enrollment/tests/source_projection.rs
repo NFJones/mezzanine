@@ -37,6 +37,24 @@ async fn external_cold_source_restores_unreplayed_model_partitions_before_report
         before.values().map(|usage| usage.input_tokens).sum::<u64>(),
         15
     );
+    let reset = fixture.service.prepare_external_usage_reset("%1").unwrap();
+    let worker = reset.clone();
+    tokio::task::spawn_blocking(move || worker.execute())
+        .await
+        .unwrap()
+        .unwrap();
+    // The write really committed, but its actor callback is lost. The old
+    // pane view has not claimed reset success; cold recovery must use durable
+    // truth rather than lose that accepted point or replay the reset command.
+    assert_eq!(
+        fixture
+            .service
+            .external_token_usage(Some("%1"))
+            .values()
+            .map(|usage| usage.input_tokens)
+            .sum::<u64>(),
+        15
+    );
     fixture.service.retire_all_external_source_anchors();
     fixture.service.control = crate::runtime::control::RuntimeControlComponent::new(
         crate::control::ControlIdempotencyCache::default(),
@@ -93,6 +111,23 @@ async fn external_cold_source_restores_unreplayed_model_partitions_before_report
         fixture.service.external_token_usage(None),
         before,
         "cold publication dropped an unreplayed committed partition"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .external_token_usage(Some("%1"))
+            .values()
+            .map(|usage| usage.input_tokens)
+            .sum::<u64>(),
+        0,
+        "cold publication lost an unreplayed partition reset"
+    );
+    assert!(
+        fixture
+            .service
+            .complete_external_usage_reset(&reset)
+            .is_err(),
+        "old reset callback adopted into a replaced control owner"
     );
     assert_eq!(
         fixture

@@ -9,6 +9,7 @@ use crate::runtime::current_unix_seconds;
 use crate::storage::token_usage::TokenUsageStore;
 
 mod precommit_retry_controls;
+mod view_resets;
 
 /// Invalid combined cache coverage must reject before actor reservations or
 /// durable writes, for both delta reports and uncharged cumulative attachment.
@@ -608,7 +609,25 @@ fn runtime_harness_status_external_only_does_not_create_native_session() {
     let reset = service
         .execute_agent_shell_command(&client, "/reset-status")
         .unwrap();
-    assert!(reset.contains("changed=true"), "{reset}");
+    assert!(!reset.contains("pane_token_usage_reset=true"), "{reset}");
+    assert_eq!(
+        service
+            .external_token_usage(Some("%1"))
+            .values()
+            .next()
+            .unwrap()
+            .input_tokens,
+        10
+    );
+    let reset = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .unwrap();
+    assert!(
+        reset.contains("pane_token_usage_reset=true durable=true"),
+        "{reset}"
+    );
+    assert!(service.agent_shell_store().get("%1").is_none());
     assert_eq!(
         service
             .external_token_usage(Some("%1"))

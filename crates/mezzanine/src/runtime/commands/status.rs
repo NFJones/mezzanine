@@ -121,6 +121,11 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<AgentShellCommandOutcome> {
+        if self.external_usage_reset_requires_worker(pane_id) {
+            return Err(MezError::invalid_state(
+                "external reset requires the off-actor command worker",
+            ));
+        }
         let visibility = self
             .agent_shell_store()
             .get(pane_id)

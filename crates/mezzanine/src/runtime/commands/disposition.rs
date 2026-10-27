@@ -118,7 +118,7 @@ pub(super) const COMMAND_EXECUTION_METADATA: &[CommandExecutionMetadata] = &[
     Entry::inline("personality", None),
     Entry::inline("stop", None),
     Entry::inline("name-session", None),
-    Entry::inline("reset-status", None),
+    Entry::deferred("reset-status", true, None),
     Entry::inline("log-level", None),
     Entry::inline("loop", None),
     Entry::inline("clear", None),
@@ -312,6 +312,7 @@ mod tests {
                 "show-approvals",
                 "list-personalities",
                 "status",
+                "reset-status",
             ])
         );
         let awaited = COMMAND_EXECUTION_METADATA

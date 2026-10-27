@@ -99,7 +99,8 @@ fn external_source_activation_inspection_does_not_create_or_migrate() {
 /// shape, preserving all seven original fields and unrelated ledger tables.
 /// Both migration controls use this helper; it never opens user storage.
 fn v8_activation_fixture(database: &rusqlite::Connection) {
-    database.execute_batch("CREATE TEMP TABLE fixture_v8_rows AS SELECT owner,attempt,ancestry,prepared_at_boot_ms,expires_at_boot_ms,revision,state FROM external_usage_source_activations;
+    database.execute_batch("DROP TABLE external_usage_view_resets;
+        CREATE TEMP TABLE fixture_v8_rows AS SELECT owner,attempt,ancestry,prepared_at_boot_ms,expires_at_boot_ms,revision,state FROM external_usage_source_activations;
         DROP TABLE external_usage_source_activations;
         CREATE TABLE external_usage_source_activations (
         owner TEXT PRIMARY KEY NOT NULL CHECK(length(owner)=36),
@@ -772,7 +773,7 @@ fn external_source_activation_migration_keeps_legacy_mappings_inert() {
     let database = rusqlite::Connection::open(store.path()).unwrap();
     database
         .execute_batch(
-            "DROP TABLE IF EXISTS external_usage_source_activations; PRAGMA user_version=7;",
+            "DROP TABLE external_usage_view_resets; DROP TABLE IF EXISTS external_usage_source_activations; PRAGMA user_version=7;",
         )
         .unwrap();
     store.initialize(100).unwrap();

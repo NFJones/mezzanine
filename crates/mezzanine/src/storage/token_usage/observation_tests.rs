@@ -803,7 +803,7 @@ fn external_observation_schema6_migration_preserves_sources_and_legacy_replay() 
         store.ingest_external(&legacy, 100).unwrap();
         let connection = store.open().unwrap();
         connection
-            .execute_batch("DROP TABLE external_usage_source_activations; DROP TABLE external_usage_observations; DROP TABLE external_usage_requests; PRAGMA user_version=5;")
+            .execute_batch("DROP TABLE external_usage_view_resets; DROP TABLE external_usage_source_activations; DROP TABLE external_usage_observations; DROP TABLE external_usage_requests; PRAGMA user_version=5;")
             .unwrap();
         if fail {
             connection
