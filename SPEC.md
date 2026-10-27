@@ -10463,7 +10463,13 @@ count arithmetic may establish a sequence identity. Selective summary coverage
 does not delete physical raw-tail rows. Accepted pending appends advance the
 logical frontier and raw count once; compaction retention changes only the raw
 count. Fork work MUST freeze the actual logical source frontier and reject
-missing required history rather than inventing or clamping its cutoff. Loop
+missing required history rather than inventing or clamping its cutoff. Fork
+source workers MUST capture the checked rows and authoritative prefix/selective
+epoch under one mutation lease, including a nonempty summary with zero raw rows.
+A selective summary crossing the captured cutoff MUST be rejected rather than
+truncated; complete summaries and rows wholly beyond it MUST stay excluded.
+Source adoption MUST reject a changed transcript store as well as a changed
+parent identity, replay position or runtime compaction generation. Loop
 restoration and transactional rollback MUST preserve both domains.
 For a manual prefix containing selective replacements, selection MUST preserve
 both complete turn boundaries and complete selective ranges. Budget estimates

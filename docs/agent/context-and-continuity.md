@@ -81,8 +81,10 @@ a shorter model representation does not remove those physical rows.
 The saved entry total describes the archive. It can exceed the raw history
 retained for model replay after compaction. Resume reconstructs that replay
 count separately from the archive's logical sequence frontier; further
-compaction must keep moving forward. Forks capture the source frontier so
-later parent rows cannot silently enter an earlier snapshot. This count repair
+compaction must keep moving forward. Fork source work captures its summary and checked rows together, even when the
+summary has replaced every raw row. A summary that crosses the captured cutoff
+is rejected rather than shortened. Forks capture the source frontier so later
+parent rows cannot silently enter an earlier snapshot. This count repair
 adds no configuration option or persisted metadata field.
 
 Conversation continuity is not proof that a command completed or that the

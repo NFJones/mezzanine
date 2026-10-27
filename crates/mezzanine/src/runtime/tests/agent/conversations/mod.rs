@@ -4,6 +4,8 @@ use super::*;
 
 mod bookkeeping;
 mod fork_epoch;
+/// Immutable compacted-parent source and cutoff qualification.
+mod fork_source;
 mod lifecycle;
 mod metadata;
 mod resume_cleanup;
