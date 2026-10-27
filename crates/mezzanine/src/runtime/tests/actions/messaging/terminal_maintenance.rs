@@ -277,11 +277,18 @@ fn runtime_terminal_timer_hands_off_original_action_without_wake_and_releases_ca
             correlation_id: None,
         },
     };
-    // Capacity rejects before consuming or altering the accepted original.
-    assert_eq!(
-        terminal_probe_send(&mut service, &turn, &action).status,
-        mez_agent::ActionStatus::Failed
-    );
+    // Capacity is provably unaccepted, not an ambiguous transport failure.
+    let before_rejection = service.message_service().snapshot_state();
+    let rejected = terminal_probe_send(&mut service, &turn, &action);
+    assert_eq!(rejected.status, mez_agent::ActionStatus::Failed);
+    assert_eq!(rejected.error.as_ref().unwrap().code, "capacity");
+    let rejected_json: serde_json::Value =
+        serde_json::from_str(rejected.structured_content_json.as_deref().unwrap()).unwrap();
+    assert_eq!(rejected_json["delivery_status"], "rejected");
+    assert_eq!(rejected_json["accepted"], false);
+    assert_eq!(rejected_json["delivery_applied"], false);
+    assert!(rejected_json["message_id"].is_null());
+    assert_eq!(service.message_service().snapshot_state(), before_rejection);
     service
         .control
         .message_service_mut()

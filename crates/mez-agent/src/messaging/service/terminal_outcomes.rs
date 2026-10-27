@@ -179,6 +179,7 @@ impl MessageService {
 
     /// Returns up to min(limit,100) unconsumed outcomes in occurrence/binding
     /// order for an authenticated currently registered ORIGINAL sender interval.
+    /// Results also stop at 64 KiB of logical cloned string/record bytes.
     /// No payload, private task result, new message or inferred wake is exposed.
     /// Legacy unknown sender intervals are unclaimable. Unregistered callers
     /// receive Forbidden; poisoned evidence returns InvalidState.
@@ -189,6 +190,7 @@ impl MessageService {
     ) -> Result<Vec<MessageDeliveryOutcome>> {
         self.require_outcome_sender(sender)?;
         let mut result = Vec::new();
+        let mut bytes = 0usize;
         let limit = limit.min(OUTCOME_BATCH);
         for queued in self
             .pending
@@ -202,6 +204,12 @@ impl MessageService {
                 }
                 if let Some(terminal) = terminal.filter(|terminal| !terminal.released) {
                     let (recipient, floor) = &queued.recipient_bindings[index];
+                    let charge =
+                        super::auxiliary::outcome_bytes(&queued.envelope.id, recipient.as_str());
+                    if bytes.saturating_add(charge) > super::auxiliary::OUTCOME_BYTES {
+                        return Ok(result);
+                    }
+                    bytes = bytes.saturating_add(charge);
                     result.push(MessageDeliveryOutcome {
                         sequence: queued.sequence,
                         message_id: queued.envelope.id.clone(),
@@ -220,7 +228,8 @@ impl MessageService {
 
     /// Queries one exact original-sender-owned occurrence without scanning
     /// unrelated earlier receipts. Returns at most min(limit,100) records, no
-    /// payload and no new authority. Missing/foreign occurrences return empty;
+    /// payload and no new authority, within 64 KiB of logical result bytes.
+    /// Missing/foreign occurrences return empty;
     /// unregistered senders receive Forbidden and poisoned evidence InvalidState.
     pub fn delivery_outcomes_for_occurrence(
         &self,
@@ -238,12 +247,19 @@ impl MessageService {
         };
         let terminals = queued.terminal.lock().map_err(|_| unavailable())?;
         let mut result = Vec::new();
+        let mut bytes = 0usize;
         for (index, terminal) in terminals.iter().enumerate() {
             if result.len() == limit.min(OUTCOME_BATCH) {
                 break;
             }
             if let Some(terminal) = terminal.filter(|terminal| !terminal.released) {
                 let (recipient, floor) = &queued.recipient_bindings[index];
+                let charge =
+                    super::auxiliary::outcome_bytes(&queued.envelope.id, recipient.as_str());
+                if bytes.saturating_add(charge) > super::auxiliary::OUTCOME_BYTES {
+                    return Ok(result);
+                }
+                bytes = bytes.saturating_add(charge);
                 result.push(MessageDeliveryOutcome {
                     sequence: queued.sequence,
                     message_id: queued.envelope.id.clone(),

@@ -67,9 +67,17 @@ impl SessionSnapshotPayload {
         if let Some(message_state) = &self.message_state {
             validate_message_snapshot_state(message_state)?;
         }
-        if self.unsettled_peer_presentations.len() > MAX_UNSETTLED_PEER_PRESENTATIONS {
+        if self.unsettled_peer_presentations.len() > MAX_UNSETTLED_PEER_PRESENTATIONS
+            || self
+                .unsettled_peer_presentations
+                .iter()
+                .fold(0usize, |bytes, row| {
+                    bytes.saturating_add(row.logical_bytes())
+                })
+                > crate::storage::snapshot::MAX_UNSETTLED_PEER_PRESENTATION_BYTES
+        {
             return Err(MezError::invalid_args(
-                "snapshot peer presentation outbox exceeds its entry bound",
+                "snapshot peer presentation outbox exceeds its count or byte bound",
             ));
         }
         if self.payload_version >= 6

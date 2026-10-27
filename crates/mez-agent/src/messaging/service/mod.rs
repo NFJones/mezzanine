@@ -44,6 +44,7 @@ mod snapshot_codec;
 mod snapshot_validation;
 use recipient_binding::validate_recipient_bindings;
 use snapshot_codec::*;
+mod auxiliary;
 mod fanout;
 mod native_commits;
 mod offers;
@@ -191,7 +192,6 @@ impl MessageService {
         if expires_before_delivery(&envelope) {
             return Err(MessageError::invalid_state(MMP_EXPIRED_MESSAGE));
         }
-        let message_id = envelope.id.clone();
         let accepted_envelope = Arc::new(envelope);
         let sequence = self.enqueue(
             accepted_envelope.clone(),
@@ -200,6 +200,7 @@ impl MessageService {
             now_ms,
         )?;
 
+        let message_id = accepted_envelope.id.clone();
         let delivery = Delivery {
             accepted: true,
             message_id: message_id.clone(),
@@ -568,6 +569,7 @@ mod tests {
     use super::*;
 
     mod acknowledgements;
+    mod auxiliary;
     mod fresh_retirement;
     mod objectives;
     mod pending;

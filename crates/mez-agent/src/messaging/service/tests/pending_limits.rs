@@ -14,14 +14,15 @@ fn pending_limits_reject_invalid_policy() {
     assert_eq!(defaults.payload_bytes, 1024 * 1024);
     assert_eq!(defaults.recipient_obligations, 4096);
     assert_eq!(defaults.per_recipient, 256);
-    for field in 0..4 {
+    for field in 0..5 {
         for excessive in [false, true] {
             let mut policy = defaults;
             let limit = match field {
                 0 => &mut policy.messages,
                 1 => &mut policy.payload_bytes,
                 2 => &mut policy.recipient_obligations,
-                _ => &mut policy.per_recipient,
+                3 => &mut policy.per_recipient,
+                _ => &mut policy.auxiliary_bytes,
             };
             *limit = if excessive { *limit + 1 } else { 0 };
             assert_eq!(
@@ -280,6 +281,7 @@ fn pending_limits_restore_refuses_each_over_cap_dimension() {
         payload_bytes: 8,
         recipient_obligations: 4,
         per_recipient: 2,
+        ..PendingDeliveryLimits::default()
     };
     assert_eq!(
         MessageService::from_snapshot_state_with_pending_limits(&snapshot, exact)

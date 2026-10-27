@@ -14333,9 +14333,13 @@ occurrences; earlier unowned receipts MUST NOT hide a live owner's handoff.
 Request-aware runnable recovery, fair scheduling and durable acceptance remain separate increments.
 
 Native receive receipts, including invisible-media commit proofs, MUST share
-the 1,024-entry live outbox limit. Admission MUST reserve every new batch
-identity before canonical context mutation; overflow MUST leave transport
-input unacknowledged.
+the 1,024-entry and 16 MiB logical source-byte live outbox limits. Source
+bytes MUST charge 512 bytes per record plus UTF-8 lengths of its identity,
+recipient, pane, conversation, turn, sender label, content type and retained
+payload. Admission MUST reserve every new batch identity and its planned-turn
+source bytes before canonical context mutation; overflow MUST leave transport
+input unacknowledged. Snapshot/rollback adoption and legacy reconstruction MUST
+apply the same bounds before retaining copies; they MUST NOT drop existing proof.
 
 Native transport reconciliation MUST use sealed same-runtime receive proof
 created only after canonical context storage, before fallible cursor/projection
@@ -14375,13 +14379,34 @@ Conservatively, committed fanout slots remain charged until the occurrence's
 last recipient commits or its terminal disposition is released. The final exact
 offered ACK releases the pending reference; optional replay may still retain it.
 A full budget MUST return typed
-provably-unaccepted `capacity` without partial fanout or prior-source mutation.
+provably-unaccepted `capacity` without partial fanout or prior-source mutation. Native send action results MUST preserve that `capacity` code,
+`delivery_status: "rejected"`, `accepted: false`, `delivery_applied: false` and
+null message ID, rather than reporting an ambiguous transport failure.
 These internal ceilings are independent of the replay window; there is no new
 configuration key or acceptance-atomic disk backing in this increment.
 
+Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
+budget over the deduplicated replay/custody union after normal replay eviction.
+Charge 1,024 bytes per occurrence plus 64 bytes and four times UTF-8 length for
+every fixed string field (including absent optional slots), sender capability,
+and extension key/value. This covers immutable sender/selector/objective fields,
+index/acceptance string copies and container overhead, independently of payload
+and frozen recipient records. Empty variable entries MUST still consume space.
+Capacity rejection MUST precede sequence/idempotency mutation. Current and legacy
+restoration MUST validate destination auxiliary policy and accepted projections.
+Logical accounting does not promise allocator-specific RSS or acceptance-atomic
+crash durability.
+
+Terminal outcome queries MUST return at most 100 records and 64 KiB logical
+copied bytes (128 per record plus message-ID and recipient-ID UTF-8 lengths),
+stopping before cloning an over-budget record. Acceptance MUST reserve each
+individual outcome's fit so exact consumption can advance through every batch.
+These limits apply to both broad and exact-occurrence queries without changing
+original-sender authority or claiming recipient success.
+
 Trusted service construction MAY inject independently smaller positive custody
-budgets for occurrences, unique payload bytes, frozen recipient slots and slots
-per exact recipient interval. Zero or values above the production ceilings MUST
+budgets for occurrences, unique payload bytes, frozen recipient slots, slots
+per exact recipient interval, and immutable auxiliary bytes. Zero or values above the production ceilings MUST
 reject before construction/restoration. Destination policy is not message or
 snapshot authority: snapshots MUST NOT choose or enlarge it. Default restoration
 uses production ceilings; narrowed destinations MUST explicitly supply their

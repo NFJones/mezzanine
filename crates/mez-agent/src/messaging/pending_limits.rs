@@ -23,6 +23,10 @@ pub struct PendingDeliveryLimits {
     pub recipient_obligations: usize,
     /// Maximum pending slots per exact recipient interval (ceiling 256).
     pub per_recipient: usize,
+    /// Maximum logical auxiliary bytes over shared replay and custody (16 MiB).
+    /// Counts immutable envelope metadata and index/container overhead, excluding
+    /// separately budgeted payload and frozen recipient records.
+    pub auxiliary_bytes: usize,
 }
 
 impl Default for PendingDeliveryLimits {
@@ -33,6 +37,7 @@ impl Default for PendingDeliveryLimits {
             payload_bytes: 1024 * 1024,
             recipient_obligations: 4096,
             per_recipient: 256,
+            auxiliary_bytes: 16 * 1024 * 1024,
         }
     }
 }
@@ -46,6 +51,7 @@ impl PendingDeliveryLimits {
             (self.payload_bytes, ceiling.payload_bytes),
             (self.recipient_obligations, ceiling.recipient_obligations),
             (self.per_recipient, ceiling.per_recipient),
+            (self.auxiliary_bytes, ceiling.auxiliary_bytes),
         ]
         .iter()
         .any(|(value, maximum)| *value == 0 || value > maximum)

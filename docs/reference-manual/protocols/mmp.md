@@ -271,8 +271,11 @@ owner's handoff. Request-aware runnable recovery, fairness and crash-durable
 acceptance remain separate work.
 
 Native receive receipts, including invisible media commit proofs, share the
-1,024-entry live bound. Admission reserves the whole batch before canonical
-context mutation; overflow leaves the delivery unacknowledged.
+1,024-entry and 16 MiB logical source-byte live bounds. Source charging includes
+512 bytes per record plus identity, recipient, pane, conversation, turn, label,
+content-type and retained-payload UTF-8 lengths. Exact planned-turn batch
+admission precedes canonical context mutation; overflow leaves mail unacknowledged.
+Snapshots, rollback adoption and legacy reconstruction enforce the same bounds.
 
 Native receive admission seals same-runtime proof only after canonical context
 storage. That proof survives Stop, context cleanup and failed-backing moves;
@@ -305,10 +308,28 @@ The retained recipient set is bounded independently of payload bytes: at most
 4096 records and 1 MiB logical metadata, charging 192 bytes plus each UTF-8 ID's
 length. New sends reserve the whole fanout before sequence allocation. Capacity
 rejection (`code: "capacity"`, `status: "rejected"`, no accepted receipt) leaves
-the prior accepted set unchanged. Only fully settled history that the ordinary
+the prior accepted set unchanged. Native send failures preserve the `capacity` code,
+`delivery_status: "rejected"`, `accepted: false`, `delivery_applied: false` and
+null message ID; no success receipt is assigned. Only fully settled history that the ordinary
 replay count/byte policy actually evicts may release metadata for the new send.
 Binding/offer/commit/terminal/sender metadata counts the deduplicated
 replay/custody union.
+
+Immutable auxiliary envelope metadata has a separate 16 MiB logical budget over
+that union after ordinary replay eviction, narrowed by `auxiliary_bytes` in the
+trusted construction policy. Each occurrence charges 1,024 bytes plus 64 bytes
+and four times UTF-8 length for each fixed envelope/sender/selector string slot,
+capability and extension key/value. Empty variable entries still count; payload
+and recipient records keep their separate budgets. This includes index and
+acceptance string copies. Over-cap acceptance rejects atomically; snapshot
+canonical sources and acceptance projections must fit the destination policy.
+Logical content accounting is independent of allocator capacity or RSS.
+
+Both terminal outcome query forms return at most 100 records and 64 KiB logical
+copied data, charging 128 bytes plus message-ID and recipient-ID lengths per
+record. Each individual record must fit at acceptance. A query stops before
+cloning the next over-budget result; exact consumption permits later batches to
+progress without payload disclosure or changed ownership.
 The socket write-versus-application-commit limitation below remains unchanged.
 
 `recipient` is an object with exactly one supported selector: `agent_id`,

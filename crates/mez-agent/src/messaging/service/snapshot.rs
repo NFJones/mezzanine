@@ -386,7 +386,9 @@ impl MessageService {
         if snapshot.schema_version < 7 {
             // Legacy snapshots cannot bypass new custody bounds. Reconstruct
             // only provable retained source; pre-upgrade evicted mail is unknown.
-            super::pending::validate_pending_snapshot(&service.snapshot_state(), pending_limits)?;
+            let reconstructed = service.snapshot_state();
+            super::pending::validate_pending_snapshot(&reconstructed, pending_limits)?;
+            super::auxiliary::validate_auxiliary_snapshot(&reconstructed, pending_limits)?;
         }
         Ok(service)
     }

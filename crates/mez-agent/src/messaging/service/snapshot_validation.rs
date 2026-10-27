@@ -27,6 +27,7 @@ pub(super) fn validate_message_service_snapshot(
             "snapshot MMP state sequence and retention values must be non-zero",
         ));
     }
+    super::auxiliary::validate_auxiliary_snapshot(snapshot, pending_limits)?;
     let mut registered_by_id = HashMap::new();
     for identity in &snapshot.registered_agents {
         sender_identity_from_snapshot(identity, snapshot.schema_version)?;

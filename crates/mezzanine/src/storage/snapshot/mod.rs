@@ -50,7 +50,8 @@ pub use types::{
     SnapshotState, SnapshotUnsettledPeerPresentation,
 };
 pub(crate) use types::{
-    MAX_UNSETTLED_PEER_PRESENTATION_PAYLOAD_BYTES, MAX_UNSETTLED_PEER_PRESENTATIONS,
+    MAX_UNSETTLED_PEER_PRESENTATION_BYTES, MAX_UNSETTLED_PEER_PRESENTATION_PAYLOAD_BYTES,
+    MAX_UNSETTLED_PEER_PRESENTATIONS, peer_presentation_source_bytes,
 };
 #[cfg(test)]
 pub use types::{

@@ -18,6 +18,14 @@ use mez_terminal::{TerminalModeState, TerminalSavedState, TerminalStyleSpan};
 /// Maximum number of unsettled receiver presentation receipts retained in one
 /// live outbox or durable snapshot payload.
 pub(crate) const MAX_UNSETTLED_PEER_PRESENTATIONS: usize = 1_024;
+/// Aggregate logical source bytes retained by receiver receipts (16 MiB).
+pub(crate) const MAX_UNSETTLED_PEER_PRESENTATION_BYTES: usize = 16 * 1024 * 1024;
+
+/// Charges owned receipt string lengths and fixed source/container overhead.
+/// This is a logical content budget, independent of allocator capacity or RSS.
+pub(crate) fn peer_presentation_source_bytes(lengths: impl IntoIterator<Item = usize>) -> usize {
+    lengths.into_iter().fold(512usize, usize::saturating_add)
+}
 /// Maximum UTF-8 bytes retained in one receiver presentation payload.
 pub(crate) const MAX_UNSETTLED_PEER_PRESENTATION_PAYLOAD_BYTES: usize = 256 * 1024;
 
@@ -61,6 +69,20 @@ pub struct SnapshotUnsettledPeerPresentation {
 }
 
 impl SnapshotUnsettledPeerPresentation {
+    /// Returns the logical retained source charge shared with live admission.
+    pub(crate) fn logical_bytes(&self) -> usize {
+        peer_presentation_source_bytes([
+            self.identity.len(),
+            self.recipient_agent_id.len(),
+            self.pane_id.len(),
+            self.conversation_id.len(),
+            self.turn_id.len(),
+            self.peer_label.len(),
+            self.content_type.len(),
+            self.payload.len(),
+        ])
+    }
+
     /// Validates a compact recipient-scoped receipt source restored from a
     /// snapshot.
     ///

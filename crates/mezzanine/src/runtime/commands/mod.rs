@@ -1978,6 +1978,11 @@ impl RuntimeSessionService {
             model_profile = selected_profile.clone();
             turn.model_profile = selected_profile_name.clone();
         }
+        if !self.can_admit_peer_receipts_for_turn(&recipient, &turn, &delivered_messages) {
+            return Err(MezError::conflict(
+                "peer message receiver receipt byte capacity",
+            ));
+        }
         let _ = self.agent_provider_request_control_for_turn(&turn)?;
         #[cfg(test)]
         if self.take_peer_message_turn_commit_failure_for_tests() {

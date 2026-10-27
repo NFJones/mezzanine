@@ -19,6 +19,7 @@ impl MessageService {
         if size > self.retention_bytes {
             return Err(MessageError::invalid_args(MMP_PAYLOAD_TOO_LARGE_MESSAGE));
         }
+        self.reserve_auxiliary_delivery(&envelope, &recipient_bindings)?;
         self.reserve_recipient_bindings(&recipient_bindings, size)?;
         self.reserve_pending_delivery(&recipient_bindings, size)?;
         let sequence = self.next_sequence;
