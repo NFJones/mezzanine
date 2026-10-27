@@ -286,41 +286,14 @@ impl MessageService {
 
     /// Retires one agent identity and its delivery subscription.
     ///
-    /// Retained envelopes matching the retired identity are discarded. A
-    /// future pane owner can reuse the same opaque id, while unrelated
-    /// outbound task results retain their sender provenance for durable
-    /// snapshot recovery.
+    /// Ending a registration does not delete a shared accepted occurrence,
+    /// change another recipient's cursor, or forget its acceptance receipt.
+    /// The reusable delivery floor and frozen registration bindings prevent a
+    /// later owner of this opaque id from acquiring old live or historical mail.
+    /// Ordinary replay budgets still bound retained source; this transition
+    /// does not supply pending custody or a terminal delivery disposition.
     pub fn retire_agent_identity(&mut self, agent_id: &AgentId) -> bool {
-        let identity = self.registered.get(agent_id).cloned();
-        let removed = self.registered.remove(agent_id).is_some();
-        self.registration_floors.remove(agent_id);
-        self.presence.remove(agent_id);
-        self.subscriptions.remove(agent_id);
-        self.subscription_order.remove(agent_id.as_str());
-        if self.fanout_after_recipient.as_deref() == Some(agent_id.as_str()) {
-            self.fanout_after_recipient = None;
-        }
-        if let Some(identity) = identity.filter(|_| removed) {
-            self.retired_delivery_floors.insert(
-                agent_id.clone(),
-                RetiredDeliveryFloor {
-                    identity: identity.clone(),
-                    last_sequence: self.last_sequence(),
-                    fresh_sender_versions: None,
-                },
-            );
-            self.queue
-                .retain(|queued| !recipient_matches(&identity, &queued.envelope.recipient));
-            self.queued_bytes = self
-                .queue
-                .iter()
-                .map(|queued| queued.envelope.payload.len())
-                .sum();
-            self.rebuild_queue_indexes();
-            self.prune_accepted_messages_to_retained_queue();
-            self.prune_retired_delivery_floors();
-        }
-        removed
+        self.retire_observational_identity(agent_id)
     }
 
     /// Returns the sequence that will be assigned to the next accepted message.
@@ -571,6 +544,7 @@ mod tests {
     mod fresh_retirement;
     mod objectives;
     mod recipient_binding;
+    mod shared_retirement;
 
     mod retirement {
         use super::*;

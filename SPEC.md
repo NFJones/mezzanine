@@ -14278,6 +14278,17 @@ audience-less-mail discard behavior. Recipient binding IDs MUST remain reserved
 for generated-ID allocation while their canonical mail is retained, including
 fanout targets that authored no messages.
 
+Retirement of any registered recipient MUST remove only that registration's
+discovery, presence and subscription authority, not delete a shared accepted
+envelope, its acceptance receipt, or another recipient's offer/cursor evidence.
+Reusable identity retirement MUST preserve its delivery floor while relevant
+canonical replay remains. A replacement registration and late selector match
+MUST NOT acquire the retired registration's mail. Retained direct-only mail MAY
+remain as bounded replay evidence without a live recipient; that does not prove
+delivery or a terminal outcome. Replay-pressure pending custody and explicit
+expiry/retirement dispositions are separate guarantees, not supplied by this
+non-destructive retirement transition.
+
 New recipient cursor advancement MUST end at an occurrence actually offered
 to that exact acceptance-time recipient registration. Every earlier retained
 own occurrence above the committed cursor MUST also have been offered, unless

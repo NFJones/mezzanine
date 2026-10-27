@@ -195,6 +195,16 @@ neither live nor historical reads inherit the old owner's mail. Current
 availability, selector and audience checks still apply, so acceptance does not
 grant permission or bypass project isolation.
 
+Retiring a reusable/native identity removes its discovery, presence and
+subscription, but preserves shared canonical envelopes, acceptance receipts and
+other recipients' offer/cursor evidence. In particular, retirement of a fast
+fanout recipient cannot delete a slow recipient's unread copy. The existing
+delivery floor and frozen registration bindings prevent a replacement owner or
+late matching registration from acquiring old mail. Direct-only retained mail
+may remain as bounded replay evidence even after its recipient retires; it is
+not evidence of delivery or a terminal disposition. This does not implement
+history-independent pending custody or expiry/retirement outcome handoff.
+
 The retained recipient set is bounded independently of payload bytes: at most
 4096 records and 1 MiB logical metadata, charging 128 bytes plus each UTF-8 ID's
 length. New sends reserve the whole fanout before sequence allocation. Capacity

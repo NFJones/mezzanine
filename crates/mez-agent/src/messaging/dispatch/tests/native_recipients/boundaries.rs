@@ -427,8 +427,8 @@ fn raw_native_ids_preserve_restored_receipts_and_cursors() {
 /// Retained direct generated recipients remain reserved after retirement and
 /// restore. Supporting opaque addresses must not make a fresh generated owner
 /// inherit an old target's canonical mail, presence, or unavailable identity.
-/// Use fresh observational retirement: reusable pane retirement intentionally
-/// deletes addressed mail and therefore cannot establish this reservation case.
+/// Fresh observational retirement additionally avoids a non-sender floor;
+/// reusable retirement preserves the mail with its delivery-interval floor.
 #[test]
 fn raw_native_id_support_does_not_reuse_retired_generated_targets() {
     let (mut service, mut connection, native) = native_raw_fixture();

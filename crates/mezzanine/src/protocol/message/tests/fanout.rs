@@ -3,6 +3,100 @@
 use super::*;
 use std::sync::Arc;
 
+/// A framed accepted broadcast remains available to a slow subscribed peer
+/// after another matching reusable identity retires. Actual frame encoding and
+/// cursor settlement must deliver the same original occurrence exactly once,
+/// without a resend or a second sender acceptance.
+#[test]
+fn framed_fanout_survives_generic_recipient_retirement() {
+    let mut service = MessageService::default();
+    let mut sender = MessageConnection::default();
+    handle_mmp_frame(
+        &encode_mmp_body(r#"{"protocol":"mmp/1","type":"hello","role":"sender"}"#),
+        4096,
+        &mut service,
+        &mut sender,
+        10,
+    )
+    .unwrap();
+    let first = service.register_agent(None, None, "worker", Vec::new());
+    let second = service.register_agent(None, None, "worker", Vec::new());
+    for target in [&first, &second] {
+        service.subscribe(&target.agent_id).unwrap();
+    }
+    let body = serde_json::json!({
+        "protocol": "mmp/1", "type": "send", "id": "framed-original",
+        "time": "fixture:retirement", "sender": {
+            "agent_id": sender.agent_id.as_ref().unwrap().as_str(), "role": "sender"
+        },
+        "recipient": {"role": "worker"}, "scope": "session",
+        "correlation_id": "original-request", "ttl_ms": 100,
+        "content_type": "text/plain; charset=utf-8", "payload": "original fanout body"
+    });
+    let (reply, _) = handle_mmp_frame(
+        &encode_mmp_body(&body.to_string()),
+        4096,
+        &mut service,
+        &mut sender,
+        11,
+    )
+    .unwrap();
+    let (reply, _) = decode_mmp_frame(&reply, 4096).unwrap();
+    let accepted: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(accepted["status"], "accepted");
+    assert_eq!(accepted["queued_recipients"], 2);
+    let sequence = service.snapshot_state().accepted_messages[0]
+        .delivery
+        .sequence;
+    let mut sink = CollectingFanoutSink::default();
+    assert_eq!(
+        flush_message_fanout_for(&mut service, &first.agent_id, 12, 10, &mut sink).unwrap(),
+        1
+    );
+    assert!(service.retire_agent_identity(&first.agent_id));
+    let snapshot = service.snapshot_state();
+    let mut service = MessageService::from_snapshot_state(&snapshot).unwrap();
+    assert_eq!(
+        service
+            .subscription(&second.agent_id)
+            .unwrap()
+            .last_sequence,
+        0
+    );
+    assert_eq!(
+        flush_message_fanout_for(&mut service, &second.agent_id, 13, 10, &mut sink).unwrap(),
+        1
+    );
+    assert_eq!(sink.frames.len(), 2);
+    let mut delivered = Vec::new();
+    for (target, frame) in &sink.frames {
+        assert!([&first.agent_id, &second.agent_id].contains(&target));
+        let (body, _) = decode_mmp_frame(frame, 4096).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let message = &body["messages"][0];
+        assert_eq!(message["sequence"], sequence);
+        assert_eq!(message["envelope"]["id"], "framed-original");
+        assert_eq!(message["envelope"]["payload"], "original fanout body");
+        delivered.push(message.clone());
+    }
+    assert_eq!(delivered[0], delivered[1]);
+    assert_eq!(
+        service
+            .subscription(&second.agent_id)
+            .unwrap()
+            .last_sequence,
+        sequence
+    );
+    assert_eq!(
+        flush_message_fanout_for(&mut service, &second.agent_id, 14, 10, &mut sink).unwrap(),
+        0
+    );
+    assert_eq!(
+        service.snapshot_state().accepted_messages,
+        snapshot.accepted_messages
+    );
+}
+
 /// Verifies fanout ready batches subscribed recipients without advancing.
 ///
 /// This regression scenario documents the behavior being protected so a
