@@ -453,6 +453,9 @@ pub(crate) struct RuntimeDirectResumeProjection {
 /// creates this bundle without accessing live runtime state.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeDirectResumeRead {
+    /// Checked source frontier and raw-tail count captured on the reader.
+    pub(crate) transcript_position: mez_agent::AgentTranscriptPosition,
+
     /// Conversation selected by the direct resume argument.
     pub(crate) conversation_id: String,
     /// Durable primary identity read off actor; absent for legacy roots.

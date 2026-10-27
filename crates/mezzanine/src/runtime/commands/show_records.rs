@@ -353,11 +353,12 @@ impl RuntimeSessionService {
                     "context entry was not found in the active pane",
                 )
             })?;
-        let transcript_entries = self
+        let session = self
             .agent_shell_store()
             .get(pane_id)
-            .map(|session| session.transcript_entries)
-            .unwrap_or(0);
+            .ok_or_else(|| MezError::invalid_state("context deletion session unavailable"))?;
+        let transcript_entries = session.transcript_entries;
+        let transcript_high_water = session.transcript_high_water;
         let retained_start = entries
             .len()
             .saturating_sub(usize::try_from(transcript_entries).unwrap_or(usize::MAX));
@@ -367,10 +368,16 @@ impl RuntimeSessionService {
                 "context entry was already deleted",
             ));
         }
-        if entry_index >= retained_start {
-            self.agent_shell_store_mut()
-                .retain_recent_transcript_entries(pane_id, transcript_entries.saturating_sub(1))?;
-        }
+        // Uncompacted deletion renumbers the archive; both domains must follow
+        // that existing rewrite. Compacted archives reject deletion in storage.
+        self.agent_shell_store_mut().restore_transcript_position(
+            pane_id,
+            mez_agent::AgentTranscriptPosition {
+                logical_high_water: transcript_high_water.saturating_sub(1),
+                active_raw_entries: transcript_entries
+                    .saturating_sub(u64::from(entry_index >= retained_start)),
+            },
+        )?;
         Ok(())
     }
 

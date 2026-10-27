@@ -365,7 +365,7 @@ fn runtime_routed_cleanup_owned_binding_seam_requires_original_native_edge() {
                 &worker.pane_id,
                 &worker.turn_id,
                 "owned-routed-component-binding",
-                0,
+                mez_agent::AgentTranscriptPosition::uncompacted(0),
                 None,
             )
             .unwrap();

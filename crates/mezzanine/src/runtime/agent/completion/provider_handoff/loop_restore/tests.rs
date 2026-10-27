@@ -31,7 +31,7 @@ fn restored_snapshot_resets_only_generic_metadata_fields() {
             "%metadata",
             "known-running-turn",
             "synthetic-restored-parent",
-            17,
+            mez_agent::AgentTranscriptPosition::uncompacted(17),
             Some("synthetic-parent-lineage".into()),
         )
         .unwrap()

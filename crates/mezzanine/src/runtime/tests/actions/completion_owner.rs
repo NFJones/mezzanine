@@ -956,7 +956,7 @@ async fn runtime_completion_owner_rebind_rejects_old_attempt_and_duplicate() {
             "%1",
             "unowned-completion-turn",
             "replacement-completion-fixture",
-            0,
+            mez_agent::AgentTranscriptPosition::uncompacted(0),
             None,
         )
         .unwrap_err();
@@ -977,7 +977,7 @@ async fn runtime_completion_owner_rebind_rejects_old_attempt_and_duplicate() {
             "%1",
             &fixture.turn.turn_id,
             "replacement-completion-fixture",
-            0,
+            mez_agent::AgentTranscriptPosition::uncompacted(0),
             None,
         )
         .unwrap();

@@ -141,6 +141,8 @@ impl RuntimeSubagentForkReadWork {
                     } else {
                         session.transcript_entries
                     }) != self.source_entries
+                    || (!self.ephemeral_source
+                        && session.transcript_high_water != self.source_high_water)
             })
             || service.agent_compaction_epoch(&self.parent_pane_id) != self.parent_compaction_epoch
         {
@@ -2001,17 +2003,7 @@ impl RuntimeSessionService {
         {
             source_entries
         } else {
-            store
-                .compaction_epoch(&source_conversation_id)
-                .map_err(|error| {
-                    if error.kind() == crate::error::MezErrorKind::NotFound {
-                        MezError::invalid_state("required transcript archive is missing")
-                    } else {
-                        error
-                    }
-                })?
-                .map_or(0, |epoch| epoch.through_sequence)
-                .saturating_add(source_entries)
+            parent_session.transcript_high_water
         };
         Ok(Some(RuntimeSubagentForkReadWork {
             store,

@@ -59,6 +59,13 @@ acknowledges acceptance with a mutation result and null body/turn. Observe the
 visible source shell for eventual success or failure; that initial response is
 not completion. Reusing its idempotency key returns the original acknowledgment
 without creating another fork. Other control commands keep their inline results.
+The saved entry total describes the archive. It can exceed the raw history
+retained for model replay after compaction. Resume reconstructs that replay
+count separately from the archive's logical sequence frontier; further
+compaction must keep moving forward. Forks capture the source frontier so
+later parent rows cannot silently enter an earlier snapshot. This count repair
+adds no configuration option or persisted metadata field.
+
 Conversation continuity is not proof that a command completed or that the
 filesystem is unchanged: verify interrupted work before asking the agent to
 continue.

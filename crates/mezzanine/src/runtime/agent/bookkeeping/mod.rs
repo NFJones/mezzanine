@@ -1043,6 +1043,8 @@ impl RuntimeSessionService {
         } else {
             self.append_transcript_with_admission_observation(&store, &entries, false)?;
         }
+        self.agent_shell_store_mut()
+            .record_transcript_entries(pane_id, entries.len())?;
         self.record_pane_transcript_ref(
             pane_id,
             format!("transcript:{pane_id}:{conversation_id}"),

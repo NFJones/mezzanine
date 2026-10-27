@@ -143,8 +143,10 @@ pub(crate) fn read_direct_resume(
     // Discovery and transcript metadata must be read after acquiring the same
     // lease as fork adoption. A reader queued behind compensation must not keep
     // a pre-lock saved-session snapshot and later bind deleted/replaced history.
-    let (snapshot_lock, presentation_entries, _sequence) =
-        store.lock_presentation_snapshot(&conversation_id)?;
+    let snapshot = store.lock_resume_replay_snapshot(&conversation_id, false)?;
+    let snapshot_lock = snapshot.lease;
+    let presentation_entries = snapshot.presentation_entries;
+    let transcript_position = snapshot.position;
     let saved = store.saved_session(&conversation_id)?.ok_or_else(|| {
         MezError::new(
             crate::error::MezErrorKind::NotFound,
@@ -154,6 +156,11 @@ pub(crate) fn read_direct_resume(
     if saved.archived_at_unix_seconds.is_some() {
         return Err(MezError::invalid_state(
             "archived conversation must be restored before it can be resumed",
+        ));
+    }
+    if saved.summary.entries > 0 && transcript_position.logical_high_water == 0 {
+        return Err(MezError::invalid_state(
+            "resumed conversation is missing required transcript history",
         ));
     }
     let subagent_lineage = store.conversation_subagent_lineage(&conversation_id)?;
@@ -213,11 +220,13 @@ pub(crate) fn read_direct_resume(
                 &entries,
                 &presentation_entries,
                 prompt_history.clone(),
+                transcript_position,
             )
         })
         .transpose()?;
     let presentation_entries = projection.is_none().then_some(presentation_entries);
     Ok(crate::runtime::RuntimeDirectResumeRead {
+        transcript_position,
         prepared_objective: store.effective_persisted_objective(&conversation_id)?,
         restored_model_identity: store.conversation_model_identity(&conversation_id)?,
         primary_display_name: store.conversation_primary_display_name(&conversation_id)?,
@@ -269,6 +278,7 @@ fn build_direct_resume_projection(
     entries: &[TranscriptEntry],
     presentation_entries: &[crate::storage::transcript::AgentPresentationEntry],
     prompt_history: Vec<mez_mux::readline::ReadlineHistoryEntry>,
+    transcript_position: mez_agent::AgentTranscriptPosition,
 ) -> Result<crate::runtime::RuntimeDirectResumeProjection> {
     let mut projection = RuntimeSessionService::for_agent_presentation_projection(
         work.session.clone(),
@@ -281,7 +291,8 @@ fn build_direct_resume_projection(
     let mut target_session = work.agent_session.clone();
     target_session.session_id = saved.summary.conversation_id.clone();
     target_session.conversation_kind = saved.conversation_kind;
-    target_session.transcript_entries = saved.summary.entries as u64;
+    target_session.transcript_entries = transcript_position.active_raw_entries;
+    target_session.transcript_high_water = transcript_position.logical_high_water;
     target_session.running_turn_id = None;
     target_session.allowed_actions = None;
     projection
@@ -652,6 +663,7 @@ impl RuntimeSessionService {
         preserve_deferred_command: bool,
     ) -> Result<AgentShellCommandOutcome> {
         let RuntimeDirectResumeRead {
+            transcript_position,
             conversation_id,
             primary_display_name,
             saved,
@@ -810,6 +822,8 @@ impl RuntimeSessionService {
                     session.visibility,
                 )
             };
+            self.agent_shell_store_mut()
+                .restore_transcript_position(pane_id, transcript_position)?;
             if let Some(project_scope) = target_project_scope.clone() {
                 self.agent_shell_store_mut()
                     .install_project_scope(pane_id, project_scope)?;

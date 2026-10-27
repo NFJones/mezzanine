@@ -524,3 +524,165 @@ fn runtime_agent_prompt_resume_installs_before_concurrent_presentation_append() 
         Some(conversation_id)
     );
 }
+
+/// Resumes a real three-row archive with a prefix epoch through row two, then
+/// captures fork history through the ordinary runtime boundary. Provider replay
+/// is a control: it must contain the prior summary and only the last raw row.
+/// Fork capture must use archive high-water three, not prefix two plus the
+/// resumed archive row count three. No counter normalization or provider call
+/// may conceal the mismatch between those separate sequence/count domains.
+#[test]
+fn runtime_resumed_compacted_archive_fork_keeps_actual_high_water() {
+    let root = temp_root("runtime-resumed-compacted-fork-count");
+    let transcript_store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "018f6b3a-1b2c-7000-9000-cafebabe0007";
+    for (sequence, content) in [
+        (1, "covered row one"),
+        (2, "covered row two"),
+        (3, "retained row three"),
+    ] {
+        transcript_store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: conversation_id.into(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role: mez_agent::transcript::TranscriptRole::Assistant,
+                turn_id: format!("closed-turn-{sequence}"),
+                agent_id: "agent-%9".into(),
+                pane_id: "%9".into(),
+                content: content.into(),
+            })
+            .unwrap();
+    }
+    transcript_store
+        .save_compaction_epoch(conversation_id, 2, "PREFIX_SUMMARY")
+        .unwrap();
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, &format!("/resume {conversation_id}"))
+        .unwrap();
+    let settled = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("real resume must settle");
+    assert!(settled.contains("resumed=true"), "{settled}");
+    let context = service
+        .agent_context_for_pane_prompt("%1", "continue", 0)
+        .unwrap();
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| block.content == "PREFIX_SUMMARY")
+    );
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("retained row three"))
+    );
+    assert!(
+        !context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("covered row"))
+    );
+    let work = service
+        .prepare_subagent_fork_read_work("agent-%1")
+        .unwrap()
+        .expect("resumed raw suffix must have fork work");
+    let snapshot = work
+        .execute()
+        .expect("resumed fork must not invent a missing high-water row");
+    assert_eq!(
+        snapshot
+            .entries
+            .iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>(),
+        [3]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Resumes a prefix-compacted archive before issuing the actual manual command.
+/// A fitting retention budget must force only uncovered closed work into the
+/// model task. The old archive count incorrectly starts again at row one,
+/// behind the already committed row-two epoch. No provider call is needed to
+/// inspect the frozen selected boundary and raw source handed to the task.
+#[test]
+fn runtime_resumed_compacted_archive_manual_selection_stays_after_prefix() {
+    let root = temp_root("runtime-resumed-compacted-manual-count");
+    let store = AgentTranscriptStore::new(root.clone());
+    let conversation = "018f6b3a-1b2c-7000-9000-cafebabe0008";
+    for sequence in 1..=3 {
+        store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: conversation.into(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role: mez_agent::transcript::TranscriptRole::Assistant,
+                turn_id: format!("closed-{sequence}"),
+                agent_id: "agent-%9".into(),
+                pane_id: "%9".into(),
+                content: format!("row-{sequence} {}", "small closed group ".repeat(20)),
+            })
+            .unwrap();
+    }
+    store
+        .save_compaction_epoch(conversation, 2, "PRIOR_PREFIX")
+        .unwrap();
+    let mut service = test_runtime_service();
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "resumed-count-manual".into(), path: None, format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"count-test\"\n[providers.openai]\nkind = \"openai\"\nmodels = [\"count-test\"]\ndefault_model = \"count-test\"\n[model_profiles.count-test]\nprovider = \"openai\"\nmodel = \"count-test\"\ncontext_window_tokens = 128000\n".into(),
+    }]).unwrap();
+    service.set_agent_transcript_store(store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, &format!("/resume {conversation}"))
+        .unwrap();
+    let resumed = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .unwrap();
+    assert!(resumed.contains("resumed=true"), "{resumed}");
+    let accepted = service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    let settled = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .unwrap_or(accepted);
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap_or_else(|| panic!("manual compaction must queue uncovered work: {settled}"));
+    assert_eq!(
+        task.compacted_through_sequence,
+        Some(3),
+        "covered prefix must never be selected again"
+    );
+    assert_eq!(
+        task.frozen_compaction_rows
+            .iter()
+            .map(|row| row.sequence)
+            .collect::<Vec<_>>(),
+        [3]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

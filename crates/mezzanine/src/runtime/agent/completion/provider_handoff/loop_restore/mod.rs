@@ -23,6 +23,8 @@ pub(super) struct OwnLoopRestore {
     expected_running_turn: String,
     parent_cid: String,
     parent_entries: u64,
+    /// Original parent archive frontier protected by the same controller proof.
+    parent_high_water: u64,
     parent_lineage: Option<String>,
     bind_entered: OnceLock<()>,
     installed: OnceLock<()>,
@@ -187,6 +189,7 @@ impl RuntimeSessionService {
             || state.execution_pane_id != proof.pane_id
             || state.parent_conversation_id != proof.parent_cid
             || state.parent_transcript_entries != proof.parent_entries
+            || state.parent_transcript_high_water != proof.parent_high_water
             || state.parent_prompt_cache_lineage_id != proof.parent_lineage
             || !self
                 .agent_loop_turn(&proof.expected_running_turn)
@@ -225,7 +228,10 @@ impl RuntimeSessionService {
                     &proof.pane_id,
                     "unowned-loop-turn",
                     &proof.parent_cid,
-                    proof.parent_entries,
+                    mez_agent::AgentTranscriptPosition {
+                        logical_high_water: proof.parent_high_water,
+                        active_raw_entries: proof.parent_entries,
+                    },
                     proof.parent_lineage.clone(),
                 )
                 .map(|_| ())
@@ -238,7 +244,10 @@ impl RuntimeSessionService {
                 &proof.pane_id,
                 &proof.expected_running_turn,
                 &proof.parent_cid,
-                proof.parent_entries,
+                mez_agent::AgentTranscriptPosition {
+                    logical_high_water: proof.parent_high_water,
+                    active_raw_entries: proof.parent_entries,
+                },
                 proof.parent_lineage.clone(),
             )?
             .clone();
@@ -366,6 +375,7 @@ impl RuntimeSessionService {
             expected_running_turn: group.turn.turn_id.clone(),
             parent_cid: state.parent_conversation_id.clone(),
             parent_entries: state.parent_transcript_entries,
+            parent_high_water: state.parent_transcript_high_water,
             parent_lineage: state.parent_prompt_cache_lineage_id.clone(),
             bind_entered: OnceLock::new(),
             installed: OnceLock::new(),

@@ -283,7 +283,11 @@ impl RuntimeSessionService {
                 Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
                 Err(error) => return Err(error),
             };
-            let presentation_entries = store.inspect_presentation(&conversation_id)?;
+            let snapshot = store
+                .lock_resume_replay_snapshot(&conversation_id, metadata.transcript_entries > 0)?;
+            let position = snapshot.position;
+            let presentation_entries = snapshot.presentation_entries;
+            drop(snapshot.lease);
             if metadata.transcript_entries > 0 {
                 match store.validate_restored_transcript(&conversation_id) {
                     Ok(count) if count >= metadata.transcript_entries => {}
@@ -332,7 +336,8 @@ impl RuntimeSessionService {
                 prompt_cache_lineage_id: metadata.prompt_cache_lineage_id.clone(),
                 visibility,
                 running_turn_id: None,
-                transcript_entries: metadata.transcript_entries,
+                transcript_entries: position.active_raw_entries,
+                transcript_high_water: position.logical_high_water,
                 log_level,
                 directive: metadata.directive.clone(),
                 allowed_actions: conversation_allowed_actions
@@ -368,10 +373,6 @@ impl RuntimeSessionService {
             .then_some(
                 "routed workflow was interrupted by runtime restart; retry requires a fresh user action",
             );
-            if diagnostic.is_some() {
-                target_session.transcript_entries =
-                    target_session.transcript_entries.saturating_add(1);
-            }
             let diagnostic_already_recorded = if let (Some(turn_id), Some(diagnostic)) =
                 (running_turn_id.as_deref(), diagnostic)
             {
@@ -394,6 +395,12 @@ impl RuntimeSessionService {
             } else {
                 false
             };
+            if diagnostic.is_some() && !diagnostic_already_recorded {
+                target_session.transcript_entries =
+                    target_session.transcript_entries.saturating_add(1);
+                target_session.transcript_high_water =
+                    target_session.transcript_high_water.saturating_add(1);
+            }
             let diagnostic_already_presented = diagnostic.is_some_and(|diagnostic| {
                 presentation_entries.iter().any(|entry| {
                     entry.source_text.as_deref() == Some(diagnostic)

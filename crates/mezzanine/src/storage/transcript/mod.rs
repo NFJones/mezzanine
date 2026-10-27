@@ -47,6 +47,8 @@ mod fs;
 mod history;
 /// Durable, exact-batch acceptance receipts for uncertain transcript writes.
 mod receipts;
+/// Leased, validated sequence frontiers and raw replay counts.
+mod replay_position;
 /// Exposes the store module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

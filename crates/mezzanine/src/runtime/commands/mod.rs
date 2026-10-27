@@ -1031,6 +1031,7 @@ impl RuntimeSessionService {
         })?;
         let parent_conversation_id = parent_session.session_id.clone();
         let parent_transcript_entries = parent_session.transcript_entries;
+        let parent_transcript_high_water = parent_session.transcript_high_water;
         let parent_display_name = parent_session.display_name.clone();
         let parent_prompt_cache_lineage_id = parent_session.prompt_cache_lineage_id.clone();
         let max_iterations = parsed.max_iterations.unwrap_or(self.agent_loop_limit());
@@ -1048,6 +1049,7 @@ impl RuntimeSessionService {
             mode: parsed.mode,
             parent_conversation_id: parent_conversation_id.clone(),
             parent_transcript_entries,
+            parent_transcript_high_water,
             parent_allowed_actions,
             parent_display_name,
             parent_prompt_cache_lineage_id: Some(parent_prompt_cache_lineage_id),
@@ -1191,7 +1193,7 @@ impl RuntimeSessionService {
                 },
                 fork.then(|| state.parent_conversation_id.clone()),
                 if fork {
-                    state.parent_transcript_entries
+                    state.parent_transcript_high_water
                 } else {
                     0
                 },
@@ -1257,7 +1259,10 @@ impl RuntimeSessionService {
                     pane_id,
                     parent_turn_id,
                     &state.parent_conversation_id,
-                    state.parent_transcript_entries,
+                    mez_agent::AgentTranscriptPosition {
+                        logical_high_water: state.parent_transcript_high_water,
+                        active_raw_entries: state.parent_transcript_entries,
+                    },
                     state.parent_prompt_cache_lineage_id.clone(),
                 )
             {
@@ -1304,6 +1309,17 @@ impl RuntimeSessionService {
                     state.parent_prompt_cache_lineage_id.clone(),
                 )
                 .map(|_| ())
+                .and_then(|_| {
+                    self.agent_shell_store_mut()
+                        .restore_transcript_position(
+                            pane_id,
+                            mez_agent::AgentTranscriptPosition {
+                                logical_high_water: state.parent_transcript_high_water,
+                                active_raw_entries: state.parent_transcript_entries,
+                            },
+                        )
+                        .map(|_| ())
+                })
                 .map_err(MezError::from)
         };
         if let Err(error) = binding {
@@ -2597,6 +2613,7 @@ mod tests {
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
             parent_transcript_entries: 0,
+            parent_transcript_high_water: 0,
             parent_allowed_actions: AllowedActionSet::say_only(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 1,
@@ -2617,6 +2634,7 @@ mod tests {
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
             parent_transcript_entries: 0,
+            parent_transcript_high_water: 0,
             parent_allowed_actions: AllowedActionSet::say_only(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 3,
@@ -2690,6 +2708,7 @@ mod tests {
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
             parent_transcript_entries: 0,
+            parent_transcript_high_water: 0,
             parent_allowed_actions: AllowedActionSet::say_only(),
             parent_display_name: None,
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),

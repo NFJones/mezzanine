@@ -2,7 +2,10 @@
 //!
 //! This module owns the agent session boundary for Mezzanine. It keeps related
 //! state transitions and helper routines localized so neighboring modules
-//! interact through typed APIs instead of duplicating subsystem details.
+//! interact through typed APIs instead of duplicating subsystem details. Logical
+//! sequence frontiers and active raw replay counts are independent: compaction
+//! changes the latter, admitted appends advance both, and restoration installs a
+//! checked pair without deriving sequence identity from provider block counts.
 
 use std::collections::BTreeMap;
 
@@ -13,6 +16,38 @@ use crate::{
 };
 
 // Agent shell sessions, stores, and shell display helpers.
+
+/// Logical transcript sequence frontier and its separately retained raw row count.
+/// Both include admitted pending appends; neither counts provider context blocks.
+/// Compaction changes only the raw count, while checked archive restoration
+/// supplies the logical frontier independently of the compacted prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AgentTranscriptPosition {
+    /// Greatest logical sequence owned by this binding, including queued rows.
+    pub logical_high_water: u64,
+    /// Number of rows retained in the raw tail, including typed/control rows.
+    pub active_raw_entries: u64,
+}
+
+impl AgentTranscriptPosition {
+    /// Creates a position for a fresh uncompacted contiguous transcript.
+    pub const fn uncompacted(entries: u64) -> Self {
+        Self {
+            logical_high_water: entries,
+            active_raw_entries: entries,
+        }
+    }
+
+    /// Validates that a raw tail cannot exceed its logical sequence frontier.
+    pub fn validate(self) -> AgentShellSessionResult<Self> {
+        if self.active_raw_entries > self.logical_high_water {
+            return Err(AgentShellSessionError::invalid_args(
+                "active transcript count exceeds logical high-water",
+            ));
+        }
+        Ok(self)
+    }
+}
 
 /// Carries Agent Shell Visibility state for this subsystem.
 ///
@@ -201,11 +236,14 @@ pub struct AgentShellSession {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub running_turn_id: Option<String>,
-    /// Stores the transcript entries value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+    /// Active raw-tail row count, including admitted pending and control rows.
+    /// This is neither the full archive/display count nor a sequence frontier;
+    /// selective summaries may replace model blocks without deleting these rows.
     pub transcript_entries: u64,
+    /// Logical sequence frontier, independent of the retained raw replay count.
+    /// Reconstructed from checked archive state on resume/restart, not persisted
+    /// as another authority or inferred from a compaction boundary plus a count.
+    pub transcript_high_water: u64,
     /// Stores the log level value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -310,6 +348,7 @@ impl AgentShellStore {
                     visibility: AgentShellVisibility::Hidden,
                     running_turn_id: None,
                     transcript_entries: 0,
+                    transcript_high_water: 0,
                     log_level: AgentLogLevel::Normal,
                     directive: None,
                     allowed_actions: None,
@@ -466,6 +505,24 @@ impl AgentShellStore {
         session.transcript_entries = session
             .transcript_entries
             .saturating_add(u64::try_from(entries).unwrap_or(u64::MAX));
+        session.transcript_high_water = session
+            .transcript_high_water
+            .saturating_add(u64::try_from(entries).unwrap_or(u64::MAX));
+        Ok(session)
+    }
+
+    /// Installs a checked logical frontier and raw-tail count atomically.
+    /// Returns an error for an absent pane or an impossible raw count. This
+    /// operation does not write history, allocate sequences, or change owners.
+    pub fn restore_transcript_position(
+        &mut self,
+        pane_id: &str,
+        position: AgentTranscriptPosition,
+    ) -> AgentShellSessionResult<&AgentShellSession> {
+        let position = position.validate()?;
+        let session = self.session_mut(pane_id)?;
+        session.transcript_entries = position.active_raw_entries;
+        session.transcript_high_water = position.logical_high_water;
         Ok(session)
     }
 
@@ -561,7 +618,7 @@ impl AgentShellStore {
     /// - `pane_id`: Pane whose managed parent turn owns the shell session.
     /// - `expected_running_turn_id`: Exact routed parent turn that must remain bound.
     /// - `conversation_id`: Durable parent conversation to restore.
-    /// - `transcript_entries`: Parent transcript high-water mark.
+    /// - `position`: Independently captured parent frontier and raw replay count.
     /// - `prompt_cache_lineage_id`: Optional lineage captured before the attempt.
     ///
     /// # Errors
@@ -572,7 +629,7 @@ impl AgentShellStore {
         pane_id: &str,
         expected_running_turn_id: &str,
         conversation_id: impl Into<String>,
-        transcript_entries: u64,
+        position: AgentTranscriptPosition,
         prompt_cache_lineage_id: Option<String>,
     ) -> AgentShellSessionResult<&AgentShellSession> {
         validate_agent_shell_required("running turn id", expected_running_turn_id)?;
@@ -581,6 +638,7 @@ impl AgentShellStore {
         if let Some(lineage_id) = prompt_cache_lineage_id.as_deref() {
             validate_agent_shell_required("prompt cache lineage id", lineage_id)?;
         }
+        let position = position.validate()?;
         let session = self.session_mut(pane_id)?;
         if session.running_turn_id.as_deref() != Some(expected_running_turn_id) {
             return Err(AgentShellSessionError::conflict(
@@ -591,7 +649,8 @@ impl AgentShellStore {
         if let Some(lineage_id) = prompt_cache_lineage_id {
             session.prompt_cache_lineage_id = lineage_id;
         }
-        session.transcript_entries = transcript_entries;
+        session.transcript_entries = position.active_raw_entries;
+        session.transcript_high_water = position.logical_high_water;
         session.conversation_kind = AgentConversationKind::Root;
         session.ephemeral = false;
         session.ephemeral_transcript_source_conversation_id = None;
@@ -701,6 +760,7 @@ impl AgentShellStore {
             session.prompt_cache_lineage_id = lineage_id;
         }
         session.transcript_entries = transcript_entries;
+        session.transcript_high_water = transcript_entries;
         session.conversation_kind = persistence.conversation_kind;
         session.ephemeral = persistence.ephemeral;
         // A durable root binding begins a distinct conversation whose trusted
@@ -792,6 +852,7 @@ impl AgentShellStore {
                 visibility: AgentShellVisibility::Visible,
                 running_turn_id: None,
                 transcript_entries: 0,
+                transcript_high_water: 0,
                 log_level,
                 directive: None,
                 allowed_actions: None,
@@ -1302,6 +1363,52 @@ mod tests {
         assert_eq!(error.kind(), crate::AgentShellSessionErrorKind::InvalidArgs);
     }
 
+    /// Compaction changes the raw replay count without moving the logical
+    /// frontier. Later accepted rows advance both counters, and an impossible
+    /// restored position must fail atomically without modifying either count.
+    #[test]
+    fn agent_shell_transcript_position_keeps_frontier_across_compaction() {
+        let mut store = AgentShellStore::default();
+        store.enter_or_resume("%position").unwrap();
+        store.record_transcript_entries("%position", 100).unwrap();
+        store
+            .retain_recent_transcript_entries("%position", 20)
+            .unwrap();
+        let session = store.get("%position").unwrap();
+        assert_eq!(
+            (session.transcript_high_water, session.transcript_entries),
+            (100, 20)
+        );
+        store.record_transcript_entries("%position", 2).unwrap();
+        let before = store.get("%position").unwrap().clone();
+        assert_eq!(
+            (before.transcript_high_water, before.transcript_entries),
+            (102, 22)
+        );
+        assert!(
+            store
+                .restore_transcript_position(
+                    "%position",
+                    AgentTranscriptPosition {
+                        logical_high_water: 10,
+                        active_raw_entries: 11,
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(store.get("%position").unwrap(), &before);
+        store
+            .restore_transcript_position(
+                "%position",
+                AgentTranscriptPosition {
+                    logical_high_water: 102,
+                    active_raw_entries: 0,
+                },
+            )
+            .unwrap();
+        assert_eq!(store.get("%position").unwrap().transcript_high_water, 102);
+    }
+
     /// Verifies managed restoration changes only conversation metadata while
     /// preserving the exact routed parent turn that owns the shell session.
     #[test]
@@ -1316,7 +1423,7 @@ mod tests {
                 "%1",
                 "turn-routed-parent",
                 "conversation-parent",
-                7,
+                AgentTranscriptPosition::uncompacted(7),
                 Some(original_lineage.clone()),
             )
             .unwrap();
@@ -1350,7 +1457,7 @@ mod tests {
                 "%1",
                 "turn-stale",
                 "conversation-parent",
-                3,
+                AgentTranscriptPosition::uncompacted(3),
                 None,
             )
             .unwrap_err();

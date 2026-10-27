@@ -563,6 +563,8 @@ pub struct RuntimeAgentLoopState {
     pub parent_conversation_id: String,
     /// Durable parent transcript count to restore after ephemeral loop forks.
     pub parent_transcript_entries: u64,
+    /// Frozen logical archive frontier, independent of retained replay rows.
+    pub parent_transcript_high_water: u64,
     /// Immutable action catalog captured from the durable parent conversation.
     ///
     /// Ephemeral loop iterations clear their pane-local catalog as a new

@@ -10447,6 +10447,19 @@ draft without changing current prompt state. Missing or corrupt required epochs
 MUST fail closed. Uncovered rows retain ordinary revision and pane-identity CAS
 checks and remain editable; no edit may delete the epoch, recompact history, or
 replay actions to bypass this protection.
+Saved archive/display row counts, logical sequence frontiers, and active raw
+replay counts MUST remain distinct. Resume and restart MUST reconstruct the
+logical frontier from checked contiguous history and the raw count from its
+compaction boundary; neither provider block counts nor boundary-plus-archive
+count arithmetic may establish a sequence identity. Selective summary coverage
+does not delete physical raw-tail rows. Accepted pending appends advance the
+logical frontier and raw count once; compaction retention changes only the raw
+count. Fork work MUST freeze the actual logical source frontier and reject
+missing required history rather than inventing or clamping its cutoff. Loop
+restoration and transactional rollback MUST preserve both domains.
+These runtime counters introduce no persisted field or configuration item;
+existing versioned transcript and checkpoint codecs remain authoritative.
+
 When conversation compaction runs, Mezzanine MUST summarize only a closed
 prefix of complete execution groups. It MUST NOT split request messages,
 provider-native events, assistant output, or terminal tool/action results that

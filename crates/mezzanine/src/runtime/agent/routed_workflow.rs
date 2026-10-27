@@ -388,7 +388,7 @@ impl RuntimeSessionService {
                     0,
                     Some(parent_session.prompt_cache_lineage_id.clone()),
                     Some(parent_session.session_id.clone()),
-                    parent_session.transcript_entries,
+                    parent_session.transcript_high_water,
                 )?;
             if let Some(project_scope) = parent_session.project_scope.clone() {
                 self.agent_shell_store_mut()
