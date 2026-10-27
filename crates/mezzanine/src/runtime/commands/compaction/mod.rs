@@ -4,7 +4,9 @@
 //! compaction provider request construction, durable summary extraction,
 //! and retained transcript-tail calculations. Keeping compaction isolated
 //! avoids mixing long-running summarization workflow with ordinary shell
-//! command dispatch.
+//! command dispatch. Manual model input keeps physical source proofs distinct
+//! from summary replacements, and prefix publication compares the frozen epoch
+//! and rows under the mutation lease before changing durable replay authority.
 
 use super::{
     AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS, AgentActionPayload, AgentContext,
@@ -38,6 +40,9 @@ use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 use mez_agent::{ProviderErrorRetryClass, apply_model_context_compaction_plan};
 
 mod handoff;
+/// Ordered selective-summary projection for model input.
+mod input;
+pub(super) use input::CompactionTranscriptSource;
 mod preparation;
 mod selection;
 mod source;
@@ -724,28 +729,42 @@ impl RuntimeSessionService {
                 "model context compaction requires configured context_window_tokens or max_input_tokens",
             )
         })?;
-        let retained_transcript_entries = if source == "manual" || resume_turn_id.is_some() {
-            runtime_compact_forced_retained_transcript_entries(
+        let selective_ranges = projection
+            .as_ref()
+            .map_or(&[][..], |epoch| epoch.ranges.as_slice());
+        let selective_history = source == "manual" && !selective_ranges.is_empty();
+        let selection = if selective_history {
+            ManualCompactionSelection::select_projected(
                 transcript_entries,
                 &transcript_records,
+                selective_ranges,
                 context_budget_tokens,
                 retained_tail_percent,
-            )
+            )?
         } else {
-            runtime_compact_retained_transcript_entries(
+            let retained_transcript_entries = if source == "manual" || resume_turn_id.is_some() {
+                runtime_compact_forced_retained_transcript_entries(
+                    transcript_entries,
+                    &transcript_records,
+                    context_budget_tokens,
+                    retained_tail_percent,
+                )
+            } else {
+                runtime_compact_retained_transcript_entries(
+                    transcript_entries,
+                    &transcript_records,
+                    context_budget_tokens,
+                    retained_tail_percent,
+                )
+            };
+            ManualCompactionSelection::select(
                 transcript_entries,
                 &transcript_records,
+                retained_transcript_entries,
                 context_budget_tokens,
                 retained_tail_percent,
             )
         };
-        let selection = ManualCompactionSelection::select(
-            transcript_entries,
-            &transcript_records,
-            retained_transcript_entries,
-            context_budget_tokens,
-            retained_tail_percent,
-        );
         let compactable_transcript_records = selection.entries;
         let retained_transcript_entries = selection.retained_entries;
         if let Some(reason) = selection.no_work {
@@ -773,6 +792,18 @@ impl RuntimeSessionService {
             });
         }
 
+        let selected_ranges = selective_ranges
+            .iter()
+            .filter(|range| {
+                compactable_transcript_records
+                    .first()
+                    .is_some_and(|first| range.through_sequence >= first.sequence)
+                    && compactable_transcript_records
+                        .last()
+                        .is_some_and(|last| range.first_sequence <= last.sequence)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         let compaction_context = if let Some(history) = prepared_history {
             self.agent_context_for_pane_prompt_with_history(
                 pane_id,
@@ -802,6 +833,9 @@ impl RuntimeSessionService {
                 mcp_summary,
                 allowed_actions,
                 compactable_transcript_records.to_vec(),
+                selected_ranges,
+                selective_history,
+                projection.clone(),
                 retained_transcript_entries,
                 self.capture_accounting_origin_for_pane(pane_id),
             );
@@ -818,15 +852,19 @@ impl RuntimeSessionService {
                 ),
             });
         }
-        let compaction_context = runtime_compaction_context_without_transcript_blocks(
-            append_mcp_context(compaction_context, &mcp_summary)?,
-        )?;
+        let transcript_source = if selective_history {
+            CompactionTranscriptSource::projected(compactable_transcript_records, &selected_ranges)?
+        } else {
+            CompactionTranscriptSource::raw(compactable_transcript_records)
+        };
+        let compaction_context = transcript_source
+            .prepare_context(append_mcp_context(compaction_context, &mcp_summary)?)?;
         let mut request = runtime_model_compaction_request(
             &model_profile,
             pane_id,
             &conversation_id,
             transcript_entries,
-            compactable_transcript_records,
+            transcript_source,
             &compaction_context,
             allowed_actions,
         )?;
@@ -842,6 +880,7 @@ impl RuntimeSessionService {
             .last()
             .map(|message| message.content.clone());
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
+            frozen_compaction_epoch: (source == "manual").then(|| projection.clone()),
             task_generation: 0,
             compaction_epoch: prepared_epoch,
             transport_retry_attempts: 0,
@@ -1019,6 +1058,7 @@ impl RuntimeSessionService {
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
+            frozen_compaction_epoch: None,
             task_generation: 0,
             compaction_epoch: 0,
             transport_retry_attempts: 0,
@@ -2593,6 +2633,15 @@ impl RuntimeSessionService {
         let first_retained = entries.len().saturating_sub(retained_count);
         let retained_entries = &entries[first_retained..];
         let previous_epoch = store.compaction_epoch(&task.conversation_id)?;
+        if task
+            .frozen_compaction_epoch
+            .as_ref()
+            .is_some_and(|baseline| baseline != &previous_epoch)
+        {
+            return Err(MezError::conflict(
+                "manual compaction source epoch changed before completion",
+            ));
+        }
         let boundary = task.compacted_through_sequence.unwrap_or_else(|| {
             previous_epoch
                 .as_ref()
@@ -2788,7 +2837,20 @@ impl RuntimeSessionService {
             let previous = store.compaction_epoch(&task.conversation_id)?;
             let previous_boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
             let boundary = task.compacted_through_sequence.unwrap_or(previous_boundary);
-            if let Some(projection) = projection {
+            if let Some(baseline) = task.frozen_compaction_epoch.as_ref() {
+                if projection.is_some() {
+                    return Err(MezError::invalid_state(
+                        "manual prefix cannot publish a selective proposal",
+                    ));
+                }
+                store.save_compaction_prefix_with_proof(
+                    &task.conversation_id,
+                    boundary,
+                    &content,
+                    &task.frozen_compaction_rows,
+                    baseline,
+                )?;
+            } else if let Some(projection) = projection {
                 let prior_ranges = previous
                     .as_ref()
                     .map_or(&[][..], |epoch| epoch.ranges.as_slice());
@@ -3330,7 +3392,7 @@ pub(super) fn runtime_model_compaction_request(
     pane_id: &str,
     conversation_id: &str,
     transcript_entries: u64,
-    entries: &[TranscriptEntry],
+    source: CompactionTranscriptSource<'_>,
     context: &AgentContext,
     allowed_actions: AllowedActionSet,
 ) -> Result<ModelRequest> {
@@ -3384,7 +3446,7 @@ pub(super) fn runtime_model_compaction_request(
                     pane_id,
                     conversation_id,
                     transcript_entries,
-                    entries,
+                    source,
                     context,
                 ),
             },
@@ -3594,7 +3656,7 @@ fn runtime_model_compaction_request_for_blocks(
         pane_id,
         conversation_id,
         0,
-        &[],
+        CompactionTranscriptSource::raw(&[]),
         &source_context,
         allowed_actions,
     )
@@ -3649,14 +3711,17 @@ pub(super) fn runtime_model_compaction_source(
     pane_id: &str,
     conversation_id: &str,
     transcript_entries: u64,
-    entries: &[TranscriptEntry],
+    source: CompactionTranscriptSource<'_>,
     context: &AgentContext,
 ) -> String {
     let mut lines = vec![
         format!("Pane: {pane_id}"),
         format!("Conversation: {conversation_id}"),
         format!("Transcript entries before compaction: {transcript_entries}"),
-        format!("Durable entries supplied for compaction: {}", entries.len()),
+        format!(
+            "Durable entries supplied for compaction: {}",
+            source.rows.len()
+        ),
         format!(
             "Provider-bound context blocks supplied: {}",
             context.blocks().len()
@@ -3671,16 +3736,7 @@ pub(super) fn runtime_model_compaction_source(
             runtime_model_compaction_entry_content(&block.content)
         ));
     }
-    for entry in entries {
-        lines.push(format!(
-            "entry={} role={} turn={} pane={} content={}",
-            entry.sequence,
-            runtime_transcript_role_name(entry.role),
-            entry.turn_id,
-            entry.pane_id,
-            runtime_model_compaction_entry_content(&entry.content)
-        ));
-    }
+    source.append_lines(&mut lines);
     lines.join("\n")
 }
 
@@ -3998,21 +4054,27 @@ fn runtime_compaction_group_is_summarizable(entries: &[TranscriptEntry]) -> bool
     entries
         .iter()
         .any(|entry| entry.role == TranscriptRole::Assistant)
-        || entries.iter().all(|entry| {
-            if entry.role != TranscriptRole::System {
-                return false;
-            }
-            match mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content) {
-                Some(mez_agent::TranscriptContextEvent::McpCompactionEpoch)
-                | Some(mez_agent::TranscriptContextEvent::McpCatalogSnapshot { .. }) => true,
-                Some(mez_agent::TranscriptContextEvent::PromptBoundary {
-                    source: ContextSourceKind::Configuration,
-                    label,
-                    ..
-                }) => label == "MCP compaction re-retrieval guidance",
-                _ => false,
-            }
-        })
+        || entries
+            .iter()
+            .all(runtime_compaction_control_entry_is_summarizable)
+}
+
+/// Classifies the dedicated control rows allowed in a closed compaction group.
+/// Other exact system references remain protected by the existing barrier rule.
+fn runtime_compaction_control_entry_is_summarizable(entry: &TranscriptEntry) -> bool {
+    if entry.role != TranscriptRole::System {
+        return false;
+    }
+    match mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content) {
+        Some(mez_agent::TranscriptContextEvent::McpCompactionEpoch)
+        | Some(mez_agent::TranscriptContextEvent::McpCatalogSnapshot { .. }) => true,
+        Some(mez_agent::TranscriptContextEvent::PromptBoundary {
+            source: ContextSourceKind::Configuration,
+            label,
+            ..
+        }) => label == "MCP compaction re-retrieval guidance",
+        _ => false,
+    }
 }
 
 /// Returns contiguous durable execution groups keyed by stable turn id.

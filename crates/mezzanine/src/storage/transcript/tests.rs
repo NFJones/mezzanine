@@ -8,6 +8,8 @@ mod failure_countdowns;
 mod fork_epoch;
 /// Immutable presentation occurrence encoding and fork provenance.
 mod occurrence;
+/// Prefix publication compares both frozen epoch authority and physical rows.
+mod prefix_proof;
 /// Exact-conversation receipt admission and retirement race coverage.
 mod receipt_admission;
 /// Epoch and row windows share one native mutation lane and pending-row check.

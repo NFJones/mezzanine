@@ -1554,7 +1554,7 @@ impl AgentTranscriptStore {
     /// Validates and publishes one epoch while the caller owns the conversation
     /// mutation lock. Forks and terminal witnesses use the identical publication
     /// contract without recursively acquiring an independent `flock` descriptor.
-    fn save_compaction_projection_locked(
+    pub(super) fn save_compaction_projection_locked(
         &self,
         epoch: AgentCompactionEpoch,
         frozen_rows: Option<&[TranscriptEntry]>,

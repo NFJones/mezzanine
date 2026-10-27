@@ -59,6 +59,13 @@ acknowledges acceptance with a mutation result and null body/turn. Observe the
 visible source shell for eventual success or failure; that initial response is
 not completion. Reusing its idempotency key returns the original acknowledgment
 without creating another fork. Other control commands keep their inline results.
+When manual compaction folds a selective summary into its prefix, it uses that
+summary once instead of resending the covered raw text. Later summaries stay in
+the retained history. Selection preserves whole turns and whole ranges, and its
+retained row count continues to describe physical history rather than model blocks. If
+another publisher changes a summary while compaction is running, the old result
+cannot overwrite that newer projection merely because the raw rows are unchanged.
+
 Manual compaction freezes its source frontier when preparation is admitted. Later
 appends do not silently enter that operation, and a changed source frontier
 invalidates preparation even if its retained row count stays the same.

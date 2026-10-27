@@ -2326,7 +2326,7 @@ mod tests {
             "%1",
             "as1",
             1,
-            &entries,
+            crate::runtime::commands::compaction::CompactionTranscriptSource::raw(&entries),
             &context,
             allowed_actions.clone(),
         )

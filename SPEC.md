@@ -10457,6 +10457,20 @@ logical frontier and raw count once; compaction retention changes only the raw
 count. Fork work MUST freeze the actual logical source frontier and reject
 missing required history rather than inventing or clamping its cutoff. Loop
 restoration and transactional rollback MUST preserve both domains.
+For a manual prefix containing selective replacements, selection MUST preserve
+both complete turn boundaries and complete selective ranges. Budget estimates
+MUST charge the replacement summary rather than covered raw bytes. Model input
+MUST render each selected range summary once at its original sequence anchor and
+exclude its covered raw content. Summaries after the selected prefix MUST NOT
+enter that prefix's compactor request. Physical frozen-row proofs and retained
+raw counts MUST still include the covered rows; a reduced model representation
+MUST NOT shorten the logical source frontier or bypass an uncovered exact/open
+turn. Prefix publication MUST absorb selected ranges and retain later ranges
+without duplicating their summaries on resumed replay. Manual tasks MUST retain
+the complete source epoch, including qualified absence, across worker and retry
+boundaries. Publication MUST compare that epoch and the selected committed rows
+under the same mutation lease before absorbing ranges. An epoch-only edit MUST
+invalidate an older completion even when every frozen raw row still matches.
 Manual compaction preparation MUST freeze its logical source frontier separately
 from the active raw row count. Source rows and canonical history MUST derive from
 one checked snapshot through that frontier. Later durable appends MUST NOT enter

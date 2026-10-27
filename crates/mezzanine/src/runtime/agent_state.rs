@@ -659,15 +659,20 @@ pub struct RuntimeAgentCompactionTask {
     pub conversation_id: String,
     /// User-visible source such as `manual` or `auto`.
     pub source: String,
-    /// Transcript entry count before compaction.
+    /// Active physical raw-row count before compaction, including pending rows.
     pub transcript_entries: u64,
-    /// Last durable sequence actually supplied for prefix summarization.
+    /// Captured logical boundary represented by the prefix input.
     pub compacted_through_sequence: Option<u64>,
-    /// Committed rows captured for staged selective ranges before publication.
+    /// Physical source rows captured for prefix or selective publication.
+    /// Pending rows must commit unchanged before they can qualify a write.
     pub frozen_compaction_rows: Vec<mez_agent::transcript::TranscriptEntry>,
+    /// Exact authoritative source epoch for manual prefix publication. The outer
+    /// absence denotes a different producer; `Some(None)` freezes no prior epoch.
+    /// Owned metadata survives correction/transport retries without rediscovery.
+    pub frozen_compaction_epoch: Option<Option<crate::storage::transcript::AgentCompactionEpoch>>,
     /// Raw recent transcript entries to retain after summary insertion.
     pub retained_transcript_entries: u64,
-    /// Durable entries supplied to the model compactor.
+    /// Physical transcript rows represented by the selected compactor source.
     pub summarized_entries: usize,
     /// Active model profile name used for the compactor request.
     pub model_profile_name: String,

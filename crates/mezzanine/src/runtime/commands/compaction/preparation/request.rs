@@ -20,6 +20,12 @@ pub(crate) struct RuntimeManualCompactionRequestWork {
     mcp_summary: mez_agent::McpPromptSummary,
     allowed_actions: AllowedActionSet,
     entries: Vec<TranscriptEntry>,
+    /// Whole summary replacements selected with these physical source rows.
+    ranges: Vec<crate::storage::transcript::AgentCompactionRange>,
+    /// Even an empty selected range list excludes later cached summaries.
+    selective_history: bool,
+    /// Full source authority, including later ranges used by planning budgets.
+    source_epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
     retained_entries: u64,
     origin: crate::storage::token_usage::AccountingOrigin,
     /// Independent request-rendering barrier, absent from production work.
@@ -46,6 +52,9 @@ impl RuntimeManualCompactionRequestWork {
         mcp_summary: mez_agent::McpPromptSummary,
         allowed_actions: AllowedActionSet,
         entries: Vec<TranscriptEntry>,
+        ranges: Vec<crate::storage::transcript::AgentCompactionRange>,
+        selective_history: bool,
+        source_epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
         retained_entries: u64,
         origin: crate::storage::token_usage::AccountingOrigin,
     ) -> Self {
@@ -57,6 +66,9 @@ impl RuntimeManualCompactionRequestWork {
             mcp_summary,
             allowed_actions,
             entries,
+            ranges,
+            selective_history,
+            source_epoch,
             retained_entries,
             origin,
             #[cfg(test)]
@@ -83,16 +95,19 @@ impl RuntimeManualCompactionRequestWork {
     /// lookup, I/O, provider call or publication occurs. Existing request errors
     /// propagate and the caller must validate original ownership before queuing.
     pub(crate) fn execute_request(&self) -> Result<RuntimeAgentCompactionTask> {
-        let context = runtime_compaction_context_without_transcript_blocks(append_mcp_context(
-            self.context.clone(),
-            &self.mcp_summary,
-        )?)?;
+        let source = if self.selective_history {
+            CompactionTranscriptSource::projected(&self.entries, &self.ranges)?
+        } else {
+            CompactionTranscriptSource::raw(&self.entries)
+        };
+        let context =
+            source.prepare_context(append_mcp_context(self.context.clone(), &self.mcp_summary)?)?;
         let mut request = runtime_model_compaction_request(
             &self.profile,
             &self.owner.pane_id,
             &self.owner.conversation_id,
             self.owner.transcript_entries,
-            &self.entries,
+            source,
             &context,
             self.allowed_actions.clone(),
         )?;
@@ -108,6 +123,7 @@ impl RuntimeManualCompactionRequestWork {
             .last()
             .map(|message| message.content.clone());
         Ok(RuntimeAgentCompactionTask {
+            frozen_compaction_epoch: Some(self.source_epoch.clone()),
             task_generation: 0,
             compaction_epoch: self.owner.compaction_epoch,
             transport_retry_attempts: 0,

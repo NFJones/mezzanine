@@ -45,6 +45,8 @@ mod fs;
 /// Both prompt histories share one SQLite database; the legacy TSV files are
 /// imported once and then left untouched.
 mod history;
+/// Atomic manual-prefix publication against frozen epoch and physical rows.
+mod prefix_publication;
 /// Durable, exact-batch acceptance receipts for uncertain transcript writes.
 mod receipts;
 /// Leased, validated sequence frontiers and raw replay counts.

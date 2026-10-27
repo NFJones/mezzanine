@@ -1,4 +1,8 @@
-//! Typed no-work outcomes from the existing contiguous closed-prefix selector.
+//! Closed-prefix selection with independent physical and model-facing domains.
+//!
+//! Selective projections unite complete turn and range boundaries into atoms.
+//! Their budgets use summary costs while retained/publication counts stay physical.
+//! An uncovered exact/open turn remains a barrier even inside a merged atom.
 //!
 //! Selection does not read storage, queue a model, publish a summary or skip an
 //! exact/open leading barrier. Budget values describe retained-tail size; once
@@ -107,5 +111,142 @@ impl<'a> ManualCompactionSelection<'a> {
             retained_words,
             budget_words,
         }
+    }
+}
+
+/// A physical prefix atom preserves both whole turns and whole selective ranges.
+/// Its model cost excludes covered raw rows and includes their summary once.
+struct ProjectedAtom {
+    /// Exclusive physical row boundary in the active window.
+    end: usize,
+    /// Cost of the canonical replacement rather than the archived raw bytes.
+    words: usize,
+    /// Every uncovered original turn remains closed and eligible.
+    closed: bool,
+}
+
+impl<'a> ManualCompactionSelection<'a> {
+    /// Selects a forced prefix using summary-aware costs without cutting either
+    /// a complete turn or an authoritative range. Counts remain physical rows;
+    /// covered groups cannot authorize skipping an uncovered exact/open barrier.
+    pub(super) fn select_projected(
+        logical: u64,
+        rows: &'a [TranscriptEntry],
+        ranges: &[crate::storage::transcript::AgentCompactionRange],
+        budget: usize,
+        percent: usize,
+    ) -> Result<Self> {
+        let count = runtime_compact_active_transcript_entry_count(logical, rows.len());
+        let active = &rows[rows.len().saturating_sub(count)..];
+        let budget_words = runtime_compact_retained_context_tail_budget_words(budget, percent);
+        if active.is_empty() {
+            return Ok(Self::select(logical, rows, 0, budget, percent));
+        }
+        let first = active[0].sequence;
+        let last = active[count - 1].sequence;
+        if ranges.iter().any(|range| {
+            (range.first_sequence < first && range.through_sequence >= first)
+                || (range.first_sequence <= last && range.through_sequence > last)
+        }) {
+            return Err(MezError::invalid_state(
+                "active raw window splits a selective range",
+            ));
+        }
+        let covered = |sequence| {
+            ranges
+                .iter()
+                .any(|range| (range.first_sequence..=range.through_sequence).contains(&sequence))
+        };
+        let mut atoms = Vec::new();
+        let mut start = 0;
+        for end in 1..=count {
+            let boundary = end == count
+                || (active[end - 1].turn_id != active[end].turn_id
+                    && !ranges.iter().any(|range| {
+                        range.first_sequence <= active[end - 1].sequence
+                            && range.through_sequence >= active[end].sequence
+                    }));
+            if !boundary {
+                continue;
+            }
+            let source = &active[start..end];
+            let words = source
+                .iter()
+                .map(|row| {
+                    if let Some(range) = ranges
+                        .iter()
+                        .find(|range| range.first_sequence == row.sequence)
+                    {
+                        AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS.saturating_add(
+                            mez_agent::provider_text_input_token_estimate(&range.summary),
+                        )
+                    } else if covered(row.sequence) {
+                        0
+                    } else {
+                        runtime_compact_transcript_entry_context_words(row)
+                    }
+                })
+                .fold(0usize, usize::saturating_add);
+            let closed = runtime_compact_transcript_execution_groups(source)
+                .iter()
+                .all(|group| {
+                    let uncovered = source[group.clone()]
+                        .iter()
+                        .filter(|row| !covered(row.sequence))
+                        .collect::<Vec<_>>();
+                    uncovered.is_empty()
+                        || uncovered
+                            .iter()
+                            .any(|row| row.role == TranscriptRole::Assistant)
+                        || uncovered
+                            .iter()
+                            .all(|row| runtime_compaction_control_entry_is_summarizable(row))
+                });
+            atoms.push(ProjectedAtom { end, words, closed });
+            start = end;
+        }
+        let closed_prefix = atoms
+            .iter()
+            .position(|atom| !atom.closed)
+            .unwrap_or(atoms.len());
+        let mut tail_start = count;
+        let mut tail_words = 0usize;
+        for (index, atom) in atoms.iter().enumerate().rev() {
+            if index < closed_prefix && tail_words.saturating_add(atom.words) >= budget_words {
+                break;
+            }
+            tail_words = tail_words.saturating_add(atom.words);
+            tail_start = if index == 0 { 0 } else { atoms[index - 1].end };
+        }
+        let mut selected = atoms
+            .iter()
+            .take(closed_prefix)
+            .take_while(|atom| atom.end <= tail_start)
+            .map(|atom| atom.end)
+            .last()
+            .unwrap_or(0);
+        if selected == 0 && closed_prefix > 0 {
+            selected = atoms[0].end;
+        }
+        let retained_words = if selected == 0 {
+            atoms
+                .iter()
+                .map(|atom| atom.words)
+                .fold(0usize, usize::saturating_add)
+        } else {
+            0
+        };
+        let no_work = (selected == 0).then_some(if retained_words > budget_words {
+            NoWorkReason::IrreducibleExactTail
+        } else {
+            NoWorkReason::NoEligibleClosedPrefix
+        });
+        Ok(Self {
+            entries: &active[..selected],
+            retained_entries: (count - selected) as u64,
+            no_work,
+            retained_words,
+            budget_words,
+        })
     }
 }

@@ -1031,6 +1031,7 @@ mod tests {
         actor
             .service
             .queue_agent_compaction_task(crate::runtime::RuntimeAgentCompactionTask {
+                frozen_compaction_epoch: None,
                 task_generation: 0,
                 compaction_epoch: 0,
                 transport_retry_attempts: 0,

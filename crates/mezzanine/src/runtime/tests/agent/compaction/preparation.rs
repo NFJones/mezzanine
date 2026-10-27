@@ -9,6 +9,8 @@ use super::*;
 use mez_core::ids::ClientId;
 
 mod diagnostics;
+/// Canonical selective summaries and physical prefix accounting.
+mod selective;
 
 /// Captures one genuine preparation through the command entry point. The store
 /// has closed eligible rows; no injected model task or completion is needed.
