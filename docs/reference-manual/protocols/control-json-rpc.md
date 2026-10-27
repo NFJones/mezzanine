@@ -1050,6 +1050,16 @@ unresolved history gap or expired/retired/changed source remains unavailable.
 Current Pi17/OpenCode15 artifacts include this client; their exact previous
 Pi15/OpenCode13 bundles remain recognized independently frozen installer history.
 
+A daemon replacement that starts a new pane/producer must not treat its former
+public source receipt as authority for the new native incarnation. Already
+committed expense survives under the original owner; it is separate from the new
+pane's live accounting view. A fresh source needs its own original request
+readiness before new incurred usage. Replaying an inherited completed outcome
+without that readiness is unavailable, not zero or a new historical charge.
+Exact same-physical-source recovery remains subject to the native continuity
+contract below. A graceful stop/start and a retained public selector do not
+promise recovery of unsent outcomes or no-gap billing through process loss.
+
 ### Explicit same-native-source cold admission (server contract)
 
 An ordinary persistent `agent/external/enroll` request can select:

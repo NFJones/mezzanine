@@ -1896,6 +1896,17 @@ detach its anchor before central retirement and NEVER queue a tombstone for
 another durable winner. Stale registry callbacks cannot consume or clean up
 replacement authority. Already committed exact claim facts remain available to
 freshly native-qualified same-intent retry, not blind write replay.
+A full service replacement that restarts the pane or producer creates a new
+native incarnation. Historical public source receipts MUST NOT authorize that
+replacement to borrow the former accounting owner, markers or completed reports.
+Committed expense/history MUST remain under the original owner independently of
+new pane presentation. A newly qualified source MAY report genuinely new requests
+only after its own original readiness; an old outcome without that readiness
+MUST remain unavailable, not become zero or a fresh historical charge. Recovery
+of the same physical source still requires the exact retained root/producer and
+independent continuity checks above. Neither graceful daemon restart nor a saved
+public selector establishes a durable unsent-report inbox or a no-gap guarantee.
+
 Successful cold replies use explicit `recovery.kind="durable-native-source"` and
 `next_sequence=1`, distinct from same-live recovery; same-service exact replies
 retain their private handle and successor receipt. Retained original reports

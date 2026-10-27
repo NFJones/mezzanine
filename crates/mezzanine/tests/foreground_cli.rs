@@ -29,6 +29,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[path = "foreground_cli/broker_attachment.rs"]
 mod broker_attachment;
 
+#[path = "foreground_cli/external_accounting.rs"]
+mod external_accounting;
+
 #[path = "foreground_cli/socket_readiness.rs"]
 mod socket_readiness;
 
