@@ -74,6 +74,10 @@ mod legacy_reconstruction {
                 )
                 .unwrap();
             service
+                .message_service()
+                .receive_subscribed(&recipient.agent_id, now_ms, 1)
+                .unwrap();
+            service
                 .message_service_mut()
                 .advance_subscription(&recipient.agent_id, delivery.sequence)
                 .unwrap();
@@ -158,6 +162,10 @@ mod legacy_reconstruction {
                     MessageScope::Session,
                     now_ms,
                 )
+                .unwrap();
+            service
+                .message_service()
+                .receive_subscribed(&recipient.agent_id, now_ms, 1)
                 .unwrap();
             service
                 .message_service_mut()

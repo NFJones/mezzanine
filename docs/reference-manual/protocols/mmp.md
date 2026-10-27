@@ -240,8 +240,16 @@ its result reports the resolved `scope` and filtered `agents` identities.
 MMP preserves acceptance order for one sender, one recipient, and one logical
 channel. Explicit receive returns a `deliver` object shaped as
 `{"protocol":"mmp/1","type":"deliver","cursor":{"recipient":"...","last_sequence":N},"messages":[{"sequence":N,"envelope":{...}}]}`.
-An `ack` advances the durable subscription cursor through the supplied
-sequence. The current automatic fanout path, however, advances its server-side
+An `ack` advances the subscription cursor only through an occurrence selected
+for that exact acceptance-time recipient registration. Every earlier retained
+own occurrence above the committed cursor must also have been offered, unless
+expired at the endpoint's observed offer time. Foreign global sequence gaps
+are harmless; unoffered, foreign and future ACKs reject without mutation, and
+duplicate/regressive ACKs are inert. Explicit sequenced receive and automatic
+fanout share this evidence; historical and unsequenced reads do not authorize
+ACKs. Native context commit still precedes acknowledgement.
+
+The current automatic fanout path, however, advances its server-side
 cursor after writing a delivery frame rather than after a recipient `ack`.
 This is a known implementation conformance gap against the normative
 at-least-once requirement in `SPEC.md`: automatic fanout is currently
@@ -285,7 +293,7 @@ at shutdown; independently registered pane-less identities remain untouched.
 Cleanup ownership corruption is critical and reaches completion after pane
 termination, rather than being reported as a successful peer closure.
 
-Private MMP snapshot schema5 retains schema4's distinction of fresh raw sender provenance from
+Private MMP snapshot schema6 retains schema4's distinction of fresh raw sender provenance from
 reusable delivery floors. It preserves the exact objective versions in retained
 authored mail, including when the current objective changed again without a
 send. Every version must be referenced by canonical mail and agree on immutable
@@ -311,6 +319,17 @@ recipient set from current registrations, nor rewrite the input snapshot.
 Empty-mail legacy snapshots still restore, while schema1 retains its existing
 audience-less-mail discard policy. This format version does not promise an
 acceptance-atomic disk write or transparent workflow restart.
+
+Schema6 additionally preserves exact offered-recipient subsets and their
+selection clock high-waters. Missing, duplicate, foreign and TTL-inconsistent
+offer records reject before reconstruction. Schema5 mail restores its known
+recipients with no offer evidence; a fresh receive/fanout selection is required
+before new cursor advancement. One optional clock slot is preallocated per
+accepted binding within the existing metadata reservation, not an unbounded ACK
+history. Offers remain tied to the original registration through retirement and
+opaque-ID reuse, and cannot establish application consumption or reconnect
+rights. Replay FIFO eviction still drops unread mail: independent pending
+custody remains unimplemented, so this fence alone does not repair that loss.
 
 ## Payloads and MAAP bridge
 

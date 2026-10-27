@@ -2,6 +2,56 @@
 
 use super::*;
 
+/// A framed raw recipient cannot discard accepted but unoffered mail. Explicit
+/// receive creates the exact offer; the compatibility last_sequence ACK then
+/// commits once and duplicate ACKs remain inert. No socket-write receipt or
+/// application-crash guarantee is inferred from this dispatcher-level test.
+#[test]
+fn framed_recipient_ack_requires_its_own_offer_before_cursor_mutation() {
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", Vec::new());
+    let target = service.register_agent(None, None, "worker", Vec::new());
+    let cursor = service.subscribe(&target.agent_id).unwrap();
+    let mut connection = MessageConnection {
+        agent_id: Some(target.agent_id.clone()),
+        delivery_cursor: Some(cursor),
+    };
+    let mut message = envelope(sender.clone());
+    message.recipient = Recipient::Agent(target.agent_id.clone());
+    let accepted = service
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 1)
+        .unwrap();
+    let ack = encode_mmp_body(&format!(
+        r#"{{"protocol":"mmp/1","type":"ack","last_sequence":{}}}"#,
+        accepted.sequence
+    ));
+    let before = service.snapshot_state();
+    let before_connection = connection.clone();
+    let (response, _) = handle_mmp_frame(&ack, 4096, &mut service, &mut connection, 2).unwrap();
+    let (body, _) = decode_mmp_frame(&response, 4096).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["error"]["code"],
+        "invalid_envelope"
+    );
+    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(connection, before_connection);
+    let receive = encode_mmp_body(r#"{"protocol":"mmp/1","type":"transport/receive","limit":1}"#);
+    let (response, _) = handle_mmp_frame(&receive, 4096, &mut service, &mut connection, 3).unwrap();
+    let (body, _) = decode_mmp_frame(&response, 4096).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["messages"][0]["sequence"],
+        accepted.sequence
+    );
+    for _ in 0..2 {
+        let (response, _) = handle_mmp_frame(&ack, 4096, &mut service, &mut connection, 4).unwrap();
+        let (body, _) = decode_mmp_frame(&response, 4096).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()["last_sequence"],
+            accepted.sequence
+        );
+    }
+}
+
 /// Verifies discovers registered agents in stable order.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -265,6 +315,10 @@ fn cursor_advance_retains_messages_for_other_subscribers() {
         .accept_at_with_scope(&sender.agent_id, fanout, MessageScope::Session, 10)
         .unwrap();
 
+    let offered = service
+        .receive_subscribed(&first.agent_id, 11, usize::MAX)
+        .unwrap();
+    assert_eq!(offered.messages.len(), 1);
     service
         .advance_subscription(&first.agent_id, delivery.sequence)
         .unwrap();

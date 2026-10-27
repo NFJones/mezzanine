@@ -30,6 +30,7 @@ impl MessageService {
             sequence,
             envelope,
             audience,
+            offered_at_ms: std::sync::Mutex::new(vec![None; recipient_bindings.len()]),
             recipient_bindings,
             accepted_at_ms: now_ms,
         });

@@ -1107,6 +1107,9 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
         )
         .unwrap();
     message_service
+        .receive_subscribed(&target.agent_id, 10, 1)
+        .unwrap();
+    message_service
         .advance_subscription(&target.agent_id, 1)
         .unwrap();
     // The actual outer payload codec must retain fresh-only schema4 provenance,
@@ -1151,7 +1154,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
         .retire_fresh_observational_identity(&raw.agent_id)
         .unwrap();
     let message_state = message_service.snapshot_state();
-    assert_eq!(message_state.schema_version, 5);
+    assert_eq!(message_state.schema_version, 6);
     assert_eq!(
         message_state.retired_delivery_floors[0]
             .fresh_sender_versions

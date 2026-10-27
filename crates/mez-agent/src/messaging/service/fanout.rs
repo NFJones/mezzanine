@@ -58,6 +58,15 @@ impl MessageService {
             if selection.batch.messages.is_empty() {
                 continue;
             }
+            // A poisoned offer record cannot authorize an ACK or be exposed
+            // as a successfully selected fanout batch. Other recipients remain
+            // eligible; explicit receive returns the typed state error.
+            if self
+                .record_delivery_offers(&selection.batch, now_ms)
+                .is_err()
+            {
+                continue;
+            }
             let selected_messages = selection.batch.messages.len();
             remaining_messages = remaining_messages.saturating_sub(selected_messages);
             remaining_payload_bytes =

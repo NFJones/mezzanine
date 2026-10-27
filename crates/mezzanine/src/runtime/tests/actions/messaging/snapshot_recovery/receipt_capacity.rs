@@ -82,6 +82,10 @@ fn runtime_user_prompt_peer_receipt_outbox_capacity_leaves_extra_message_pending
             )
             .unwrap();
         service
+            .message_service()
+            .receive_subscribed(&recipient.agent_id, now_ms, 1)
+            .unwrap();
+        service
             .message_service_mut()
             .advance_subscription(&recipient.agent_id, delivery.sequence)
             .unwrap();

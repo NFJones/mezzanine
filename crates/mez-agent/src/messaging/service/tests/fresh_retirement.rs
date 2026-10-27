@@ -485,7 +485,7 @@ fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
 fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
     let (service, _) = objective_history_fixture();
     let before = service.snapshot_state();
-    assert_eq!(before.schema_version, 5);
+    assert_eq!(before.schema_version, 6);
     let mut corruptions = Vec::new();
     let mut empty = before.clone();
     empty.retired_delivery_floors[0].fresh_sender_versions = Some(Vec::new());
@@ -558,7 +558,7 @@ fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
     unsent_anchor.retired_delivery_floors[0].identity.objective = Some("C unsent".to_string());
     corruptions.push(unsent_anchor);
     let mut unsupported = before.clone();
-    unsupported.schema_version = 6;
+    unsupported.schema_version = 7;
     corruptions.push(unsupported);
     let mut active = before.clone();
     active

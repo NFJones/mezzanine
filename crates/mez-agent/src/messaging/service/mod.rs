@@ -22,10 +22,10 @@ use super::types::{
     MessageAcceptedSnapshot, MessageAudienceSnapshot, MessageDeliveryCursorSnapshot,
     MessageDeliverySnapshot, MessageEnvelopeSnapshot, MessageExtensionFieldSnapshot,
     MessageFanoutDiagnostics, MessageIdentitySnapshot, MessagePresenceSnapshot,
-    MessageQueuedEnvelopeSnapshot, MessageRecipientBindingSnapshot, MessageRecipientSnapshot,
-    MessageRetiredDeliveryFloorSnapshot, MessageScope, MessageSequence, MessageService,
-    MessageServiceSnapshot, PresenceRecord, ProjectScopeId, QueuedEnvelope, Recipient,
-    ResolvedMessageAudience, RetiredDeliveryFloor, SenderIdentity, SequencedEnvelope,
+    MessageQueuedEnvelopeSnapshot, MessageRecipientBindingSnapshot, MessageRecipientOfferSnapshot,
+    MessageRecipientSnapshot, MessageRetiredDeliveryFloorSnapshot, MessageScope, MessageSequence,
+    MessageService, MessageServiceSnapshot, PresenceRecord, ProjectScopeId, QueuedEnvelope,
+    Recipient, ResolvedMessageAudience, RetiredDeliveryFloor, SenderIdentity, SequencedEnvelope,
 };
 use super::validation::{
     normalize_objective, normalize_optional_objective, validate_message_type, validate_protocol,
@@ -41,6 +41,7 @@ mod snapshot_validation;
 use recipient_binding::validate_recipient_bindings;
 use snapshot_codec::*;
 mod fanout;
+mod offers;
 mod receive;
 mod retention;
 mod subscriptions;
@@ -331,11 +332,9 @@ impl MessageService {
         self.next_sequence
     }
 
-    /// Runs the advance subscription operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Commits only an offered own occurrence, without skipping an unoffered
+    /// live own prefix. Duplicate/regressive ACKs are inert. Global sequence
+    /// knowledge, acceptance, and another recipient's offer grant no authority.
     pub fn advance_subscription(
         &mut self,
         recipient: &AgentId,
@@ -346,6 +345,16 @@ impl MessageService {
                 "delivery cursor cannot advance past the latest accepted message",
             ));
         }
+        let cursor = self
+            .subscriptions
+            .get(recipient)
+            .ok_or_else(|| MessageError::forbidden("agent has no delivery subscription"))?;
+        if sequence <= cursor.last_sequence {
+            return Ok(cursor.clone());
+        }
+        self.validate_delivery_ack(recipient, cursor.last_sequence, sequence)?;
+        // Validation above proves this exact subscription exists; no mutation
+        // or callback intervenes before the actor-owned cursor commit.
         let cursor = self
             .subscriptions
             .get_mut(recipient)
@@ -558,6 +567,7 @@ fn expires_before_delivery(envelope: &Envelope) -> bool {
 mod tests {
     use super::*;
 
+    mod acknowledgements;
     mod fresh_retirement;
     mod objectives;
     mod recipient_binding;
@@ -880,7 +890,7 @@ mod tests {
                 .unwrap();
 
             let snapshot = service.snapshot_state();
-            assert_eq!(snapshot.schema_version, 5);
+            assert_eq!(snapshot.schema_version, 6);
             assert!(
                 snapshot
                     .registered_agents
@@ -1123,6 +1133,7 @@ mod tests {
             for message in &mut legacy.retained_messages {
                 message.audience = None;
                 message.recipient_bindings = None;
+                message.offered_recipients = None;
                 message.envelope.sender.project_scope = None;
             }
             for message in &mut legacy.accepted_messages {

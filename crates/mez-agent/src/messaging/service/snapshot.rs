@@ -8,6 +8,9 @@
 //! reserves all retained recipient IDs independently of sender floors, including
 //! selector-based fanout targets. Legacy retained mail with unknown recipients
 //! is refused explicitly; snapshot capture is not acceptance-atomic durability.
+//! Schema6 preserves selected-recipient offers for cumulative ACK validation.
+//! Schema5 restores proven bindings without inventing unknown offers; a fresh
+//! sequenced selection is required before advancing an uncommitted cursor.
 
 use super::snapshot_validation::validate_message_service_snapshot;
 use super::*;
@@ -60,7 +63,7 @@ impl MessageService {
 
         MessageServiceSnapshot {
             protocol: MMP_PROTOCOL.to_string(),
-            schema_version: 5,
+            schema_version: 6,
             next_sequence: self.next_sequence,
             retention_messages: self.retention_messages,
             retention_bytes: self.retention_bytes,
@@ -186,6 +189,7 @@ impl MessageService {
                     })
                     .collect::<Result<Vec<_>>>()?,
                 accepted_at_ms: retained.accepted_at_ms,
+                offered_at_ms: std::sync::Mutex::new(super::offers::offers_from_snapshot(retained)),
             }));
         }
         let mut accepted_messages = HashMap::new();

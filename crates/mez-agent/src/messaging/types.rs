@@ -7,7 +7,7 @@
 //! membership, reconnect or subscription authority.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use mez_core::ids::{AgentId, IdFactory, PaneId, WindowId};
 use serde::{Deserialize, Serialize};
@@ -640,7 +640,7 @@ pub struct TaskResultPayload {
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(super) struct QueuedEnvelope {
     /// Stores the sequence value for this data structure.
     ///
@@ -656,6 +656,12 @@ pub(super) struct QueuedEnvelope {
     pub(super) audience: ResolvedMessageAudience,
     /// Exact eligible registrations captured at acceptance, not live selectors.
     pub(super) recipient_bindings: Vec<(AgentId, MessageSequence)>,
+    /// Successful live selection clock high-water per accepted recipient. Slots
+    /// are preallocated in immutable binding order within its metadata charge.
+    /// The mutex
+    /// permits shared read APIs to record offers without mutating any payload,
+    /// registration or cursor. Entries cannot outlive this bounded occurrence.
+    pub(super) offered_at_ms: Mutex<Vec<Option<u64>>>,
     /// Stores the accepted at ms value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -946,6 +952,20 @@ pub struct MessageQueuedEnvelopeSnapshot {
     /// Schema5 exact eligible registrations captured before acceptance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recipient_bindings: Option<Vec<MessageRecipientBindingSnapshot>>,
+    /// Schema6 selected-recipient evidence. Legacy absence requires a fresh
+    /// offer before any new ACK; it never infers an offer from acceptance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offered_recipients: Option<Vec<MessageRecipientOfferSnapshot>>,
+}
+
+/// Private selected-occurrence evidence, not an application commit receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageRecipientOfferSnapshot {
+    /// Recipient from this occurrence's immutable acceptance binding set.
+    pub recipient: String,
+    /// Selection clock used only to exclude expired earlier own occurrences
+    /// when validating a cumulative ACK. It grants no lifecycle authority.
+    pub observed_at_ms: u64,
 }
 
 /// Private snapshot evidence of one exact recipient registration interval.

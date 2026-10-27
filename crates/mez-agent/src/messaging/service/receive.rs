@@ -31,9 +31,11 @@ impl MessageService {
                 messages: Vec::new(),
             });
         }
-        Ok(self
+        let batch = self
             .receive_after_indexed(cursor, identity, now_ms, limit, usize::MAX)
-            .batch)
+            .batch;
+        self.record_delivery_offers(&batch, now_ms)?;
+        Ok(batch)
     }
 
     /// Merges selector indexes in occurrence order under message and byte limits.

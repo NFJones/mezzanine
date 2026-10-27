@@ -14267,7 +14267,7 @@ live or historical delivery rights. Existing availability, selector and project
 audience checks continue to constrain delivery; frozen membership is not a
 permission grant.
 
-Private message snapshot schema5 MUST preserve active registration sequence
+Private message snapshot schema6 MUST preserve active registration sequence
 floors and each retained occurrence's exact recipient bindings. The floor is
 the acceptance high-water at registration: any mail belonging to a previous
 registration falls at or below the replacement floor. Restoring schemas2–4 with
@@ -14277,6 +14277,26 @@ Legacy empty-mail snapshots remain restorable, and schema1 retains its existing
 audience-less-mail discard behavior. Recipient binding IDs MUST remain reserved
 for generated-ID allocation while their canonical mail is retained, including
 fanout targets that authored no messages.
+
+New recipient cursor advancement MUST end at an occurrence actually offered
+to that exact acceptance-time recipient registration. Every earlier retained
+own occurrence above the committed cursor MUST also have been offered, unless
+it had expired at the endpoint's observed offer time. Other recipients' global
+sequence gaps do not block a valid cumulative ACK. Acceptance or knowledge of
+the global sequence alone MUST NOT authorize cursor advancement. Duplicate and
+regressive ACKs are inert. Explicit sequenced receive and automatic/native
+fanout MUST record the same offer evidence; historical and unsequenced reads
+MUST NOT create ACK authority. Native ACK remains after canonical context commit.
+
+Schema6 MUST capture offered recipient subsets and their observed selection
+clock high-waters alongside frozen bindings. Restoration MUST reject missing,
+duplicate, foreign or TTL-inconsistent offer records. Schema5 retained mail has
+known recipients but unknown offers: restore it with no offers, requiring a fresh
+selection before new ACK advancement. Offer metadata is pre-reserved as one
+optional clock slot per accepted binding within the existing logical metadata
+charge; receive MUST NOT allocate another growing offer history. Offer evidence
+is not recipient application consumption, same-daemon reconnect authority,
+history-independent pending custody or acceptance-atomic disk durability.
 
 Retained recipient metadata has independent internal ceilings of 4096 records
 and 1 MiB logical charged bytes (128 bytes plus the UTF-8 ID length per record).

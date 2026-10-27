@@ -189,6 +189,10 @@ async fn async_actor_startup_arms_peer_delivery_timer_for_restored_v6_receipt() 
         )
         .unwrap();
     service
+        .message_service()
+        .receive_subscribed(&recipient.agent_id, now_ms, 1)
+        .unwrap();
+    service
         .message_service_mut()
         .advance_subscription(&recipient.agent_id, delivery.sequence)
         .unwrap();

@@ -93,6 +93,30 @@ pub(super) fn queued_envelope_snapshot(queued: &QueuedEnvelope) -> MessageQueued
         accepted_at_ms: queued.accepted_at_ms,
         envelope: envelope_snapshot(&queued.envelope),
         audience: Some(audience_snapshot(&queued.audience)),
+        // Poisoned offer metadata is discarded fail-closed, never fabricated.
+        // Retained source survives and must be offered again after restoration.
+        offered_recipients: Some(
+            queued
+                .offered_at_ms
+                .lock()
+                .ok()
+                .map(|offers| {
+                    queued
+                        .recipient_bindings
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, (id, _))| {
+                            offers.get(index).copied().flatten().map(|observed_at_ms| {
+                                MessageRecipientOfferSnapshot {
+                                    recipient: id.to_string(),
+                                    observed_at_ms,
+                                }
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
         recipient_bindings: Some(
             queued
                 .recipient_bindings
