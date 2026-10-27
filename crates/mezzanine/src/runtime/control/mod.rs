@@ -93,8 +93,8 @@ pub(crate) use context::{
 };
 pub(crate) use context::{
     RuntimeAgentHistoryEpochInputs, RuntimeAgentHistoryEpochWork, RuntimeAgentPromptHistoryWork,
-    RuntimeAgentTranscriptContext, execute_runtime_agent_prompt_history_work,
-    runtime_agent_compaction_replay_context,
+    RuntimeAgentTranscriptContext, RuntimeAgentTranscriptSnapshot,
+    execute_runtime_agent_prompt_history_work, runtime_agent_compaction_replay_context,
 };
 pub(crate) use external_enrollment::ExternalEnrollmentWork;
 pub(crate) use external_enrollment::ExternalSourceEndWork;

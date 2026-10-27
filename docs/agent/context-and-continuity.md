@@ -59,6 +59,10 @@ acknowledges acceptance with a mutation result and null body/turn. Observe the
 visible source shell for eventual success or failure; that initial response is
 not completion. Reusing its idempotency key returns the original acknowledgment
 without creating another fork. Other control commands keep their inline results.
+Manual compaction freezes its source frontier when preparation is admitted. Later
+appends do not silently enter that operation, and a changed source frontier
+invalidates preparation even if its retained row count stays the same.
+
 Model replay reads its compaction projection and checked transcript window
 together, so an epoch change cannot splice one summary to a separately read tail.
 Captured pending rows remain distinct from durable history until storage settles.

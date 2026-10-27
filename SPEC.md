@@ -10457,6 +10457,13 @@ logical frontier and raw count once; compaction retention changes only the raw
 count. Fork work MUST freeze the actual logical source frontier and reject
 missing required history rather than inventing or clamping its cutoff. Loop
 restoration and transactional rollback MUST preserve both domains.
+Manual compaction preparation MUST freeze its logical source frontier separately
+from the active raw row count. Source rows and canonical history MUST derive from
+one checked snapshot through that frontier. Later durable appends MUST NOT enter
+the admitted source; adoption MUST reject a changed frontier even when the raw
+count is unchanged. A missing captured high-water row or an epoch beyond the
+captured frontier MUST fail before provider dispatch, rather than shorten or
+widen the source.
 Ordinary model replay MUST capture its authoritative compaction epoch and
 checked transcript window under one conversation mutation lease, then render
 from that immutable snapshot without rereading storage. Pending rows MUST be

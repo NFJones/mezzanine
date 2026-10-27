@@ -157,14 +157,20 @@ async fn runtime_manual_compaction_no_work_awaited_ingress_keeps_narrow_groups()
     }
 }
 
-/// Missing logical/durable sources and irreducible exact tails remain distinct
-/// outcomes. Every skip preserves existing rows, leaves the durable replay epoch
-/// absent and queues no model; a fitting single closed group still queues work.
+/// Missing logical source, absent configured storage, missing required history,
+/// and irreducible exact tails remain distinct outcomes. A required archive is
+/// an integrity error rather than a no-work success. Every refusal preserves
+/// existing rows and queues no model; a fitting closed group still queues work.
 #[test]
 fn runtime_manual_compaction_no_work_source_and_exact_tail_matrix() {
     for (label, rows, logical, reason) in [
         ("logical-empty", Vec::new(), 0, "no-transcript-entries"),
-        ("durable-empty", Vec::new(), 1, "no-durable-transcript"),
+        (
+            "durable-empty",
+            Vec::new(),
+            1,
+            "required transcript archive is missing",
+        ),
         (
             "irreducible",
             vec![row(
@@ -181,8 +187,14 @@ fn runtime_manual_compaction_no_work_source_and_exact_tail_matrix() {
         let response = service
             .execute_agent_shell_command(&primary, "/compact")
             .unwrap();
-        assert!(response.contains(&format!("reason={reason}")), "{response}");
-        assert!(response.contains("compacted=false"));
+        if label == "durable-empty" {
+            assert!(response.contains(reason), "{response}");
+            assert!(response.contains("agent command error"), "{response}");
+            assert!(!response.contains("reason=no-durable-transcript"));
+        } else {
+            assert!(response.contains(&format!("reason={reason}")), "{response}");
+            assert!(response.contains("compacted=false"));
+        }
         assert!(!response.contains("state=queued"));
         assert!(!service.agent_is_compacting("%1"));
         assert!(service.pending_agent_compaction_task_ids().is_empty());
@@ -196,6 +208,29 @@ fn runtime_manual_compaction_no_work_source_and_exact_tail_matrix() {
             assert_eq!(store.inspect("diagnostic-compact").unwrap(), rows);
         }
     }
+    let mut no_store = test_runtime_service();
+    assert!(no_store.persistence.transcript_store().is_none());
+    no_store
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    no_store
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "no-configured-store", 1)
+        .unwrap();
+    let no_store_primary = no_store
+        .attach_primary("no-store", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let response = no_store
+        .execute_agent_shell_command(&no_store_primary, "/compact")
+        .unwrap();
+    assert!(
+        response.contains("reason=no-durable-transcript"),
+        "{response}"
+    );
+    assert!(response.contains("compacted=false"));
+    assert!(!no_store.agent_is_compacting("%1"));
+    assert!(no_store.pending_agent_compaction_task_ids().is_empty());
     let rows = vec![row(
         1,
         TranscriptRole::Assistant,

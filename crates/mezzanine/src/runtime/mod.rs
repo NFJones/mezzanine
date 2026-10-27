@@ -269,7 +269,8 @@ pub(crate) use control::ExternalUsageWork;
 pub(crate) use control::RuntimeControlComponent;
 pub(crate) use control::status::StatusControlWork;
 pub(crate) use control::{
-    RuntimeAgentTranscriptContext, execute_runtime_agent_prompt_history_work,
+    RuntimeAgentTranscriptContext, RuntimeAgentTranscriptSnapshot,
+    execute_runtime_agent_prompt_history_work,
 };
 /// Exposes deferred runtime side-effect value types.
 ///

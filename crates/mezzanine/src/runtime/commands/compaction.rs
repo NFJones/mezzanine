@@ -595,8 +595,7 @@ impl RuntimeSessionService {
         source: &str,
         resume_turn_id: Option<&str>,
         prepared: Option<(
-            Vec<TranscriptEntry>,
-            crate::runtime::RuntimeAgentTranscriptContext,
+            crate::runtime::RuntimeAgentTranscriptSnapshot,
             RuntimeManualCompactionPreparation,
         )>,
     ) -> Result<AgentShellCommandOutcome> {
@@ -622,7 +621,7 @@ impl RuntimeSessionService {
             )));
         }
         if self.agent_is_compacting(pane_id)
-            && !prepared.as_ref().is_some_and(|(_, _, owner)| {
+            && !prepared.as_ref().is_some_and(|(_, owner)| {
                 self.agent_compaction_task_is_current(pane_id, owner.task_generation)
             })
         {
@@ -649,16 +648,46 @@ impl RuntimeSessionService {
                 ),
             });
         }
-        let (transcript_records, prepared_history, prepared_owner) =
-            if let Some((rows, history, owner)) = prepared {
-                (rows, Some(history), Some(owner))
+        let (mut transcript_records, prepared_history, prepared_owner, projection) =
+            if let Some((snapshot, owner)) = prepared {
+                (
+                    snapshot.rows,
+                    Some(snapshot.history),
+                    Some(owner),
+                    snapshot.epoch,
+                )
+            } else if source == "manual" {
+                // Inline manual preparation retains the same live project,
+                // readiness and bookkeeping prerequisites as ordinary context
+                // assembly before capturing its immutable history inputs.
+                if self.persistence.transcript_store().is_some() {
+                    self.prepare_agent_context_prerequisites(pane_id, true)?;
+                }
+                let high_water = self
+                    .agent_shell_store()
+                    .get(pane_id)
+                    .ok_or_else(|| MezError::invalid_state("manual source session unavailable"))?
+                    .transcript_high_water;
+                let snapshot = source::ManualCompactionSourceWork::capture(
+                    self.persistence.transcript_store().cloned(),
+                    conversation_id.clone(),
+                )
+                .execute_with_history(
+                    self.prepare_runtime_agent_prompt_history_work(pane_id),
+                    high_water,
+                )?;
+                (snapshot.rows, Some(snapshot.history), None, snapshot.epoch)
             } else {
                 (
                     self.inspect_agent_shell_transcript_for_compaction(&conversation_id)?,
                     None,
                     None,
+                    None,
                 )
             };
+        if let Some(epoch) = projection.as_ref() {
+            transcript_records.retain(|row| row.sequence > epoch.through_sequence);
+        }
         let prepared_epoch = prepared_owner
             .as_ref()
             .map_or(0, |owner| owner.compaction_epoch);

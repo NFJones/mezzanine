@@ -601,12 +601,103 @@ fn runtime_manual_compaction_preparation_capacity_survives_cancellation() {
     assert!(store.compaction_epoch("prepare-owned").unwrap().is_none());
 }
 
-/// A changed installed source or logical count invalidates the captured history
+/// Manual admission freezes a logical source frontier before the worker reads.
+/// A later durable parent append must enter neither the raw compactor source
+/// nor the canonical context, even when labels and raw count remain unchanged.
+/// This uses the real command/preparation boundary and makes no provider call.
+#[test]
+fn runtime_manual_compaction_source_freezes_admitted_logical_frontier() {
+    let (mut service, primary, store) = fixture("manual-source-frozen-frontier");
+    service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    let work = service.take_manual_compaction_preparations().pop().unwrap();
+    store
+        .append(&TranscriptEntry {
+            conversation_id: "prepare-owned".into(),
+            sequence: 4,
+            created_at_unix_seconds: 4,
+            role: TranscriptRole::Assistant,
+            turn_id: "late-unowned-turn".into(),
+            agent_id: "agent-%1".into(),
+            pane_id: "%1".into(),
+            content: "LATE_ROW_OUTSIDE_ADMITTED_SOURCE".into(),
+        })
+        .unwrap();
+    let snapshot = work.execute_source().unwrap();
+    let rows = snapshot.rows;
+    let history = snapshot.history;
+    assert_eq!(
+        rows.iter().map(|row| row.sequence).collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    assert!(
+        !history
+            .blocks
+            .iter()
+            .any(|block| block.content.contains("LATE_ROW_OUTSIDE_ADMITTED_SOURCE"))
+    );
+    service.cancel_current_agent_compaction_task("%1");
+}
+
+/// An epoch published after admission may cover history beyond the captured
+/// frontier. Such a summary cannot be paired with the older source window; the
+/// preparation fails before provider dispatch and preserves the external epoch.
+/// This is an actual archive append/publication, with no replacement source or
+/// synthetic model completion used to repair the metadata.
+#[test]
+fn runtime_manual_compaction_source_rejects_epoch_beyond_admitted_frontier() {
+    let (mut service, primary, store) = fixture("manual-source-later-epoch");
+    service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    let work = service.take_manual_compaction_preparations().pop().unwrap();
+    store
+        .append(&TranscriptEntry {
+            conversation_id: "prepare-owned".into(),
+            sequence: 4,
+            created_at_unix_seconds: 4,
+            role: TranscriptRole::Assistant,
+            turn_id: "later-epoch-turn".into(),
+            agent_id: "agent-%1".into(),
+            pane_id: "%1".into(),
+            content: "later epoch source".into(),
+        })
+        .unwrap();
+    store
+        .save_compaction_epoch("prepare-owned", 4, "later epoch summary")
+        .unwrap();
+    let result = work.execute_source();
+    assert!(
+        result
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("epoch advanced beyond")
+    );
+    assert!(
+        service
+            .complete_manual_compaction_preparation(&work, result)
+            .is_err()
+    );
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.pending_agent_compaction_task_ids().is_empty());
+    assert_eq!(
+        store
+            .compaction_epoch("prepare-owned")
+            .unwrap()
+            .unwrap()
+            .summary,
+        "later epoch summary"
+    );
+}
+
+/// A changed installed source, raw count, or independent logical frontier invalidates the captured history
 /// even when the pane/conversation labels still match. Rejection clears only the
 /// preparation owner and queues no provider work or durable epoch.
 #[test]
 fn runtime_manual_compaction_preparation_rejects_changed_source_ownership() {
-    for change in ["store", "count"] {
+    for change in ["store", "count", "frontier"] {
         let (mut service, primary, store) = fixture(&format!("manual-preparation-stale-{change}"));
         assert!(
             service
@@ -620,6 +711,17 @@ fn runtime_manual_compaction_preparation_rejects_changed_source_ownership() {
             service.set_agent_transcript_store(AgentTranscriptStore::new(temp_root(
                 "replacement-prepare-store",
             )));
+        } else if change == "frontier" {
+            service
+                .agent_shell_store_mut()
+                .restore_transcript_position(
+                    "%1",
+                    mez_agent::AgentTranscriptPosition {
+                        logical_high_water: 4,
+                        active_raw_entries: 3,
+                    },
+                )
+                .unwrap();
         } else {
             service
                 .agent_shell_store_mut()

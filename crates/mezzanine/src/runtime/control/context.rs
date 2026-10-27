@@ -208,11 +208,104 @@ pub(crate) struct RuntimeAgentPromptHistoryWork {
     pub(crate) transcript_work: Option<RuntimeAgentHistoryEpochWork>,
 }
 
+/// Frozen manual source and its canonical history from one checked storage read.
+/// Rows include the physical archive through the admitted logical frontier;
+/// prefix/selective coverage is retained separately from raw row counts.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeAgentTranscriptSnapshot {
+    /// Checked logical rows including deduplicated captured pending appends.
+    pub(crate) rows: Vec<TranscriptEntry>,
+    /// Authoritative projection captured in the same mutation lane as the rows.
+    pub(crate) epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
+    /// Canonical model history rendered without any second storage read.
+    pub(crate) history: RuntimeAgentTranscriptContext,
+}
+
+impl RuntimeAgentPromptHistoryWork {
+    /// Reads source and context under one lease through an admitted frontier.
+    /// Captured store/conversation mismatch, absent high-water, corrupt required
+    /// history and conflicting pending rows fail before any model dispatch.
+    /// A missing installed store remains an honest no-source outcome. Existing
+    /// settled terminal handoffs reconcile before the coherent snapshot read.
+    pub(crate) fn execute_source_snapshot(
+        self,
+        store: Option<&crate::storage::transcript::AgentTranscriptStore>,
+        conversation_id: &str,
+        high_water: u64,
+    ) -> Result<RuntimeAgentTranscriptSnapshot> {
+        let empty = |blocks| RuntimeAgentTranscriptContext {
+            blocks,
+            execution_events: Vec::new(),
+            provider_history_repair_identity: None,
+        };
+        let Some(store) = store else {
+            return Ok(RuntimeAgentTranscriptSnapshot {
+                rows: Vec::new(),
+                epoch: None,
+                history: empty(self.memory_blocks),
+            });
+        };
+        let work = self.transcript_work.ok_or_else(|| {
+            crate::MezError::invalid_state("manual source has no captured transcript history owner")
+        })?;
+        if &work.store != store || work.inputs.conversation_id != conversation_id {
+            return Err(crate::MezError::conflict(
+                "manual source history owner changed",
+            ));
+        }
+        store.publish_terminal_compaction_handoffs(conversation_id)?;
+        let pending_count = work
+            .inputs
+            .pending_entries
+            .iter()
+            .filter(|row| row.sequence <= high_water)
+            .map(|row| row.sequence)
+            .collect::<BTreeSet<_>>()
+            .len() as u64;
+        let snapshot = store.conversation_replay_snapshot(
+            conversation_id,
+            &work.inputs.pending_entries,
+            |_| {
+                Some((
+                    ConversationTranscriptRead::Through(high_water),
+                    high_water > pending_count,
+                ))
+            },
+        )?;
+        let mut rows = snapshot.view.logical;
+        rows.retain(|row| row.sequence <= high_water);
+        if high_water > 0 && rows.last().is_none_or(|row| row.sequence != high_water) {
+            return Err(crate::MezError::invalid_state(
+                "manual source is missing its captured high-water row",
+            ));
+        }
+        let mut epoch = snapshot.epoch;
+        if let Some(epoch) = epoch.as_mut() {
+            if epoch.through_sequence > high_water {
+                return Err(crate::MezError::conflict(
+                    "manual source epoch advanced beyond its captured frontier",
+                ));
+            }
+            epoch
+                .ranges
+                .retain(|range| range.through_sequence <= high_water);
+        }
+        let transcript =
+            runtime_agent_history_epoch_from_snapshot(work.inputs, epoch.clone(), rows.clone());
+        let history = runtime_agent_prompt_history_from_transcript(self.memory_blocks, transcript);
+        Ok(RuntimeAgentTranscriptSnapshot {
+            rows,
+            epoch,
+            history,
+        })
+    }
+}
+
 /// Prepares one complete prompt-history epoch without accessing live runtime state.
 pub(crate) fn execute_runtime_agent_prompt_history_work(
     work: RuntimeAgentPromptHistoryWork,
 ) -> Result<RuntimeAgentTranscriptContext> {
-    let mut blocks = work.memory_blocks;
+    let blocks = work.memory_blocks;
     let Some(transcript_work) = work.transcript_work else {
         return Ok(RuntimeAgentTranscriptContext {
             blocks,
@@ -221,6 +314,17 @@ pub(crate) fn execute_runtime_agent_prompt_history_work(
         });
     };
     let transcript = execute_runtime_agent_history_epoch_work(transcript_work)?;
+    Ok(runtime_agent_prompt_history_from_transcript(
+        blocks, transcript,
+    ))
+}
+
+/// Combines immutable memory with canonical transcript history exactly once.
+/// An authoritative compact-memory projection supersedes cached memory blocks.
+fn runtime_agent_prompt_history_from_transcript(
+    mut blocks: Vec<ContextBlock>,
+    transcript: RuntimeAgentTranscriptContext,
+) -> RuntimeAgentTranscriptContext {
     if transcript
         .blocks
         .first()
@@ -232,11 +336,11 @@ pub(crate) fn execute_runtime_agent_prompt_history_work(
         blocks.clear();
     }
     blocks.extend(transcript.blocks);
-    Ok(RuntimeAgentTranscriptContext {
+    RuntimeAgentTranscriptContext {
         blocks,
         execution_events: transcript.execution_events,
         provider_history_repair_identity: transcript.provider_history_repair_identity,
-    })
+    }
 }
 
 /// Merges durable and actor-captured pending transcript entries, trims the

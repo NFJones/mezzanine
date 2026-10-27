@@ -4,13 +4,15 @@
 //! captured before source I/O. A finite permit remains with cloned work through
 //! actual worker retirement, not merely logical cancellation. The worker decodes
 //! source/history without consulting live service state and performs no model
-//! dispatch or publication. Actor adoption remains the only scheduling authority.
+//! dispatch or new compaction publication. Existing settled terminal handoffs
+//! reconcile before one leased source/history capture through the admitted
+//! logical frontier. Actor adoption remains the only scheduling authority.
 //! Durable decoding and immutable context/request rendering use separate worker
 //! phases under the same logical owner. Live context/policy capture and source
 //! eligibility remain actor-owned; no worker may rediscover or widen authority.
 
 use super::*;
-use crate::runtime::control::{RuntimeAgentPromptHistoryWork, RuntimeAgentTranscriptContext};
+use crate::runtime::control::{RuntimeAgentPromptHistoryWork, RuntimeAgentTranscriptSnapshot};
 
 mod request;
 pub(crate) use request::RuntimeManualCompactionRequestWork;
@@ -31,8 +33,10 @@ pub(crate) struct RuntimeManualCompactionPreparation {
     /// Loaded layer bytes/trust, including disk-discovered overlays that need not
     /// advance the terminal session generation on every reconciliation.
     pub(crate) config_layers: Vec<crate::config::ConfigLayer>,
-    /// Original logical transcript count.
+    /// Original active raw-tail row count.
     pub(crate) transcript_entries: u64,
+    /// Frozen logical frontier, independent of the retained raw row count.
+    pub(crate) transcript_high_water: u64,
     /// Original kernel pane incarnation, when a local root exists.
     pub(crate) process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
     /// Installed store identity/settings captured before worker I/O.
@@ -55,13 +59,10 @@ pub(crate) struct RuntimeManualCompactionPreparation {
 impl RuntimeManualCompactionPreparation {
     /// Performs captured durable decoding with no live actor access, writes, or
     /// provider call. Corrupt source remains an error rather than a no-work skip.
-    pub(crate) fn execute_source(
-        &self,
-    ) -> Result<(Vec<TranscriptEntry>, RuntimeAgentTranscriptContext)> {
-        let rows = self.source.clone().execute()?;
-        let history =
-            crate::runtime::execute_runtime_agent_prompt_history_work(self.history.clone())?;
-        Ok((rows, history))
+    pub(crate) fn execute_source(&self) -> Result<RuntimeAgentTranscriptSnapshot> {
+        self.source
+            .clone()
+            .execute_with_history(self.history.clone(), self.transcript_high_water)
     }
 }
 
@@ -87,6 +88,7 @@ impl RuntimeSessionService {
         }
         let conversation_id = session.session_id.clone();
         let transcript_entries = session.transcript_entries;
+        let transcript_high_water = session.transcript_high_water;
         let visibility = session.visibility;
         self.prepare_agent_context_prerequisites(pane_id, true)?;
         let permit = self.reserve_manual_compaction_preparation()?;
@@ -100,6 +102,7 @@ impl RuntimeSessionService {
             config_generation: self.session.config_generation,
             config_layers: self.integration.config_layers().to_vec(),
             transcript_entries,
+            transcript_high_water,
             process,
             store,
             source: source::ManualCompactionSourceWork::capture(
@@ -135,18 +138,18 @@ impl RuntimeSessionService {
     pub(crate) fn complete_manual_compaction_preparation(
         &mut self,
         work: &RuntimeManualCompactionPreparation,
-        result: Result<(Vec<TranscriptEntry>, RuntimeAgentTranscriptContext)>,
+        result: Result<RuntimeAgentTranscriptSnapshot>,
     ) -> Result<bool> {
         if !self.agent_compaction_task_is_current(&work.pane_id, work.task_generation) {
             return Ok(false);
         }
         let freshness = self.validate_manual_compaction_owner(work);
-        let outcome = freshness.and(result).and_then(|(rows, history)| {
+        let outcome = freshness.and(result).and_then(|snapshot| {
             self.queue_agent_shell_compaction_with_model(
                 &work.pane_id,
                 "manual",
                 None,
-                Some((rows, history, work.clone())),
+                Some((snapshot, work.clone())),
             )
         });
         if outcome.is_err() || matches!(outcome, Ok(AgentShellCommandOutcome::Display { .. })) {
@@ -177,6 +180,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::conflict("compaction conversation was removed"))?;
         if session.session_id != work.conversation_id
             || session.transcript_entries != work.transcript_entries
+            || session.transcript_high_water != work.transcript_high_water
             || self.session.config_generation != work.config_generation
             || self.integration.config_layers() != work.config_layers.as_slice()
             || self.persistence.transcript_store() != work.store.as_ref()

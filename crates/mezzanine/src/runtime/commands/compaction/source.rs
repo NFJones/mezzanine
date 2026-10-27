@@ -3,7 +3,9 @@
 //! The runtime captures the installed transcript store and exact conversation
 //! before decoding any source. Execution consumes that capture and never looks
 //! up a current pane, configuration, turn, or replacement store. It performs no
-//! publication, scheduling or model call. The caller remains responsible for
+//! scheduling or model calls. Existing terminal handoff recovery precedes manual
+//! snapshot capture; source and canonical history then share one lease. The caller
+//! remains responsible for
 //! generation/freshness validation before adopting these rows or committing an
 //! epoch. Missing storage is an honest no-source outcome; corruption is an error.
 //!
@@ -29,6 +31,16 @@ impl ManualCompactionSourceWork {
             store,
             conversation_id,
         }
+    }
+
+    /// Produces manual source and canonical history from one frozen logical
+    /// frontier. It cannot consult replacement actor state or reread the epoch.
+    pub(super) fn execute_with_history(
+        self,
+        history: crate::runtime::control::RuntimeAgentPromptHistoryWork,
+        high_water: u64,
+    ) -> Result<crate::runtime::RuntimeAgentTranscriptSnapshot> {
+        history.execute_source_snapshot(self.store.as_ref(), &self.conversation_id, high_water)
     }
 
     /// Decodes the captured durable archive without accessing actor state.
