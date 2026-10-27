@@ -2,8 +2,8 @@
 //!
 //! One bounded index shares immutable occurrences with replay and its delivery
 //! indexes. Exact offered ACK evidence belongs to the occurrence, not mutable
-//! subscription lifetime. Expired/retired unsatisfied rows remain conservatively
-//! retained until a typed terminal-outcome owner is implemented; this module
+//! subscription lifetime. The sibling terminal owner retains unsatisfied rows
+//! until exact sender consumption or its finite handoff horizon; this module
 //! never mistakes unavailability or expiry for successful recipient commit.
 
 use super::*;
@@ -92,7 +92,9 @@ impl MessageService {
             ))
             .map(|(_, row)| row)
         {
-            if !self.accepted_recipient(queued, recipient) {
+            if !self.accepted_recipient(queued, recipient)
+                || self.recipient_is_terminal(queued, recipient)
+            {
                 continue;
             }
             let index = queued
@@ -135,28 +137,7 @@ impl MessageService {
             *expiration =
                 Some(expiration.map_or(observed_at_ms, |prior| prior.max(observed_at_ms)));
         }
-        let completed = self
-            .pending
-            .iter()
-            .filter_map(|(sequence, queued)| {
-                queued
-                    .acknowledged
-                    .lock()
-                    .ok()
-                    .filter(|slots| slots.iter().all(|ack| *ack))
-                    .map(|_| *sequence)
-            })
-            .collect::<Vec<_>>();
-        for sequence in completed {
-            if let Some(queued) = self.pending.remove(&sequence)
-                && !self.queue.iter().any(|row| row.sequence == sequence)
-            {
-                self.remove_queue_indexes(&queued);
-            }
-        }
-        self.prune_accepted_messages_to_retained_queue();
-        self.prune_retired_delivery_floors();
-        Ok(())
+        self.release_completed_pending()
     }
 }
 
@@ -230,9 +211,14 @@ pub(super) fn validate_pending_snapshot(
                 "snapshot MMP ACK expiry evidence is invalid",
             ));
         }
-        for binding in bindings {
+        for (index, binding) in bindings.iter().enumerate() {
             if exact_cursor(snapshot, binding).is_some_and(|cursor| cursor >= row.sequence)
                 && !acknowledged.contains(&binding.recipient)
+                && !row
+                    .terminal_recipients
+                    .as_ref()
+                    .and_then(|slots| slots.get(index))
+                    .is_some_and(Option::is_some)
                 && (row.ack_expiry_observed_at_ms.is_none()
                     || offers
                         .iter()
@@ -270,7 +256,16 @@ pub(super) fn validate_pending_snapshot(
                 ));
             }
         }
-        if acknowledged.len() == bindings.len() {
+        if bindings.iter().enumerate().all(|(index, binding)| {
+            acknowledged.contains(&binding.recipient)
+                || row
+                    .terminal_recipients
+                    .as_ref()
+                    .and_then(|slots| slots.get(index))
+                    .copied()
+                    .flatten()
+                    .is_some_and(|terminal| terminal.released)
+        }) {
             if extra.iter().any(|extra| extra.sequence == row.sequence) {
                 return Err(MessageError::invalid_args(
                     "snapshot MMP custody-only source has no pending recipient",

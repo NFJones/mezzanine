@@ -302,7 +302,7 @@ fn acknowledgement_snapshot_validates_offers_and_upgrades_schema5_fail_closed() 
     bad.schema_version = 5;
     corruptions.push(bad);
     let mut bad = before.clone();
-    bad.schema_version = 8;
+    bad.schema_version = 9;
     corruptions.push(bad);
     for bad in corruptions {
         let decoded =
@@ -317,6 +317,8 @@ fn acknowledgement_snapshot_validates_offers_and_upgrades_schema5_fail_closed() 
     for row in &mut legacy.retained_messages {
         row.offered_recipients = None;
         row.acknowledged_recipients = None;
+        row.terminal_recipients = None;
+        row.sender_registered_after_sequence = None;
     }
     let mut restored = MessageService::from_snapshot_state(&legacy).unwrap();
     assert!(

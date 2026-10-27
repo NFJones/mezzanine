@@ -148,6 +148,15 @@ pub(super) fn queued_envelope_snapshot(queued: &QueuedEnvelope) -> MessageQueued
             .lock()
             .ok()
             .and_then(|observed| *observed),
+        terminal_recipients: Some(
+            queued
+                .terminal
+                .lock()
+                .ok()
+                .map(|slots| slots.clone())
+                .unwrap_or_default(),
+        ),
+        sender_registered_after_sequence: queued.sender_registered_after_sequence,
     }
 }
 

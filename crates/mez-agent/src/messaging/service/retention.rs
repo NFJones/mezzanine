@@ -27,12 +27,18 @@ impl MessageService {
             .checked_add(1)
             .ok_or_else(|| MessageError::invalid_state("message sequence number exhausted"))?;
         self.queued_bytes += size;
+        let sender_registered_after_sequence = self
+            .registration_floors
+            .get(&envelope.sender.agent_id)
+            .copied();
         let queued = Arc::new(QueuedEnvelope {
             sequence,
             envelope,
             audience,
             offered_at_ms: std::sync::Mutex::new(vec![None; recipient_bindings.len()]),
             acknowledged: std::sync::Mutex::new(vec![false; recipient_bindings.len()]),
+            terminal: std::sync::Mutex::new(vec![None; recipient_bindings.len()]),
+            sender_registered_after_sequence,
             ack_expiry_observed_at_ms: std::sync::Mutex::new(None),
             recipient_bindings,
             accepted_at_ms: now_ms,

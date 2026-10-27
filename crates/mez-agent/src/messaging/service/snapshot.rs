@@ -14,6 +14,8 @@
 //! Schema7 stores each replay/custody source once and preserves exact recipient
 //! commits independently of retired cursors. Legacy mail supplies only provable
 //! retained custody; unknown evicted source is never reconstructed.
+//! Schema8 preserves pre-reserved terminal dispositions and exact sender
+//! intervals. Legacy unknown sender intervals never acquire handoff authority.
 
 use super::snapshot_validation::validate_message_service_snapshot;
 use super::*;
@@ -66,7 +68,7 @@ impl MessageService {
 
         MessageServiceSnapshot {
             protocol: MMP_PROTOCOL.to_string(),
-            schema_version: 7,
+            schema_version: 8,
             next_sequence: self.next_sequence,
             retention_messages: self.retention_messages,
             retention_bytes: self.retention_bytes,
@@ -240,7 +242,28 @@ impl MessageService {
                     }
                 })
                 .collect::<Vec<_>>();
-            let is_pending = acknowledged.iter().any(|ack| !ack);
+            let terminal = if snapshot.schema_version >= 8 {
+                retained.terminal_recipients.clone().unwrap_or_default()
+            } else {
+                vec![None; acknowledged.len()]
+            };
+            let is_pending = acknowledged
+                .iter()
+                .zip(&terminal)
+                .any(|(ack, terminal)| !ack && !terminal.is_some_and(|terminal| terminal.released));
+            let sender_registered_after_sequence = if snapshot.schema_version >= 8 {
+                retained.sender_registered_after_sequence
+            } else {
+                // Only an interval still covering this occurrence proves the
+                // original sender; retired/replaced legacy owners stay unknown.
+                registration_floors
+                    .iter()
+                    .find(|(id, floor)| {
+                        id.as_str() == retained.envelope.sender.agent_id
+                            && **floor < retained.sequence
+                    })
+                    .map(|(_, floor)| *floor)
+            };
             let queued = Arc::new(QueuedEnvelope {
                 sequence: retained.sequence,
                 envelope,
@@ -260,6 +283,8 @@ impl MessageService {
                 accepted_at_ms: retained.accepted_at_ms,
                 offered_at_ms: std::sync::Mutex::new(super::offers::offers_from_snapshot(retained)),
                 acknowledged: std::sync::Mutex::new(acknowledged),
+                terminal: std::sync::Mutex::new(terminal),
+                sender_registered_after_sequence,
                 ack_expiry_observed_at_ms: std::sync::Mutex::new(
                     retained.ack_expiry_observed_at_ms,
                 ),

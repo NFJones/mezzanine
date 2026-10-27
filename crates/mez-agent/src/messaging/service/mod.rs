@@ -14,6 +14,9 @@ use std::sync::Arc;
 use mez_core::ids::{AgentId, IdFactory, PaneId, StableId, WindowId};
 
 use super::error::{MessageError, MessageErrorKind, Result};
+use super::outcomes::{
+    DeliveryTerminalReason, MessageDeliveryOutcome, MessageDeliveryTerminalSnapshot,
+};
 use super::pending_limits::PendingDeliveryLimits;
 
 use super::types::{
@@ -47,6 +50,7 @@ mod pending;
 mod receive;
 mod retention;
 mod subscriptions;
+mod terminal_outcomes;
 
 /// Compares immutable sender provenance without conflating mutable objective
 /// telemetry with project membership, native association or capability identity.
@@ -369,6 +373,7 @@ impl MessageService {
             .filter(|queued| {
                 self.registered.get(recipient).is_some_and(|identity| {
                     self.recipient_is_available(&identity.agent_id)
+                        && !self.recipient_is_terminal(queued, recipient)
                         && self.accepted_recipient(queued, recipient)
                         && recipient_matches(identity, &queued.envelope.recipient)
                         && audience_matches(identity, &queued.audience)
@@ -568,6 +573,7 @@ mod tests {
     mod pending_limits;
     mod recipient_binding;
     mod shared_retirement;
+    mod terminal_outcomes;
 
     mod retirement {
         use super::*;
@@ -887,7 +893,7 @@ mod tests {
                 .unwrap();
 
             let snapshot = service.snapshot_state();
-            assert_eq!(snapshot.schema_version, 7);
+            assert_eq!(snapshot.schema_version, 8);
             assert!(
                 snapshot
                     .registered_agents
@@ -1132,6 +1138,8 @@ mod tests {
                 message.audience = None;
                 message.recipient_bindings = None;
                 message.offered_recipients = None;
+                message.terminal_recipients = None;
+                message.sender_registered_after_sequence = None;
                 message.acknowledged_recipients = None;
                 message.envelope.sender.project_scope = None;
             }

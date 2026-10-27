@@ -230,6 +230,8 @@ fn pending_limits_restore_refuses_each_over_cap_dimension() {
     for row in &mut legacy.retained_messages {
         row.acknowledged_recipients = None;
         row.ack_expiry_observed_at_ms = None;
+        row.terminal_recipients = None;
+        row.sender_registered_after_sequence = None;
     }
     assert_eq!(
         MessageService::from_snapshot_state(&legacy)

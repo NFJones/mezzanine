@@ -8,6 +8,7 @@
 mod dispatch;
 mod error;
 mod json;
+mod outcomes;
 mod pending_limits;
 mod service;
 mod types;
@@ -16,6 +17,9 @@ mod validation;
 pub use dispatch::dispatch_mmp_body;
 pub use error::{MessageError, MessageErrorKind, Result};
 pub use json::delivery_batch_json;
+pub use outcomes::{
+    DeliveryTerminalReason, MessageDeliveryOutcome, MessageDeliveryTerminalSnapshot,
+};
 pub use pending_limits::PendingDeliveryLimits;
 pub use types::{
     AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus, Envelope,

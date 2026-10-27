@@ -58,7 +58,9 @@ impl MessageService {
             )
         };
         let endpoint = self.queued_by_sequence.get(&sequence).ok_or_else(invalid)?;
-        if !self.accepted_recipient(endpoint, recipient) {
+        if !self.accepted_recipient(endpoint, recipient)
+            || self.recipient_is_terminal(endpoint, recipient)
+        {
             return Err(invalid());
         }
         let observed_at_ms = offered_at(endpoint, recipient)?.ok_or_else(invalid)?;
@@ -67,6 +69,7 @@ impl MessageService {
             std::ops::Bound::Included(sequence),
         )) {
             if self.accepted_recipient(queued, recipient)
+                && !self.recipient_is_terminal(queued, recipient)
                 && !expired(queued, observed_at_ms)
                 && offered_at(queued, recipient)?.is_none()
             {

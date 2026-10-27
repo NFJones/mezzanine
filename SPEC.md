@@ -14267,7 +14267,7 @@ live or historical delivery rights. Existing availability, selector and project
 audience checks continue to constrain delivery; frozen membership is not a
 permission grant.
 
-Private message snapshot schema7 MUST preserve active registration sequence
+Private message snapshot schema8 MUST preserve active registration sequence
 floors and each retained occurrence's exact recipient bindings. The floor is
 the acceptance high-water at registration: any mail belonging to a previous
 registration falls at or below the replacement floor. Restoring schemas2–4 with
@@ -14286,9 +14286,32 @@ canonical replay remains. A replacement registration and late selector match
 MUST NOT acquire the retired registration's mail. Retained direct-only mail MAY
 remain as bounded evidence without a live recipient; that does not prove
 delivery or a terminal outcome. Unsatisfied retired/expired obligations MUST
-remain conservatively charged until an explicit terminal-outcome owner settles
-them; retirement or expiry alone MUST NOT fabricate recipient commit. Typed
-expiry/retirement disposition handoff remains a separate unfinished guarantee.
+remain charged until an explicit terminal-outcome owner settles them;
+retirement or expiry alone MUST NOT fabricate recipient commit.
+
+The lower service's explicit actor-owned terminal maintenance MUST reserve one
+fixed-size disposition slot per accepted recipient before success. It records
+`expired` only after the original strict TTL boundary, or `recipient_retired`
+only after that exact registration interval ends. Temporary offline presence
+MUST NOT establish retirement. The first observed reason/time is immutable;
+clock rollback MUST NOT revive terminal mail. Terminal evidence and recipient
+ACKs MUST be mutually exclusive, including cumulative ACK prefix processing.
+The exact original authenticated sender interval MAY query at most 100
+payload-free outcomes per call and explicitly acknowledge an exact receipt only
+after its handoff commits. Reused sender/recipient IDs MUST NOT inherit rights.
+Unknown legacy sender intervals MUST NOT acquire receipt-consumption authority.
+
+An unconsumed outcome MUST retain its existing occurrence/resource reservation
+for ten minutes from first service observation, then explicit maintenance MAY
+release it. Retries/rollback MUST NOT renew that horizon. Shared source is
+released only when all recipients have genuine ACKs or released terminal
+dispositions; optional replay remains independent. An outcome is not delivery
+success, a substantive answer, approval, a new message or permission to replay
+effects. This is a wall-clock-based explicit maintenance API, not guaranteed
+monotonic elapsed time or acceptance-atomic persistence. Product delivery-timer
+and originating-action/workflow handoff integration remain unfinished; the
+existing product sweep does not yet call this API. Pending terminal candidates
+therefore remain conservatively charged until a trusted caller maintains them.
 
 Accepted same-runtime delivery custody MUST be independent of optional replay
 retention. A pending reference and replay reference MUST share the original
@@ -14305,8 +14328,9 @@ Custody MUST reserve before sequence allocation or success: at most 1000 pending
 occurrences, 1 MiB unique pending payload, 4096 frozen recipient slots and 256
 slots per exact recipient interval. Shared payload bytes are charged once.
 Conservatively, committed fanout slots remain charged until the occurrence's
-last recipient commits. The final exact offered ACK releases the pending
-reference; optional replay may still retain it. A full budget MUST return typed
+last recipient commits or its terminal disposition is released. The final exact
+offered ACK releases the pending reference; optional replay may still retain it.
+A full budget MUST return typed
 provably-unaccepted `capacity` without partial fanout or prior-source mutation.
 These internal ceilings are independent of the replay window; there is no new
 configuration key or acceptance-atomic disk backing in this increment.
@@ -14321,7 +14345,7 @@ policy at restore. Both current and reconstructed legacy custody MUST fit that
 policy without discarding accepted source. These are construction-time budgets,
 not model/wire/config controls; optional replay retention remains independent.
 
-Schema7 MUST store each canonical source exactly once in replay or custody-only
+Schema8 MUST store each canonical source exactly once in replay or custody-only
 rows, including explicit committed-recipient subsets. Commits MUST reference
 genuine exact offers and agree with any still-active exact recipient cursor.
 An active exact cursor MUST NOT conceal an explicitly uncommitted live row.
@@ -14340,11 +14364,23 @@ Over-cap legacy custody MUST refuse rather than discard accepted mail. Snapshot
 capture remains distinct from acceptance-atomic durability or transparent
 workflow restart.
 
+Schema8 additionally MUST preserve terminal slots in immutable binding order,
+their reason/first-observation/released evidence, and the original sender's
+registration interval (or explicit legacy unknown). Restoration MUST reject
+missing/wrong-sized slots, ACK/terminal overlap, pre-acceptance observation,
+TTL-inconsistent expiry, retirement of a still-exact active interval, invalid
+sender intervals and newer fields under older schemas. Schemas5–7 MAY recover a
+sender interval only when its current registration still covers the occurrence;
+retired/replaced legacy sender intervals remain unknown. Released terminal
+tombstones in replay MUST NOT become deliverable again after restoration.
+
 New recipient cursor advancement MUST end at an occurrence actually offered
 to that exact acceptance-time recipient registration. Every earlier retained
 own occurrence above the committed cursor MUST also have been offered, unless
-it had expired at the endpoint's observed offer time. Other recipients' global
-sequence gaps do not block a valid cumulative ACK. Acceptance or knowledge of
+it had expired at the endpoint's observed offer time or already has an explicit
+terminal disposition. A terminal endpoint MUST NOT be acknowledged as delivery.
+Other recipients' global sequence gaps do not block a valid cumulative ACK.
+Acceptance or knowledge of
 the global sequence alone MUST NOT authorize cursor advancement. Duplicate and
 regressive ACKs are inert. Explicit sequenced receive and automatic/native
 fanout MUST record the same offer evidence; historical and unsequenced reads
@@ -14361,10 +14397,10 @@ is not recipient application consumption, same-daemon reconnect authority,
 or acceptance-atomic disk durability.
 
 Retained recipient metadata has independent internal ceilings of 4096 records
-and 1 MiB logical charged bytes (160 bytes plus the UTF-8 ID length per record).
-The charge includes binding, offer, commit and container overhead across the
-deduplicated replay/custody union. An enqueue MAY reuse only metadata belonging
-to fully committed replay rows that its count/payload policy actually evicts.
+and 1 MiB logical charged bytes (192 bytes plus the UTF-8 ID length per record).
+The charge includes binding, offer, commit, terminal/sender state and container
+overhead across the deduplicated replay/custody union. An enqueue MAY reuse only metadata belonging
+to fully settled replay rows that its count/payload policy actually evicts.
 Reservation failure MUST reject the entire
 send with `capacity` before sequence allocation or receipt/queue mutation; no
 partial fanout or accepted result is permitted. These are in-memory metadata

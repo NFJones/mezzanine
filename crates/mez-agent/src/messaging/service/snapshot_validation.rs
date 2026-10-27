@@ -14,7 +14,7 @@ pub(super) fn validate_message_service_snapshot(
     snapshot: &MessageServiceSnapshot,
     pending_limits: PendingDeliveryLimits,
 ) -> Result<()> {
-    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1..=7) {
+    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1..=8) {
         return Err(MessageError::invalid_args(
             "snapshot MMP state has unsupported protocol or schema version",
         ));
@@ -40,6 +40,7 @@ pub(super) fn validate_message_service_snapshot(
         }
     }
     let mut presence_ids = HashSet::new();
+    super::terminal_outcomes::validate_terminal_snapshot(snapshot)?;
     super::pending::validate_pending_snapshot(snapshot, pending_limits)?;
     validate_recipient_bindings(snapshot, &registered_by_id)?;
     super::offers::validate_delivery_offer_snapshot(snapshot)?;

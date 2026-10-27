@@ -469,6 +469,8 @@ fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
     for row in &mut legacy.retained_messages {
         row.recipient_bindings = None;
         row.acknowledged_recipients = None;
+        row.terminal_recipients = None;
+        row.sender_registered_after_sequence = None;
     }
     assert_eq!(legacy.retired_delivery_floors.len(), 1);
     assert!(
@@ -500,7 +502,7 @@ fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
 fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
     let (service, _) = objective_history_fixture();
     let before = service.snapshot_state();
-    assert_eq!(before.schema_version, 7);
+    assert_eq!(before.schema_version, 8);
     let mut corruptions = Vec::new();
     let mut empty = before.clone();
     empty.retired_delivery_floors[0].fresh_sender_versions = Some(Vec::new());
@@ -573,7 +575,7 @@ fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
     unsent_anchor.retired_delivery_floors[0].identity.objective = Some("C unsent".to_string());
     corruptions.push(unsent_anchor);
     let mut unsupported = before.clone();
-    unsupported.schema_version = 8;
+    unsupported.schema_version = 9;
     corruptions.push(unsupported);
     let mut active = before.clone();
     active

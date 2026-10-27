@@ -10,8 +10,9 @@ use super::*;
 const MAX_RECIPIENT_BINDINGS: usize = 4096;
 /// Conservative logical metadata bound, independently of payload retention.
 const MAX_RECIPIENT_BINDING_BYTES: usize = 1024 * 1024;
-/// Per-record charge covers ID, binding, offer, commit and container overhead.
-const RECIPIENT_BINDING_OVERHEAD: usize = 160;
+/// Per-record charge covers ID, binding, offer, commit, terminal/sender state and
+/// container overhead. This reservation happens before acceptance.
+const RECIPIENT_BINDING_OVERHEAD: usize = 192;
 
 /// Computes a conservative checked logical charge for immutable recipient IDs.
 fn binding_bytes<'a>(ids: impl Iterator<Item = &'a str>) -> usize {
@@ -58,7 +59,7 @@ impl MessageService {
     }
 
     /// Reserves all recipient metadata before sequence allocation or mutation.
-    /// Fully committed history that this enqueue already evicts does not
+    /// Fully settled history that this enqueue already evicts does not
     /// consume the candidate budget. Pending references are always charged.
     pub(super) fn reserve_recipient_bindings(
         &self,

@@ -81,6 +81,7 @@ impl MessageService {
             };
             let message_bytes = queued.envelope.payload.len();
             if !expired(queued, now_ms)
+                && !self.recipient_is_terminal(queued, &identity.agent_id)
                 && audience_matches(identity, &queued.audience)
                 && self.accepted_recipient(queued, &identity.agent_id)
                 && (include_committed || !self.recipient_has_committed(queued, &identity.agent_id))

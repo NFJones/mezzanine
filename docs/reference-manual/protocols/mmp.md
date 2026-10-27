@@ -203,8 +203,33 @@ delivery floor and frozen registration bindings prevent a replacement owner or
 late matching registration from acquiring old mail. Direct-only retained mail
 may remain as bounded evidence even after its recipient retires; it is not
 evidence of delivery or a terminal disposition. Unsatisfied expired/retired
-obligations remain conservatively charged: typed expiry/retirement outcome
-handoff is still unfinished, not silently treated as a successful ACK.
+obligations remain charged until explicit terminal maintenance settles them,
+never silently treated as a successful ACK.
+
+The lower `MessageService::settle_delivery_outcomes_at` API records one typed
+`expired` or `recipient_retired` disposition in each pre-reserved recipient slot.
+Expiry uses the original strict TTL boundary; retirement means the exact
+registration interval ended, not merely offline presence. First reason/time
+wins, and clock rollback cannot revive terminal mail. Terminal slots never
+become recipient ACKs, even through a later cumulative ACK. A genuine later
+offered endpoint can advance across a terminal prefix without consuming its
+outcome.
+
+`delivery_outcomes_for` exposes at most 100 payload-free receipts per call to
+the authenticated original sender interval. `acknowledge_delivery_outcome`
+releases only an exact receipt after caller-owned handoff commits. Reused IDs
+cannot consume old receipts; unknown legacy sender intervals remain unclaimable.
+Outcomes remain reserved for ten minutes from first service observation, then
+explicit maintenance releases them. Retries/rollback do not renew the horizon.
+Shared custody releases only after every recipient ACKs or its terminal receipt
+is consumed/ages out; optional replay may retain terminal tombstones afterward.
+This is wall-clock-based, not monotonic elapsed-time or crash-durability proof.
+
+**Integration boundary:** the current product delivery timer and originating
+action/workflow handoff do not yet call these lower APIs. Product candidates
+remain charged until explicit trusted maintenance. No new raw wire action,
+ordinary mail, model wake, task retry or fabricated successful delivery is
+introduced by this lower contract.
 
 Accepted same-runtime custody is independent of optional replay history. The
 pending and replay references share the original immutable occurrence; replay
@@ -219,17 +244,17 @@ redelivering it as new work.
 Internal pending ceilings are 1000 occurrences, 1 MiB unique payload, 4096 frozen
 recipient slots and 256 slots per exact recipient interval, independently of
 the replay window. Fanout charges the shared payload once; committed slots are
-conservatively charged until the last recipient commits the occurrence. The
-last exact offered ACK releases pending custody, not a remaining replay
+conservatively charged until the last recipient commits or its terminal receipt
+is released. The last exact offered ACK releases pending custody, not a remaining replay
 reference. Capacity is reserved before assigning sequence/success. These limits
 do not add a config knob, disk spool, fair deferred-send scheduler, or durable
-acceptance. Permanent loss of recipients can currently exhaust custody until
-the unfinished terminal-outcome handoff is supplied.
+acceptance. Permanent loss of recipients can still exhaust product custody
+until the lower terminal maintenance/handoff is integrated there.
 
 Trusted in-process callers can narrow each custody budget using
 `PendingDeliveryLimits` with `MessageService::with_pending_limits`. Values must
 be positive and cannot exceed the ceilings above. No wire/config control is
-introduced. Policy is destination-owned, not saved in schema7 message state:
+introduced. Policy is destination-owned, not saved in schema8 message state:
 `from_snapshot_state` explicitly uses production defaults, while a narrowed
 destination must use `from_snapshot_state_with_pending_limits` with its policy.
 Over-cap current or reconstructed legacy custody is refused, never truncated.
@@ -237,12 +262,13 @@ Replay limits and payload validation remain independent; a pending byte budget
 does not enlarge the maximum individually acceptable envelope.
 
 The retained recipient set is bounded independently of payload bytes: at most
-4096 records and 1 MiB logical metadata, charging 160 bytes plus each UTF-8 ID's
+4096 records and 1 MiB logical metadata, charging 192 bytes plus each UTF-8 ID's
 length. New sends reserve the whole fanout before sequence allocation. Capacity
 rejection (`code: "capacity"`, `status: "rejected"`, no accepted receipt) leaves
-the prior accepted set unchanged. Only fully committed history that the ordinary
+the prior accepted set unchanged. Only fully settled history that the ordinary
 replay count/byte policy actually evicts may release metadata for the new send.
-Binding/offer/commit metadata counts the deduplicated replay/custody union.
+Binding/offer/commit/terminal/sender metadata counts the deduplicated
+replay/custody union.
 The socket write-versus-application-commit limitation below remains unchanged.
 
 `recipient` is an object with exactly one supported selector: `agent_id`,
@@ -334,7 +360,7 @@ at shutdown; independently registered pane-less identities remain untouched.
 Cleanup ownership corruption is critical and reaches completion after pane
 termination, rather than being reported as a successful peer closure.
 
-Private MMP snapshot schema7 retains schema4's distinction of fresh raw sender provenance from
+Private MMP snapshot schema8 retains schema4's distinction of fresh raw sender provenance from
 reusable delivery floors. It preserves the exact objective versions in retained
 authored mail, including when the current objective changed again without a
 send. Every version must be referenced by canonical mail and agree on immutable
@@ -389,6 +415,16 @@ the retained recipient's own offer evidence explicitly refuses restoration,
 rather than inventing commits, rewinding or adopting inaccessible pending mail.
 Over-cap legacy state also refuses rather than dropping source. Snapshot support
 is not an acceptance-atomic disk write or transparent application/workflow restart.
+
+Schema8 adds exact sender registration intervals (or explicit legacy unknown)
+and fixed terminal slots in binding order, including released tombstones in
+optional replay. Missing/wrong-sized slots, overlapping ACKs, pre-acceptance
+observations, invalid TTL/retirement reasons and invalid sender intervals reject
+before adoption. New fields under older schemas reject as well. For schemas5–7,
+only a still-current sender interval covering the occurrence is provable;
+retired/replaced legacy owners cannot gain handoff authority. Restored terminal
+mail cannot become live again on clock rollback. The ten-minute horizon and
+explicit product-integration boundary above apply equally after round trip.
 
 ## Payloads and MAAP bridge
 

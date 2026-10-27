@@ -526,6 +526,8 @@ fn pending_restore_refuses_unprovable_legacy_advanced_cursors() {
     proven.custody_messages = None;
     for row in &mut proven.retained_messages {
         row.acknowledged_recipients = None;
+        row.terminal_recipients = None;
+        row.sender_registered_after_sequence = None;
     }
     let mut upgraded = MessageService::from_snapshot_state(&proven).unwrap();
     assert!(upgraded.pending.is_empty());
@@ -547,6 +549,8 @@ fn pending_restore_refuses_unprovable_legacy_advanced_cursors() {
         legacy.custody_messages = None;
         for row in &mut legacy.retained_messages {
             row.acknowledged_recipients = None;
+            row.terminal_recipients = None;
+            row.sender_registered_after_sequence = None;
             row.offered_recipients = if schema == 5 { None } else { Some(Vec::new()) };
         }
         assert!(

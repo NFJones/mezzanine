@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use mez_core::ids::{AgentId, IdFactory, PaneId, WindowId};
 use serde::{Deserialize, Serialize};
 
+use super::outcomes::MessageDeliveryTerminalSnapshot;
 use super::pending_limits::PendingDeliveryLimits;
 
 /// Defines the MMP PROTOCOL const used by this subsystem.
@@ -667,6 +668,12 @@ pub(super) struct QueuedEnvelope {
     /// Exact recipient commits in immutable binding order, independent of a
     /// later subscription replacement or recipient retirement.
     pub(super) acknowledged: Mutex<Vec<bool>>,
+    /// Pre-reserved terminal slots in the same immutable recipient order.
+    /// A terminal recipient can never subsequently become acknowledged.
+    pub(super) terminal: Mutex<Vec<Option<MessageDeliveryTerminalSnapshot>>>,
+    /// Exact original sender interval; legacy unknown evidence grants no
+    /// terminal-receipt consumption rights to a later registration.
+    pub(super) sender_registered_after_sequence: Option<MessageSequence>,
     /// Genuine later ACK endpoint selection time that proved this occurrence
     /// expired before an unoffered prefix was skipped. Not a delivery commit or
     /// terminal disposition; retained independently of endpoint replay lifetime.
@@ -993,6 +1000,13 @@ pub struct MessageQueuedEnvelopeSnapshot {
     /// expired, unoffered prefix. This is not an offer or recipient commit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ack_expiry_observed_at_ms: Option<u64>,
+    /// Schema8 terminal slots in immutable recipient-binding order, including
+    /// released tombstones while optional replay retains the occurrence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_recipients: Option<Vec<Option<MessageDeliveryTerminalSnapshot>>>,
+    /// Schema8 original sender interval; None explicitly means legacy unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_registered_after_sequence: Option<MessageSequence>,
 }
 
 /// Private selected-occurrence evidence, not an application commit receipt.
