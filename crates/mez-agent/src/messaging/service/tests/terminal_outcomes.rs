@@ -438,3 +438,294 @@ fn terminal_prefix_does_not_block_later_real_commit() {
             .is_empty()
     );
 }
+
+/// Timer eligibility follows finite terminal work rather than ordinary pending
+/// mail. A released partial-fanout receipt cannot keep an unrelated TTL-free
+/// live obligation ticking; future TTL and its unconsumed horizon remain live
+/// until maintenance releases them. Eligibility checks never mutate snapshots.
+#[test]
+fn terminal_maintenance_eligibility_is_finite_and_read_only() {
+    let (mut service, sender, recipients, _) = fixture(None);
+    assert_eq!(
+        service.owned_pending_delivery_id(&sender.agent_id, 1),
+        Some("original")
+    );
+    assert!(
+        service
+            .owned_pending_delivery_id(&recipients[0].agent_id, 1)
+            .is_none()
+    );
+    let before = service.snapshot_state();
+    assert!(!service.needs_delivery_outcome_maintenance().unwrap());
+    assert_eq!(before, service.snapshot_state());
+    service.retire_agent_identity(&recipients[0].agent_id);
+    assert!(service.needs_delivery_outcome_maintenance().unwrap());
+    service.settle_delivery_outcomes_at(12).unwrap();
+    assert!(service.needs_delivery_outcome_maintenance().unwrap());
+    let outcome = service
+        .delivery_outcomes_for(&sender.agent_id, 100)
+        .unwrap()
+        .remove(0);
+    service
+        .acknowledge_delivery_outcome(&sender.agent_id, &outcome)
+        .unwrap();
+    assert!(!service.needs_delivery_outcome_maintenance().unwrap());
+
+    let (mut expiring, _, _, _) = fixture(Some(10));
+    assert!(expiring.needs_delivery_outcome_maintenance().unwrap());
+    assert_eq!(expiring.settle_delivery_outcomes_at(20).unwrap(), 0);
+    assert_eq!(expiring.settle_delivery_outcomes_at(21).unwrap(), 2);
+    assert!(expiring.needs_delivery_outcome_maintenance().unwrap());
+    expiring.settle_delivery_outcomes_at(600_021).unwrap();
+    assert!(!expiring.needs_delivery_outcome_maintenance().unwrap());
+    assert!(expiring.pending.is_empty());
+}
+
+/// Exact-occurrence inspection retains the same original-sender fence and
+/// per-call limit as broad outcome queries. It cannot disclose a foreign row,
+/// create offers, release custody or accept an unregistered caller merely
+/// because that caller guesses the accepted sequence.
+#[test]
+fn terminal_exact_occurrence_query_preserves_owner_limit_and_custody() {
+    let (mut service, sender, _, _) = fixture(Some(10));
+    service.settle_delivery_outcomes_at(21).unwrap();
+    let outsider = service.register_agent(None, None, "outsider", Vec::new());
+    let before = service.snapshot_state();
+    assert_eq!(
+        service
+            .delivery_outcomes_for_occurrence(&sender.agent_id, 1, 100)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        service
+            .delivery_outcomes_for_occurrence(&sender.agent_id, 1, 1)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        service
+            .delivery_outcomes_for_occurrence(&sender.agent_id, 1, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        service
+            .delivery_outcomes_for_occurrence(&sender.agent_id, 2, 100)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        service
+            .delivery_outcomes_for_occurrence(&outsider.agent_id, 1, 100)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(before, service.snapshot_state());
+    service.retire_agent_identity(&sender.agent_id);
+    assert_eq!(
+        service
+            .delivery_outcomes_for_occurrence(&sender.agent_id, 1, 100)
+            .unwrap_err()
+            .kind(),
+        MessageErrorKind::Forbidden
+    );
+}
+
+/// Native retirement must acknowledge only proven offered occurrences, even
+/// when an earlier offer never reached canonical context. Validation is atomic;
+/// shared other-recipient custody survives, and captured snapshots can round
+/// trip positive retired-interval ACKs without inventing a cumulative cursor.
+#[test]
+fn terminal_native_retirement_commits_exact_offers_without_claiming_prefix() {
+    let (mut service, sender, recipients, mut envelope) = fixture(None);
+    service.pending_limits.messages = 2;
+    envelope.id = "second".into();
+    service
+        .accept_at_with_scope(&sender.agent_id, envelope, MessageScope::Session, 11)
+        .unwrap();
+    service
+        .receive_subscribed(&recipients[0].agent_id, 11, 10)
+        .unwrap();
+    let before = service.snapshot_state();
+    for (recipient, sequences) in [
+        (&recipients[0].agent_id, vec![2, 2]),
+        (&recipients[0].agent_id, vec![3]),
+        (&sender.agent_id, vec![2]),
+        (&recipients[1].agent_id, vec![2]),
+    ] {
+        assert!(
+            service
+                .retire_agent_identity_with_committed_occurrences(recipient, &sequences)
+                .is_err()
+        );
+        assert_eq!(before, service.snapshot_state());
+    }
+    assert!(
+        service
+            .retire_agent_identity_with_committed_occurrences(&recipients[0].agent_id, &[2])
+            .unwrap()
+    );
+    let snapshot = service.snapshot_state();
+    let mut restored =
+        MessageService::from_snapshot_state_with_pending_limits(&snapshot, service.pending_limits)
+            .unwrap();
+    for owner in [&mut service, &mut restored] {
+        assert_eq!(owner.settle_delivery_outcomes_at(12).unwrap(), 1);
+        let outcomes = owner.delivery_outcomes_for(&sender.agent_id, 100).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].sequence, 1);
+        assert_eq!(
+            outcomes[0].recipient.recipient,
+            recipients[0].agent_id.as_str()
+        );
+        assert_eq!(outcomes[0].reason, DeliveryTerminalReason::RecipientRetired);
+        let unread = owner
+            .receive_subscribed(&recipients[1].agent_id, 12, 10)
+            .unwrap();
+        assert_eq!(unread.messages.len(), 2);
+        owner
+            .advance_subscription(&recipients[1].agent_id, 2)
+            .unwrap();
+        assert_eq!(
+            owner.pending.len(),
+            1,
+            "only the first unsatisfied recipient receipt remains charged"
+        );
+        owner
+            .acknowledge_delivery_outcome(&sender.agent_id, &outcomes[0])
+            .unwrap();
+        assert!(owner.pending.is_empty());
+    }
+}
+
+/// A native canonical commit can await an earlier cursor prefix after Stop or
+/// context cleanup. Maintenance must expire genuinely uncommitted recipients,
+/// preserve the exact own canonical offer, and reject forged protection before
+/// making any terminal change. A later honest ACK then releases only its slot.
+#[test]
+fn terminal_native_commit_protection_is_exact_atomic_and_ttl_independent() {
+    let (mut service, sender, recipients, _) = fixture(Some(10));
+    service
+        .receive_subscribed(&recipients[0].agent_id, 11, 10)
+        .unwrap();
+    let before = service.snapshot_state();
+    for claims in [
+        vec![(sender.agent_id.clone(), 1)],
+        vec![(recipients[0].agent_id.clone(), 2)],
+        vec![
+            (recipients[0].agent_id.clone(), 1),
+            (recipients[1].agent_id.clone(), 1),
+        ],
+    ] {
+        assert!(
+            service
+                .settle_delivery_outcomes_with_native_commits_at(21, &claims)
+                .is_err()
+        );
+        assert_eq!(before, service.snapshot_state());
+    }
+    assert_eq!(
+        service
+            .settle_delivery_outcomes_with_native_commits_at(
+                21,
+                &[(recipients[0].agent_id.clone(), 1)]
+            )
+            .unwrap(),
+        1
+    );
+    service
+        .advance_subscription(&recipients[0].agent_id, 1)
+        .unwrap();
+    let outcomes = service
+        .delivery_outcomes_for(&sender.agent_id, 100)
+        .unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(
+        outcomes[0].recipient.recipient,
+        recipients[1].agent_id.as_str()
+    );
+    assert_eq!(outcomes[0].reason, DeliveryTerminalReason::Expired);
+    service
+        .acknowledge_delivery_outcome(&sender.agent_id, &outcomes[0])
+        .unwrap();
+    assert!(service.pending.is_empty());
+}
+
+/// Already canonical native input waiting on a cursor must not consume the
+/// fanout's first-message budget or be replayed before later genuine mail.
+/// Transient exclusions preserve raw delivery/ACK state and apply only to the
+/// exact offered recipient, not another recipient's shared obligation.
+#[test]
+fn terminal_native_fanout_exclusion_reaches_later_unread_occurrences() {
+    let (mut service, sender, recipients, mut envelope) = fixture(None);
+    service.pending_limits.messages = 2;
+    service
+        .receive_subscribed(&recipients[0].agent_id, 11, 1)
+        .unwrap();
+    envelope.id = "later-unread".into();
+    service
+        .accept_at_with_scope(&sender.agent_id, envelope, MessageScope::Session, 11)
+        .unwrap();
+    let batches = service
+        .fanout_ready_excluding_native_commits(12, 1, &[(recipients[0].agent_id.clone(), 1)])
+        .unwrap();
+    let native = batches
+        .iter()
+        .find(|batch| batch.recipient == recipients[0].agent_id)
+        .unwrap();
+    let ordinary = batches
+        .iter()
+        .find(|batch| batch.recipient == recipients[1].agent_id)
+        .unwrap();
+    assert_eq!(native.batch.messages[0].sequence, 2);
+    assert_eq!(ordinary.batch.messages[0].sequence, 1);
+    assert_eq!(
+        service
+            .subscription(&recipients[0].agent_id)
+            .unwrap()
+            .last_sequence,
+        0
+    );
+    assert_eq!(service.pending.len(), 2);
+}
+
+/// A canonical native input awaiting an earlier cursor is not finite TTL work
+/// itself. After the genuinely uncommitted fanout receipt settles, that stable
+/// protected input cannot keep the one-second terminal timer busy forever.
+#[test]
+fn terminal_native_proof_does_not_keep_expiry_timer_alive() {
+    let (mut service, sender, recipients, _) = fixture(Some(10));
+    service
+        .receive_subscribed(&recipients[0].agent_id, 11, 1)
+        .unwrap();
+    let proof = [(recipients[0].agent_id.clone(), 1)];
+    service
+        .settle_delivery_outcomes_with_native_commits_at(21, &proof)
+        .unwrap();
+    let outcome = service
+        .delivery_outcomes_for(&sender.agent_id, 100)
+        .unwrap()
+        .remove(0);
+    service
+        .acknowledge_delivery_outcome(&sender.agent_id, &outcome)
+        .unwrap();
+    assert!(
+        !service
+            .needs_delivery_outcome_maintenance_with_native_commits(&proof)
+            .unwrap()
+    );
+    assert!(
+        service
+            .fanout_ready_excluding_native_commits(21, 100, &proof)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        service.pending.len(),
+        1,
+        "committed native input is retained until its cursor or registration settles"
+    );
+}

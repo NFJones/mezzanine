@@ -994,9 +994,7 @@ impl RuntimeSessionService {
             self.remove_subagent_authority_state(agent_id);
             self.deregister_macro_managed_subagent(agent_id);
             if let Some(identity) = mez_core::ids::AgentId::opaque(agent_id.to_string()) {
-                self.control
-                    .message_service_mut()
-                    .retire_agent_identity(&identity);
+                self.retire_runtime_message_identity_after_native_commits(&identity)?;
             }
             self.remember_retired_persistent_subagent(agent_id, persistent);
             return Ok(ActionResult::succeeded(

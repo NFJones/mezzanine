@@ -141,23 +141,40 @@ fn runtime_peer_receive_blocked_bookkeeping_remains_fenced_without_archive_retry
 
 /// A pending recipient must not hide another ready recipient in delivery timer
 /// eligibility. Finite-TTL mail still keeps bounded expiry service while history
-/// is fenced, and expires without receive context or cursor acknowledgement.
+/// is fenced, and expires with terminal custody evidence but without receive
+/// context, history retry, provider admission or cursor acknowledgement.
 #[test]
 fn runtime_peer_receive_pending_history_preserves_expiry_and_other_recipients() {
-    let (mut service, _, _) = stopped_candidate_fixture("receive-expiry");
+    let (mut service, _, conversation) = stopped_candidate_fixture("receive-expiry");
     let now = crate::runtime::current_unix_millis();
     let (recipient, _) = accept_peer(&mut service, "%1", now, None);
-    accept_peer(&mut service, "%1", now + 1, Some(10));
+    let (_, expired_sequence) = accept_peer(&mut service, "%1", now + 1, Some(10));
+    let turns = service.agent_turn_ledger().turns().len();
     assert!(service.has_pending_peer_messages(now));
     let transition = service.apply_peer_message_delivery_timer(now, 1).unwrap();
     assert!(!transition.applied);
     assert_eq!(transition.side_effects.len(), 1);
+    let expired = service
+        .apply_peer_message_delivery_timer(now + 12, 1)
+        .unwrap();
     assert!(
-        !service
-            .apply_peer_message_delivery_timer(now + 12, 1)
-            .unwrap()
-            .applied
+        expired.applied,
+        "expiry commits terminal custody evidence, not receive context"
     );
+    assert_eq!(expired.side_effects.len(), 1);
+    let sender = AgentId::opaque("agent-receive-sender").unwrap();
+    let outcomes = service
+        .message_service()
+        .delivery_outcomes_for_occurrence(&sender, expired_sequence, 100)
+        .unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(
+        outcomes[0].reason,
+        mez_agent::messaging::DeliveryTerminalReason::Expired
+    );
+    assert_eq!(outcomes[0].recipient.recipient, recipient.as_str());
+    assert_eq!(service.agent_turn_ledger().turns().len(), turns);
+    assert!(service.persistence.bookkeeping_pending(&conversation));
     assert_eq!(cursor(&service, &recipient), 0);
     let batch = service
         .message_service_mut()

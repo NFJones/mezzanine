@@ -18,12 +18,85 @@ const TERMINAL_HANDOFF_MS: u64 = 600_000;
 const OUTCOME_BATCH: usize = 100;
 
 impl MessageService {
+    /// Borrows the payload-free ID of an occurrence still in pending custody
+    /// under this exact original currently registered sender interval. Trusted
+    /// adapters can bound same-runtime metadata without cloning envelope data.
+    /// This read-only view grants no delivery or acknowledgement authority.
+    pub fn owned_pending_delivery_id(
+        &self,
+        sender: &AgentId,
+        sequence: MessageSequence,
+    ) -> Option<&str> {
+        self.pending
+            .get(&sequence)
+            .filter(|queued| self.owns_outcomes(queued, sender))
+            .map(|queued| queued.envelope.id.as_str())
+    }
+
+    /// Reports whether finite actor maintenance remains necessary. Future TTL
+    /// boundaries, exact recipient retirement and unconsumed terminal horizons
+    /// keep maintenance eligible; ordinary offline mail without TTL does not.
+    /// Released slots and positive ACKs cannot keep an idle timer alive.
+    /// Poisoned reservation evidence returns InvalidState without mutation.
+    pub fn needs_delivery_outcome_maintenance(&self) -> Result<bool> {
+        self.needs_delivery_outcome_maintenance_with_native_commits(&[])
+    }
+
+    /// Reports finite terminal work after excluding exact proven native commits
+    /// waiting on a cursor prefix. Such canonical input must not create a
+    /// permanent TTL timer. The adapter separately schedules reconcilable ACKs.
+    pub fn needs_delivery_outcome_maintenance_with_native_commits(
+        &self,
+        native_commits: &[(AgentId, MessageSequence)],
+    ) -> Result<bool> {
+        let protected = self.native_commit_protection(native_commits)?;
+        for queued in self.pending.values() {
+            let acknowledged = queued.acknowledged.lock().map_err(|_| unavailable())?;
+            let terminals = queued.terminal.lock().map_err(|_| unavailable())?;
+            if acknowledged.len() != queued.recipient_bindings.len()
+                || terminals.len() != acknowledged.len()
+            {
+                return Err(unavailable());
+            }
+            for (index, (recipient, floor)) in queued.recipient_bindings.iter().enumerate() {
+                if acknowledged[index] || protected.contains(&(recipient.clone(), queued.sequence))
+                {
+                    continue;
+                }
+                if let Some(terminal) = terminals[index] {
+                    if !terminal.released {
+                        return Ok(true);
+                    }
+                } else if queued.envelope.ttl_ms.is_some()
+                    || self.registration_floors.get(recipient) != Some(floor)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     /// Observes expiry/authoritative retirement and ages existing dispositions.
     /// Returns the count of newly terminal recipients. Repeated passes do not
     /// renew a horizon. Clock rollback cannot revive a terminal occurrence.
     /// At most the configured pending occurrences/recipient slots are visited;
     /// poisoned evidence returns InvalidState before changing any slot.
     pub fn settle_delivery_outcomes_at(&mut self, now_ms: u64) -> Result<usize> {
+        self.settle_delivery_outcomes_with_native_commits_at(now_ms, &[])
+    }
+
+    /// Maintains terminal custody while preserving exact offered occurrences
+    /// already canonically committed by the trusted native adapter but waiting
+    /// for an earlier cursor prefix. Claims validate before any mutation and
+    /// are not persisted as new task authority. They cannot revive terminal
+    /// mail or protect foreign/unoffered occurrences. This has no wire action.
+    pub fn settle_delivery_outcomes_with_native_commits_at(
+        &mut self,
+        now_ms: u64,
+        native_commits: &[(AgentId, MessageSequence)],
+    ) -> Result<usize> {
+        let protected = self.native_commit_protection(native_commits)?;
         let mut guards = Vec::new();
         for queued in self.pending.values() {
             let acknowledged = queued.acknowledged.lock().map_err(|_| unavailable())?;
@@ -38,7 +111,8 @@ impl MessageService {
         let mut changed = 0;
         for (queued, acknowledged, mut terminals) in guards {
             for (index, (recipient, floor)) in queued.recipient_bindings.iter().enumerate() {
-                if acknowledged[index] {
+                if acknowledged[index] || protected.contains(&(recipient.clone(), queued.sequence))
+                {
                     continue;
                 }
                 let terminal = &mut terminals[index];
@@ -72,6 +146,35 @@ impl MessageService {
         }
         self.release_completed_pending()?;
         Ok(changed)
+    }
+
+    /// Validates bounded transient native commit evidence before any derived
+    /// read exclusion or terminal mutation. It never stores new task authority.
+    pub(super) fn native_commit_protection(
+        &self,
+        native_commits: &[(AgentId, MessageSequence)],
+    ) -> Result<HashSet<(AgentId, MessageSequence)>> {
+        if native_commits.len() > self.pending_limits.recipient_obligations {
+            return Err(MessageError::invalid_args(
+                "native commit protection exceeds obligation bound",
+            ));
+        }
+        let mut protected = HashSet::new();
+        for (recipient, sequence) in native_commits {
+            let row = self.pending.get(sequence).ok_or_else(|| {
+                MessageError::invalid_args("native commit occurrence is unavailable")
+            })?;
+            if !self.accepted_recipient(row, recipient)
+                || self.recipient_is_terminal(row, recipient)
+                || super::offers::offered_at(row, recipient)?.is_none()
+            {
+                return Err(MessageError::invalid_args(
+                    "native commit protection requires an exact own offer",
+                ));
+            }
+            protected.insert((recipient.clone(), *sequence));
+        }
+        Ok(protected)
     }
 
     /// Returns up to min(limit,100) unconsumed outcomes in occurrence/binding
@@ -110,6 +213,47 @@ impl MessageService {
                         observed_at_ms: terminal.observed_at_ms,
                     });
                 }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Queries one exact original-sender-owned occurrence without scanning
+    /// unrelated earlier receipts. Returns at most min(limit,100) records, no
+    /// payload and no new authority. Missing/foreign occurrences return empty;
+    /// unregistered senders receive Forbidden and poisoned evidence InvalidState.
+    pub fn delivery_outcomes_for_occurrence(
+        &self,
+        sender: &AgentId,
+        sequence: MessageSequence,
+        limit: usize,
+    ) -> Result<Vec<MessageDeliveryOutcome>> {
+        self.require_outcome_sender(sender)?;
+        let Some(queued) = self
+            .pending
+            .get(&sequence)
+            .filter(|row| self.owns_outcomes(row, sender))
+        else {
+            return Ok(Vec::new());
+        };
+        let terminals = queued.terminal.lock().map_err(|_| unavailable())?;
+        let mut result = Vec::new();
+        for (index, terminal) in terminals.iter().enumerate() {
+            if result.len() == limit.min(OUTCOME_BATCH) {
+                break;
+            }
+            if let Some(terminal) = terminal.filter(|terminal| !terminal.released) {
+                let (recipient, floor) = &queued.recipient_bindings[index];
+                result.push(MessageDeliveryOutcome {
+                    sequence: queued.sequence,
+                    message_id: queued.envelope.id.clone(),
+                    recipient: MessageRecipientBindingSnapshot {
+                        recipient: recipient.to_string(),
+                        registered_after_sequence: *floor,
+                    },
+                    reason: terminal.reason,
+                    observed_at_ms: terminal.observed_at_ms,
+                });
             }
         }
         Ok(result)

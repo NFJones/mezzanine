@@ -2037,9 +2037,7 @@ impl RuntimeSessionService {
             ));
         }
         if let Some(sequence) = delivered_message_sequence {
-            self.control
-                .message_service_mut()
-                .advance_subscription(&recipient, sequence)?;
+            self.advance_runtime_message_subscription(&recipient, sequence)?;
             #[cfg(test)]
             if self.take_peer_message_receive_after_cursor_advance_failure_for_tests() {
                 return Err(MezError::invalid_state(

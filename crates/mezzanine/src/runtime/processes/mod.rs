@@ -4999,9 +4999,7 @@ impl RuntimeSessionService {
             .any(|pane| pane.id.as_str() == pane_id);
         self.remove_subagent_authority_state(&agent_id);
         if let Some(agent_id) = AgentId::opaque(&agent_id) {
-            self.control
-                .message_service_mut()
-                .retire_agent_identity(&agent_id);
+            self.retire_runtime_message_identity_after_native_commits(&agent_id)?;
         }
         if !pane_is_live {
             self.checkpoint_agent_session_metadata()?;

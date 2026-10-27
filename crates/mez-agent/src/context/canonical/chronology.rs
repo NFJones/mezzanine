@@ -134,6 +134,28 @@ impl AgentContext {
         )
     }
 
+    /// Appends a neutral runtime fact with summarizable retention. Unlike
+    /// policy/instruction hints, repeated delivery or lifecycle facts must not
+    /// accumulate permanent exact barriers after their owner settles them.
+    /// The event is recoverable canonical reference evidence, not a user
+    /// instruction; callers must commit it before consuming its source receipt.
+    /// Returns the allocated sequence; sequencing or metadata errors leave the
+    /// original context unchanged.
+    pub fn append_runtime_fact_event(
+        &mut self,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> AgentContextResult<ContextEventSequence> {
+        self.append_conversation_event(
+            ContextBlock::reference_event(ContextSourceKind::RuntimeHint, label, content),
+            ContextSemanticKind::ReferenceEvent,
+            ContextRetention::Summarizable,
+            None,
+            None,
+            true,
+        )
+    }
+
     /// Appends a typed task prelude before the first direct-user event.
     pub fn append_task_prelude(
         &mut self,

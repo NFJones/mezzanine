@@ -14308,16 +14308,54 @@ released only when all recipients have genuine ACKs or released terminal
 dispositions; optional replay remains independent. An outcome is not delivery
 success, a substantive answer, approval, a new message or permission to replay
 effects. This is a wall-clock-based explicit maintenance API, not guaranteed
-monotonic elapsed time or acceptance-atomic persistence. Product delivery-timer
-and originating-action/workflow handoff integration remain unfinished; the
-existing product sweep does not yet call this API. Pending terminal candidates
-therefore remain conservatively charged until a trusted caller maintains them.
+monotonic elapsed time or acceptance-atomic persistence. The product's existing
+one-second delivery timer MUST maintain pending future TTL boundaries, exact
+recipient retirement and unconsumed terminal horizons even without live fanout.
+Ordinary TTL-free offline mail and released slots MUST NOT independently keep
+that maintenance timer alive. Native commit reconciliation MUST precede lower
+terminal settlement.
 
-Before live TTL filtering, the native delivery sweep MUST reconcile previously
-offered occurrences already present as canonical peer-message events in the
-same agent's context. This recovery MUST include custody-only occurrences and
-MUST NOT create offers, context events or provider work. An offered occurrence
-without canonical commit MUST NOT be acknowledged by reconciliation.
+Product terminal handoff MUST consume a receipt only after a canonical neutral
+summarizable runtime reference commits to its exact original live send action's
+context; settled facts MUST NOT create permanent exact compaction barriers.
+The original sender interval, generated turn/action message ID, acceptance
+receipt sequence, live turn context and currently bound conversation MUST agree. The
+accepted send result remains accepted; the fact is not ordinary peer mail and
+MUST NOT settle a wait, wake provider work, remove pause/approval/Stop fences or
+retry effects. Same-runtime owner metadata MUST be captured only after native
+acceptance, survive provider batch replacement, and remain bounded to at most
+1000 canonical pending occurrences; it contains only original identity strings
+and occurrence references, never another payload queue. It MUST NOT restore
+task authority after restart. Ended, replaced or unprovable owners retain their
+lower receipt until its bounded ten-minute expiry; another task MUST NOT inherit it. Each
+sender examines at most 100 outcomes per sweep using exact eligible owned
+occurrences; earlier unowned receipts MUST NOT hide a live owner's handoff.
+Request-aware runnable recovery, fair scheduling and durable acceptance remain separate increments.
+
+Native receive receipts, including invisible-media commit proofs, MUST share
+the 1,024-entry live outbox limit. Admission MUST reserve every new batch
+identity before canonical context mutation; overflow MUST leave transport
+input unacknowledged.
+
+Native transport reconciliation MUST use sealed same-runtime receive proof
+created only after canonical context storage, before fallible cursor/projection
+work. It MUST survive Stop, context cleanup and failed-backing moves until its
+transport ACK or exact registration retirement. Restored presentation rows and
+historical context labels MUST NOT establish new commit or task authority.
+Projection retirement MUST retain unacknowledged native proof without allowing
+it to repaint a replacement or subsequently reopened conversation.
+
+A native cumulative ACK MUST NOT claim an earlier offered input without native
+canonical proof. Proven input waiting on an earlier prefix MUST be protected
+from false expiry and excluded from native fanout/context construction so it
+cannot start another task or consume the unread fanout budget. Reconcilable
+proof requires a transport pass; stable blocked proof alone MUST NOT keep the
+expiry timer ticking. Terminal settlement of an honestly uncommitted prefix
+MAY then permit the original canonical ACK without fabricated prefix commits.
+Exact native registration retirement MUST atomically ACK only its proven own
+offered occurrences before ending the interval; unsatisfied occurrences and
+other fanout recipients retain their separate obligations. None of these
+operations grants scheduler/provider authority or retries task effects.
 
 Accepted same-runtime delivery custody MUST be independent of optional replay
 retention. A pending reference and replay reference MUST share the original

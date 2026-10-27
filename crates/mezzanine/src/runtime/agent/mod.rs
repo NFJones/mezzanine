@@ -118,8 +118,14 @@ pub(crate) enum TerminalResultDisposition {
 /// of the same envelope cannot create another pane row. The receipt stays in
 /// actor-owned state until the renderer accepts the write, allowing the next
 /// delivery or prompt boundary to recover an interrupted receive commit.
+/// A live post-context receipt also seals same-runtime commit proof independent
+/// of context lifetime. Keep that proof until transport ACK or exact recipient
+/// retirement; restored display projections never restore native task authority.
 #[derive(Debug, Clone)]
 struct RuntimeReceivedPeerMessagePresentation {
+    /// Same-runtime proof created only after canonical native context commit.
+    /// Restored presentation projections never acquire this authority.
+    native_commit_proven: bool,
     /// Authoritative MMP recipient that accepted the delivery.
     ///
     /// A pane name is only a presentation target: group and session fanout can
@@ -220,6 +226,8 @@ mod macros;
 mod mcp_network;
 mod mcp_registry;
 mod memory;
+mod message_commits;
+mod message_outcomes;
 mod messages;
 mod outcome;
 mod presentation;
@@ -420,6 +428,9 @@ pub(crate) struct RuntimeAgentComponent {
     /// Local terminal-child occurrences retained independently of best-effort
     /// bridge delivery until exact parent context and wake admission commit.
     owned_child_failures: BTreeMap<String, child_failures::OwnedChildFailure>,
+    /// Original native send owners bounded by canonical pending occurrences,
+    /// retained across provider batches but never restored as task authority.
+    outbound_delivery_owners: BTreeMap<u64, message_outcomes::OutboundDeliveryOwner>,
     /// Per-failure-signature correction attempts keyed by turn/signature.
     agent_turn_failure_feedback_attempts: BTreeMap<String, usize>,
     /// Output-limit recovery attempt currently shaping each active request.

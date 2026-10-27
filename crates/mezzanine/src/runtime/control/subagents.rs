@@ -1864,10 +1864,16 @@ impl RuntimeSessionService {
             .agent_shell_store()
             .get(pane_id)
             .map(|session| session.session_id.clone());
-        if let Some(agent_id) = mez_core::ids::AgentId::opaque(child_agent_id.to_string()) {
-            self.control
-                .message_service_mut()
-                .retire_agent_identity(&agent_id);
+        if let Some(agent_id) = mez_core::ids::AgentId::opaque(child_agent_id.to_string())
+            && let Err(error) = self.retire_runtime_message_identity_after_native_commits(&agent_id)
+        {
+            let _ = self.append_agent_error_text_to_terminal_buffer(
+                pane_id,
+                &format!(
+                    "native message retirement retained unresolved custody: {}",
+                    error.message()
+                ),
+            );
         }
         self.remove_subagent_authority_state(child_agent_id);
         self.prune_unreferenced_local_cleanup_parents();

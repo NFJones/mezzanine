@@ -10,6 +10,19 @@ use super::*;
 /// The retained 1,024-entry projection must remain a valid snapshot.
 #[test]
 fn runtime_user_prompt_peer_receipt_outbox_capacity_leaves_extra_message_pending() {
+    assert_peer_receipt_capacity("text/plain; charset=utf-8");
+}
+
+/// Invisible media still seals native commit evidence. Filling that evidence
+/// cache must reject the next receive before context or cursor mutation, just
+/// as visible presentation receipts do, rather than bypassing the shared bound.
+#[test]
+fn runtime_invisible_peer_receipt_capacity_leaves_extra_message_pending() {
+    assert_peer_receipt_capacity("application/json");
+}
+
+/// Exercises the production admission path with a full retained receipt cache.
+fn assert_peer_receipt_capacity(content_type: &str) {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -73,8 +86,8 @@ fn runtime_user_prompt_peer_receipt_outbox_capacity_leaves_extra_message_pending
                     recipient: mez_agent::messaging::Recipient::Agent(recipient.agent_id.clone()),
                     correlation_id: None,
                     ttl_ms: None,
-                    content_type: "text/plain; charset=utf-8".to_string(),
-                    payload: "retained receipt".to_string(),
+                    content_type: content_type.to_string(),
+                    payload: "{}".to_string(),
                     extension_fields: Vec::new(),
                 },
                 MessageScope::Session,
@@ -102,8 +115,8 @@ fn runtime_user_prompt_peer_receipt_outbox_capacity_leaves_extra_message_pending
                 recipient: mez_agent::messaging::Recipient::Agent(recipient.agent_id.clone()),
                 correlation_id: None,
                 ttl_ms: None,
-                content_type: "text/plain; charset=utf-8".to_string(),
-                payload: "retained receipt".to_string(),
+                content_type: content_type.to_string(),
+                payload: "{}".to_string(),
                 extension_fields: Vec::new(),
             },
         );
@@ -121,14 +134,28 @@ fn runtime_user_prompt_peer_receipt_outbox_capacity_leaves_extra_message_pending
                 recipient: mez_agent::messaging::Recipient::Agent(recipient.agent_id.clone()),
                 correlation_id: None,
                 ttl_ms: None,
-                content_type: "text/plain; charset=utf-8".to_string(),
-                payload: "must remain pending".to_string(),
+                content_type: content_type.to_string(),
+                payload: "{}".to_string(),
                 extension_fields: Vec::new(),
             },
             MessageScope::Session,
             now_ms,
         )
         .unwrap();
+    let unread = service
+        .message_service()
+        .receive_subscribed(&recipient.agent_id, now_ms, 1)
+        .unwrap();
+    assert_eq!(unread.messages.len(), 1);
+    let deliveries = unread
+        .messages
+        .into_iter()
+        .map(|message| (message.sequence, (*message.envelope).clone()))
+        .collect::<Vec<_>>();
+    assert!(
+        !service
+            .can_admit_received_peer_message_presentation_batch(&recipient.agent_id, &deliveries,)
+    );
     assert!(
         service
             .start_agent_prompt_turn("%1", "continue work")

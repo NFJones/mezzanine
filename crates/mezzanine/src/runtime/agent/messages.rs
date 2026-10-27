@@ -78,10 +78,11 @@ impl RuntimeSessionService {
         for turn in pending_peer_wait_wakes {
             let _ = self.resume_parked_peer_wait(&turn)?;
         }
+        let native_commits = self.proven_runtime_message_commits()?;
         let ready = self
             .control
             .message_service_mut()
-            .fanout_ready(now_ms, usize::MAX);
+            .fanout_ready_excluding_native_commits(now_ms, usize::MAX, &native_commits)?;
         let mut committed = 0usize;
         for fanout in ready {
             let recipient = fanout.recipient;
@@ -116,14 +117,7 @@ impl RuntimeSessionService {
                     message.envelope.id.as_str(),
                 );
                 let already_committed =
-                    self.agent_turn_contexts()
-                        .get(&turn.turn_id)
-                        .is_some_and(|context| {
-                            context.blocks().iter().any(|block| {
-                                block.source == mez_agent::ContextSourceKind::PeerMessage
-                                    && block.label == label
-                            })
-                        });
+                    self.runtime_native_message_commit_is_proven(&recipient, &message);
                 if !already_committed {
                     if !self.can_admit_received_peer_message_presentation(
                         &recipient,
@@ -165,9 +159,7 @@ impl RuntimeSessionService {
                         ),
                     )?;
                 }
-                self.control
-                    .message_service_mut()
-                    .advance_subscription(&recipient, message.sequence)?;
+                self.advance_runtime_message_subscription(&recipient, message.sequence)?;
             }
 
             let _ = self.flush_received_peer_message_presentations();
@@ -207,62 +199,6 @@ impl RuntimeSessionService {
             }
         }
         Ok(committed)
-    }
-
-    /// Finishes interrupted context-before-cursor commits before live TTL
-    /// filtering hides their source. Only exact offered occurrences with a
-    /// canonical event in their owning agent's context authorize ACK; the
-    /// first uncommitted own occurrence stops cumulative advancement. No event,
-    /// turn, provider work or presentation is created by reconciliation.
-    fn reconcile_committed_runtime_peer_messages(&mut self) -> Result<()> {
-        let recipients = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .map(|turn| turn.agent_id.clone())
-            .collect::<BTreeSet<_>>();
-        for recipient in recipients {
-            let Some(recipient) = AgentId::opaque(recipient) else {
-                continue;
-            };
-            if self
-                .control
-                .message_service()
-                .subscription(&recipient)
-                .is_none()
-            {
-                continue;
-            }
-            let offered = self
-                .control
-                .message_service()
-                .offered_uncommitted_deliveries(&recipient)?;
-            for message in offered {
-                let label = crate::runtime::control::runtime_peer_message_block_label(
-                    message.sequence,
-                    &message.envelope.id,
-                );
-                let committed = self.agent_turn_ledger().turns().iter().any(|turn| {
-                    turn.agent_id == recipient.as_str()
-                        && self
-                            .agent_turn_contexts()
-                            .get(&turn.turn_id)
-                            .is_some_and(|context| {
-                                context.blocks().iter().any(|block| {
-                                    block.source == mez_agent::ContextSourceKind::PeerMessage
-                                        && block.label == label
-                                })
-                            })
-                });
-                if !committed {
-                    break;
-                }
-                self.control
-                    .message_service_mut()
-                    .advance_subscription(&recipient, message.sequence)?;
-            }
-        }
-        Ok(())
     }
 
     /// Fairly reacquires capacity and settles one parked peer wait after model
@@ -418,9 +354,27 @@ impl RuntimeSessionService {
         self.reconcile_committed_runtime_peer_messages()?;
         for (_, _, identities) in &orphan_groups {
             for identity in identities {
-                self.agent
+                let retain_proof = self
+                    .agent
                     .received_peer_message_presentations
-                    .remove(identity);
+                    .get(identity)
+                    .is_some_and(|receipt| {
+                        receipt.native_commit_proven
+                            && !self.received_peer_message_presentation_is_acknowledged(receipt)
+                    });
+                if retain_proof {
+                    if let Some(receipt) = self
+                        .agent
+                        .received_peer_message_presentations
+                        .get_mut(identity)
+                    {
+                        receipt.presentation_eligible = false;
+                    }
+                } else {
+                    self.agent
+                        .received_peer_message_presentations
+                        .remove(identity);
+                }
             }
         }
         for (_, turn_id, _) in orphan_groups {
@@ -442,6 +396,13 @@ impl RuntimeSessionService {
                 self.agent_turn_ledger()
                     .turn(&receipt.turn_id)
                     .filter(|turn| turn.state == AgentTurnState::Queued)
+                    .filter(|turn| {
+                        !self.pane_is_closing(&turn.pane_id)
+                            && self
+                                .agent_shell_store()
+                                .get(&turn.pane_id)
+                                .is_some_and(|shell| shell.session_id == turn.conversation_id)
+                    })
                     .filter(|turn| self.agent_turn_contexts().contains_key(&turn.turn_id))
                     .filter(|turn| self.agent_turn_model_profile(&turn.turn_id).is_some())
                     .map(|turn| turn.turn_id.clone())
@@ -511,7 +472,7 @@ impl RuntimeSessionService {
     /// Payload text is deliberately absent: two accepted envelopes can carry the
     /// same text and each must retain a distinct presentation row, while a retry
     /// of one accepted envelope must reuse the exact same receipt.
-    fn received_peer_message_presentation_id(
+    pub(super) fn received_peer_message_presentation_id(
         recipient: &AgentId,
         sequence: mez_agent::messaging::MessageSequence,
         envelope: &Envelope,
@@ -525,7 +486,8 @@ impl RuntimeSessionService {
     /// Returns whether a delivery can retain its reconstructible receiver receipt.
     ///
     /// The live outbox intentionally shares the snapshot's 1,024-record bound.
-    /// A new delivery is not acknowledged when its receipt cannot be retained,
+    /// Invisible media also retains a native commit proof and counts toward this
+    /// bound. A new delivery is not acknowledged when its receipt cannot be retained,
     /// preserving lossless backpressure rather than dropping a receiver row.
     fn can_admit_received_peer_message_presentation(
         &self,
@@ -533,9 +495,6 @@ impl RuntimeSessionService {
         sequence: mez_agent::messaging::MessageSequence,
         envelope: &Envelope,
     ) -> bool {
-        if !self.received_peer_message_presentation_is_visible(&envelope.content_type) {
-            return true;
-        }
         let identity = Self::received_peer_message_presentation_id(recipient, sequence, envelope);
         self.agent
             .received_peer_message_presentations
@@ -544,7 +503,7 @@ impl RuntimeSessionService {
                 < MAX_UNSETTLED_PEER_PRESENTATIONS
     }
 
-    /// Returns whether an idle receive batch can retain every visible receipt.
+    /// Returns whether an idle receive batch can retain every native receipt.
     ///
     /// Idle delivery creates one turn for the entire unread batch, so capacity
     /// must be reserved for all new identities before its cursor advances.
@@ -555,9 +514,6 @@ impl RuntimeSessionService {
     ) -> bool {
         let new_identities = deliveries
             .iter()
-            .filter(|(_, envelope)| {
-                self.received_peer_message_presentation_is_visible(&envelope.content_type)
-            })
             .map(|(sequence, envelope)| {
                 Self::received_peer_message_presentation_id(recipient, *sequence, envelope)
             })
@@ -585,11 +541,12 @@ impl RuntimeSessionService {
     ) {
         let identity =
             Self::received_peer_message_presentation_id(&recipient_agent_id, sequence, &envelope);
-        if self
+        if let Some(receipt) = self
             .agent
             .received_peer_message_presentations
-            .contains_key(&identity)
+            .get_mut(&identity)
         {
+            receipt.native_commit_proven = true;
             return;
         }
         let occurrence = self.capture_presentation_occurrence(
@@ -610,6 +567,7 @@ impl RuntimeSessionService {
             .received_peer_message_presentations
             .entry(identity)
             .or_insert(super::RuntimeReceivedPeerMessagePresentation {
+                native_commit_proven: true,
                 recipient_agent_id,
                 occurrence,
                 pane_id: turn.pane_id.clone(),
@@ -680,6 +638,7 @@ impl RuntimeSessionService {
                 .received_peer_message_presentations
                 .entry(entry.identity.clone())
                 .or_insert(super::RuntimeReceivedPeerMessagePresentation {
+                    native_commit_proven: false,
                     recipient_agent_id,
                     occurrence: entry.occurrence,
                     pane_id: entry.pane_id.clone(),
@@ -789,6 +748,7 @@ impl RuntimeSessionService {
                     candidates.push((
                         identity,
                         super::RuntimeReceivedPeerMessagePresentation {
+                            native_commit_proven: false,
                             recipient_agent_id: recipient.clone(),
                             occurrence: Default::default(),
                             pane_id: pane_id.clone(),
@@ -855,17 +815,16 @@ impl RuntimeSessionService {
                 .is_some_and(|session| {
                     !session.ephemeral && session.session_id == receipt.conversation_id
                 });
+            let acknowledged = self.received_peer_message_presentation_is_acknowledged(&receipt);
             if !pane_owns_conversation {
+                if receipt.native_commit_proven && !acknowledged {
+                    continue;
+                }
                 self.agent
                     .received_peer_message_presentations
                     .remove(&identity);
                 continue;
             }
-            let acknowledged = self
-                .control
-                .message_service()
-                .subscription(&receipt.recipient_agent_id)
-                .is_some_and(|cursor| cursor.last_sequence >= receipt.sequence);
             if !acknowledged {
                 continue;
             }
@@ -1062,7 +1021,9 @@ impl RuntimeSessionService {
             .received_peer_message_presentations
             .iter()
             .filter(|(_, receipt)| {
-                receipt.conversation_id == conversation_id && receipt.presentation_attempted
+                receipt.conversation_id == conversation_id
+                    && receipt.presentation_attempted
+                    && self.received_peer_message_presentation_is_acknowledged(receipt)
             })
             .filter_map(|(identity, receipt)| {
                 self.received_peer_message_presentation_is_persisted(
@@ -1084,17 +1045,30 @@ impl RuntimeSessionService {
 
     /// Drops receipt state owned by a pane that has retired from the session.
     ///
-    /// A closed pane can never display or replay another receiver row. Pending
-    /// and completed identities are therefore removed together, keeping the
-    /// in-memory idempotency set bounded by live pane ownership.
+    /// A closed pane cannot display or replay another receiver row. Keep only
+    /// sealed unacknowledged native commit proof until the cursor reconciles or
+    /// exact registration retirement commits it; these rows cannot repaint a
+    /// replacement conversation. The existing receipt and custody caps apply.
     pub(crate) fn clear_received_peer_message_presentations_for_pane(&mut self, pane_id: &str) {
         let identities = self
             .agent
             .received_peer_message_presentations
             .iter()
-            .filter(|(_, receipt)| receipt.pane_id == pane_id)
+            .filter(|(_, receipt)| {
+                receipt.pane_id == pane_id
+                    && (!receipt.native_commit_proven
+                        || self.received_peer_message_presentation_is_acknowledged(receipt))
+            })
             .map(|(identity, _)| identity.clone())
             .collect::<Vec<_>>();
+        for receipt in self
+            .agent
+            .received_peer_message_presentations
+            .values_mut()
+            .filter(|receipt| receipt.pane_id == pane_id && receipt.native_commit_proven)
+        {
+            receipt.presentation_eligible = false;
+        }
         for identity in identities {
             self.agent
                 .received_peer_message_presentations
@@ -1105,18 +1079,43 @@ impl RuntimeSessionService {
     /// Retires receipts bound to an old conversation before a pane renders a replacement.
     ///
     /// Once a pane leaves a conversation, its unresolved rows can no longer be
-    /// rendered or durably retried through that pane. Removing them prevents an
-    /// old receipt from crossing the conversation ownership boundary.
+    /// rendered or durably retried through that pane. Drop display-only rows,
+    /// but retain sealed unacknowledged native proof until transport settlement.
+    /// Flush never renders that proof through the replacement conversation.
     pub(crate) fn clear_received_peer_message_presentations_for_conversation(
         &mut self,
         pane_id: &str,
         conversation_id: &str,
     ) {
+        let protected = self
+            .agent
+            .received_peer_message_presentations
+            .iter()
+            .filter(|(_, receipt)| {
+                receipt.native_commit_proven
+                    && !self.received_peer_message_presentation_is_acknowledged(receipt)
+            })
+            .map(|(identity, _)| identity.clone())
+            .collect::<BTreeSet<_>>();
         self.agent
             .received_peer_message_presentations
-            .retain(|_, receipt| {
-                receipt.pane_id != pane_id || receipt.conversation_id != conversation_id
+            .retain(|identity, receipt| {
+                receipt.pane_id != pane_id
+                    || receipt.conversation_id != conversation_id
+                    || protected.contains(identity)
             });
+        for receipt in self
+            .agent
+            .received_peer_message_presentations
+            .values_mut()
+            .filter(|receipt| {
+                receipt.pane_id == pane_id
+                    && receipt.conversation_id == conversation_id
+                    && receipt.native_commit_proven
+            })
+        {
+            receipt.presentation_eligible = false;
+        }
     }
 
     /// Prunes completed receipt identities whose owning turn has reached a
@@ -1129,7 +1128,10 @@ impl RuntimeSessionService {
             .agent
             .received_peer_message_presentations
             .iter()
-            .filter(|(_, receipt)| receipt.turn_id == turn_id)
+            .filter(|(_, receipt)| {
+                receipt.turn_id == turn_id
+                    && self.received_peer_message_presentation_is_acknowledged(receipt)
+            })
             .filter_map(|(identity, receipt)| {
                 self.received_peer_message_presentation_is_persisted(
                     &receipt.conversation_id,
@@ -1399,9 +1401,7 @@ impl RuntimeSessionService {
             ));
         }
         if let Some(delivered_message_sequence) = delivered_message_sequence {
-            self.control
-                .message_service_mut()
-                .advance_subscription(&recipient, delivered_message_sequence)?;
+            self.advance_runtime_message_subscription(&recipient, delivered_message_sequence)?;
         }
         #[cfg(test)]
         if self.take_peer_message_receive_after_cursor_advance_failure_for_tests() {
@@ -1477,6 +1477,24 @@ impl RuntimeSessionService {
     /// bounded one-second maintenance cadence; receive admission checks only
     /// its exact conversation fence, never retries the failed archive read.
     pub(crate) fn has_pending_peer_messages(&mut self, now_ms: u64) -> bool {
+        // Custody expiry/retirement is independent of live fanout and loop
+        // admission. Retry unavailable evidence conservatively rather than
+        // silently abandoning an accepted obligation.
+        let native_commits = match self.proven_runtime_message_commits() {
+            Ok(commits) => commits,
+            Err(_) => return true,
+        };
+        if self
+            .control
+            .message_service()
+            .needs_delivery_outcome_maintenance_with_native_commits(&native_commits)
+            .unwrap_or(true)
+            || self
+                .has_reconcilable_runtime_message_commits()
+                .unwrap_or(true)
+        {
+            return true;
+        }
         if self.has_pending_owned_child_failure_handoff() {
             return true;
         }
@@ -1488,7 +1506,10 @@ impl RuntimeSessionService {
             .received_peer_message_presentations
             .values()
             .any(|receipt| {
-                self.received_peer_message_presentation_is_transport_deliverable(receipt, now_ms)
+                (!receipt.native_commit_proven
+                    && self.received_peer_message_presentation_is_transport_deliverable(
+                        receipt, now_ms,
+                    ))
                     || (receipt.presentation_eligible
                         && self.received_peer_message_presentation_is_acknowledged(receipt)
                         && !self
@@ -1499,7 +1520,14 @@ impl RuntimeSessionService {
             return true;
         }
         let loop_limit = self.agent_peer_message_loop_limit();
-        let ready = self.control.message_service_mut().fanout_ready(now_ms, 1);
+        let ready = match self
+            .control
+            .message_service_mut()
+            .fanout_ready_excluding_native_commits(now_ms, 1, &native_commits)
+        {
+            Ok(ready) => ready,
+            Err(_) => return true,
+        };
         ready.into_iter().any(|fanout| {
             let recipient = fanout.recipient.as_str().to_string();
             if !recipient.starts_with("agent-") {
@@ -1528,6 +1556,10 @@ impl RuntimeSessionService {
             .rev()
             .find(|turn| {
                 turn.agent_id == agent_id
+                    && self
+                        .agent_shell_store()
+                        .get(&turn.pane_id)
+                        .is_some_and(|shell| shell.session_id == turn.conversation_id)
                     && matches!(
                         turn.state,
                         AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
@@ -1574,6 +1606,16 @@ impl RuntimeSessionService {
         generation: u64,
     ) -> Result<RuntimeTransition> {
         let committed = self.deliver_pending_runtime_agent_messages(now_ms)?;
+        // Canonical native input reconciliation above must precede terminal
+        // classification. Handoff never grants scheduler/provider authority.
+        let native_commits = self.proven_runtime_message_commits()?;
+        let terminal = self
+            .control
+            .message_service_mut()
+            .settle_delivery_outcomes_with_native_commits_at(now_ms, &native_commits)?;
+        self.reconcile_committed_runtime_peer_messages()?;
+        let _ = self.flush_received_peer_message_presentations();
+        let handed_off = self.handoff_runtime_message_delivery_outcomes()?;
         let side_effects = if self.has_pending_peer_messages(now_ms) {
             vec![RuntimeSideEffect::ScheduleTimer {
                 key: RuntimeTimerKey::new(
@@ -1587,7 +1629,7 @@ impl RuntimeSessionService {
             Vec::new()
         };
         Ok(RuntimeTransition {
-            applied: committed > 0,
+            applied: committed > 0 || terminal > 0 || handed_off > 0,
             side_effects,
         })
     }
@@ -1802,6 +1844,7 @@ impl RuntimeSessionService {
                 return Ok(result);
             }
         };
+        self.retain_outbound_delivery_owner(turn, action, &delivery);
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         let result = ActionResult::succeeded(
             turn,

@@ -18,6 +18,37 @@ impl MessageService {
         limit_per_recipient: usize,
         budget: FanoutBudget,
     ) -> Vec<FanoutBatch> {
+        self.fanout_ready_with_exclusions(now_ms, limit_per_recipient, budget, &HashSet::new())
+    }
+
+    /// Selects ordinary fanout while excluding exact canonically committed
+    /// native input that awaits a cursor prefix. Exclusions validate first and
+    /// consume no payload/work budget, so they cannot replay input or hide a
+    /// later genuinely unread occurrence. This neither creates ACKs nor changes
+    /// raw protocol receive semantics.
+    pub fn fanout_ready_excluding_native_commits(
+        &mut self,
+        now_ms: u64,
+        limit_per_recipient: usize,
+        native_commits: &[(AgentId, MessageSequence)],
+    ) -> Result<Vec<FanoutBatch>> {
+        let excluded = self.native_commit_protection(native_commits)?;
+        Ok(self.fanout_ready_with_exclusions(
+            now_ms,
+            limit_per_recipient,
+            FanoutBudget::default(),
+            &excluded,
+        ))
+    }
+
+    /// Applies the shared aggregate selection budget after trusted exclusions.
+    fn fanout_ready_with_exclusions(
+        &mut self,
+        now_ms: u64,
+        limit_per_recipient: usize,
+        budget: FanoutBudget,
+        excluded_native_commits: &HashSet<(AgentId, MessageSequence)>,
+    ) -> Vec<FanoutBatch> {
         self.fanout_diagnostics.cycles = self.fanout_diagnostics.cycles.saturating_add(1);
         if budget.max_recipients == 0
             || budget.max_messages == 0
@@ -50,7 +81,10 @@ impl MessageService {
                 now_ms,
                 limit_per_recipient.min(remaining_messages),
                 remaining_payload_bytes,
-                false,
+                super::receive::ReceiveSelectionFilter {
+                    include_committed: false,
+                    native_commits: Some(excluded_native_commits),
+                },
             );
             self.fanout_diagnostics.sequence_lookups = self
                 .fanout_diagnostics

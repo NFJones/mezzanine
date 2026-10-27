@@ -225,11 +225,11 @@ Shared custody releases only after every recipient ACKs or its terminal receipt
 is consumed/ages out; optional replay may retain terminal tombstones afterward.
 This is wall-clock-based, not monotonic elapsed-time or crash-durability proof.
 
-**Integration boundary:** the current product delivery timer and originating
-action/workflow handoff do not yet call these lower APIs. Product candidates
-remain charged until explicit trusted maintenance. No new raw wire action,
-ordinary mail, model wake, task retry or fabricated successful delivery is
-introduced by this lower contract.
+**Integration boundary:** the product timer invokes this maintenance after
+native commit reconciliation. Only an exact original live accepted action can
+consume its handoff, as described below; other owners retain the bounded
+receipt until expiry. No raw wire action, ordinary mail, model wake, task retry
+or fabricated successful delivery is introduced by this contract.
 
 Accepted same-runtime custody is independent of optional replay history. The
 pending and replay references share the original immutable occurrence; replay
@@ -248,14 +248,48 @@ conservatively charged until the last recipient commits or its terminal receipt
 is released. The last exact offered ACK releases pending custody, not a remaining replay
 reference. Capacity is reserved before assigning sequence/success. These limits
 do not add a config knob, disk spool, fair deferred-send scheduler, or durable
-acceptance. Permanent loss of recipients can still exhaust product custody
-until the lower terminal maintenance/handoff is integrated there.
+acceptance. The existing one-second product delivery timer also maintains
+future TTL expiry, exact recipient retirement and unconsumed terminal horizons
+when live fanout is empty. TTL-free merely offline mail and already released
+slots do not independently keep terminal maintenance ticking.
 
-Native sweeps first reconcile interrupted context-before-cursor commits using
-the exact previously offered occurrence, including custody outside replay.
-Expiry does not turn an already canonical input into undelivered mail. An offer
-without a canonical peer event remains unacknowledged; reconciliation itself
-does not create context or wake a provider.
+For an exact original live `send_message` action, the timer commits one
+payload-free, summarizable runtime reference before consuming its receipt.
+Compaction can retire settled facts without recreating their consumed receipts.
+Original sender registration, generated turn/action ID, acceptance sequence,
+task context and current conversation must agree. Ownership is captured at
+actual native acceptance, survives provider batch replacement and is bounded
+by at most 1000 canonical pending occurrences. It stores original identities
+and occurrence references, not payloads, and does not restore task authority
+after restart. The original action remains accepted. This fact does not act
+as peer mail, resume a wait, wake a provider or retry effects.
+Ended/replaced/unprovable owners retain the bounded receipt until ten minutes
+from first observation, then maintenance releases it without handing it to
+another conversation. Exact eligible occurrence queries inspect at most 100
+outcomes per sender/sweep; earlier unowned receipts cannot hide a later live
+owner's handoff. Request-aware runnable recovery, fairness and crash-durable
+acceptance remain separate work.
+
+Native receive receipts, including invisible media commit proofs, share the
+1,024-entry live bound. Admission reserves the whole batch before canonical
+context mutation; overflow leaves the delivery unacknowledged.
+
+Native receive admission seals same-runtime proof only after canonical context
+storage. That proof survives Stop, context cleanup and failed-backing moves;
+restored display projections and historical labels cannot claim it. Retiring a
+pane/conversation suppresses its old display while retaining unacknowledged
+proof until transport settlement. It cannot repaint a reopened conversation.
+
+A later native input cannot cumulatively ACK an earlier offered input that
+never committed. Proven input waiting on a prefix is protected from false TTL
+failure and excluded from native fanout/prompt construction, so it neither
+replays as new work nor hides genuinely unread mail behind a fanout limit.
+Only a reconcilable prefix or finite terminal work keeps the maintenance timer
+active. At exact native registration retirement, only proven own offers receive
+positive ACKs; genuinely unsatisfied recipients keep their terminal obligations.
+This adds no wire ACK action, task restart authority or acceptance-atomic crash
+persistence. Unacknowledged same-runtime proof is not restored as task authority
+from a snapshot's presentation outbox.
 
 Trusted in-process callers can narrow each custody budget using
 `PendingDeliveryLimits` with `MessageService::with_pending_limits`. Values must

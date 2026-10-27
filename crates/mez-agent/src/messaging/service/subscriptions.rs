@@ -44,6 +44,29 @@ impl MessageService {
             .collect()
     }
 
+    /// Checks lower ACK admissibility without claiming application commit.
+    /// Native adapters still need canonical proof for every offered prefix.
+    /// Returns false for an invalid/blocked endpoint or prefix; unavailable
+    /// evidence and missing subscriptions retain their typed errors.
+    pub fn can_advance_subscription(
+        &self,
+        recipient: &AgentId,
+        sequence: MessageSequence,
+    ) -> Result<bool> {
+        let cursor = self
+            .subscriptions
+            .get(recipient)
+            .ok_or_else(|| MessageError::forbidden("agent has no delivery subscription"))?;
+        if sequence <= cursor.last_sequence {
+            return Ok(true);
+        }
+        match self.validate_delivery_ack(recipient, cursor.last_sequence, sequence) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == MessageErrorKind::InvalidArgs => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Subscribes after current history without skipping accepted unread mail.
     pub fn subscribe(&mut self, recipient: &AgentId) -> Result<DeliveryCursor> {
         if let Some(cursor) = self.subscriptions.get(recipient) {
@@ -135,7 +158,17 @@ impl MessageService {
             last_sequence: 0,
         };
         Ok(self
-            .receive_after_indexed(&start, identity, now_ms, usize::MAX, usize::MAX, true)
+            .receive_after_indexed(
+                &start,
+                identity,
+                now_ms,
+                usize::MAX,
+                usize::MAX,
+                super::receive::ReceiveSelectionFilter {
+                    include_committed: true,
+                    native_commits: None,
+                },
+            )
             .batch
             .messages
             .into_iter()

@@ -712,6 +712,7 @@ impl RuntimeSessionService {
         let discarded_accepted_messages =
             (snapshot.schema_version == 1).then_some(snapshot.accepted_messages.len());
         let restored = mez_agent::messaging::MessageService::from_snapshot_state(snapshot)?;
+        self.retire_runtime_message_transfers_for_restore()?;
         *self.control.message_service_mut() = restored;
         self.retire_unbound_external_message_identities();
         if payload.payload_version >= 6 {

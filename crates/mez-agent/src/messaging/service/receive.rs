@@ -14,6 +14,16 @@ pub(super) struct IndexedReceiveSelection {
     pub(super) payload_bytes: usize,
 }
 
+/// Selection-only filters; native exclusions borrow already-validated proof
+/// and never change delivery authority or the aggregate work budget.
+#[derive(Default, Clone, Copy)]
+pub(super) struct ReceiveSelectionFilter<'a> {
+    /// Historical reconstruction may inspect already acknowledged rows.
+    pub(super) include_committed: bool,
+    /// Live native fanout skips canonically committed input awaiting its cursor.
+    pub(super) native_commits: Option<&'a HashSet<(AgentId, MessageSequence)>>,
+}
+
 impl MessageService {
     /// Selects live deliveries after an authenticated recipient cursor.
     pub fn receive_after(
@@ -32,7 +42,14 @@ impl MessageService {
             });
         }
         let batch = self
-            .receive_after_indexed(cursor, identity, now_ms, limit, usize::MAX, false)
+            .receive_after_indexed(
+                cursor,
+                identity,
+                now_ms,
+                limit,
+                usize::MAX,
+                ReceiveSelectionFilter::default(),
+            )
             .batch;
         self.record_delivery_offers(&batch, now_ms)?;
         Ok(batch)
@@ -46,7 +63,7 @@ impl MessageService {
         now_ms: u64,
         limit: usize,
         max_payload_bytes: usize,
-        include_committed: bool,
+        filter: ReceiveSelectionFilter<'_>,
     ) -> IndexedReceiveSelection {
         let selectors = recipient_selectors(identity);
         let mut next_by_selector = std::collections::BinaryHeap::new();
@@ -82,9 +99,13 @@ impl MessageService {
             let message_bytes = queued.envelope.payload.len();
             if !expired(queued, now_ms)
                 && !self.recipient_is_terminal(queued, &identity.agent_id)
+                && !filter.native_commits.is_some_and(|excluded| {
+                    excluded.contains(&(identity.agent_id.clone(), queued.sequence))
+                })
                 && audience_matches(identity, &queued.audience)
                 && self.accepted_recipient(queued, &identity.agent_id)
-                && (include_committed || !self.recipient_has_committed(queued, &identity.agent_id))
+                && (filter.include_committed
+                    || !self.recipient_has_committed(queued, &identity.agent_id))
             {
                 if payload_bytes.saturating_add(message_bytes) > max_payload_bytes {
                     break;

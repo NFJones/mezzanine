@@ -45,6 +45,7 @@ mod snapshot_validation;
 use recipient_binding::validate_recipient_bindings;
 use snapshot_codec::*;
 mod fanout;
+mod native_commits;
 mod offers;
 mod pending;
 mod receive;

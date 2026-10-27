@@ -366,15 +366,26 @@ fn plan_model_context_compaction_with_projection(
             )
         })
         .collect::<Vec<_>>();
+    // Producer-owned retention is authoritative. A runtime fact and policy
+    // guidance may share RuntimeHint provenance while requiring different
+    // compaction treatment; the block-only compatibility default loses that.
+    let protected_chronology = context
+        .chronology()
+        .iter()
+        .map(|event| {
+            event.retention() == ContextRetention::Exact
+                || event.block().source == ContextSourceKind::TranscriptUser
+        })
+        .collect::<Vec<_>>();
     let protected_words = stable_costs
         .iter()
         .copied()
         .fold(0usize, usize::saturating_add)
         .saturating_add(
-            immutable_chronology
+            protected_chronology
                 .iter()
                 .zip(&chronology_costs)
-                .filter(|(block, _)| model_context_block_is_protected_barrier(block))
+                .filter(|(protected, _)| **protected)
                 .map(|(_, cost)| *cost)
                 .fold(0usize, usize::saturating_add),
         );
@@ -388,9 +399,9 @@ fn plan_model_context_compaction_with_projection(
         .iter()
         .enumerate()
         .filter(|(_, group)| {
-            !immutable_chronology[(*group).clone()]
+            !protected_chronology[(*group).clone()]
                 .iter()
-                .any(model_context_block_is_protected_barrier)
+                .any(|protected| *protected)
                 && model_context_group_is_closed_and_consumed(
                     context,
                     group,
@@ -436,9 +447,9 @@ fn plan_model_context_compaction_with_projection(
                 consumed_sequence_high_water,
             ));
         };
-        let segment_end = immutable_chronology[first.end..]
+        let segment_end = protected_chronology[first.end..]
             .iter()
-            .position(model_context_block_is_protected_barrier)
+            .position(|protected| *protected)
             .map_or(immutable_chronology.len(), |offset| {
                 first.end.saturating_add(offset)
             });
@@ -722,12 +733,6 @@ fn model_context_execution_group_ranges(context: &AgentContext) -> Vec<Range<usi
         groups.push(start..events.len());
     }
     groups
-}
-
-/// Returns whether a block is an exact, non-crossable compaction barrier.
-fn model_context_block_is_protected_barrier(block: &ContextBlock) -> bool {
-    block.retention() == ContextRetention::Exact
-        || block.source == ContextSourceKind::TranscriptUser
 }
 
 /// Returns the provider-request word cost of one block.
@@ -1425,6 +1430,47 @@ mod tests {
                 .iter()
                 .all(|block| block.source != ContextSourceKind::UserInstruction),
             "the active user prompt must remain an exact barrier"
+        );
+    }
+
+    /// Runtime delivery facts share provenance with exact runtime guidance.
+    /// Planning must use captured canonical retention so settled facts remain
+    /// eligible while policy guidance and user instructions remain barriers.
+    #[test]
+    fn model_context_compaction_honors_summarizable_runtime_fact_retention() {
+        let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user prompt",
+            "keep this instruction exact",
+        )])
+        .unwrap();
+        context
+            .append_reference_event(
+                ContextSourceKind::RuntimeHint,
+                "protected runtime guidance",
+                "keep this controller instruction exact",
+            )
+            .unwrap();
+        context
+            .append_runtime_fact_event("settled delivery outcome", "delivery fact ".repeat(100))
+            .unwrap();
+        let plan = plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            1000,
+            0,
+            context.event_sequence_high_water_mark(),
+        )
+        .unwrap();
+        assert!(plan.changes_context());
+        assert_eq!(plan.replacement_blocks().len(), 1);
+        assert_eq!(
+            plan.replacement_blocks()[0].label,
+            "settled delivery outcome"
+        );
+        assert!(
+            plan.replacement_blocks()
+                .iter()
+                .all(|block| block.label != "protected runtime guidance"
+                    && block.source != ContextSourceKind::UserInstruction)
         );
     }
 

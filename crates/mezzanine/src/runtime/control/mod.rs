@@ -293,6 +293,9 @@ impl RuntimeSessionService {
                 usize::MAX,
             )?;
             for message in pending_messages.messages {
+                if self.runtime_native_message_commit_is_proven(&identity.agent_id, &message) {
+                    continue;
+                }
                 insert_context_block_by_placement(
                     &mut blocks,
                     ContextBlock::reference_event(
@@ -546,6 +549,9 @@ impl RuntimeSessionService {
         let mut delivered_messages = Vec::new();
         let mut delivered_message_count = 0usize;
         for message in pending_messages.messages {
+            if self.runtime_native_message_commit_is_proven(&identity.agent_id, &message) {
+                continue;
+            }
             insert_context_block_by_placement(
                 &mut blocks,
                 ContextBlock::reference_event(
