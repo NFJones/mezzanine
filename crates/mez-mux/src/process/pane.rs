@@ -465,6 +465,19 @@ impl PaneProcess {
             .validate_logical_records()
             .map_err(|error| MezError::invalid_args(error.to_string()))?;
         let input = delivery.bytes.as_slice();
+        // A canonical receiver trigger owns its ACK contract independently of
+        // general launch metadata. Explicit Fish children can have that
+        // receiver installed even when ordinary shell pacing was not inferred.
+        let fish_receiver_trigger_end =
+            if matches!(delivery.pacing, ShellInputPacing::GeneratedSource) {
+                input
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map(|index| index + 1)
+                    .filter(|end| shell_input_record_starts_fish_receiver(&input[..*end]))
+            } else {
+                None
+            };
         #[cfg(not(target_os = "macos"))]
         {
             if input.is_empty() {
@@ -486,13 +499,7 @@ impl PaneProcess {
                 }
                 return Ok(());
             }
-            if matches!(delivery.pacing, ShellInputPacing::GeneratedSource)
-                && let Some(end) = input
-                    .iter()
-                    .position(|byte| *byte == b'\n')
-                    .map(|index| index + 1)
-                && shell_input_record_starts_fish_receiver(&input[..end])
-            {
+            if let Some(end) = fish_receiver_trigger_end {
                 self.buffer_available_output_for_write()?;
                 let baseline = self.shell_input_acknowledgements_seen;
                 self.write_input(&input[..end])?;
@@ -525,7 +532,10 @@ impl PaneProcess {
                     "loader-acknowledged shell delivery was not negotiated",
                 ));
             }
-            if !self.supports_shell_input_acknowledgements() && !loader_acknowledged {
+            if !self.supports_shell_input_acknowledgements()
+                && !loader_acknowledged
+                && fish_receiver_trigger_end.is_none()
+            {
                 return self.write_input(input);
             }
             let mut written = 0usize;
@@ -549,9 +559,14 @@ impl PaneProcess {
                     receiver_acknowledged && receiver_input_record_requires_ack(record);
                 let loader_record_acknowledged =
                     loader_acknowledged && loader_input_record_requires_ack(record);
+                // Even a standalone canonical trigger must settle ownership
+                // before a later delivery can supply its encoded source.
                 if receiver_record_acknowledged
                     || loader_record_acknowledged
-                    || (!receiver_acknowledged && !loader_acknowledged && written < input.len())
+                    || (!receiver_acknowledged
+                        && !loader_acknowledged
+                        && (written < input.len()
+                            || shell_input_record_starts_fish_receiver(record)))
                 {
                     let waits_for_acknowledgement = receiver_record_acknowledged
                         || loader_record_acknowledged

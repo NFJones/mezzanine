@@ -4157,7 +4157,9 @@ fn runtime_seatbelt_pane_dispatch_retains_backend_and_cleans_workload_lease() {
 
 /// Verifies a Fish pane runs the fixed internal capability script under POSIX
 /// sh without an unused command-payload receiver, accepts the exact sentinel,
-/// and preserves Fish pane identity.
+/// and preserves Fish pane identity. The modeled test captures typed dispatch
+/// at the adapter boundary and supplies protocol observations explicitly; real
+/// Fish receiver execution is covered by managed-shell acceptance tests.
 #[test]
 fn runtime_bubblewrap_fish_pane_probe_uses_posix_sh_and_caches_success() {
     let root = temp_root("runtime-bubblewrap-fish-probe");
@@ -4169,6 +4171,10 @@ fn runtime_bubblewrap_fish_pane_probe_uses_posix_sh_and_caches_success() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
+    // This is a modeled policy/cache test, not an executing Fish receiver.
+    // Retain the real placeholder process guard while capturing typed dispatch
+    // through the adapter boundary instead of asking cat to acknowledge Fish.
+    let process = service.take_running_pane_process_for_adapter("%1").unwrap();
     configure_path_resolution_bubblewrap(&mut service);
     service.set_pane_environment_signature_for_tests("%1", path_resolution_fish_environment(&root));
     // Declare the pane's OS-verified dialect directly: the live pane process
@@ -4183,6 +4189,23 @@ fn runtime_bubblewrap_fish_pane_probe_uses_posix_sh_and_caches_success() {
         !service
             .ensure_bubblewrap_capability_for_action(&turn, "fish-action-1")
             .unwrap()
+    );
+    let effects = service.drain_pane_io_transition().side_effects;
+    let inputs = pane_input_effects(&effects);
+    let [
+        RuntimeSideEffect::PaneProcessIo {
+            instance,
+            effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
+        },
+    ] = inputs.as_slice()
+    else {
+        panic!("expected one generation-owned probe wrapper delivery: {inputs:?}");
+    };
+    assert_eq!(instance.pane_id, "%1");
+    assert!(
+        delivery
+            .bytes
+            .starts_with(b"__mez_agent_wrapper_receive '__MEZ_WRAPPER_SOURCE_END_")
     );
     let marker = service
         .running_shell_transactions_for_tests()
@@ -4249,6 +4272,9 @@ fn runtime_bubblewrap_fish_pane_probe_uses_posix_sh_and_caches_success() {
             .unwrap()
     );
     assert!(service.running_shell_transactions_for_tests().is_empty());
+    service
+        .restore_running_pane_process_from_adapter("%1", process)
+        .unwrap();
     service.terminate_all_pane_processes().unwrap();
     fs::remove_dir_all(root).unwrap();
 }
