@@ -1,4 +1,12 @@
 //! Provider/auth/audit stores and transcript checkpoint and restoration behavior.
+//!
+//! Restart hydration reads a checked logical frontier, raw replay count, and
+//! terminal presentation under one conversation mutation lease. That lease stays
+//! owned through installation of the matching actor projection; later durable
+//! interruption diagnostics and presentation writes acquire the lane separately.
+//! Failed adoption restores prior pane state and never resumes interrupted work.
+//! Checkpoint codecs remain the durable authority; runtime counters are derived
+//! from validated archive and compaction state rather than archive display totals.
 
 use super::mcp_helpers::runtime_agent_session_metadata_visibility;
 use super::{
@@ -287,7 +295,7 @@ impl RuntimeSessionService {
                 .lock_resume_replay_snapshot(&conversation_id, metadata.transcript_entries > 0)?;
             let position = snapshot.position;
             let presentation_entries = snapshot.presentation_entries;
-            drop(snapshot.lease);
+            let snapshot_lease = snapshot.lease;
             if metadata.transcript_entries > 0 {
                 match store.validate_restored_transcript(&conversation_id) {
                     Ok(count) if count >= metadata.transcript_entries => {}
@@ -419,6 +427,8 @@ impl RuntimeSessionService {
             let previous_transcript_refs = self.persistence.pane_transcript_refs(&pane_id);
             let previous_working_directory = self.pane_current_working_directory(&pane_id);
             let hydrate_result = (|| -> Result<()> {
+                #[cfg(test)]
+                store.verify_restart_replay_lease_for_tests(&conversation_id)?;
                 self.agent_shell_store_mut()
                     .restore_session(&pane_id, target_session)?;
                 self.rebind_runtime_message_project_scope(
@@ -456,6 +466,12 @@ impl RuntimeSessionService {
                         PathBuf::from(working_directory),
                     );
                 }
+
+                // The position and terminal projection are now installed from
+                // the same locked source. Release only at this adoption point:
+                // subsequent diagnostic/presentation appends acquire this lane
+                // themselves and must not recursively lock our descriptor.
+                drop(snapshot_lease);
 
                 if let (Some(turn_id), Some(diagnostic)) = (running_turn_id.as_deref(), diagnostic)
                     && !diagnostic_already_recorded

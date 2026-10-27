@@ -1078,7 +1078,11 @@ fn runtime_restart_objective_metadata_failure_restores_prior_pane_state() {
 
 /// Verifies crash-recovered active metadata never resumes a previously running
 /// turn automatically; it restores the conversation and records the turn as
-/// interrupted so retry requires a fresh user action.
+/// interrupted so retry requires a fresh user action. An independent native
+/// writer descriptor must remain excluded until the coherent replay pair is
+/// adopted; diagnostic appends must subsequently acquire the lane without a
+/// recursive-lock hang. Repeated restore preserves the frontier and records
+/// exactly one interruption diagnostic.
 #[test]
 fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
     let mut service = test_runtime_service();
@@ -1145,6 +1149,9 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
         })
         .unwrap();
 
+    // Probe the real mutation lane immediately before runtime adoption. The
+    // routed diagnostic then exercises release before a fresh durable append.
+    transcript_store.require_restart_replay_lease_for_tests();
     let mut restored = test_runtime_service();
     restored.session.id = service.session().id.clone();
     restored.set_agent_transcript_store(transcript_store.clone());
@@ -1213,6 +1220,13 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
         })
         .count();
     assert_eq!(restart_diagnostics, 1);
+    let initial_position = restored.agent_shell_store().get("%1").unwrap().clone();
+    assert_eq!(
+        initial_position.transcript_high_water,
+        transcript_store
+            .validate_restored_transcript(&conversation_id)
+            .unwrap()
+    );
 
     let repeated_count = restored
         .restore_agent_sessions_from_transcript_store()
@@ -1242,6 +1256,15 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
         })
         .count();
     assert_eq!(repeated_diagnostics, 1);
+    let repeated_position = restored.agent_shell_store().get("%1").unwrap();
+    assert_eq!(
+        repeated_position.transcript_high_water,
+        initial_position.transcript_high_water
+    );
+    assert_eq!(
+        repeated_position.transcript_entries,
+        initial_position.transcript_entries
+    );
 }
 
 /// Verifies runtime event fanout batches all ready event notifications for one

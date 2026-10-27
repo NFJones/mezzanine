@@ -121,6 +121,37 @@ enum StagedActivePayload {
 }
 
 impl AgentTranscriptStore {
+    /// Enables an actual competing-writer lock check at restart adoption.
+    /// This observes native exclusion without threads or timing assumptions.
+    #[cfg(test)]
+    pub(crate) fn require_restart_replay_lease_for_tests(&self) {
+        self.check_restart_replay_lease
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Rejects test restoration when an independent writer could enter before
+    /// the captured replay state is installed. Production has no probe or flag.
+    #[cfg(test)]
+    pub(crate) fn verify_restart_replay_lease_for_tests(
+        &self,
+        conversation_id: &str,
+    ) -> Result<()> {
+        if !self
+            .check_restart_replay_lease
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        let competing_writer = self.open_conversation_lock(conversation_id)?;
+        match flock(&competing_writer, FlockOperation::NonBlockingLockExclusive) {
+            Err(rustix::io::Errno::WOULDBLOCK) => Ok(()),
+            Err(error) => Err(std::io::Error::from(error).into()),
+            Ok(()) => Err(MezError::invalid_state(
+                "restart replay released its mutation lease before adoption",
+            )),
+        }
+    }
+
     /// Acquires the exclusive advisory lock shared by one conversation's mutations.
     pub(super) fn acquire_conversation_lock(&self, conversation_id: &str) -> Result<File> {
         let file = self.open_conversation_lock(conversation_id)?;

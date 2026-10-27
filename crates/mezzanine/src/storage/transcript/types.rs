@@ -351,6 +351,9 @@ pub struct AgentTranscriptStore {
     /// One-shot deterministic handshake after recovery reads a journal, before locking.
     #[cfg(test)]
     pub(super) archive_recovery_read_barrier: Arc<Mutex<Option<ArchiveRecoveryReadBarrier>>>,
+    /// Enables a competing nonblocking writer probe at restart replay adoption.
+    #[cfg(test)]
+    pub(super) check_restart_replay_lease: Arc<AtomicBool>,
     /// One-shot fixture handshake immediately before presentation ownership acquisition.
     #[cfg(test)]
     pub(super) presentation_lock_barrier: Arc<Mutex<Option<ArchiveRecoveryReadBarrier>>>,
