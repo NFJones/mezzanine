@@ -27,6 +27,20 @@ use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 const MAX_PROJECTED_STREAMS: usize = 4096;
 const MAX_IN_FLIGHT: usize = 32;
 
+/// Production always recognizes the established completed-message layout after
+/// authorization. Test-only variants preserve old queued-work semantics and
+/// exercise exact-pair rejection without exposing any wire migration selector.
+enum OpenCodeAdmission {
+    /// Normal production conversion, with no caller-controlled opt-out.
+    Automatic,
+    /// Explicit immutable candidate used only by exact-pair boundary tests.
+    #[cfg(test)]
+    Exact(Box<crate::integrations::bootstrap::opencode::CompletedObservation>),
+    /// Reproduces pre-upgrade authorized legacy workers for late/reset fixtures.
+    #[cfg(test)]
+    PriorLayout,
+}
+
 /// Bounded checkpoint projection, independent of native request/context samples.
 #[derive(Debug, Default)]
 pub(super) struct ExternalUsageProjection {
@@ -155,30 +169,6 @@ pub(crate) struct ExternalUsageWork {
 }
 
 impl ExternalUsageWork {
-    /// Attaches one exact same-report receipt-only migration to admitted legacy
-    /// work. Failure leaves the original work/reservation available to settle or
-    /// release. This never changes its source, origin, pane, clock or stream key.
-    #[allow(
-        dead_code,
-        reason = "ordinary adapter migration uses exact admitted work"
-    )]
-    pub(crate) fn set_opencode_handoff(
-        &mut self,
-        pair: crate::integrations::bootstrap::opencode::CompletedObservation,
-    ) -> Result<()> {
-        if self.admission == 0
-            || self.request_marker.is_some()
-            || self.opencode_handoff.is_some()
-            || pair.legacy() != &self.report
-        {
-            return Err(MezError::conflict(
-                "OpenCode handoff does not match admitted legacy work",
-            ));
-        }
-        self.opencode_handoff = Some(pair);
-        Ok(())
-    }
-
     /// Runs legacy or sealed native request accounting off actor. Native work
     /// cannot replace its originally reserved project/group with current state.
     pub(crate) fn execute(&self) -> Result<ExternalUsageCommit> {
@@ -249,7 +239,7 @@ impl ExternalUsageWork {
                     "OpenCode admitted handoff report changed",
                 ));
             }
-            let (commit, group) = self.store.ingest_external_opencode_handoff_with_group(
+            let (commit, group) = self.store.ingest_admitted_legacy_opencode_with_group(
                 pair.observation(),
                 pair.legacy(),
                 self.now,
@@ -389,23 +379,35 @@ impl RuntimeSessionService {
         request: &JsonRpcRequest,
         connection: &ControlConnectionState,
     ) -> Result<ExternalUsageWork> {
-        self.prepare_external_usage_report(request, connection, None)
+        self.prepare_external_usage_report(request, connection, OpenCodeAdmission::Automatic)
     }
 
-    /// Internal exact-pair migration reuses legacy authorization, but reserves
-    /// canonical group capacity before any storage work. Not an ordinary RPC or
-    /// source/request association; unmapped ledger evidence still fails closed.
-    #[allow(
-        dead_code,
-        reason = "qualified adapter migration supplies exact legacy evidence"
-    )]
+    /// Test-only exact-pair boundary, retaining full real legacy authorization.
+    /// It cannot bypass source/report identity or provide a wire migration flag.
+    #[cfg(test)]
     pub(crate) fn prepare_external_opencode_handoff(
         &mut self,
         request: &JsonRpcRequest,
         connection: &ControlConnectionState,
         pair: crate::integrations::bootstrap::opencode::CompletedObservation,
     ) -> Result<ExternalUsageWork> {
-        self.prepare_external_usage_report(request, connection, Some(pair))
+        self.prepare_external_usage_report(
+            request,
+            connection,
+            OpenCodeAdmission::Exact(Box::new(pair)),
+        )
+    }
+
+    /// Recreates old already-admitted legacy work for migration/reset ordering
+    /// tests. Authorization, owner/origin capture and capacity are unchanged;
+    /// only automatic layout conversion is omitted, as in the previous release.
+    #[cfg(test)]
+    pub(crate) fn prepare_external_legacy_usage_for_tests(
+        &mut self,
+        request: &JsonRpcRequest,
+        connection: &ControlConnectionState,
+    ) -> Result<ExternalUsageWork> {
+        self.prepare_external_usage_report(request, connection, OpenCodeAdmission::PriorLayout)
     }
 
     /// Parses the unchanged capability-only report before accepting an optional
@@ -414,7 +416,7 @@ impl RuntimeSessionService {
         &mut self,
         request: &JsonRpcRequest,
         connection: &ControlConnectionState,
-        pair: Option<crate::integrations::bootstrap::opencode::CompletedObservation>,
+        admission: OpenCodeAdmission,
     ) -> Result<ExternalUsageWork> {
         self.require_live()?;
         if request.method != "agent/external/usage" || connection.initialized() {
@@ -511,11 +513,27 @@ impl RuntimeSessionService {
             ),
             counters,
         };
-        if pair.as_ref().is_some_and(|pair| pair.legacy() != &report) {
-            return Err(MezError::conflict(
-                "OpenCode handoff does not match authorized report",
-            ));
-        }
+        // Only the already-authorized, server-attributed completed-message
+        // layout opts into migration. No wire selector can claim native source
+        // authority or attach another launch owner's historical expense.
+        let pair = match admission {
+            OpenCodeAdmission::Automatic => {
+                crate::integrations::bootstrap::opencode::CompletedObservation::from_legacy_report(
+                    &report,
+                )?
+            }
+            #[cfg(test)]
+            OpenCodeAdmission::Exact(pair) => {
+                if pair.legacy() != &report {
+                    return Err(MezError::conflict(
+                        "OpenCode handoff does not match authorized report",
+                    ));
+                }
+                Some(*pair)
+            }
+            #[cfg(test)]
+            OpenCodeAdmission::PriorLayout => None,
+        };
         let work = ExternalUsageWork {
             admission: 0,
             request_id: request.id.clone(),

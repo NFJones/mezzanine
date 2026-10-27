@@ -125,6 +125,8 @@ mod external_tests;
 #[cfg(test)]
 mod history_tests;
 #[cfg(test)]
+mod legacy_launch_tests;
+#[cfg(test)]
 mod observation_tests;
 #[cfg(test)]
 mod project_tests;

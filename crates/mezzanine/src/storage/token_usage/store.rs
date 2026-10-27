@@ -13,7 +13,9 @@ use super::{
     set_private_file_permissions, sqlite_i64,
 };
 
-pub(super) const SCHEMA_VERSION: i64 = 12;
+/// Version13 fences older writers from recharging legacy launch observations
+/// whose immutable aliases now point at shared canonical checkpoints.
+pub(super) const SCHEMA_VERSION: i64 = 13;
 const SECONDS_PER_DAY: u64 = 86_400;
 
 /// One immutable provider/model usage delta.
@@ -360,7 +362,7 @@ fn initialize_schema(
                  PRAGMA user_version = 1;",
             )?;
         }
-        1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | SCHEMA_VERSION => {}
+        1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | SCHEMA_VERSION => {}
         future if future > SCHEMA_VERSION => {
             return Err(MezError::invalid_state(format!(
                 "token usage database schema version {future} is newer than supported version {SCHEMA_VERSION}"
@@ -480,6 +482,12 @@ fn initialize_schema(
                 FOREIGN KEY(stream_id) REFERENCES external_usage_streams(id));
              PRAGMA user_version=12;",
         )?;
+    }
+    if version < 13 {
+        // The format is unchanged; the interpretation of legacy-launch aliases
+        // now requires canonical replay lookup before charging. Fence old writers
+        // transactionally without rewriting any expense or native identity.
+        transaction.execute_batch("PRAGMA user_version=13;")?;
     }
     transaction.commit()?;
     Ok(())

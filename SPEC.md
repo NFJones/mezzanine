@@ -1572,7 +1572,7 @@ replay remains inert at capacity. Legacy delta/cumulative fingerprints and
 uncharged baselines MUST remain unchanged. This storage checkpoint does not
 enable ordinary reporting: attachment baselines, legacy OpenCode layout handoff,
 request-origin capture and producer/RPC integration still require qualification.
-The explicit ledger-only OpenCode legacy handoff MUST require a mapped same-owner
+The native ledger-only OpenCode legacy handoff MUST require a mapped same-owner
 source and its exact compiled per-message delta checkpoint/receipt. Generic
 observation conversion encountering that checkpoint MUST reject instead of
 recharging it. Adoption MUST atomically record source-wide replay identity,
@@ -1621,6 +1621,35 @@ Stale/reordered snapshots and delayed legacy member completions MUST NOT create
 duplicate projections or revive reset expense. Member routing MUST remain
 bounded and never silently evicted. This internal migration MUST NOT enable
 ordinary producer reporting, historical import or cross-owner/source recovery.
+Telemetry schema13 fences the interpretation of legacy-launch OpenCode replay
+aliases. Migration from12 MUST advance only the version in the existing schema
+transaction, retaining all expense, checkpoints, raw receipts, native mappings,
+request metadata and reset facts. Older readers MUST refuse the newer version;
+downgrade MUST NOT let an old per-message writer recharge canonical observations.
+After current capability/UID/registration/session authorization, normal legacy
+`agent/external/usage` admission MUST recognize the exact established OpenCode
+completed-message delta layout: sequence1, no baseline, `opencode-message:` plus
+a canonical64-hex digest, and canonical positive `completed:<milliseconds>`
+whose second matches the report time. Server-owned owner and frozen launch
+origin MUST be assigned before conversion; no caller owner/project/native mode
+or migration flag is accepted. Other legacy layouts retain their semantics.
+This explicitly scoped legacy-launch worker MAY lack a native mapping but MUST
+NOT allocate one, promote a launch owner or grant native recovery/request rights.
+A conflicting existing mapping MUST reject. An exact existing per-message
+checkpoint/receipt MUST adopt with zero expense and retain its millisecond
+fingerprint. For a fresh message with no old checkpoint, canonical checkpoint,
+immutable alias, receipt and expense MUST commit atomically without allocating a
+new per-message checkpoint. Missing old receipt, changed finalized payload/time,
+invalid group evidence or exhausted alias capacity MUST refuse without partial
+new evidence. Strict native handoff/snapshot APIs MUST retain their mapped-source
+and existing-checkpoint requirements. Legacy snapshots MUST retain the same
+bounded ownership/digest/group validation, checked totals and coherent sealed
+publication. Admission MUST reserve the canonical group before capacity checks;
+actor reconciliation MUST retain member/reset high-water facts as described above.
+This makes legacy capability reporting reachable and bounded by model/category/
+project groups; it does not install or qualify ordinary vendor usage callbacks,
+recover a different owner or import history into a fresh launch namespace.
+
 Telemetry schema 7 adds source-scoped opaque request markers with immutable
 original project/admission time and one optional observation completion link.
 `agent/external/usage-begin` MUST require an existing kernel-qualified persistent
@@ -1643,8 +1672,9 @@ the same marker MUST recover original provenance, never current cwd. Lost replie
 retry only the same metadata/report, never provider work. Reporting clients MUST
 capture begin readiness before the genuine new request and MUST NOT mint markers
 for historical/resumed/fork-inherited completed events or infer a newest marker.
-These observational facts do not attest vendor invoice amounts. Generic legacy
-`agent/external/usage` remains unchanged and rejects internal observation mode.
+These observational facts do not attest vendor invoice amounts. Legacy
+`agent/external/usage` continues to reject caller-selected observation mode;
+recognized completed-message deltas follow the scoped migration contract above.
 One retained ordinary SOCKET request-end dispatch MAY retry only an explicitly
 refused precommit writer: final idempotent WAL setup or expense-ledger BEGIN
 IMMEDIATE with exact base SQLite BUSY/LOCKED. Schema admission, reads/writes,
@@ -1660,8 +1690,9 @@ adds no durable pending store, source handoff, task/service/reload/restart
 recovery or no-gap guarantee; existing explicit coverage limitations remain.
 Unreported sources remain unavailable; actually committed request reports expose
 `request-bound-external-reported` coverage, not exhaustive accounting. Vendor
-producers, legacy OpenCode layout handoff and broader
-cross-process resume/fork attachment qualification remain separate work.
+producers and broader cross-process resume/fork attachment qualification remain
+separate work; legacy launch migration does not qualify an ordinary native
+OpenCode counter producer.
 Same-client socket reconnect after a committed-but-lost usage acknowledgment
 MUST retain the original ticket, normalized report, source witness, admission
 time and origin. Retry MUST freshly qualify that same native source; a durable

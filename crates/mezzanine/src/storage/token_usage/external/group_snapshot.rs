@@ -1,6 +1,8 @@
 //! Bounded same-owner OpenCode checkpoint views derived from replay aliases.
 //!
 //! One deferred read transaction pins source, membership and absolute checkpoints.
+//! Native reads require mapped sources; admitted legacy-launch writer reads may
+//! lack that mapping but never create one or authorize native recovery.
 //! Checkpoints lack owner/epoch columns: only source-wide aliases and independently
 //! recomputed stream digests bind membership. Unaliased legacy history is excluded,
 //! not imported or charged. Shared checkpoints are counted once, with checked
@@ -106,6 +108,26 @@ pub(super) fn snapshot_in_transaction(
     tx: &rusqlite::Transaction<'_>,
     report: &ExternalUsageReport,
 ) -> Result<Option<ExternalUsageGroupSnapshot>> {
+    snapshot_with_scope(tx, report, false)
+}
+
+/// Called only by the admitted legacy-launch writer in its own transaction.
+/// Missing native mapping is allowed here, not in native snapshot/recovery APIs;
+/// all alias/checkpoint ownership, grouping and capacity checks remain shared.
+pub(super) fn snapshot_for_legacy_launch(
+    tx: &rusqlite::Transaction<'_>,
+    report: &ExternalUsageReport,
+) -> Result<Option<ExternalUsageGroupSnapshot>> {
+    snapshot_with_scope(tx, report, true)
+}
+
+/// A legacy scope permits an absent mapping only; a conflicting existing native
+/// mapping still rejects. No source mapping or replay authority is written here.
+fn snapshot_with_scope(
+    tx: &rusqlite::Transaction<'_>,
+    report: &ExternalUsageReport,
+    legacy_launch: bool,
+) -> Result<Option<ExternalUsageGroupSnapshot>> {
     if report.harness != "opencode"
         || report.mode != "observation"
         || report.baseline
@@ -128,7 +150,7 @@ pub(super) fn snapshot_in_transaction(
             |row| row.get(0),
         )
         .optional()?;
-    if harness.as_deref() != Some(b"opencode".as_slice()) {
+    if harness.as_deref() != Some(b"opencode".as_slice()) && !(legacy_launch && harness.is_none()) {
         return Err(MezError::forbidden(
             "OpenCode group requires a mapped native source",
         ));

@@ -512,7 +512,7 @@ mod tests {
             connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            12
+            crate::storage::token_usage::store::SCHEMA_VERSION
         );
         assert_eq!(
             fixture

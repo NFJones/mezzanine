@@ -5,7 +5,9 @@
 //! cache reads/writes; output excludes reasoning. Restore inclusive ledger totals
 //! with checked arithmetic. Legacy snapshots use immutable per-message streams;
 //! typed migration candidates retain that exact proof beside source-wide IDs
-//! and bounded model/category grouping. Producer/worker wiring remains separate.
+//! and bounded model/category grouping. Authorized legacy usage admission uses
+//! the same exact-layout constructor; ordinary vendor callback qualification
+//! remains separate.
 //! Partial revisions are not charged; the future bound plugin must qualify any
 //! correction protocol rather than invent callback-local revision numbers.
 //! This pure owner never reads transcripts, installs plugins, infers pane
@@ -180,6 +182,53 @@ pub(crate) struct CompletedObservation {
 }
 
 impl CompletedObservation {
+    /// Recognizes only the established completed-message layout after the caller
+    /// has authorized its source and supplied server-owned owner/project fields.
+    /// Other legacy streams are not reinterpreted. Malformed recognized layouts
+    /// reject; construction grants no source, request or historical authority.
+    pub(crate) fn from_legacy_report(
+        legacy: &crate::storage::token_usage::ExternalUsageReport,
+    ) -> Result<Option<Self>> {
+        if legacy.harness != "opencode" || !legacy.epoch.starts_with("opencode-message:") {
+            return Ok(None);
+        }
+        let id = legacy
+            .epoch
+            .strip_prefix("opencode-message:")
+            .ok_or_else(unavailable)?;
+        let millis = legacy
+            .event_id
+            .strip_prefix("completed:")
+            .and_then(|value| value.parse::<u64>().ok());
+        if id.len() != 64
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || legacy.mode != "delta"
+            || legacy.sequence != 1
+            || legacy.baseline
+            || !millis.is_some_and(|value| {
+                value > 0
+                    && legacy.observed_at > 0
+                    && value / 1000 == legacy.observed_at
+                    && legacy.event_id == format!("completed:{value}")
+            })
+        {
+            return Err(MezError::invalid_args(
+                "OpenCode completed report layout invalid",
+            ));
+        }
+        legacy.counters.validate()?;
+        let mut observation = legacy.clone();
+        observation.event_id = id.into();
+        observation.mode = "observation".into();
+        observation.epoch = crate::storage::token_usage::external_observation_epoch(&observation)?;
+        Ok(Some(Self {
+            legacy: legacy.clone(),
+            observation,
+        }))
+    }
+
     /// Borrows the exact legacy proof for explicit ledger receipt adoption.
     pub(crate) fn legacy(&self) -> &crate::storage::token_usage::ExternalUsageReport {
         &self.legacy
@@ -204,18 +253,7 @@ pub(crate) fn completed_observation(
     let Some(legacy) = completed_report(release, bound_session, owner, project, bytes)? else {
         return Ok(None);
     };
-    let mut observation = legacy.clone();
-    observation.event_id = legacy
-        .epoch
-        .strip_prefix("opencode-message:")
-        .ok_or_else(unavailable)?
-        .into();
-    observation.mode = "observation".into();
-    observation.epoch = crate::storage::token_usage::external_observation_epoch(&observation)?;
-    Ok(Some(CompletedObservation {
-        legacy,
-        observation,
-    }))
+    CompletedObservation::from_legacy_report(&legacy)
 }
 
 #[cfg(test)]

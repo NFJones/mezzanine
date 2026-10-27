@@ -8,6 +8,7 @@ use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionAct
 use crate::runtime::current_unix_seconds;
 use crate::storage::token_usage::TokenUsageStore;
 
+mod opencode_admission;
 mod precommit_retry_controls;
 mod view_resets;
 
@@ -152,7 +153,7 @@ fn qualify_opencode_group_projection(count: u64, canonical: bool) {
     let (request1, pair1) = make(1, "model");
     for request in [&request0, &request1] {
         let work = service
-            .prepare_external_usage(request, &connection)
+            .prepare_external_legacy_usage_for_tests(request, &connection)
             .unwrap();
         let commit = work.execute().unwrap();
         let reply: serde_json::Value =
@@ -179,7 +180,7 @@ fn qualify_opencode_group_projection(count: u64, canonical: bool) {
     });
     service.set_external_usage_stream_limit_for_tests(2);
     let delayed = service
-        .prepare_external_usage(&request0, &connection)
+        .prepare_external_legacy_usage_for_tests(&request0, &connection)
         .unwrap();
     let delayed_commit = delayed.execute().unwrap();
     service.reset_agent_token_usage_for_pane("%1");
@@ -265,7 +266,7 @@ fn qualify_opencode_group_projection(count: u64, canonical: bool) {
         if index == 2 {
             assert_eq!(
                 service
-                    .prepare_external_usage(&request, &connection)
+                    .prepare_external_legacy_usage_for_tests(&request, &connection)
                     .unwrap_err()
                     .kind(),
                 crate::error::MezErrorKind::RateLimited,
@@ -333,15 +334,13 @@ fn qualify_opencode_group_projection(count: u64, canonical: bool) {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// A typed receipt handoff may attach only to exact already-admitted legacy
-/// work. Real legacy registration supplies pane/provenance authority; the source
-/// mapping below is explicitly synthetic storage setup, not ordinary native
-/// enrollment proof. Original reservations and reset baselines survive adoption,
+/// Automatic typed handoff must retain the exact already-admitted legacy report.
+/// Real launch/registration supplies authority; the seeded old ledger expense is
+/// not native source evidence. Original reservations/reset baselines survive adoption,
 /// unpublished caller commits reject, and actual worker replay never recharges.
 #[test]
 fn runtime_external_opencode_handoff_requires_exact_published_worker() {
-    let (mut service, connection, mut params, store) = fixture();
-    service.set_external_binding_harness_for_tests("opencode");
+    let (mut service, connection, mut params, store) = fixture_for_harness("opencode");
     let now = params["observed_at"].as_u64().unwrap();
     let bytes = serde_json::to_vec(&serde_json::json!({
         "role":"assistant", "sessionID":"usage-run", "id":"message", "providerID":"provider", "modelID":"model",
@@ -366,29 +365,17 @@ fn runtime_external_opencode_handoff_requires_exact_published_worker() {
         .to_string(),
     )
     .unwrap();
-    let mut work = service
+    let work = service
         .prepare_external_usage(&request, &connection)
         .unwrap();
-    let pair = crate::integrations::bootstrap::opencode::completed_observation(
-        "fixture",
-        "usage-run",
-        &work.report.owner,
-        work.report.project.clone(),
-        &bytes,
-    )
-    .unwrap()
-    .unwrap();
-    let sql = rusqlite::Connection::open(store.path()).unwrap();
-    sql.execute(
-        "INSERT INTO external_usage_sources(witness,harness,owner) VALUES(?1,'opencode',?2)",
-        rusqlite::params!["a".repeat(64), work.report.owner],
-    )
-    .unwrap();
-    drop(sql);
-    let legacy = work.execute().unwrap();
+    // Exact pre-upgrade expense through the original store writer, without
+    // publishing this newly admitted migration worker's completion.
+    let legacy = store.ingest_external(&work.report, now).unwrap();
     let reservations = service.external_usage_reservation_counts_for_tests();
     assert!(
-        work.set_opencode_handoff(template).is_err(),
+        service
+            .prepare_external_opencode_handoff(&request, &connection, template)
+            .is_err(),
         "wrong owner must retain original work"
     );
     assert_eq!(
@@ -397,17 +384,14 @@ fn runtime_external_opencode_handoff_requires_exact_published_worker() {
     );
     let mut mismatched = work.clone();
     mismatched.report.sequence += 1;
-    assert!(mismatched.set_opencode_handoff(pair.clone()).is_err());
+    assert!(mismatched.execute().is_err());
     let mut tampered = work.clone();
-    tampered.set_opencode_handoff(pair.clone()).unwrap();
     tampered.report.model.model = "changed-after-attachment".into();
     assert!(
         tampered.execute().is_err(),
         "changed work cannot publish handoff evidence"
     );
     assert_eq!(external_ledger_input(&store), 10);
-    work.set_opencode_handoff(pair.clone()).unwrap();
-    assert!(work.set_opencode_handoff(pair.clone()).is_err());
     let rejected: serde_json::Value =
         serde_json::from_str(&service.complete_external_usage(work.clone(), Ok(legacy))).unwrap();
     assert!(
@@ -418,10 +402,9 @@ fn runtime_external_opencode_handoff_requires_exact_published_worker() {
         service.external_usage_reservation_counts_for_tests(),
         (0, 0)
     );
-    let mut work = service
+    let work = service
         .prepare_external_usage(&request, &connection)
         .unwrap();
-    work.set_opencode_handoff(pair.clone()).unwrap();
     let commit = work.execute().unwrap();
     assert!(!commit.applied);
     let group = work.published_group_for_tests().unwrap();
@@ -450,10 +433,9 @@ fn runtime_external_opencode_handoff_requires_exact_published_worker() {
         10
     );
     service.reset_agent_token_usage_for_pane("%1");
-    let mut replay = service
+    let replay = service
         .prepare_external_usage(&request, &connection)
         .unwrap();
-    replay.set_opencode_handoff(pair).unwrap();
     let commit = replay.execute().unwrap();
     service.complete_external_usage(replay, Ok(commit));
     assert_eq!(
@@ -473,16 +455,6 @@ fn runtime_external_opencode_handoff_requires_exact_published_worker() {
     let mut changed = service
         .prepare_external_usage(&request, &connection)
         .unwrap();
-    let pair = crate::integrations::bootstrap::opencode::completed_observation(
-        "fixture",
-        "usage-run",
-        &changed.report.owner,
-        changed.report.project.clone(),
-        &bytes,
-    )
-    .unwrap()
-    .unwrap();
-    changed.set_opencode_handoff(pair).unwrap();
     let commit = changed.execute().unwrap();
     changed.report.owner = "changed-after-publication".into();
     changed.report.epoch = "changed-reservation-key".into();
@@ -816,6 +788,19 @@ fn fixture() -> (
     serde_json::Value,
     TokenUsageStore,
 ) {
+    fixture_for_harness("codex")
+}
+
+/// Chooses the harness in actual launch admission, before registration or owner
+/// allocation. No stored identity or native provenance is edited by fixtures.
+fn fixture_for_harness(
+    harness: &str,
+) -> (
+    RuntimeSessionService,
+    ControlConnectionState,
+    serde_json::Value,
+    TokenUsageStore,
+) {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -825,7 +810,7 @@ fn fixture() -> (
     store.initialize(current_unix_seconds()).unwrap();
     service.set_token_usage_store(store.clone());
     let launch: serde_json::Value = serde_json::from_str(&service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"launch","method":"agent/external/launch","params":{"pane_id":"%1","harness":"codex","version":"fixture"}}"#, &primary,
+        &serde_json::json!({"jsonrpc":"2.0","id":"launch","method":"agent/external/launch","params":{"pane_id":"%1","harness":harness,"version":"fixture"}}).to_string(), &primary,
     )).unwrap();
     let mut connection = ControlConnectionState::new(true, false);
     connection

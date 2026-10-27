@@ -9,6 +9,10 @@
 //! Native immutable observations additionally share model/category/project
 //! streams and source-wide opaque ID tombstones. This internal storage mode
 //! neither enables ordinary RPC admission nor authorizes historical import.
+//! A separately scoped legacy-launch writer shares these transactions after
+//! runtime capability admission. It preserves exact preexisting receipts while
+//! charging fresh completed messages into shared streams, without allocating
+//! native mappings or granting recovery authority.
 
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 use rusqlite::{OptionalExtension, params};
@@ -20,6 +24,23 @@ use super::{MezError, Result, TokenUsageStore, sqlite_i64};
 /// Read-transaction projection prerequisites; never another expense store.
 mod group_snapshot;
 pub(crate) use group_snapshot::ExternalUsageGroupSnapshot;
+
+/// Group publication scope, fixed by the server entry point rather than input.
+/// Legacy launches retain their existing capability authority only; they cannot
+/// become mapped native sources or acquire cold-recovery/request authority.
+enum GroupPublication<'a> {
+    /// Default native operations require an exact durable native mapping.
+    Native(Option<&'a mut Option<ExternalUsageGroupSnapshot>>),
+    /// An already-authorized legacy OpenCode launch publishes one coherent group.
+    LegacyLaunch(&'a mut Option<ExternalUsageGroupSnapshot>),
+}
+
+impl GroupPublication<'_> {
+    /// Only the explicitly scoped legacy-launch writer can waive native mapping.
+    fn is_legacy_launch(&self) -> bool {
+        matches!(self, Self::LegacyLaunch(_))
+    }
+}
 
 /// Immutable source ID tombstones are retained, never silently evicted.
 const MAX_OBSERVATIONS_PER_SOURCE: i64 = 65_536;
@@ -277,7 +298,7 @@ impl TokenUsageStore {
         report: &ExternalUsageReport,
         now: u64,
     ) -> Result<ExternalUsageCommit> {
-        self.ingest_external_with_request(report, now, None, None, None)
+        self.ingest_external_with_request(report, now, None, None, GroupPublication::Native(None))
     }
 
     /// Adopts only exact same-owner OpenCode legacy evidence into immutable
@@ -295,12 +316,19 @@ impl TokenUsageStore {
         now: u64,
     ) -> Result<ExternalUsageCommit> {
         Self::require_opencode_handoff_pair(report, legacy)?;
-        self.ingest_external_with_request(report, now, None, Some(legacy), None)
+        self.ingest_external_with_request(
+            report,
+            now,
+            None,
+            Some(legacy),
+            GroupPublication::Native(None),
+        )
     }
 
     /// Commits exact alias adoption and captures bounded group evidence under
     /// the same immediate writer. Invalid group evidence rolls back adoption;
     /// success returns only after commit. Neither result grants native authority.
+    #[cfg(test)]
     pub(crate) fn ingest_external_opencode_handoff_with_group(
         &self,
         report: &ExternalUsageReport,
@@ -309,10 +337,42 @@ impl TokenUsageStore {
     ) -> Result<(ExternalUsageCommit, ExternalUsageGroupSnapshot)> {
         Self::require_opencode_handoff_pair(report, legacy)?;
         let mut group = None;
-        let commit =
-            self.ingest_external_with_request(report, now, None, Some(legacy), Some(&mut group))?;
+        let commit = self.ingest_external_with_request(
+            report,
+            now,
+            None,
+            Some(legacy),
+            GroupPublication::Native(Some(&mut group)),
+        )?;
         let group = group.ok_or_else(|| {
             MezError::invalid_state("OpenCode committed group evidence unavailable")
+        })?;
+        Ok((commit, group))
+    }
+
+    /// Ingests an exact completed-message report from an already-authorized
+    /// legacy launch. The caller must supply its server-owned owner/project,
+    /// never a claimed native mapping. Existing exact legacy receipts adopt with
+    /// zero expense; fresh messages charge one canonical checkpoint atomically
+    /// with their alias and bounded coherent group. This cannot allocate native
+    /// mappings, admit ordinary producers or enable source recovery.
+    pub(crate) fn ingest_admitted_legacy_opencode_with_group(
+        &self,
+        report: &ExternalUsageReport,
+        legacy: &ExternalUsageReport,
+        now: u64,
+    ) -> Result<(ExternalUsageCommit, ExternalUsageGroupSnapshot)> {
+        Self::require_opencode_handoff_pair(report, legacy)?;
+        let mut group = None;
+        let commit = self.ingest_external_with_request(
+            report,
+            now,
+            None,
+            Some(legacy),
+            GroupPublication::LegacyLaunch(&mut group),
+        )?;
+        let group = group.ok_or_else(|| {
+            MezError::invalid_state("legacy OpenCode group publication unavailable")
         })?;
         Ok((commit, group))
     }
@@ -359,7 +419,13 @@ impl TokenUsageStore {
         request: &super::external_requests::ExternalRequestReport,
         now: u64,
     ) -> Result<ExternalUsageCommit> {
-        self.ingest_external_with_request(request.report(), now, Some(request), None, None)
+        self.ingest_external_with_request(
+            request.report(),
+            now,
+            Some(request),
+            None,
+            GroupPublication::Native(None),
+        )
     }
 
     /// Uses the sole existing ledger transaction and observes only an actual
@@ -375,7 +441,7 @@ impl TokenUsageStore {
             now,
             Some(request),
             None,
-            None,
+            GroupPublication::Native(None),
             admission,
         )
     }
@@ -388,7 +454,7 @@ impl TokenUsageStore {
         now: u64,
         request: Option<&super::external_requests::ExternalRequestReport>,
         legacy: Option<&ExternalUsageReport>,
-        group: Option<&mut Option<ExternalUsageGroupSnapshot>>,
+        group: GroupPublication<'_>,
     ) -> Result<ExternalUsageCommit> {
         self.ingest_external_with_admission(
             report,
@@ -408,10 +474,11 @@ impl TokenUsageStore {
         now: u64,
         request: Option<&super::external_requests::ExternalRequestReport>,
         legacy: Option<&ExternalUsageReport>,
-        group: Option<&mut Option<ExternalUsageGroupSnapshot>>,
+        group: GroupPublication<'_>,
         admission: &mut super::ExternalUsageAdmissionWitness,
     ) -> Result<ExternalUsageCommit> {
         admission.clear();
+        let legacy_launch = group.is_legacy_launch();
         let observation = report.mode == "observation";
         crate::integrations::harness_policy::require_active_external_harness(&report.harness)?;
         report.counters.validate()?;
@@ -540,7 +607,9 @@ impl TokenUsageStore {
                     |row| row.get(0),
                 )
                 .optional()?;
-            if harness.as_deref() != Some(report.harness.as_str()) {
+            if harness.as_deref() != Some(report.harness.as_str())
+                && !(legacy_launch && harness.is_none())
+            {
                 return Err(MezError::forbidden(
                     "external observation requires a mapped native source",
                 ));
@@ -585,7 +654,7 @@ impl TokenUsageStore {
                     }
                     Some((revision, totals))
                 } else {
-                    if legacy.is_some() {
+                    if legacy.is_some() && !legacy_launch {
                         return Err(MezError::conflict("OpenCode legacy checkpoint unavailable"));
                     }
                     None
@@ -799,13 +868,21 @@ impl TokenUsageStore {
         tx: rusqlite::Transaction<'_>,
         report: &ExternalUsageReport,
         commit: ExternalUsageCommit,
-        group: Option<&mut Option<ExternalUsageGroupSnapshot>>,
+        group: GroupPublication<'_>,
     ) -> Result<ExternalUsageCommit> {
-        if let Some(output) = group {
-            let snapshot =
-                group_snapshot::snapshot_in_transaction(&tx, report)?.ok_or_else(|| {
-                    MezError::invalid_state("OpenCode handoff group evidence unavailable")
-                })?;
+        let (output, legacy_launch) = match group {
+            GroupPublication::Native(output) => (output, false),
+            GroupPublication::LegacyLaunch(output) => (Some(output), true),
+        };
+        if let Some(output) = output {
+            let snapshot = if legacy_launch {
+                group_snapshot::snapshot_for_legacy_launch(&tx, report)?
+            } else {
+                group_snapshot::snapshot_in_transaction(&tx, report)?
+            }
+            .ok_or_else(|| {
+                MezError::invalid_state("OpenCode handoff group evidence unavailable")
+            })?;
             if !snapshot.members().iter().any(|member| {
                 member.stream_id == commit.stream_id
                     && member.revision == commit.revision

@@ -840,6 +840,31 @@ Usage admission explicitly rejects internal `observation` mode before reserving
 legacy accounting work; field-name schema validation is not a mode enum or an
 authorization substitute. Ordinary bindings remain rejected on that legacy path.
 
+Telemetry schema13 adds a semantic version fence for legacy-launch OpenCode
+aliases; migration from12 changes only the version in the existing transaction.
+Expense, native source identities, receipts, request metadata and reset facts
+remain unchanged. Older binaries refuse the newer format rather than interpreting
+shared-stream reports as fresh per-message expense.
+
+Normal capability-only `agent/external/usage` admission now recognizes the known
+OpenCode completed-message delta layout after UID/current capability/registration/
+session authorization and server-owned owner/origin assignment. It uses the
+canonical64-hex message epoch and exact completion milliseconds, not a caller
+migration flag or observation mode. Exact old receipts adopt without expense;
+fresh messages atomically write one shared model/category/project checkpoint,
+immutable alias and actual expense. Old missing receipts and changed finalized
+metadata conflict. Alias limits and replay-at-capacity rules remain unchanged.
+The legacy worker's coherent snapshot keeps all ownership/digest/group checks,
+reserves the canonical projection before capacity enforcement, and preserves
+reset/member high-water facts at actor adoption.
+
+This explicit legacy scope may lack a native mapping; it never allocates one or
+grants native request/cold recovery rights. Conflicting mappings reject, and
+strict native storage/snapshot APIs continue to require native mapping. Generic
+legacy layouts retain their semantics. Ordinary native OpenCode callback/counter
+qualification remains separate; this does not turn the installed TUI's explicit
+unavailable usage into a qualified producer or attach history to a new owner.
+
 ### Native request-bound accounting
 
 `agent/external/usage-begin` accepts only `launch_token`, `generation`,
@@ -1204,7 +1229,8 @@ zero usage. Historical/resumed/fork-inherited completed events must not get new
 markers. This contract is external-reported observation, not vendor billing
 attestation. Discovery reports `request-bound-external-reported` only after an
 actual durable request report. Existing enrollment/client support may still lack
-usage producers; legacy layout handoff remains unfinished.
+usage producers; the automatic legacy-launch layout migration described above
+does not qualify those vendor sources.
 The shared fixed `harness-source` usage capsule accepts an optional `harness`
 selector for `pi`, `opencode`, `claude`, `codex`, `copilot` or `cursor` (omitted
 means the installed Claude contract). It projects only the fixed
