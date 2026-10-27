@@ -1,4 +1,4 @@
-//! Bounded correction for unavailable MMP recipients in mixed final batches.
+//! Bounded correction for unavailable MMP recipients in single and mixed batches.
 //!
 //! The reopened report describes a provider-driven final batch whose message
 //! action failed because the recipient was not registered or available, with
@@ -469,23 +469,48 @@ async fn runtime_unavailable_recipient_correction_is_async_parity() {
 /// admission and correction path; the failure is not provider shaping.
 #[test]
 fn runtime_unavailable_recipient_correction_is_provider_agnostic() {
-    for control in [
-        None,
-        Some((
-            "deepseek",
-            mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
-        )),
-        Some((
-            "alternate-compat",
-            mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
-        )),
+    for (single, control) in [
+        (false, None),
+        (true, None),
+        (
+            false,
+            Some((
+                "deepseek",
+                mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+            )),
+        ),
+        (
+            true,
+            Some((
+                "deepseek",
+                mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+            )),
+        ),
+        (
+            false,
+            Some((
+                "alternate-compat",
+                mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+            )),
+        ),
+        (
+            true,
+            Some((
+                "alternate-compat",
+                mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+            )),
+        ),
     ] {
         let (mut service, _target) = mixed_batch_fixture();
-        let actions = vec![
-            send_action("msg-missing", "agent:agent-nowhere", "handoff"),
-            list_agents_action("discover-1"),
-            final_say_action("say-final", "finished"),
-        ];
+        let actions = if single {
+            vec![send_action("msg-missing", "agent:agent-nowhere", "handoff")]
+        } else {
+            vec![
+                send_action("msg-missing", "agent:agent-nowhere", "handoff"),
+                list_agents_action("discover-1"),
+                final_say_action("say-final", "finished"),
+            ]
+        };
         let execution = if let Some((provider_id, api)) = control {
             service
                 .execute_agent_turn_with_provider(
@@ -506,7 +531,7 @@ fn runtime_unavailable_recipient_correction_is_provider_agnostic() {
         assert_eq!(
             execution.terminal_state,
             AgentTurnState::Running,
-            "control={control:?}: {:?}",
+            "single={single} control={control:?}: {:?}",
             result_diagnostics(&execution)
         );
         assert_eq!(
@@ -522,6 +547,137 @@ fn runtime_unavailable_recipient_correction_is_provider_agnostic() {
                 .any(|task| task.turn_id == "turn-1")
         );
     }
+}
+
+/// One unavailable action can change course through explicit discovery, then
+/// send once to the verified identity in its ORIGINAL session audience. Every
+/// provider call is fake, while production dispatch produces the failure and
+/// discovery results. The absent send is never accepted or automatically
+/// replayed, and one original failed-result occurrence remains in context.
+#[test]
+fn runtime_unavailable_single_action_discovers_then_sends_once() {
+    let (mut service, target) = mixed_batch_fixture();
+    let failed = execute_sync(
+        &mut service,
+        batch_response(
+            "runtime-batch",
+            vec![send_action("missing", "agent:agent-nowhere", "handoff")],
+        ),
+    );
+    assert_eq!(failed.terminal_state, AgentTurnState::Running);
+    assert_eq!(failed.action_results.len(), 1);
+    assert_eq!(action_result_block_count(&service, "missing"), 1);
+    let discover = AgentAction {
+        id: "discover-current".into(),
+        payload: AgentActionPayload::ListAgents {
+            agent_type: Some("all".into()),
+            scope: Some("session".into()),
+        },
+    };
+    let listed = service
+        .poll_agent_provider_tasks_with_provider(
+            &RuntimeBatchProvider {
+                response: batch_response("runtime-batch", vec![discover]),
+            },
+            1,
+        )
+        .unwrap()
+        .remove(0);
+    let body: serde_json::Value = serde_json::from_str(
+        listed.action_results[0]
+            .structured_content_json
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    let verified = body["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent_id"].as_str() == Some(target.as_str()))
+        .unwrap();
+    assert_eq!(body["scope"], "session");
+    let recipient = format!("agent:{}", verified["agent_id"].as_str().unwrap());
+    let corrected = service
+        .poll_agent_provider_tasks_with_provider(
+            &RuntimeBatchProvider {
+                response: batch_response(
+                    "runtime-batch",
+                    vec![send_action("verified-send", &recipient, "handoff")],
+                ),
+            },
+            1,
+        )
+        .unwrap()
+        .remove(0);
+    assert_eq!(corrected.action_results[0].status, ActionStatus::Succeeded);
+    assert_eq!(action_result_block_count(&service, "missing"), 1);
+    assert_eq!(
+        service
+            .message_service()
+            .receive_for(&target, u64::MAX)
+            .len(),
+        1
+    );
+    let finished = service
+        .poll_agent_provider_tasks_with_provider(
+            &RuntimeBatchProvider {
+                response: runtime_say_response("turn-1", "finished after verified send", true),
+            },
+            1,
+        )
+        .unwrap()
+        .remove(0);
+    assert_eq!(finished.terminal_state, AgentTurnState::Completed);
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert_eq!(
+        service
+            .message_service()
+            .receive_for(&target, u64::MAX)
+            .len(),
+        1
+    );
+}
+
+/// Renaming both the action and absent target does not renew the stable opaque
+/// unavailable-recipient failure budget. Exhaustion stays truthful and the
+/// original failed sends never produce envelopes or another queued correction.
+#[test]
+fn runtime_unavailable_single_action_target_churn_does_not_renew_budget() {
+    let (mut service, target) = mixed_batch_fixture();
+    service.set_agent_action_failure_retry_limit(1);
+    let first = execute_sync(
+        &mut service,
+        batch_response(
+            "runtime-batch",
+            vec![send_action("missing-1", "agent:agent-nowhere-a", "handoff")],
+        ),
+    );
+    assert_eq!(first.terminal_state, AgentTurnState::Running);
+    let second = service
+        .poll_agent_provider_tasks_with_provider(
+            &RuntimeBatchProvider {
+                response: batch_response(
+                    "runtime-batch",
+                    vec![send_action(
+                        "missing-2",
+                        "agent:agent-nowhere-b",
+                        "different handoff",
+                    )],
+                ),
+            },
+            1,
+        )
+        .unwrap()
+        .remove(0);
+    assert_eq!(second.terminal_state, AgentTurnState::Failed);
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert!(
+        service
+            .message_service()
+            .receive_for(&target, u64::MAX)
+            .is_empty()
+    );
 }
 
 /// An active external sibling still owns work and blocks correction until it

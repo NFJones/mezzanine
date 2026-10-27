@@ -12117,6 +12117,19 @@ denials, policy denials, command timeouts, or user cancellations, and MUST
 preserve the failed action result for audit, diagnostics, and model context.
 If the bounded correction attempts for each model-correctable failed action are
 exhausted, Mezzanine MUST settle the turn as failed.
+An ordinary pre-acceptance `send_message` failure with
+`message_recipient_unavailable` MUST remain model-correctable while this budget
+and the existing ownership/sibling safety gates permit it. This applies to a
+genuinely one-action batch as well as a mixed batch; a planned final flag alone
+MUST NOT suppress correction. Preserve the failed result once in canonical
+context and audit. There is no accepted envelope to resend automatically. A
+corrective model decision may discover a current eligible peer in the original
+audience, choose one verified target, or change course and complete useful work.
+Renaming action IDs or unavailable targets MUST NOT renew an unchanged failure
+signature's budget. Zero is not a supported action-failure retry setting: it
+MUST be rejected by the positive-integer configuration contract, not treated as
+an implicit unlimited budget. MAAP repair reservations/calls describe a different
+owner and cannot establish whether executed-action correction was attempted.
 An opaque pre-effect `close_agent` result with `Rejected` status and `unavailable`
 error MAY enter this same bounded correction path. The rejected result MUST remain
 in audit and model context; rejection is not proof of closure. The model may

@@ -190,6 +190,22 @@ post-close checkpoint failures are not this pre-effect case: pane removal may
 already have happened before checkpoint failure. There are no new settings or
 ownership privileges for close recovery.
 
+An ordinary unavailable `send_message` target likewise permits bounded same-turn
+correction before acceptance, including a one-action batch with planned final
+intent. The failed result remains context/audit evidence, not a successful send.
+Discover current eligible peers using the appropriate `agent_type` in the
+original audience, verify the intended identity, then choose a corrected send
+once; or abandon messaging and complete useful independent work. Do not guess a
+target, widen scope to bypass unavailability, or replay the failed request
+automatically. Changing action IDs or absent target names does not renew an
+unchanged failure signature's budget. `action_failure_retry_limit` is positive;
+zero is rejected, unlike the separate provider-error retry setting. A diagnostic
+showing zero malformed-MAAP repair calls does not prove no executed-action
+feedback occurred. Offline current-source tests qualify immediate actor
+correction for final/nonfinal single-action chat completions and a complete
+discover/send-once or changed-course workflow; they do not identify the build or
+unique cause of an older incident or certify a live vendor service.
+
 Published objectives describe current work. Set `/objective <text>` to override
 the generated objective for the current conversation; `/objective --clear`
 restores generated publication. Bare `/objective` reports its source and value.

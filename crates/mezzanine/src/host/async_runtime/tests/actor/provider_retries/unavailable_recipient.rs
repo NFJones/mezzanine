@@ -1,10 +1,14 @@
-//! Async unavailable-recipient mixed-batch settlement and immediate dispatch.
+//! Async unavailable-recipient single/mixed settlement and immediate dispatch.
 //!
 //! The initial typed completion carries planned Running send-to-unavailable and
 //! list_agents actions plus a Succeeded final say. Production actor settlement
 //! must execute the message, abandon only the unstarted read-only discovery,
 //! and enqueue the existing corrective provider dispatch immediately, without a
 //! timer or poll rescue. A changed-course completion then retires the same turn.
+//! The single-action matrix additionally supplies both planned-final flags and
+//! chat compatibility shapes. These are offline planned completions, not live
+//! SDK/parser captures. Heap-pinning the shared large fixture keeps wrapper
+//! futures off the default test stack without changing runtime stack policy.
 
 use super::*;
 
@@ -12,6 +16,38 @@ use super::*;
 /// immediate corrective provider task through production actor completion.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_unavailable_recipient_mixed_batch_dispatches_correction_immediately() {
+    Box::pin(qualify_unavailable_recipient(
+        false,
+        false,
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+    ))
+    .await;
+}
+
+/// The reopened report has ONE dispatched action and final-planned=true. Drive
+/// the actual send/error/settlement/dispatch owners with exactly one planned
+/// send, project audience, both final flags and DeepSeek-compatible versus
+/// ordinary chat request shaping. A changed-course response completes the SAME
+/// turn after one immediate correction, with no timer, extra input or resend.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_unavailable_recipient_single_action_final_and_nonfinal_correct_immediately() {
+    for api in [
+        mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+        mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+    ] {
+        for final_planned in [false, true] {
+            Box::pin(qualify_unavailable_recipient(true, final_planned, api)).await;
+        }
+    }
+}
+
+/// Executes one isolated production actor workflow; only the original planned
+/// completion is supplied. The runtime itself produces unavailable feedback.
+async fn qualify_unavailable_recipient(
+    single: bool,
+    final_planned: bool,
+    api: mez_agent::ProviderApiCompatibility,
+) {
     let mut service = test_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -45,7 +81,7 @@ async fn async_actor_unavailable_recipient_mixed_batch_dispatches_correction_imm
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     let request = crate::integrations::agent::context::assemble_model_request(
         &task.model_profile,
-        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        api,
         &turn,
         context,
     )
@@ -54,7 +90,7 @@ async fn async_actor_unavailable_recipient_mixed_batch_dispatches_correction_imm
         id: "msg-unavailable".into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
             recipient: "agent:agent-nowhere".into(),
-            scope: Some("session".into()),
+            scope: Some(if single { "project" } else { "session" }.into()),
             content_type: "text/plain; charset=utf-8".into(),
             payload: "handoff".into(),
             correlation_id: None,
@@ -86,18 +122,36 @@ async fn async_actor_unavailable_recipient_mixed_batch_dispatches_correction_imm
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
                 rationale: "send or continue locally".into(),
-                actions: vec![send.clone(), discovery.clone(), say.clone()],
+                actions: if single {
+                    vec![send.clone()]
+                } else {
+                    vec![send.clone(), discovery.clone(), say.clone()]
+                },
             }),
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: Default::default(),
-        action_results: vec![
-            mez_agent::ActionResult::running(&turn, &send, Vec::new(), None),
-            mez_agent::ActionResult::running(&turn, &discovery, Vec::new(), None),
-            mez_agent::ActionResult::succeeded(&turn, &say, vec!["continued locally".into()], None),
-        ],
-        final_turn: false,
+        action_results: if single {
+            vec![mez_agent::ActionResult::running(
+                &turn,
+                &send,
+                Vec::new(),
+                None,
+            )]
+        } else {
+            vec![
+                mez_agent::ActionResult::running(&turn, &send, Vec::new(), None),
+                mez_agent::ActionResult::running(&turn, &discovery, Vec::new(), None),
+                mez_agent::ActionResult::succeeded(
+                    &turn,
+                    &say,
+                    vec!["continued locally".into()],
+                    None,
+                ),
+            ]
+        },
+        final_turn: final_planned,
         terminal_state: mez_agent::AgentTurnState::Running,
     };
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
@@ -129,7 +183,7 @@ async fn async_actor_unavailable_recipient_mixed_batch_dispatches_correction_imm
                 .filter(|effect| matches!(effect, RuntimeSideEffect::DispatchAgentProvider { turn_id, .. } if turn_id == &turn.turn_id))
                 .count(),
             1,
-            "mixed unavailable-recipient failure must dispatch correction immediately"
+            "unavailable recipient must dispatch correction immediately: single={single} final={final_planned} api={api:?}"
         );
         assert_eq!(
             handle.pending_agent_provider_tasks().await.unwrap().len(),
