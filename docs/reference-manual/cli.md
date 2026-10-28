@@ -823,7 +823,13 @@ existing historical targets retain their original semantics. Receipt schema stay
 ordinary skills-directory loader discovers it without `--plugin-dir`, a Mez
 wrapper, fd3 or launcher helper environment. The literal SDK source pins the
 installing Mezzanine executable for native helper observations and available
-main-request counters. Revision2 adds bounded main-session classic lifecycle
+main-request counters. The documented [skills-directory loader](https://code.claude.com/docs/en/plugins/loading#name-conflicts)
+loads the user copy ahead of a same-name project copy; managed locks, session-only
+plugins and installed marketplace plugins can take precedence. Bootstrap leaves
+those choices intact. A same-name higher-priority plugin can therefore leave
+Mezzanine installed without its telemetry loaded. The [mod policy](https://code.claude.com/docs/en/plugins/mods/overview#turn-mods-on-or-off)
+and vendor trust decisions still apply; installing this observational graph does
+not change them. Revision2 adds bounded main-session classic lifecycle
 observations and a static automatic title, without forwarding prompts, messages,
 tool/error text or transcript paths. Presentation order is captured before
 downstream completion; heartbeat and expense ownership remain separate. Exact

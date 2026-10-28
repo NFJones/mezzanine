@@ -1029,3 +1029,49 @@ test("Claude child lost ACK retains original report and unknown child cannot ret
   assert.equal(endings().length, 4);
   assert(endings().every(call => JSON.stringify(call) === original));
 });
+
+/** A fresh module instance cannot infer a conversation from loading, a request,
+ * a child start, or a mod-load session.start alias. A real classic start remains
+ * the only admission boundary, including documented fresh resume/fork events. */
+test("Claude fresh load and reload remain inert until a genuine classic start", async () => {
+  const original = fixture(); await original.invoke(start());
+  const reloaded = fixture();
+  assert.equal(reloaded.hooks.has("session.start"), false);
+  assert.equal(reloaded.calls.length, 0);
+  assert.equal(reloaded.lifecycle.length, 0);
+  assert.equal(reloaded.timers.length, 0);
+  await reloaded.hooks.get("classic.SubagentStart")(reloaded.sdk, {
+    session_id: "session-a", hook_event_name: "SubagentStart", agent_id: "child-a",
+  }, async () => reloaded.result);
+  const final = stepResult();
+  const step = reloaded.hooks.get("turn.step")(reloaded.sdk, stepInput(), async function* () { return final; });
+  assert.equal((await step.next()).value, final);
+  assert.equal(reloaded.calls.length, 0);
+  assert.equal(reloaded.lifecycle.length, 0);
+  assert.equal(reloaded.timers.length, 0);
+  assert.equal(original.timers[0].cancelled, false, "new module has no old owner's cancellation authority");
+});
+
+/** Startup/resume/fork describe genuine classic main starts, never inherited
+ * expense. The new instance observes only the current callback and request;
+ * compact/unknown/child starts must not manufacture source or history. */
+test("Claude fresh classic startup resume and fork admit without inherited expense", async () => {
+  for (const source of ["startup", "resume", "fork"]) {
+    const f = fixture();
+    const event = start("session-a", { source });
+    let calls = 0;
+    assert.equal(await f.invoke(event, async e => { calls++; assert.equal(e, event); return f.result; }), f.result);
+    assert.equal(calls, 1);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0].external_session_id, "session-a");
+    assert.equal(f.lifecycle[0].data.state, "ready");
+    assert.equal(f.timers.length, 1);
+    assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 0);
+  }
+  for (const extra of [{ source: "compact" }, { source: "unknown" }, { source: "fork", agent_id: "child-a" }]) {
+    const f = fixture();
+    assert.equal(await f.invoke(start("session-a", extra)), f.result);
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.timers.length, 0);
+  }
+});
