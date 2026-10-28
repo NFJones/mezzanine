@@ -211,13 +211,13 @@ mod tests {
         use super::super::installer::Operation;
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
-            assert_eq!(current.revision, if harness == "pi" { 17 } else { 15 });
+            assert_eq!(current.revision, if harness == "pi" { 18 } else { 15 });
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), if harness == "pi" { 15 } else { 38 });
+            assert_eq!(history.len(), if harness == "pi" { 16 } else { 38 });
             assert!(history.iter().any(|manifest| manifest.revision == 8));
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
-            assert_eq!(immediate.revision, if harness == "pi" { 16 } else { 14 });
+            assert_eq!(immediate.revision, if harness == "pi" { 17 } else { 14 });
             let frozen = immediate
                 .entries
                 .iter()
@@ -229,7 +229,12 @@ mod tests {
                     bytes: include_bytes!("persistent_client.mjs").to_vec()
                 }
             );
-            let bounded = &history[1];
+            // Historical byte contracts belong to their shipped revisions,
+            // even when a Pi-only producer revision adds a new predecessor.
+            let bounded = history
+                .iter()
+                .find(|manifest| manifest.revision == if harness == "pi" { 15 } else { 13 })
+                .unwrap();
             assert_eq!(bounded.revision, if harness == "pi" { 15 } else { 13 });
             assert_eq!(
                 bounded
@@ -243,8 +248,10 @@ mod tests {
                 }
             );
             if harness == "pi" {
-                assert_eq!(history[2].revision, 14);
-                let one_shot = history[2]
+                let one_shot = history
+                    .iter()
+                    .find(|manifest| manifest.revision == 14)
+                    .unwrap()
                     .entries
                     .iter()
                     .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
@@ -255,10 +262,13 @@ mod tests {
                         bytes: super::super::history::persistent_client_one_shot_end()
                     }
                 );
-                assert_eq!(history[3].revision, 13);
-                assert_eq!(history[4].revision, 12);
-                assert_eq!(history[5].revision, 11);
-                let pre_resume = history[5]
+                for revision in [13, 12, 11] {
+                    assert!(history.iter().any(|manifest| manifest.revision == revision));
+                }
+                let pre_resume = history
+                    .iter()
+                    .find(|manifest| manifest.revision == 11)
+                    .unwrap()
                     .entries
                     .iter()
                     .find(|entry| entry.path.ends_with("/persistent_client.mjs"))
@@ -273,10 +283,13 @@ mod tests {
                     history
                         .iter()
                         .map(|manifest| manifest.revision)
-                        .eq((2..=16).rev())
+                        .eq((2..=17).rev())
                 );
             }
-            let request = immediate
+            let request = history
+                .iter()
+                .find(|manifest| manifest.revision == if harness == "pi" { 16 } else { 14 })
+                .unwrap()
                 .entries
                 .iter()
                 .find(|entry| entry.path.ends_with("/request_accounting.mjs"))

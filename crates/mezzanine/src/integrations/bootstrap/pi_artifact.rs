@@ -42,16 +42,40 @@ pub(crate) fn candidate_manifest() -> Manifest {
     entries.extend(super::persistent_client::entries("extensions/mezzanine"));
     Manifest {
         harness: "pi".into(),
-        revision: 17,
+        revision: 18,
         vendor_version: super::pi::RELEASE.into(),
         entries,
     }
 }
 
+/// Exact revision17 before metadata-only auxiliary attribution disclosure.
+/// Frozen producer bytes preserve ownership of every previous shipped layout.
+pub(super) fn historical_auxiliary_manifest() -> Manifest {
+    let mut manifest = candidate_manifest();
+    manifest.revision = 17;
+    for entry in &mut manifest.entries {
+        let bytes = match entry.path.as_str() {
+            "extensions/mezzanine/pi_usage.mjs" => {
+                Some(include_bytes!("history/pi_usage_v17.mjs").as_slice())
+            }
+            "extensions/mezzanine/pi_persistent.mjs" => {
+                Some(include_bytes!("history/pi_persistent_v17.mjs").as_slice())
+            }
+            _ => None,
+        };
+        if let Some(bytes) = bytes {
+            entry.artifact = Artifact::File {
+                bytes: bytes.to_vec(),
+            };
+        }
+    }
+    manifest
+}
+
 /// Exact revision-16 cold-source client before bounded settled receipts.
 /// The current transport/producer bytes remain unchanged; accounting is frozen.
 pub(super) fn historical_receipt_manifest() -> Manifest {
-    let mut manifest = candidate_manifest();
+    let mut manifest = historical_auxiliary_manifest();
     manifest.revision = 16;
     super::history::freeze_pre_receipt_bound(&mut manifest);
     manifest
@@ -59,7 +83,7 @@ pub(super) fn historical_receipt_manifest() -> Manifest {
 
 /// Exact revision15 before explicit automatic native cold recovery.
 pub(super) fn historical_bounded_end_manifest() -> Manifest {
-    let mut manifest = candidate_manifest();
+    let mut manifest = historical_auxiliary_manifest();
     manifest.revision = 15;
     super::history::freeze_bounded_end_transport(&mut manifest);
     manifest
@@ -67,7 +91,7 @@ pub(super) fn historical_bounded_end_manifest() -> Manifest {
 
 /// Exact revision-14 layout before bounded lost-end-ACK recovery.
 pub(super) fn historical_one_shot_end_manifest() -> Manifest {
-    let mut manifest = candidate_manifest();
+    let mut manifest = historical_auxiliary_manifest();
     manifest.revision = 14;
     super::history::freeze_one_shot_end_transport(&mut manifest);
     manifest
@@ -75,7 +99,7 @@ pub(super) fn historical_one_shot_end_manifest() -> Manifest {
 
 /// Exact revision-13 layout before required source-end acknowledgments.
 pub(super) fn historical_end_manifest() -> Manifest {
-    let mut manifest = candidate_manifest();
+    let mut manifest = historical_auxiliary_manifest();
     manifest.revision = 13;
     super::history::freeze_pre_end_transport(&mut manifest);
     manifest
@@ -118,7 +142,7 @@ pub(super) fn historical_loss_manifest() -> Manifest {
 /// Exact revision-10 changed slots, independent of current loss-ordering code.
 /// Shared transport/request bytes are unchanged by revision 11.
 pub(super) fn historical_usage_manifest() -> Manifest {
-    let mut manifest = candidate_manifest();
+    let mut manifest = historical_auxiliary_manifest();
     manifest.revision = 10;
     for entry in &mut manifest.entries {
         let bytes = match entry.path.as_str() {
@@ -144,7 +168,7 @@ pub(super) fn historical_usage_manifest() -> Manifest {
 /// frozen independently of the active producer. Other slots are unchanged by
 /// revision 10; fixed helper references retain common native installer policy.
 pub(super) fn historical_manifest() -> Manifest {
-    let mut manifest = candidate_manifest();
+    let mut manifest = historical_auxiliary_manifest();
     manifest.revision = 9;
     manifest
         .entries

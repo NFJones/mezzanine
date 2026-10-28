@@ -352,3 +352,49 @@ test("ordinary late old-owner failure cannot contaminate successor coverage", as
     main({ type: "session_shutdown", reason: "quit" }, "session-b"); await owner.tail;
   });
 });
+
+/** Current auxiliary counters lack a qualified provider/request boundary. Their
+ * presence must disclose unknown coverage without charging them or modifying
+ * vendor work. Repeated summaries remain one bounded content-free disclosure. */
+test("ordinary Pi auxiliary counters disclose unavailable response attribution", async () => {
+  const owner = {};
+  const { records, create } = clients();
+  const emit = load(owner, create);
+  emit({ type: "session_start", reason: "startup" });
+  await owner.tail;
+  for (const input of [
+    { type: "session_compact", compactionEntry: { usage: { input: 100 }, summary: "PRIVATE" } },
+    { type: "session_tree", summaryEntry: { usage: { input: 200 }, summary: "PRIVATE" } },
+  ]) emit(input);
+  await owner.tail;
+  assert.deepEqual(records[0].events, [{ type: "session_start", reason: "startup" },
+    { type: "usage_gap", reason: "response-correlation" }]);
+  assert.equal(owner.lease.failed, false);
+  assert(!JSON.stringify(records).includes("PRIVATE"));
+});
+
+/** Exact-session and original-lease fencing also applies to observational
+ * auxiliary callbacks: empty navigation, a child or retired factory cannot
+ * publish a gap or open another client under the current owner's authority. */
+test("ordinary Pi auxiliary callbacks retain session and reload lease fences", async () => {
+  const owner = {};
+  const { records, create } = clients();
+  const old = load(owner, create);
+  old({ type: "session_start", reason: "startup" });
+  await owner.tail;
+  old({ type: "session_tree" });
+  old({ type: "session_compact", compactionEntry: { usage: {} } }, "child-session");
+  old({ type: "session_shutdown", reason: "reload" });
+  const current = load(owner, create);
+  current({ type: "session_start", reason: "reload" });
+  await owner.tail;
+  old({ type: "session_compact", compactionEntry: { usage: {} } });
+  current({ type: "session_tree", summaryEntry: { usage: {} } }, "child-session");
+  await owner.tail;
+  assert.equal(records.flatMap(record => record.events).filter(fact => fact.type === "usage_gap").length, 0);
+  current({ type: "session_tree", summaryEntry: { usage: {} } });
+  await owner.tail;
+  assert.equal(records.length, 2);
+  assert.deepEqual(records[1].events, [{ type: "session_start", reason: "reload" },
+    { type: "usage_gap", reason: "response-correlation" }]);
+});

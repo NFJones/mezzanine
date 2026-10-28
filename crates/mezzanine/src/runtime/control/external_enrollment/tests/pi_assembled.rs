@@ -367,7 +367,7 @@ async fn external_pi_bare_bootstrap_ordinary_launch_accounting_and_retirement() 
                 }
                 if phase == "accounted" {
                     assert!(status.contains("actual-model"));
-                    assert!(status.contains("request-bound-external-reported"));
+                    assert!(status.contains("unavailable-pi-usage-response-correlation"));
                 }
                 if phase == "gap" {
                     assert!(status.contains("finalized-counters"));

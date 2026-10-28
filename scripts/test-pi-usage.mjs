@@ -683,3 +683,113 @@ test("historical and changed callbacks cannot replace the undurable real-core re
     assert.equal(f.owner.lease.failed, false);
   }
 });
+
+/** Auxiliary metadata may advertise usage but not actual request/provider
+ * identity. Presence inspection never evaluates counters or private content,
+ * creates no request ticket, and remains bounded even for an oversized list. */
+test("Pi auxiliary coverage inspects bounded presence without reading counters or content", async () => {
+  for (const kind of ["compact", "branch", "oversized-tools"]) {
+    const facts = [];
+    const f = fixture({ async piObservation(fact) { facts.push(fact); return { delivered: true }; } });
+    const auxiliary = {};
+    for (const field of ["usage", "content", "summary", "details"]) {
+      Object.defineProperty(auxiliary, field, { get() { assert.fail("private auxiliary value accessed"); } });
+    }
+    let input;
+    if (kind === "compact") input = { type: "session_compact", compactionEntry: auxiliary };
+    else if (kind === "branch") input = { type: "session_tree", summaryEntry: auxiliary };
+    else {
+      const rows = new Array(129);
+      Object.defineProperty(rows, 0, { get() { assert.fail("oversized tool list scanned"); } });
+      input = { type: "turn_end", toolResults: rows };
+    }
+    f.observer.auxiliary(input);
+    f.observer.auxiliary(input);
+    await f.drain();
+    assert.deepEqual(facts, [{ type: "usage_gap", reason: "response-correlation" }]);
+    assert.equal(f.markers.length, 0);
+    assert.equal(f.reports.length, 0);
+  }
+});
+
+/** Empty navigation, summaries with no advertised counters and failed owners
+ * cannot invent an auxiliary loss or expense. Supported main assistant requests
+ * remain independent of optional auxiliary presence detection. */
+test("Pi auxiliary absence and failed source remain inert", async () => {
+  const facts = [];
+  const f = fixture({ async piObservation(fact) { facts.push(fact); return { delivered: true }; } });
+  for (const input of [{ type: "session_tree" }, { type: "session_tree", summaryEntry: {} },
+    { type: "session_compact", compactionEntry: {} }, { type: "turn_end", toolResults: [{}] }]) {
+    f.observer.auxiliary(input);
+  }
+  f.owned.failed = true;
+  f.observer.auxiliary({ type: "session_compact", compactionEntry: { usage: {} } });
+  await f.drain();
+  assert.equal(facts.length, 0);
+  assert.equal(f.markers.length, 0);
+  assert.equal(f.reports.length, 0);
+});
+
+/** A finalized assistant and an auxiliary tool result are distinct accounting
+ * sources. Keep the sole original assistant ticket, immutable normalized report
+ * and durable receipt, while disclosing absent auxiliary response attribution. */
+test("ordinary Pi tool usage discloses coverage without entering assistant expense", async () => {
+  const f = callbackRetryFixture(true, { missingAcks: 0 });
+  f.emit({ type: "session_start", reason: "startup" });
+  f.emit({ type: "agent_start" });
+  f.emit({ type: "turn_start", turnIndex: 0 });
+  const original = message();
+  f.emit({ type: "message_end", message: original });
+  f.emit({ ...event(original), toolResults: [{ usage: { input: 999999 }, content: "PRIVATE_AUXILIARY" }] });
+  await f.drain();
+  const reports = f.requests.filter(row => row.method.endsWith("usage-end"));
+  assert.equal(reports.length, 1);
+  assert.deepEqual(reports[0].payload.counters, { input_tokens: 10, output_tokens: 7,
+    cached_input_tokens: 2, cache_write_input_tokens: 3 });
+  assert.equal(f.charges(), 1);
+  assert.equal(f.owner.lease.failed, false);
+  assert.equal(f.owner.lease.lastUsageGap, "response-correlation");
+  assert.deepEqual(f.facts.filter(fact => fact.type === "usage_gap"),
+    [{ type: "usage_gap", reason: "response-correlation" }]);
+  assert(!JSON.stringify(f.requests).includes("PRIVATE_AUXILIARY"));
+});
+
+/** A hostile callback length getter cannot expand an already checked bound.
+ * Snapshot one count and inspect only that many slots; arbitrary content and
+ * dynamic length changes cannot turn metadata observation into unbounded work. */
+test("Pi auxiliary tool inspection snapshots its finite callback bound", async () => {
+  const facts = [];
+  const f = fixture({ async piObservation(fact) { facts.push(fact); return { delivered: true }; } });
+  let lengths = 0;
+  const rows = new Proxy([], {
+    get(target, key) {
+      if (key === "length") return lengths++ === 0 ? 128 : 129;
+      if (/^\d+$/.test(String(key))) {
+        assert(Number(key) < 128, "tool inspection expanded beyond captured budget");
+        return {};
+      }
+      return Reflect.get(target, key);
+    },
+  });
+  f.observer.auxiliary({ type: "turn_end", toolResults: rows });
+  await f.drain();
+  assert.equal(lengths, 1);
+  assert.equal(facts.length, 0);
+  assert.equal(f.reports.length, 0);
+});
+
+/** Replaying an already finalized assistant cannot manufacture a new current
+ * auxiliary observation from changed tool metadata. The retained report remains
+ * inert and its old ticket cannot lend authority to a late coverage diagnostic. */
+test("Pi historical finalized replay cannot invent new auxiliary coverage", async () => {
+  const facts = [];
+  const f = fixture({ async piObservation(fact) { facts.push(fact); return { delivered: true }; } });
+  f.start();
+  f.end(message());
+  await f.drain();
+  f.observer.turnEnd({ ...event(message()), toolResults: [{ usage: { input: 999999 } }] });
+  await f.drain();
+  assert.equal(facts.length, 0);
+  assert.equal(f.reports.length, 1);
+  assert.equal(f.markers.length, 1);
+});

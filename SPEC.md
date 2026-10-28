@@ -1315,6 +1315,22 @@ remains unknown, while explicit zero remains known. Finalized error/abort/length
 attempts with attributable counters are incurred observations; pending/deferred
 outcomes and unsupported auxiliary/tool/compaction/branch/cache-warming counters
 remain uncharged coverage gaps, never invoice-completeness claims.
+Current summary callbacks advertising a `usage` property, or a matched current
+assistant outcome carrying auxiliary tool-result usage, MUST disclose the
+existing fixed response-correlation gap when actual auxiliary provider/request
+attribution is unavailable. Presence detection MUST NOT evaluate usage values,
+summary/tool content, selected-model state or aggregate totals, and MUST NOT
+admit another request or expense. Tool-result inspection MUST be bounded at128;
+larger lists MUST disclose unqualified coverage without scanning the tail.
+Navigation or summaries with no advertised usage MUST remain inert. Stale,
+child-session or failed owners MUST NOT publish an auxiliary disclosure. A
+current disclosure queued before enrollment completes MUST be published once;
+startup may replay inherited coverage but MUST NOT duplicate that queued fact.
+This preserves available assistant expense and its typed durable ACK separately
+from the sticky coverage gap; unsupported auxiliary counters remain uncharged.
+A native-qualified same-live recovery MUST expose its inherited Pi coverage gap
+before the first successor callback creates a lifecycle projection. Rendering
+that retained diagnostic MUST NOT synthesize a callback, presentation or expense.
 The immutable normalized report and reporting-publication UTC MUST be frozen
 once after readiness and reused on every telemetry-only retry. Observer reload
 MUST NOT transfer original client-local tickets or credentials to a successor.

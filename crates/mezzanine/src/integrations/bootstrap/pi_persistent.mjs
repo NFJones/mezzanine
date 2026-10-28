@@ -113,7 +113,10 @@ export function registerOrdinaryPiObserver(pi, options = {}) {
         if (!started) { fail(owned); return; }
         const result = await client.piObservation({ type: "session_start", reason });
         if (!result?.delivered) fail(owned);
-        if (!owned.failed && state.usageGap) {
+        // An actual pre-readiness callback already queued its own disclosure.
+        // Only replay an inherited gap here; do not publish that same current
+        // obligation twice or treat queue custody as a durable acknowledgment.
+        if (!owned.failed && state.usageGap && owned.lastUsageGap !== state.usageGap) {
           const gap = await client.piObservation({ type: "usage_gap", reason: state.usageGap });
           if (!gap?.delivered) fail(owned);
           owned.lastUsageGap = state.usageGap;
@@ -131,6 +134,18 @@ export function registerOrdinaryPiObserver(pi, options = {}) {
         else if (type === "message_end") usage.messageEnd(event);
         else usage.turnEnd(event);
       } catch { /* accounting observation cannot modify a Pi request/boundary */ }
+    });
+  }
+  // Auxiliary usage presence has no attributable request/provider contract.
+  // Report only that fixed coverage gap under the exact current session owner;
+  // never inspect summaries, tool bodies, counters or selected-model metadata.
+  for (const type of ["session_compact", "session_tree"]) {
+    pi.on(type, (event, ctx) => {
+      try {
+        const owned = lease;
+        if (!owned || owner().lease !== owned || owned.failed || ctx.sessionManager.getSessionId() !== owned.session) return;
+        usage.auxiliary(event);
+      } catch { /* auxiliary reporting remains synchronous and neutral */ }
     });
   }
   for (const type of ["agent_start", "ui_prompt_start", "ui_prompt_end", "agent_before_settle", "agent_settled", "session_shutdown"]) {

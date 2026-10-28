@@ -1267,7 +1267,7 @@ mod tests {
         entries
     }
 
-    /// Current Pi13 and every exact frozen Pi12..2 target, plus the existing
+    /// Current Pi18 and every exact frozen Pi17..2 target, plus the existing
     /// historical OpenCode basis and its five predecessors, can be interrupted
     /// at every artifact/receipt boundary, then normally installed or uninstalled.
     /// Preview is tree-identical without even recreating the removed fixture lock;
@@ -1282,11 +1282,11 @@ mod tests {
                 super::super::compiled_manifest(harness, None).unwrap()
             };
             let mut targets = super::super::compiled_history(&current);
-            assert_eq!(targets.len(), if harness == "pi" { 15 } else { 5 });
+            assert_eq!(targets.len(), if harness == "pi" { 16 } else { 5 });
             if harness == "pi" {
-                assert_eq!(current.revision, 17);
+                assert_eq!(current.revision, 18);
                 assert!(
-                    (2..=16)
+                    (2..=17)
                         .all(|revision| targets.iter().any(|target| target.revision == revision))
                 );
             }
@@ -1561,14 +1561,14 @@ mod tests {
             let history = super::super::compiled_history(&current);
             assert_eq!(
                 history.len(),
-                if harness == "pi" { 15 } else { 38 },
+                if harness == "pi" { 16 } else { 38 },
                 "all frozen targets must remain qualified for {harness}"
             );
             if harness == "pi" {
-                assert_eq!(current.revision, 17);
-                assert_eq!(history[0].revision, 16);
+                assert_eq!(current.revision, 18);
+                assert_eq!(history[0].revision, 17);
                 assert!(
-                    (2..=16)
+                    (2..=17)
                         .all(|revision| history.iter().any(|target| target.revision == revision))
                 );
             }

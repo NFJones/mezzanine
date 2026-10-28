@@ -66,7 +66,7 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
     let previous = historical_manifest();
     let current = candidate_manifest();
     assert_eq!(previous.revision, 9);
-    assert_eq!(current.revision, 17);
+    assert_eq!(current.revision, 18);
     assert_eq!(previous.entries.len(), 10);
     let revision10 = historical_usage_manifest();
     assert_eq!(revision10.revision, 10);
@@ -179,10 +179,13 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
 fn pi_revision13_history_preserves_frozen_slots_and_rejects_tampered_authority() {
     let current = candidate_manifest();
     let revision13 = historical_end_manifest();
+    let before_auxiliary = historical_auxiliary_manifest();
     let revision12 = historical_resume_manifest();
     let revision11 = historical_loss_manifest();
     assert_eq!(current.entries.len(), revision12.entries.len());
-    let end_changes = current
+    // The previously shipped transport/accounting boundary remains frozen;
+    // revision18's separate two-producer delta has its own ownership test.
+    let end_changes = before_auxiliary
         .entries
         .iter()
         .zip(&revision13.entries)
@@ -215,10 +218,10 @@ fn pi_revision13_history_preserves_frozen_slots_and_rejects_tampered_authority()
         }
     }
     let history = super::super::compiled_history(&current);
-    assert_eq!(history.len(), 15);
+    assert_eq!(history.len(), 16);
     assert_eq!(
         history.iter().map(|item| item.revision).collect::<Vec<_>>(),
-        (2..=16).rev().collect::<Vec<_>>()
+        (2..=17).rev().collect::<Vec<_>>()
     );
     for manifest in std::iter::once(current).chain(history) {
         for index in 0..manifest.entries.len() {
@@ -232,4 +235,53 @@ fn pi_revision13_history_preserves_frozen_slots_and_rejects_tampered_authority()
             }
         }
     }
+}
+
+/// Revision17 remains byte-exact installer history after auxiliary-disclosure
+/// wiring changes the two Pi-owned modules. Shared transport and every other
+/// installed file remain identical; altered historical bytes grant no ownership.
+#[test]
+fn pi_auxiliary_revision18_preserves_frozen_revision17_ownership() {
+    use sha2::Digest;
+    let old = historical_auxiliary_manifest();
+    let current = candidate_manifest();
+    assert_eq!(old.revision, 17);
+    assert_eq!(current.revision, 18);
+    assert!(super::super::compiled_history(&current).contains(&old));
+    for (bytes, expected) in [
+        (
+            include_bytes!("../history/pi_usage_v17.mjs").as_slice(),
+            "9e781100f974659f87acb29789cf47c57a4c00f3deb6d9f3c40da58d647e3b4e",
+        ),
+        (
+            include_bytes!("../history/pi_persistent_v17.mjs").as_slice(),
+            "322a7ed1771098e54d2d387bd0d3de28326675ca8ecd725a977bc683566afdef",
+        ),
+    ] {
+        assert_eq!(
+            sha2::Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+            expected
+        );
+    }
+    let changed = current
+        .entries
+        .iter()
+        .filter(|entry| !old.entries.contains(entry))
+        .map(|entry| entry.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        changed,
+        [
+            "extensions/mezzanine/pi_persistent.mjs",
+            "extensions/mezzanine/pi_usage.mjs"
+        ]
+    );
+    let mut forged = old;
+    if let Artifact::File { bytes } = &mut forged.entries[0].artifact {
+        bytes.push(0);
+    }
+    assert!(super::super::compiled_history(&forged).is_empty());
 }

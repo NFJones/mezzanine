@@ -1026,7 +1026,7 @@ async fn qualify(
                 .unwrap();
             assert!(
                 status.contains("actual-model")
-                    && status.contains("request-bound-external-reported")
+                    && status.contains("unavailable-pi-usage-response-correlation")
             );
             if registry {
                 // start() restores credentials/ordinal but emits no SDK fact.
@@ -1042,7 +1042,10 @@ async fn qualify(
                         .iter()
                         .any(|row| row["method"] == "agent/external/pi-observation")
                 );
-                assert!(!status.contains("unavailable-pi-usage-"));
+                // The genuine auxiliary gap predates recovery and stays
+                // visible; a successful same-report replay must not invent a
+                // new delivery-loss diagnostic or a synthetic SDK callback.
+                assert!(!status.contains("unavailable-pi-usage-durable-acknowledgment"));
             }
             assert!(!status.contains("PRIVATE_REPLAY_CONTENT"));
             let list = handle

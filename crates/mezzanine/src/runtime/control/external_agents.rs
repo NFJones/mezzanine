@@ -87,11 +87,19 @@ impl LaunchBinding {
 
     /// Distinguishes actually observed request reports from source unavailability.
     /// Legacy externally reported accounting is not a completeness/invoice claim.
+    /// Native-qualified inherited Pi gaps remain visible before the recovered
+    /// observer's first callback allocates its new lifecycle projection.
     fn usage_coverage(&self) -> &'static str {
         if let Some(reason) = self
             .pi_lifecycle
             .as_ref()
             .and_then(|projection| projection.usage_gap_coverage())
+            .or_else(|| {
+                self.enrollment
+                    .as_ref()
+                    .and_then(|enrollment| enrollment.inherited_usage_gap())
+                    .map(|reason| reason.coverage())
+            })
         {
             return reason;
         }

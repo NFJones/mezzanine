@@ -409,6 +409,20 @@ obligation without restoring a failed or stale owner. No provider work is retrie
 Genuine reload reuses process-owned replay evidence, but successor credentials
 cannot inherit old tickets. Unmatched restored/history events are dropped.
 
+Pi revision18 also discloses observed auxiliary usage without guessing its
+provider, model or request origin. A compaction/branch-summary callback with a
+`usage` property, or tool-result usage on a matched current assistant outcome,
+sets `unavailable-pi-usage-response-correlation` in `/status`. A known gap also
+remains visible immediately after same-live native recovery, before another Pi
+callback creates the recovered lifecycle projection. The producer reads
+only property presence, never auxiliary counter values or content; it inspects
+at most128 tool-result slots and discloses unqualified coverage for larger
+lists. Empty navigation stays inert. Available main assistant usage is still
+recorded normally; the gap takes precedence in coverage status. Startup does
+not duplicate a current pre-readiness gap already queued by its callback.
+Revision18 preserves exact frozen revision17 and older layouts for upgrade and
+repair; no settings or extra accounting enablement are added.
+
 Known limits: pending/deferred responses, compaction/branch/tool/cache-warming
 auxiliary calls without a stable current-request counter contract, and durable
 cross-process unsent-report recovery are unsupported. No transcript backfill or

@@ -1189,3 +1189,63 @@ async fn external_source_resume_missing_control_owner_does_not_adopt_mapping() {
         0
     );
 }
+
+/// A native-qualified warm recovery carries its original diagnostic even before
+/// the successor's first Pi callback allocates a lifecycle projection. Registry
+/// loss cannot briefly report generic/healthy coverage, synthesize presentation
+/// or expense, or require a fabricated callback to restore an already known gap.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_resume_inherited_pi_gap_is_visible_before_first_callback() {
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    storage(&mut fixture);
+    let first = enroll(&mut fixture, &request()).await;
+    for (sequence, event) in [
+        (
+            1,
+            serde_json::json!({"type":"session_start","reason":"startup"}),
+        ),
+        (
+            2,
+            serde_json::json!({"type":"usage_gap","reason":"response-correlation"}),
+        ),
+    ] {
+        fixture
+            .service
+            .dispatch_external_agent_request(&pi(&first, sequence, event), &fixture.connection)
+            .unwrap();
+    }
+    // This bounded metadata refresh is the existing maintenance/commit owner;
+    // it copies a genuinely accepted gap without creating source authority.
+    fixture.service.refresh_external_source_diagnostics();
+    *fixture.service.control.external_agents_mut() = Default::default();
+    let recovered = enroll(&mut fixture, &resume(&first, "fixture-instance-a", None)).await;
+    assert_eq!(recovered["result"]["recovery"]["kind"], "same-live-source");
+    let binding = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    assert!(binding.pi_lifecycle.is_none());
+    assert!(
+        binding
+            .registration
+            .as_ref()
+            .unwrap()
+            .presentation
+            .is_none()
+    );
+    let coverage = fixture.service.external_agent_rows()[0]["usage_coverage"].clone();
+    let spent = fixture
+        .service
+        .external_token_usage(None)
+        .values()
+        .map(|usage| usage.input_tokens + usage.output_tokens)
+        .sum::<u64>();
+    assert_eq!(coverage, "unavailable-pi-usage-response-correlation");
+    assert_eq!(spent, 0);
+}

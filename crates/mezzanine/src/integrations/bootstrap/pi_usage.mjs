@@ -63,6 +63,26 @@ export function projectPiUsage(session, event) {
   } catch { /* arbitrary callback objects are not reporting authority */ }
 }
 
+/** Auxiliary callback counters have no response provider/model plus native
+ * pre-request admission contract. Inspect only presence, never counter values,
+ * summaries, tool content or totals. At most128 tool-result slots are inspected;
+ * larger callbacks disclose unqualified coverage instead of scanning unbounded
+ * input or pretending the uninspected tail contains no auxiliary usage. */
+function hasAuxiliaryCounters(event) {
+  const present = entry => entry !== null && typeof entry === "object" && Object.hasOwn(entry, "usage");
+  if (event?.type === "session_compact") return present(event.compactionEntry);
+  if (event?.type === "session_tree") return present(event.summaryEntry);
+  if (event?.type !== "turn_end") return false;
+  const rows = event.toolResults;
+  if (!Array.isArray(rows)) return false;
+  const count = rows.length;
+  if (!natural(count) || count > 128) return true;
+  for (let index = 0; index < count; index++) {
+    if (present(rows[index])) return true;
+  }
+  return false;
+}
+
 /** One process-owned map reserves active plus finalized slots before admission.
  * Only durable historical dedup evidence may be pruned. Unknown-delivery slots
  * survive exhaustion/teardown/reload without transferring original tickets;
@@ -308,6 +328,7 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
         slot.finalized = true; lose("unavailable-immutable-observation-conflict"); abandon(slot); return;
       }
       if (slot.projection && JSON.stringify(slot.projection) !== fingerprint) { lose("unavailable-immutable-observation-conflict"); return; }
+      if (!slot.finalized && hasAuxiliaryCounters(event)) lose("unavailable-response-correlation");
       slot.finalized = true;
       slot.projection ??= projection;
       if (slot.key !== projection.event_id) {
@@ -317,6 +338,11 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
         recent.set(slot.key, { slot, fingerprint });
       }
       if (!slot.durable) send(slot);
+    },
+    /** Current summary callbacks may reveal missing auxiliary attribution even
+     * while the main agent is idle. A failed/stale source cannot publish it. */
+    auxiliary(event) {
+      if (healthy() && hasAuxiliaryCounters(event)) lose("unavailable-response-correlation");
     },
     cancelRetries,
     close() { finishUnreported(); cancelRetries(); },
