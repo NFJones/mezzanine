@@ -5,21 +5,10 @@
 //! an executable, source, client or request. Private input must not be logged,
 //! transported or persisted. Aliases and exact vendor versions are irrelevant.
 
-/// Classifies only the documented server mode, independently of executable path,
-/// version and aliases. Any non-stdio listener is potentially multi-client.
+/// Refuses documented app-server invocations independently of path or aliases.
+/// Even stdio can resolve persisted remote-control state or enable remote access
+/// later. Transport arguments cannot prove a requesting client; this negative
+/// predicate grants no authority to other invocations.
 pub(crate) fn shared_server(arguments: &[Vec<u8>]) -> bool {
-    if !arguments.iter().any(|argument| argument == b"app-server") {
-        return false;
-    }
-    arguments.iter().enumerate().any(|(index, argument)| {
-        if argument == b"--managed-daemon" {
-            return true;
-        }
-        let listener = if argument == b"--listen" {
-            Some(arguments.get(index + 1).map_or(&b""[..], Vec::as_slice))
-        } else {
-            argument.strip_prefix(b"--listen=")
-        };
-        listener.is_some_and(|value| value != b"stdio://" && value != b"stdio")
-    })
+    arguments.iter().any(|argument| argument == b"app-server")
 }

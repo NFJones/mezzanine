@@ -9,7 +9,12 @@ use super::helper_presentation::{child, settle};
 use super::*;
 
 /// Builds only public normalized child selectors and optional checked counters.
-fn event(kind: &str, id: Option<&str>, turn: &str, tokens: Option<u64>) -> JsonRpcRequest {
+pub(super) fn event(
+    kind: &str,
+    id: Option<&str>,
+    turn: &str,
+    tokens: Option<u64>,
+) -> JsonRpcRequest {
     let mut request = callback(kind, turn);
     let mut params: serde_json::Value =
         serde_json::from_str(request.params.as_deref().unwrap()).unwrap();

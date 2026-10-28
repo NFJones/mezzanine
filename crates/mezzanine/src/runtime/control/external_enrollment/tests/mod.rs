@@ -95,15 +95,16 @@ async fn launch_ordinary_fixture(
     let executable = std::env::current_exe().unwrap();
     let (mode_name, launch) = if mode == "root-hold" {
         ("hold", "exec ")
-    } else if mode == "codex-shared" {
+    } else if matches!(mode, "codex-shared" | "codex-stdio" | "codex-remote") {
         ("hold", "")
     } else {
         (mode, "")
     };
-    let topology_arguments = if mode == "codex-shared" {
-        " -- app-server --listen unix://"
-    } else {
-        ""
+    let topology_arguments = match mode {
+        "codex-shared" => " -- app-server --listen unix://",
+        "codex-stdio" => " -- app-server --listen stdio://",
+        "codex-remote" => " -- app-server --stdio --remote-control",
+        _ => "",
     };
     let command = format!(
         "MEZ_TEST_ENROLL_MODE={} {launch}{} --exact runtime::control::external_enrollment::tests::external_enrollment_ordinary_child_fixture --ignored --quiet{topology_arguments}\n",
@@ -1374,6 +1375,7 @@ mod codex_installed;
 mod codex_model_delivery;
 mod codex_observation;
 mod codex_request_scope;
+mod codex_restart;
 mod codex_topology;
 mod copilot;
 mod copilot_installed;

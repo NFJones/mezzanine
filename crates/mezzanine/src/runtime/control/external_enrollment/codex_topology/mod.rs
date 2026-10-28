@@ -32,7 +32,8 @@ mod tests {
     use super::*;
 
     /// Listener forms and managed mode refuse shared attribution even with an
-    /// aliased executable. Ordinary TUI/shim argv and single-client stdio remain
+    /// aliased executable. Stdio is not client isolation: persisted remote control
+    /// can activate without a listener flag. Ordinary TUI/shim argv remains
     /// eligible for the separate native proof; a prompt containing one combined
     /// flag string does not become a daemon, and private values never escape.
     #[test]
@@ -42,6 +43,10 @@ mod tests {
             vec!["alias", "app-server", "--listen=ws://PRIVATE"],
             vec!["alias", "app-server", "--managed-daemon"],
             vec!["alias", "app-server", "--listen"],
+            vec!["alias", "app-server"],
+            vec!["alias", "app-server", "--listen", "stdio://"],
+            vec!["alias", "app-server", "--listen=stdio://"],
+            vec!["alias", "app-server", "--stdio", "--remote-control"],
         ] {
             let bytes = arguments
                 .iter()
@@ -51,9 +56,6 @@ mod tests {
         }
         for arguments in [
             vec!["shim", "resume", "--last"],
-            vec!["alias", "app-server"],
-            vec!["alias", "app-server", "--listen", "stdio://"],
-            vec!["alias", "app-server", "--listen=stdio://"],
             vec!["alias", "app-server --listen unix://PRIVATE"],
         ] {
             let bytes = arguments

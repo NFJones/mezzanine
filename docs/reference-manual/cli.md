@@ -279,8 +279,8 @@ epoch replacement stay fenced; this does not establish continuous observer healt
 A reused public conversation label cannot choose another native creator: native
 parent evidence narrows the candidate before full worker/actor proof.
 Known shared app-server command hooks cannot identify their requesting client
-from a launching pane's inherited MEZ, ancestry or cwd. Native managed-daemon and
-non-stdio listener modes are refused with
+from a launching pane's inherited MEZ, ancestry or cwd. Known app-server modes,
+including stdio with potentially persisted remote control, are refused with
 `unavailable-codex-native-client-session-association`; unavailable native argument
 inspection reports `unavailable-codex-native-process-topology`. Arguments remain
 private and supply no authorization. Bootstrap reports the shared-server gap

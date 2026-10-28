@@ -681,8 +681,9 @@ use child selectors. SessionEnd accepts pane/session/event only, without turn or
 child fields. The indexed candidate must retain the original fixed instance at
 epoch1. Kernel parent PID narrows candidates only; native worker and actor still
 prove exact helper writer, retained creator/root/generation and ancestry.
-Rotation and retirement reject rather than adopt the newest source. Known shared
-managed/non-stdio app servers are refused with
+Rotation and retirement reject rather than adopt the newest source. Known app-server
+invocations, including stdio whose persisted remote control can activate, are
+refused with
 `unavailable-codex-native-client-session-association`; unknown native topology
 fails closed. Inherited launcher MEZ, ancestry or cwd cannot prove a shared
 server's requesting client. No invocation bytes enter diagnostics or transport.

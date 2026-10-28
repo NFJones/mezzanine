@@ -1257,8 +1257,10 @@ candidate only; full parent incarnation and pane ancestry MUST still be proved
 by the native worker and actor before any effect.
 Known shared Codex app-server callbacks MUST NOT borrow a launching pane's
 inherited MEZ, ancestry or cwd as requesting-client session association. Bounded
-native parent arguments MAY classify/refuse documented managed-daemon or
-non-stdio listener modes, independently of executable path/alias/version; this
+native parent arguments MAY classify/refuse documented app-server modes,
+including stdio: persisted remote control can activate without a non-stdio
+listener flag. Transport selection MUST NOT establish client isolation. This
+refusal is independent of executable path/alias/version; this
 inspection MUST NOT authorize a source. Unknown native argument observations
 MUST fail closed with a fixed topology capability gap. Invocation bytes MUST stay
 in memory and MUST NOT enter transport, logs, storage or diagnostics. Native

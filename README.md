@@ -67,7 +67,7 @@ Fresh native lifecycle facts restore visibility after idle expiry.
 Model readiness captures the native hook’s request directory for accounting.
 Native child starts qualify separate request custody without changing parent status.
 Shared-server callbacks require requesting-client association and cannot borrow
-a launching pane’s context.
+a launching pane’s context, including when the server uses stdio.
 Claude child accounting requires a genuine start under the current parent observer.
 Ordinary Claude accounting keeps missing-counter or delivery coverage visible
 after earlier reported usage, without changing vendor requests or recorded expense.
