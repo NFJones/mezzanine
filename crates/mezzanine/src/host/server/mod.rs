@@ -1318,6 +1318,7 @@ impl HostServer {
             "boot_generation": reconciliation.boot_generation,
             "iroh": {
                 "enabled": iroh.is_some(),
+                "available": iroh.is_some_and(HostIrohInvitationIssuer::available),
                 "endpoint_id": iroh.map(HostIrohInvitationIssuer::endpoint_id),
             },
             "running_sessions": running,
@@ -1765,6 +1766,7 @@ mod tests {
 
     use super::*;
 
+    mod listeners;
     mod shutdown_completion;
     mod teardown;
 

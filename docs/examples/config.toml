@@ -49,6 +49,8 @@ cpu_count = 2
 # recovery path. Inbound listening is disabled; explicit outbound connections
 # are permitted by default. Lookup, relay use, port mapping, environment proxies,
 # and system CA-store use remain disabled. Changes require a daemon restart.
+# Host-scoped endpoint loss preserves local sessions after proven remote cleanup.
+# Host status reports remote availability separately from this enabled setting.
 [transport.iroh]
 enabled = false
 outbound_enabled = true

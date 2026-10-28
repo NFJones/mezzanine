@@ -2255,6 +2255,29 @@ intended for launchd, systemd, or another service manager. Host startup,
 readiness, draining, shutdown, stale-socket recovery, and reconciliation MUST
 remain bounded and MUST use portable host abstractions on Linux and macOS.
 
+The persistent host MUST treat isolated loss of its optional host-scoped Iroh
+endpoint as remote transport unavailability after endpoint and connection-task
+cleanup completes. It MUST retain the original local listener, session router,
+identity/trust owner, session actors and native panes, and continue local
+management and session admission. It MUST NOT restart the endpoint, acquire a
+second identity owner, replay remote requests or inputs, or silently replace
+local sessions. `host/get.iroh.available` MUST be false after endpoint closure;
+`enabled` continues to describe configuration. New or replayed invitation
+responses MUST fail while the endpoint is unavailable, without inventing a
+usable address. Local trust inspection and revocation remain available.
+
+Explicit host shutdown and process shutdown signals MUST still stop both
+listeners and perform existing bounded session/native teardown. Critical local
+or shared-authority failure, endpoint-close timeout, unproven connection-task
+cleanup and failed task joins MUST remain host-fatal. Ordinary remote client
+errors remain connection-local. A degraded remote listener MUST retain its
+original failure for the eventual host result; later critical local failure
+remains the primary cause with bounded remote diagnostics. A successful local
+shutdown receipt proves its existing local checkpoint/native guarantees, not
+remote transport health. Disconnect cleanup MUST preserve the established
+remote attachment and durable lease rules, without revoking or recreating a
+lease merely to hide a lost transport.
+
 ### 5.2 Durable Remote Session Leases
 
 A remote session assignment MUST be represented by a durable

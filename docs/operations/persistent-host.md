@@ -320,6 +320,24 @@ Read [Lifecycle, detach, and recovery](lifecycle-detach-and-recovery.md) for
 snapshots and conversation recovery. An automatic service restart restores
 availability, not proof that interrupted work completed safely.
 
+## Optional endpoint loss
+
+If the host-scoped Iroh endpoint closes unexpectedly, the host drains its remote
+connection tasks and keeps the existing local Unix listener and local sessions
+running when that cleanup is proven. `mez host status` continues to report local
+readiness; its `iroh.enabled` describes configuration and `iroh.available` becomes
+false. Pairing invitation creation and replay fail while unavailable. Local
+trust inspection and revocation remain usable. No endpoint restart, replacement
+key owner, session replacement or request/input replay happens automatically.
+
+Reconnect only after an explicit, coordinated host restart. An outage does not
+revoke durable leases or erase an uncertain remote operation result. Reconcile
+those outcomes before resubmitting work. Explicit `mez host stop` and process
+shutdown signals still drain both listeners and stop local sessions. Unsafe
+remote cleanup or critical local/shared-authority failure still ends the host.
+The eventual foreground host result retains the remote failure; a completed
+local stop receipt describes local shutdown, not restored remote health.
+
 ## Add remote access deliberately
 
 Local use does not require Iroh. Enable and validate host-scoped Iroh policy

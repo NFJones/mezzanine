@@ -1,21 +1,22 @@
 //! Joint ownership of local management and optional remote host listeners.
 //!
-//! This owner composes both listeners over the existing session router. Every
-//! terminal branch observes peer cleanup before returning; the CLI supplies
-//! only its shutdown signal. Keeping the serving futures here makes listener
-//! failure scope testable against the actual Unix management owner rather than
-//! a second router or a detached background listener.
+//! This owner composes both listeners over the existing session router. Isolated
+//! remote loss retains the original local future after remote cleanup; unsafe
+//! cleanup, local failure and explicit shutdown still settle both listeners.
+//! Degradation is sticky for final diagnostics and never triggers a restart,
+//! replacement router, key owner or input replay. The CLI supplies its signal.
 
 use std::future::Future;
 
-use crate::error::{MezError, Result};
-use crate::host::iroh::HostIrohRuntime;
+use crate::error::{MezError, Result, TeardownErrors};
+use crate::host::iroh::{HostIrohRuntime, HostIrohServeError};
 
 use super::HostServer;
 
 impl HostServer {
-    /// Runs local and remote listeners under one shutdown signal, preserving
-    /// the initiating error after both serving futures complete their cleanup.
+    /// Runs both listeners, retaining local service after proven transport-only
+    /// loss. Returns retained transport or critical failure after safe cleanup;
+    /// no remote failure is converted into a healthy whole-host result.
     pub(crate) async fn serve_with_iroh<C>(
         &self,
         iroh: &HostIrohRuntime,
@@ -47,27 +48,58 @@ impl HostServer {
                 let _ = shutdown.send(true);
                 finish_host_listener_pair(
                     result,
-                    async { remote.await.map(|_| ()) },
+                    async { remote.await.map(|_| ()).map_err(HostIrohServeError::into_error) },
                     "remote",
                 )
                 .await
             }
             result = &mut remote => {
-                let _ = shutdown.send(true);
-                finish_host_listener_pair(result.map(|_| ()), local.as_mut(), "local").await
+                match result {
+                    Err(HostIrohServeError::TransportUnavailable(error)) => {
+                        eprintln!("mez host: Iroh transport unavailable; local service remains active");
+                        // The remote future is complete and must never be polled
+                        // again. Its owner and identity remain alive in the caller.
+                        let result = tokio::select! {
+                            result = &mut local => result,
+                            () = &mut cancellation => {
+                                let _ = shutdown.send(true);
+                                local.await
+                            }
+                        };
+                        finish_degraded_host(result, error)
+                    }
+                    other => {
+                        let _ = shutdown.send(true);
+                        finish_host_listener_pair(
+                            other.map(|_| ()).map_err(HostIrohServeError::into_error),
+                            local.as_mut(), "local",
+                        ).await
+                    }
+                }
             }
             () = &mut cancellation => {
                 let _ = shutdown.send(true);
                 let (local_result, remote_result) = tokio::join!(local, remote);
                 finish_host_listener_pair(
                     local_result,
-                    async { remote_result.map(|_| ()) },
+                    async { remote_result.map(|_| ()).map_err(HostIrohServeError::into_error) },
                     "remote",
                 )
                 .await
             }
         }
     }
+}
+
+/// A later local failure is critical and remains primary. A clean local stop
+/// still reports the earlier transport outage in the eventual host result.
+fn finish_degraded_host(local: Result<()>, remote: MezError) -> Result<()> {
+    let mut failures = TeardownErrors::default();
+    if let Err(error) = local {
+        failures.record("local host listener", error);
+    }
+    failures.record("remote transport unavailable", remote);
+    failures.finish()
 }
 
 /// Drains the peer host listener after one listener completes, preserving the
@@ -85,13 +117,12 @@ where
         (Ok(()), Ok(())) => Ok(()),
         (Err(primary), Ok(())) => Err(primary),
         (Ok(()), Err(peer)) => Err(peer),
-        (Err(primary), Err(peer)) => Err(MezError::new(
-            primary.kind(),
-            format!(
-                "{}; {peer_name} listener cleanup also failed: {peer}",
-                primary.message()
-            ),
-        )),
+        (Err(primary), Err(peer)) => {
+            let mut failures = TeardownErrors::default();
+            failures.record("initiating host listener", primary);
+            failures.record(&format!("{peer_name} listener cleanup"), peer);
+            failures.finish()
+        }
     }
 }
 
@@ -102,8 +133,9 @@ mod tests {
 
     use super::*;
 
-    /// Remote listener failure remains the reported service error only after
-    /// the local Unix listener has completed its shutdown path.
+    /// Critical remote listener failure remains the reported service error
+    /// only after the local Unix listener has completed its shutdown path.
+    /// This result-combination helper does not classify optional transport loss.
     #[tokio::test(flavor = "current_thread")]
     async fn remote_host_failure_drains_local_listener_before_returning() {
         let drained = Arc::new(AtomicBool::new(false));
@@ -178,5 +210,42 @@ mod tests {
         finish_host_listener_pair(Ok(()), async { Ok(()) }, "remote")
             .await
             .unwrap();
+    }
+
+    /// A later critical local result must preserve its original typed policy
+    /// observations even after remote service already degraded. A clean local
+    /// stop still leaves that earlier outage visible in the final host result.
+    #[test]
+    fn degraded_host_retains_outage_and_later_critical_local_evidence() {
+        let local = MezError::forbidden("critical local authority failure")
+            .mark_pane_backend_failure()
+            .with_provider_raw_text("local-origin");
+        let error =
+            finish_degraded_host(Err(local), MezError::invalid_state("remote lost")).unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+        assert!(error.is_pane_backend_failure());
+        assert_eq!(error.provider_raw_text(), Some("local-origin"));
+        assert!(error.message().contains("remote lost"));
+        let error = finish_degraded_host(Ok(()), MezError::conflict("remote lost")).unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Conflict);
+        assert!(error.message().contains("remote lost"));
+    }
+
+    /// Peer cleanup diagnostics must not reconstruct the initiating error and
+    /// discard its I/O classification or native/provider policy evidence.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dual_listener_failure_preserves_typed_primary_evidence() {
+        let primary = MezError::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            .mark_pane_backend_failure();
+        let error = finish_host_listener_pair(
+            Err(primary),
+            async { Err(MezError::invalid_state("peer failed")) },
+            "remote",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.io_kind(), Some(std::io::ErrorKind::PermissionDenied));
+        assert!(error.is_pane_backend_failure());
+        assert!(error.message().contains("peer failed"));
     }
 }

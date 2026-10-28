@@ -204,6 +204,7 @@ async fn run_host_serve<W: Write>(
         "socket": server.socket_path(),
         "config": config_path,
         "iroh_enabled": iroh.is_some(),
+        "iroh_available": iroh.as_ref().is_some_and(|runtime| runtime.invitation_issuer().available()),
         "iroh_endpoint_id": iroh.as_ref().map(HostIrohRuntime::endpoint_id),
     });
     write_json_or_plain(stdout, output_format, &serialize_json(&started)?)?;

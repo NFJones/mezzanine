@@ -9,6 +9,19 @@ infrastructure as a production dependency.
 This page is an operator gate, not evidence that a production relay or lookup
 service has been selected. Iroh remains disabled by default.
 
+## Host transport availability
+
+For the persistent host, `host/get.iroh.enabled` records configured remote
+transport and `available` records whether its endpoint is still open. Unexpected
+endpoint loss is reported as remote unavailable after remote task cleanup;
+healthy local sessions and Unix administration remain usable. Invitations,
+including secret-bearing replay responses, fail until an explicit coordinated
+host restart. There is no automatic endpoint replacement or request/input replay.
+Unsafe cleanup and critical shared-owner failures remain host-fatal. This policy
+applies to the optional host endpoint; explicitly enabled per-session transport
+remains startup-critical. See [persistent host operations](persistent-host.md#optional-endpoint-loss)
+for shutdown and durable-lease implications.
+
 ## Prerequisites
 
 - Deploy and verify the [persistent multi-session host](persistent-host.md)
