@@ -256,6 +256,11 @@ Final `CliExit` cleanup waits for the same publication barrier. Borrowed status
 remains nonzero while it is pending or unknown, even when the actual native
 child count is zero; callback obligations do not inflate that count.
 
+Runtime service failures retain the initiating error and bounded, named cleanup
+diagnostics. Supervision observes cancelled wrappers and retained blocking fork
+jobs before returning. These diagnostics preserve failure classification and do
+not prove native retirement or authorize retrying an executed effect.
+
 `mez host stop` requests the final shutdown verdict on the same protected local
 connection and succeeds only after the host confirms native retirement and
 runtime completion publication. Its `--timeout` covers the whole operation,

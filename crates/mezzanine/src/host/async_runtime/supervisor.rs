@@ -1,12 +1,16 @@
-//! Async Runtime Supervisor implementation.
+//! Named service supervision and observed cleanup of exact runtime workers.
 //!
-//! This module owns the async runtime supervisor boundary for Mezzanine. It keeps related
-//! state transitions and helper routines localized so neighboring modules
-//! interact through typed APIs instead of duplicating subsystem details.
+//! Primary services determine lifetime; auxiliary services cannot keep an idle
+//! session alive. Every exit path aborts and joins remaining Tokio wrappers and
+//! retires separately retained saved-fork jobs. The first failure stays causal,
+//! with bounded named secondary diagnostics. Wrapper completion is distinct from
+//! OS-process retirement and does not authorize effect replay.
 
 use super::{
     Duration, Future, HashMap, HashSet, JoinError, JoinSet, MezError, Pin, Result, TokioTaskId,
 };
+
+use crate::error::TeardownErrors;
 
 // Async runtime service supervision.
 
@@ -255,36 +259,35 @@ impl AsyncRuntimeServiceSupervisor {
     where
         C: Future<Output = ()>,
     {
-        let result = self.run_services_until_shutdown(cancellation).await;
+        let mut failures = TeardownErrors::default();
+        let report = match self.run_services_until_shutdown(cancellation).await {
+            Ok(report) => Some(report),
+            Err(error) => {
+                failures.record("service supervision", error);
+                None
+            }
+        };
         // Errors and auxiliary aborts cannot bypass a fork's blocking owner.
         // Signal before abort, join all wrappers, then take exact retained jobs.
         for retirement in &self.saved_fork_retirements {
             retirement.request_stop();
         }
         self.tasks.abort_all();
-        let mut cleanup_failure = None;
         while let Some(joined) = self.tasks.join_next_with_id().await {
-            if let Err(error) = self.report_joined_service(joined)
-                && cleanup_failure.is_none()
-            {
-                cleanup_failure = Some(error);
+            if let Err(error) = self.report_joined_service(joined) {
+                failures.record("service shutdown", error);
             }
         }
         for retirement in &self.saved_fork_retirements {
-            if let Err(error) = retirement.retire().await
-                && cleanup_failure.is_none()
-            {
-                cleanup_failure = Some(error);
+            if let Err(error) = retirement.retire().await {
+                failures.record("saved fork retirement", error);
             }
         }
-        match (result, cleanup_failure) {
-            (Ok(report), None) => Ok(report),
-            (Err(primary), Some(retirement)) => Err(MezError::new(
-                primary.kind(),
-                format!("{primary}; saved fork retirement also failed: {retirement}"),
-            )),
-            (Err(error), None) | (Ok(_), Some(error)) => Err(error),
-        }
+        failures.finish()?;
+        // Every absent report records its initiating error before cleanup.
+        report.ok_or_else(|| {
+            MezError::invalid_state("service supervision lost its completion report")
+        })
     }
 
     /// Runs the existing service reporting policy; the outer owner always retires
@@ -351,10 +354,7 @@ impl AsyncRuntimeServiceSupervisor {
             }),
             Ok((task_id, Err(error))) => {
                 let name = self.take_service_name(task_id);
-                Err(MezError::new(
-                    error.kind(),
-                    format!("async runtime service {name} failed: {}", error.message()),
-                ))
+                Err(error.with_context(format!("async runtime service {name} failed")))
             }
             Err(error) => {
                 let name = self.take_service_name(error.id());
@@ -395,9 +395,14 @@ impl AsyncRuntimeServiceSupervisor {
         }
         self.tasks.abort_all();
         let mut reports = Vec::new();
+        let mut failures = TeardownErrors::default();
         while let Some(joined) = self.tasks.join_next_with_id().await {
-            reports.push(self.report_joined_service(joined)?);
+            match self.report_joined_service(joined) {
+                Ok(report) => reports.push(report),
+                Err(error) => failures.record("service shutdown", error),
+            }
         }
+        failures.finish()?;
         Ok(reports)
     }
 
@@ -427,31 +432,20 @@ impl AsyncRuntimeServiceSupervisor {
         }
         self.tasks.abort_all();
         let mut reports = Vec::new();
+        let mut failures = TeardownErrors::default();
         while let Some(joined) = self.tasks.join_next_with_id().await {
-            match joined {
-                Ok((task_id, Ok(exit))) => reports.push(AsyncRuntimeServiceReport {
-                    name: self.take_service_name(task_id),
-                    exit,
-                }),
-                Ok((task_id, Err(error))) => {
-                    let name = self.take_service_name(task_id);
-                    return Err(MezError::new(
-                        error.kind(),
-                        format!("async runtime service {name} failed: {}", error.message()),
-                    ));
+            let cancelled = joined.as_ref().is_err_and(JoinError::is_cancelled);
+            match self.report_joined_service(joined) {
+                Ok(mut report) => {
+                    if cancelled {
+                        report.exit = AsyncRuntimeServiceExit::completed(0);
+                    }
+                    reports.push(report);
                 }
-                Err(error) if error.is_cancelled() => reports.push(AsyncRuntimeServiceReport {
-                    name: self.take_service_name(error.id()),
-                    exit: AsyncRuntimeServiceExit::completed(0),
-                }),
-                Err(error) => {
-                    let name = self.take_service_name(error.id());
-                    return Err(MezError::invalid_state(format!(
-                        "async runtime service {name} task failed: {error}"
-                    )));
-                }
+                Err(error) => failures.record("auxiliary service shutdown", error),
             }
         }
+        failures.finish()?;
         Ok(reports)
     }
 }

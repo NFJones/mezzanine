@@ -9,10 +9,12 @@ use std::io;
 use thiserror::Error;
 
 mod compaction;
+mod teardown;
 pub(crate) use compaction::{
     CompactionCostUnit, CompactionFailureDisposition, CompactionFailureEvidence,
     CompactionFailurePhase,
 };
+pub(crate) use teardown::TeardownErrors;
 
 /// Defines the Result type used by this subsystem.
 ///
@@ -695,6 +697,14 @@ impl MezError {
     /// on duplicated control-flow logic.
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Adds caller context while preserving the original classification and all
+    /// typed policy, I/O and provider observations. This changes diagnostics only;
+    /// it neither grants retry authority nor changes effect-settlement evidence.
+    pub(crate) fn with_context(mut self, context: impl AsRef<str>) -> Self {
+        self.message = format!("{}: {}", context.as_ref(), self.message);
+        self
     }
 
     /// Returns the original stdlib I/O error kind when this error was converted

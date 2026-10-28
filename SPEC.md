@@ -2739,6 +2739,16 @@ best-effort signaling and kernel adoption, never a successful reap claim.
 Public opaque CLI Debug formatting MUST expose only coarse effective exit and
 pending/unknown status, never private retained diagnostics, owners or handles.
 
+Runtime service supervision MUST preserve the first observed failure's kind and
+typed policy evidence while collecting later service and saved-fork retirement
+failures. It MUST abort and observe remaining service wrappers and retire exact
+blocking fork owners before returning; task cancellation alone is not native
+process retirement. Secondary diagnostics MUST name the actual stage rather
+than attribute worker failure to unrelated cleanup. Detailed secondary reporting
+MUST remain bounded (eight entries, 128-byte stage labels and 1,024-byte error
+text, each with explicit truncation markers), sort the retained entries, and
+report the omitted count. Diagnostic aggregation MUST NOT authorize effect retry.
+
 Redundant shutdown transport closure MAY establish admission idempotence only
 with terminal intent from the same retained actor handle; actor/reducer errors
 MUST remain errors. Successful host shutdown MUST also observe that exact

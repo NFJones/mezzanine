@@ -156,3 +156,82 @@ async fn async_runtime_service_supervisor_reports_cancelled_services_as_shutdown
         }]
     );
 }
+
+/// Three completed service failures must retain the first cause and both named
+/// secondary outcomes while a fourth pending service is cancelled and joined.
+/// Per-service channels establish completion order on the current-thread runtime;
+/// this verifies real supervisor behavior without native processes or sleeps.
+#[tokio::test(flavor = "current_thread")]
+async fn async_runtime_service_supervisor_retains_all_concurrent_failures() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use tokio::sync::oneshot;
+
+    /// The pending future owns this witness even before its first poll. Its
+    /// destruction proves cancellation was observed before supervision returns.
+    struct PendingOwner(Arc<AtomicBool>);
+    impl Drop for PendingOwner {
+        /// Records destruction only; this is no OS-process retirement proof.
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let (first_done, first_observed) = oneshot::channel();
+    let (second_start, second_ready) = oneshot::channel();
+    let (second_done, second_observed) = oneshot::channel();
+    let (third_start, third_ready) = oneshot::channel();
+    let (third_done, third_observed) = oneshot::channel();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let owner = PendingOwner(cancelled.clone());
+    let supervisor = AsyncRuntimeServiceSupervisor::new(vec![
+        AsyncRuntimeService::new("first-causal", async move {
+            first_done.send(()).unwrap();
+            Err(MezError::forbidden("FIRST_CAUSAL_FAILURE"))
+        }),
+        AsyncRuntimeService::new("second-worker", async move {
+            second_ready.await.unwrap();
+            second_done.send(()).unwrap();
+            Err(MezError::invalid_state("SECOND_WORKER_FAILURE"))
+        }),
+        AsyncRuntimeService::new("third-worker", async move {
+            third_ready.await.unwrap();
+            third_done.send(()).unwrap();
+            Err(MezError::invalid_state("THIRD_WORKER_FAILURE"))
+        }),
+        AsyncRuntimeService::new("pending-owner", async move {
+            let _owner = owner;
+            std::future::pending::<Result<AsyncRuntimeServiceExit>>().await
+        }),
+    ])
+    .unwrap();
+    first_observed.await.unwrap();
+    second_start.send(()).unwrap();
+    second_observed.await.unwrap();
+    third_start.send(()).unwrap();
+    third_observed.await.unwrap();
+    let error = supervisor
+        .run_until_shutdown(std::future::pending())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    for evidence in [
+        "FIRST_CAUSAL_FAILURE",
+        "second-worker",
+        "SECOND_WORKER_FAILURE",
+        "third-worker",
+        "THIRD_WORKER_FAILURE",
+    ] {
+        assert!(
+            error.message().contains(evidence),
+            "missing {evidence}: {error}"
+        );
+    }
+    assert!(
+        !error.message().contains("saved fork"),
+        "no fork retirement was attempted: {error}"
+    );
+    assert!(cancelled.load(Ordering::SeqCst));
+}
