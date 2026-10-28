@@ -113,6 +113,12 @@ impl AsyncRuntimeRequestEnvelope {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
+    /// Panics in the serialized actor for isolated runtime-ownership tests only.
+    #[cfg(test)]
+    PanicForTests {
+        /// Remains unanswered so the actual caller observes actor transport loss.
+        reply: oneshot::Sender<()>,
+    },
     /// Installs the shared diagnostics registry for one host-routed Iroh connection.
     SetHostRoutedIrohDiagnostics {
         /// Privacy-safe registry populated by the host-owned path sampler.
@@ -1596,6 +1602,8 @@ impl AsyncRuntimeRequest {
             | Self::TakeAgentPresentationResizeWork { .. }
             | Self::ApplyStreamingSayProjection { .. }
             | Self::ApplyAgentPresentationResize { .. } => Family::Provider,
+            #[cfg(test)]
+            Self::PanicForTests { .. } => Family::Control,
             #[cfg(test)]
             Self::RecordClaimedAgentProviderTaskForTests { .. } => Family::Provider,
             Self::SubmitRuntimeEvents { .. } => Family::Event,

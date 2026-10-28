@@ -954,6 +954,10 @@ impl AsyncRuntimeSessionActor {
     /// Ordinary request failures are returned through their owned reply channel.
     pub(super) async fn handle_request(&mut self, request: AsyncRuntimeRequest) -> bool {
         match request {
+            #[cfg(test)]
+            AsyncRuntimeRequest::PanicForTests { reply: _reply } => {
+                panic!("PRIVATE_RUNTIME_PANIC_TEST_PAYLOAD");
+            }
             AsyncRuntimeRequest::SetHostRoutedIrohDiagnostics { diagnostics, reply } => {
                 self.service.set_host_routed_iroh_diagnostics(diagnostics);
                 let _ = reply.send(());

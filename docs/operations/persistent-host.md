@@ -232,6 +232,15 @@ an unproven/failure barrier, not a reconstructed original OS-error category.
 
 If native cleanup cannot be proved within its deadline, the live host retains
 the exact session generation in cleanup-pending state (reported as stopping).
+
+An unwind in a supervised session runtime discards that actor and its services
+and records a fixed panic cause, distinct from task cancellation. The ordinary
+panic hook still runs; arbitrary panic payloads are not copied into structured
+status. Outstanding native ownership remains cleanup-pending until actual
+retirement permits the generation's single terminal failure publication.
+Independent healthy sessions continue serving control requests during this
+retained cleanup; the failed actor is never resumed.
+
 Native failure details remain in private runtime diagnostics/captured stderr,
 not public host-status error strings. It is not evicted with terminal history or made
 available for identity reuse. New managed pane, restored-pane and editor child

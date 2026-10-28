@@ -2384,6 +2384,12 @@ architecture MUST preserve three distinct boundaries:
 2. A session supervisor creates, indexes, observes, and stops multiple
    independent session runtimes. Failure of one runtime MUST NOT terminate the
    host or disclose state to another runtime.
+   A whole-session runtime unwind MUST discard the compromised actor and its
+   services, retain a fixed panic cause distinct from cancellation, and preserve
+   exact generation/native cleanup ownership. Pending native obligations MUST
+   remain discoverable until real retirement permits once-only terminal failure
+   publication. This boundary MUST NOT resume the actor, suppress the normal
+   panic hook, or copy arbitrary panic payloads into structured status.
 3. A persistent host owns the local control front door, stable remote endpoint,
    host trust, routing policy, durable leases, and restart reconciliation. The
    host MUST route a connection to at most one session actor and MUST NOT

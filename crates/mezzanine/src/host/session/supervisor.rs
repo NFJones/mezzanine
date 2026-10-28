@@ -11,12 +11,16 @@
 //! remove or overwrite a replacement session with the same identity.
 //! Shutdown keeps one captured deadline through native effects and publication,
 //! preserving the first error with bounded diagnostics from every later stage.
+//! A whole-runtime unwind discards the compromised actor and services before
+//! publishing a fixed panic cause. The cancellation guard remains independent;
+//! neither outcome substitutes task completion for exact native retirement.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use futures_util::FutureExt;
 use mez_mux::process::PaneProcessRetirementOwner;
 use tokio::sync::{Notify, watch};
 
@@ -430,7 +434,22 @@ impl SessionSupervisor {
                     }
                 }
             };
-            let completion = runtime.run(Vec::new(), cancellation).await;
+            // This is the disposable session-runtime boundary, not a recovery
+            // point inside serialized mutations. An unwind destroys the entire
+            // runtime future; its actor is never polled again. Retained native
+            // custody remains with this exact supervisor generation and the
+            // existing completion path requires cleanup before publication.
+            // Tokio's outer panic catch would otherwise dispose this future as
+            // abandonment and the cancellation guard would mislabel the cause.
+            // Keep the ordinary panic hook, but never copy its payload to status.
+            let completion = std::panic::AssertUnwindSafe(runtime.run(Vec::new(), cancellation))
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| {
+                    Err(MezError::invalid_state(
+                        "session runtime panicked before completion",
+                    ))
+                });
             #[cfg(test)]
             let publication_probe = { inner.runtime_completion_probe.lock().unwrap().take() };
             #[cfg(test)]
@@ -1618,6 +1637,7 @@ mod tests {
 
     mod native_attempt_scopes;
     mod receipt_ordering;
+    mod runtime_panic;
     mod stop_completion;
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(10_000);

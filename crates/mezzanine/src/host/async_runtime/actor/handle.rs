@@ -1051,6 +1051,14 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Triggers an actual serialized actor panic in isolated ownership tests.
+    /// No production or wire request exposes this seam; reply loss is returned.
+    #[cfg(test)]
+    pub(crate) async fn panic_for_tests(&self) -> Result<()> {
+        self.request(|reply| AsyncRuntimeRequest::PanicForTests { reply })
+            .await
+    }
+
     /// Installs a deterministic provider claim for actor-level regression tests.
     #[cfg(test)]
     pub(crate) async fn record_claimed_agent_provider_task_for_tests(
