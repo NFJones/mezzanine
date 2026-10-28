@@ -1,9 +1,9 @@
-//! Actual optional endpoint loss against the existing local host and native pane.
+//! Host listener isolation, shared-authority failure and exact fixture cleanup.
 //!
-//! The fixture closes only its own Iroh endpoint, waits for remote task draining,
-//! then requires fresh shell execution and owner-authenticated Unix management.
-//! All observations are captured before exact host cleanup and assertions, so a
-//! regression failure cannot abandon the fixture's original native owner.
+//! Offline endpoints and private stores exercise local management, real native
+//! execution and routed attachment retirement. Faults touch only fixture-owned
+//! endpoints and stores. Product observations precede independent cleanup, so
+//! cleanup cannot manufacture a successful closure or native-retirement result.
 
 use super::*;
 use crate::control::{ControlConnectionState, encode_control_body};
@@ -20,10 +20,16 @@ async fn management_request(socket: &Path, method: &str, params: Value) -> Resul
     stream
         .write_all(&encode_control_body(&request.to_string()))
         .await?;
+    read_fixture_response(&mut stream).await
+}
+
+/// Reads one bounded response for local and Iroh fixture peers. Callers retain
+/// their real connection and operation deadline; EOF remains an observed error.
+async fn read_fixture_response<S: tokio::io::AsyncRead + Unpin>(stream: &mut S) -> Result<Value> {
     let mut bytes = Vec::new();
     let mut buffer = [0; 4096];
     loop {
-        let read = tokio::io::AsyncReadExt::read(&mut stream, &mut buffer).await?;
+        let read = tokio::io::AsyncReadExt::read(stream, &mut buffer).await?;
         if read == 0 {
             return Err(MezError::invalid_state("management closed before response"));
         }
@@ -313,6 +319,443 @@ async fn optional_startup_bind_failure_preserves_local_service_and_identity() {
     let error = served.unwrap().unwrap().unwrap_err();
     assert!(
         error.message().contains("failed to bind Iroh endpoint"),
+        "{error}"
+    );
+}
+
+/// Runs an actual listener pair without native sessions. A temporary owned
+/// lease-directory type fault exercises critical shared-authority I/O. Product
+/// outcomes and peer closure are observed before restoring paths or performing
+/// independent fixture cleanup; a failed observation cannot become a pass merely
+/// because the cleanup closes the endpoint later.
+async fn observe_listener_pair_disposition(mode: &str) -> Result<()> {
+    let root = test_root(mode);
+    let policy = RuntimeIrohTransportPolicy {
+        enabled: true,
+        identity: RuntimeIrohIdentityPolicy::Host,
+        relay: RuntimeIrohRelayPolicy::Disabled,
+        setup_timeout: Duration::from_secs(3),
+        ..RuntimeIrohTransportPolicy::default()
+    };
+    let remote = std::sync::Arc::new(HostIrohRuntime::bind(&root, policy).await.unwrap().unwrap());
+    let endpoint = remote.endpoint_for_test().endpoint().clone();
+    let diagnostics = remote.endpoint_for_test().diagnostics();
+    let mut settings = config(root.clone());
+    settings.iroh_invitation_issuer = Some(remote.invitation_issuer());
+    let host = std::sync::Arc::new(HostServer::bind(settings).unwrap());
+    let native = host.router().native_cleanup_owner();
+    let serving_host = host.clone();
+    let serving_remote = remote.clone();
+    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    let mut cancel = Some(cancel);
+    let mut serving = tokio::spawn(Box::pin(async move {
+        serving_host
+            .serve_with_iroh(&serving_remote, async {
+                let _ = cancelled.await;
+            })
+            .await
+    }));
+    let leases = root.join("host/leases");
+    let retained = root.join("retained-leases");
+    let mut moved_leases = false;
+    let mut joined = false;
+    let observations: Result<()> = async {
+        let ready = tokio::time::timeout(
+            Duration::from_secs(3),
+            management_request(host.socket_path(), "host/get", json!({})),
+        )
+        .await
+        .map_err(|_| MezError::invalid_state("listener fixture local readiness timed out"))??;
+        if ready["result"]["ready"] != true {
+            return Err(MezError::invalid_state(
+                "listener fixture local readiness absent",
+            ));
+        }
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !diagnostics.snapshot().listener_active {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .map_err(|_| MezError::invalid_state("listener fixture remote readiness absent"))?;
+        if mode == "after-remote" {
+            endpoint.close().await;
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while diagnostics.snapshot().listener_active {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .map_err(|_| {
+                MezError::invalid_state("remote loss was not settled before local fault")
+            })?;
+            let degraded = tokio::time::timeout(
+                Duration::from_secs(3),
+                management_request(host.socket_path(), "host/get", json!({})),
+            )
+            .await
+            .map_err(|_| {
+                MezError::invalid_state("degraded local listener did not remain active")
+            })??;
+            if degraded["result"]["iroh"]["available"] != false {
+                return Err(MezError::invalid_state(
+                    "degraded transport was not observed",
+                ));
+            }
+        }
+        if mode == "cancel" {
+            let _ = cancel.take().unwrap().send(());
+        } else {
+            fs::rename(&leases, &retained)?;
+            moved_leases = true;
+            fs::write(&leases, b"fixture-owned authority destination fault")?;
+            if mode == "simultaneous" {
+                endpoint.close().await;
+            }
+            // Wake the real accept loop. No request or uncertain operation is
+            // replayed; the next owner loop observes its actual lease-store I/O.
+            drop(tokio::net::UnixStream::connect(host.socket_path()).await?);
+        }
+        let result = tokio::time::timeout(Duration::from_secs(8), &mut serving)
+            .await
+            .map_err(|_| {
+                MezError::invalid_state("listener owner did not finish its critical/cancel path")
+            })?;
+        joined = true;
+        let result = result.map_err(|error| {
+            MezError::invalid_state(format!("listener owner task failed: {error}"))
+        })?;
+        if !endpoint.is_closed() || diagnostics.snapshot().listener_active {
+            return Err(MezError::invalid_state(
+                "peer endpoint remained live after owner completion",
+            ));
+        }
+        if mode == "cancel" {
+            result?;
+        } else {
+            let error = result.err().ok_or_else(|| {
+                MezError::invalid_state("critical authority I/O was reported as success")
+            })?;
+            if error.io_kind().is_none() || !error.message().contains("host serving") {
+                return Err(MezError::invalid_state(format!(
+                    "critical local cause was replaced: {error}"
+                )));
+            }
+            if mode == "after-remote" && !error.message().contains("remote transport unavailable") {
+                return Err(MezError::invalid_state(
+                    "later critical error erased observed remote degradation",
+                ));
+            }
+        }
+        Ok(())
+    }
+    .await;
+    if moved_leases {
+        if leases.is_file() {
+            fs::remove_file(&leases).unwrap();
+        }
+        fs::rename(&retained, &leases).unwrap();
+    }
+    if !joined {
+        if let Some(cancel) = cancel.take() {
+            let _ = cancel.send(());
+        }
+        if tokio::time::timeout(Duration::from_secs(8), &mut serving)
+            .await
+            .is_err()
+        {
+            serving.abort();
+            let _ = serving.await;
+        }
+    }
+    let endpoint_cleanup = tokio::time::timeout(Duration::from_secs(3), endpoint.close()).await;
+    let runtime_cleanup = host
+        .router()
+        .shutdown_all(true, Duration::from_secs(3))
+        .await;
+    let pending = native.native_pending_count();
+    drop(host);
+    drop(remote);
+    runtime_cleanup?;
+    endpoint_cleanup.map_err(|_| MezError::invalid_state("fixture endpoint cleanup timed out"))?;
+    if pending? != 0 {
+        return Err(MezError::invalid_state(
+            "native-free fixture acquired native debt",
+        ));
+    }
+    let _ = fs::remove_dir_all(root);
+    observations
+}
+
+/// Critical shared-authority failure remains fatal before, after and alongside
+/// optional remote loss. The real endpoint must be closed before the owner
+/// returns, and a previously observed remote outage cannot replace local cause.
+#[tokio::test(flavor = "current_thread")]
+async fn critical_local_authority_failure_still_settles_optional_remote_peer() {
+    for mode in ["local-first", "after-remote", "simultaneous"] {
+        observe_listener_pair_disposition(mode).await.unwrap();
+    }
+}
+
+/// The cancellation future used by CLI shutdown signals still settles a real
+/// healthy local/remote pair successfully. This exercises the shared owner path;
+/// it does not send an operating-system signal to the test runner process.
+#[tokio::test(flavor = "current_thread")]
+async fn host_signal_cancellation_settles_both_healthy_listeners() {
+    observe_listener_pair_disposition("cancel").await.unwrap();
+}
+
+/// One fixture-owned authenticated control connection. Kept outside the
+/// observation future so all pumps can be explicitly joined even on failure.
+struct RemoteProbe {
+    /// Actual SDK connection whose closure is observed before fixture cleanup.
+    connection: iroh::endpoint::Connection,
+    /// Owned bounded control-frame bridge, never a simulated protocol peer.
+    bridge: crate::runtime::IrohCompressionBridge,
+}
+
+impl RemoteProbe {
+    /// Connects once over the real endpoint and uncompressed transport contract.
+    /// Returns setup failure without issuing any session operation or retry.
+    async fn connect(client: &iroh::Endpoint, address: &iroh::EndpointAddr) -> Result<Self> {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let connection = client
+                .connect(address.clone(), crate::runtime::MEZZANINE_IROH_ALPN)
+                .await
+                .map_err(|error| {
+                    MezError::invalid_state(format!("fixture Iroh connect failed: {error}"))
+                })?;
+            let (send, recv) = connection.open_bi().await.map_err(|error| {
+                MezError::invalid_state(format!("fixture Iroh stream failed: {error}"))
+            })?;
+            let compression = crate::runtime::IrohCompressionPolicy::new(
+                crate::runtime::RuntimeIrohCompressionCodec::None,
+                512,
+                3,
+                HOST_CONTROL_MAX_CONTENT_LENGTH + 1024,
+            )?;
+            let bridge = crate::runtime::IrohCompressionBridge::spawn(
+                recv,
+                send,
+                compression,
+                HOST_CONTROL_MAX_CONTENT_LENGTH,
+            )?;
+            Ok(Self { connection, bridge })
+        })
+        .await
+        .map_err(|_| MezError::invalid_state("fixture Iroh connect timed out"))?
+    }
+
+    /// Exchanges one real request without FIN or replay, keeping attachment
+    /// ownership alive until actual endpoint closure is injected.
+    async fn request(&mut self, method: &str, params: Value) -> Result<Value> {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let request =
+                json!({"jsonrpc":"2.0","id":"active-probe","method":method,"params":params});
+            self.bridge
+                .stream_mut()
+                .write_all(&encode_control_body(&request.to_string()))
+                .await?;
+            self.bridge.stream_mut().flush().await?;
+            read_fixture_response(self.bridge.stream_mut()).await
+        })
+        .await
+        .map_err(|_| MezError::invalid_state("fixture Iroh response timed out"))?
+    }
+
+    /// Settles the owned pump even when endpoint loss already made flushing
+    /// fail. Bridge shutdown joins on success and on its abort/error branches;
+    /// this cleanup result cannot rewrite prior product observations.
+    async fn finish(self) {
+        let _ = self.bridge.shutdown(Duration::from_secs(3)).await;
+        self.connection.close(
+            iroh::endpoint::VarInt::from_u32(0),
+            b"owned fixture complete",
+        );
+    }
+}
+
+/// Actual endpoint loss must disconnect a live routed primary and its transport
+/// tasks, retain the existing durable lease/session and original native pane,
+/// and remove the old client's input authority. A later local primary supplies
+/// a fresh command/nonce barrier proving both native continuity and rejection of
+/// stale-client input. Local trust revocation must remain usable while remote
+/// transport is unavailable. All owners are retained before remote creation.
+#[tokio::test(flavor = "current_thread")]
+async fn endpoint_loss_settles_active_attachment_without_replaying_or_losing_lease() {
+    use crate::security::remote::{RemoteSessionAttachScope, RemoteTrustStore};
+    use crate::storage::lease::RemoteSessionLeaseState;
+    use secrecy::ExposeSecret;
+
+    let root = test_root("active-endpoint-loss");
+    let policy = RuntimeIrohTransportPolicy {
+        enabled: true,
+        identity: RuntimeIrohIdentityPolicy::Host,
+        relay: RuntimeIrohRelayPolicy::Disabled,
+        compression_codecs: vec![crate::runtime::RuntimeIrohCompressionCodec::None],
+        setup_timeout: Duration::from_secs(3),
+        ..RuntimeIrohTransportPolicy::default()
+    };
+    let remote = std::sync::Arc::new(
+        HostIrohRuntime::bind(&root, policy.clone())
+            .await
+            .unwrap()
+            .unwrap(),
+    );
+    let endpoint = remote.endpoint_for_test().endpoint().clone();
+    let address = remote.endpoint_addr().unwrap();
+    let diagnostics = remote.endpoint_for_test().diagnostics();
+    let trust = RemoteTrustStore::under_host_config_root(&root).unwrap();
+    let now = current_unix_seconds().unwrap();
+    let invitation = trust
+        .create_host_invitation(
+            remote.endpoint_id(),
+            RemoteRoleCeiling::Primary,
+            RemoteHostRoutingAuthority {
+                session_create: true,
+                session_list: true,
+                session_attach_scope: RemoteSessionAttachScope::Own,
+                max_active_leases: 2,
+                max_live_sessions: 2,
+                ..RemoteHostRoutingAuthority::default()
+            },
+            600,
+            now,
+        )
+        .unwrap();
+    let mut settings = config(root.clone());
+    settings.iroh_invitation_issuer = Some(remote.invitation_issuer());
+    let host = std::sync::Arc::new(HostServer::bind(settings).unwrap());
+    let native = host.router().native_cleanup_owner();
+    let client =
+        crate::runtime::bind_runtime_iroh_client_endpoint(&policy, iroh::SecretKey::generate())
+            .await
+            .unwrap();
+    let serving_host = host.clone();
+    let serving_remote = remote.clone();
+    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    let mut serving = tokio::spawn(Box::pin(async move {
+        serving_host
+            .serve_with_iroh(&serving_remote, async {
+                let _ = cancelled.await;
+            })
+            .await
+    }));
+    let mut probes = Vec::new();
+    let observations: Result<()> = async {
+        probes.push(RemoteProbe::connect(&client, &address).await?);
+        let paired = probes[0].request("control/initialize", json!({
+            "client_name":"pair-probe", "requested_version":3, "requested_role":"observer", "session_intent":"host_only",
+            "authentication":{"mechanism":"extension:iroh_invitation","token":invitation.token.expose_secret()}
+        })).await?;
+        let credential = paired["result"]["device_credential"].as_str()
+            .ok_or_else(|| MezError::invalid_state("fixture pairing did not return a credential"))?.to_string();
+        probes.pop().unwrap().finish().await;
+        probes.push(RemoteProbe::connect(&client, &address).await?);
+        let created = probes[0].request("control/initialize", json!({
+            "client_name":"active-probe", "requested_version":3, "requested_role":"primary", "session_intent":"create",
+            "idempotency_key":"active-create-once", "detach_primary_on_disconnect":true,
+            "client":{"name":"active-probe","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm"}},
+            "authentication":{"mechanism":"extension:iroh_device","token":credential}
+        })).await?;
+        let lease_id = created["result"]["lease"]["lease_id"].as_str()
+            .ok_or_else(|| MezError::invalid_state("routed fixture lease absent"))?.to_string();
+        let session_id = created["result"]["lease"]["session_id"].as_str()
+            .ok_or_else(|| MezError::invalid_state("routed fixture session absent"))?.to_string();
+        let lease_before = host.router().get_lease(&lease_id)?;
+        let state = probes[0].request("session/get", json!({})).await?;
+        if state["result"]["session"]["attached_primary_count"] != 1 {
+            return Err(MezError::invalid_state("routed fixture did not own exactly one active primary"));
+        }
+        let old_primary = state["result"]["session"]["primary_client_ids"][0].as_str()
+            .and_then(mez_core::ids::ClientId::opaque)
+            .ok_or_else(|| MezError::invalid_state("routed fixture primary absent"))?;
+        let panes = probes[0].request("pane/list", json!({})).await?;
+        if panes.get("error").is_some() {
+            return Err(MezError::invalid_state("active routed control request failed"));
+        }
+        let runtime = host.router().runtime_for_tests(&session_id)?;
+        let actor = runtime.actor();
+        let pid = shell_heartbeat(actor, &old_primary, &root.join("remote-before"), "remote-before-loss").await?;
+        let birth = mez_mux::process::process_start_token_for_pid(pid)
+            .ok_or_else(|| MezError::invalid_state("routed native identity absent"))?;
+        endpoint.close().await;
+        tokio::time::timeout(Duration::from_secs(3), probes[0].connection.closed()).await
+            .map_err(|_| MezError::invalid_state("active routed connection did not close"))?;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let snapshot = diagnostics.snapshot();
+                if !snapshot.listener_active && snapshot.active_connections == 0
+                    && actor.lifecycle_state().await? == RuntimeLifecycleState::Detached { break Ok::<(), MezError>(()); }
+                tokio::task::yield_now().await;
+            }
+        }).await.map_err(|_| MezError::invalid_state("remote attachment ownership did not settle"))??;
+        let lease_after = host.router().get_lease(&lease_id)?;
+        if lease_after.state != RemoteSessionLeaseState::Active || lease_after.session_id != session_id
+            || lease_after.lease_generation != lease_before.lease_generation
+            || host.router().snapshots().await?.len() != 1 {
+            return Err(MezError::invalid_state("endpoint loss changed/replayed durable session assignment"));
+        }
+        let blocked = root.join("stale-input-effect");
+        let stale = format!("printf stale > '{}'\n", blocked.display());
+        if actor.write_input_to_pane(old_primary, "%1", stale.into_bytes()).await.is_ok() {
+            return Err(MezError::invalid_state("disconnected remote primary retained input authority"));
+        }
+        let local = actor.handle_control_input_for_connection(
+            encode_control_body(r#"{"jsonrpc":"2.0","id":"local","method":"control/initialize","params":{"requested_version":2,"requested_role":"primary","client_name":"after-remote","client":{"name":"after-remote","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm"}}}}"#),
+            HOST_CONTROL_MAX_CONTENT_LENGTH, ControlConnectionState::new(true,true),
+        ).await?;
+        let local_primary = local.connection.caller_client_id().cloned()
+            .ok_or_else(|| MezError::invalid_state("replacement local primary absent"))?;
+        let after_pid = shell_heartbeat(actor, &local_primary, &root.join("remote-after"), "local-after-loss").await?;
+        if after_pid != pid || mez_mux::process::process_start_token_for_pid(pid) != Some(birth) || blocked.exists() {
+            return Err(MezError::invalid_state("routed pane was replaced or stale input produced an effect"));
+        }
+        let status = tokio::time::timeout(Duration::from_secs(3), management_request(host.socket_path(), "host/get", json!({})))
+            .await.map_err(|_| MezError::invalid_state("local administration lost after active transport loss"))??;
+        if status["result"]["ready"] != true || status["result"]["iroh"]["available"] != false {
+            return Err(MezError::invalid_state("active loss was reported as healthy remote transport"));
+        }
+        let records = remote.invitation_issuer().list_clients()?;
+        let record = records.first().ok_or_else(|| MezError::invalid_state("paired trust record absent"))?;
+        let revoked = tokio::time::timeout(Duration::from_secs(3), management_request(host.socket_path(), "remote/client/revoke",
+            json!({"client_id":record.id,"reason":"owned outage test","idempotency_key":"revoke-after-outage"})))
+            .await.map_err(|_| MezError::invalid_state("local revocation stalled after outage"))??;
+        if revoked["result"]["revoked"] != true {
+            return Err(MezError::invalid_state("local trust revocation unavailable during outage"));
+        }
+        Ok(())
+    }.await;
+    for probe in probes {
+        probe.finish().await;
+    }
+    client.close().await;
+    let _ = cancel.send(());
+    let served = tokio::time::timeout(Duration::from_secs(8), &mut serving).await;
+    if served.is_err() {
+        serving.abort();
+        let _ = serving.await;
+    }
+    let cleanup = host
+        .router()
+        .shutdown_all(true, Duration::from_secs(3))
+        .await;
+    let pending = native.native_pending_count();
+    drop(host);
+    drop(remote);
+    cleanup.unwrap();
+    assert_eq!(
+        pending.unwrap(),
+        0,
+        "active fixture retained native ownership"
+    );
+    let _ = fs::remove_dir_all(root);
+    observations.unwrap();
+    let error = served.unwrap().unwrap().unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("Iroh listener closed unexpectedly"),
         "{error}"
     );
 }
