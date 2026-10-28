@@ -268,6 +268,16 @@ a child callback, approve a tool or forward tool content. Existing revision4
 members upgrade through the shared-hook reconciler; authored hooks and normal
 vendor trust review remain intact. This lifecycle coverage does not supply token
 accounting or change existing exporters.
+After idle proof and lease expiry, the original Codex source becomes invisible
+and its observational presence goes offline, while bounded original request and
+replay custody remains under the same live native creator/root. Maintenance and
+duplicate callbacks do not renew it. A changed lifecycle fact with fresh native
+worker/actor proof restores the same identity and a finite lease; SessionStart
+retries and model counters alone do not. A long-running request's original post
+can still commit usage while dormant. Explicit end, root loss and observer
+epoch replacement stay fenced; this does not establish continuous observer health.
+A reused public conversation label cannot choose another native creator: native
+parent evidence narrows the candidate before full worker/actor proof.
 The previously inspected lifecycle hooks at upstream `openai/codex` commit
 `0c329ad2` have lifecycle IDs/selected model rather than usage counters. Newer
 observation-only `PreModelRequest`/`PostModelRequest` hooks also expose per-request

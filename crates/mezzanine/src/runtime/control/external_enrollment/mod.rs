@@ -38,6 +38,7 @@ const ADMISSION_BUDGET: Duration = Duration::from_secs(2);
 const MAX_OBSERVER_INSTANCES: usize = 128;
 
 mod codex;
+mod codex_idle;
 mod codex_order;
 mod codex_requests;
 mod cold;
@@ -132,6 +133,8 @@ pub(super) struct EnrollmentBinding {
     codex_turns: codex::CodexTurns,
     /// Original model-request custody, independent of lifecycle/observer proof.
     codex_requests: codex_requests::Requests,
+    /// Dormant visibility retains original callback custody without fresh health.
+    codex_idle: codex_idle::CodexIdle,
     /// Original classic Copilot timestamp fence, never a turn or billing claim.
     copilot_events: copilot::CopilotEvents,
     /// Original Cursor generation fences, never counters or idle health.
@@ -353,6 +356,9 @@ impl EnrollmentBinding {
     /// Allows daemon renewal for live socket observers or live original creators
     /// with explicit recent epoch proof; parent survival alone is never enough.
     pub(super) fn idle_renewable(&mut self) -> bool {
+        if self.codex_telemetry_dormant() {
+            return false;
+        }
         if let Some(observer) = &self.curated_observer {
             return matches!(self.producer, ProducerEvidence::VerifiedParent(_))
                 && self.provenance_is_live()
@@ -369,6 +375,9 @@ impl EnrollmentBinding {
     /// Checks an overdue lease without a new registry sweep; immutable endpoint
     /// polls let a delayed maintenance tick avoid retiring a connected observer.
     pub(super) fn has_live_observer(&self) -> bool {
+        if self.codex_telemetry_dormant() {
+            return false;
+        }
         if let Some(observer) = &self.curated_observer {
             return matches!(self.producer, ProducerEvidence::VerifiedParent(_))
                 && self.provenance_is_live()
@@ -875,6 +884,7 @@ impl RuntimeSessionService {
                     curated_observer: None,
                     codex_turns: Default::default(),
                     codex_requests: Default::default(),
+                    codex_idle: Default::default(),
                     copilot_events: Default::default(),
                     cursor_generations: Default::default(),
                     token: SecretString::from(token),

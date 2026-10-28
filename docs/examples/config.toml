@@ -1,3 +1,4 @@
+# Codex idle expiry hides telemetry; only fresh native lifecycle facts restore it.
 # Codex synchronous model hooks report checked per-request usage under original
 # native readiness; selected model and context totals never become a bill.
 # Codex tool/permission callbacks observe the exact current main turn; they do

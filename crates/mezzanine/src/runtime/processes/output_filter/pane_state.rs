@@ -1192,7 +1192,7 @@ impl RuntimeSessionService {
         let missing_pane_failures = self.fail_agent_turns_for_missing_panes()?;
         self.reconcile_human_pauses()?;
         self.renew_connected_external_observers();
-        let external_retirements = self.reconcile_external_agent_registrations();
+        let external_transitions = self.reconcile_external_agent_registrations();
         let terminal_join_recoveries = self.recover_terminal_joined_subagent_results()?;
         let completion_publications = self.retry_completion_publications();
         let dependency_wait_recoveries = self.recover_ready_dependency_waits()?;
@@ -1201,7 +1201,7 @@ impl RuntimeSessionService {
         let unreachable_turn_failures =
             self.fail_unreachable_running_agent_turns_with_actor_progress(actor_progress_turn_ids)?;
         Ok(missing_pane_failures
-            .saturating_add(external_retirements)
+            .saturating_add(external_transitions)
             .saturating_add(terminal_join_recoveries)
             .saturating_add(completion_publications)
             .saturating_add(dependency_wait_recoveries)

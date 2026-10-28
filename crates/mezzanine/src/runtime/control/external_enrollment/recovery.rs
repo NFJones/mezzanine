@@ -1043,6 +1043,7 @@ impl RuntimeSessionService {
                 curated_observer: None,
                 codex_turns: Default::default(),
                 codex_requests: Default::default(),
+                codex_idle: Default::default(),
                 copilot_events: Default::default(),
                 cursor_generations: Default::default(),
                 token: SecretString::from(token),

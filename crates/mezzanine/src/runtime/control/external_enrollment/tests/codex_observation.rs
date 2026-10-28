@@ -89,18 +89,14 @@ async fn external_codex_observation_native_order_and_original_epoch_fences() {
         Some("interrupted")
     );
     let root_connection = fixture.connection.clone();
-    let work = fixture
-        .service
-        .prepare_external_helper_presentation(
-            &callback("UserPromptSubmit", "foreign"),
-            &root_connection,
-        )
-        .unwrap();
     assert!(
-        settle(&mut fixture, work, &root_connection)
-            .await
-            .get("error")
-            .is_some()
+        fixture
+            .service
+            .prepare_external_helper_presentation(
+                &callback("UserPromptSubmit", "foreign"),
+                &root_connection,
+            )
+            .is_err()
     );
     let binding = fixture
         .service

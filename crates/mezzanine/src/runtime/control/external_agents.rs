@@ -6,6 +6,8 @@
 //! digests; ordinary enrollment retains a redacted service-owned producer handle.
 //! Registrations are observational: they cannot write input, approve actions or
 //! resume native tasks. Lease expiry means unavailable telemetry, not death.
+//! Original Codex command sources retain bounded dormant custody after silence,
+//! with hidden/offline presence until a fresh native changed fact recovers them.
 //! Runtime restart invalidates capabilities; no credential is persisted.
 
 use std::collections::BTreeMap;
@@ -23,7 +25,8 @@ use crate::runtime::{RuntimeSessionService, current_unix_seconds};
 
 pub(super) const MAX_BINDINGS: usize = 256;
 const LAUNCH_SECONDS: u64 = 120;
-const LEASE_SECONDS: u64 = 60;
+/// Finite visibility lease after independently qualified observer evidence.
+pub(super) const LEASE_SECONDS: u64 = 60;
 const TOMBSTONE_SECONDS: u64 = 300;
 
 /// Bounded actor-owned registrations; ordinary handles are private/redacted.
@@ -66,6 +69,10 @@ impl LaunchBinding {
                 .enrollment
                 .as_ref()
                 .is_none_or(|enrollment| enrollment.provenance_is_live())
+            && !self
+                .enrollment
+                .as_ref()
+                .is_some_and(|source| source.codex_telemetry_dormant())
             && (self.expires > now
                 || self
                     .enrollment
@@ -561,7 +568,7 @@ impl RuntimeSessionService {
     /// Expires missing renewal or replaced pane roots without claiming death.
     fn external_agent_binding_needs_retirement(&self, binding: &LaunchBinding, now: u64) -> bool {
         !binding.retired
-            && (!binding.has_current_telemetry(now)
+            && ((!binding.has_current_telemetry(now) && !binding.can_wait_for_codex_callback())
                 || self.find_pane_descriptor(&binding.pane_id).is_none()
                 || !self.pane_process_identity_is_current(&binding.pane_id, &binding.process))
     }
@@ -569,24 +576,31 @@ impl RuntimeSessionService {
     /// Reconciles only one captured/indexed target, using the identical global
     /// maintenance predicate but without sweeping unrelated registrations.
     pub(super) fn reconcile_external_agent_registration(&mut self, digest: [u8; 32]) {
-        if self
+        let retire = self
             .control
             .external_agents()
             .bindings
             .get(&digest)
             .is_some_and(|binding| {
                 self.external_agent_binding_needs_retirement(binding, current_unix_seconds())
-            })
+            });
+        if retire
+            || self
+                .suspend_idle_codex_source(digest, current_unix_seconds())
+                .is_err()
         {
             self.retire_external_agent_binding(digest);
         }
     }
 
     /// Expires missing renewal or replaced pane roots without claiming death.
+    /// Original Codex command sources become invisible/dormant on silence while
+    /// retaining their bounded native namespace for fresh callback recovery.
+    /// Returns retirement and coalesced visibility changes for actor redraw.
     pub(crate) fn reconcile_external_agent_registrations(&mut self) -> usize {
         self.prune_external_source_anchors();
         let now = current_unix_seconds();
-        let retired = self
+        let mut retired = self
             .control
             .external_agents()
             .bindings
@@ -599,6 +613,19 @@ impl RuntimeSessionService {
         for digest in &retired {
             self.retire_external_agent_binding(*digest);
         }
+        let candidates = self
+            .control
+            .external_agents()
+            .bindings
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for digest in candidates {
+            if self.suspend_idle_codex_source(digest, now).is_err() {
+                self.retire_external_agent_binding(digest);
+                retired.push(digest);
+            }
+        }
         self.control
             .external_agents_mut()
             .enrollments
@@ -608,7 +635,15 @@ impl RuntimeSessionService {
             .external_agents_mut()
             .bindings
             .retain(|_, binding| !binding.retired || binding.expires > now);
-        retired.len()
+        let visibility_changes = self
+            .control
+            .external_agents_mut()
+            .bindings
+            .values_mut()
+            .filter_map(|binding| binding.enrollment.as_mut())
+            .map(|source| usize::from(source.take_codex_visibility_change()))
+            .sum::<usize>();
+        retired.len().saturating_add(visibility_changes)
     }
 
     /// Keeps bounded lease and non-authorizing creator-fence cleanup active;

@@ -184,6 +184,7 @@ impl RuntimeSessionService {
         if curated.is_some() {
             enrollment.curated_observer = Some(curated::CuratedObserver::default());
             enrollment.codex_requests = Default::default();
+            enrollment.codex_idle = Default::default();
         }
         enrollment.observe_connection(&work.origin);
         if let Some(registration) = &mut binding.registration {

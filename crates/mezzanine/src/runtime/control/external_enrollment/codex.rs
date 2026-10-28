@@ -141,7 +141,7 @@ impl CodexTurns {
 
 /// Selects only the original fixed local-command instance; rotating to another
 /// observer permanently excludes stateless callbacks instead of handing off.
-fn original(binding: &LaunchBinding) -> Result<&EnrollmentBinding> {
+pub(super) fn original(binding: &LaunchBinding) -> Result<&EnrollmentBinding> {
     binding
         .enrollment
         .as_ref()
@@ -200,15 +200,37 @@ impl RuntimeSessionService {
             .enrollments
             .helper_targets
             .candidates(*uid, "codex", &session);
-        for target in targets {
+        for target in targets.iter().copied() {
             self.reconcile_external_agent_registration(target);
         }
-        let digest = self
-            .control
-            .external_agents()
-            .enrollments
-            .helper_targets
-            .select(*uid, "codex", &session)?;
+        // A dormant source and another native creator may share a public
+        // session label. Kernel parent PID narrows candidates only; worker
+        // reobservation still proves full parent incarnation and pane ancestry.
+        let parent = connection
+            .unix_origin()
+            .ok_or_else(|| MezError::forbidden("Codex callback parent unavailable"))?
+            .identity
+            .parent_process_id;
+        let mut matching = targets.into_iter().filter(|digest| {
+            self.control
+                .external_agents()
+                .bindings
+                .get(digest)
+                .is_some_and(|binding| {
+                    binding.uid == *uid
+                        && binding.pane_id == pane
+                        && original(binding)
+                            .is_ok_and(|source| source.producer.identity().process_id == parent)
+                })
+        });
+        let digest = matching.next().ok_or_else(|| {
+            MezError::forbidden("Codex original native creator candidate unavailable")
+        })?;
+        if matching.next().is_some() {
+            return Err(MezError::conflict(
+                "Codex native creator candidate ambiguous",
+            ));
+        }
         let binding = self
             .control
             .external_agents()
@@ -285,7 +307,9 @@ impl RuntimeSessionService {
     /// Applies a native-authorized original callback using daemon-owned sequence
     /// and bounded turn fences. Only SessionEnd retires the exact source; changed
     /// native facts stamp finite proof for existing daemon maintenance, never
-    /// direct renewal/billing/continuous idle health. Stop is ready, not success.
+    /// billing/continuous idle health. A changed native fact can recover an
+    /// expired dormant source through its separate visibility owner. Stop is
+    /// ready, not success.
     pub(super) fn commit_external_codex_observation(
         &mut self,
         digest: [u8; 32],
@@ -334,6 +358,7 @@ impl RuntimeSessionService {
             .as_mut()
             .ok_or_else(|| MezError::invalid_state("Codex observer proof owner disappeared"))?
             .observe(sequence)?;
+        self.recover_codex_after_changed_fact(digest)?;
         Ok(reply)
     }
 }

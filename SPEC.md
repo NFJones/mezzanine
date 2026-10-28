@@ -1228,11 +1228,29 @@ Codex revision5 MUST observe documented main PreToolUse/PermissionRequest/
 PostToolUse with only exact session and active turn selectors. PermissionRequest
 MAY show approval-wait; tool callbacks MAY show running only on the already
 admitted original turn. They MUST NOT alias prompt-submit, allocate a new turn,
-revive an interrupted/retired turn, overwrite a parent from child fields, renew a
-lease directly or make approval decisions. Native parent/root/order/epoch fences
+revive an interrupted/retired turn, overwrite a parent from child fields or make
+approval decisions. Native parent/root/order/epoch fences
 remain mandatory. Tool inputs/results/names and approval text MUST NOT enter the
 observation capsule. Exact revision4 shared members remain upgradeable; authored
 callbacks and vendor hooks trust/disabled policy MUST remain untouched.
+An original first-epoch Codex command-hook source MAY retain its bounded private
+namespace and request custody after idle proof/lease expiry while its exact
+native creator and pane root remain live. Expired telemetry MUST be hidden and
+observational presence offline; silence MUST NOT renew proof, expiry or observer
+health. A changed lifecycle fact MAY restore the same identity/run/namespace and
+a finite lease only after fresh native helper/writer/creator/root/order/epoch
+worker and actor checks. Duplicate facts and SessionStart retries MUST remain
+time-inert; model counters alone MUST NOT restore visibility or health. An
+original admitted request outcome MAY settle while dormant without reviving old
+presentation. Explicit SessionEnd, native lifetime/root loss and observer
+replacement MUST retain their retirement/epoch fences; no retired identity or
+successor observer MAY be implicitly adopted by this recovery.
+Dormancy and recovery MUST notify the existing actor redraw path, including
+when suspension first occurs during request admission rather than maintenance.
+Public session labels MAY narrow callback candidates, but reused labels MUST NOT
+block or select another native creator: kernel parent PID MAY narrow the original
+candidate only; full parent incarnation and pane ancestry MUST still be proved
+by the native worker and actor before any effect.
 Ordinary Codex hook fields MUST NOT be treated as request accounting: the inspected
 SessionStart/UserPromptSubmit/Stop/SessionEnd schemas provide lifecycle IDs and
 selected-model metadata, not token counters. Separate OTEL `response.completed`
