@@ -1,4 +1,6 @@
 //! Exact retained-snapshot output commitment before remote receipt settlement.
+//! Cursor phase uses the owner's runtime monotonic clock, matching async budgets
+//! without resetting its epoch on snapshot replacement or accepting wire time.
 //!
 //! Uses the existing attached-terminal encoder/writer, not another renderer.
 //! The client owns snapshot rows, styles, modes and receipt IDs together; callers
@@ -56,9 +58,9 @@ impl OutboundSessionClient {
             } else {
                 (self.lines.clone(), self.styles.clone())
             };
-            let modes = crate::host::terminal::wire_modes::with_cursor_blink_epoch(
+            let modes = crate::host::terminal::wire_modes::with_cursor_blink_elapsed(
                 self.modes,
-                self.cursor_blink_epoch,
+                self.cursor_blink_epoch.elapsed(),
             );
             commit_snapshot(terminal, &lines, &styles, modes, &self.receipts).await?;
             self.client.discovery.validate()?;
@@ -125,9 +127,9 @@ impl OutboundSessionClient {
                 connected,
                 quality,
             );
-            let modes = crate::host::terminal::wire_modes::with_cursor_blink_epoch(
+            let modes = crate::host::terminal::wire_modes::with_cursor_blink_elapsed(
                 self.modes,
-                self.cursor_blink_epoch,
+                self.cursor_blink_epoch.elapsed(),
             );
             commit_snapshot(terminal, &lines, &styles, modes, &[]).await?;
             self.client.discovery.validate()?;
@@ -163,9 +165,9 @@ impl OutboundSessionClient {
         }
         tokio::time::timeout(budget, async move {
             self.client.discovery.validate()?;
-            let modes = crate::host::terminal::wire_modes::with_cursor_blink_epoch(
+            let modes = crate::host::terminal::wire_modes::with_cursor_blink_elapsed(
                 self.modes,
-                self.cursor_blink_epoch,
+                self.cursor_blink_epoch.elapsed(),
             );
             let visible = mez_mux::attached_client::cursor_phase_visible(modes);
             if self.painted_cursor == Some(visible) {

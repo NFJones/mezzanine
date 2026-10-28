@@ -90,6 +90,12 @@ Background colors on blank cells and normal terminal line wrapping are
 preserved. A full-screen pane application does not itself switch the outer
 terminal into its alternate screen; Mez manages the attached presentation.
 
+Cursor blink intervals describe a full visible-and-hidden cycle. Internal
+outbound snapshot presentation retains one client-local monotonic epoch across
+snapshot replacements and uses its async runtime clock for phase and deadline
+calculations. Cursor-only repaint reuses settled rows without fetching another
+snapshot or acknowledging presentation again.
+
 Pane alternate screens are separate from normal history. Full-screen programs
 can remain visible and explicitly captured, but their rows are not injected
 into normal scrollback or default agent context. Host bracketed paste, mouse,

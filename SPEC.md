@@ -6966,7 +6966,9 @@ and validate cursor coordinates against the requested viewport on both ends.
 Only decoded presentation fields MAY cross IPC; this transport MUST NOT apply
 host modes or grant input or presentation-acknowledgement authority.
 Outbound presentation MUST apply cursor blink phase from a retained client-local
-epoch to copied output modes. Snapshot replacement MUST NOT reset that epoch or
+epoch to copied output modes. The async outbound owner MUST use its runtime
+monotonic clock for both cursor elapsed time and async deadlines; synchronous
+attach retains its own monotonic clock. Snapshot replacement MUST NOT reset that epoch or
 modify retained server mode evidence. Transport metadata MUST NOT supply local
 blink phase; this alone does not qualify idle cursor repaint scheduling.
 The explicit internal cursor-repaint API MUST require receipt-settled output and

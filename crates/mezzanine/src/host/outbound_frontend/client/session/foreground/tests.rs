@@ -1,7 +1,9 @@
-//! Foreground operation identity checks without terminal or remote effects.
+//! Internal foreground ownership, protocol and retained-output qualification.
 //!
-//! Logical mutations retain invocation-local identities rather than relying on
-//! process IDs. Exhaustion rejects instead of reusing a completed operation.
+//! Inert Unix peers and fake terminal writers exercise exact settlement, local
+//! repaint, cancellation and restoration without native sessions or providers.
+//! Logical mutations retain invocation-local identities; controlled clocks own
+//! timer transitions without replacing real framing or output assertions.
 
 use super::*;
 
@@ -149,18 +151,76 @@ fn inert_client(
         committed_view: None,
         iroh_status_slot: None,
         painted_health: None,
-        cursor_blink_epoch: std::time::Instant::now(),
+        cursor_blink_epoch: tokio::time::Instant::now(),
         painted_cursor: None,
         clipboard_receiver: None,
     };
     (root, listener, peer, client)
 }
 
+/// Prevents paused time from auto-advancing past pending real Unix I/O. The
+/// exact owned blocking task inhibits Tokio auto-advance, while explicit advance
+/// controls phase transitions. The existing five-second fixture horizon also
+/// bounds this wall-clock watchdog; on failure it releases inhibition so pending
+/// virtual deadlines can fire. Dropping the sender during unwind releases it.
+fn hold_idle_fixture_clock() -> (std::sync::mpsc::Sender<()>, tokio::task::JoinHandle<bool>) {
+    let (release, held) = std::sync::mpsc::channel();
+    let owner =
+        tokio::task::spawn_blocking(move || held.recv_timeout(Duration::from_secs(5)).is_ok());
+    (release, owner)
+}
+
+/// Cursor phase uses the same controlled monotonic time as async presentation
+/// deadlines. Advancing half a full cycle must repaint the settled local frame
+/// without wire activity, preserving copied modes and the original epoch.
+#[tokio::test(start_paused = true)]
+async fn outbound_cursor_repaint_tracks_runtime_clock() {
+    let (root, listener, peer, mut client) = inert_client(Vec::new());
+    client.modes.cursor_visible = true;
+    client.modes.cursor_blink = true;
+    client.modes.cursor_blink_interval_ms = 2000;
+    let epoch = client.cursor_blink_epoch;
+    let mut terminal = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+    let (client, acknowledged) = client
+        .present(&mut terminal, "clock-initial", Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert!(acknowledged);
+    let (client, unchanged) = client
+        .repaint_cursor_phase(&mut terminal, Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert!(!unchanged);
+    assert_eq!(terminal.written_frames.len(), 1);
+    tokio::time::advance(Duration::from_millis(1100)).await;
+    let (client, repainted) = client
+        .repaint_cursor_phase(&mut terminal, Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(client.cursor_blink_epoch, epoch);
+    drop(client);
+    drop(peer);
+    drop(listener);
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(
+        repainted,
+        "runtime half-cycle must change effective cursor phase"
+    );
+    assert_eq!(terminal.written_frames.len(), 2);
+    assert!(mez_mux::attached_client::cursor_phase_visible(
+        terminal.written_frames[0].modes
+    ));
+    assert!(!mez_mux::attached_client::cursor_phase_visible(
+        terminal.written_frames[1].modes
+    ));
+}
+
 /// Idle cursor phase changes repaint the already settled frame without a view
 /// or ACK request. A writer notification gates cancellation after the second
 /// local commit, rather than assuming that a buffered poll can be retracted.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn outbound_foreground_idle_cursor_repaints_without_remote_work() {
+    let (clock_release, clock_owner) = hold_idle_fixture_clock();
     let (root, listener, peer, mut client) = inert_client(Vec::new());
     client.events_negotiated = true;
     client.modes.cursor_visible = true;
@@ -188,7 +248,7 @@ async fn outbound_foreground_idle_cursor_repaints_without_remote_work() {
         let frame = peer.next().await.unwrap().unwrap();
         let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
         assert_eq!(request["operation"], "events");
-        tokio::time::sleep(Duration::from_millis(1100)).await;
+        tokio::time::advance(Duration::from_millis(1100)).await;
         peer.send(ProtocolFrame::new(
             CONTENT_TYPE,
             serde_json::json!({
@@ -215,6 +275,8 @@ async fn outbound_foreground_idle_cursor_repaints_without_remote_work() {
     })
     .await
     .unwrap();
+    clock_release.send(()).unwrap();
+    assert!(clock_owner.await.unwrap(), "manual clock watchdog expired");
     result.unwrap();
     assert_eq!(terminal.written_frames.len(), 2);
     assert!(mez_mux::attached_client::cursor_phase_visible(
@@ -504,8 +566,9 @@ async fn outbound_foreground_committed_cutoff_skips_covered_view_events() {
 /// Idle coarse-health changes must repaint the settled local decoration without
 /// fetching server rows or acknowledging receipts again. The original health
 /// exchange supplies initial presentation, and cancellation retires a later poll.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn outbound_foreground_idle_health_repaints_without_snapshot_or_ack() {
+    let (clock_release, clock_owner) = hold_idle_fixture_clock();
     let (root, listener, peer, mut client) = inert_client(Vec::new());
     client.events_negotiated = true;
     client.lines = vec!["base    tail".into()];
@@ -553,7 +616,7 @@ async fn outbound_foreground_idle_health_repaints_without_snapshot_or_ack() {
         let frame = peer.next().await.unwrap().unwrap();
         let request: serde_json::Value = serde_json::from_str(&frame.body).unwrap();
         assert_eq!(request["operation"], "events");
-        tokio::time::sleep(Duration::from_millis(1100)).await;
+        tokio::time::advance(Duration::from_millis(1100)).await;
         peer.send(ProtocolFrame::new(
             CONTENT_TYPE,
             serde_json::json!({
@@ -593,6 +656,8 @@ async fn outbound_foreground_idle_health_repaints_without_snapshot_or_ack() {
     })
     .await
     .unwrap();
+    clock_release.send(()).unwrap();
+    assert!(clock_owner.await.unwrap(), "manual clock watchdog expired");
     result.unwrap();
     assert_eq!(terminal.written_frames.len(), 2);
     for (frame, index) in terminal.written_frames.iter().zip([3, 1]) {

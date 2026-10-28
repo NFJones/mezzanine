@@ -56,7 +56,7 @@ fn fixture() -> (
         committed_view: None,
         iroh_status_slot: None,
         painted_health: None,
-        cursor_blink_epoch: std::time::Instant::now(),
+        cursor_blink_epoch: tokio::time::Instant::now(),
         painted_cursor: None,
         clipboard_receiver: Some(receiver),
     };

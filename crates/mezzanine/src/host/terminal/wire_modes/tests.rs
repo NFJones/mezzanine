@@ -107,3 +107,27 @@ fn wire_modes_reject_malformed_required_cursor_evidence() {
         assert!(parse_view_output_modes(&serde_json::json!({"cursor":cursor})).is_err());
     }
 }
+
+/// Caller-owned elapsed time changes only local phase evidence. Zero preserves
+/// the first phase and oversized durations saturate instead of wrapping; server
+/// cursor coordinates, visibility, style and blink configuration stay intact.
+#[test]
+fn wire_modes_elapsed_phase_preserves_modes_and_saturates() {
+    let original = AttachedTerminalOutputModes {
+        cursor_row: 2,
+        cursor_column: 3,
+        cursor_visible: true,
+        cursor_blink_interval_ms: 2000,
+        ..Default::default()
+    };
+    for (elapsed, expected) in [
+        (std::time::Duration::ZERO, 0),
+        (std::time::Duration::from_millis(1100), 1100),
+        (std::time::Duration::MAX, u64::MAX),
+    ] {
+        let mut actual = with_cursor_blink_elapsed(original, elapsed);
+        assert_eq!(actual.cursor_blink_elapsed_ms, expected);
+        actual.cursor_blink_elapsed_ms = original.cursor_blink_elapsed_ms;
+        assert_eq!(actual, original);
+    }
+}

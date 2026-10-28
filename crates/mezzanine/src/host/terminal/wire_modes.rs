@@ -139,10 +139,20 @@ pub(crate) fn output_modes_view_value(modes: AttachedTerminalOutputModes) -> ser
 /// Wire metadata never supplies this epoch; saturation preserves attach behavior
 /// for elapsed durations beyond the integer representation.
 pub(crate) fn with_cursor_blink_epoch(
-    mut modes: AttachedTerminalOutputModes,
+    modes: AttachedTerminalOutputModes,
     epoch: std::time::Instant,
 ) -> AttachedTerminalOutputModes {
-    modes.cursor_blink_elapsed_ms = u64::try_from(epoch.elapsed().as_millis()).unwrap_or(u64::MAX);
+    with_cursor_blink_elapsed(modes, epoch.elapsed())
+}
+
+/// Copies presentation modes with a caller-owned monotonic elapsed duration.
+/// Saturates durations beyond the wire representation and changes no server
+/// evidence or authority. Async and synchronous owners retain their own clocks.
+pub(crate) fn with_cursor_blink_elapsed(
+    mut modes: AttachedTerminalOutputModes,
+    elapsed: std::time::Duration,
+) -> AttachedTerminalOutputModes {
+    modes.cursor_blink_elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
     modes
 }
 

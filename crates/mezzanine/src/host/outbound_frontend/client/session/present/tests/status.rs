@@ -72,7 +72,7 @@ fn fixture() -> (
         snapshot_size: (80, 24),
         committed_view: None,
         painted_health: None,
-        cursor_blink_epoch: std::time::Instant::now(),
+        cursor_blink_epoch: tokio::time::Instant::now(),
         painted_cursor: None,
         clipboard_receiver: None,
         iroh_status_slot: Some(crate::host::terminal::TerminalIrohStatusSlot {
@@ -144,7 +144,7 @@ async fn outbound_present_cursor_repaint_preserves_settlement_without_ipc() {
     let base = owner.committed_view.clone();
     let lines = owner.lines.clone();
     let styles = owner.styles.clone();
-    owner.cursor_blink_epoch = std::time::Instant::now() - Duration::from_millis(7500);
+    owner.cursor_blink_epoch = tokio::time::Instant::now() - Duration::from_millis(7500);
     owner.painted_cursor = Some(true);
     let (owner, painted) = owner
         .repaint_cursor_phase(&mut terminal, Duration::from_secs(1))
@@ -203,7 +203,7 @@ async fn outbound_present_cursor_repaint_preserves_settlement_without_ipc() {
 async fn outbound_present_status_repaint_preserves_settlement_without_ack() {
     for mode in ["changed", "same", "down", "output-failure"] {
         let (root, listener, peer, mut owner) = fixture();
-        owner.cursor_blink_epoch = std::time::Instant::now() - Duration::from_secs(2);
+        owner.cursor_blink_epoch = tokio::time::Instant::now() - Duration::from_secs(2);
         let epoch = owner.cursor_blink_epoch;
         let handle = owner.client.handle.clone();
         let summary = owner.summary.clone();
@@ -319,7 +319,7 @@ async fn outbound_present_status_repaint_preserves_settlement_without_ack() {
 async fn outbound_present_status_uses_exact_health_and_commits_before_ack() {
     for mode in ["success", "unknown", "down", "foreign", "output-failure"] {
         let (root, listener, peer, mut owner) = fixture();
-        owner.cursor_blink_epoch = std::time::Instant::now() - Duration::from_secs(2);
+        owner.cursor_blink_epoch = tokio::time::Instant::now() - Duration::from_secs(2);
         let epoch = owner.cursor_blink_epoch;
         let handle = owner.client.handle.clone();
         let summary = owner.summary.clone();

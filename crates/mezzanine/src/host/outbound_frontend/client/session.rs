@@ -61,8 +61,8 @@ pub(crate) struct OutboundSessionClient {
     iroh_status_slot: Option<crate::host::terminal::TerminalIrohStatusSlot>,
     /// Last successfully painted health decoration; absent until settled output.
     painted_health: Option<crate::host::terminal::TerminalIrohStatusQuality>,
-    /// Local presentation clock retained across snapshots, never decoded from IPC.
-    cursor_blink_epoch: std::time::Instant,
+    /// Runtime monotonic epoch retained across snapshots, never decoded from IPC.
+    cursor_blink_epoch: tokio::time::Instant,
     /// Effective cursor visibility from the last receipt-settled output frame.
     painted_cursor: Option<bool>,
     /// Exact-session transfer decoder present only for explicit primary v2 setup.
@@ -150,7 +150,7 @@ impl OutboundFrontendClient {
                     snapshot_size: (columns, rows),
                     committed_view: None,
                     painted_health: None,
-                    cursor_blink_epoch: std::time::Instant::now(),
+                    cursor_blink_epoch: tokio::time::Instant::now(),
                     painted_cursor: None,
                     events_negotiated: params.event_stream_version == Some(1),
                     render_rate_limit_fps: snapshot.render_rate_limit_fps,
