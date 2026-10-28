@@ -72,11 +72,31 @@ case is qualified before adding shared authored members.
 | Harness / ordinary command | Offline installed-source evidence | Accounting boundary |
 | --- | --- | --- |
 | Claude / `claude` | Child discovers installed skill/plugin/hooks metadata; SDK-shaped loader shim executes the installed module, real native helper ingress and local timer cancellation | Synthetic current-request final outcomes commit once on replay; missing usage stays unknown and reports a fixed current-epoch coverage gap after prior expense. Not an actual Claude vendor-loader or paid-request check. Native retirement after creator exit is separate from local SessionEnd. |
-| Codex / `codex` | Child reads installed hooks.json and executes exact commands; native enrollment, lifecycle and exact SessionEnd retirement | Revision6 synchronous model hooks report checked per-request usage under original native readiness. Selected model/context totals do not bill; child/default-daemon/source-transition qualification remains incomplete. |
+| Codex / `codex` | Child reads installed hooks.json and executes exact commands; native enrollment, lifecycle and exact SessionEnd retirement | Revision7 synchronous model hooks report checked per-request usage with original native readiness/project origin, separate parent/child custody and durable replay. Native producer replacement under a retained pane root is qualified separately. All known app-server modes require unavailable requesting-client association; this is not default-daemon support. |
 | Copilot / `copilot` | Child discovers installed hooks/mezzanine.json exec/args; native lifecycle and exact SessionEnd retirement | `unavailable-safe-activation`: no safe ordinary persistent OTel activation/native correlation is supplied or enabled by this fixture. Existing exporters are preserved. |
 | Cursor / `agent` | Child reads installed hooks.json and executes exact ordinary CLI hook commands; native lifecycle and exact SessionEnd retirement | `unavailable-counter-schema`: exact CLI counter/cache/multiplicity/native-origin evidence remains unqualified. No forced print mode or IDE-counter substitution. |
-| OpenCode / `opencode` | Separate compiled installer/loader fixtures only; not an assembled installed-native case in this four-harness matrix | Ordinary shared-server/client association and durable accounting dependencies remain unresolved; installation is not accounting acceptance. |
+| OpenCode / `opencode` | Separate installer, TUI route/cache and explicit Bun-native fixture; excluded from this four-creator run | The installed client-local TUI observer selects only its own cached root session. Ordinary usage observations are deliberately dropped until durable source continuity is implemented. The legacy server entry remains descriptor-gated and inert under ordinary launch. |
 | Pi / `pi` | Separate Pi acceptance owner and fixtures | Not qualified by the four-harness matrix. |
+
+Public contract/source review: 2026-10-28. These references describe available
+extension surfaces; they do not attest that a vendor loaded Mezzanine's bytes.
+
+| Harness | Primary reference | Local evidence and remaining scope |
+| --- | --- | --- |
+| Claude | [Mods and policy](https://code.claude.com/docs/en/plugins/mods/overview) | Installed module/native matrix and separate request/child controls; actual SDK loading remains unverified. |
+| Codex | [Inspected hook source](https://github.com/openai/codex/tree/1cc3cf8060c5f1dbd4e3a4d75e1a77b523e0c1ad/codex-rs/hooks) | `codex_` native/projector/installed controls cover the supported direct-source subset; positive shared-daemon requesting-client association is unavailable. The source revision is evidence, not a required runtime version. |
+| Copilot | [Hook locations and events](https://docs.github.com/en/copilot/reference/hooks-reference) | Installed classic callback/native matrix; OTel activation, native request correlation and durable ordinary accounting remain separate work. |
+| Cursor | [Hook schema](https://cursor.com/docs/hooks) | Installed CLI callback/native matrix; exact CLI usage/counter multiplicity and broader client continuity remain unqualified. IDE samples do not qualify CLI billing. |
+| OpenCode | [Plugin discovery](https://opencode.ai/docs/plugins/) and [ordinary TUI](https://opencode.ai/docs/tui/) | `scripts/test-opencode-tui.mjs` checks client-local selection, waits and disposal. `external_enrollment_installed_opencode_tui_uses_client_local_association` is a separate explicit native fixture requiring an existing Bun host; it was not run in this review. Actual vendor loading and ordinary durable usage remain unverified/unavailable respectively. |
+| Pi | [Extension source](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md) | Separate lifecycle/accounting and assembled acceptance scope; this matrix does not certify it. |
+
+All six have compiled installation recipes. Installation, actual native
+enrollment, known usage, and unverified vendor behavior are separate results.
+The four-creator fixture below was rerun on Linux; it does not include OpenCode
+or Pi and does not certify macOS, live SDK loading or provider spending.
+The separate installed persistent-client test also passed with Node for all six
+canonical harness labels. That establishes native sender/transport behavior for
+those labels, not an actual OpenCode Bun TUI API or another vendor SDK loader.
 
 Two repeated isolated runs hold four independent creators on two actual pane
 roots, alongside an ordinary idle native Harness. They exercise pinned titles,
@@ -241,8 +261,9 @@ or delete an entire shared configuration merely to make the current installer ac
 it. Rebootstrap from a different executable pathname does not authenticate the old
 helper, and automatic migration of such unknown references remains unsupported.
 Installation is not proof that
-callbacks are loaded, enrolled or accounted; current descriptor-gated artifacts
-may remain inert under ordinary invocation until migration is complete. Vendor
+callbacks are loaded, enrolled or accounted. Legacy descriptor-gated server
+entries remain inert under ordinary invocation; the installed client-local
+paths have the separate capabilities and limits listed above. Vendor
 trust review and disabled policy remain intact. No live/provider/platform
 conformance is implied by component or historical launcher tests.
 
@@ -317,7 +338,11 @@ model hooks explicitly synchronously with a three-second cap. The helper makes
 at most two immutable bounded delivery attempts and requires a typed durable
 positive-revision ledger acknowledgment for known incurred usage. Revision5 and
 older receipts upgrade while preserving authored hooks/config/exporters/trust.
-Full ordinary topology and child/source-transition qualification remain unfinished. Separately, OTEL completion events and response spans expose
+Direct native child continuations and producer replacement beneath a retained
+pane root have separate local qualification. Positive default shared-daemon
+requesting-client association remains unavailable; a full Mezzanine daemon
+restart preserving PTYs is not established by those tests. Separately, OTEL
+completion events and response spans expose
 input/output/cache-read/cache-write/reasoning counters.
 TUI `last_token_usage` can mean active context occupancy, while `total_token_usage`
 is accumulated session usage; neither is an independently qualified new request.
@@ -400,9 +425,15 @@ at 256 IDs; exhaustion reports unavailable once and disables producer telemetry
 instead of evicting history. Unknown/prototype-named statuses remain inert.
 The pure producer opens no channel or client API. The dependency-free owned entry
 remains `plugins/mezzanine.js` plus private siblings; settings and other plugins
-are preserved. Its current descriptor gate is legacy activation, not a supported
-ordinary-command enrollment path or wrapper fallback. Normal process-qualified
-admission and accounting-source continuity are unfinished. Existing checked
+are preserved. That server entry retains its legacy descriptor gate and stays inert under
+ordinary invocation; it is not a wrapper fallback. Revision15 also registers a
+separate client-local TUI plugin in the effective `tui.json`/`tui.jsonc` plugin
+array, preserving authored fields. Its selected route and root-session cache,
+not the server bus or inherited server pane, select lifecycle observations.
+The native helper/persistent client still qualify the requesting process and
+pane. Unsupported/missing TUI APIs remain inert. This ordinary TUI path
+intentionally drops usage observations until durable accounting-source
+continuity is implemented; it does not adopt server-wide usage. Existing checked
 completed-message ledger replay/conflict protection and strict frame fixtures
 remain reusable, but do not prove normal callback connectivity. Coverage remains
 finalized assistant messages with complete evidenced counters, excluding tool

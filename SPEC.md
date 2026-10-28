@@ -838,12 +838,18 @@ Claude SDK-shaped module callbacks and classic Codex/Copilot/Cursor commands on
 two panes, repeated isolated runs, native/external coexistence, pinned titles,
 read-only status/browser controls and exact source retirement. Its child-only
 synthetic Claude current-request outcomes qualify durable replay/nonbilling of
-missing counters, not provider spending or exhaustive accounting. Classic
-callback counters MUST remain unbilled; unavailable usage is not measured zero.
+missing counters, not provider spending or exhaustive accounting. This fixture's
+unqualified classic callback counter samples MUST remain unbilled;
+unavailable usage is not measured zero. Independently qualified Codex model-hook
+requests are a separate supported accounting source.
 Claude local SessionEnd cancellation MUST NOT be represented as immediate native
 retirement while its creator is still alive: process-death reconciliation is a
 separate evidenced boundary. Classic exact SessionEnd retirement is distinct.
-OpenCode loader/association support and Pi acceptance remain separate scopes.
+OpenCode client-local TUI lifecycle and Pi acceptance remain separate scopes.
+The OpenCode TUI observer MUST select only its own current cached root session;
+server events or inherited server pane metadata MUST NOT select the client.
+Ordinary TUI usage remains unavailable until durable source continuity is
+implemented; the legacy descriptor-gated server entry is not an ordinary fallback.
 This matrix MUST NOT certify real vendor loading, shared-server association,
 cross-process source handoff, restart continuity, macOS execution or full billing.
 
@@ -1324,8 +1330,11 @@ seconds; other lifecycle members retain their prior recipe. The helper MUST use
 at most two immutable bounded transport attempts for model callbacks and require
 a positive-revision typed durable ledger acknowledgment for known incurred usage.
 Revision5 and earlier receipts MUST upgrade without adopting unreceipted old
-members or changing authored hook siblings/config/exporters/trust. Full ordinary
-topology and child/source-transition qualification remain unfinished.
+members or changing authored hook siblings/config/exporters/trust. Direct native
+child continuation and producer replacement under a retained pane root have local
+qualification; positive default shared-daemon requesting-client association
+remains unavailable. Those tests do not establish a full Mezzanine daemon
+restart preserving PTYs.
 TUI `last_token_usage` context occupancy and accumulated session
 totals MUST NOT be billed as new expense or summed together. OTEL ingestion remains
 unqualified until stable immutable report/request correlation, actual native
