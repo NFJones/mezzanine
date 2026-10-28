@@ -53,6 +53,7 @@ use crate::runtime::{
 use crate::security::audit::{AuditActor, AuditLog, AuditRecord};
 use crate::storage::registry::records_to_json;
 
+mod listeners;
 mod teardown;
 
 const HOST_SOCKET_FILE_NAME: &str = "host.sock";
