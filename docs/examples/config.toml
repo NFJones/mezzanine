@@ -1,3 +1,4 @@
+# Codex model readiness uses trusted native hook cwd, preserving it across retry.
 # Codex shared-server callbacks cannot borrow the launching pane as a client.
 # Codex idle expiry hides telemetry; only fresh native lifecycle facts restore it.
 # Codex synchronous model hooks report checked per-request usage under original

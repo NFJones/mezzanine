@@ -287,6 +287,11 @@ private and supply no authorization. Bootstrap reports the shared-server gap
 separately from unverified runtime support. Vendor launch options, shims, daemon
 policy and exporter configuration are unchanged; no `--no-daemon` requirement is
 introduced. Ordinary client-side session association still needs qualification.
+Codex model readiness measures the actual native Pre hook working directory,
+which can differ from its creator's directory. Only a trusted mapped project is
+attributed; untrusted or unavailable hook cwd stays unattributed. Later Post
+callbacks and retries retain the original project, regardless of their cwd.
+Payload paths and pane cwd hints cannot select accounting origin.
 The previously inspected lifecycle hooks at upstream `openai/codex` commit
 `0c329ad2` have lifecycle IDs/selected model rather than usage counters. Newer
 observation-only `PreModelRequest`/`PostModelRequest` hooks also expose per-request

@@ -1284,7 +1284,13 @@ response model, admit an expense, or authorize callback replay. Native original
 request custody remains separate from this pure fact. The installed model callback adapter MUST qualify the actual direct native helper and original
 observer epoch, admit a pre boundary before accepting final counters, retain the
 original origin across bounded retry, conserve same-writer replay, and quarantine
-overlapping pre writers without replacing their origin. Missing counters/readiness,
+overlapping pre writers without replacing their origin. The code-owned Codex model
+pre boundary MUST qualify the actual native hook writer cwd after original
+creator/root/writer proof, since the hook executor uses per-request cwd. The
+creator cwd, pane hints and callback paths MUST NOT substitute for that observed
+hook cwd. Untrusted/unavailable cwd stays unattributed without creator fallback;
+Post and replay MUST retain the first durable origin. Generic curated usage-begin
+MUST retain its creator-cwd contract. Missing counters/readiness,
 capacity exhaustion and missing durable acknowledgment MUST expose fixed coverage
 gaps independently of previously recorded expense. Successful delivery of every
 retained report MAY clear its durable-acknowledgment gap, but MUST NOT erase an

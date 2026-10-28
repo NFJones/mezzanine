@@ -19,27 +19,29 @@ fn post() -> JsonRpcRequest {
 /// Changes the actual isolated fixture creator's cwd and waits for its own
 /// acknowledgment. No production RPC accepts this path as accounting authority.
 async fn change_creator_directory(fixture: &mut Fixture, directory: &std::path::Path) {
+    change_native_directory(&mut fixture.socket, directory).await;
+}
+
+/// Changes a real fixture process cwd through its isolated test control stream;
+/// the runtime receives no directory claim and must observe its native process.
+async fn change_native_directory(socket: &mut tokio::net::UnixStream, directory: &std::path::Path) {
     use std::os::unix::ffi::OsStrExt;
     let bytes = directory.as_os_str().as_bytes();
-    fixture.socket.write_all(&[8]).await.unwrap();
-    fixture
-        .socket
+    socket.write_all(&[8]).await.unwrap();
+    socket
         .write_all(&u32::try_from(bytes.len()).unwrap().to_be_bytes())
         .await
         .unwrap();
-    fixture.socket.write_all(bytes).await.unwrap();
+    socket.write_all(bytes).await.unwrap();
     let mut changed = [0];
-    tokio::time::timeout(
-        Duration::from_secs(10),
-        fixture.socket.read_exact(&mut changed),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), socket.read_exact(&mut changed))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(changed, [1]);
 }
 
-/// The pre boundary captures actual creator cwd A despite a stale pane hint B.
+/// The pre boundary captures inherited native hook cwd A despite a stale pane hint B.
 /// The creator then changes physically to B before final counters arrive; those
 /// counters and a replay after a view reset retain A. Only a later genuine pre
 /// may admit B, even though the pane now misleadingly advertises A. Project IDs
@@ -297,4 +299,127 @@ async fn external_codex_model_published_expense_survives_rotation_without_stale_
             .external_usage_reservation_counts_for_tests(),
         (0, 0)
     );
+}
+
+/// Codex executes each hook in a request-specific cwd which can differ from its
+/// living creator and pane. A native Pre hook in trusted B must capture B while
+/// its creator remains A; a second hook in an untrusted directory stays
+/// unattributed. Post in A and a view-reset replay cannot change either origin.
+/// Generic curated begin still measures the creator, so only the code-owned
+/// model adapter can select the proven hook writer instead of a payload path.
+#[tokio::test(flavor = "current_thread")]
+async fn external_codex_model_origin_uses_native_hook_cwd_without_creator_fallback() {
+    use crate::security::project::{ProjectTrustStore, TrustDecision};
+    let directory = std::env::temp_dir().join(format!(
+        "mez-codex-hook-cwd-{}",
+        crate::storage::token_usage::new_token_usage_event_id()
+    ));
+    let a = directory.join("creator");
+    let b = directory.join("request");
+    let unknown = directory.join("untrusted");
+    for path in [&a, &b, &unknown] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let Some(mut fixture) = fixture_with_start_directory("hold", Some(&a)).await else {
+        panic!("Codex hook cwd qualification requires native peer evidence");
+    };
+    let store =
+        crate::storage::token_usage::TokenUsageStore::new(fixture.directory.join("usage.sqlite"));
+    let mut trust = ProjectTrustStore::default();
+    for path in [&a, &b] {
+        trust
+            .decide(path.clone(), TrustDecision::Trusted, None)
+            .unwrap();
+    }
+    let inventory = store
+        .prepare_accounting_projects(&trust.records().cloned().collect::<Vec<_>>())
+        .unwrap();
+    let project_b = inventory
+        .iter()
+        .find(|row| row.root == b.canonicalize().unwrap())
+        .unwrap()
+        .id
+        .clone()
+        .unwrap();
+    fixture.service.set_project_trust_store(trust, None);
+    fixture.service.set_token_usage_store(store.clone());
+    fixture
+        .service
+        .persistence
+        .install_accounting_projects(&store, Some(inventory));
+    fixture
+        .service
+        .set_pane_current_working_directory("%1", a.clone());
+    let (_source_socket, source) = child(&mut fixture).await;
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&declaration(), &source)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &source).await["result"]["registered"],
+        true
+    );
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&callback("UserPromptSubmit", "turn-a"), &source)
+        .unwrap();
+    assert!(
+        settle(&mut fixture, work, &source)
+            .await
+            .get("error")
+            .is_none()
+    );
+    let mut sockets = Vec::new();
+    for path in [&b, &unknown] {
+        let (mut pre_socket, pre) = child(&mut fixture).await;
+        change_native_directory(&mut pre_socket, path).await;
+        let work = fixture
+            .service
+            .prepare_external_helper_presentation(&callback("PreModelRequest", "turn-a"), &pre)
+            .unwrap();
+        assert_eq!(
+            settle(&mut fixture, work, &pre).await["result"]["observed"],
+            true
+        );
+        let (post_socket, connection) = child(&mut fixture).await;
+        for replay in [false, true] {
+            if replay {
+                assert!(fixture.service.reset_external_token_usage("%1"));
+            }
+            let work = fixture
+                .service
+                .prepare_external_helper_presentation(&post(), &connection)
+                .unwrap();
+            let reply = settle(&mut fixture, work, &connection).await;
+            assert_eq!(reply["result"]["durable"], true, "{reply}");
+            assert_eq!(reply["result"]["applied"], !replay, "{reply}");
+        }
+        sockets.extend([pre_socket, post_socket]);
+    }
+    let database = rusqlite::Connection::open(store.path()).unwrap();
+    for table in ["external_usage_requests", "token_usage_events"] {
+        let mut projects = database
+            .prepare(&format!(
+                "SELECT project_id FROM {table} ORDER BY project_id"
+            ))
+            .unwrap();
+        let projects = projects
+            .query_map([], |row| row.get::<_, Option<String>>(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(projects, vec![None, Some(project_b.as_str().to_owned())]);
+    }
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        20
+    );
+    drop(fixture);
+    std::fs::remove_dir_all(directory).unwrap();
 }

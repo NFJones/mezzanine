@@ -64,6 +64,7 @@ does not activate paid search or change the default backend.
 Codex lifecycle observations include permission waits and tool activity.
 Synchronous model hooks report available per-request usage under native readiness.
 Fresh native lifecycle facts restore visibility after idle expiry.
+Model readiness captures the native hook’s request directory for accounting.
 Shared-server callbacks require requesting-client association and cannot borrow
 a launching pane’s context.
 Claude child accounting requires a genuine start under the current parent observer.

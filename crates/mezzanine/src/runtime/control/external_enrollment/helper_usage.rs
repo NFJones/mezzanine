@@ -3,7 +3,10 @@
 //! Public selectors narrow an existing declared creator; they never mint source
 //! authority. Native helper observation runs first on the existing bounded
 //! worker, then this capture reobserves the retained creator and qualifies its
-//! actual cwd. Actor settlement must still fence original root/source/identity
+//! actual cwd. The code-owned Codex model adapter instead qualifies the native
+//! hook writer cwd, since its executor applies a per-request working directory.
+//! This never changes generic helper origins or accepts a payload path. Actor
+//! settlement must still fence original root/source/identity
 //! and a one-shot published durable origin before returning readiness. No
 //! expense, lease, presentation, namespace allocation or general RPC occurs.
 
@@ -28,6 +31,8 @@ pub(super) struct HelperUsageBegin {
     marker: String,
     producer: ProducerEvidence,
     harness: String,
+    /// Only the code-owned Codex model boundary can select native hook cwd.
+    native_hook_cwd: bool,
     trust: Option<Arc<crate::security::project::ProjectTrustStore>>,
     inventory: Option<Arc<Vec<AccountingProjectRecord>>>,
     store: TokenUsageStore,
@@ -72,6 +77,7 @@ impl HelperUsageBegin {
             marker,
             producer: source.producer.clone(),
             harness: binding.harness.clone(),
+            native_hook_cwd: false,
             trust: service
                 .integration
                 .project_trust_store()
@@ -94,8 +100,24 @@ impl HelperUsageBegin {
         })
     }
 
+    /// Captures the code-owned Codex model boundary, whose native hook executor
+    /// uses per-request cwd. Public generic begin calls retain creator semantics.
+    pub(super) fn capture_codex_hook(
+        service: &RuntimeSessionService,
+        binding: &LaunchBinding,
+        marker: String,
+    ) -> Result<Self> {
+        if binding.harness != "codex" {
+            return Err(MezError::forbidden("Codex request source unavailable"));
+        }
+        let mut begin = Self::capture(service, binding, marker)?;
+        begin.native_hook_cwd = true;
+        Ok(begin)
+    }
+
     /// Invoked only after this work's actual native direct-parent ancestry was
-    /// published. The helper cwd/session hints never select expense origin.
+    /// published. Payload cwd/session hints never select expense origin. Only
+    /// code-owned Codex model hooks use the exact native writer working directory.
     pub(super) fn observe(&self, work: &ExternalEnrollmentWork) -> Result<()> {
         if Instant::now() >= work.deadline
             || !work.ancestry.get().is_some_and(|ancestry| {
@@ -111,7 +133,15 @@ impl HelperUsageBegin {
             .producer
             .reobserve()
             .map_err(|_| MezError::forbidden("curated request creator unavailable"))?;
-        let cwd = mez_mux::process::current_working_directory_for_pid(identity.process_id)
+        let hook_identity = if self.native_hook_cwd {
+            Some(work.origin.reobserve().map_err(|_| {
+                MezError::forbidden("Codex native hook unavailable during origin capture")
+            })?)
+        } else {
+            None
+        };
+        let cwd_pid = hook_identity.map_or(identity.process_id, |hook| hook.process_id);
+        let cwd = mez_mux::process::current_working_directory_for_pid(cwd_pid)
             .and_then(|cwd| std::fs::canonicalize(cwd).ok());
         let root = cwd.as_ref().and_then(|cwd| {
             self.trust.as_ref().and_then(|trust| {
@@ -127,6 +157,13 @@ impl HelperUsageBegin {
         self.producer.reobserve().map_err(|_| {
             MezError::forbidden("curated request creator changed during origin capture")
         })?;
+        if let Some(hook) = hook_identity
+            && work.origin.reobserve().ok() != Some(hook)
+        {
+            return Err(MezError::forbidden(
+                "Codex native hook changed during origin capture",
+            ));
+        }
         if Instant::now() >= work.deadline {
             return Err(MezError::conflict("curated request observation expired"));
         }

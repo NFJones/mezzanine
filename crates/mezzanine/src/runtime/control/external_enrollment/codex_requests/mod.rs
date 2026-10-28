@@ -251,7 +251,7 @@ impl RuntimeSessionService {
             .get(&digest)
             .ok_or_else(|| MezError::forbidden("Codex original request owner unavailable"))?;
         let begin = if let Step::Before { marker, .. } = &plan.step {
-            Some(super::helper_usage::HelperUsageBegin::capture(
+            Some(super::helper_usage::HelperUsageBegin::capture_codex_hook(
                 self,
                 binding,
                 marker.clone(),
