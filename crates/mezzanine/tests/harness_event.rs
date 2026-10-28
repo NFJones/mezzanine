@@ -278,7 +278,7 @@ fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks()
     .unwrap();
     std::fs::write(vendor.join("config.toml"), b"[features]\nhooks = false\n").unwrap();
     let installed = bootstrap(&[]);
-    assert_eq!(installed["manifest_revision"], 6);
+    assert_eq!(installed["manifest_revision"], 7);
     assert_eq!(
         installed["shared_server_association"],
         "unavailable-codex-native-client-session-association"

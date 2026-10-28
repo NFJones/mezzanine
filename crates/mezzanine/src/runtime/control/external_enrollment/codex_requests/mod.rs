@@ -119,6 +119,8 @@ pub(super) struct RequestWork {
     pub(super) step: Step,
     pub(super) report: Option<Report>,
     native_observed: Arc<OnceLock<()>>,
+    /// Raw selectors stay runtime-local; custody uses a disjoint opaque turn key.
+    child_turn: Option<(String, String)>,
 }
 impl RequestWork {
     /// Marks only an actual off-actor ancestry-qualified callback, before I/O.
@@ -147,8 +149,17 @@ impl RuntimeSessionService {
         turn: &str,
         writer: ProcessParentIdentity,
         counters: Option<ExternalCounters>,
-        current_turn: bool,
+        child: Option<&str>,
     ) -> RequestWork {
+        let raw_turn = turn;
+        let current_turn = binding.enrollment.as_ref().is_some_and(|source| {
+            child.map_or_else(
+                || source.codex_turns.is_current(turn),
+                |id| source.codex_children.allows_pre(id, turn),
+            )
+        });
+        let scoped_turn = child.map(|id| super::codex_children::turn_key(id, turn));
+        let turn = scoped_turn.as_deref().unwrap_or(turn);
         let requests = binding.enrollment.as_ref().map(|s| &s.codex_requests);
         let mut report = None;
         let step = if let Some(requests) = requests {
@@ -233,6 +244,7 @@ impl RuntimeSessionService {
             step,
             report,
             native_observed: Arc::new(OnceLock::new()),
+            child_turn: child.map(|id| (id.into(), raw_turn.into())),
         }
     }
 
@@ -323,6 +335,11 @@ impl RuntimeSessionService {
             .get_mut(&digest)
             .and_then(|b| b.enrollment.as_mut())
             .ok_or_else(|| MezError::forbidden("Codex original request source unavailable"))?;
+        if matches!(plan.step, Step::Before { .. })
+            && let Some((child, turn)) = &plan.child_turn
+        {
+            source.codex_children.admit_turn(child, turn)?;
+        }
         let requests = &mut source.codex_requests;
         match &plan.step {
             Step::Before {

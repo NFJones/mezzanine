@@ -38,6 +38,7 @@ const ADMISSION_BUDGET: Duration = Duration::from_secs(2);
 const MAX_OBSERVER_INSTANCES: usize = 128;
 
 mod codex;
+mod codex_children;
 mod codex_idle;
 mod codex_order;
 mod codex_requests;
@@ -134,6 +135,8 @@ pub(super) struct EnrollmentBinding {
     codex_turns: codex::CodexTurns,
     /// Original model-request custody, independent of lifecycle/observer proof.
     codex_requests: codex_requests::Requests,
+    /// Exact native child starts and finite original child-turn fences.
+    codex_children: codex_children::Children,
     /// Dormant visibility retains original callback custody without fresh health.
     codex_idle: codex_idle::CodexIdle,
     /// Original classic Copilot timestamp fence, never a turn or billing claim.
@@ -891,6 +894,7 @@ impl RuntimeSessionService {
                     curated_observer: None,
                     codex_turns: Default::default(),
                     codex_requests: Default::default(),
+                    codex_children: Default::default(),
                     codex_idle: Default::default(),
                     copilot_events: Default::default(),
                     cursor_generations: Default::default(),

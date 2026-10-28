@@ -673,52 +673,73 @@ native creator/root/epoch. Permission wait is presentation only; tool events are
 running activity, not prompt submission, approval or usage evidence. Replays are
 sequence-inert and interruption dominates later activity. No extra public fields
 or capabilities are granted.
-`agent/external/codex-observe` accepts only `pane_id`, `external_session_id`,
-`event` (UserPromptSubmit/PreToolUse/PermissionRequest/PostToolUse/Stop/Interrupt)
-and bounded inert `turn_id`. A unique
-indexed candidate must retain the original fixed instance at epoch1; worker and
-settlement fence its captured generation and exact native helper/source/root.
-Rotation or retirement rejects, never rebinds a callback to the newest epoch.
-Daemon presentation sequences advance only for new coarse facts. A bounded
-per-source ingress ticket remains held through actor settlement; later native
-workers wait within their existing deadlines without blocking actor work.
-Rejection/cancellation releases coalesced finite ordering holes, so independent
-worker completion cannot reorder accepted callbacks. Original wire ids survive
-the private internal helper envelope.
-The bounded 4096-turn fence retains known old IDs, rejects stale stops and exhaustion, makes
-identical retries inert and prevents Stop from downgrading interruption or
-claiming success. Unknown new prompt IDs are arrival-ordered rather than vendor
-chronology proof. SessionEnd accepts pane/session/event only, no turn_id, and
-retires only the captured native-qualified original first epoch through the same
-ordered settlement and exact cleanup. It cannot kill the creator, infer success,
-clear expense or affect another session/successor. Late queued callbacks and
-same-lifetime re-enrollment remain fenced. This is current-daemon retirement,
-not same-ID transition or restart qualification. Changed native-authorized facts
-may stamp original proof with server sequence; duplicate/stale/failed/end facts
-cannot refresh it. The existing 30s monotonic window plus native creator/root
-liveness allows daemon maintenance (not the callback) to renew the 60s lease.
-Proof loss is connection-lost despite parent survival, with finite 30s+60s grace.
-This does not prove continuous idle observer health or no-gap delivery; usage
-remains unavailable and no callback grants native task powers. Installation
-is not proof of actual vendor loading or callback delivery.
-Ordinary Codex usage remains unqualified, not fabricated zero. Source inspection
-at `openai/codex` commit `0c329ad2c9d5a2592128a1d536c66e16f9397e46` found no
-token counters in the installed lifecycle hook schemas, but separate OTEL
-`sse_event_completed(usage, ttft_ms)` and response-span completion do emit actual
-input/output/cache/reasoning counters. The completion-log signature/shared metadata
-provide no original-request origin or response/request ID argument. OTLP trace/span
-correlation is a possible separate source, not proof of native client/pane ownership
-or ready-marker provenance. A collector must establish those facts, preserve response
-model/category and immutable report identity, bound retry/retention and freeze origin
-before charging. TUI last/context and cumulative totals are not additional deltas.
-Current Codex configuration selects one exporter per signal; bootstrap cannot
-silently replace an authored exporter or promise a metadata-only additional sink.
-Detailed log macros include account/email; trace-safe events omit those common log
-fields, but that alone does not qualify all exported payloads or native provenance.
-No receiver/exporter rewrite or alternate accounting RPC is enabled here. Tests
-qualify that completion-like extra fields remain absent from fixed lifecycle
-envelopes and create no request markers, observations, receipts, checkpoints or
-expense even when a real native source mapping exists.
+`agent/external/codex-observe` accepts `pane_id`, `external_session_id`, fixed
+`event`, and bounded inert `turn_id`. PostModelRequest additionally requires
+normalized `counters` (or null for unavailable). SubagentStart/SubagentStop and
+child model callbacks carry explicit `agent_id`; other lifecycle events cannot
+use child selectors. SessionEnd accepts pane/session/event only, without turn or
+child fields. The indexed candidate must retain the original fixed instance at
+epoch1. Kernel parent PID narrows candidates only; native worker and actor still
+prove exact helper writer, retained creator/root/generation and ancestry.
+Rotation and retirement reject rather than adopt the newest source. Known shared
+managed/non-stdio app servers are refused with
+`unavailable-codex-native-client-session-association`; unknown native topology
+fails closed. Inherited launcher MEZ, ancestry or cwd cannot prove a shared
+server's requesting client. No invocation bytes enter diagnostics or transport.
+
+Daemon presentation sequences advance only for changed main lifecycle facts.
+Per-source ingress tickets remain held through actor settlement; native workers
+wait within existing deadlines without blocking the actor. Model plans must be
+serving before worker I/O, so another callback cannot replace captured custody.
+Cancellation releases finite ordering holes and replies preserve original IDs.
+The 4096-turn main fence retains old IDs and rejects exhaustion. Stop means ready,
+not success; Interrupt dominates later activity on that turn. Exact SessionEnd
+retires only the captured source, never kills the creator or clears expense.
+
+Original first-epoch source custody can remain dormant after idle expiry while
+its retained native creator/root live. Rows are hidden and presence goes offline;
+survival alone renews neither observer proof nor lease. Only a changed genuine
+main lifecycle fact can recover the same original identity and finite lease.
+Replays, model counts and child events do not wake the parent. Original admitted
+outcomes can settle while dormant. Explicit end, root loss and observer replacement
+remain closed fences, and missing presence cannot allocate a replacement identity.
+This is finite observational proof, not continuous idle health.
+
+The installed synchronous PreModelRequest/PostModelRequest source supplies
+per-request usage. A genuine native Pre captures one immutable durable origin
+from its actual hook working directory and trusted project inventory, independently
+of creator/pane cwd or payload paths. Overlapping Pre writers quarantine their
+turn rather than pair by nearest/newest callback. Post keeps the original origin,
+including after cwd changes, view reset and transport retry. Failed/cancelled
+requests preserve incurred counts; absent categories stay unknown and inclusive
+cache/reasoning subsets are validated. Selected model and context/cumulative
+occupancy totals never become response dimensions or extra expense. Response
+provider/model remain unavailable when absent from this source.
+
+Main and child requests share sixteen active/retained custody slots, with finite
+settled replay hints. Both model hooks use explicit async=false/timeout=3; the
+helper performs at most two immutable bounded telemetry attempts. Only a typed
+positive-revision durable ledger ACK completes Post delivery. Refusal/lost ACK
+keeps the original normalized report for bounded later delivery, never triggers
+provider replay, and exposes fixed readiness/counter/delivery/capacity gaps.
+No alternate ledger or usage RPC is introduced.
+
+Revision7 adds neutral SubagentStart/SubagentStop hooks while retaining exact
+revision6 upgrade ownership. A genuine native Start binds at most128 child
+identities under the exact original parent session, with4096 aggregate child-turn
+fences and no eviction. Child/sibling turn keys are disjoint from valid main turn
+selectors. Child requests retain their own native hook cwd and original custody
+under the shared durable owner. Child facts cannot repaint, renew or retire the
+parent. SubagentStop may continue, so it proves neither death nor request completion;
+a later genuine Pre can admit continuation. Old retired child turns cannot reopen,
+and parent/source/root/epoch fences end the association. Child SessionStart/End
+cannot allocate or retire a main source; unknown children cannot import history.
+
+Lifecycle hooks, separate OTEL completion-like fields and TUI last/context totals
+are not request readiness or additional usage deltas. Bootstrap preserves authored
+exporters, settings and vendor hook review/disabled policy. No collector/exporter
+rewrite is needed for this model-hook path. Installation remains separate from
+actual vendor loading, runtime delivery and unsupported client association.
 The original fixed command-hook instance coalesces only its exact boundary. A
 same-ID resume/clear/fork boundary is not an identical retry and requires a fresh
 observer with captured predecessor evidence; the neutral helper retains none.

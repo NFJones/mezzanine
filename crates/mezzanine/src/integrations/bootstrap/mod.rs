@@ -191,8 +191,9 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         };
     }
     if Some(manifest) == codex_artifact::manifest().as_ref() {
-        let mut history = codex_artifact::historical_tool_manifest()
+        let mut history = codex_artifact::historical_model_manifest()
             .into_iter()
+            .chain(codex_artifact::historical_tool_manifest())
             .chain(codex_artifact::historical_activity_manifest())
             .chain(codex_artifact::historical_fixed_manifest())
             .collect::<Vec<_>>();

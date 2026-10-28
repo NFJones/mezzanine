@@ -720,10 +720,14 @@ main SessionStart startup/resume/clear/fork using standard nonsecret MEZ routing
 Duplicate/child/compact/other-event input MUST NOT allocate a source. No inherited
 fd3 or launcher credential may authorize it. Native daemon writer/direct-parent/
 root/ancestry/deadline fences remain required. Every callback MUST return neutral
-JSON without raw daemon results/errors, initialize, retry, transcript reads or
-provider work. Missing route/input/runtime/outage loses telemetry only.
+JSON without raw daemon results/errors, initialize, transcript reads or provider
+work. Lifecycle callbacks MUST use at most one exchange; model callbacks MAY
+use the bounded immutable telemetry retry described below. Missing route/input/runtime/outage loses telemetry only.
 Normalized UserPromptSubmit/Stop/Interrupt MAY use `agent/external/codex-observe`
-with only pane/session/event/turn selectors. It MUST target a unique indexed
+with only pane/session/event/turn selectors. Model callbacks MAY additionally
+carry normalized counters, and explicit child Start/Stop/model callbacks MAY
+carry bounded `agent_id`; child labels require original native Start before
+request readiness and cannot become main lifecycle facts. It MUST target a unique indexed
 Codex original fixed instance at epoch1, capture its generation before native
 work and reject rotation/retirement rather than adopting a newest source.
 Native helper authorization MUST precede server-owned presentation sequencing.
@@ -1295,7 +1299,24 @@ capacity exhaustion and missing durable acknowledgment MUST expose fixed coverag
 gaps independently of previously recorded expense. Successful delivery of every
 retained report MAY clear its durable-acknowledgment gap, but MUST NOT erase an
 independent readiness/counter/capacity gap. Selected model/provider MUST
-remain unavailable rather than being inferred. Codex revision6 MUST install exact
+remain unavailable rather than being inferred. Codex child model hooks MUST require
+an actual native-qualified SubagentStart under the original parent session and
+explicit child thread identity; a child label alone MUST NOT bind a source.
+At most 128 child identities and 4096 aggregate child-turn fences MUST be retained
+without eviction. Child and sibling custody keys MUST be disjoint from valid
+main-turn selectors, sharing the existing sixteen-slot request budget and
+original durable owner. Child readiness MUST capture native hook cwd, and
+admitted outcomes MUST retain their original project and counters. SubagentStop
+is a continuable turn boundary, not child death: it MUST NOT retire parent or
+child, discard admitted outcomes, renew parent proof or change parent status.
+A genuine later child Pre MAY admit continuation; retired child turns MUST NOT
+reopen. Only parent/source/root/epoch fences end the original association. Child
+SessionStart/End MUST remain unable to create or retire a main source. Unknown
+children and parent replacements MUST NOT adopt requests or history.
+Codex revision7 MUST preserve the exact revision6 ten-member graph and add only
+SubagentStart/SubagentStop with the fixed neutral command and one-second budget.
+Exact revision6 MUST remain recognized for receipt-qualified upgrade and repair.
+Codex revision7 MUST install exact
 PreModelRequest/PostModelRequest members with explicit async=false and timeout=3
 seconds; other lifecycle members retain their prior recipe. The helper MUST use
 at most two immutable bounded transport attempts for model callbacks and require

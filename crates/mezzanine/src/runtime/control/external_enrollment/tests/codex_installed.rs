@@ -440,7 +440,8 @@ async fn external_codex_installed_shared_server_callback_is_neutral_without_ipc(
 /// same living ordinary creator, retaining older threads until all are admitted.
 /// Each session owns one durable namespace and
 /// records one model request. Same-session resume declarations are inert, compact
-/// and child contexts produce no IPC, and later parent facts still work. End
+/// and child lifecycle contexts produce no IPC. Unstarted child model facts cannot
+/// admit expense; later parent facts still work. End
 /// and late model callbacks cannot revive an original retired session or bill
 /// it twice. The next session's clear/fork/resume source cannot import history.
 /// This uses isolated bootstrap and the actual fixed helper, not actual Codex.
@@ -492,8 +493,8 @@ async fn external_codex_installed_session_boundaries_preserve_parent_and_account
             ("SessionStart", "clear", true, 0),
             ("SessionEnd", boundary, true, 0),
             ("UserPromptSubmit", boundary, false, 1),
-            ("PreModelRequest", boundary, true, 0),
-            ("PostModelRequest", boundary, true, 0),
+            ("PreModelRequest", boundary, true, 1),
+            ("PostModelRequest", boundary, true, 2),
             ("PreModelRequest", boundary, false, 1),
             ("PostModelRequest", boundary, false, 1),
             ("Stop", boundary, false, 1),
@@ -581,4 +582,125 @@ async fn external_codex_installed_session_boundaries_preserve_parent_and_account
             .unwrap(),
         40
     );
+}
+
+/// The generated child boundary hooks bind actual native children only to their
+/// original qualified parent session. Equal parent/sibling turn labels maintain
+/// distinct readiness; Stop may continue and cannot retire the parent. Installed
+/// duplicate Post callbacks without a new Pre cannot recharge settled expense.
+/// This runs the actual fresh helper and isolated installer without vendor calls.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires freshly built sibling mez binary; installed child accounting qualification"]
+async fn external_codex_installed_child_hooks_account_without_parent_overwrite() {
+    use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+    let Some(mut fixture) = fixture("hold").await else {
+        panic!("installed child qualification requires native evidence")
+    };
+    let helper = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("mez");
+    let home = fixture.directory.join("home");
+    std::fs::create_dir(&home).unwrap();
+    let installed = std::process::Command::new(helper)
+        .args(["--json", "bootstrap", "codex"])
+        .env_clear()
+        .env("HOME", &home)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(installed.status.success(), "{installed:?}");
+    assert!(installed.stderr.is_empty());
+    let document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join(".codex/hooks.json")).unwrap()).unwrap();
+    let usage = fixture.directory.join("usage.sqlite");
+    fixture
+        .service
+        .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&usage));
+    let service = std::mem::replace(&mut fixture.service, RuntimeServiceFixture::new().build());
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let task = tokio::spawn(actor.run());
+    for (event, id, turn, callbacks) in [
+        ("SessionStart", None, "shared", 1),
+        ("UserPromptSubmit", None, "shared", 1),
+        ("SubagentStart", Some("a"), "shared", 1),
+        ("SubagentStart", Some("b"), "shared", 1),
+        ("PreModelRequest", None, "shared", 1),
+        ("PreModelRequest", Some("a"), "shared", 1),
+        ("PreModelRequest", Some("b"), "shared", 1),
+        ("SubagentStop", Some("a"), "shared", 1),
+        ("PostModelRequest", Some("a"), "shared", 1),
+        ("PostModelRequest", None, "shared", 1),
+        ("PostModelRequest", Some("b"), "shared", 1),
+        ("Stop", None, "shared", 1),
+        ("PreModelRequest", Some("a"), "shared", 1),
+        ("PostModelRequest", Some("a"), "shared", 1),
+        ("SubagentStop", Some("a"), "shared", 1),
+        ("PostModelRequest", Some("a"), "shared", 2),
+        ("SessionEnd", Some("a"), "shared", 0),
+    ] {
+        let mut payload = serde_json::json!({"hook_event_name":event,"session_id":"session-a","source":"startup",
+            "turn_id":turn,"stop_hook_active":false,"status":"completed","token_usage":{"input_tokens":10,"output_tokens":3},
+            "cwd":"PRIVATE","agent_transcript_path":"PRIVATE","last_assistant_message":"PRIVATE"});
+        if let Some(id) = id {
+            payload["agent_id"] = id.into();
+            payload["agent_type"] = "PRIVATE".into();
+        }
+        let command = document["hooks"][event][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        installed_callback(&mut fixture, &handle, command, payload, callbacks).await;
+    }
+    handle.shutdown().await.unwrap();
+    fixture.service = task.await.unwrap().service;
+    let registry = fixture.service.control.external_agents();
+    assert_eq!(registry.bindings.len(), 1);
+    let binding = registry.bindings.values().next().unwrap();
+    assert!(!binding.retired);
+    assert_eq!(binding.enrollment.as_ref().unwrap().epoch, 1);
+    let presentation = binding
+        .registration
+        .as_ref()
+        .unwrap()
+        .presentation
+        .as_ref()
+        .unwrap();
+    assert_eq!(presentation.sequence, 2);
+    assert_eq!(presentation.state, "ready");
+    assert_eq!(fixture.service.external_agent_rows().len(), 1);
+    let database = rusqlite::Connection::open(usage).unwrap();
+    for table in ["external_usage_requests", "token_usage_events"] {
+        assert_eq!(
+            database
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            4
+        );
+    }
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        40
+    );
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT count(DISTINCT owner) FROM external_usage_requests",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert!(fixture.connection.unix_origin().unwrap().is_live());
 }

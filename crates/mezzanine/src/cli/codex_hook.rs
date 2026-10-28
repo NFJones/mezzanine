@@ -53,6 +53,15 @@ fn native_route_eligible(pid: u32) -> bool {
     !refused && mez_mux::process::process_parent_identity_for_pid(pid) == Some(identity)
 }
 
+/// Rebuilds only fixed normalized observation fields, never supplied RPC text.
+fn codex_observation_body(params: serde_json::Value) -> Result<String> {
+    let body = serde_json::json!({"jsonrpc":"2.0","id":"codex-hook","method":"agent/external/codex-observe","params":params}).to_string();
+    crate::control::validate_control_method_params_schema(
+        &crate::control::parse_json_rpc_request(&body)?,
+    )?;
+    Ok(body)
+}
+
 /// Rebuilds a normalized initial declaration or original-instance turn callback. The fixed
 /// process-local instance label permits inert retry for one qualified creator,
 /// not another helper-owned namespace. Child/compact/turn/end events cannot
@@ -60,10 +69,20 @@ fn native_route_eligible(pid: u32) -> bool {
 fn request(bytes: &[u8], pane: &str) -> Result<Option<String>> {
     let observation = codex::normalize("best-effort", bytes)?;
     if observation.is_none() {
-        if let Some(fact) = codex::request::normalize(bytes)? {
-            if fact.agent_id.is_some() {
-                return Ok(None);
+        if let Some(child) = codex::children::normalize(bytes)? {
+            if pane.len() < 2
+                || pane.len() > 64
+                || !pane.starts_with('%')
+                || !pane[1..].bytes().all(|b| b.is_ascii_digit())
+            {
+                return Err(MezError::invalid_args("Codex child pane unavailable"));
             }
+            return Ok(Some(codex_observation_body(serde_json::json!({
+                "pane_id":pane,"external_session_id":child.session,"turn_id":child.turn,
+                "event":child.event,"agent_id":child.child,
+            }))?));
+        }
+        if let Some(fact) = codex::request::normalize(bytes)? {
             if pane.len() < 2
                 || pane.len() > 64
                 || !pane.starts_with('%')
@@ -72,6 +91,9 @@ fn request(bytes: &[u8], pane: &str) -> Result<Option<String>> {
                 return Err(MezError::invalid_args("Codex request pane unavailable"));
             }
             let mut params = serde_json::json!({"pane_id":pane,"external_session_id":fact.session,"turn_id":fact.turn});
+            if let Some(child) = fact.agent_id {
+                params["agent_id"] = child.into();
+            }
             match fact.phase {
                 codex::request::Phase::Before => params["event"] = "PreModelRequest".into(),
                 codex::request::Phase::After { counters, .. } => {
@@ -81,11 +103,7 @@ fn request(bytes: &[u8], pane: &str) -> Result<Option<String>> {
                     })?;
                 }
             }
-            let body = serde_json::json!({"jsonrpc":"2.0","id":"codex-hook","method":"agent/external/codex-observe","params":params}).to_string();
-            crate::control::validate_control_method_params_schema(
-                &crate::control::parse_json_rpc_request(&body)?,
-            )?;
-            return Ok(Some(body));
+            return Ok(Some(codex_observation_body(params)?));
         }
         return Ok(None);
     }
@@ -340,7 +358,7 @@ mod tests {
     }
     /// Genuine model-hook usage survives failed/cancelled requests while paths,
     /// selected model and error text never leave the bounded projector. A child
-    /// fact remains unassociated and cannot bill its main parent implicitly.
+    /// fact retains its explicit selector; native Start must authorize association.
     #[test]
     fn codex_hook_model_capsules_keep_only_checked_scope_and_usage() {
         for status in ["completed", "failed", "cancelled"] {
@@ -357,11 +375,12 @@ mod tests {
             assert!(value["params"]["counters"]["reasoning_tokens"].is_null());
             assert!(!body.contains("PRIVATE"));
             input["agent_id"] = "child-a".into();
-            assert!(
-                request(&serde_json::to_vec(&input).unwrap(), "%1")
-                    .unwrap()
-                    .is_none()
-            );
+            let child_body = request(&serde_json::to_vec(&input).unwrap(), "%1")
+                .unwrap()
+                .unwrap();
+            let child: serde_json::Value = serde_json::from_str(&child_body).unwrap();
+            assert_eq!(child["params"]["agent_id"], "child-a");
+            assert!(!child_body.contains("PRIVATE"));
         }
     }
 

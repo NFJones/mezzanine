@@ -292,6 +292,14 @@ which can differ from its creator's directory. Only a trusted mapped project is
 attributed; untrusted or unavailable hook cwd stays unattributed. Later Post
 callbacks and retries retain the original project, regardless of their cwd.
 Payload paths and pane cwd hints cannot select accounting origin.
+Revision7 also installs SubagentStart/SubagentStop. Child usage requires a genuine
+native start under the exact original parent session; child IDs alone do not
+establish association. Main and sibling requests keep separate custody while
+sharing the finite request budget. Child facts do not repaint or renew the parent.
+SubagentStop may continue, so it does not prove death or discard readiness. Later
+Pre callbacks can admit new requests, while old retired turns stay fenced. Parent
+end, root loss and observer replacement close the original child association.
+Child hook cwd supplies original project attribution; no transcript is read.
 The previously inspected lifecycle hooks at upstream `openai/codex` commit
 `0c329ad2` have lifecycle IDs/selected model rather than usage counters. Newer
 observation-only `PreModelRequest`/`PostModelRequest` hooks also expose per-request

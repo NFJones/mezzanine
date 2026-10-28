@@ -661,6 +661,7 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
             "pane_id",
             "external_session_id",
             "event",
+            "agent_id",
             "turn_id",
             "counters",
         ]),

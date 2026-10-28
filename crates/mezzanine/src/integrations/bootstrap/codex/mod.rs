@@ -12,6 +12,8 @@
 
 use crate::error::{MezError, Result};
 
+/// Pure original child-start/stop selectors, never root declarations.
+pub(crate) mod children;
 /// Pure model-request facts, separate from lifecycle, transport and admission.
 pub(crate) mod request;
 /// Negative native command-mode classification, never source authority.

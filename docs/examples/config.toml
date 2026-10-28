@@ -1,3 +1,4 @@
+# Codex native child starts qualify usage; child Stop never retires the parent.
 # Codex model readiness uses trusted native hook cwd, preserving it across retry.
 # Codex shared-server callbacks cannot borrow the launching pane as a client.
 # Codex idle expiry hides telemetry; only fresh native lifecycle facts restore it.

@@ -6,6 +6,8 @@
 //! is admitted. Turn order is arrival-based; known retired turns stay fenced.
 //! SessionEnd retires only that exact session. New native facts stamp finite
 //! observer proof, not continuous idle health; end never attests creator death.
+//! Child facts affect only their separate bounded request scope, never parent
+//! presentation, lease, health or retirement.
 
 use super::*;
 
@@ -16,6 +18,8 @@ const MAX_TURNS: usize = 4096;
 #[derive(Debug, Clone)]
 pub(super) struct CodexEvent {
     kind: &'static str,
+    /// Explicit child selector; it grants no association before native Start.
+    child: Option<String>,
     turn: String,
     /// Normalized model-hook counts only; absent is unknown, never zero.
     counters: Option<crate::storage::token_usage::ExternalCounters>,
@@ -25,6 +29,8 @@ impl CodexEvent {
     /// Rejects unsupported semantics and content-shaped turn IDs before work.
     fn parse(params: &serde_json::Value) -> Result<Self> {
         let kind = match text(params, "event", 32)?.as_str() {
+            "SubagentStart" => "SubagentStart",
+            "SubagentStop" => "SubagentStop",
             "UserPromptSubmit" => "UserPromptSubmit",
             "Stop" => "Stop",
             "PermissionRequest" => "PermissionRequest",
@@ -36,6 +42,27 @@ impl CodexEvent {
             "PostModelRequest" => "PostModelRequest",
             _ => return Err(MezError::invalid_args("Codex event unavailable")),
         };
+        let child = if params.get("agent_id").is_some() {
+            let id = text(params, "agent_id", 128)?;
+            if !id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+            {
+                return Err(MezError::invalid_args("Codex child selector unavailable"));
+            }
+            Some(id)
+        } else {
+            None
+        };
+        if matches!(kind, "SubagentStart" | "SubagentStop") && child.is_none()
+            || child.is_some()
+                && !matches!(
+                    kind,
+                    "SubagentStart" | "SubagentStop" | "PreModelRequest" | "PostModelRequest"
+                )
+        {
+            return Err(MezError::invalid_args("Codex child event unavailable"));
+        }
         if kind != "PostModelRequest" && params.get("counters").is_some() {
             return Err(MezError::invalid_args(
                 "Codex counters require a model post",
@@ -68,6 +95,7 @@ impl CodexEvent {
             }
             return Ok(Self {
                 kind,
+                child: None,
                 turn: String::new(),
                 counters: None,
             });
@@ -81,6 +109,7 @@ impl CodexEvent {
         }
         Ok(Self {
             kind,
+            child,
             turn,
             counters,
         })
@@ -98,6 +127,11 @@ pub(super) struct CodexTurns {
 }
 
 impl CodexTurns {
+    /// Checks the original current main turn without selecting a child turn.
+    pub(super) fn is_current(&self, turn: &str) -> bool {
+        self.current.as_deref() == Some(turn)
+    }
+
     /// Plans a coarse transition without mutation. Duplicate observations are
     /// time/sequence inert, old turns reject, and Interrupt dominates later Stop.
     fn state_for(&self, event: &CodexEvent) -> Result<Option<&'static str>> {
@@ -251,7 +285,7 @@ impl RuntimeSessionService {
                 &event.turn,
                 writer,
                 event.counters,
-                source.codex_turns.current.as_deref() == Some(event.turn.as_str()),
+                event.child.as_deref(),
             ))
         } else {
             None
@@ -322,6 +356,20 @@ impl RuntimeSessionService {
             .bindings
             .get(&digest)
             .ok_or_else(|| MezError::forbidden("Codex callback owner unavailable"))?;
+        original(binding)?;
+        if let Some(child) = &event.child {
+            let source = self
+                .control
+                .external_agents_mut()
+                .bindings
+                .get_mut(&digest)
+                .and_then(|binding| binding.enrollment.as_mut())
+                .ok_or_else(|| MezError::forbidden("Codex original child owner unavailable"))?;
+            let changed = source
+                .codex_children
+                .observe(event.kind, child, &event.turn)?;
+            return Ok(serde_json::json!({"observed":true,"changed":changed}).to_string());
+        }
         let source = original(binding)?;
         let previous = binding
             .registration
@@ -375,6 +423,7 @@ mod tests {
         let mut owner = CodexTurns::default();
         for index in 0..MAX_TURNS {
             let event = CodexEvent {
+                child: None,
                 kind: "UserPromptSubmit",
                 turn: format!("turn-{index}"),
                 counters: None,
@@ -385,6 +434,7 @@ mod tests {
         assert!(
             owner
                 .state_for(&CodexEvent {
+                    child: None,
                     kind: "UserPromptSubmit",
                     turn: "new".into(),
                     counters: None
@@ -394,6 +444,7 @@ mod tests {
         assert!(
             owner
                 .state_for(&CodexEvent {
+                    child: None,
                     kind: "Stop",
                     turn: "turn-0".into(),
                     counters: None
@@ -401,6 +452,7 @@ mod tests {
                 .is_err()
         );
         let stop = CodexEvent {
+            child: None,
             kind: "Stop",
             turn: format!("turn-{}", MAX_TURNS - 1),
             counters: None,

@@ -24,7 +24,10 @@ async fn change_creator_directory(fixture: &mut Fixture, directory: &std::path::
 
 /// Changes a real fixture process cwd through its isolated test control stream;
 /// the runtime receives no directory claim and must observe its native process.
-async fn change_native_directory(socket: &mut tokio::net::UnixStream, directory: &std::path::Path) {
+pub(super) async fn change_native_directory(
+    socket: &mut tokio::net::UnixStream,
+    directory: &std::path::Path,
+) {
     use std::os::unix::ffi::OsStrExt;
     let bytes = directory.as_os_str().as_bytes();
     socket.write_all(&[8]).await.unwrap();
