@@ -277,6 +277,21 @@ fn external_enrollment_ordinary_child_fixture() {
                 socket.write_all(&[1]).unwrap();
                 continue;
             }
+            if release == [8] {
+                // A test-only command changes this real creator process's own
+                // cwd. Production attribution must rediscover it from the OS,
+                // never from the fixture payload or a pane cwd hint.
+                use std::os::unix::ffi::OsStrExt;
+                let mut length = [0; 4];
+                socket.read_exact(&mut length).unwrap();
+                let length = u32::from_be_bytes(length) as usize;
+                assert!(length <= 4096);
+                let mut directory = vec![0; length];
+                socket.read_exact(&mut directory).unwrap();
+                std::env::set_current_dir(std::ffi::OsStr::from_bytes(&directory)).unwrap();
+                socket.write_all(&[1]).unwrap();
+                continue;
+            }
             if release == [9] {
                 let mut length = [0; 4];
                 socket.read_exact(&mut length).unwrap();
@@ -1349,6 +1364,7 @@ mod codex_creator;
 mod codex_installed;
 mod codex_model_delivery;
 mod codex_observation;
+mod codex_request_scope;
 mod copilot;
 mod copilot_installed;
 mod creator_isolation;
