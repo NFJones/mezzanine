@@ -1,3 +1,5 @@
+# Codex tool/permission callbacks observe the exact current main turn; they do
+# not approve tools or provide token counters. No configuration item is added.
 # Claude child accounting requires a genuine SubagentStart under the current
 # parent observer; unknown children remain unavailable. No setting enables it.
 # Claude response-model labels retain bounded cloud naming (including @) without

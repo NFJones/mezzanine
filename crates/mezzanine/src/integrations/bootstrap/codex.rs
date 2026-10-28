@@ -25,6 +25,12 @@ pub(crate) enum Observation {
         turn: String,
         state: &'static str,
     },
+    /// Tool/permission activity on an already admitted exact main turn only.
+    Activity {
+        session: String,
+        turn: String,
+        event: &'static str,
+    },
     /// Exact main session end notification, not an attestation of process exit.
     SessionEnded { session: String },
 }
@@ -75,7 +81,7 @@ impl<'de> serde::Deserialize<'de> for UniqueObject {
 }
 
 /// Projects allowlisted main-session events independent of observed version.
-/// Child events and ambiguous permission/tool activity are intentionally inert.
+/// Child events are inert; tool/permission facts require an exact turn selector.
 /// Unknown additional payload data is discarded, never copied into output.
 pub(crate) fn normalize(release: &str, bytes: &[u8]) -> Result<Option<Observation>> {
     if release.is_empty()
@@ -130,6 +136,15 @@ pub(crate) fn normalize(release: &str, bytes: &[u8]) -> Result<Option<Observatio
                 },
             }))
         }
+        "PreToolUse" | "PostToolUse" | "PermissionRequest" => Ok(Some(Observation::Activity {
+            session: identifier(&value, "session_id")?,
+            turn: identifier(&value, "turn_id")?,
+            event: match event {
+                "PreToolUse" => "PreToolUse",
+                "PostToolUse" => "PostToolUse",
+                _ => "PermissionRequest",
+            },
+        })),
         "SessionEnd" => Ok(Some(Observation::SessionEnded {
             session: identifier(&value, "session_id")?,
         })),
@@ -149,7 +164,8 @@ pub(crate) fn normalize_bound(
     Ok(observation.filter(|item| match item {
         Observation::SessionReady { session }
         | Observation::SessionEnded { session }
-        | Observation::Turn { session, .. } => session == bound,
+        | Observation::Turn { session, .. }
+        | Observation::Activity { session, .. } => session == bound,
     }))
 }
 
@@ -316,9 +332,31 @@ mod tests {
         )
         .unwrap_err();
         assert!(!error.message().contains("SECRET"));
-        assert_eq!(
-            normalize(RELEASE, br#"{"hook_event_name":"PermissionRequest"}"#).unwrap(),
-            None
-        );
+        assert!(normalize(RELEASE, br#"{"hook_event_name":"PermissionRequest"}"#).is_err());
+    }
+    /// Documented permission/tool fields identify only an exact main turn.
+    /// Private payloads never enter the fact, and child/unknown turns cannot
+    /// become parent activity merely by carrying the same session label.
+    #[test]
+    fn codex_activity_projects_only_main_session_turn_and_fixed_event() {
+        for event in ["PreToolUse", "PostToolUse", "PermissionRequest"] {
+            let mut input = serde_json::json!({"hook_event_name":event,"session_id":"session-a","turn_id":"turn-a",
+                "tool_name":"PRIVATE","tool_input":{"command":"PRIVATE"},"tool_response":"PRIVATE"});
+            let result = normalize("best-effort", &serde_json::to_vec(&input).unwrap())
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(&result, Observation::Activity {session,turn,event:kind} if session == "session-a" && turn == "turn-a" && *kind == event)
+            );
+            assert!(!format!("{result:?}").contains("PRIVATE"));
+            input["agent_id"] = "child-a".into();
+            assert_eq!(
+                normalize("best-effort", &serde_json::to_vec(&input).unwrap()).unwrap(),
+                None
+            );
+            input.as_object_mut().unwrap().remove("agent_id");
+            input.as_object_mut().unwrap().remove("turn_id");
+            assert!(normalize("best-effort", &serde_json::to_vec(&input).unwrap()).is_err());
+        }
     }
 }

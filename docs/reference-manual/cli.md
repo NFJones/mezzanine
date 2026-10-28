@@ -260,6 +260,14 @@ or certify a live Codex process. Its release reference is
 That reference is evidence, not a compatibility gate. The fixed internal helper
 normalizes at most 64 KiB/250 ms of stdin and remains neutral on unavailable
 telemetry; it never starts Codex, initializes a primary or bypasses vendor trust.
+Codex bootstrap revision5 adds observational `PreToolUse`, `PermissionRequest`
+and `PostToolUse` callbacks. They retain only the exact main session/turn identity:
+permission waits can show `approval-wait` and tool activity can show `running`.
+They cannot start a turn, revive an interrupted/old turn, update the parent from
+a child callback, approve a tool or forward tool content. Existing revision4
+members upgrade through the shared-hook reconciler; authored hooks and normal
+vendor trust review remain intact. This lifecycle coverage does not supply token
+accounting or change existing exporters.
 Further source inspection at upstream `openai/codex` commit `0c329ad2` confirms
 ordinary hook schemas have lifecycle IDs/selected model but no usage counters.
 This is not a blanket absence of ordinary-mode counters: OTEL completion events

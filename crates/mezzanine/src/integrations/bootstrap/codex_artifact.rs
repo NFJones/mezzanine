@@ -1,8 +1,9 @@
 //! Compiled best-effort Codex hooks with exact shared-array member ownership.
 //! Authored callback siblings, config, credentials and trust remain untouched.
 //! The historical whole-file manifest is frozen independently for receipt/journal
-//! qualification. Normal /hooks review is required; ordinary helper activation
-//! remains unfinished and installation alone grants no telemetry authority.
+//! qualification. Normal /hooks review is required; native helper admission
+//! supplies lifecycle observations, while accounting remains a separate source.
+//! Installation alone grants no telemetry authority or approval decisions.
 
 use super::{
     installer::Manifest,
@@ -19,6 +20,35 @@ pub(crate) fn manifest() -> Option<Manifest> {
 /// preserves one inert pathname; unavailable evidence cannot select PATH or a
 /// launcher environment fallback. This helper reference grants no admission.
 fn manifest_for_helper(helper: &std::path::Path) -> Option<Manifest> {
+    let helper_text = helper.to_str()?;
+    if !helper.is_absolute()
+        || helper_text.len() > 4096
+        || helper_text.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let quoted = shlex::try_quote(helper_text).ok()?;
+    let command = format!("test -x {quoted} && exec {quoted} codex-hook || printf '{{}}\\n'");
+    Some(Manifest {
+        harness: "codex".into(), revision: 5, vendor_version: "best-effort".into(),
+        entries: vec![Entry { path: "hooks.json".into(), artifact: Artifact::JsonArrayEntries {
+            entries: ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop", "Interrupt", "SessionEnd"]
+                .into_iter().map(|name| JsonArrayMember {
+                    pointer: format!("/hooks/{name}"),
+                    value: serde_json::json!({"hooks":[{"type":"command","command":command,"timeout":1}]}),
+                }).collect(),
+        }}],
+    })
+}
+
+/// Exact revision4 before additional original-turn tool/permission callbacks.
+/// The fixed command and five-member graph remain receipt-qualified history.
+pub(super) fn historical_activity_manifest() -> Option<Manifest> {
+    historical_activity_for_helper(&std::env::current_exe().ok()?)
+}
+
+/// Reconstructs only the fixed historical graph for the installing executable.
+fn historical_activity_for_helper(helper: &std::path::Path) -> Option<Manifest> {
     let helper_text = helper.to_str()?;
     if !helper.is_absolute()
         || helper_text.len() > 4096
@@ -113,6 +143,7 @@ pub(super) fn has_historical_shared_member(bytes: &[u8]) -> crate::Result<bool> 
     for frozen in [
         Some(historical_shared_manifest()),
         historical_fixed_manifest(),
+        historical_activity_manifest(),
     ]
     .into_iter()
     .flatten()
@@ -188,7 +219,7 @@ mod tests {
     #[test]
     fn codex_artifact_command_pins_installer_without_environment() {
         let manifest = super::super::compiled_manifest("codex", None).unwrap();
-        assert_eq!(manifest.revision, 4);
+        assert_eq!(manifest.revision, 5);
         let Artifact::JsonArrayEntries { entries } = &manifest.entries[0].artifact else {
             panic!("Codex must own shared hook members only");
         };
@@ -270,5 +301,42 @@ mod tests {
         );
         assert!(root.join("hooks.json").is_file());
         std::fs::remove_dir_all(home).unwrap();
+    }
+    /// Revision5 adds exact tool/permission members without redefining shipped
+    /// revision4 ownership or its fixed command. Authored sibling arrays remain
+    /// under the shared member reconciler instead of whole-file ownership.
+    #[test]
+    fn codex_artifact_activity_revision_preserves_previous_member_graph() {
+        let current = super::super::compiled_manifest("codex", None).unwrap();
+        let previous = historical_activity_manifest().unwrap();
+        assert_eq!((current.revision, previous.revision), (5, 4));
+        let Artifact::JsonArrayEntries { entries: new } = &current.entries[0].artifact else {
+            panic!("shared members");
+        };
+        let Artifact::JsonArrayEntries { entries: old } = &previous.entries[0].artifact else {
+            panic!("shared history");
+        };
+        assert_eq!((new.len(), old.len()), (8, 5));
+        let mut hooks = serde_json::Map::new();
+        for entry in old {
+            assert!(new.contains(entry));
+            hooks.insert(
+                entry.pointer.strip_prefix("/hooks/").unwrap().to_string(),
+                serde_json::json!([entry.value]),
+            );
+        }
+        assert!(
+            has_historical_shared_member(
+                &serde_json::to_vec(&serde_json::json!({"hooks":hooks})).unwrap()
+            )
+            .unwrap()
+        );
+        for event in ["PreToolUse", "PermissionRequest", "PostToolUse"] {
+            assert!(
+                new.iter()
+                    .any(|entry| entry.pointer == format!("/hooks/{event}"))
+            );
+        }
+        assert!(super::super::compiled_history(&current).contains(&previous));
     }
 }

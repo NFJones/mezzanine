@@ -671,3 +671,89 @@ async fn external_codex_callback_freshness_is_finite_and_replay_time_inert() {
         renewed
     );
 }
+
+/// Genuine permission/tool callbacks update only their already admitted turn.
+/// Replays are sequence-inert; missing prompts, retired turns and interrupted
+/// turns cannot be resurrected by activity. All updates cross native parent/root
+/// proof and preserve the original accounting owner and finite lease boundary.
+#[tokio::test(flavor = "current_thread")]
+async fn external_codex_activity_native_wait_resume_and_old_turn_fences() {
+    let Some(mut fixture) = fixture("hold").await else {
+        panic!("Codex activity qualification requires native peer evidence");
+    };
+    let (_socket, connection) = child(&mut fixture).await;
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&declaration(), &connection)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &connection).await["result"]["registered"],
+        true
+    );
+    let binding = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    let original = (binding.expires, binding.accounting_owner.clone());
+    for (event, turn, sequence, changed) in [
+        ("UserPromptSubmit", "turn-a", 1, true),
+        ("PreToolUse", "turn-a", 1, false),
+        ("PermissionRequest", "turn-a", 2, true),
+        ("PermissionRequest", "turn-a", 2, false),
+        ("PostToolUse", "turn-a", 3, true),
+        ("Stop", "turn-a", 4, true),
+        ("PreToolUse", "turn-a", 5, true),
+        ("Interrupt", "turn-a", 6, true),
+        ("PostToolUse", "turn-a", 6, false),
+        ("PermissionRequest", "turn-a", 6, false),
+        ("UserPromptSubmit", "turn-b", 7, true),
+    ] {
+        let work = fixture
+            .service
+            .prepare_external_helper_presentation(&callback(event, turn), &connection)
+            .unwrap();
+        let reply = settle(&mut fixture, work, &connection).await;
+        assert_eq!(reply["result"]["sequence"], sequence, "{reply}");
+        assert_eq!(reply["result"]["changed"], changed, "{reply}");
+        if event == "PermissionRequest" && sequence == 2 {
+            assert_eq!(
+                fixture
+                    .service
+                    .live_pane_harness_status("%1")
+                    .unwrap()
+                    .text
+                    .as_deref(),
+                Some("approval-wait")
+            );
+        }
+    }
+    for turn in ["turn-a", "unknown"] {
+        let work = fixture
+            .service
+            .prepare_external_helper_presentation(&callback("PermissionRequest", turn), &connection)
+            .unwrap();
+        assert!(
+            settle(&mut fixture, work, &connection)
+                .await
+                .get("error")
+                .is_some()
+        );
+    }
+    let binding = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(
+        (binding.expires, binding.accounting_owner.clone()),
+        original
+    );
+    assert!(!binding.enrollment.as_ref().unwrap().request_reports_seen);
+}

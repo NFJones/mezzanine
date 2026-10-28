@@ -86,6 +86,14 @@ fn request(bytes: &[u8], pane: &str) -> Result<Option<String>> {
                 serde_json::json!({"pane_id":pane,"external_session_id":session,"event":event,"turn_id":turn}),
             )
         }
+        Observation::Activity {
+            session,
+            turn,
+            event,
+        } => (
+            "agent/external/codex-observe",
+            serde_json::json!({"pane_id":pane,"external_session_id":session,"event":event,"turn_id":turn}),
+        ),
         Observation::SessionEnded { session } => (
             "agent/external/codex-observe",
             serde_json::json!({"pane_id":pane,"external_session_id":session,"event":"SessionEnd"}),
@@ -230,5 +238,22 @@ mod tests {
             assert!(request(bytes, pane).is_err());
         }
         assert!(request(&vec![b' '; 65_537], "%1").is_err());
+    }
+    /// Activity must retain its exact event rather than aliasing prompt submit,
+    /// which would let an old tool callback admit a new turn. Tool contents and
+    /// approval decisions remain absent from the fixed observation capsule.
+    #[test]
+    fn codex_hook_activity_keeps_exact_event_without_content_or_decisions() {
+        for event in ["PreToolUse", "PostToolUse", "PermissionRequest"] {
+            let bytes = serde_json::to_vec(&serde_json::json!({"hook_event_name":event,"session_id":"session-a","turn_id":"turn-a",
+                "tool_input":{"command":"PRIVATE"},"permission_mode":"bypassPermissions"})).unwrap();
+            let body = request(&bytes, "%1").unwrap().unwrap();
+            let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(value["method"], "agent/external/codex-observe");
+            assert_eq!(value["params"]["event"], event);
+            assert_eq!(value["params"]["turn_id"], "turn-a");
+            assert_eq!(value["params"].as_object().unwrap().len(), 4);
+            assert!(!body.contains("PRIVATE") && !body.contains("bypassPermissions"));
+        }
     }
 }

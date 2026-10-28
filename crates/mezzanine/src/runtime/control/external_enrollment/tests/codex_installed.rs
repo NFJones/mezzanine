@@ -50,6 +50,9 @@ async fn external_codex_installed_session_start_admits_native_creator_without_la
         .as_str()
         .unwrap();
     assert!(!command.contains("MEZ_CODEX_HELPER"));
+    for event in ["PreToolUse", "PermissionRequest", "PostToolUse"] {
+        assert_eq!(document["hooks"][event][0]["hooks"][0]["command"], command);
+    }
     let usage = fixture.directory.join("usage.sqlite");
     fixture
         .service
@@ -62,6 +65,9 @@ async fn external_codex_installed_session_start_admits_native_creator_without_la
         ("SessionStart", "a"),
         ("SessionStart", "a"),
         ("UserPromptSubmit", "a"),
+        ("PreToolUse", "a"),
+        ("PermissionRequest", "a"),
+        ("PostToolUse", "a"),
         ("Stop", "a"),
         ("UserPromptSubmit", "b"),
         ("Interrupt", "b"),
@@ -69,7 +75,7 @@ async fn external_codex_installed_session_start_admits_native_creator_without_la
         ("SessionEnd", ""),
     ] {
         let launch = serde_json::json!({"command":command,"event":{"hook_event_name":event,"session_id":"session-a","source":"startup","turn_id":turn,"stop_hook_active":false,"prompt":"PRIVATE","transcript_path":"PRIVATE","usage":{"input_tokens":999},
-            "model":"selected-not-response","permission_mode":"default","last_assistant_message":"PRIVATE",
+            "model":"selected-not-response","permission_mode":"default","last_assistant_message":"PRIVATE","tool_name":"PRIVATE","tool_input":{"command":"PRIVATE"},"tool_response":"PRIVATE",
             "event.name":"codex.sse_event","event.kind":"response.completed","conversation.id":"unrelated-session",
             "input_token_count":"121","output_token_count":"13","cached_token_count":32,"cache_write_token_count":4,"reasoning_token_count":2,
             "user.email":"PRIVATE","total_token_usage":{"input_tokens":5000,"total_tokens":6000},"last_token_usage":{"input_tokens":1000,"total_tokens":1000}}}).to_string();
@@ -131,7 +137,7 @@ async fn external_codex_installed_session_start_admits_native_creator_without_la
         .presentation
         .as_ref()
         .unwrap();
-    assert_eq!(presentation.sequence, 4);
+    assert_eq!(presentation.sequence, 6);
     assert_eq!(presentation.state, "interrupted");
     assert!(binding.retired);
     assert!(fixture.service.external_agent_rows().is_empty());

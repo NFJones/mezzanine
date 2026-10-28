@@ -25,6 +25,9 @@ impl CodexEvent {
         let kind = match text(params, "event", 32)?.as_str() {
             "UserPromptSubmit" => "UserPromptSubmit",
             "Stop" => "Stop",
+            "PermissionRequest" => "PermissionRequest",
+            "PreToolUse" => "PreToolUse",
+            "PostToolUse" => "PostToolUse",
             "Interrupt" => "Interrupt",
             "SessionEnd" => "SessionEnd",
             _ => return Err(MezError::invalid_args("Codex event unavailable")),
@@ -83,10 +86,11 @@ impl CodexTurns {
         if self.current.as_deref() != Some(&event.turn) {
             return Err(MezError::conflict("Codex current turn unavailable"));
         }
-        let state = if event.kind == "Stop" {
-            "ready"
-        } else {
-            "interrupted"
+        let state = match event.kind {
+            "Stop" => "ready",
+            "PermissionRequest" => "approval-wait",
+            "PreToolUse" | "PostToolUse" => "running",
+            _ => "interrupted",
         };
         Ok((self.state != Some(state) && self.state != Some("interrupted")).then_some(state))
     }

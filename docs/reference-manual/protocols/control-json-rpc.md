@@ -666,8 +666,16 @@ The fixed installed `codex-hook` helper now sends this exact declaration for
 normalized main SessionStart startup/resume/clear/fork over one bounded Unix
 exchange using standard route hints. It emits only neutral JSON, discards daemon
 results/errors and supplies no fd3, credentials or general role.
+Codex's restricted `agent/external/codex-observe` also accepts fixed
+`PreToolUse`, `PermissionRequest`, and `PostToolUse` events with the existing exact
+`turn_id`. These events require an already admitted current turn and original
+native creator/root/epoch. Permission wait is presentation only; tool events are
+running activity, not prompt submission, approval or usage evidence. Replays are
+sequence-inert and interruption dominates later activity. No extra public fields
+or capabilities are granted.
 `agent/external/codex-observe` accepts only `pane_id`, `external_session_id`,
-`event` (UserPromptSubmit/Stop/Interrupt) and bounded inert `turn_id`. A unique
+`event` (UserPromptSubmit/PreToolUse/PermissionRequest/PostToolUse/Stop/Interrupt)
+and bounded inert `turn_id`. A unique
 indexed candidate must retain the original fixed instance at epoch1; worker and
 settlement fence its captured generation and exact native helper/source/root.
 Rotation or retirement rejects, never rebinds a callback to the newest epoch.

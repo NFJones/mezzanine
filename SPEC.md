@@ -1224,6 +1224,15 @@ status. Stop MUST remain a ready/turn boundary, not success proof, because later
 hook decisions may continue execution. Interrupt and SessionEnd observations
 MUST NOT imply vendor process death. This projection alone MUST NOT enable an
 installed adapter or imply exact token coverage.
+Codex revision5 MUST observe documented main PreToolUse/PermissionRequest/
+PostToolUse with only exact session and active turn selectors. PermissionRequest
+MAY show approval-wait; tool callbacks MAY show running only on the already
+admitted original turn. They MUST NOT alias prompt-submit, allocate a new turn,
+revive an interrupted/retired turn, overwrite a parent from child fields, renew a
+lease directly or make approval decisions. Native parent/root/order/epoch fences
+remain mandatory. Tool inputs/results/names and approval text MUST NOT enter the
+observation capsule. Exact revision4 shared members remain upgradeable; authored
+callbacks and vendor hooks trust/disabled policy MUST remain untouched.
 Ordinary Codex hook fields MUST NOT be treated as request accounting: the inspected
 SessionStart/UserPromptSubmit/Stop/SessionEnd schemas provide lifecycle IDs and
 selected-model metadata, not token counters. Separate OTEL `response.completed`
