@@ -445,6 +445,11 @@ writer/root/creator evidence are required; absent original service anchors or
 retired/replaced source cannot be recovered from a database row or label change.
 If a resumed reply is lost and its new registry binding is then lost again, the
 old selector may remain unavailable; the client does not invent shadow authority.
+After an answered warm refusal, the shared client may attempt explicit durable
+source recovery using its original public checkpoint and a frozen operation ID.
+Retained same-live authority must refuse cold replacement after an unknown
+observer reply; a historical checkpoint cannot select a newer observer or
+charge the original report again.
 The client sends no synthetic startup, outcome or diagnostic baseline on recovery.
 The first actual Pi gap may use ordinal 1 only on a native resume-qualified
 projection; a lost gap ACK stays failed. Lifecycle/gap delivery failure remains
@@ -489,7 +494,7 @@ reports through genuine native Unix origin/writer proof and the production actor
 | Lifecycle and presentation | Current input-wait, `/status` and `:list-agents`; pinned user title and retained native conversation coexist without provider work. |
 | Finalized usage | Success/error/abort callbacks, actual response model, inclusive cache partitions, fresh frozen reporting UTC, replay deduplication and three typed durable ACKs. |
 | Missing counters | A fourth original readiness marker has no linked observation/expense; explicit coverage gap preserves earlier totals, never invents zero expense. |
-| Completion and outside Mez | Exact session retirement and cleared reservations; outside-Mez callbacks preserve normal output/exit and request no telemetry authority. |
+| Completion and outside Mez | Exact session retirement, a separate typed durable source-end receipt and cleared reservations; outside-Mez callbacks preserve normal output/exit and request no telemetry authority. |
 | Privacy | Only allowlisted observational methods and metadata; prompt/answer/tool/error content and raw upstream response identity stay out of transport. |
 
 This is offline assembled qualification, not a real Pi SDK loader/provider run,

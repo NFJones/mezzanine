@@ -7,6 +7,8 @@
 //! Reset stops the actor, retains its same service/control/root/store, clears only
 //! the registration facade, then restarts actor processing. It is not an OS
 //! daemon/root replacement, durable spool, vendor SDK, or invoice qualification.
+//! Unknown warm recovery also checks the shared client's explicit cold attempt:
+//! only the original checkpoint is sent, and retained warm authority must refuse.
 //!
 //! Final socket EOF is only transport evidence. Before final actor shutdown or
 //! process cleanup, each path collects the pane shell's atomic actual Node exit
@@ -893,7 +895,11 @@ async fn qualify(
                 .iter()
                 .filter(|row| row["method"] == "agent/external/enroll")
                 .collect::<Vec<_>>();
-            assert_eq!(enrolls.len(), 3);
+            // The shared client now makes one explicit durable-native attempt
+            // after an answered warm refusal. The same service still retains
+            // its warm source authority, so that fourth attempt must refuse
+            // without selecting a newer receipt or initial enrollment.
+            assert_eq!(enrolls.len(), 4);
             assert!(
                 enrolls[1]["params"] == enrolls[2]["params"],
                 "unknown R1 must retain original S0/P metadata, not newest/bare fallback"
@@ -918,6 +924,32 @@ async fn qualify(
             assert_eq!(
                 rejected["error"]["message"],
                 "source resume retry unavailable"
+            );
+            let cold = &enrolls[3]["params"];
+            let selector = &cold["durable_source_resume"];
+            assert!(
+                selector["receipt"] == original["result"]["source_receipt"],
+                "cold recovery must retain the original public checkpoint"
+            );
+            let operation = selector["operation_id"].as_str().unwrap();
+            assert!(
+                operation.len() == 64 && operation.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "cold recovery requires one bounded explicit operation identity"
+            );
+            let mut expected_cold = enrolls[0]["params"].clone();
+            expected_cold["durable_source_resume"] = selector.clone();
+            assert!(
+                *cold == expected_cold,
+                "cold recovery must preserve metadata without warm/newest selectors"
+            );
+            let cold_refused = received
+                .iter()
+                .find(|row| row["id"] == enrolls[3]["id"])
+                .unwrap();
+            assert_eq!(cold_refused["error"]["code"], -32006);
+            assert_eq!(
+                cold_refused["error"]["message"],
+                "same-live source authority retained; cold replacement unavailable"
             );
             assert_eq!(
                 sent.iter()

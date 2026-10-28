@@ -3,6 +3,8 @@
 //! The real product CLI owns root selection/publication/helper pinning. A normal
 //! PATH command discovers installed package entries and emits source-shaped
 //! callbacks; genuine kernel origin/writer evidence owns admission and ACKs.
+//! Usage receipts and terminal source retirement have distinct typed ACKs;
+//! neither can stand in for the other's durable completion evidence.
 //! This qualifies the assembled local chain, not a real Pi SDK/provider, daemon
 //! restart, source-recovery protocol, or the complete multi-vendor support goal.
 
@@ -506,6 +508,7 @@ async fn external_pi_bare_bootstrap_ordinary_launch_accounting_and_retirement() 
                 | "agent/external/pi-observation"
                 | "agent/external/usage-begin"
                 | "agent/external/usage-end"
+                | "agent/external/source-end"
         )
     )));
     let enrolled = replies
@@ -522,11 +525,11 @@ async fn external_pi_bare_bootstrap_ordinary_launch_accounting_and_retirement() 
         assert_eq!(request["params"]["provider"], "pi-offline-provider");
         assert_eq!(request["params"]["counters"]["input_tokens"], 10);
         assert!(request["params"]["observed_at"].as_u64().unwrap() > 1);
-    }
-    for reply in replies
-        .iter()
-        .filter(|reply| reply["result"]["durable"] == true)
-    {
+        let reply = replies
+            .iter()
+            .find(|reply| reply["id"] == request["id"])
+            .unwrap();
+        assert_eq!(reply["result"]["durable"], true);
         assert!(reply["result"]["applied"].is_boolean());
         assert!(reply["result"]["revision"].as_u64().unwrap() > 0);
     }
@@ -551,7 +554,38 @@ async fn external_pi_bare_bootstrap_ordinary_launch_accounting_and_retirement() 
             .iter()
             .filter(|reply| reply["result"]["durable"] == true)
             .count(),
-        3
+        4
+    );
+    let endings = requests
+        .iter()
+        .filter(|request| request["method"] == "agent/external/source-end")
+        .collect::<Vec<_>>();
+    assert_eq!(endings.len(), 1);
+    let ending = endings[0];
+    assert!(
+        ending["params"]
+            == serde_json::json!({
+                "launch_token": enrolled["result"]["launch_token"],
+                "generation": enrolled["result"]["generation"],
+                "external_session_id": enrolled["result"]["external_session_id"]
+            }),
+        "retirement must retain the original exact source selectors"
+    );
+    assert!(
+        requests.last().unwrap()["id"] == ending["id"],
+        "source retirement must not authorize another telemetry exchange"
+    );
+    let ended = replies
+        .iter()
+        .find(|reply| reply["id"] == ending["id"])
+        .unwrap();
+    assert!(
+        ended["result"]
+            == serde_json::json!({
+                "protocol": "external-source-end/1", "retired": true, "durable": true,
+                "generation": enrolled["result"]["generation"]
+            }),
+        "source retirement requires its own typed durable receipt"
     );
     drop(audit);
     exit.service.terminate_all_pane_processes().unwrap();
