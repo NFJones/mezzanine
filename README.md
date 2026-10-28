@@ -63,6 +63,7 @@ does not activate paid search or change the default backend.
 
 Ordinary Claude accounting keeps missing-counter or delivery coverage visible
 after earlier reported usage, without changing vendor requests or recorded expense.
+Response-model metadata preserves bounded cloud model labels through durable replay.
 
 Ordinary Pi accounting reports observed auxiliary counters with missing request
 attribution as unavailable coverage while retaining supported assistant usage.

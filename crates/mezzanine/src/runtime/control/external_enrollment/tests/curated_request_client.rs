@@ -38,6 +38,16 @@ async fn external_claude_bare_bootstrap_installed_module_has_native_durable_usag
         .await;
 }
 
+/// A cloud-style response model is metadata rather than a source selector.
+/// Actual installed callbacks and native helper parsing must preserve its exact
+/// spelling through a durable commit/replay and status, without another expense
+/// or changes to original source identity, gaps, title or vendor delegation.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
+async fn external_claude_installed_response_model_metadata_survives_native_replay() {
+    qualify_request_client_with_install("claude-model-ordinary-fixture.mjs", true, 15, true).await;
+}
+
 /// Installed revision5 must retain a finalized normalized report after both
 /// immediate durable replies are lost. A later genuine main step resends the
 /// same original readiness/report through real native helper ingress, recovers
@@ -79,6 +89,12 @@ async fn qualify_request_client_with_install(
 ) {
     let paired_clear = script_name == "claude-clear-ordinary-fixture.mjs";
     let pending_recovery = script_name == "claude-pending-ordinary-fixture.mjs";
+    let model_metadata = script_name == "claude-model-ordinary-fixture.mjs";
+    let expected_model = if model_metadata {
+        "claude-haiku-4-5@20251001"
+    } else {
+        "response-model"
+    };
     assert!(!paired_clear || (installed && claude && requests == 27));
     assert!(!pending_recovery || (installed && claude && requests == 18));
     let node = std::path::PathBuf::from(
@@ -281,7 +297,7 @@ async fn qualify_request_client_with_install(
                 status.contains("request-bound-external-reported"),
                 "{status}"
             );
-            assert!(status.contains("response-model"), "{status}");
+            assert!(status.contains(expected_model), "{status}");
         }
     }
     let mut completed = [0];
@@ -363,11 +379,20 @@ async fn qualify_request_client_with_install(
             "{status}"
         );
         assert!(
-            status.contains("response-model"),
+            status.contains(expected_model),
             "incurred usage must survive telemetry retirement: {status}"
         );
     }
     let database = rusqlite::Connection::open(path).unwrap();
+    if model_metadata {
+        assert_eq!(
+            database
+                .query_row("SELECT model FROM token_usage_events", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            expected_model
+        );
+    }
     assert_eq!(
         database
             .query_row(

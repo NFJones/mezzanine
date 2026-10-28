@@ -36,6 +36,46 @@ mod tests {
         }
     }
 
+    /// Actual response/provider labels are data, distinct from opaque source
+    /// selectors. Documented cloud model punctuation and bounded UTF8 survive
+    /// exact projection; control/bidi/oversized labels and unsafe IDs still fail.
+    #[test]
+    fn harness_source_usage_model_labels_preserve_bounded_metadata() {
+        let base = serde_json::json!({"operation":"curated-usage-end","external_session_id":"session-a",
+            "generation":1,"observer_witness":"a".repeat(64),"request_id":"b".repeat(64),
+            "event_id":"c".repeat(64),"observed_at":10,"provider":"unavailable",
+            "model":"claude-haiku-4-5@20251001","counters":{"input_tokens":10,"output_tokens":3}});
+        for model in [
+            "claude-haiku-4-5@20251001".to_string(),
+            "publisher/model@revision".into(),
+            "é".repeat(64),
+        ] {
+            let mut input = base.clone();
+            input["model"] = serde_json::json!(model);
+            let parsed = Usage::parse(input.to_string().as_bytes()).unwrap();
+            let request: serde_json::Value = serde_json::from_str(&parsed.request()).unwrap();
+            assert_eq!(request["params"]["model"], model);
+        }
+        for model in [
+            "".to_string(),
+            "  ".into(),
+            "model\n".into(),
+            "model\u{85}".into(),
+            "model\u{202e}".into(),
+            "é".repeat(65),
+        ] {
+            let mut input = base.clone();
+            input["model"] = serde_json::json!(model);
+            assert!(Usage::parse(input.to_string().as_bytes()).is_err());
+        }
+        let mut input = base.clone();
+        input["external_session_id"] = serde_json::json!("session@other");
+        assert!(Usage::parse(input.to_string().as_bytes()).is_err());
+        input = base;
+        input["request_id"] = serde_json::json!("marker@other");
+        assert!(Usage::parse(input.to_string().as_bytes()).is_err());
+    }
+
     /// Unique bounded public selectors project only fixed Claude methods;
     /// credentials, unknown payload content, null begin outcomes and numeric
     /// ambiguity cannot enter a captured helper request or receipt.
@@ -111,6 +151,17 @@ fn digest(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// Provider/model labels are bounded inert UTF8 metadata, never authority or
+/// executable arguments. IDs and source selectors retain their own grammar.
+fn label(value: &str) -> bool {
+    value.len() <= 128
+        && !value.trim().is_empty()
+        && !value.chars().any(|character| {
+            character.is_control()
+                || matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+}
+
 impl Usage {
     /// Rejects duplicate/extra fields, private handles and unsafe numeric data
     /// before fixed-method serialization. No upstream object is forwarded.
@@ -151,11 +202,8 @@ impl Usage {
                 || parsed
                     .observed_at
                     .is_none_or(|time| time == 0 || time > 9_007_199_254_740_991)
-                || parsed
-                    .provider
-                    .as_ref()
-                    .is_none_or(|id| !identifier(id, 128))
-                || parsed.model.as_ref().is_none_or(|id| !identifier(id, 128))
+                || parsed.provider.as_ref().is_none_or(|value| !label(value))
+                || parsed.model.as_ref().is_none_or(|value| !label(value))
             {
                 return Err(MezError::invalid_args(
                     "request outcome metadata unavailable",

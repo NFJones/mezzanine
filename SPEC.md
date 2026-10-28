@@ -2168,6 +2168,15 @@ final usage MUST NOT fabricate a retained outcome. No timer, store persistence,
 provider replay or no-gap process/reload/restart guarantee is introduced. Exact
 revision1–4 module/client/step inputs MUST remain independently frozen or guarded
 for same-helper upgrades; receipt paths cannot authenticate executable relocation.
+Claude revision8 MUST preserve exact bounded inert UTF8 response-model labels,
+including cloud punctuation such as `@`. These labels and provider metadata MUST
+NOT use the opaque session/request/marker selector grammar. The projector and
+fixed usage capsule MUST reject empty/whitespace-only, over128-byte, control and
+bidi-control labels without reading content or guessing another model. Native
+selectors, request IDs, original hashes and source/worker/actor checks remain
+unchanged. Revision7's projector and literal graph MUST stay independently
+recognizable; no accounting namespace, protocol authority or configuration schema
+is added by accepting valid metadata spelling.
 Claude revision7 MUST disclose fixed request coverage gaps through its exact
 native-qualified original curated observer: request readiness, missing/invalid
 final counters (including error/cancellation without final usage), unknown durable

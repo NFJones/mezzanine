@@ -1,3 +1,5 @@
+# Claude response-model labels retain bounded cloud naming (including @) without
+# a new setting; native/request selectors keep their existing strict grammar.
 # Ordinary Claude accounting reports missing-counter/delivery coverage under
 # its original native observer; no additional Mezzanine setting is required.
 # Ordinary Pi auxiliary counters without qualified request attribution remain

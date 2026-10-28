@@ -7,6 +7,11 @@
  * No transport, installation, vendor behavior or native authority lives here. */
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
 const natural = value => Number.isSafeInteger(value) && value >= 0;
+/** Response model labels are data. Bound UTF8 before projection while retaining
+ * cloud punctuation; native/session/request selectors keep their narrow grammar. */
+const label = value => typeof value === 'string' && value.length <= 128 && value.trim().length > 0
+  && new TextEncoder().encode(value).length <= 128
+  && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(value);
 
 /** Capture pinned main-loop identity once before hashing or downstream work. */
 export function captureClaudeStep(session, event) {
@@ -43,7 +48,7 @@ export function projectClaudeStepOutcome(step, result, observed_at) {
     if (turnId !== step.turnId || index !== step.index || !usage || typeof usage !== 'object' || Array.isArray(usage)) return;
     const model = usage.model, input = usage.input_tokens, output = usage.output_tokens,
       read = usage.cache_read_input_tokens, write = usage.cache_creation_input_tokens;
-    if (!identifier(model) || ![input, output, read, write].every(natural)) return;
+    if (!label(model) || ![input, output, read, write].every(natural)) return;
     const inclusive = input + read + write;
     if (!natural(inclusive)) return;
     return Object.freeze({ event_id: step.event_id, observed_at, provider: 'unavailable', model,

@@ -174,6 +174,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     if manifest.harness == "claude" {
         return if Some(manifest) == claude_artifact::manifest().as_ref() {
             [
+                claude_artifact::historical_model_manifest(),
                 claude_artifact::historical_coverage_manifest(),
                 claude_artifact::historical_receipt_manifest(),
                 claude_artifact::historical_proof_closure_manifest(),

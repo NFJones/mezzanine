@@ -1261,6 +1261,10 @@ ID/time/provider/model/counters. No private capability, PID/project/epoch/endpoi
 or general-method selector is accepted. Exact sender-confirmed native helper,
 direct-parent creator, pane-root incarnation, mapped namespace and deadline
 remain required. No new producer/freshness/presentation/lease is allocated.
+Provider and model labels on usage-end are bounded inert metadata, not opaque
+source selectors: cloud punctuation such as `@` is retained exactly. Blank,
+over128-byte UTF8, control or bidi-control labels are rejected. Session/request
+IDs, witnesses, native qualification and fixed operation grammar are unchanged.
 Curated usage and heartbeat callbacks narrow only the indexed UID/harness/session
 candidates by their exact original observer witness. Two distinct creators with
 the same session label keep separate accounting and can use their own receipts;

@@ -9,6 +9,8 @@ import { pathToFileURL } from 'node:url';
 
 const [directory] = process.argv.slice(2);
 const pairedClear = process.argv[1].endsWith('claude-clear-ordinary-fixture.mjs');
+const responseModel = process.argv[1].endsWith('claude-model-ordinary-fixture.mjs')
+  ? 'claude-haiku-4-5@20251001' : 'response-model';
 const { register } = await import(pathToFileURL(`${directory}/register.mjs`));
 const exec = promisify(execFile), hooks = new Map();
 register((name, handler) => hooks.set(name, handler));
@@ -42,7 +44,7 @@ assert.equal(await hooks.get('classic.SessionStart')(sdk, {
 assert.equal(helpers, 2);
 const chunk = Object.freeze({ kind: 'text', text: 'PRIVATE' });
 const final = Object.freeze({ turnId: 'turn-a', index: 0, answer: 'PRIVATE', toolUses: [], stopReason: 'end_turn',
-  usage: { model: 'response-model', input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 4 } });
+  usage: { model: responseModel, input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 4 } });
 for (let iteration = 0; iteration < 2; iteration++) {
   const event = Object.freeze({ turnId: 'turn-a', index: 0, model: 'selected', messageCount: 2 });
   const stream = hooks.get('turn.step')(sdk, event, async function* (passed) {

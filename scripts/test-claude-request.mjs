@@ -63,3 +63,22 @@ test('Claude projector captures selectors once and never reads answer or chunks'
   Object.defineProperty(outcome.usage, 'model', { get() { throw new Error('PRIVATE'); } });
   assert.equal(projectClaudeStepOutcome(step, outcome, 101), undefined);
 });
+
+/** Response-model spelling is data rather than a source/request selector.
+ * Valid cloud punctuation and exact bounded UTF8 survive without modifying
+ * immutable expense IDs; unknown/control/oversized labels never become expense. */
+test('Claude response model labels preserve bounded inert metadata', async () => {
+  const step = await identifyClaudeStep(captureClaudeStep('session-a', input()));
+  assert.equal(step.request_id, '7042362f4a84ac30981915be04df27bcfdcb6f1feea2f3b169dbc9a307c564e6');
+  assert.equal(step.event_id, 'edc01fc33ee38fdc8f78812613eb9eaacef8cf295210e08bebfda39a0bbe1e57');
+  for (const model of ['claude-haiku-4-5@20251001', 'publisher/model@revision', 'é'.repeat(64)]) {
+    const outcome = result(); outcome.usage.model = model;
+    assert.equal(projectClaudeStepOutcome(step, outcome, 101)?.model, model);
+  }
+  for (const model of ['', '  ', 'model\n', 'model\u0085', 'model\u202e', 'é'.repeat(65)]) {
+    const outcome = result(); outcome.usage.model = model;
+    assert.equal(projectClaudeStepOutcome(step, outcome, 101), undefined);
+  }
+  assert.equal(captureClaudeStep('session@other', input()), undefined);
+  assert.equal(captureClaudeStep('session-a', { ...input(), turnId: 'turn@other' }), undefined);
+});

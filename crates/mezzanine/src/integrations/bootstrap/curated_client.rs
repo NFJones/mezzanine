@@ -97,7 +97,7 @@ pub(super) fn historical_claude_module_v1(helper: &std::path::Path) -> Result<St
             "6e0fa6c94d99a7b84663d9fe19f72e499464eb95d35ad69d85417c2286ad17b2",
         ),
         (
-            include_bytes!("claude_request.mjs").as_slice(),
+            include_bytes!("history/claude_request_v7.mjs").as_slice(),
             "32b4b295e16a9d07afffd604aa4ec7500fa417f6945a4f3f6e2e5f0051ebecf4",
         ),
         (
@@ -270,6 +270,43 @@ pub(super) fn historical_claude_module_v5(helper: &std::path::Path) -> Result<St
         include_str!("curated_client.mjs"),
         include_str!("history/claude_request_step_v6.mjs"),
     )
+}
+
+/// Reconstructs the revision7 literal entry only while its unchanged embedded
+/// inputs remain exact. The old projector is separately frozen by the manifest;
+/// active metadata normalization cannot redefine historical installation bytes.
+pub(super) fn historical_claude_module_v7(helper: &std::path::Path) -> Result<String> {
+    use sha2::Digest;
+    historical_claude_module_v5(helper)?;
+    for (bytes, expected) in [
+        (
+            include_bytes!("curated_module.mjs").as_slice(),
+            "93a37bc04f78750a32a7ac99c0074a2cd7babc2b1e91fe45b38fe003c30b0d87",
+        ),
+        (
+            include_bytes!("claude_request_step.mjs").as_slice(),
+            "77753eb48a40bd2cef5ea0e6037e5eccdcd3f241de530286a49a1976c8bbe010",
+        ),
+        (
+            include_bytes!("claude_usage_gap_runner.mjs").as_slice(),
+            "2816804fbbb3c19a418950cbe46683a8e809f218a854ac779bc716ddfff6ca88",
+        ),
+        (
+            include_bytes!("claude_usage_gap.mjs").as_slice(),
+            "dec55fda4e5af2e2ee13a7c3d67e57ec2c4a4d4fa9c3e17eea10e2b043d7fffc",
+        ),
+    ] {
+        let actual = sha2::Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if actual != expected {
+            return Err(MezError::invalid_state(
+                "Claude historical revision-7 source changed",
+            ));
+        }
+    }
+    module_source(helper, 10_000)
 }
 
 /// One-pass insertion preserves literal helper filenames even when they contain
@@ -541,19 +578,47 @@ mod tests {
         }
     }
 
-    /// Module source composes only fixed literal wrappers/imports with the
-    /// validated helper body; marker-like helper data is not substituted again.
+    /// Module source pins startup, heartbeat, lifecycle, accounting and gap
+    /// helpers separately. Marker-like filenames remain inert data at all five
+    /// call sites, including the two distinct normalized capsule senders.
     #[test]
     fn curated_module_rendering_keeps_fixed_callbacks_and_helper_data() {
-        let source =
-            module_source(std::path::Path::new("/owned/__MEZ_SOURCE_BODY__"), 1000).unwrap();
-        assert_eq!(source.matches("on('classic.SessionStart'").count(), 1);
-        assert_eq!(source.matches("on('classic.SessionEnd'").count(), 1);
-        assert_eq!(source.matches("on('turn.step'").count(), 1);
-        assert!(source.contains("yield* next(e)"));
-        assert!(!source.contains("on('session.start'"));
-        assert!(source.contains("lifetime = observerLifetime;"));
-        assert_eq!(source.matches("\"/owned/__MEZ_SOURCE_BODY__\"").count(), 4);
-        assert!(!source.contains("store.get"));
+        for helper in [
+            "/owned/__MEZ_SOURCE_BODY__",
+            "/owned/__MEZ_GAP_BODY__",
+            "/owned/__MEZ_HELPER__",
+        ] {
+            let source = module_source(std::path::Path::new(helper), 1000).unwrap();
+            let quoted = serde_json::to_string(helper).unwrap();
+            assert_eq!(source.matches("on('classic.SessionStart'").count(), 1);
+            assert_eq!(source.matches("on('classic.SessionEnd'").count(), 1);
+            assert_eq!(source.matches("on('turn.step'").count(), 1);
+            assert!(source.contains("yield* next(e)"));
+            assert!(!source.contains("on('session.start'"));
+            assert!(source.contains("lifetime = observerLifetime;"));
+            assert_eq!(source.matches(&quoted).count(), 5);
+            assert_eq!(
+                source
+                    .matches(&format!("[{quoted}, \"harness-source\""))
+                    .count(),
+                4
+            );
+            assert_eq!(
+                source
+                    .matches(&format!("[{quoted}, \"harness-event\""))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                source
+                    .matches(&format!(
+                        "[{quoted}, \"harness-source\", JSON.stringify(capsule)"
+                    ))
+                    .count(),
+                2
+            );
+            assert!(source.contains("createClaudeUsageGapSender({"));
+            assert!(!source.contains("store.get"));
+        }
     }
 }

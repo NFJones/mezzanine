@@ -868,6 +868,13 @@ creator/root fences still apply, and a rotated observer starts its own diagnosti
 state. Diagnostic delivery can itself be unavailable; it is not a durable spool
 or an exact count of lost reports. Exact revision6 and earlier bundles remain
 upgradeable; no new Mezzanine configuration or vendor enablement is added.
+Revision8 accepts bounded UTF8 actual response-model labels, including the `@`
+spelling used by some cloud model IDs. It preserves the label exactly through
+native helper validation, durable replay and status. Labels stay limited to128
+UTF8 bytes and exclude blank/control/bidi-control text; session, request and
+source selectors retain their strict existing grammar. The original expense IDs
+and all shared client bytes remain unchanged. Exact revision7 and earlier graphs
+remain recognized for upgrade/repair, with no extra enablement or setting.
 Focused Linux acceptance qualifies the unchanged bare-installed module's terminal
 negative-proof cancellation/no-helper/no-re-admission behavior while its actual
 Node creator remains alive; deterministic proof/lease aging is not wall-clock
