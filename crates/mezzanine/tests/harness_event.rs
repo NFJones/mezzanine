@@ -6,7 +6,7 @@
 
 #[path = "harness_event/helper_publication.rs"]
 mod helper_publication;
-use helper_publication::copy_fixture_helper;
+use helper_publication::{PublicationRoot, copy_fixture_helper};
 use std::os::unix::fs::DirBuilderExt;
 
 /// Production Cursor bootstrap must create version1 only for an absent shared
@@ -17,14 +17,8 @@ use std::os::unix::fs::DirBuilderExt;
 #[test]
 fn standalone_cursor_bootstrap_shared_members_and_commands_remain_neutral() {
     use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
-    let root = std::env::temp_dir().join(format!(
-        "mez-cursor-install-{}-{}",
-        std::process::id(),
-        rand::random::<u64>()
-    ));
-    std::fs::create_dir(&root).unwrap();
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let owner = PublicationRoot::new();
+    let root = owner.path();
     let helper = root.join("owned 'quote' $LITERAL; mez");
     copy_fixture_helper(std::path::Path::new(env!("CARGO_BIN_EXE_mez")), &helper).unwrap();
     let home = root.join("home");
@@ -118,7 +112,6 @@ fn standalone_cursor_bootstrap_shared_members_and_commands_remain_neutral() {
         std::fs::read(vendor.join("cli-config.json")).unwrap(),
         b"PRIVATE USER POLICY"
     );
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// Bare production Copilot bootstrap resolves COPILOT_HOME, creates only its
@@ -129,14 +122,8 @@ fn standalone_cursor_bootstrap_shared_members_and_commands_remain_neutral() {
 #[test]
 fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
     use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
-    let root = std::env::temp_dir().join(format!(
-        "mez-copilot-install-{}-{}",
-        std::process::id(),
-        rand::random::<u64>()
-    ));
-    std::fs::create_dir(&root).unwrap();
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let owner = PublicationRoot::new();
+    let root = owner.path();
     let helper = root.join("owned 'quote' $LITERAL; mez");
     copy_fixture_helper(std::path::Path::new(env!("CARGO_BIN_EXE_mez")), &helper).unwrap();
     let home = root.join("home");
@@ -227,7 +214,6 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
         std::fs::read(vendor.join("settings.json")).unwrap(),
         b"{\"disableAllHooks\":true,\"authoredExporter\":true}"
     );
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// Bare production bootstrap pins its actual executable even when the path
@@ -238,13 +224,8 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
 #[test]
 fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks() {
     use std::os::unix::fs::PermissionsExt;
-    let root = std::env::temp_dir().join(format!(
-        "mez-codex-deploy-{}-{}",
-        std::process::id(),
-        rand::random::<u64>()
-    ));
-    std::fs::create_dir(&root).unwrap();
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let owner = PublicationRoot::new();
+    let root = owner.path();
     let helper = root.join("owned 'quote' $NOT_A_VARIABLE; mez");
     copy_fixture_helper(std::path::Path::new(env!("CARGO_BIN_EXE_mez")), &helper).unwrap();
     let home = root.join("home");
@@ -355,7 +336,6 @@ fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks()
             assert!(result.stderr.is_empty(), "{shell}/{state}: {result:?}");
         }
     }
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// Malformed/child/compact inputs, missing pane hints and unavailable Unix routes

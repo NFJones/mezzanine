@@ -6,6 +6,9 @@
 //! is the publication boundary. This removes an ownership hazard, not proof of
 //! the historical cause of intermittent ETXTBSY. No production spawn policy,
 //! retry, shell serialization or vendor installation is introduced here.
+//! Unique owner-only roots live beside the Cargo binary so multi-gigabyte real
+//! copies do not consume bounded temporary mounts. RAII also removes partial
+//! fixture data when setup or assertions unwind.
 
 use std::path::Path;
 
@@ -59,20 +62,30 @@ fn finish_fixture_copy(child: std::process::Child, helper: &Path) -> std::io::Re
 }
 
 /// Own private regression-test paths and clean up even after assertion failures.
-struct PublicationRoot(std::path::PathBuf);
+pub(super) struct PublicationRoot(std::path::PathBuf);
 
 impl PublicationRoot {
     /// Allocate a unique owner-only root, never a shared mutable helper path.
-    fn new() -> Self {
-        use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!(
+    pub(super) fn new() -> Self {
+        use std::os::unix::fs::DirBuilderExt;
+        // Cargo supplies the absolute executable path; its filesystem already
+        // supports the large binary and does not depend on TMPDIR capacity.
+        let directory = Path::new(env!("CARGO_BIN_EXE_mez")).parent().unwrap();
+        let root = directory.join(format!(
             "mez-helper-publication-{}-{}",
             std::process::id(),
             rand::random::<u64>()
         ));
-        std::fs::create_dir(&root).unwrap();
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
         Self(root)
+    }
+
+    /// Borrows this root without transferring cleanup ownership to the caller.
+    pub(super) fn path(&self) -> &Path {
+        &self.0
     }
 }
 
@@ -80,6 +93,38 @@ impl Drop for PublicationRoot {
     /// Best-effort cleanup must not mask the original failure during unwind.
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Real-copy roots must stay on the Cargo binary filesystem rather than a
+/// capacity-limited TMPDIR. Both normal return and a deliberate setup panic
+/// remove nonempty roots, including partial helper data, without hiding the
+/// original failure or requiring successful end-of-test manual cleanup.
+#[test]
+fn copied_helper_roots_use_binary_storage_and_clean_normal_and_panicked_setup() {
+    use std::os::unix::fs::MetadataExt;
+    for panic_setup in [false, true] {
+        let mut created = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let owner = PublicationRoot::new();
+            let binary = Path::new(env!("CARGO_BIN_EXE_mez"));
+            assert_eq!(owner.path().parent(), binary.parent());
+            assert_eq!(
+                std::fs::metadata(owner.path()).unwrap().dev(),
+                std::fs::metadata(binary).unwrap().dev()
+            );
+            assert_eq!(
+                std::fs::metadata(owner.path()).unwrap().mode() & 0o777,
+                0o700
+            );
+            std::fs::write(owner.path().join("partial helper"), b"partial fixture copy").unwrap();
+            created = Some(owner.path().to_path_buf());
+            if panic_setup {
+                panic!("controlled fixture setup failure");
+            }
+        }));
+        assert_eq!(result.is_err(), panic_setup);
+        assert!(!created.unwrap().exists());
     }
 }
 
