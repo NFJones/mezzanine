@@ -1251,6 +1251,23 @@ Public session labels MAY narrow callback candidates, but reused labels MUST NOT
 block or select another native creator: kernel parent PID MAY narrow the original
 candidate only; full parent incarnation and pane ancestry MUST still be proved
 by the native worker and actor before any effect.
+Known shared Codex app-server callbacks MUST NOT borrow a launching pane's
+inherited MEZ, ancestry or cwd as requesting-client session association. Bounded
+native parent arguments MAY classify/refuse documented managed-daemon or
+non-stdio listener modes, independently of executable path/alias/version; this
+inspection MUST NOT authorize a source. Unknown native argument observations
+MUST fail closed with a fixed topology capability gap. Invocation bytes MUST stay
+in memory and MUST NOT enter transport, logs, storage or diagnostics. Native
+argument queries MUST return only a refusal Boolean. Ambiguous Darwin alignment
+and leading-empty-argument layouts MUST be evaluated conservatively, not exposed
+as an exact argv vector that could contain environment data. The installed helper
+MUST also refuse shared/unknown native parent topology before IPC, including
+when contacting an older server. Initial
+native admission and every subsequent native helper observation MUST apply the
+guard before source ownership, readiness or expense. Full native incarnation,
+writer and pane ancestry proof remains mandatory for all other modes. Bootstrap
+MUST distinguish installation/runtime verification from the fixed shared-server
+association limitation, without forcing --no-daemon or changing vendor mode.
 Ordinary Codex hook fields MUST NOT be treated as request accounting: the inspected
 SessionStart/UserPromptSubmit/Stop/SessionEnd schemas provide lifecycle IDs and
 selected-model metadata, not token counters. Separate OTEL `response.completed`

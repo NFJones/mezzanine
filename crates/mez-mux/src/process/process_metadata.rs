@@ -301,9 +301,10 @@ pub fn process_environment_for_pid(pid: u32) -> Option<Vec<RawEnvironmentEntry>>
 #[cfg(target_os = "macos")]
 const MACOS_PROCARGS2_READ_CAP: usize = 8 * 1024 * 1024;
 
-/// Returns the Darwin `KERN_PROCARGS2` exec-time environment for `pid`.
+/// Reads one bounded Darwin process argument/environment buffer without logging
+/// protected process data. Query/read failures return no partial observation.
 #[cfg(target_os = "macos")]
-pub fn process_environment_for_pid(pid: u32) -> Option<Vec<RawEnvironmentEntry>> {
+pub(super) fn read_macos_procargs(pid: u32, cap: usize) -> Option<Vec<u8>> {
     let pid = libc::c_int::try_from(pid).ok()?;
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut size: usize = 0;
@@ -319,7 +320,7 @@ pub fn process_environment_for_pid(pid: u32) -> Option<Vec<RawEnvironmentEntry>>
             0,
         )
     };
-    if status != 0 || size == 0 || size > MACOS_PROCARGS2_READ_CAP {
+    if status != 0 || size == 0 || size > cap {
         return None;
     }
     let mut buffer = vec![0_u8; size];
@@ -339,6 +340,13 @@ pub fn process_environment_for_pid(pid: u32) -> Option<Vec<RawEnvironmentEntry>>
         return None;
     }
     buffer.truncate(size);
+    Some(buffer)
+}
+
+/// Returns the Darwin `KERN_PROCARGS2` exec-time environment for `pid`.
+#[cfg(target_os = "macos")]
+pub fn process_environment_for_pid(pid: u32) -> Option<Vec<RawEnvironmentEntry>> {
+    let buffer = read_macos_procargs(pid, MACOS_PROCARGS2_READ_CAP)?;
     Some(parse_environment_bytes(parse_macos_environment_bytes(
         &buffer,
     )?))

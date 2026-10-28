@@ -42,6 +42,15 @@ pub(super) struct HelperPresentation {
 impl HelperPresentation {
     /// Runs only after the original native direct-parent ancestry publication.
     pub(super) fn observe_usage(&self, work: &ExternalEnrollmentWork) -> Result<()> {
+        if work.harness == "codex" {
+            self.producer
+                .reobserve()
+                .map_err(|_| MezError::forbidden("Codex native creator unavailable"))?;
+            super::codex_topology::require_client_scope(self.producer.identity().process_id)?;
+            self.producer
+                .reobserve()
+                .map_err(|_| MezError::forbidden("Codex native creator changed"))?;
+        }
         if let Some(begin) = &self.usage_begin {
             begin.observe(work)?;
         }

@@ -14,6 +14,8 @@ use crate::error::{MezError, Result};
 
 /// Pure model-request facts, separate from lifecycle, transport and admission.
 pub(crate) mod request;
+/// Negative native command-mode classification, never source authority.
+pub(crate) mod topology;
 
 /// Exact upstream release whose lifecycle fields were inspected.
 pub(crate) const RELEASE: &str = "0.160.0";

@@ -350,3 +350,70 @@ async fn external_codex_installed_model_hooks_record_incurred_requests_without_l
         );
     }
 }
+
+/// A shared creator can retain genuine pane ancestry and inherited routing while
+/// serving another client. Its installed fixed helper must remain neutral and
+/// refuse before IPC, so even a server from before the runtime guard cannot
+/// assign that callback to the launching pane. No vendor or provider is run.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires freshly built sibling mez binary; installed shared-mode qualification"]
+async fn external_codex_installed_shared_server_callback_is_neutral_without_ipc() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let Some(mut fixture) = fixture("codex-shared").await else {
+        panic!("shared Codex qualification requires native peer evidence")
+    };
+    let helper = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("mez");
+    let home = fixture.directory.join("home");
+    std::fs::create_dir(&home).unwrap();
+    let installed = std::process::Command::new(&helper)
+        .args(["--json", "bootstrap", "codex"])
+        .env_clear()
+        .env("HOME", &home)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(installed.status.success(), "{installed:?}");
+    assert!(installed.stderr.is_empty());
+    let document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join(".codex/hooks.json")).unwrap()).unwrap();
+    let command = document["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    let launch = serde_json::json!({"command":command,"event":{"hook_event_name":"SessionStart","session_id":"session-a","source":"startup"}}).to_string();
+    fixture.socket.write_all(&[9]).await.unwrap();
+    fixture
+        .socket
+        .write_all(&u32::try_from(launch.len()).unwrap().to_be_bytes())
+        .await
+        .unwrap();
+    fixture.socket.write_all(launch.as_bytes()).await.unwrap();
+    let mut neutral = [0];
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        fixture.socket.read_exact(&mut neutral),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(neutral, [1]);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), fixture.listener.accept())
+            .await
+            .is_err()
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .is_empty()
+    );
+    assert!(fixture.service.external_agent_rows().is_empty());
+}

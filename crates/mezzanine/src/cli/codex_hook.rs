@@ -37,6 +37,22 @@ pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u
     Some(u8::from(writeln!(stdout, "{{}}").is_err()))
 }
 
+/// Refuses unknown/shared native parent modes before IPC, including when the
+/// selected server predates its own guard. This is negative filtering only;
+/// the server must still prove full original native source/root authority.
+fn native_route_eligible(pid: u32) -> bool {
+    let Some(identity) = mez_mux::process::process_parent_identity_for_pid(pid) else {
+        return false;
+    };
+    let Some(refused) = mez_mux::process::process_argument_refusal_for_pid(
+        identity.parent_process_id,
+        codex::topology::shared_server,
+    ) else {
+        return false;
+    };
+    !refused && mez_mux::process::process_parent_identity_for_pid(pid) == Some(identity)
+}
+
 /// Rebuilds a normalized initial declaration or original-instance turn callback. The fixed
 /// process-local instance label permits inert retry for one qualified creator,
 /// not another helper-owned namespace. Child/compact/turn/end events cannot
@@ -152,6 +168,7 @@ pub(super) async fn run<W: Write>(
         super::harness_event::read_input_from(&std::io::stdin(), Duration::from_millis(250))
         && let Some(pane) = pane
         && let Ok(Some(body)) = request(&bytes, pane)
+        && native_route_eligible(std::process::id())
     {
         let event = serde_json::from_str::<serde_json::Value>(&body)
             .ok()

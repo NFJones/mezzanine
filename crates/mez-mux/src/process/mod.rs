@@ -17,6 +17,8 @@ mod manager;
 mod pane;
 /// Exposes bounded native parent/incarnation observations and ancestry evidence.
 mod process_ancestry;
+/// Bounded sensitive argv observations for local topology diagnostics only.
+mod process_arguments;
 /// Exposes native pane-process metadata lookup behind one portable boundary.
 mod process_metadata;
 /// Exposes the pty module boundary.
@@ -55,6 +57,8 @@ pub use process_ancestry::{
     ProcessAncestry, ProcessAncestryUnavailable, ProcessParentIdentity, process_ancestry,
     process_parent_identity_for_pid,
 };
+#[doc(hidden)]
+pub use process_arguments::process_argument_refusal_for_pid;
 #[doc(hidden)]
 pub use process_metadata::filesystem_credentials_for_pid;
 #[doc(hidden)]

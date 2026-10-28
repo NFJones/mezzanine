@@ -41,6 +41,7 @@ mod codex;
 mod codex_idle;
 mod codex_order;
 mod codex_requests;
+mod codex_topology;
 mod cold;
 mod copilot;
 mod curated;
@@ -289,6 +290,12 @@ impl ExternalEnrollmentWork {
             helper.observe_usage(self)?;
         }
         if self.helper.is_none() {
+            if self.harness == "codex" {
+                codex_topology::require_client_scope(self.origin.identity.process_id)?;
+                self.origin
+                    .reobserve()
+                    .map_err(|_| MezError::forbidden("Codex native creator changed"))?;
+            }
             if let Some(history) = &self.warm_history {
                 history.execute(self)?;
             }

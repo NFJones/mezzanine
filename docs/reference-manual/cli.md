@@ -278,6 +278,15 @@ can still commit usage while dormant. Explicit end, root loss and observer
 epoch replacement stay fenced; this does not establish continuous observer health.
 A reused public conversation label cannot choose another native creator: native
 parent evidence narrows the candidate before full worker/actor proof.
+Known shared app-server command hooks cannot identify their requesting client
+from a launching pane's inherited MEZ, ancestry or cwd. Native managed-daemon and
+non-stdio listener modes are refused with
+`unavailable-codex-native-client-session-association`; unavailable native argument
+inspection reports `unavailable-codex-native-process-topology`. Arguments remain
+private and supply no authorization. Bootstrap reports the shared-server gap
+separately from unverified runtime support. Vendor launch options, shims, daemon
+policy and exporter configuration are unchanged; no `--no-daemon` requirement is
+introduced. Ordinary client-side session association still needs qualification.
 The previously inspected lifecycle hooks at upstream `openai/codex` commit
 `0c329ad2` have lifecycle IDs/selected model rather than usage counters. Newer
 observation-only `PreModelRequest`/`PostModelRequest` hooks also expose per-request

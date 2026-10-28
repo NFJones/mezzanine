@@ -282,6 +282,12 @@ impl CuratedAdmission {
                 "curated creator relationship or deadline changed",
             ));
         }
+        if work.harness == "codex" {
+            super::codex_topology::require_client_scope(producer.identity().process_id)?;
+            producer
+                .reobserve()
+                .map_err(|_| MezError::forbidden("Codex native creator changed"))?;
+        }
         self.producer
             .set(producer.clone())
             .map_err(|_| MezError::conflict("curated creator already observed"))?;

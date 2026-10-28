@@ -192,6 +192,7 @@ fn run_with_root_selector<W: Write>(
                 "runtime_verification":"not-performed",
                 "support":"best-effort",
                 "lifecycle":"unverified",
+                "shared_server_association":if args.harness == "codex" { serde_json::json!("unavailable-codex-native-client-session-association") } else { serde_json::Value::Null },
                 "usage":if args.harness == "copilot" { "unavailable-safe-activation" } else if args.harness == "cursor" { "unavailable-counter-schema" } else { "unverified" },
                 "guidance":"Installation is observational only. Use ordinary vendor commands and preserve vendor review/disabled policy. Automatic enrollment and accounting capabilities may still be unavailable; no Mez vendor-launch wrappers exist",
             }),
@@ -281,6 +282,12 @@ fn write_report<W: Write>(
             writeln!(
                 stdout,
                 "Runtime enrollment/accounting not verified; vendor review and disabled policy remain unchanged."
+            )?;
+        }
+        if let Some(gap) = report["shared_server_association"].as_str() {
+            writeln!(
+                stdout,
+                "Shared-server callbacks: {gap}. A launching pane is not requesting-client session proof; vendor launch behavior is unchanged."
             )?;
         }
     } else {
