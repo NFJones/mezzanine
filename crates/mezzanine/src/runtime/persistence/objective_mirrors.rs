@@ -63,7 +63,7 @@ pub struct RuntimeObjectiveMirrorStatus {
     pub slot_phase: &'static str,
     /// Exact current-revision cache confirmations, not transcript receipts.
     pub confirmed: u64,
-    /// Nonblocking filesystem lock refusals.
+    /// Observed physical lock refusals, including superseded/deleted receipts.
     pub busy: u64,
     /// Terminal I/O or abandoned-work observations.
     pub failed: u64,
@@ -278,11 +278,17 @@ impl ObjectiveMirrorQueue {
         // One physical attempt is reported exactly once, even when a newer
         // desired revision or a deletion has already superseded its receipt.
         // The freshness gates below are allowed to reject confirmation, retry
-        // and UI refresh, but a filesystem failure/cancelled job must stay
-        // visible as bounded content-free diagnostics.
-        if let MirrorResult::Failed(reason) = &receipt.result {
-            self.status.failed = self.status.failed.saturating_add(1);
-            self.status.last_failure = Some(*reason);
+        // and UI refresh, but actual lock refusal, filesystem failure or a
+        // cancelled job must stay visible as bounded content-free diagnostics.
+        match &receipt.result {
+            MirrorResult::Failed(reason) => {
+                self.status.failed = self.status.failed.saturating_add(1);
+                self.status.last_failure = Some(*reason);
+            }
+            MirrorResult::Busy => {
+                self.status.busy = self.status.busy.saturating_add(1);
+            }
+            MirrorResult::Written(_) => {}
         }
         let entry = self.entries.get_mut(&receipt.key)?;
         if entry.in_flight != Some(receipt.revision) {
@@ -323,7 +329,6 @@ impl ObjectiveMirrorQueue {
                     self.status.last_failure = Some(MirrorFailure::SchedulingExhausted);
                 }
                 entry.eligible_at = Instant::now() + OBJECTIVE_MIRROR_BUSY_DELAY;
-                self.status.busy = self.status.busy.saturating_add(1);
                 None
             }
             MirrorResult::Failed(reason) => {
@@ -1068,6 +1073,55 @@ mod tests {
             "latest"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A completed actual lock refusal remains a diagnostic fact even when a
+    /// newer publication supersedes its revision before collection. Collecting
+    /// twice cannot double-count it, confirm old work or delay the explicit new
+    /// revision with an obsolete retry. No native job, fake Busy or sleep exists.
+    #[test]
+    fn objective_mirror_superseded_busy_receipt_is_counted_once_without_stale_retry() {
+        let (store, root) = store();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join(".session-objectives.json.lock"))
+            .unwrap();
+        flock(&lock, FlockOperation::LockExclusive).unwrap();
+        let mut queue = ObjectiveMirrorQueue::default();
+        queue.publish(store.clone(), "same", Some("old"));
+        queue.claim().unwrap().execute();
+        queue.publish(store.clone(), "same", Some("latest"));
+        let first_refresh = queue.collect();
+        let count_after_first = queue.status.busy;
+        let second_refresh = queue.collect();
+        let count_after_second = queue.status.busy;
+        let stale_confirmed = queue.status.confirmed;
+        let latest = queue.claim();
+        let latest_admitted = latest.is_some();
+        drop(lock);
+        if let Some(work) = latest {
+            work.execute();
+            queue.collect();
+        }
+        let mirrored = store
+            .session_objective_mirror("same")
+            .unwrap()
+            .map(|record| record.objective);
+        let confirmed = queue.status.confirmed;
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(first_refresh.is_none() && second_refresh.is_none());
+        assert_eq!(count_after_first, 1, "superseded real Busy was hidden");
+        assert_eq!(count_after_second, 1, "Busy receipt was counted twice");
+        assert_eq!(stale_confirmed, 0);
+        assert!(
+            latest_admitted,
+            "old refusal delayed an explicit new revision"
+        );
+        assert_eq!(mirrored.as_deref(), Some("latest"));
+        assert_eq!(confirmed, 1);
     }
 
     /// Actual lock admission is finite and busy is not successful persistence.

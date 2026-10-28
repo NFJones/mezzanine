@@ -13696,6 +13696,9 @@ The baseline command capabilities are:
   cadence with fair scheduling independent of publication revision. Capacity
   refusal and filesystem failure MUST remain visible as bounded content-free
   diagnostics and MUST NOT falsely suppress an identical explicit retry.
+  Every completed physical mirror file-lock refusal MUST be counted once, including a
+  superseded or deleted revision. This diagnostic observation MUST NOT revive
+  stale retry, publication, confirmation or browser-refresh authority.
   Stale results MUST NOT confirm newer revisions or rebound stores. An older
   write already past its last revision check cannot be described as cancelled;
   newer local work MUST follow it serially, and current confirmation MUST settle

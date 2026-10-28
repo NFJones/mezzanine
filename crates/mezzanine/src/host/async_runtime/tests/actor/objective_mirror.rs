@@ -7,12 +7,24 @@
 
 use super::super::*;
 use rustix::fs::{FlockOperation, flock};
+use std::time::Instant;
+
+/// Content-free observation from the actual descriptor-owning release thread.
+#[derive(Debug, Clone)]
+struct MirrorLockObservation {
+    /// Actual held interval before descriptor release, not a timing guarantee.
+    held_for_ms: u128,
+    /// Explicit fixture release, independent watchdog expiry or sender loss.
+    trigger: &'static str,
+}
 
 /// Owns one actual advisory lock and an independent bounded release watchdog.
 struct MirrorLockWatchdog {
     release: Option<std::sync::mpsc::SyncSender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
     released: StdArc<AtomicBool>,
+    /// Written only by the actual lock owner and read after joining it.
+    observation: StdArc<std::sync::Mutex<Option<MirrorLockObservation>>>,
 }
 
 impl MirrorLockWatchdog {
@@ -21,6 +33,19 @@ impl MirrorLockWatchdog {
         if let Some(release) = &self.release {
             let _ = release.try_send(());
         }
+    }
+
+    /// Releases and joins the exact owner, retaining only bounded phase facts.
+    /// This never extends the watchdog or changes any actor/retry decision.
+    fn release_and_observe(mut self) -> Option<MirrorLockObservation> {
+        self.release_now();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        self.observation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 
     /// Acquires the store's real mirror lock before starting the watchdog.
@@ -33,20 +58,34 @@ impl MirrorLockWatchdog {
             .open(root.join(".session-objectives.json.lock"))
             .unwrap();
         flock(&lock, FlockOperation::LockExclusive).unwrap();
+        let acquired = Instant::now();
         let (release, receiver) = std::sync::mpsc::sync_channel(1);
         let released = StdArc::new(AtomicBool::new(false));
         let observed = released.clone();
+        let observation = StdArc::new(std::sync::Mutex::new(None));
+        let recorded = observation.clone();
         let thread = std::thread::spawn(move || {
-            let _ = receiver.recv_timeout(Duration::from_secs(3));
+            let trigger = match receiver.recv_timeout(Duration::from_secs(3)) {
+                Ok(()) => "explicit-release",
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => "watchdog-expired",
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => "sender-dropped",
+            };
+            let held_for_ms = acquired.elapsed().as_millis();
             // Flag before releasing the descriptor: false proves the lock is
             // still held, never a late runtime result after watchdog rescue.
             observed.store(true, Ordering::Release);
             drop(lock);
+            *recorded.lock().unwrap_or_else(|error| error.into_inner()) =
+                Some(MirrorLockObservation {
+                    held_for_ms,
+                    trigger,
+                });
         });
         Self {
             release: Some(release),
             thread: Some(thread),
             released,
+            observation,
         }
     }
 }
@@ -243,10 +282,13 @@ async fn objective_mirror_actor_case(run_service: bool) {
             .execute_agent_shell_command(primary, "/stop".into())
             .await;
         let cancel_before_release = !watchdog.released.load(Ordering::Acquire);
+        let busy_started = Instant::now();
+        let mut busy_snapshot = None;
         let busy_observed = if run_service {
             tokio::time::timeout(Duration::from_secs(1), async {
                 loop {
                     let status = handle.metrics().await.unwrap().objective_mirror;
+                    busy_snapshot = Some(status.clone());
                     if watchdog.released.load(Ordering::Acquire) {
                         break false;
                     }
@@ -261,6 +303,7 @@ async fn objective_mirror_actor_case(run_service: bool) {
         } else {
             true
         };
+        let busy_elapsed = busy_started.elapsed();
         let convergence = if run_service {
             watchdog.release_now();
             let observed = tokio::time::timeout(Duration::from_secs(2), async {
@@ -290,7 +333,7 @@ async fn objective_mirror_actor_case(run_service: bool) {
             read_before_release,
             cancel,
             cancel_before_release,
-            busy_observed,
+            (busy_observed, busy_snapshot, busy_elapsed),
             convergence,
             shutdown,
         )
@@ -303,7 +346,7 @@ async fn objective_mirror_actor_case(run_service: bool) {
             responsive,
             cancel,
             cancelled,
-            busy_observed,
+            (busy_observed, busy_snapshot, busy_elapsed),
             convergence,
             shutdown,
         ),
@@ -312,7 +355,9 @@ async fn objective_mirror_actor_case(run_service: bool) {
     ) = tokio::join!(client, persistence, actor.run());
     // Release and join before any assertions or filesystem cleanup, including
     // the baseline failure. Drop is also the unwind fallback for early errors.
-    drop(watchdog);
+    let lock_observation = watchdog
+        .release_and_observe()
+        .map(|observation| (observation.held_for_ms, observation.trigger));
     exit.service.poll_runtime_objective_mirror(false);
     let idle = !run_service || exit.service.objective_mirrors_are_idle_for_tests();
     let mirrored = if run_service && idle {
@@ -333,7 +378,7 @@ async fn objective_mirror_actor_case(run_service: bool) {
     convergence.unwrap();
     assert!(
         busy_observed,
-        "retry qualification must observe Busy while the real lock is held"
+        "retry qualification must observe Busy while the real lock is held; adoption={adopted} read={responsive} cancel={cancelled} busy_wait={busy_elapsed:?} status={busy_snapshot:?} lock(held_ms,trigger)={lock_observation:?}"
     );
     if let Some(report) = persistence {
         assert_eq!(report.unwrap().failed, 0);
@@ -348,7 +393,7 @@ async fn objective_mirror_actor_case(run_service: bool) {
     }
     assert!(
         adopted && responsive && cancelled,
-        "objective cache lock stalled actor until release: adoption={adopted} read={responsive} cancel={cancelled}"
+        "objective cache lock stalled actor until release: adoption={adopted} read={responsive} cancel={cancelled} lock(held_ms,trigger)={lock_observation:?}"
     );
     assert!(exit.service.tracked_runtime_pane_process_ids().is_empty());
     assert_eq!(
