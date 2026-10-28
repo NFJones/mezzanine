@@ -278,7 +278,9 @@ path/content and selected-model fields. These hooks have no request ID/index;
 normalization alone does not install them or qualify native request pairing,
 original origin, response model/provider or durable accounting. An internal adapter now routes these facts through native helper qualification
 and the shared original-origin ledger, with finite custody and replay/overlap
-fences. The bootstrap does not yet install these model hooks; installation and
+fences. Retained reports retry after storage refusal without changing their
+original admission; recovery clears their delivery gap while preserving
+independent missing-counter/readiness/capacity gaps. The bootstrap does not yet install these model hooks; installation and
 full ordinary-topology qualification remain unfinished. Separately, OTEL completion events and response spans expose
 input/output/cache-read/cache-write/reasoning counters.
 TUI `last_token_usage` can mean active context occupancy, while `total_token_usage`

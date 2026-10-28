@@ -1252,7 +1252,9 @@ observer epoch, admit a pre boundary before accepting final counters, retain the
 original origin across bounded retry, conserve same-writer replay, and quarantine
 overlapping pre writers without replacing their origin. Missing counters/readiness,
 capacity exhaustion and missing durable acknowledgment MUST expose fixed coverage
-gaps independently of previously recorded expense. Selected model/provider MUST
+gaps independently of previously recorded expense. Successful delivery of every
+retained report MAY clear its durable-acknowledgment gap, but MUST NOT erase an
+independent readiness/counter/capacity gap. Selected model/provider MUST
 remain unavailable rather than being inferred. Model-hook installation and full
 ordinary-topology qualification remain unfinished.
 TUI `last_token_usage` context occupancy and accumulated session

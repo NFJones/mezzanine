@@ -18,7 +18,7 @@ const CUSTODY: usize = 16;
 const RECEIPTS: usize = 128;
 
 /// Closed current-epoch coverage facts, separate from price and expense totals.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Gap {
     /// No unique original admission could be retained for this callback.
     Readiness,
@@ -453,6 +453,12 @@ impl RuntimeSessionService {
             requests
                 .retained
                 .retain(|r| r.admission.marker != report.admission.marker);
+            // Exact retained obligations are recoverable. Clear only their
+            // delivery fault after the last report commits; unrelated missing
+            // source/counter/readiness facts must remain visible.
+            if requests.retained.is_empty() && requests.gap == Some(Gap::Durable) {
+                requests.gap = None;
+            }
             if !requests.settled.iter().any(|r| r.writer == report.writer) {
                 if requests.settled.len() >= RECEIPTS {
                     requests.settled.pop_front();
@@ -468,7 +474,11 @@ impl RuntimeSessionService {
             {
                 requests.retained.push(report.clone());
             }
-            requests.gap = Some(Gap::Durable);
+            // Delivery refusal must not overwrite an independent coverage gap:
+            // later successful delivery could otherwise erase that older loss.
+            if requests.gap.is_none() || requests.gap == Some(Gap::Durable) {
+                requests.gap = Some(Gap::Durable);
+            }
         }
     }
 }

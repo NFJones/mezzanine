@@ -8,7 +8,7 @@ use super::*;
 
 /// Constructs only the fixed initial Codex creator declaration, not callback
 /// capabilities. Actual helper/parent/root evidence remains fixture-independent.
-fn declaration() -> JsonRpcRequest {
+pub(super) fn declaration() -> JsonRpcRequest {
     let mut request = curated_request();
     let mut params: serde_json::Value =
         serde_json::from_str(request.params.as_deref().unwrap()).unwrap();
@@ -21,7 +21,7 @@ fn declaration() -> JsonRpcRequest {
 }
 
 /// One bounded metadata-only callback, with no credential/generation or title.
-fn callback(event: &str, turn: &str) -> JsonRpcRequest {
+pub(super) fn callback(event: &str, turn: &str) -> JsonRpcRequest {
     crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"codex-observe","method":"agent/external/codex-observe",
         "params":{"pane_id":"%1","external_session_id":"session-a","event":event,"turn_id":turn}}).to_string()).unwrap()
 }

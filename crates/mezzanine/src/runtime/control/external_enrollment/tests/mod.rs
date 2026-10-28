@@ -1347,6 +1347,7 @@ mod ancestry;
 mod claude_curated;
 mod codex_creator;
 mod codex_installed;
+mod codex_model_delivery;
 mod codex_observation;
 mod copilot;
 mod copilot_installed;
