@@ -17,6 +17,8 @@ const MAX_TURNS: usize = 4096;
 pub(super) struct CodexEvent {
     kind: &'static str,
     turn: String,
+    /// Normalized model-hook counts only; absent is unknown, never zero.
+    counters: Option<crate::storage::token_usage::ExternalCounters>,
 }
 
 impl CodexEvent {
@@ -30,7 +32,33 @@ impl CodexEvent {
             "PostToolUse" => "PostToolUse",
             "Interrupt" => "Interrupt",
             "SessionEnd" => "SessionEnd",
+            "PreModelRequest" => "PreModelRequest",
+            "PostModelRequest" => "PostModelRequest",
             _ => return Err(MezError::invalid_args("Codex event unavailable")),
+        };
+        if kind != "PostModelRequest" && params.get("counters").is_some() {
+            return Err(MezError::invalid_args(
+                "Codex counters require a model post",
+            ));
+        }
+        let counters = if kind == "PostModelRequest" {
+            match params.get("counters") {
+                Some(serde_json::Value::Null) => None,
+                Some(value) => {
+                    let counters: crate::storage::token_usage::ExternalCounters =
+                        serde_json::from_value(value.clone())
+                            .map_err(|_| MezError::invalid_args("Codex counters invalid"))?;
+                    counters.validate()?;
+                    Some(counters)
+                }
+                None => {
+                    return Err(MezError::invalid_args(
+                        "Codex model post counters unavailable",
+                    ));
+                }
+            }
+        } else {
+            None
         };
         if kind == "SessionEnd" {
             if params.get("turn_id").is_some() {
@@ -41,6 +69,7 @@ impl CodexEvent {
             return Ok(Self {
                 kind,
                 turn: String::new(),
+                counters: None,
             });
         }
         let turn = text(params, "turn_id", 128)?;
@@ -50,7 +79,11 @@ impl CodexEvent {
         {
             return Err(MezError::invalid_args("Codex turn selector unavailable"));
         }
-        Ok(Self { kind, turn })
+        Ok(Self {
+            kind,
+            turn,
+            counters,
+        })
     }
 }
 
@@ -185,6 +218,23 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::forbidden("Codex callback candidate unavailable"))?;
         let source = original(binding)?;
         let order_queue = source.codex_turns.order.clone();
+        let plan = if matches!(event.kind, "PreModelRequest" | "PostModelRequest") {
+            let writer = connection
+                .unix_origin()
+                .ok_or_else(|| MezError::forbidden("Codex request writer unavailable"))?
+                .identity;
+            Some(self.plan_codex_request(
+                binding,
+                event.kind,
+                &event.turn,
+                writer,
+                event.counters,
+                source.codex_turns.current.as_deref() == Some(event.turn.as_str()),
+            ))
+        } else {
+            None
+        };
+
         let callback = crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":request.id,"method":"agent/external/helper-presentation","params":{
             "launch_token":source.token.expose_secret(),"generation":binding.generation,"external_session_id":session,"sequence":1,"state":"ready",
         }}).to_string())?;
@@ -200,12 +250,34 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
+        // A model plan captures original request custody before reserving its
+        // ticket. It cannot wait behind an older callback that may replace or
+        // quarantine that captured state before the ledger worker executes.
+        // Bounded helper retry may re-plan only after the predecessor settles.
+        if plan.is_some() && !order.is_serving() {
+            self.control
+                .external_agents_mut()
+                .enrollments
+                .pending
+                .remove(&work.admission);
+            return Err(MezError::conflict("Codex model predecessor unsettled"));
+        }
         // The request id is already encoded JSON, unlike the internal envelope's
         // string construction. Preserve the caller's original wire correlation.
         work.request_id = request.id.clone();
         if let Some(helper) = &mut work.helper {
             helper.codex = Some(event);
             helper.codex_order = Some(order);
+        }
+        if let Some(plan) = plan
+            && let Err(error) = self.attach_codex_request(&mut work, digest, plan)
+        {
+            self.control
+                .external_agents_mut()
+                .enrollments
+                .pending
+                .remove(&work.admission);
+            return Err(error);
         }
         Ok(work)
     }
@@ -280,6 +352,7 @@ mod tests {
             let event = CodexEvent {
                 kind: "UserPromptSubmit",
                 turn: format!("turn-{index}"),
+                counters: None,
             };
             assert_eq!(owner.state_for(&event).unwrap(), Some("running"));
             owner.commit(&event, "running");
@@ -288,7 +361,8 @@ mod tests {
             owner
                 .state_for(&CodexEvent {
                     kind: "UserPromptSubmit",
-                    turn: "new".into()
+                    turn: "new".into(),
+                    counters: None
                 })
                 .is_err()
         );
@@ -296,13 +370,15 @@ mod tests {
             owner
                 .state_for(&CodexEvent {
                     kind: "Stop",
-                    turn: "turn-0".into()
+                    turn: "turn-0".into(),
+                    counters: None
                 })
                 .is_err()
         );
         let stop = CodexEvent {
             kind: "Stop",
             turn: format!("turn-{}", MAX_TURNS - 1),
+            counters: None,
         };
         assert_eq!(owner.state_for(&stop).unwrap(), Some("ready"));
         owner.commit(&stop, "ready");

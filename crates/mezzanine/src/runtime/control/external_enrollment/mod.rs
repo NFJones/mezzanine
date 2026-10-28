@@ -39,6 +39,7 @@ const MAX_OBSERVER_INSTANCES: usize = 128;
 
 mod codex;
 mod codex_order;
+mod codex_requests;
 mod cold;
 mod copilot;
 mod curated;
@@ -129,6 +130,8 @@ pub(super) struct EnrollmentBinding {
     curated_observer: Option<curated::CuratedObserver>,
     /// Bounded original-epoch Codex turn replay state, never billing or liveness.
     codex_turns: codex::CodexTurns,
+    /// Original model-request custody, independent of lifecycle/observer proof.
+    codex_requests: codex_requests::Requests,
     /// Original classic Copilot timestamp fence, never a turn or billing claim.
     copilot_events: copilot::CopilotEvents,
     /// Original Cursor generation fences, never counters or idle health.
@@ -629,6 +632,7 @@ impl RuntimeSessionService {
                 .and_then(|helper| helper.codex_order.clone()),
         );
         let result = self.commit_external_enrollment(&work, observed, connection);
+        self.finish_codex_request(&work);
         if let Some(end) = work
             .helper
             .as_ref()
@@ -870,6 +874,7 @@ impl RuntimeSessionService {
                     observers: vec![Arc::downgrade(&work.origin)],
                     curated_observer: None,
                     codex_turns: Default::default(),
+                    codex_requests: Default::default(),
                     copilot_events: Default::default(),
                     cursor_generations: Default::default(),
                     token: SecretString::from(token),

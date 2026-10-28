@@ -1042,6 +1042,7 @@ impl RuntimeSessionService {
                 observers: vec![Arc::downgrade(&work.origin)],
                 curated_observer: None,
                 codex_turns: Default::default(),
+                codex_requests: Default::default(),
                 copilot_events: Default::default(),
                 cursor_generations: Default::default(),
                 token: SecretString::from(token),

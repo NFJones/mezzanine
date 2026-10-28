@@ -15,20 +15,22 @@ use super::*;
 /// Secret payload formatting prevents credentials or title data in work Debug.
 #[derive(Debug, Clone)]
 pub(super) struct HelperPresentation {
-    digest: [u8; 32],
-    generation: u64,
+    pub(super) digest: [u8; 32],
+    pub(super) generation: u64,
     pub(super) producer: ProducerEvidence,
     params: SecretString,
     /// Explicit freshness proof is separate from generic presentation mutation.
     heartbeat: bool,
     /// Request origin is distinct from presentation/freshness and never expense.
-    usage_begin: Option<super::helper_usage::HelperUsageBegin>,
+    pub(super) usage_begin: Option<super::helper_usage::HelperUsageBegin>,
     /// Shared ledger reservation; native observation must precede execution.
     pub(super) usage_end: Option<Box<super::super::external_usage::ExternalUsageWork>>,
     /// Fixed diagnostic only; native worker and actor fences remain mandatory.
     usage_gap: Option<crate::integrations::bootstrap::claude_usage_gap::UsageGapReason>,
     /// Metadata-only original Codex callback; daemon owns its sequence/replay fence.
     pub(super) codex: Option<super::codex::CodexEvent>,
+    /// Original model-request plan; native witness is worker-only.
+    pub(super) codex_request: Option<super::codex_requests::RequestWork>,
     /// Separate classic Copilot semantics; only native settlement permits effects.
     pub(super) copilot: Option<super::copilot::CopilotEvent>,
     /// Distinct native Cursor generation semantics, without usage forwarding.
@@ -42,6 +44,9 @@ impl HelperPresentation {
     pub(super) fn observe_usage(&self, work: &ExternalEnrollmentWork) -> Result<()> {
         if let Some(begin) = &self.usage_begin {
             begin.observe(work)?;
+        }
+        if let Some(request) = &self.codex_request {
+            request.observe();
         }
         if let Some(end) = &self.usage_end {
             end.execute()?;
@@ -293,6 +298,7 @@ impl RuntimeSessionService {
                 usage_end: None,
                 usage_gap,
                 codex: None,
+                codex_request: None,
                 copilot: None,
                 cursor: None,
                 codex_order: None,
@@ -448,6 +454,9 @@ impl RuntimeSessionService {
                 return Err(MezError::conflict(
                     "Codex callback is not current ingress work",
                 ));
+            }
+            if let Some(plan) = &helper.codex_request {
+                return self.commit_codex_request(helper.digest, plan, helper.usage_begin.as_ref());
             }
             return self.commit_external_codex_observation(helper.digest, &work.session_id, event);
         }

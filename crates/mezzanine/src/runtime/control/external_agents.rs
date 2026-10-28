@@ -110,6 +110,13 @@ impl LaunchBinding {
         {
             return reason;
         }
+        if let Some(reason) = self
+            .enrollment
+            .as_ref()
+            .and_then(|source| source.codex_request_gap_coverage())
+        {
+            return reason;
+        }
         if self
             .enrollment
             .as_ref()

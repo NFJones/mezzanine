@@ -1246,7 +1246,15 @@ selected-model/error/path/content fields. A child selector MUST remain explicit;
 it grants no parent association. This input has no request ID/index. The pure
 fact MUST NOT allocate a source, pair by nearest/newest turn, invent provider or
 response model, admit an expense, or authorize callback replay. Native original
-request custody, stable identity and durable typed ACK remain separate work.
+request custody remains separate from this pure fact. The internal, not-yet-installed
+model callback adapter MUST qualify the actual direct native helper and original
+observer epoch, admit a pre boundary before accepting final counters, retain the
+original origin across bounded retry, conserve same-writer replay, and quarantine
+overlapping pre writers without replacing their origin. Missing counters/readiness,
+capacity exhaustion and missing durable acknowledgment MUST expose fixed coverage
+gaps independently of previously recorded expense. Selected model/provider MUST
+remain unavailable rather than being inferred. Model-hook installation and full
+ordinary-topology qualification remain unfinished.
 TUI `last_token_usage` context occupancy and accumulated session
 totals MUST NOT be billed as new expense or summed together. OTEL ingestion remains
 unqualified until stable immutable report/request correlation, actual native

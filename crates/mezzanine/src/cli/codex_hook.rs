@@ -3,7 +3,9 @@
 //! Bounded vendor stdin is projected into one exact code-owned creator declaration.
 //! Standard MEZ routing selects a candidate, never authority; native writer/parent/
 //! root evidence remains daemon-owned. No fd3, credential, general RPC, transcript,
-//! subprocess or retry is used. Replies/errors never reach vendor output. Later
+//! subprocess is used. Model callbacks permit two bounded immutable delivery
+//! attempts; only a typed durable result acknowledges expense. Replies/errors
+//! never reach vendor output. Later
 //! SessionEnd retires only its original session; freshness/usage remain separate.
 
 use super::{MezError, Result, SocketSelection, Write};
@@ -40,7 +42,38 @@ pub(crate) fn run_internal_process(arguments: &[std::ffi::OsString]) -> Option<u
 /// not another helper-owned namespace. Child/compact/turn/end events cannot
 /// implicitly allocate or revive a producer, and vendor content is discarded.
 fn request(bytes: &[u8], pane: &str) -> Result<Option<String>> {
-    let Some(observation) = codex::normalize("best-effort", bytes)? else {
+    let observation = codex::normalize("best-effort", bytes)?;
+    if observation.is_none() {
+        if let Some(fact) = codex::request::normalize(bytes)? {
+            if fact.agent_id.is_some() {
+                return Ok(None);
+            }
+            if pane.len() < 2
+                || pane.len() > 64
+                || !pane.starts_with('%')
+                || !pane[1..].bytes().all(|b| b.is_ascii_digit())
+            {
+                return Err(MezError::invalid_args("Codex request pane unavailable"));
+            }
+            let mut params = serde_json::json!({"pane_id":pane,"external_session_id":fact.session,"turn_id":fact.turn});
+            match fact.phase {
+                codex::request::Phase::Before => params["event"] = "PreModelRequest".into(),
+                codex::request::Phase::After { counters, .. } => {
+                    params["event"] = "PostModelRequest".into();
+                    params["counters"] = serde_json::to_value(counters).map_err(|_| {
+                        MezError::invalid_state("Codex normalized counters unavailable")
+                    })?;
+                }
+            }
+            let body = serde_json::json!({"jsonrpc":"2.0","id":"codex-hook","method":"agent/external/codex-observe","params":params}).to_string();
+            crate::control::validate_control_method_params_schema(
+                &crate::control::parse_json_rpc_request(&body)?,
+            )?;
+            return Ok(Some(body));
+        }
+        return Ok(None);
+    }
+    let Some(observation) = observation else {
         return Ok(None);
     };
     if pane.len() < 2
@@ -107,7 +140,7 @@ fn request(bytes: &[u8], pane: &str) -> Result<Option<String>> {
     Ok(Some(body))
 }
 
-/// Performs at most one same-user peer-qualified Unix exchange after finite
+/// Performs one same-user exchange, or two immutable model-hook attempts, after finite
 /// stdin normalization. No daemon result or credentials are exposed; only
 /// writing the required neutral JSON can fail the callback process.
 pub(super) async fn run<W: Write>(
@@ -120,15 +153,47 @@ pub(super) async fn run<W: Write>(
         && let Some(pane) = pane
         && let Ok(Some(body)) = request(&bytes, pane)
     {
-        let _ = super::harness_event::exchange_result(
-            super::selected_socket_path(socket),
-            &body,
-            "codex-hook",
-        )
-        .await;
+        let event = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| value["params"]["event"].as_str().map(str::to_owned));
+        let model_request = matches!(
+            event.as_deref(),
+            Some("PreModelRequest" | "PostModelRequest")
+        );
+        for _ in 0..if model_request { 2 } else { 1 } {
+            if super::harness_event::exchange_result(
+                super::selected_socket_path(socket),
+                &body,
+                "codex-hook",
+            )
+            .await
+            .is_ok_and(|reply| delivery_complete(event.as_deref(), &reply))
+            {
+                break;
+            }
+        }
     }
     writeln!(stdout, "{{}}")?;
     Ok(())
+}
+
+/// A transport success alone cannot acknowledge incurred request expense.
+/// Lifecycle observations have no financial promise; pre callbacks may also
+/// carry an older retained report whose durable acknowledgment is sufficient.
+fn delivery_complete(event: Option<&str>, reply: &serde_json::Value) -> bool {
+    let durable = reply["accepted"] == true
+        && reply["durable"] == true
+        && reply["applied"].is_boolean()
+        && reply["revision"]
+            .as_u64()
+            .is_some_and(|revision| revision > 0)
+        && reply["coverage"]["source"] == "external-reported"
+        && reply["coverage"]["reasoning_known"].is_boolean();
+    match event {
+        Some("PostModelRequest") => durable,
+        Some("PreModelRequest") => durable || reply["observed"] == true,
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -255,5 +320,55 @@ mod tests {
             assert_eq!(value["params"].as_object().unwrap().len(), 4);
             assert!(!body.contains("PRIVATE") && !body.contains("bypassPermissions"));
         }
+    }
+    /// Genuine model-hook usage survives failed/cancelled requests while paths,
+    /// selected model and error text never leave the bounded projector. A child
+    /// fact remains unassociated and cannot bill its main parent implicitly.
+    #[test]
+    fn codex_hook_model_capsules_keep_only_checked_scope_and_usage() {
+        for status in ["completed", "failed", "cancelled"] {
+            let mut input = serde_json::json!({"hook_event_name":"PostModelRequest",
+                "session_id":"session-a","turn_id":"turn-a","status":status,
+                "model":"PRIVATE","cwd":"PRIVATE","error":"PRIVATE",
+                "token_usage":{"input_tokens":10,"output_tokens":3,"total_tokens":13}});
+            let body = request(&serde_json::to_vec(&input).unwrap(), "%1")
+                .unwrap()
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(value["params"]["event"], "PostModelRequest");
+            assert_eq!(value["params"]["counters"]["input_tokens"], 10);
+            assert!(value["params"]["counters"]["reasoning_tokens"].is_null());
+            assert!(!body.contains("PRIVATE"));
+            input["agent_id"] = "child-a".into();
+            assert!(
+                request(&serde_json::to_vec(&input).unwrap(), "%1")
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    /// A successful socket reply may describe observation or telemetry loss.
+    /// Only the shared ledger's typed durable result ends financial retry; both
+    /// newly applied and conserved replay acknowledgments satisfy that promise.
+    #[test]
+    fn codex_hook_model_delivery_requires_typed_durable_acknowledgment() {
+        for applied in [true, false] {
+            let reply = serde_json::json!({"accepted":true,"durable":true,"applied":applied,
+                "revision":1,"coverage":{"source":"external-reported","reasoning_known":false}});
+            assert!(delivery_complete(Some("PostModelRequest"), &reply));
+            let mut zero_revision = reply.clone();
+            zero_revision["revision"] = 0.into();
+            assert!(!delivery_complete(Some("PostModelRequest"), &zero_revision));
+            for field in ["accepted", "durable", "applied", "revision", "coverage"] {
+                let mut incomplete = reply.clone();
+                incomplete.as_object_mut().unwrap().remove(field);
+                assert!(!delivery_complete(Some("PostModelRequest"), &incomplete));
+            }
+        }
+        let observed = serde_json::json!({"observed":true});
+        assert!(!delivery_complete(Some("PostModelRequest"), &observed));
+        assert!(delivery_complete(Some("PreModelRequest"), &observed));
+        assert!(delivery_complete(Some("Stop"), &observed));
     }
 }

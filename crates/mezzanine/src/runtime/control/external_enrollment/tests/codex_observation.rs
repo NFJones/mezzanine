@@ -757,3 +757,178 @@ async fn external_codex_activity_native_wait_resume_and_old_turn_fences() {
     );
     assert!(!binding.enrollment.as_ref().unwrap().request_reports_seen);
 }
+
+/// Ordinary model callbacks acquire readiness from their actual native pre
+/// writer, then settle immutable inclusive counters through the shared ledger.
+/// A repeated post from that same process conserves expense; a later distinct
+/// pre/post pair with identical counts remains a distinct incurred request.
+/// Missing readiness and overlapping pre writers never borrow a newer origin.
+#[tokio::test(flavor = "current_thread")]
+async fn external_codex_model_requests_native_pairing_replay_and_overlap() {
+    let Some(mut fixture) = fixture("hold").await else {
+        panic!("Codex model qualification requires native peer evidence");
+    };
+    let path = fixture.directory.join("usage.sqlite");
+    fixture
+        .service
+        .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&path));
+    let (_source_socket, source) = child(&mut fixture).await;
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&declaration(), &source)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &source).await["result"]["registered"],
+        true
+    );
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&callback("UserPromptSubmit", "turn-a"), &source)
+        .unwrap();
+    assert!(
+        settle(&mut fixture, work, &source)
+            .await
+            .get("error")
+            .is_none()
+    );
+    let post = crate::control::parse_json_rpc_request(
+        &serde_json::json!({
+            "jsonrpc":"2.0","id":"post","method":"agent/external/codex-observe",
+            "params":{"pane_id":"%1","external_session_id":"session-a","event":"PostModelRequest",
+                "turn_id":"turn-a","counters":{"input_tokens":10,"output_tokens":3,
+                    "cached_input_tokens":2,"reasoning_tokens":1}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let (_orphan_socket, orphan) = child(&mut fixture).await;
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&post, &orphan)
+        .unwrap();
+    let reply = settle(&mut fixture, work, &orphan).await;
+    assert_ne!(reply["result"]["durable"], true, "{reply}");
+    // Keep native sockets alive until their own observation and settlement end.
+    let mut sockets = Vec::new();
+    for _ in 0..2 {
+        let (pre_socket, pre) = child(&mut fixture).await;
+        let work = fixture
+            .service
+            .prepare_external_helper_presentation(&callback("PreModelRequest", "turn-a"), &pre)
+            .unwrap();
+        let reply = settle(&mut fixture, work, &pre).await;
+        assert_eq!(reply["result"]["observed"], true, "{reply}");
+        let (post_socket, connection) = child(&mut fixture).await;
+        for replay in [false, true] {
+            let work = fixture
+                .service
+                .prepare_external_helper_presentation(&post, &connection)
+                .unwrap();
+            let reply = settle(&mut fixture, work, &connection).await;
+            assert_eq!(reply["result"]["durable"], true, "{reply}");
+            assert_eq!(reply["result"]["applied"], !replay, "{reply}");
+        }
+        sockets.extend([pre_socket, post_socket]);
+    }
+    let (missing_pre_socket, missing_pre) = child(&mut fixture).await;
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&callback("PreModelRequest", "turn-a"), &missing_pre)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &missing_pre).await["result"]["observed"],
+        true
+    );
+    let mut missing_post = post.clone();
+    let mut params: serde_json::Value =
+        serde_json::from_str(missing_post.params.as_deref().unwrap()).unwrap();
+    params["counters"] = serde_json::Value::Null;
+    missing_post.params = Some(params.to_string());
+    let (missing_socket, missing) = child(&mut fixture).await;
+    for _ in 0..2 {
+        let work = fixture
+            .service
+            .prepare_external_helper_presentation(&missing_post, &missing)
+            .unwrap();
+        assert_ne!(
+            settle(&mut fixture, work, &missing).await["result"]["durable"],
+            true
+        );
+        let source = fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap()
+            .enrollment
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            source.codex_request_gap_coverage(),
+            Some("unavailable-codex-usage-finalized-counters")
+        );
+    }
+    sockets.extend([missing_pre_socket, missing_socket]);
+    for _ in 0..2 {
+        let (socket, connection) = child(&mut fixture).await;
+        let work = fixture
+            .service
+            .prepare_external_helper_presentation(
+                &callback("PreModelRequest", "turn-a"),
+                &connection,
+            )
+            .unwrap();
+        // No post may capture old custody while this preceding pre is still
+        // uncommitted, even though the common worker can otherwise queue work.
+        assert!(
+            fixture
+                .service
+                .prepare_external_helper_presentation(&post, &orphan)
+                .is_err()
+        );
+        assert!(
+            settle(&mut fixture, work, &connection)
+                .await
+                .get("error")
+                .is_none()
+        );
+        let replay = fixture
+            .service
+            .prepare_external_helper_presentation(&missing_post, &missing)
+            .unwrap();
+        assert_ne!(
+            settle(&mut fixture, replay, &missing).await["result"]["durable"],
+            true
+        );
+        sockets.push(socket);
+    }
+    let (_late_socket, late) = child(&mut fixture).await;
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&post, &late)
+        .unwrap();
+    assert_ne!(
+        settle(&mut fixture, work, &late).await["result"]["durable"],
+        true
+    );
+    let database = rusqlite::Connection::open(&path).unwrap();
+    let totals: (i64, i64, i64) = database
+        .query_row(
+            "SELECT count(*),sum(input_tokens),sum(output_tokens) FROM token_usage_events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(totals, (2, 20, 6));
+    assert_eq!(
+        fixture
+            .service
+            .live_pane_harness_status("%1")
+            .unwrap()
+            .text
+            .as_deref(),
+        Some("running")
+    );
+}
