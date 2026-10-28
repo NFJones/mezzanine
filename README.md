@@ -200,8 +200,8 @@ After upgrading Mezzanine, open a new pane or restart the session to use
 updated shell integration.
 
 For a service-manager deployment, `mez host serve` runs the persistent
-multi-session host. Isolated optional Iroh endpoint loss preserves local sessions
-and Unix administration after remote cleanup. Optional Iroh access uses explicit
+multi-session host. Isolated optional Iroh network setup failure or endpoint loss
+preserves local sessions and Unix administration after proven remote cleanup. Optional Iroh access uses explicit
 device pairing and keeps the local Unix socket as the administration and recovery path. See [Persistent
 multi-session host](docs/operations/persistent-host.md), [Remote pairing and
 recovery](docs/safety-and-trust/remote-pairing-and-recovery.md), and [Operations

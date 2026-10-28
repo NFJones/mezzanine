@@ -7,14 +7,13 @@
 
 use base64::Engine as _;
 use futures_util::FutureExt as _;
-use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher};
-use iroh::endpoint::{
-    BindOpts, IdleTimeout, PortmapperConfig, QuicTransportConfig, VarInt, presets,
-};
-use iroh::tls::CaTlsConfig;
-use iroh::{Endpoint, RelayMap, RelayMode, SecretKey, Watcher};
+#[cfg(test)]
+use iroh::SecretKey;
+use iroh::endpoint::VarInt;
+#[cfg(test)]
+use iroh::endpoint::{PortmapperConfig, QuicTransportConfig, presets};
+use iroh::{Endpoint, RelayMap, RelayMode, Watcher};
 use std::collections::BTreeMap;
-use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -34,6 +33,12 @@ use crate::storage::snapshot::SnapshotRepository;
 use mez_core::ids::ClientId;
 use tokio::io::AsyncWriteExt;
 
+mod bind;
+#[cfg(test)]
+use bind::wait_for_dialable_iroh_addr;
+pub(crate) use bind::{
+    RuntimeIrohBindError, bind_runtime_iroh_client_endpoint, bind_runtime_iroh_endpoint,
+};
 mod control_connection;
 mod diagnostics;
 mod quality;
@@ -1152,158 +1157,11 @@ impl RuntimeIrohEndpoint {
     }
 }
 
-/// Binds a protected endpoint only when remote transport is explicitly enabled.
-pub(crate) async fn bind_runtime_iroh_endpoint(
-    policy: RuntimeIrohTransportPolicy,
-    secret_key: SecretKey,
-) -> Result<Option<RuntimeIrohEndpoint>> {
-    if !policy.enabled {
-        return Ok(None);
-    }
-
-    let stream_limit = u32::try_from(policy.max_streams_per_connection)
-        .map_err(|_| MezError::config("transport.iroh.max_streams_per_connection is too large"))?;
-    let endpoint = bind_policy_iroh_endpoint(
-        &policy,
-        secret_key,
-        stream_limit,
-        0,
-        (policy.bind_port != 0).then_some(policy.bind_port),
-        IrohCompressionPolicy::ordered_alpns(&policy.compression_codecs),
-        "Iroh endpoint",
-    )
-    .await?;
-    let initial_addr = wait_for_dialable_iroh_addr(&endpoint, &policy).await?;
-    let (endpoint_addr, _) = tokio::sync::watch::channel(Some(initial_addr));
-    Ok(Some(RuntimeIrohEndpoint {
-        endpoint,
-        policy,
-        diagnostics: RuntimeIrohDiagnostics::default(),
-        intentional_close: Arc::new(AtomicBool::new(false)),
-        endpoint_addr,
-        authority: None,
-    }))
-}
-
-/// Waits until the endpoint publishes at least one concrete transport route.
-async fn wait_for_dialable_iroh_addr(
-    endpoint: &Endpoint,
-    policy: &RuntimeIrohTransportPolicy,
-) -> Result<iroh::EndpointAddr> {
-    let readiness = async {
-        if !matches!(&policy.relay, RuntimeIrohRelayPolicy::Disabled) {
-            endpoint.online().await;
-        }
-        let mut watcher = endpoint.watch_addr();
-        loop {
-            let addr = watcher.get();
-            if !addr.is_empty() {
-                return Ok::<iroh::EndpointAddr, MezError>(addr);
-            }
-            watcher.updated().await.map_err(|_| {
-                MezError::invalid_state("Iroh endpoint address watcher disconnected")
-            })?;
-        }
-    };
-    tokio::time::timeout(policy.setup_timeout, readiness)
-        .await
-        .map_err(|_| MezError::invalid_state("Iroh endpoint address readiness timed out"))?
-}
-
 fn publish_iroh_endpoint_addr(
     publisher: &tokio::sync::watch::Sender<Option<iroh::EndpointAddr>>,
     addr: iroh::EndpointAddr,
 ) {
     publisher.send_replace((!addr.is_empty()).then_some(addr));
-}
-
-/// Binds a client-only endpoint with no remotely initiated streams.
-pub(crate) async fn bind_runtime_iroh_client_endpoint(
-    policy: &RuntimeIrohTransportPolicy,
-    secret_key: SecretKey,
-) -> Result<Endpoint> {
-    bind_policy_iroh_endpoint(
-        policy,
-        secret_key,
-        0,
-        1,
-        None,
-        Vec::new(),
-        "Iroh client endpoint",
-    )
-    .await
-}
-
-async fn bind_policy_iroh_endpoint(
-    policy: &RuntimeIrohTransportPolicy,
-    secret_key: SecretKey,
-    incoming_bidi_streams: u32,
-    incoming_uni_streams: u32,
-    bind_port: Option<u16>,
-    alpns: Vec<Vec<u8>>,
-    diagnostic_name: &str,
-) -> Result<Endpoint> {
-    let idle_timeout = IdleTimeout::try_from(policy.idle_timeout)
-        .map_err(|_| MezError::config("transport.iroh.idle_timeout_ms is too large"))?;
-    let keep_alive_interval = policy.idle_timeout / 3;
-    let transport = QuicTransportConfig::builder()
-        .max_concurrent_bidi_streams(VarInt::from_u32(incoming_bidi_streams))
-        .max_concurrent_uni_streams(VarInt::from_u32(incoming_uni_streams))
-        .max_idle_timeout(Some(idle_timeout))
-        .keep_alive_interval(keep_alive_interval)
-        .build();
-
-    let mut builder = Endpoint::builder(presets::Minimal)
-        .secret_key(secret_key)
-        .alpns(alpns)
-        .transport_config(transport)
-        .relay_mode(relay_mode(&policy.relay)?);
-
-    if let Some(bind_port) = bind_port {
-        builder = builder
-            .bind_addr((Ipv4Addr::UNSPECIFIED, bind_port))
-            .map_err(|error| {
-                MezError::config(format!("invalid transport.iroh.bind_port: {error}"))
-            })?
-            .bind_addr_with_opts(
-                (Ipv6Addr::UNSPECIFIED, bind_port),
-                BindOpts::default().set_is_required(false),
-            )
-            .map_err(|error| {
-                MezError::config(format!("invalid transport.iroh.bind_port: {error}"))
-            })?;
-    }
-
-    if !policy.port_mapping {
-        builder = builder.portmapper_config(PortmapperConfig::Disabled);
-    }
-    if !policy.direct_connections {
-        builder = builder.clear_ip_transports();
-    }
-    if policy.proxy_from_env {
-        builder = builder.proxy_from_env();
-    }
-    if policy.system_ca_store {
-        builder = builder.ca_tls_config(CaTlsConfig::system());
-    }
-    builder = match &policy.address_lookup {
-        RuntimeIrohAddressLookupPolicy::Disabled | RuntimeIrohAddressLookupPolicy::Local => {
-            builder.clear_address_lookup()
-        }
-        RuntimeIrohAddressLookupPolicy::N0Dns => builder
-            .address_lookup(PkarrPublisher::n0_dns())
-            .address_lookup(DnsAddressLookup::n0_dns()),
-        RuntimeIrohAddressLookupPolicy::CustomDns { domain } => builder
-            .clear_address_lookup()
-            .address_lookup(DnsAddressLookup::builder(domain.clone())),
-    };
-
-    tokio::time::timeout(policy.setup_timeout, builder.bind())
-        .await
-        .map_err(|_| MezError::invalid_state(format!("{diagnostic_name} setup timed out")))?
-        .map_err(|error| {
-            MezError::invalid_state(format!("failed to bind {diagnostic_name}: {error}"))
-        })
 }
 
 impl super::RuntimeSessionService {
@@ -3186,7 +3044,8 @@ mod tests {
 
         let error = bind_runtime_iroh_endpoint(policy, SecretKey::generate())
             .await
-            .unwrap_err();
+            .unwrap_err()
+            .into_error();
         assert!(
             error.message().contains("failed to bind Iroh endpoint")
                 || error.message().contains("address readiness timed out"),

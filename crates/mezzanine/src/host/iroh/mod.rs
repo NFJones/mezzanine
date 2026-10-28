@@ -33,11 +33,12 @@ use crate::host::async_runtime::{
 };
 use crate::host::router::HostSessionRouter;
 use crate::protocol::framing::ProtocolFrameCodec;
+#[cfg(test)]
+use crate::runtime::RuntimeIrohEndpoint;
 use crate::runtime::{
     IrohCompressionBridge, IrohCompressionMetrics, IrohCompressionPolicy,
-    RuntimeIrohCompressionCodec, RuntimeIrohDiagnostics, RuntimeIrohEndpoint,
-    RuntimeIrohIdentityPolicy, RuntimeIrohTransportPolicy, RuntimeLifecycleState,
-    bind_runtime_iroh_endpoint, serve_host_routed_iroh_event_stream,
+    RuntimeIrohCompressionCodec, RuntimeIrohDiagnostics, RuntimeIrohIdentityPolicy,
+    RuntimeIrohTransportPolicy, RuntimeLifecycleState, serve_host_routed_iroh_event_stream,
 };
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::remote::{
@@ -47,8 +48,10 @@ use crate::security::remote::{
 use crate::storage::lease::{RemoteSessionLease, RemoteSessionLeaseState};
 
 mod lifecycle;
+mod startup;
 pub(crate) use lifecycle::HostIrohServeError;
 use lifecycle::{HostIrohShutdownReport, drain_host_iroh_connection_tasks};
+use startup::HostIrohTransport;
 
 const HOST_CONTROL_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
 
@@ -133,39 +136,47 @@ fn remote_client_route(remote_addr: iroh::endpoint::IncomingAddr) -> &'static st
     }
 }
 
-/// Stable host endpoint, trust store, and bounded pre-session listener.
+/// Stable host identity/trust owner and optional transport construction outcome.
 #[derive(Debug)]
 pub(crate) struct HostIrohRuntime {
+    /// Exclusive identity ownership survives safely unavailable networking.
     identity: RemoteEndpointIdentity,
+    /// Existing authority is validated before optional endpoint construction.
     trust: RemoteTrustStore,
-    endpoint: RuntimeIrohEndpoint,
+    /// Actual endpoint or the original settled network construction failure.
+    transport: HostIrohTransport,
+    /// Serialized audit writer shared with authenticated connection setup.
     audit_log: Option<HostAuditLog>,
 }
 
-/// Cloneable local-administration view of one live host Iroh endpoint.
+/// Cloneable trust administration and optional host-endpoint invitation view.
 #[derive(Debug, Clone)]
 pub(crate) struct HostIrohInvitationIssuer {
-    endpoint: iroh::Endpoint,
+    /// Exists only after actual construction; closure also fences invitations.
+    endpoint: Option<iroh::Endpoint>,
+    /// Stable configured host identity, including unavailable startup.
     endpoint_id: String,
+    /// Original policy remains inspectable independently of endpoint liveness.
     policy: RuntimeIrohTransportPolicy,
+    /// Local inspection and revocation do not depend on network availability.
     trust: RemoteTrustStore,
 }
 
 impl HostIrohInvitationIssuer {
     /// Reports transport liveness independently of enabled configuration.
     pub(crate) fn available(&self) -> bool {
-        !self.endpoint.is_closed()
+        self.endpoint
+            .as_ref()
+            .is_some_and(|endpoint| !endpoint.is_closed())
     }
 
-    /// Refuses secret-bearing invitation responses after transport closure.
-    fn require_available(&self) -> Result<()> {
-        if self.available() {
-            Ok(())
-        } else {
-            Err(MezError::invalid_state(
-                "host Iroh transport is unavailable",
-            ))
-        }
+    /// Requires an actual open endpoint before returning secret-bearing
+    /// invitation state. Unavailable startup has no endpoint or synthetic key.
+    fn require_available(&self) -> Result<&iroh::Endpoint> {
+        self.endpoint
+            .as_ref()
+            .filter(|endpoint| !endpoint.is_closed())
+            .ok_or_else(|| MezError::invalid_state("host Iroh transport is unavailable"))
     }
 
     /// Returns the configured default lifetime for host pairing invitations.
@@ -187,8 +198,8 @@ impl HostIrohInvitationIssuer {
                 "host Iroh profile name must be non-empty printable text",
             ));
         }
-        self.require_available()?;
-        let server_addr = foreign_machine_invitation_addr(self.endpoint.addr(), &self.policy)?;
+        let server_addr =
+            foreign_machine_invitation_addr(self.require_available()?.addr(), &self.policy)?;
         let invitation = self.trust.create_host_invitation(
             &self.endpoint_id,
             role,
@@ -229,9 +240,9 @@ impl HostIrohInvitationIssuer {
             ));
         }
         let (invitation_id, token) =
-            self.invitation_replay_material(idempotency_key, request_fingerprint);
-        self.require_available()?;
-        let server_addr = foreign_machine_invitation_addr(self.endpoint.addr(), &self.policy)?;
+            self.invitation_replay_material(idempotency_key, request_fingerprint)?;
+        let server_addr =
+            foreign_machine_invitation_addr(self.require_available()?.addr(), &self.policy)?;
         let invitation = self.trust.create_host_invitation_idempotent(
             &self.endpoint_id,
             role,
@@ -266,7 +277,7 @@ impl HostIrohInvitationIssuer {
         self.require_available()?;
         let request_fingerprint = administration_request_fingerprint("remote/invite", params)?;
         let (invitation_id, token) =
-            self.invitation_replay_material(idempotency_key, &request_fingerprint);
+            self.invitation_replay_material(idempotency_key, &request_fingerprint)?;
         let object = response.as_object_mut().ok_or_else(|| {
             MezError::invalid_state("persisted invitation replay response must be an object")
         })?;
@@ -282,12 +293,14 @@ impl HostIrohInvitationIssuer {
         Ok(response)
     }
 
+    /// Derives stable replay material only from an actual available endpoint.
+    /// No fallback key is generated when optional startup was unavailable.
     fn invitation_replay_material(
         &self,
         idempotency_key: &str,
         request_fingerprint: &str,
-    ) -> (String, SecretString) {
-        let secret_key = self.endpoint.secret_key().to_bytes();
+    ) -> Result<(String, SecretString)> {
+        let secret_key = self.require_available()?.secret_key().to_bytes();
         let mut invitation_digest = Sha256::new();
         invitation_digest.update(b"mezzanine-host-invitation-id-v1\0");
         invitation_digest.update(secret_key);
@@ -309,7 +322,7 @@ impl HostIrohInvitationIssuer {
         let token = SecretString::from(
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token_digest.finalize()),
         );
-        (invitation_id, token)
+        Ok((invitation_id, token))
     }
 
     pub(crate) fn list_clients(&self) -> Result<Vec<crate::security::remote::RemoteTrustRecord>> {
@@ -340,7 +353,9 @@ impl HostIrohInvitationIssuer {
 }
 
 impl HostIrohRuntime {
-    /// Binds one host-scoped endpoint when inbound Iroh is enabled.
+    /// Retains one enabled host transport after security validation, including
+    /// safe network unavailability. Returns errors for policy, identity/trust,
+    /// or ambiguous construction/cleanup; disabled transport returns none.
     pub(crate) async fn bind(
         config_root: &Path,
         policy: RuntimeIrohTransportPolicy,
@@ -353,15 +368,19 @@ impl HostIrohRuntime {
                 "persistent host Iroh requires transport.iroh.identity = host",
             ));
         }
-        let identity = RemoteEndpointIdentity::load_or_create_host(config_root)?;
+        let identity = RemoteEndpointIdentity::load_or_create_host(config_root)
+            .map_err(|error| error.with_context("load persistent-host Iroh identity"))?;
         let trust = RemoteTrustStore::under_host_config_root(config_root)?;
-        let endpoint = bind_runtime_iroh_endpoint(policy, identity.secret_key().clone())
-            .await?
-            .ok_or_else(|| MezError::invalid_state("enabled host Iroh endpoint was not bound"))?;
+        // Validate existing authority before the optional network boundary.
+        // Corrupt or inaccessible trust must not become a transport outage.
+        let _ = trust
+            .list_records()
+            .map_err(|error| error.with_context("load persistent-host Iroh trust"))?;
+        let transport = HostIrohTransport::bind(policy, identity.secret_key().clone()).await?;
         Ok(Some(Self {
             identity,
             trust,
-            endpoint,
+            transport,
             audit_log: None,
         }))
     }
@@ -378,8 +397,9 @@ impl HostIrohRuntime {
 
     /// Latest dialable address, unavailable after the endpoint has closed.
     pub(crate) fn endpoint_addr(&self) -> Option<iroh::EndpointAddr> {
-        (!self.endpoint.endpoint().is_closed())
-            .then(|| self.endpoint.endpoint_addr())
+        let endpoint = self.transport.endpoint()?;
+        (!endpoint.endpoint().is_closed())
+            .then(|| endpoint.endpoint_addr())
             .flatten()
     }
 
@@ -387,15 +407,20 @@ impl HostIrohRuntime {
     /// This grants no replacement identity or process-retirement authority.
     #[cfg(test)]
     pub(crate) fn endpoint_for_test(&self) -> &RuntimeIrohEndpoint {
-        &self.endpoint
+        self.transport
+            .endpoint()
+            .expect("fixture requires an actually bound endpoint")
     }
 
     /// Returns the local-administration view for invitations and trust records.
     pub(crate) fn invitation_issuer(&self) -> HostIrohInvitationIssuer {
         HostIrohInvitationIssuer {
-            endpoint: self.endpoint.endpoint().clone(),
+            endpoint: self
+                .transport
+                .endpoint()
+                .map(|endpoint| endpoint.endpoint().clone()),
             endpoint_id: self.endpoint_id().to_string(),
-            policy: self.endpoint.policy().clone(),
+            policy: self.transport.policy().clone(),
             trust: self.trust.clone(),
         }
     }
@@ -412,8 +437,9 @@ impl HostIrohRuntime {
                 "invitation fixture requires an ephemeral endpoint",
             ));
         }
-        let sockets = self.endpoint.endpoint().bound_sockets();
-        let addr = self.endpoint.endpoint().addr();
+        let endpoint = issuer.require_available()?;
+        let sockets = endpoint.bound_sockets();
+        let addr = endpoint.addr();
         let port = addr
             .ip_addrs()
             .find(|addr| {
@@ -481,11 +507,12 @@ impl HostIrohRuntime {
     where
         C: Future<Output = ()>,
     {
-        let endpoint = self.endpoint.endpoint().clone();
-        let policy = self.endpoint.policy().clone();
+        let runtime_endpoint = self.transport.listener_endpoint()?;
+        let endpoint = runtime_endpoint.endpoint().clone();
+        let policy = runtime_endpoint.policy().clone();
         let trust = self.trust.clone();
         let server_endpoint_id = self.endpoint_id().to_string();
-        let diagnostics = self.endpoint.diagnostics();
+        let diagnostics = runtime_endpoint.diagnostics();
         let audit_log = self.audit_log.clone();
         let mut tasks = JoinSet::new();
         let mut accepted = 0u64;
@@ -502,7 +529,7 @@ impl HostIrohRuntime {
                 () = &mut cancellation => break,
                 incoming = endpoint.accept(), if tasks.len() < policy.max_connections => {
                     let Some(incoming) = incoming else {
-                        endpoint_closed_unexpectedly = !self.endpoint.is_intentionally_closed();
+                        endpoint_closed_unexpectedly = !runtime_endpoint.is_intentionally_closed();
                         break;
                     };
                     let remote_route = remote_client_route(incoming.remote_addr());
@@ -566,7 +593,7 @@ impl HostIrohRuntime {
             }
         }
 
-        shutdown_report.endpoint_close_failed = !self.endpoint.shutdown_handle().close().await;
+        shutdown_report.endpoint_close_failed = !runtime_endpoint.shutdown_handle().close().await;
         drain_host_iroh_connection_tasks(&mut tasks, policy.setup_timeout, &mut shutdown_report)
             .await;
         shutdown_report.finish_scoped(accepted, endpoint_closed_unexpectedly)

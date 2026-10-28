@@ -2266,6 +2266,15 @@ local sessions. `host/get.iroh.available` MUST be false after endpoint closure;
 responses MUST fail while the endpoint is unavailable, without inventing a
 usable address. Local trust inspection and revocation remain available.
 
+Optional host transport startup MAY continue as unavailable only after a
+completed network bind failure that returned no endpoint, or address-readiness
+failure followed by observed bounded endpoint closure. The original host
+identity and trust owner MUST remain held even without a live endpoint.
+Invalid configuration, identity/trust-store failure and ambiguous construction
+or cleanup timeout MUST fail host startup. Per-session Iroh enablement remains
+startup-critical. Freeing a conflicting port or restoring network connectivity
+MUST NOT trigger an implicit endpoint restart or operation replay.
+
 Explicit host shutdown and process shutdown signals MUST still stop both
 listeners and perform existing bounded session/native teardown. Critical local
 or shared-authority failure, endpoint-close timeout, unproven connection-task

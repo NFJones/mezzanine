@@ -24,6 +24,55 @@ fn test_root(label: &str) -> std::path::PathBuf {
     ))
 }
 
+/// Invalid relay configuration, corrupt key bytes and corrupt trust data must
+/// fail before optional networking. A simultaneously occupied required socket
+/// ensures none is hidden behind a transport-unavailable result. These cases
+/// create only private stores and sockets, never a native session process.
+#[tokio::test(flavor = "current_thread")]
+async fn host_startup_keeps_configuration_and_security_failures_critical() {
+    for fault in ["policy", "identity", "trust"] {
+        let root = test_root(fault);
+        let identity = RemoteEndpointIdentity::load_or_create_host(&root).unwrap();
+        drop(identity);
+        let occupied = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let mut policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            identity: RuntimeIrohIdentityPolicy::Host,
+            bind_port: occupied.local_addr().unwrap().port(),
+            setup_timeout: std::time::Duration::from_secs(3),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        match fault {
+            "policy" => {
+                policy.relay = crate::runtime::RuntimeIrohRelayPolicy::Custom {
+                    urls: vec!["not a URL".into()],
+                }
+            }
+            "identity" => fs::write(root.join("remote/host/endpoint.key"), b"bad").unwrap(),
+            "trust" => {
+                let path = root.join("remote/host/trust.json");
+                fs::write(&path, b"{invalid trust").unwrap();
+                fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let result = HostIrohRuntime::bind(&root, policy).await;
+        drop(occupied);
+        let error = result.unwrap_err();
+        let _ = fs::remove_dir_all(root);
+        if fault == "policy" {
+            assert_eq!(error.kind(), MezErrorKind::Config);
+            assert!(error.message().contains("relay_urls"), "{error}");
+        } else {
+            assert!(error.message().contains(fault), "{error}");
+        }
+        assert!(
+            !error.message().contains("failed to bind Iroh endpoint"),
+            "{error}"
+        );
+    }
+}
+
 /// Endpoint-close degradation and a connection-task panic must both remain
 /// visible after cleanup without exposing the panic payload.
 #[tokio::test(flavor = "current_thread")]
@@ -379,7 +428,7 @@ async fn host_listener_isolates_invalid_intent_and_reconnects_device() {
         crate::runtime::bind_runtime_iroh_client_endpoint(&policy, iroh::SecretKey::generate())
             .await
             .unwrap();
-    let diagnostics = host.endpoint.diagnostics();
+    let diagnostics = host.endpoint_for_test().diagnostics();
     let stop = std::sync::Arc::new(tokio::sync::Notify::new());
     let server_stop = stop.clone();
 
@@ -465,8 +514,8 @@ async fn host_listener_reports_unexpected_endpoint_closure() {
         ..RuntimeIrohTransportPolicy::default()
     };
     let host = HostIrohRuntime::bind(&root, policy).await.unwrap().unwrap();
-    let endpoint = host.endpoint.endpoint().clone();
-    let diagnostics = host.endpoint.diagnostics();
+    let endpoint = host.endpoint_for_test().endpoint().clone();
+    let diagnostics = host.endpoint_for_test().diagnostics();
     endpoint.close().await;
 
     let error = tokio::time::timeout(
@@ -501,8 +550,8 @@ async fn host_listener_accepts_intentional_endpoint_shutdown() {
         ..RuntimeIrohTransportPolicy::default()
     };
     let host = HostIrohRuntime::bind(&root, policy).await.unwrap().unwrap();
-    let diagnostics = host.endpoint.diagnostics();
-    let shutdown = host.endpoint.shutdown_handle();
+    let diagnostics = host.endpoint_for_test().diagnostics();
+    let shutdown = host.endpoint_for_test().shutdown_handle();
     let (served, closed) = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         tokio::join!(host.serve(std::future::pending()), shutdown.close())
     })
@@ -557,13 +606,13 @@ async fn host_connection_times_out_when_first_frame_is_withheld() {
     });
     let incoming = tokio::time::timeout(
         std::time::Duration::from_secs(3),
-        host.endpoint.endpoint().accept(),
+        host.endpoint_for_test().endpoint().accept(),
     )
     .await
     .expect("host should accept the silent peer")
     .expect("host endpoint should remain open");
     let remote_route = remote_client_route(incoming.remote_addr());
-    let diagnostics = host.endpoint.diagnostics();
+    let diagnostics = host.endpoint_for_test().diagnostics();
     let authenticated_endpoint_id = std::sync::OnceLock::new();
     let handler = serve_host_only_connection(
         incoming,
@@ -629,7 +678,7 @@ async fn routed_host_end_to_end_enforces_intent_idempotency_and_authority() {
         .await
         .unwrap()
         .unwrap();
-    let diagnostics = host.endpoint.diagnostics();
+    let diagnostics = host.endpoint_for_test().diagnostics();
     let router = HostSessionRouter::new(HostSessionRouterConfig {
         runtime_root: root.join("runtime"),
         owner_uid: crate::runtime::current_effective_uid(),

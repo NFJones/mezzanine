@@ -330,6 +330,13 @@ false. Pairing invitation creation and replay fail while unavailable. Local
 trust inspection and revocation remain usable. No endpoint restart, replacement
 key owner, session replacement or request/input replay happens automatically.
 
+The same local availability policy applies when an optional endpoint cannot bind
+its network socket or cannot publish a ready address after a completed clean
+close. The host retains its configured identity and trust ownership, reports
+remote unavailable, and can start local sessions. Invalid configuration, key or
+trust failure, and construction/cleanup timeouts without proven settlement still
+fail startup. Fixing the network or freeing a port does not restart it implicitly.
+
 Reconnect only after an explicit, coordinated host restart. An outage does not
 revoke durable leases or erase an uncertain remote operation result. Reconcile
 those outcomes before resubmitting work. Explicit `mez host stop` and process

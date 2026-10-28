@@ -17,6 +17,9 @@ endpoint loss is reported as remote unavailable after remote task cleanup;
 healthy local sessions and Unix administration remain usable. Invitations,
 including secret-bearing replay responses, fail until an explicit coordinated
 host restart. There is no automatic endpoint replacement or request/input replay.
+Completed network bind failure and readiness failure with observed endpoint
+closure can also start in this unavailable state. Invalid configuration,
+identity/trust errors and ambiguous construction or cleanup timeout fail startup.
 Unsafe cleanup and critical shared-owner failures remain host-fatal. This policy
 applies to the optional host endpoint; explicitly enabled per-session transport
 remains startup-critical. See [persistent host operations](persistent-host.md#optional-endpoint-loss)

@@ -51,6 +51,8 @@ cpu_count = 2
 # and system CA-store use remain disabled. Changes require a daemon restart.
 # Host-scoped endpoint loss preserves local sessions after proven remote cleanup.
 # Host status reports remote availability separately from this enabled setting.
+# Completed network setup failure can leave this host transport unavailable;
+# invalid config, identity/trust errors and unproven cleanup still fail startup.
 [transport.iroh]
 enabled = false
 outbound_enabled = true

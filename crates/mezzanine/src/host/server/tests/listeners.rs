@@ -210,3 +210,109 @@ async fn optional_endpoint_loss_preserves_local_management_and_native_pane() {
         "{error}"
     );
 }
+
+/// A real required UDP bind conflict must leave optional remote transport
+/// unavailable while local administration and actual native execution work.
+/// Releasing the owned conflicting socket does not authorize an automatic
+/// restart or a second key owner. Shutdown observations precede final assertions.
+#[tokio::test(flavor = "current_thread")]
+async fn optional_startup_bind_failure_preserves_local_service_and_identity() {
+    let root = test_root("optional-startup-bind");
+    let occupied = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+    let policy = RuntimeIrohTransportPolicy {
+        enabled: true,
+        identity: RuntimeIrohIdentityPolicy::Host,
+        relay: RuntimeIrohRelayPolicy::Disabled,
+        bind_port: occupied.local_addr().unwrap().port(),
+        setup_timeout: Duration::from_secs(3),
+        ..RuntimeIrohTransportPolicy::default()
+    };
+    let remote = match HostIrohRuntime::bind(&root, policy.clone()).await {
+        Ok(Some(remote)) => std::sync::Arc::new(remote),
+        other => {
+            let _ = fs::remove_dir_all(root);
+            panic!("optional network bind failure prevented local startup: {other:?}");
+        }
+    };
+    let mut settings = config(root.clone());
+    settings.iroh_invitation_issuer = Some(remote.invitation_issuer());
+    let host = std::sync::Arc::new(HostServer::bind(settings).unwrap());
+    let native = host.router().native_cleanup_owner();
+    let session =
+        Box::pin(host.create_session(Some("startup-local".into()), Size::new(80, 24).unwrap()))
+            .await
+            .unwrap();
+    let actor = host
+        .router()
+        .runtime_for_tests(&session.session_id)
+        .unwrap()
+        .actor()
+        .clone();
+    let serving_host = host.clone();
+    let serving_remote = remote.clone();
+    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    let mut serving = tokio::spawn(Box::pin(async move {
+        serving_host
+            .serve_with_iroh(&serving_remote, async {
+                let _ = cancelled.await;
+            })
+            .await
+    }));
+    let observations: Result<()> = async {
+        drop(occupied);
+        let status = tokio::time::timeout(Duration::from_secs(3), management_request(host.socket_path(), "host/get", json!({})))
+            .await.map_err(|_| MezError::invalid_state("local management unavailable after optional bind failure"))??;
+        if status["result"]["ready"] != true || status["result"]["iroh"]["enabled"] != true
+            || status["result"]["iroh"]["available"] != false
+            || status["result"]["iroh"]["endpoint_id"].as_str() != Some(remote.endpoint_id())
+        {
+            return Err(MezError::invalid_state("startup status hid configured transport unavailability"));
+        }
+        let initialized = actor.handle_control_input_for_connection(
+            encode_control_body(r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"primary","requested_version":2,"client_name":"startup-local","client":{"name":"startup-local","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm"}}}}"#),
+            HOST_CONTROL_MAX_CONTENT_LENGTH, ControlConnectionState::new(true,true),
+        ).await?;
+        let primary = initialized.connection.caller_client_id().cloned()
+            .ok_or_else(|| MezError::invalid_state("startup local primary was not initialized"))?;
+        let pid = shell_heartbeat(&actor, &primary, &root.join("startup-heartbeat"), "startup-local-ready").await?;
+        if mez_mux::process::process_start_token_for_pid(pid).is_none() {
+            return Err(MezError::invalid_state("startup local native identity absent"));
+        }
+        let duplicate = HostIrohRuntime::bind(&root, policy).await;
+        if !duplicate.is_err_and(|error| error.kind() == MezErrorKind::Conflict) {
+            return Err(MezError::invalid_state("unavailable startup transport lost its original identity lock"));
+        }
+        let issuer = remote.invitation_issuer();
+        if issuer.available() || remote.endpoint_addr().is_some() {
+            return Err(MezError::invalid_state("unavailable startup transport silently restarted"));
+        }
+        issuer.list_clients()?;
+        if issuer.create_invitation("startup", RemoteRoleCeiling::Observer, RemoteHostRoutingAuthority::default(), 60, 1).is_ok() {
+            return Err(MezError::invalid_state("unavailable startup transport issued an invitation"));
+        }
+        Ok(())
+    }.await;
+    let _ = cancel.send(());
+    let served = tokio::time::timeout(Duration::from_secs(8), &mut serving).await;
+    if served.is_err() {
+        serving.abort();
+        let _ = serving.await;
+    }
+    let cleanup = host
+        .router()
+        .shutdown_all(true, Duration::from_secs(3))
+        .await;
+    let pending = native.native_pending_count();
+    drop(actor);
+    drop(host);
+    drop(remote);
+    cleanup.unwrap();
+    assert_eq!(pending.unwrap(), 0);
+    let _ = fs::remove_dir_all(root);
+    observations.unwrap();
+    let error = served.unwrap().unwrap().unwrap_err();
+    assert!(
+        error.message().contains("failed to bind Iroh endpoint"),
+        "{error}"
+    );
+}
