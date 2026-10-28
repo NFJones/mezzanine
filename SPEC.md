@@ -2818,6 +2818,21 @@ when no receipt receiver exists and terminal history is disabled.
 Final CLI cleanup and borrowed exit status MUST include this publication
 barrier, without counting callback obligations as synthetic native children.
 
+An accepted host stop MUST use one absolute shutdown budget through admission
+drain, required checkpoint attempts, exact runtime/native settlement and final
+reply publication. Serving-loop failures MUST enter the same remaining-safe-stage
+teardown path with their initiating error retained. Once admission is draining,
+a rejected or timed-out graceful checkpoint MUST remain failed durability while
+remaining safe shutdown continues at the original force setting. It MUST NOT
+reopen admission, silently grant a forced stop, refresh cleanup authority or
+report healthy completion. The host MAY publish its stopped admission state
+only after actual exact runtime/native settlement succeeds; checkpoint failure
+still makes the operation fail. Per-session shutdown MUST preserve supervision,
+endpoint, actor and native outcomes independently, retaining the first cause
+and bounded later diagnostics. Endpoint close MUST be attempted once on
+cancellation, natural completion or service failure before actor shutdown;
+interrupted close completion MUST remain unproven and MUST NOT trigger replay.
+
 Public `mez host stop` success MUST require an explicit healthy completion
 verdict from its original authenticated host connection, after checkpoint,
 native retirement and exact runtime publication have succeeded. A host shutdown

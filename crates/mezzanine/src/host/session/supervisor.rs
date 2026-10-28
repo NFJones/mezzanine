@@ -9,6 +9,8 @@
 //! entry carries a
 //! monotonically increasing generation so completion from an older task cannot
 //! remove or overwrite a replacement session with the same identity.
+//! Shutdown keeps one captured deadline through native effects and publication,
+//! preserving the first error with bounded diagnostics from every later stage.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -19,7 +21,7 @@ use mez_mux::process::PaneProcessRetirementOwner;
 use tokio::sync::{Notify, watch};
 
 use super::{SessionFactory, SessionFactoryRequest, SessionRuntimeHandle};
-use crate::error::{MezError, MezErrorKind, Result};
+use crate::error::{MezError, MezErrorKind, Result, TeardownErrors};
 use crate::runtime::{RuntimeLifecycleState, RuntimePowerInhibitionStatus};
 
 const DEFAULT_TERMINAL_HISTORY_LIMIT: usize = 64;
@@ -767,13 +769,44 @@ impl SessionSupervisor {
         timeout: Duration,
         #[cfg(test)] after_native: Option<fn(&Self, bool)>,
     ) -> impl std::future::Future<Output = Result<()>> + '_ {
-        let preparation = tokio::time::Instant::now()
+        let deadline = tokio::time::Instant::now()
             .checked_add(timeout)
-            .ok_or_else(|| MezError::invalid_args("session shutdown budget is not representable"))
-            .and_then(|deadline| {
-                self.capture_native_continuation_scope(deadline)
-                    .map(|scope| (deadline, scope))
-            });
+            .ok_or_else(|| MezError::invalid_args("session shutdown budget is not representable"));
+        self.shutdown_all_until_with_receipt_probe(
+            force,
+            deadline,
+            #[cfg(test)]
+            after_native,
+        )
+    }
+
+    /// Stops captured exact runtimes within an existing caller deadline, without
+    /// refreshing native cleanup attempts or extending an expired budget.
+    pub(crate) fn shutdown_all_until(
+        &self,
+        force: bool,
+        deadline: tokio::time::Instant,
+    ) -> impl std::future::Future<Output = Result<()>> + '_ {
+        self.shutdown_all_until_with_receipt_probe(
+            force,
+            Ok(deadline),
+            #[cfg(test)]
+            None,
+        )
+    }
+
+    /// Shares exact capture and completion settlement between duration and
+    /// already-deadlined callers; the test probe grants no cleanup authority.
+    fn shutdown_all_until_with_receipt_probe(
+        &self,
+        force: bool,
+        deadline: Result<tokio::time::Instant>,
+        #[cfg(test)] after_native: Option<fn(&Self, bool)>,
+    ) -> impl std::future::Future<Output = Result<()>> + '_ {
+        let preparation = deadline.and_then(|deadline| {
+            self.capture_native_continuation_scope(deadline)
+                .map(|scope| (deadline, scope))
+        });
         async move {
             use futures_util::StreamExt;
             let (deadline, mut scope) = preparation?;
@@ -826,7 +859,7 @@ impl SessionSupervisor {
             let mut stops: futures_util::stream::FuturesUnordered<_> = targets
                 .into_iter()
                 .map(|(session_id, target, effect_deadline)| async move {
-                    tokio::time::timeout_at(
+                    let result = tokio::time::timeout_at(
                         deadline,
                         self.stop_exact_shutdown_target_until(
                             &session_id,
@@ -839,19 +872,21 @@ impl SessionSupervisor {
                     .await
                     .map_err(|_| {
                         MezError::invalid_state("session supervisor stop deadline expired")
-                    })?
+                    })
+                    .and_then(|result| result);
+                    (session_id, result)
                 })
                 .collect();
             let requests = async {
-                let mut first_error = None;
-                while let Some(result) = stops.next().await {
+                let mut failures = TeardownErrors::default();
+                while let Some((session_id, result)) = stops.next().await {
                     if let Err(error) = result {
-                        first_error.get_or_insert(error);
+                        failures.record(&format!("session {session_id} shutdown"), error);
                     }
                 }
-                first_error
+                failures
             };
-            let (mut first_error, native) = tokio::join!(
+            let (mut failures, native) = tokio::join!(
                 requests,
                 self.drain_native_captured_scope_with_owner_receipts(
                     scope,
@@ -864,13 +899,7 @@ impl SessionSupervisor {
                 after_native(self, native.is_ok());
             }
             if let Err(error) = native {
-                first_error = Some(match first_error {
-                    Some(primary) => MezError::new(
-                        primary.kind(),
-                        format!("{}; native cleanup: {error}", primary.message()),
-                    ),
-                    None => error,
-                });
+                failures.record("native cleanup", error);
             }
             let settlement = tokio::time::timeout_at(deadline, async {
                 loop {
@@ -888,24 +917,20 @@ impl SessionSupervisor {
             // future finished. Its monotonic receipt must affect this verdict too.
             match self.native_cleanup_failure() {
                 Ok(Some(failure)) => {
-                    first_error.get_or_insert_with(|| MezError::invalid_state(failure));
+                    failures.record(
+                        "native completion publication",
+                        MezError::invalid_state(failure),
+                    );
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    first_error.get_or_insert(error);
+                    failures.record("native completion publication", error);
                 }
             }
-            match (first_error, settlement) {
-                (None, result) => result,
-                (Some(primary), Ok(())) => Err(primary),
-                (Some(primary), Err(settlement)) => Err(MezError::new(
-                    primary.kind(),
-                    format!(
-                        "{}; remaining session cleanup: {settlement}",
-                        primary.message()
-                    ),
-                )),
+            if let Err(error) = settlement {
+                failures.record("remaining session cleanup", error);
             }
+            failures.finish()
         }
     }
 

@@ -1154,13 +1154,33 @@ impl HostSessionRouter {
         Ok(assignments)
     }
 
+    /// Holds the actual serialized admission lock for a controlled drain test.
+    /// This grants no session, native cleanup or durable completion authority.
+    #[cfg(test)]
+    pub(crate) async fn hold_creation_for_tests(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.creation_lock.clone().lock_owned().await
+    }
+
     #[cfg(test)]
     pub(crate) fn runtime_for_tests(&self, session_id: &str) -> Result<SessionRuntimeHandle> {
         self.supervisor.lookup(session_id)
     }
 
+    /// Gives fixture-owned cleanup a fresh explicit relative budget. Production
+    /// host teardown carries its already captured absolute deadline instead.
+    #[cfg(test)]
     pub(crate) async fn shutdown_all(&self, force: bool, timeout: Duration) -> Result<()> {
         self.supervisor.shutdown_all(force, timeout).await
+    }
+
+    /// Finishes exact supervised shutdown within the caller's existing absolute
+    /// deadline, preserving native attempts and completion-publication fences.
+    pub(crate) async fn shutdown_all_until(
+        &self,
+        force: bool,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        self.supervisor.shutdown_all_until(force, deadline).await
     }
 
     /// Captures checkpoints for every active durable local assignment.

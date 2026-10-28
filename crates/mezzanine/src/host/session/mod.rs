@@ -53,6 +53,7 @@ use crate::storage::transcript::AgentTranscriptStore;
     reason = "the persistent host consumes the completed supervisor in the next architecture phase"
 )]
 mod supervisor;
+mod teardown;
 
 #[allow(
     unused_imports,
@@ -523,17 +524,14 @@ impl SessionRuntime {
             .take()
             .ok_or_else(|| MezError::invalid_state("session runtime actor is unavailable"))?;
         let daemon = async move {
-            let cancellation = async move {
-                cancellation.await;
-                if let Some(iroh_shutdown) = iroh_shutdown {
-                    let _ = iroh_shutdown.close().await;
-                }
-            };
-            let result = supervise_async_runtime_services(services, cancellation).await;
+            let close = iroh_shutdown.map(|endpoint| move || async move { endpoint.close().await });
+            let (result, endpoint_close) =
+                teardown::supervise_and_close_endpoint(services, cancellation, close).await;
             let shutdown = shutdown_handle.shutdown().await;
-            (result, shutdown)
+            (result, endpoint_close, shutdown)
         };
-        let ((supervision, shutdown), mut actor_exit) = tokio::join!(daemon, actor.run());
+        let ((supervision, endpoint_close, shutdown), mut actor_exit) =
+            tokio::join!(daemon, actor.run());
         // Shutdown's reply is a plain lifecycle value: errors at this specific
         // request boundary are send/reply transport errors, not reducer errors.
         // Only the actual joined actor exit can classify redundant closure.
@@ -548,12 +546,26 @@ impl SessionRuntime {
             }
             result => result.map(|_| ()),
         };
-        // Preserve the initiating supervision error while still reporting
-        // actor cleanup failures when supervision itself completed normally.
-        let supervision = supervision.and_then(|report| shutdown.map(|()| report));
+        // Preserve the initiating outcome and later actor/native failures.
+        // Reporting an additional error never changes exact native custody.
+        let shutdown_failed = supervision.is_err() || shutdown.is_err();
+        let mut failures = crate::error::TeardownErrors::default();
+        let supervision = match supervision {
+            Ok(report) => Some(report),
+            Err(error) => {
+                failures.record("service supervision", error);
+                None
+            }
+        };
+        if let Err(error) = endpoint_close {
+            failures.record("session Iroh shutdown", error);
+        }
+        if let Err(error) = shutdown {
+            failures.record("actor shutdown", error);
+        }
         let native = self.handle.native_retirement_owner();
         let attempt = native.initial_shutdown_attempt(
-            supervision.is_err()
+            shutdown_failed
                 || matches!(
                     actor_exit.service.lifecycle_state(),
                     RuntimeLifecycleState::Killed | RuntimeLifecycleState::Failed
@@ -575,20 +587,14 @@ impl SessionRuntime {
                 .map_or(Ok(()), |failure| Err(MezError::invalid_state(failure))),
             Err(error) => Err(error.into()),
         };
-        let supervision = match (supervision, cleanup) {
-            (Ok(report), Ok(())) => report,
-            (Err(primary), Ok(())) => return Err(primary),
-            (Ok(_), Err(cleanup)) => return Err(cleanup),
-            (Err(primary), Err(cleanup)) => {
-                return Err(MezError::new(
-                    primary.kind(),
-                    format!(
-                        "{}; native cleanup also failed: {cleanup}",
-                        primary.message()
-                    ),
-                ));
-            }
-        };
+        if let Err(error) = cleanup {
+            failures.record("native cleanup", error);
+        }
+        failures.finish()?;
+        // An absent report always records a service failure before cleanup.
+        let supervision = supervision.ok_or_else(|| {
+            MezError::invalid_state("session runtime lost its supervision report")
+        })?;
         Ok(SessionRuntimeCompletion {
             service: actor_exit.service,
             supervision,
@@ -874,6 +880,8 @@ mod tests {
 
     use super::*;
 
+    mod teardown;
+
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(1);
 
     /// Production X11 composition is auxiliary lifetime work, not a primary
@@ -1107,6 +1115,10 @@ mod tests {
                 assert!(
                     error.message().contains("initiating service control"),
                     "{error}"
+                );
+                assert!(
+                    error.message().contains("actor shutdown"),
+                    "initiating failure discarded concurrent actor shutdown error: {error}"
                 );
             } else {
                 assert!(

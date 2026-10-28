@@ -206,7 +206,8 @@ multi-session host](docs/operations/persistent-host.md), [Remote pairing and
 recovery](docs/safety-and-trust/remote-pairing-and-recovery.md), and [Operations
 and troubleshooting](docs/operations/README.md).
 Service supervision preserves the initiating failure alongside bounded, named
-cleanup diagnostics.
+cleanup diagnostics. Host stop reports failed durability even when
+remaining session cleanup completes.
 
 Use `mez --help` and the [CLI reference](docs/reference-manual/cli.md) for the
 current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions-and-panes.md)

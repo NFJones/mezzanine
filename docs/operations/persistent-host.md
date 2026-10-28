@@ -256,10 +256,20 @@ Final `CliExit` cleanup waits for the same publication barrier. Borrowed status
 remains nonzero while it is pending or unknown, even when the actual native
 child count is zero; callback obligations do not inflate that count.
 
-Runtime service failures retain the initiating error and bounded, named cleanup
+Runtime and host failures retain the initiating error and bounded, named cleanup
 diagnostics. Supervision observes cancelled wrappers and retained blocking fork
-jobs before returning. These diagnostics preserve failure classification and do
-not prove native retirement or authorize retrying an executed effect.
+jobs before returning. Session shutdown collects endpoint, actor and native
+outcomes separately. An endpoint close interrupted by service failure remains
+unproven and is not repeated.
+
+Once a host stop is accepted, admission remains fenced. If a required graceful
+checkpoint fails or times out, the host still attempts remaining safe runtime
+cleanup with the requested force setting and original deadline. The command
+reports failed durability even when all sessions subsequently stop; it does not
+certify a fresh recoverable checkpoint. Existing valid checkpoints remain
+available. A host serving failure follows the same cleanup path. Drain,
+checkpoint, native settlement and the final response share one shutdown budget.
+Diagnostics do not prove native retirement or authorize replaying an effect.
 
 `mez host stop` requests the final shutdown verdict on the same protected local
 connection and succeeds only after the host confirms native retirement and
