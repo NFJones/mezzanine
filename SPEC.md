@@ -13758,7 +13758,25 @@ The baseline command capabilities are:
   derived metadata before acknowledging a match, and append only a verified
   missing suffix. A worker-owned append receipt MUST retain its exact validated
   rows until the complete durable archive matches, and startup recovery MUST
-  reconcile retained receipts before validating checkpointed history. An
+  reconcile retained receipts before validating checkpointed history. A
+  projection-bearing initial child append MUST retain its exact conversation
+  identity, rows and complete prefix/selective epoch in one immutable payload.
+  Its admission MUST journal that payload, reconcile rows and sidecar under one
+  conversation mutation lease, and require the durable sidecar marker before
+  acknowledging readiness. Empty raw tails MUST use a genuine empty archive;
+  a metadata-only receipt key of zero MUST NOT become a transcript sequence.
+  Its canonical filename MUST use `<cid>-initial-<20-digit-generation>.json`;
+  numeric zero sequence/generation filenames remain noncanonical.
+  Row-only receipts retain version 1. Initial-projection receipts MUST use
+  version 2 with `compaction_epoch` included in their domain-separated digest;
+  version 1 recovery remains supported without rewriting accepted journals.
+  Version/shape mismatches and unknown versions MUST fail closed. Existing
+  compaction epoch formats remain versions 1 and 2; this does not change the
+  configuration schema. Initial publication MUST reject unowned existing raw
+  history, different durable replay authority and conflicting retained payloads.
+  Recovery MUST preflight projection conflicts before mutating any conversation,
+  and settlement MUST prove the complete initial payload, including an empty
+  tail and required-state marker, rather than acknowledge rows alone. An
   absent receipt MUST NOT acknowledge uncommitted rows; a late duplicate
   settlement is harmless only if the complete exact batch is already present
   in valid committed history. Receipt admission and fork fences MUST route

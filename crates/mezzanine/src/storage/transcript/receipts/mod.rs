@@ -9,7 +9,10 @@
 //! is checked by its own owner or global recovery, not unrelated admission.
 //! Global recovery discovers identities, then re-enumerates under each exact
 //! lock so a receipt retired before ownership acquisition is benign. Its
-//! accumulated snapshot is preflighted in full before any archive is changed;
+//! v1 row receipts and v2 initial-projection receipts share routing and ownership.
+//! Projection admission publishes all replay authority before acknowledgment,
+//! including a genuine empty archive. Digests cover the complete v2 payload.
+//! The accumulated snapshot is preflighted in full before any archive is changed;
 //! new conversations discovered by a later scan remain for the next recovery.
 
 use std::fs::{self, OpenOptions};
@@ -24,11 +27,17 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{MezError, MezErrorKind, Result};
 
+use super::TranscriptAppendBatch;
 use super::encoding::{decode_transcript_entry, encode_transcript_entry};
 use super::fs::{set_private_dir_permissions, set_private_file_permissions};
-use super::types::AgentTranscriptStore;
+use super::types::{AgentCompactionEpoch, AgentTranscriptStore};
+
+/// Initial projection publication and whole-payload recovery checks.
+mod initial_projection;
 
 const RECEIPT_VERSION: u64 = 1;
+/// Projection-bearing receipts retain a complete initial replay source.
+const PROJECTION_RECEIPT_VERSION: u64 = 2;
 
 /// One-shot test handshake after receipt path enumeration, before opening files.
 #[cfg(test)]
@@ -40,6 +49,7 @@ pub(super) struct ReceiptEnumerationBarrier {
     resume: std::sync::mpsc::Receiver<()>,
 }
 
+/// Versioned exact payload and generation retained until durable settlement.
 #[derive(Serialize, Deserialize)]
 struct AppendReceipt {
     version: u64,
@@ -48,45 +58,49 @@ struct AppendReceipt {
     generation: u64,
     digest: String,
     rows: Vec<String>,
+    /// Version-two initial authority; forbidden on a version-one receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compaction_epoch: Option<AgentCompactionEpoch>,
 }
 
 impl AppendReceipt {
-    fn new(entries: &[TranscriptEntry], generation: u64) -> Result<Self> {
-        let first = entries
-            .first()
-            .ok_or_else(|| MezError::invalid_args("empty transcript receipt"))?;
-        if generation == 0
-            || entries
-                .iter()
-                .any(|entry| entry.conversation_id != first.conversation_id)
-            || entries
-                .windows(2)
-                .any(|pair| pair[0].sequence.checked_add(1) != Some(pair[1].sequence))
-        {
+    /// Encodes every owned domain into one versioned receipt identity.
+    fn from_batch(batch: &TranscriptAppendBatch, generation: u64) -> Result<Self> {
+        if generation == 0 {
             return Err(MezError::invalid_args(
-                "transcript receipt requires one contiguous conversation and nonzero generation",
+                "transcript receipt requires a nonzero generation",
             ));
         }
-        let rows = entries
+        let rows = batch
+            .entries()
             .iter()
             .map(encode_transcript_entry)
             .collect::<Result<Vec<_>>>()?;
-        let digest = digest_rows(&rows);
+        let compaction_epoch = batch.initial_compaction_epoch().cloned();
+        let version = if compaction_epoch.is_some() {
+            PROJECTION_RECEIPT_VERSION
+        } else {
+            RECEIPT_VERSION
+        };
+        let digest = digest_payload(&rows, compaction_epoch.as_ref())?;
         Ok(Self {
-            version: RECEIPT_VERSION,
-            conversation_id: first.conversation_id.clone(),
-            first_sequence: first.sequence,
+            version,
+            conversation_id: batch.conversation_id().into(),
+            first_sequence: batch.first_sequence(),
             generation,
             digest,
             rows,
+            compaction_epoch,
         })
     }
 
-    fn entries(&self) -> Result<Vec<TranscriptEntry>> {
-        if self.version != RECEIPT_VERSION
-            || self.rows.is_empty()
-            || self.generation == 0
-            || self.digest != digest_rows(&self.rows)
+    /// Reconstructs and validates the complete payload before trusting its rows.
+    fn batch(&self) -> Result<TranscriptAppendBatch> {
+        if self.generation == 0
+            || !matches!(self.version, RECEIPT_VERSION | PROJECTION_RECEIPT_VERSION)
+            || (self.version == RECEIPT_VERSION && self.compaction_epoch.is_some())
+            || (self.version == PROJECTION_RECEIPT_VERSION && self.compaction_epoch.is_none())
+            || self.digest != digest_payload(&self.rows, self.compaction_epoch.as_ref())?
         {
             return Err(MezError::invalid_state(
                 "transcript receipt identity is invalid",
@@ -97,18 +111,33 @@ impl AppendReceipt {
             .iter()
             .map(|row| decode_transcript_entry(row))
             .collect::<Result<Vec<_>>>()?;
-        let check = Self::new(&entries, self.generation)?;
-        if check.conversation_id != self.conversation_id
-            || check.first_sequence != self.first_sequence
+        let batch = match self.compaction_epoch.as_ref() {
+            Some(epoch) => TranscriptAppendBatch::initial_projection(epoch.clone(), entries)?,
+            None => TranscriptAppendBatch::rows(entries)?,
+        };
+        if batch.conversation_id() != self.conversation_id
+            || batch.first_sequence() != self.first_sequence
         {
             return Err(MezError::invalid_state(
                 "transcript receipt rows do not match identity",
             ));
         }
-        Ok(entries)
+        Ok(batch)
     }
 
+    /// Validates projection ownership too, even when a caller needs only rows.
+    fn entries(&self) -> Result<Vec<TranscriptEntry>> {
+        Ok(self.batch()?.entries().to_vec())
+    }
+
+    /// Routes metadata-only ownership without relaxing numeric row identities.
     fn filename(&self) -> String {
+        if self.version == PROJECTION_RECEIPT_VERSION && self.first_sequence == 0 {
+            return format!(
+                "{}-initial-{:020}.json",
+                self.conversation_id, self.generation
+            );
+        }
         format!(
             "{}-{:020}-{:020}.json",
             self.conversation_id, self.first_sequence, self.generation
@@ -127,6 +156,29 @@ fn digest_rows(rows: &[String]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// Preserves the v1 digest while binding v2 rows and complete epoch bytes to a
+/// separate domain. Empty metadata-only payloads still have full CID authority.
+fn digest_payload(rows: &[String], epoch: Option<&AgentCompactionEpoch>) -> Result<String> {
+    let Some(epoch) = epoch else {
+        return Ok(digest_rows(rows));
+    };
+    let encoded = serde_json::to_vec(epoch).map_err(|error| {
+        MezError::invalid_state(format!(
+            "transcript receipt projection encode failed: {error}"
+        ))
+    })?;
+    let mut digest = Sha256::new();
+    digest.update(b"mezzanine-initial-transcript-projection-v2\0");
+    digest.update(digest_rows(rows).as_bytes());
+    digest.update((encoded.len() as u64).to_be_bytes());
+    digest.update(encoded);
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 /// Parses canonical filename routing identity without opening or trusting rows.
@@ -148,7 +200,14 @@ fn receipt_conversation_id(path: &Path) -> Result<Option<&str>> {
     let (prefix, generation) = stem.rsplit_once('-').ok_or_else(invalid)?;
     let (conversation_id, sequence) = prefix.rsplit_once('-').ok_or_else(invalid)?;
     validate_conversation_id(conversation_id)?;
-    for number in [sequence, generation] {
+    // Metadata-only ownership has its own explicit namespace. Numeric zero
+    // remains noncanonical, so legacy unknown-name fences are not weakened.
+    let numbers = if sequence == "initial" {
+        vec![generation]
+    } else {
+        vec![sequence, generation]
+    };
+    for number in numbers {
         if number.len() != 20
             || !number.bytes().all(|byte| byte.is_ascii_digit())
             || number.parse::<u64>().ok().is_none_or(|value| value == 0)
@@ -297,14 +356,28 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
-    /// Durably accepts one immutable, validated batch before caller acknowledgment.
-    /// Conflicting overlapping receipts are rejected under conversation ownership.
+    /// Preserves ordinary row-only admission and its v1 recovery contract.
     pub(crate) fn accept_append_receipt(
         &self,
         entries: &[TranscriptEntry],
         generation: u64,
     ) -> Result<()> {
-        let receipt = AppendReceipt::new(entries, generation)?;
+        self.accept_transcript_append_receipt(
+            &TranscriptAppendBatch::rows(entries.to_vec())?,
+            generation,
+        )
+    }
+
+    /// Durably accepts all rows and optional initial authority in one owner.
+    /// Initial projections are published before success; failures leave their
+    /// complete receipt available for exact recovery rather than a partial ACK.
+    pub(crate) fn accept_transcript_append_receipt(
+        &self,
+        batch: &TranscriptAppendBatch,
+        generation: u64,
+    ) -> Result<()> {
+        let entries = batch.entries();
+        let receipt = AppendReceipt::from_batch(batch, generation)?;
         let _lock = self.acquire_conversation_lock(&receipt.conversation_id)?;
         // Admission must not leave a replayable receipt for a sequence that
         // already belongs to different durable content. Check the complete
@@ -328,6 +401,7 @@ impl AgentTranscriptStore {
             Err(error) => return Err(error),
         };
         let pending = self.read_locked_append_receipts(&[&receipt.conversation_id])?;
+        self.check_initial_projection_admission_locked(batch, &pending, committed_count)?;
         let mut next_sequence = committed_count
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("transcript receipt sequence overflow"))?;
@@ -358,15 +432,24 @@ impl AgentTranscriptStore {
             if existing.first_sequence == receipt.first_sequence
                 && existing.generation == generation
             {
-                if rows == entries {
+                if rows == entries && existing.compaction_epoch == receipt.compaction_epoch {
                     let directory = self.append_receipt_directory();
                     set_private_dir_permissions(&directory)?;
                     set_private_file_permissions(&directory.join(existing.filename()))?;
                     fs::File::open(&directory)?.sync_all()?;
                     fs::File::open(&self.root)?.sync_all()?;
+                    self.reconcile_initial_projection_locked(batch, &_lock)?;
                     return Ok(());
                 }
                 return Err(MezError::conflict("transcript receipt identity changed"));
+            }
+            if receipt.compaction_epoch.is_some()
+                && existing.compaction_epoch.is_some()
+                && receipt.compaction_epoch != existing.compaction_epoch
+            {
+                return Err(MezError::conflict(
+                    "transcript receipts claim different initial projections",
+                ));
             }
             if rows.iter().any(|row| {
                 entries
@@ -407,6 +490,7 @@ impl AgentTranscriptStore {
         fs::rename(&temporary, &path)?;
         fs::File::open(&directory)?.sync_all()?;
         fs::File::open(&self.root)?.sync_all()?;
+        self.reconcile_initial_projection_locked(batch, &_lock)?;
         Ok(())
     }
 
@@ -433,6 +517,7 @@ impl AgentTranscriptStore {
     /// Failure leaves the receipt available for a later checked recovery.
     pub(crate) fn recover_append_receipts(&self) -> Result<()> {
         let receipts = self.read_append_receipts()?;
+        self.preflight_initial_projection_receipts(&receipts)?;
         // Reject mutually inconsistent retained claims before any append can
         // make one side of the conflict durable. A damaged journal remains
         // available for diagnosis rather than being partially replayed.
@@ -506,8 +591,15 @@ impl AgentTranscriptStore {
                 ))
         });
         for (receipt, entries) in receipts {
-            self.append_many(&entries)?;
-            self.settle_append_receipt(&entries, receipt.generation)?;
+            let batch = match receipt.compaction_epoch {
+                Some(epoch) => TranscriptAppendBatch::initial_projection(epoch, entries)?,
+                None => TranscriptAppendBatch::rows(entries)?,
+            };
+            self.accept_transcript_append_receipt(&batch, receipt.generation)?;
+            if batch.initial_compaction_epoch().is_none() {
+                self.append_many(batch.entries())?;
+            }
+            self.settle_transcript_append_receipt(&batch, receipt.generation)?;
         }
         Ok(())
     }
@@ -518,7 +610,21 @@ impl AgentTranscriptStore {
         entries: &[TranscriptEntry],
         generation: u64,
     ) -> Result<()> {
-        let receipt = AppendReceipt::new(entries, generation)?;
+        self.settle_transcript_append_receipt(
+            &TranscriptAppendBatch::rows(entries.to_vec())?,
+            generation,
+        )
+    }
+
+    /// Retires only the exact complete payload after rows and initial authority
+    /// are proven durable. Missing receipts require the same idempotence proof.
+    pub(crate) fn settle_transcript_append_receipt(
+        &self,
+        batch: &TranscriptAppendBatch,
+        generation: u64,
+    ) -> Result<()> {
+        let entries = batch.entries();
+        let receipt = AppendReceipt::from_batch(batch, generation)?;
         let _lock = self.acquire_conversation_lock(&receipt.conversation_id)?;
         let directory = self.append_receipt_directory();
         match fs::symlink_metadata(&directory) {
@@ -529,7 +635,7 @@ impl AgentTranscriptStore {
                 ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return self.verify_missing_append_receipt(entries);
+                return self.verify_missing_append_receipt(batch);
             }
             Err(error) => return Err(error.into()),
         }
@@ -542,7 +648,7 @@ impl AgentTranscriptStore {
                 ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return self.verify_missing_append_receipt(entries);
+                return self.verify_missing_append_receipt(batch);
             }
             Err(error) => return Err(error.into()),
         }
@@ -555,7 +661,7 @@ impl AgentTranscriptStore {
             || actual.first_sequence != receipt.first_sequence
             || actual.generation != receipt.generation
             || actual.digest != receipt.digest
-            || actual.entries()? != entries
+            || actual.batch()? != *batch
         {
             return Err(MezError::conflict(
                 "transcript receipt changed before settlement",
@@ -575,6 +681,7 @@ impl AgentTranscriptStore {
                 "transcript receipt has uncommitted or conflicting rows",
             ));
         }
+        self.verify_initial_projection_committed_locked(batch)?;
         fs::remove_file(&path)?;
         fs::File::open(&directory)?.sync_all()?;
         Ok(())
@@ -582,8 +689,9 @@ impl AgentTranscriptStore {
 
     /// Treats an absent receipt as an idempotent late settlement only when the
     /// entire exact batch is already committed in a valid archive.
-    fn verify_missing_append_receipt(&self, entries: &[TranscriptEntry]) -> Result<()> {
-        let conversation_id = &entries[0].conversation_id;
+    fn verify_missing_append_receipt(&self, batch: &TranscriptAppendBatch) -> Result<()> {
+        let entries = batch.entries();
+        let conversation_id = batch.conversation_id();
         self.validate_restored_transcript(conversation_id)?;
         let archive = self.inspect(conversation_id)?;
         if entries.iter().any(|entry| {
@@ -596,6 +704,7 @@ impl AgentTranscriptStore {
                 "missing transcript receipt has uncommitted or conflicting rows",
             ));
         }
+        self.verify_initial_projection_committed_locked(batch)?;
         Ok(())
     }
 }

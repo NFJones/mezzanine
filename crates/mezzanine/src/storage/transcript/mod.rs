@@ -28,6 +28,8 @@ pub(crate) mod steering;
 /// Immutable transcript-only fallback evidence in the existing presentation log.
 pub(crate) mod fallback;
 
+/// Immutable transcript rows and optional initial fork authority.
+mod append_batch;
 /// Source-proven terminal handoffs for accepted turn-local model summaries.
 pub(crate) mod compaction_handoff;
 /// Exposes the encoding module boundary.
@@ -49,6 +51,7 @@ mod history;
 mod prefix_publication;
 /// Durable, exact-batch acceptance receipts for uncertain transcript writes.
 mod receipts;
+pub(crate) use append_batch::TranscriptAppendBatch;
 /// Leased, validated sequence frontiers and raw replay counts.
 mod replay_position;
 /// Exposes the store module boundary.

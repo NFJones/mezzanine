@@ -127,10 +127,10 @@ const SESSION_METADATA_VERSION: u64 = 4;
 /// Versioned authoritative summary and replay-boundary sidecar.
 const COMPACTION_EPOCH_FILE_NAME: &str = "compaction-epoch.json";
 /// Maximum encoded size accepted for one durable compaction epoch.
-const COMPACTION_EPOCH_MAX_BYTES: u64 = 1024 * 1024;
+pub(super) const COMPACTION_EPOCH_MAX_BYTES: u64 = 1024 * 1024;
 
 /// Checks the ordering and bounds of selective replay ranges before publication or use.
-fn validate_compaction_ranges(
+pub(super) fn validate_compaction_ranges(
     ranges: &[AgentCompactionRange],
     prefix_boundary: u64,
     next_sequence: u64,
@@ -153,7 +153,7 @@ fn validate_compaction_ranges(
 }
 
 /// Refuses selective replacements that could erase user intent or tear one execution group.
-fn validate_compaction_range_sources(
+pub(super) fn validate_compaction_range_sources(
     ranges: &[AgentCompactionRange],
     entries: &[TranscriptEntry],
 ) -> Result<()> {
@@ -1289,118 +1289,11 @@ impl AgentTranscriptStore {
                             error
                         }
                     })?;
-            let path = self.existing_transcript_path_for(&conversation_id)?;
-            let durable = if path.exists() {
-                let mut file = std_fs::File::open(&path)?;
-                if file.metadata()?.len() > 0 {
-                    file.seek(SeekFrom::End(-1))?;
-                    let mut terminator = [0];
-                    file.read_exact(&mut terminator)?;
-                    if terminator[0] != b'\n' {
-                        return Err(MezError::invalid_state(
-                            "transcript archive ends with an incomplete row",
-                        ));
-                    }
-                }
-                // The tail alone cannot prove that an older prefix survived.
-                // Rows have no write-time size limit, so the first-row reader
-                // must accept every row that append_one_locked can persist.
-                let mut first_line = String::new();
-                BufReader::new(std_fs::File::open(&path)?).read_line(&mut first_line)?;
-                if !first_line.is_empty()
-                    && decode_transcript_entry(first_line.trim_end_matches(['\r', '\n']))?.sequence
-                        != 1
-                {
-                    return Err(MezError::invalid_state(
-                        "transcript archive is missing its leading history",
-                    ));
-                }
-                // A sound first row and tail do not prove the interior survived.
-                // Worker appends run off-actor; validate the complete archive
-                // before extending it or acknowledging a matching receipt.
-                self.validate_restored_transcript(&conversation_id)?;
-                let latest = self.inspect_latest_entries(&conversation_id, 1)?;
-                if latest
-                    .last()
-                    .is_some_and(|last| entries[0].sequence <= last.sequence)
-                {
-                    // Older receipts can precede arbitrarily many later rows.
-                    // Scan off-actor rather than allocating from an untrusted
-                    // sequence gap or silently dropping the older prefix.
-                    let archive = self.inspect(&conversation_id)?;
-                    if archive.first().is_some_and(|first| first.sequence != 1) {
-                        return Err(MezError::invalid_state(
-                            "transcript archive is missing its leading history",
-                        ));
-                    }
-                    archive
-                } else {
-                    latest
-                }
-            } else {
-                Vec::new()
-            };
-            if durable
-                .iter()
-                .any(|row| row.conversation_id != conversation_id)
-                || durable
-                    .windows(2)
-                    .any(|pair| pair[0].sequence.checked_add(1) != Some(pair[1].sequence))
-            {
-                return Err(MezError::invalid_state(
-                    "transcript archive contains missing, reordered, or foreign entries",
-                ));
-            }
-            let mut next_sequence = durable
-                .last()
-                .map_or(1, |row| row.sequence.saturating_add(1));
-            let mut matched = false;
-            for &entry in &entries {
-                if let Some(existing) = durable.iter().find(|row| row.sequence == entry.sequence) {
-                    if existing != entry {
-                        return Err(MezError::conflict(
-                            "transcript append sequence conflicts with durable contents",
-                        ));
-                    }
-                    matched = true;
-                    continue;
-                }
-                if entry.sequence != next_sequence {
-                    return Err(if entry.sequence > next_sequence {
-                        MezError::invalid_state(
-                            "transcript append is waiting for an earlier durable entry",
-                        )
-                    } else {
-                        MezError::conflict(
-                            "transcript append sequence conflicts with durable chronology",
-                        )
-                    });
-                }
-                bytes = bytes.saturating_add(self.append_one_locked(entry)?);
-                next_sequence = next_sequence.saturating_add(1);
-                #[cfg(test)]
-                if self
-                    .fail_transcript_append_after_first
-                    .swap(false, Ordering::SeqCst)
-                {
-                    return Err(MezError::from(std::io::Error::new(
-                        std::io::ErrorKind::Interrupted,
-                        "injected transcript append failure after first commit",
-                    )));
-                }
-            }
-            if matched {
-                // A visible record need not have survived sync or its summary
-                // and catalog writes. Repair these under the append lock before
-                // acknowledging an identical uncertain batch.
-                std_fs::File::open(&path)?.sync_all()?;
-                set_private_file_permissions(&path)?;
-                if let Some(mut summary) = summarize_conversation(self.inspect(&conversation_id)?) {
-                    summary.project_root = saved_session_project_root(summary.directory.as_deref());
-                    self.write_summary_sidecar(&summary)?;
-                }
-                self.upsert_catalog_from_files(&conversation_id, None)?;
-            }
+            bytes = bytes.saturating_add(self.append_conversation_rows_locked(
+                &conversation_id,
+                &entries,
+                &_conversation_lock,
+            )?);
             // Terminal audit evidence is durable now, but is not itself a
             // replay epoch. Publish its distinct source-proven transition
             // outside the append lock; publication reacquires that lock and
@@ -1412,6 +1305,134 @@ impl AgentTranscriptStore {
             }) {
                 self.publish_terminal_compaction_handoffs(&conversation_id)?;
             }
+        }
+        Ok(bytes)
+    }
+
+    /// Reconciles one validated contiguous conversation span under its existing
+    /// mutation lease. The caller owns row validation and the matching lease;
+    /// exact uncertain prefixes are synced and their summary/catalog repaired.
+    /// Empty spans do no I/O. Corrupt archives or conflicting rows fail closed.
+    pub(super) fn append_conversation_rows_locked(
+        &self,
+        conversation_id: &str,
+        entries: &[&TranscriptEntry],
+        _lease: &std_fs::File,
+    ) -> Result<usize> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let mut bytes = 0usize;
+        let path = self.existing_transcript_path_for(conversation_id)?;
+        let durable = if path.exists() {
+            let mut file = std_fs::File::open(&path)?;
+            if file.metadata()?.len() > 0 {
+                file.seek(SeekFrom::End(-1))?;
+                let mut terminator = [0];
+                file.read_exact(&mut terminator)?;
+                if terminator[0] != b'\n' {
+                    return Err(MezError::invalid_state(
+                        "transcript archive ends with an incomplete row",
+                    ));
+                }
+            }
+            // The tail alone cannot prove that an older prefix survived.
+            // Rows have no write-time size limit, so the first-row reader
+            // must accept every row that append_one_locked can persist.
+            let mut first_line = String::new();
+            BufReader::new(std_fs::File::open(&path)?).read_line(&mut first_line)?;
+            if !first_line.is_empty()
+                && decode_transcript_entry(first_line.trim_end_matches(['\r', '\n']))?.sequence != 1
+            {
+                return Err(MezError::invalid_state(
+                    "transcript archive is missing its leading history",
+                ));
+            }
+            // A sound first row and tail do not prove the interior survived.
+            // Worker appends run off-actor; validate the complete archive
+            // before extending it or acknowledging a matching receipt.
+            self.validate_restored_transcript(conversation_id)?;
+            let latest = self.inspect_latest_entries(conversation_id, 1)?;
+            if latest
+                .last()
+                .is_some_and(|last| entries[0].sequence <= last.sequence)
+            {
+                // Older receipts can precede arbitrarily many later rows.
+                // Scan off-actor rather than allocating from an untrusted
+                // sequence gap or silently dropping the older prefix.
+                let archive = self.inspect(conversation_id)?;
+                if archive.first().is_some_and(|first| first.sequence != 1) {
+                    return Err(MezError::invalid_state(
+                        "transcript archive is missing its leading history",
+                    ));
+                }
+                archive
+            } else {
+                latest
+            }
+        } else {
+            Vec::new()
+        };
+        if durable
+            .iter()
+            .any(|row| row.conversation_id != conversation_id)
+            || durable
+                .windows(2)
+                .any(|pair| pair[0].sequence.checked_add(1) != Some(pair[1].sequence))
+        {
+            return Err(MezError::invalid_state(
+                "transcript archive contains missing, reordered, or foreign entries",
+            ));
+        }
+        let mut next_sequence = durable
+            .last()
+            .map_or(1, |row| row.sequence.saturating_add(1));
+        let mut matched = false;
+        for &entry in entries {
+            if let Some(existing) = durable.iter().find(|row| row.sequence == entry.sequence) {
+                if existing != entry {
+                    return Err(MezError::conflict(
+                        "transcript append sequence conflicts with durable contents",
+                    ));
+                }
+                matched = true;
+                continue;
+            }
+            if entry.sequence != next_sequence {
+                return Err(if entry.sequence > next_sequence {
+                    MezError::invalid_state(
+                        "transcript append is waiting for an earlier durable entry",
+                    )
+                } else {
+                    MezError::conflict(
+                        "transcript append sequence conflicts with durable chronology",
+                    )
+                });
+            }
+            bytes = bytes.saturating_add(self.append_one_locked(entry)?);
+            next_sequence = next_sequence.saturating_add(1);
+            #[cfg(test)]
+            if self
+                .fail_transcript_append_after_first
+                .swap(false, Ordering::SeqCst)
+            {
+                return Err(MezError::from(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "injected transcript append failure after first commit",
+                )));
+            }
+        }
+        if matched {
+            // A visible record need not have survived sync or its summary
+            // and catalog writes. Repair these under the append lock before
+            // acknowledging an identical uncertain batch.
+            std_fs::File::open(&path)?.sync_all()?;
+            set_private_file_permissions(&path)?;
+            if let Some(mut summary) = summarize_conversation(self.inspect(conversation_id)?) {
+                summary.project_root = saved_session_project_root(summary.directory.as_deref());
+                self.write_summary_sidecar(&summary)?;
+            }
+            self.upsert_catalog_from_files(conversation_id, None)?;
         }
         Ok(bytes)
     }
@@ -5388,6 +5409,18 @@ impl AgentTranscriptStore {
         Ok(metadata.version == 1
             && metadata.conversation_kind == "subagent"
             && (metadata.subagent_lineage.is_none() || metadata.allowed_actions.is_none()))
+    }
+
+    /// Reports whether durable metadata requires its compaction sidecar.
+    /// Initial append settlement calls this under the conversation mutation
+    /// lease so a sidecar-before-marker failure cannot retire its recovery owner.
+    pub(super) fn compaction_epoch_marker_is_committed(
+        &self,
+        conversation_id: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .read_conversation_metadata_locked(conversation_id)?
+            .compaction_epoch_required)
     }
 
     /// Reads metadata while the caller owns the conversation mutation lock.

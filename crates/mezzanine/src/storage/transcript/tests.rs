@@ -6,6 +6,8 @@ mod active_metadata;
 mod failure_countdowns;
 /// Forked active projections preserve source-owned compaction authority.
 mod fork_epoch;
+/// Projection-bearing append admission and complete crash recovery.
+mod initial_projection;
 /// Immutable presentation occurrence encoding and fork provenance.
 mod occurrence;
 /// Prefix publication compares both frozen epoch authority and physical rows.

@@ -73,6 +73,11 @@ invalidates preparation even if its retained row count stays the same.
 Model replay reads its compaction projection and checked transcript window
 together, so an epoch change cannot splice one summary to a separately read tail.
 Captured pending rows remain distinct from durable history until storage settles.
+Initial projection persistence retains the inherited summary together with its
+exact raw rows, including a genuinely empty tail. A partial write remains
+recoverable and cannot acknowledge a complete inherited context or overwrite a
+different saved summary. Recovery does not ask a model to recreate that context
+or execute historical actions again.
 
 Rows appended after a compactor's source was captured stay in retained history.
 Runtime counters follow assigned sequence positions, including intervening writers;
