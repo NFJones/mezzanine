@@ -1276,6 +1276,24 @@ native authority changes, without giving the stale helper a durable receipt.
 CLI failures return fixed accepted:false/durable:false; success rebuilds only
 typed public receipts. This is a common reporting primitive, not vendor callback
 association or exhaustive spend certification.
+`agent/external/curated-usage-gap` is a separate Claude-only diagnostic method.
+Its parameters are `harness: "claude"`, original `external_session_id`,
+`generation`, `observer_witness`, and one fixed `reason`: `request-readiness`,
+`finalized-counters`, `durable-acknowledgment`, or `capacity`. The fixed
+`harness-source` capsule uses `operation: "curated-usage-gap"` and the same public
+selectors/reason, without a harness override. Unknown/duplicate/extra fields and
+arbitrary vendor text are rejected. Original direct-child helper/creator/root,
+UID, generation/witness, current binding and worker/actor deadline qualification
+remain mandatory. A matching `{ "observed": true, "reason": "..." }` acknowledges
+only this diagnostic; unavailable CLI output is `{ "observed": false }`.
+An accepted diagnostic remains visible for its current observer epoch even after
+later valid reports. Explicit observer rotation resets this ephemeral state.
+The operation cannot allocate/restore a source, charge or erase expense, change
+presentation, refresh heartbeat proof or renew a lease. The installed sender
+coalesces at most four fixed pending reasons; later genuine observations may
+redisclose after earlier custody settles. There is no timer retry or durable
+diagnostic spool, and loss of the diagnostic receipt is not proof of non-delivery.
+
 The common curated SDK adapter binds the portable core to fixed original-observer
 usage capsules. Its caller owns the exact admitted lifetime and fixed helper
 runner; it captures public selectors once and queues at most16 operations. Stop

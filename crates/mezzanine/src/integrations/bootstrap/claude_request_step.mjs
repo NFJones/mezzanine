@@ -40,15 +40,22 @@ on('turn.step', async function* ($, e, next) {
   let step;
   let accounting;
   let ticket;
+  let gap;
+  let admissionGap = "request-readiness";
+  let captured;
+  let alreadyPending = false;
+  let finalized = false;
   try {
-    const captured = captureClaudeStep(session, e);
+    __MEZ_GAP_BODY__
+    captured = captureClaudeStep(session, e);
     if (captured) await retryRequestReport(stepOwner, stepObserver);
+    if (captured && activeRequestProducers + pendingRequestReports.size >= 16) admissionGap = "capacity";
     if (captured && activeRequestProducers + pendingRequestReports.size < 16 && stepObserver !== undefined
         && observerLifetime === stepOwner && boundSession === session && stepOwner.receipt === stepObserver) {
       activeRequestProducers++;
       reserved = true;
       step = await identifyClaudeStep(captured);
-      const alreadyPending = [...pendingRequestReports].some(pending => pending.owner === stepOwner
+      alreadyPending = [...pendingRequestReports].some(pending => pending.owner === stepOwner
         && pending.observer === stepObserver && pending.ticket.request_id === step.request_id);
       if (!alreadyPending && observerLifetime === stepOwner && boundSession === session && stepOwner.receipt === stepObserver) {
         const observerLifetime = stepOwner;
@@ -58,9 +65,13 @@ on('turn.step', async function* ($, e, next) {
       }
     }
   } catch { /* unavailable telemetry must still delegate the vendor request */ }
+  if (captured && !ticket && !alreadyPending) {
+    try { await gap?.observe(admissionGap); } catch { /* diagnostic loss stays neutral */ }
+  }
   if (!ticket && reserved) { activeRequestProducers--; reserved = false; }
   try {
     const result = yield* next(e);
+    finalized = true;
     let report;
     let delivery;
     try {
@@ -69,6 +80,10 @@ on('turn.step', async function* ($, e, next) {
         if (report) delivery = await accounting.endRequest(ticket, report);
       }
     } catch { /* counter/transport failure preserves the exact final result */ }
+    try {
+      if (ticket && !report) await gap?.observe("finalized-counters");
+      else if (report && delivery?.durable !== true) await gap?.observe("durable-acknowledgment");
+    } catch { /* diagnostics never alter the delegated result */ }
     if (report && delivery?.durable !== true && observerLifetime === stepOwner
         && boundSession === session && stepOwner.receipt === stepObserver
         && ![...pendingRequestReports].some(pending => pending.owner === stepOwner
@@ -80,6 +95,9 @@ on('turn.step', async function* ($, e, next) {
     }
     return result;
   } finally {
+    if (ticket && !finalized) {
+      try { await gap?.observe("finalized-counters"); } catch { /* original error/cancellation remains unchanged */ }
+    }
     try { if (!retained) { if (ticket) accounting.abandonRequest(ticket); accounting?.stop(); } } catch { /* bounded local cleanup */ }
     if (reserved) activeRequestProducers--;
   }

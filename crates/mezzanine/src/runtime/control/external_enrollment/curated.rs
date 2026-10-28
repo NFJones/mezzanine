@@ -18,6 +18,8 @@ pub(super) struct CuratedObserver {
     pub(super) sequence: u64,
     /// Local monotonic observation time, never a supplied timestamp or lease.
     pub(super) observed_at: Option<Instant>,
+    /// Sticky current-epoch telemetry loss, never freshness or expense evidence.
+    pub(super) usage_gap: Option<crate::integrations::bootstrap::claude_usage_gap::UsageGapReason>,
 }
 
 impl CuratedObserver {
@@ -498,4 +500,15 @@ pub(super) fn public_response(
         "run_id":source.run_generation,"observer_epoch":source.epoch,"observer_instance":source.instance,
         "external_session_id":session,"usage":"unavailable-source-continuity","observer_transport":"unavailable-curated-freshness",
         "expires_at_unix_seconds":binding.expires,"lease_seconds":60}).to_string()
+}
+
+/// Exposes only a fixed current-epoch diagnostic to observational status rows.
+impl EnrollmentBinding {
+    /// Missing counters or acknowledgments cannot be hidden by earlier expense.
+    pub(in crate::runtime::control) fn curated_usage_gap_coverage(&self) -> Option<&'static str> {
+        self.curated_observer
+            .as_ref()?
+            .usage_gap
+            .map(|reason| reason.coverage())
+    }
 }

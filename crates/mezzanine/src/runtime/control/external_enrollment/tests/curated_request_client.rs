@@ -25,7 +25,7 @@ async fn external_curated_request_sdk_client_has_native_durable_ack() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
 async fn external_claude_request_generator_has_native_durable_ack() {
-    qualify_request_client("claude-request-ordinary-fixture.mjs", true, 14).await;
+    qualify_request_client("claude-request-ordinary-fixture.mjs", true, 15).await;
 }
 
 /// Bare production bootstrap must install the actual module consumed by an
@@ -34,7 +34,7 @@ async fn external_claude_request_generator_has_native_durable_ack() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
 async fn external_claude_bare_bootstrap_installed_module_has_native_durable_usage() {
-    qualify_request_client_with_install("claude-request-ordinary-fixture.mjs", true, 14, true)
+    qualify_request_client_with_install("claude-request-ordinary-fixture.mjs", true, 15, true)
         .await;
 }
 
@@ -46,7 +46,7 @@ async fn external_claude_bare_bootstrap_installed_module_has_native_durable_usag
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
 async fn external_claude_installed_pending_outcome_recovers_lost_durable_replies() {
-    qualify_request_client_with_install("claude-pending-ordinary-fixture.mjs", true, 17, true)
+    qualify_request_client_with_install("claude-pending-ordinary-fixture.mjs", true, 18, true)
         .await;
 }
 
@@ -60,7 +60,7 @@ async fn external_claude_installed_pending_outcome_recovers_lost_durable_replies
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
 async fn external_claude_installed_same_id_clear_uses_captured_native_predecessor() {
-    qualify_request_client_with_install("claude-clear-ordinary-fixture.mjs", true, 26, true).await;
+    qualify_request_client_with_install("claude-clear-ordinary-fixture.mjs", true, 27, true).await;
 }
 
 /// Shared owned fixture for the pure runner and full literal generator; only
@@ -79,8 +79,8 @@ async fn qualify_request_client_with_install(
 ) {
     let paired_clear = script_name == "claude-clear-ordinary-fixture.mjs";
     let pending_recovery = script_name == "claude-pending-ordinary-fixture.mjs";
-    assert!(!paired_clear || (installed && claude && requests == 26));
-    assert!(!pending_recovery || (installed && claude && requests == 17));
+    assert!(!paired_clear || (installed && claude && requests == 27));
+    assert!(!pending_recovery || (installed && claude && requests == 18));
     let node = std::path::PathBuf::from(
         std::env::var_os("MEZ_TEST_NODE_BINARY").expect("explicit offline Node path"),
     );
@@ -190,6 +190,16 @@ async fn qualify_request_client_with_install(
             .set_pane_title_explicit("%1", "Pinned")
             .unwrap();
     }
+    if claude && !installed {
+        std::fs::write(
+            directory.join("claude_usage_gap.mjs"),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/integrations/bootstrap/claude_usage_gap.mjs"
+            )),
+        )
+        .unwrap();
+    }
     let inspection_client = if installed {
         Some(
             fixture
@@ -242,6 +252,21 @@ async fn qualify_request_client_with_install(
         .unwrap();
         assert!(!connection.initialized());
         assert!(connection.caller_client_id().is_none());
+        // The genuine missing-counter outcome has completed before the next
+        // lifecycle helper. Prior reported expense must not hide that loss.
+        if installed && claude && !pending_recovery && ordinal == 9 {
+            let status = handle
+                .execute_agent_shell_command(
+                    inspection_client.as_ref().unwrap().clone(),
+                    "/status".into(),
+                )
+                .await
+                .unwrap();
+            assert!(
+                status.contains("unavailable-claude-usage-finalized-counters"),
+                "missing current counters remained reported coverage"
+            );
+        }
         if installed && ordinal == 4 {
             let status = handle
                 .execute_agent_shell_command(
@@ -312,6 +337,7 @@ async fn qualify_request_client_with_install(
                 .as_ref()
                 .unwrap();
             assert_eq!(source.epoch, 2);
+            assert_eq!(source.curated_usage_gap_coverage(), None);
             assert!(source.usage_owner_is_durable);
             assert_eq!(source.instances.len(), 2);
         }

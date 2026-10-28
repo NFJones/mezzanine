@@ -615,6 +615,17 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         ]),
     },
     ControlMethodSpec {
+        method: "agent/external/curated-usage-gap",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "harness",
+            "observer_witness",
+            "generation",
+            "external_session_id",
+            "reason",
+        ]),
+    },
+    ControlMethodSpec {
         method: "agent/external/curated-usage-end",
         dispatch: ControlDispatchKind::ExternalAgent,
         params_schema: ControlParamsSchema::Allowed(&[

@@ -61,6 +61,9 @@ Shared HTTP execution keeps wire payloads out of transport diagnostics. The
 [authenticated-search foundation](docs/reference-manual/agent-actions.md#http-execution-and-authenticated-search-foundation)
 does not activate paid search or change the default backend.
 
+Ordinary Claude accounting keeps missing-counter or delivery coverage visible
+after earlier reported usage, without changing vendor requests or recorded expense.
+
 Ordinary Pi accounting reports observed auxiliary counters with missing request
 attribution as unavailable coverage while retaining supported assistant usage.
 Fresh observations can redisclose that gap after receiver-side state loss.

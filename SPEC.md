@@ -2168,6 +2168,23 @@ final usage MUST NOT fabricate a retained outcome. No timer, store persistence,
 provider replay or no-gap process/reload/restart guarantee is introduced. Exact
 revision1–4 module/client/step inputs MUST remain independently frozen or guarded
 for same-helper upgrades; receipt paths cannot authenticate executable relocation.
+Claude revision7 MUST disclose fixed request coverage gaps through its exact
+native-qualified original curated observer: request readiness, missing/invalid
+final counters (including error/cancellation without final usage), unknown durable
+acknowledgment, or active/pending capacity. Reasons MUST be a closed grammar,
+never vendor text. One original observer MAY queue at most one copy of each of
+four fixed reasons; queued/in-flight copies coalesce, and later genuine facts MAY
+redisclose after custody settles. Unknown/child callbacks MUST remain inert.
+A matching typed diagnostic receipt establishes observation only, never expense
+commitment. Native helper/creator/root/generation/witness/deadline fences MUST
+precede publication. Gap facts MUST NOT refresh proof/leases, change lifecycle or
+presentation, allocate a source, mutate expense or clear pending reports.
+Status MUST prefer an accepted current-epoch gap over earlier reported expense;
+a subsequent report MUST NOT erase that gap. Explicit observer rotation resets
+this ephemeral diagnostic; old owners cannot contaminate the successor. There
+is no durable diagnostic spool, timer retry, source revival or gap-free delivery
+guarantee. Exact revision6 module/step snapshots MUST preserve prior ownership;
+shared request-accounting bytes and configuration schema remain unchanged.
 The installed shared request client MUST retain only validated content-free
 reports and client-local tickets captured before genuine new requests. It MUST
 refuse beyond128 active tickets without silently evicting unacknowledged expense.

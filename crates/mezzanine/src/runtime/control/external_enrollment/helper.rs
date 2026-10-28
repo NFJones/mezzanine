@@ -25,6 +25,8 @@ pub(super) struct HelperPresentation {
     usage_begin: Option<super::helper_usage::HelperUsageBegin>,
     /// Shared ledger reservation; native observation must precede execution.
     pub(super) usage_end: Option<Box<super::super::external_usage::ExternalUsageWork>>,
+    /// Fixed diagnostic only; native worker and actor fences remain mandatory.
+    usage_gap: Option<crate::integrations::bootstrap::claude_usage_gap::UsageGapReason>,
     /// Metadata-only original Codex callback; daemon owns its sequence/replay fence.
     pub(super) codex: Option<super::codex::CodexEvent>,
     /// Separate classic Copilot semantics; only native settlement permits effects.
@@ -92,6 +94,7 @@ impl RuntimeSessionService {
                 | "agent/external/curated-heartbeat"
                 | "agent/external/curated-usage-begin"
                 | "agent/external/curated-usage-end"
+                | "agent/external/curated-usage-gap"
         ) || connection.initialized()
         {
             return Err(MezError::forbidden(
@@ -122,6 +125,7 @@ impl RuntimeSessionService {
         let heartbeat = request.method == "agent/external/curated-heartbeat";
         let usage_begin = request.method == "agent/external/curated-usage-begin";
         let usage_end = request.method == "agent/external/curated-usage-end";
+        let usage_gap_method = request.method == "agent/external/curated-usage-gap";
         if heartbeat
             && !params
                 .get("sequence")
@@ -136,6 +140,7 @@ impl RuntimeSessionService {
             || heartbeat
             || usage_begin
             || usage_end
+            || usage_gap_method
         {
             let harness = text(&params, "harness", 64)?;
             crate::integrations::harness_policy::require_active_external_harness(&harness)?;
@@ -149,7 +154,7 @@ impl RuntimeSessionService {
                 self.reconcile_external_agent_registration(candidate);
             }
             let targets = &self.control.external_agents().enrollments.helper_targets;
-            if heartbeat || usage_begin || usage_end {
+            if heartbeat || usage_begin || usage_end || usage_gap_method {
                 targets.select_witness(
                     *uid,
                     &harness,
@@ -166,7 +171,8 @@ impl RuntimeSessionService {
         if (request.method == "agent/external/helper-observe"
             || heartbeat
             || usage_begin
-            || usage_end)
+            || usage_end
+            || usage_gap_method)
             && text(&params, "observer_witness", 64)? != observer_witness(digest)
         {
             return Err(MezError::forbidden(
@@ -200,7 +206,7 @@ impl RuntimeSessionService {
             .as_ref()
             .filter(|registration| registration.external_session_id == session_id)
             .ok_or_else(|| MezError::forbidden("external helper session unavailable"))?;
-        if heartbeat
+        if (heartbeat || usage_gap_method)
             && (binding.harness != "claude"
                 || enrollment.curated_observer.is_none()
                 || !matches!(enrollment.producer, ProducerEvidence::VerifiedParent(_)))
@@ -214,6 +220,21 @@ impl RuntimeSessionService {
                 "external Pi lifecycle owns presentation sequence",
             ));
         }
+        let usage_gap = if usage_gap_method {
+            Some(
+                serde_json::from_value::<
+                    crate::integrations::bootstrap::claude_usage_gap::UsageGapReason,
+                >(
+                    params
+                        .get("reason")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+                .map_err(|_| MezError::invalid_args("curated usage coverage reason unavailable"))?,
+            )
+        } else {
+            None
+        };
         let usage_begin = if usage_begin {
             Some(super::helper_usage::HelperUsageBegin::capture(
                 self,
@@ -270,6 +291,7 @@ impl RuntimeSessionService {
                 heartbeat,
                 usage_begin,
                 usage_end: None,
+                usage_gap,
                 codex: None,
                 copilot: None,
                 cursor: None,
@@ -428,6 +450,18 @@ impl RuntimeSessionService {
                 ));
             }
             return self.commit_external_codex_observation(helper.digest, &work.session_id, event);
+        }
+        if let Some(reason) = helper.usage_gap {
+            let observer = self
+                .control
+                .external_agents_mut()
+                .bindings
+                .get_mut(&helper.digest)
+                .and_then(|binding| binding.enrollment.as_mut())
+                .and_then(|source| source.curated_observer.as_mut())
+                .ok_or_else(|| MezError::forbidden("curated coverage owner unavailable"))?;
+            observer.usage_gap = Some(reason);
+            return Ok(serde_json::json!({"observed":true,"reason":reason}).to_string());
         }
         if helper.heartbeat {
             let sequence = params

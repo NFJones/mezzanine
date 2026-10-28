@@ -13,6 +13,7 @@ const { register } = await import(pathToFileURL(`${directory}/register.mjs`));
 const exec = promisify(execFile), hooks = new Map();
 register((name, handler) => hooks.set(name, handler));
 let helpers = 0, cancelled = false, fixedHelper;
+const coverageGaps = [];
 const sources = [], timers = [];
 const sdk = { process: { run: async (argv, options) => {
   helpers++;
@@ -20,6 +21,11 @@ const sdk = { process: { run: async (argv, options) => {
   execution.child.stdin.end(options.stdin ?? '');
   const result = await execution;
   assert.equal(result.stderr, '');
+  if (argv[1] === 'harness-source' && JSON.parse(argv[2]).operation === 'curated-usage-gap') {
+    const capsule = JSON.parse(argv[2]);
+    assert.deepEqual(JSON.parse(result.stdout), { observed: true, reason: capsule.reason });
+    coverageGaps.push(capsule);
+  }
   if (argv[1] === 'harness-source' && JSON.parse(argv[2]).operation === undefined) {
     const source = JSON.parse(result.stdout);
     assert.equal(source.registered, true);
@@ -50,7 +56,9 @@ assert.equal(helpers, 8);
 const missing = Object.freeze({ ...final, index: 1, usage: null });
 const stream = hooks.get('turn.step')(sdk, { turnId: 'turn-a', index: 1 }, async function* () { return missing; });
 assert.equal((await stream.next()).value, missing);
-assert.equal(helpers, 9);
+assert.equal(helpers, 10);
+assert.equal(coverageGaps.length, 1);
+assert.equal(coverageGaps[0].reason, "finalized-counters");
 for (const [name, extra] of [
   ['UserPromptSubmit', { prompt: 'PRIVATE' }],
   ['Notification', { notification_type: 'permission_prompt', message: 'PRIVATE' }],
@@ -61,13 +69,13 @@ for (const [name, extra] of [
     { session_id: 'session-a', hook_event_name: name, ...extra }, async () => unchanged), unchanged);
 }
 await hooks.get('classic.SessionEnd')(sdk, { session_id: 'session-a', hook_event_name: 'SessionEnd', reason: 'clear' }, async () => unchanged);
-assert.equal(helpers, 14);
+assert.equal(helpers, 15);
 assert.equal(cancelled, true);
 if (pairedClear) {
   assert.equal(await hooks.get('classic.SessionStart')(sdk, {
     session_id: 'session-a', hook_event_name: 'SessionStart', source: 'clear',
   }, async () => unchanged), unchanged);
-  assert.equal(helpers, 16);
+  assert.equal(helpers, 17);
   assert.equal(sources.length, 2);
   assert.equal(sources[1].agent_id, sources[0].agent_id);
   assert.equal(sources[1].run_id, sources[0].run_id);
@@ -79,7 +87,7 @@ if (pairedClear) {
   await hooks.get('classic.SessionStart')(sdk, {
     session_id: 'session-a', hook_event_name: 'SessionStart', source: 'clear',
   }, async () => unchanged);
-  assert.equal(helpers, 16, 'coalesced clear cannot re-admit');
+  assert.equal(helpers, 17, 'coalesced clear cannot re-admit');
   // Already committed request identity stays inert across the qualified epoch
   // change; one distinct synthetic request may incur new usage exactly once.
   for (const turnId of ['turn-a', 'turn-clear']) {
@@ -92,23 +100,23 @@ if (pairedClear) {
     const completed = await stream.next();
     assert.equal(completed.done, true); assert.equal(completed.value, outcome);
   }
-  assert.equal(helpers, 22);
+  assert.equal(helpers, 23);
   await timers[0].callback();
-  assert.equal(helpers, 22, 'old queued timer must remain inert');
+  assert.equal(helpers, 23, 'old queued timer must remain inert');
   const oldProof = await sdk.process.run([fixedHelper, 'harness-source', JSON.stringify({
     operation: 'curated-heartbeat', external_session_id: sources[0].external_session_id,
     generation: sources[0].generation, observer_witness: sources[0].observer_witness, sequence: 1,
   })], { timeoutMs: 3000 });
   assert.equal(JSON.parse(oldProof.stdout).observed, false);
   await timers[1].callback();
-  assert.equal(helpers, 24, 'fresh timer uses the successor witness');
+  assert.equal(helpers, 25, 'fresh timer uses the successor witness');
   await hooks.get('classic.UserPromptSubmit')(sdk, {
     session_id: 'session-a', hook_event_name: 'UserPromptSubmit', prompt: 'PRIVATE',
   }, async () => unchanged);
   await hooks.get('classic.SessionEnd')(sdk, {
     session_id: 'session-a', hook_event_name: 'SessionEnd', reason: 'logout',
   }, async () => unchanged);
-  assert.equal(helpers, 26);
+  assert.equal(helpers, 27);
   assert.equal(timers[1].cancelled, true);
 }
 process.stdout.write('{"qualified":true}\n');

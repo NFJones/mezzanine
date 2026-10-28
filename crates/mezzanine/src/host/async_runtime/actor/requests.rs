@@ -333,6 +333,7 @@ impl AsyncRuntimeSessionActor {
                 | "agent/external/curated-usage-begin"
                 | "agent/external/helper-presentation"
                 | "agent/external/curated-usage-end"
+                | "agent/external/curated-usage-gap"
                 | "agent/external/helper-observe"
                 | "agent/external/codex-observe"
                 | "agent/external/copilot-observe"
@@ -354,6 +355,7 @@ impl AsyncRuntimeSessionActor {
                 | "agent/external/curated-heartbeat"
                 | "agent/external/curated-usage-begin"
                 | "agent/external/curated-usage-end"
+                | "agent/external/curated-usage-gap"
         ) {
             self.service
                 .prepare_external_helper_presentation(&request, connection)

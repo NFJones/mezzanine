@@ -71,7 +71,7 @@ case is qualified before adding shared authored members.
 
 | Harness / ordinary command | Offline installed-source evidence | Accounting boundary |
 | --- | --- | --- |
-| Claude / `claude` | Child discovers installed skill/plugin/hooks metadata; SDK-shaped loader shim executes the installed module, real native helper ingress and local timer cancellation | Synthetic current-request final outcomes commit once on replay; missing usage stays unknown. Not an actual Claude vendor-loader or paid-request check. Native retirement after creator exit is separate from local SessionEnd. |
+| Claude / `claude` | Child discovers installed skill/plugin/hooks metadata; SDK-shaped loader shim executes the installed module, real native helper ingress and local timer cancellation | Synthetic current-request final outcomes commit once on replay; missing usage stays unknown and reports a fixed current-epoch coverage gap after prior expense. Not an actual Claude vendor-loader or paid-request check. Native retirement after creator exit is separate from local SessionEnd. |
 | Codex / `codex` | Child reads installed hooks.json and executes exact commands; native enrollment, lifecycle and exact SessionEnd retirement | Hook counters/selected model/context totals do not bill. Separate OTel counters exist, but requesting-client/request/origin/privacy association is not qualified here. |
 | Copilot / `copilot` | Child discovers installed hooks/mezzanine.json exec/args; native lifecycle and exact SessionEnd retirement | `unavailable-safe-activation`: no safe ordinary persistent OTel activation/native correlation is supplied or enabled by this fixture. Existing exporters are preserved. |
 | Cursor / `agent` | Child reads installed hooks.json and executes exact ordinary CLI hook commands; native lifecycle and exact SessionEnd retirement | `unavailable-counter-schema`: exact CLI counter/cache/multiplicity/native-origin evidence remains unqualified. No forced print mode or IDE-counter substitution. |
@@ -818,7 +818,7 @@ repair. Versions 2–7 cannot acquire this ownership by relabelling a journal;
 existing historical targets retain their original semantics. Receipt schema stays
 1 and the Mezzanine configuration schema is unchanged.
 
-`mez bootstrap claude` installs an eight-file observational mod at the selected
+`mez bootstrap claude` installs a nine-file observational mod at the selected
 `CLAUDE_CONFIG_DIR` or `~/.claude` root's `skills/mezzanine-telemetry/`. The vendor's
 ordinary skills-directory loader discovers it without `--plugin-dir`, a Mez
 wrapper, fd3 or launcher helper environment. The literal SDK source pins the
@@ -853,6 +853,21 @@ new observer. Stop/replacement/clear/proof closure fences retained work. Exact
 revision1–4 source snapshots remain safely upgradeable. This is process-local
 retry only: no timer, durable outbox, reload/restart or cross-process continuation
 guarantee is added; absent later qualified callbacks, delivery remains unknown.
+Revision7 also reports fixed missing-coverage reasons under the original native
+observer: request readiness, finalized counters, durable acknowledgment, or finite
+metadata capacity. `/status` shows `unavailable-claude-usage-*` even after earlier
+requests reported expense; later successful reports retain that current-epoch
+gap. Errors or cancellation without a final usage result disclose missing
+counters without charging invented usage or changing the delegated result.
+The diagnostic sender coalesces only queued/in-flight copies of each of four
+fixed facts. A later genuine observation can redisclose after prior custody
+settles. Its typed observation receipt is separate from durable expense ACKs.
+It does not renew proof/leases, alter lifecycle/title, allocate source authority,
+retry provider work or discard pending reports. Native generation/witness and
+creator/root fences still apply, and a rotated observer starts its own diagnostic
+state. Diagnostic delivery can itself be unavailable; it is not a durable spool
+or an exact count of lost reports. Exact revision6 and earlier bundles remain
+upgradeable; no new Mezzanine configuration or vendor enablement is added.
 Focused Linux acceptance qualifies the unchanged bare-installed module's terminal
 negative-proof cancellation/no-helper/no-re-admission behavior while its actual
 Node creator remains alive; deterministic proof/lease aging is not wall-clock

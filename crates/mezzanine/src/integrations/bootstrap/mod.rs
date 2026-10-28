@@ -11,6 +11,8 @@
 mod adoption;
 /// Owns the documented ordinary Claude user-root mod bundle, not vendor settings.
 pub(crate) mod claude_artifact;
+/// Fixed request-loss reasons, independent of expense and lifecycle authority.
+pub(crate) mod claude_usage_gap;
 #[allow(
     dead_code,
     reason = "pinned projection awaits launch-bound vendor qualification"
@@ -172,6 +174,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     if manifest.harness == "claude" {
         return if Some(manifest) == claude_artifact::manifest().as_ref() {
             [
+                claude_artifact::historical_coverage_manifest(),
                 claude_artifact::historical_receipt_manifest(),
                 claude_artifact::historical_proof_closure_manifest(),
                 claude_artifact::historical_paired_clear_manifest(),

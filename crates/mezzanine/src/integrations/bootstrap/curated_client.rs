@@ -239,7 +239,7 @@ pub(super) fn historical_claude_module_v5(helper: &std::path::Path) -> Result<St
     historical_claude_module_v4(helper)?;
     for (bytes, expected) in [
         (
-            include_bytes!("curated_module.mjs").as_slice(),
+            include_bytes!("history/curated_module_claude_v6.mjs").as_slice(),
             "87db659ad7a77fc35178e6cbdf3840028129f056aa7ac1e12de673b484386ae2",
         ),
         (
@@ -247,7 +247,7 @@ pub(super) fn historical_claude_module_v5(helper: &std::path::Path) -> Result<St
             "1376398079a8c98804ca77902589ce1fb875cff28d63ceb383e6aabfef2b15e0",
         ),
         (
-            include_bytes!("claude_request_step.mjs").as_slice(),
+            include_bytes!("history/claude_request_step_v6.mjs").as_slice(),
             "8e2b9382cfaba48af30e314fe394558d61e549e92aff96862c4984b6b91bd159",
         ),
     ] {
@@ -261,7 +261,15 @@ pub(super) fn historical_claude_module_v5(helper: &std::path::Path) -> Result<St
             ));
         }
     }
-    module_source(helper, 10_000)
+    compose_module(
+        helper,
+        10_000,
+        include_str!("history/curated_module_claude_v6.mjs"),
+        true,
+        true,
+        include_str!("curated_client.mjs"),
+        include_str!("history/claude_request_step_v6.mjs"),
+    )
 }
 
 /// One-pass insertion preserves literal helper filenames even when they contain
@@ -288,6 +296,18 @@ fn compose_module(
     let (step_before, step_after) = step_template
         .split_once("__MEZ_REQUEST_BODY__")
         .ok_or_else(|| MezError::invalid_state("Claude request runner marker unavailable"))?;
+    let step_before = if let Some((before, after)) = step_before.split_once("__MEZ_GAP_BODY__") {
+        let quoted = serde_json::to_string(
+            helper
+                .to_str()
+                .ok_or_else(|| MezError::invalid_args("Claude helper unavailable"))?,
+        )
+        .map_err(|_| MezError::invalid_args("Claude helper unavailable"))?;
+        let gap = include_str!("claude_usage_gap_runner.mjs").replace("__MEZ_HELPER__", &quoted);
+        format!("{before}{gap}{after}")
+    } else {
+        step_before.to_string()
+    };
     let step = format!("{step_before}{request}{step_after}");
     let (before, tail) = template
         .split_once("__MEZ_SOURCE_BODY__")

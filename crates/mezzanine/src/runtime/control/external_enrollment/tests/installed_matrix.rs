@@ -398,7 +398,7 @@ fn inspect_browser(service: &mut RuntimeSessionService, primary: &mez_core::ids:
         .execute_agent_shell_command(primary, "/status")
         .unwrap();
     assert!(
-        status.contains("request-bound-external-reported"),
+        status.contains("unavailable-claude-usage-finalized-counters"),
         "{status}"
     );
     let target = service
@@ -595,7 +595,14 @@ async fn qualify_matrix() {
     }
     for row in matrix.service.external_agent_rows() {
         assert_eq!(row["controls"], serde_json::json!([]));
-        if row["harness"] != "claude" {
+        if row["harness"] == "claude" {
+            // The child completed a real missing-counter callback after its
+            // durably acknowledged expense; browser/status must expose both.
+            assert_eq!(
+                row["usage_coverage"],
+                "unavailable-claude-usage-finalized-counters"
+            );
+        } else {
             assert_ne!(row["usage_coverage"], "request-bound-external-reported");
         }
     }
@@ -605,7 +612,7 @@ async fn qualify_matrix() {
         .unwrap();
     assert!(status.contains("response-model"), "{status}");
     assert!(
-        status.contains("request-bound-external-reported"),
+        status.contains("unavailable-claude-usage-finalized-counters"),
         "{status}"
     );
     for pane in ["%1", "%2"] {

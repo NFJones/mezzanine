@@ -103,6 +103,13 @@ impl LaunchBinding {
         {
             return reason;
         }
+        if let Some(reason) = self
+            .enrollment
+            .as_ref()
+            .and_then(|enrollment| enrollment.curated_usage_gap_coverage())
+        {
+            return reason;
+        }
         if self
             .enrollment
             .as_ref()

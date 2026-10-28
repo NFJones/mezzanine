@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 
 const [directory] = process.argv.slice(2);
 const { register } = await import(pathToFileURL(`${directory}/register.mjs`));
-const exec = promisify(execFile), hooks = new Map(), endings = [], timers = [];
+const exec = promisify(execFile), hooks = new Map(), endings = [], timers = [], coverageGaps = [];
 register((name, handler) => hooks.set(name, handler));
 let helpers = 0, lost = 0, delegates = 0;
 const sdk = { process: { run: async (argv, options) => {
@@ -23,6 +23,10 @@ const sdk = { process: { run: async (argv, options) => {
     if (capsule.operation === undefined) {
       assert.equal(receipt.registered, true);
       assert(!Object.hasOwn(receipt, 'launch_token'));
+    }
+    if (capsule.operation === 'curated-usage-gap') {
+      assert.deepEqual(receipt, { observed: true, reason: capsule.reason });
+      coverageGaps.push(capsule);
     }
     if (capsule.operation === 'curated-usage-end') {
       assert.equal(receipt.durable, true, 'expense really committed before the reply was lost');
@@ -68,7 +72,9 @@ assert.deepEqual(endings[1], endings[0]);
 assert.notEqual(endings[3].event_id, endings[0].event_id);
 assert.equal(endings[3].observer_witness, endings[0].observer_witness);
 assert(!JSON.stringify(endings).includes('PRIVATE'));
-assert.equal(helpers, 12);
+assert.equal(helpers, 13);
+assert.equal(coverageGaps.length, 1);
+assert.equal(coverageGaps[0].reason, "durable-acknowledgment");
 for (const [name, extra] of [
   ['UserPromptSubmit', { prompt: 'PRIVATE' }],
   ['Notification', { notification_type: 'permission_prompt', message: 'PRIVATE' }],
@@ -80,6 +86,6 @@ for (const [name, extra] of [
 }
 assert.equal(await hooks.get('classic.SessionEnd')(sdk,
   { session_id: 'session-a', hook_event_name: 'SessionEnd', reason: 'logout' }, async () => unchanged), unchanged);
-assert.equal(helpers, 17);
+assert.equal(helpers, 18);
 assert.equal(timers.length, 1); assert.equal(timers[0].cancelled, true);
 process.stdout.write('{"qualified":true}\n');

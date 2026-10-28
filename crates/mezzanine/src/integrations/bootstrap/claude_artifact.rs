@@ -17,7 +17,7 @@ pub(super) fn manifest() -> Option<Manifest> {
 /// Compiles the exact private mod graph for a trusted code-owned helper path.
 /// The public CLI supplies only current_exe; tests qualify a built fixed helper.
 pub(crate) fn manifest_for_helper(helper: &std::path::Path) -> Result<Manifest> {
-    build_manifest(helper, 6)
+    build_manifest(helper, 7)
 }
 
 /// Exact revision-1 ownership for the same fixed installing executable. No
@@ -50,6 +50,12 @@ pub(super) fn historical_receipt_manifest() -> Option<Manifest> {
     build_manifest(&std::env::current_exe().ok()?, 5).ok()
 }
 
+/// Exact revision-6 before current-epoch request coverage diagnostics.
+/// The module matches revision5; the bounded receipt client remains current.
+pub(super) fn historical_coverage_manifest() -> Option<Manifest> {
+    build_manifest(&std::env::current_exe().ok()?, 6).ok()
+}
+
 /// Builds only current or guarded historical compiled private artifacts.
 fn build_manifest(helper: &std::path::Path, revision: u32) -> Result<Manifest> {
     let prefix = "skills/mezzanine-telemetry";
@@ -58,8 +64,8 @@ fn build_manifest(helper: &std::path::Path, revision: u32) -> Result<Manifest> {
         2 => super::curated_client::historical_claude_module_v2(helper)?,
         3 => super::curated_client::historical_claude_module_v3(helper)?,
         4 => super::curated_client::historical_claude_module_v4(helper)?,
-        5 => super::curated_client::historical_claude_module_v5(helper)?,
-        6 => super::curated_client::module_source(helper, 10_000)?,
+        5 | 6 => super::curated_client::historical_claude_module_v5(helper)?,
+        7 => super::curated_client::module_source(helper, 10_000)?,
         _ => {
             return Err(crate::error::MezError::invalid_state(
                 "Claude compiled revision unavailable",
@@ -74,6 +80,12 @@ fn build_manifest(helper: &std::path::Path, revision: u32) -> Result<Manifest> {
         ("hooks/claude_observer.mjs", if revision == 1 { include_bytes!("history/claude_observer_v1.mjs").to_vec() } else { include_bytes!("claude_observer.mjs").to_vec() }),
         ("hooks/claude_request.mjs", include_bytes!("claude_request.mjs").to_vec()),
     ];
+    if revision >= 7 {
+        files.push((
+            "hooks/claude_usage_gap.mjs",
+            include_bytes!("claude_usage_gap.mjs").to_vec(),
+        ));
+    }
     for (name, source) in super::curated_client::request_accounting_sources() {
         let path = match name {
             "curated_request_accounting.mjs" => "hooks/curated_request_accounting.mjs",
@@ -109,9 +121,10 @@ mod tests {
         reconciliation::Artifact,
     };
 
-    /// The receipt-cache revision changes only the owned accounting module and
-    /// receipt. The previous current graph remains independently recognizable;
-    /// authored files and its already-qualified lifecycle module are preserved.
+    /// The prior receipt-cache graph remains independently recognizable. Its
+    /// exact accounting snapshot upgrades through the current supported private
+    /// installer, including only the enumerated owned current-source changes;
+    /// authored files and all remaining prior siblings stay preserved.
     #[test]
     fn bootstrap_claude_settled_receipt_upgrade_preserves_previous_graph() {
         use super::super::installer::{Operation, plan_private};
@@ -129,7 +142,10 @@ mod tests {
                 bytes: include_bytes!("history/request_accounting_pre_receipt_bound.mjs").to_vec(),
             }
         );
-        assert!(super::super::compiled_history(&current).contains(&previous));
+        assert!(
+            super::super::compiled_history(&compiled_manifest("claude", None).unwrap())
+                .contains(&previous)
+        );
         let base = std::env::temp_dir().join(format!(
             "mez-claude-receipt-cache-{}",
             crate::storage::token_usage::new_token_usage_event_id()
@@ -147,6 +163,8 @@ mod tests {
         assert_eq!(
             upgrade.changed_paths(),
             [
+                "skills/mezzanine-telemetry/hooks/claude_usage_gap.mjs",
+                "skills/mezzanine-telemetry/hooks/register.mjs",
                 "skills/mezzanine-telemetry/hooks/request_accounting.mjs",
                 "@mez-bootstrap-receipt/claude",
             ]
@@ -162,14 +180,57 @@ mod tests {
         std::fs::remove_dir_all(base).unwrap();
     }
 
+    /// Revision7 adds only the fixed gap producer and its literal entry wiring.
+    /// Exact revision6 has the old module bytes/graph, shares the current bounded
+    /// accounting client and cannot acquire new source authority from a receipt.
+    #[test]
+    fn bootstrap_claude_usage_gap_revision7_preserves_frozen_revision6() {
+        use sha2::Digest;
+        let current = compiled_manifest("claude", None).unwrap();
+        let previous = super::historical_coverage_manifest().unwrap();
+        assert_eq!((current.revision, previous.revision), (7, 6));
+        assert_eq!((current.entries.len(), previous.entries.len()), (9, 8));
+        for (bytes, expected) in [
+            (
+                include_bytes!("history/curated_module_claude_v6.mjs").as_slice(),
+                "87db659ad7a77fc35178e6cbdf3840028129f056aa7ac1e12de673b484386ae2",
+            ),
+            (
+                include_bytes!("history/claude_request_step_v6.mjs").as_slice(),
+                "8e2b9382cfaba48af30e314fe394558d61e549e92aff96862c4984b6b91bd159",
+            ),
+        ] {
+            assert_eq!(
+                sha2::Sha256::digest(bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+                expected
+            );
+        }
+        for old in &previous.entries {
+            let new = current
+                .entries
+                .iter()
+                .find(|entry| entry.path == old.path)
+                .unwrap();
+            if old.path.ends_with("/register.mjs") {
+                assert_ne!(new.artifact, old.artifact);
+            } else {
+                assert_eq!(new.artifact, old.artifact);
+            }
+        }
+        assert!(super::super::compiled_history(&current).contains(&previous));
+    }
+
     /// The compiled Claude adapter must provide the complete literal mod and
     /// pure siblings at the documented user-root autoload placement, not require
     /// a wrapper, fd3, injected helper environment or authored settings rewrite.
     #[test]
     fn bootstrap_claude_artifact_has_complete_ordinary_autoload_bundle() {
         let manifest = compiled_manifest("claude", None).expect("compiled Claude adapter");
-        assert_eq!(manifest.revision, 6);
-        assert_eq!(manifest.entries.len(), 8);
+        assert_eq!(manifest.revision, 7);
+        assert_eq!(manifest.entries.len(), 9);
         assert!(manifest.entries.iter().all(|entry| {
             entry.path.starts_with("skills/mezzanine-telemetry/")
                 && matches!(entry.artifact, Artifact::File { .. })
@@ -303,6 +364,7 @@ mod tests {
         assert_eq!(
             upgrade.changed_paths(),
             [
+                "skills/mezzanine-telemetry/hooks/claude_usage_gap.mjs",
                 "skills/mezzanine-telemetry/hooks/register.mjs",
                 "skills/mezzanine-telemetry/hooks/request_accounting.mjs",
                 "@mez-bootstrap-receipt/claude",
@@ -336,7 +398,7 @@ mod tests {
         let history = super::super::compiled_history(&current);
         assert_eq!(
             history.iter().map(|m| m.revision).collect::<Vec<_>>(),
-            [5, 4, 3, 2, 1]
+            [6, 5, 4, 3, 2, 1]
         );
         let previous = history
             .iter()
@@ -377,6 +439,7 @@ mod tests {
         assert_eq!(
             upgrade.changed_paths(),
             [
+                "skills/mezzanine-telemetry/hooks/claude_usage_gap.mjs",
                 "skills/mezzanine-telemetry/hooks/register.mjs",
                 "skills/mezzanine-telemetry/hooks/request_accounting.mjs",
                 "@mez-bootstrap-receipt/claude",
@@ -460,7 +523,7 @@ mod tests {
     fn bootstrap_claude_artifact_upgrades_guarded_revision1_exactly() {
         let current = compiled_manifest("claude", None).unwrap();
         let history = super::super::compiled_history(&current);
-        assert_eq!(history.len(), 5);
+        assert_eq!(history.len(), 6);
         let previous = history
             .iter()
             .find(|manifest| manifest.revision == 1)

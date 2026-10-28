@@ -1,3 +1,5 @@
+# Ordinary Claude accounting reports missing-counter/delivery coverage under
+# its original native observer; no additional Mezzanine setting is required.
 # Ordinary Pi auxiliary counters without qualified request attribution remain
 # uncharged and disclose unavailable coverage, including fresh observations
 # after receiver state loss; no separate enablement is needed.

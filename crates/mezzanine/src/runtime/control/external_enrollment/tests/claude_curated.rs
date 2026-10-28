@@ -583,6 +583,14 @@ async fn qualify_curated_probe_with_autoload(
     };
     let (import, create, duplicate, stop) = if owned {
         std::fs::write(
+            directory.join("plugin/hooks/claude_usage_gap.mjs"),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/integrations/bootstrap/claude_usage_gap.mjs"
+            )),
+        )
+        .unwrap();
+        std::fs::write(
             directory.join("plugin/hooks/curated_lifetime.mjs"),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),

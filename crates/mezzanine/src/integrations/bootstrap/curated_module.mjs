@@ -10,6 +10,7 @@ import { createCuratedLifetime } from './curated_lifetime.mjs';
 import { projectClaudeEvent, createClaudeLifecycleSender } from './claude_observer.mjs';
 import { createCuratedRequestAccountingClient } from './curated_request_accounting.mjs';
 import { captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome } from './claude_request.mjs';
+import { createClaudeUsageGapSender } from './claude_usage_gap.mjs';
 
 export function register(on) {
   let observerLifetime = createCuratedLifetime();
@@ -24,6 +25,7 @@ export function register(on) {
   let identitiesExhausted = false;
   let activeRequestProducers = 0;
   let lifecycleSender;
+  let usageGapSender;
 
   on('classic.SessionStart', async ($, e, next) => {
     let fact;

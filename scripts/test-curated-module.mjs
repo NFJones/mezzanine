@@ -9,6 +9,8 @@ import { projectClaudeEvent, createClaudeLifecycleSender } from "../crates/mezza
 import { createCuratedRequestAccountingClient } from "../crates/mezzanine/src/integrations/bootstrap/curated_request_accounting.mjs";
 import { captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome } from "../crates/mezzanine/src/integrations/bootstrap/claude_request.mjs";
 
+import { createClaudeUsageGapSender } from "../crates/mezzanine/src/integrations/bootstrap/claude_usage_gap.mjs";
+
 const template = readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_module.mjs", import.meta.url), "utf8");
 const source = readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_client.mjs", import.meta.url), "utf8");
 const body = source.replace(/__MEZ_[A-Z]+__/g, marker => ({ __MEZ_OWNED__: "true", __MEZ_LIFETIME__: "observerLifetime",
@@ -18,9 +20,10 @@ const code = template.replace(/^import .*;\n/gm, "").replace("export function re
   .replace("__MEZ_SOURCE_BODY__", body)
   .replace("__MEZ_LIFECYCLE_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/claude_lifecycle_runner.mjs", import.meta.url), "utf8").replace("__MEZ_HELPER__", JSON.stringify("/owned/mez")))
   .replace("__MEZ_STEP_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/claude_request_step.mjs", import.meta.url), "utf8")
+    .replace("__MEZ_GAP_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/claude_usage_gap_runner.mjs", import.meta.url), "utf8").replace("__MEZ_HELPER__", JSON.stringify("/owned/mez")))
     .replace("__MEZ_REQUEST_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_request_runner.mjs", import.meta.url), "utf8")
       .replace("__MEZ_HELPER__", JSON.stringify("/owned/mez"))));
-const register = new Function("createCuratedLifetime", "projectClaudeEvent", "createCuratedRequestAccountingClient", "captureClaudeStep", "identifyClaudeStep", "projectClaudeStepOutcome", "createClaudeLifecycleSender", `${code}\nreturn register;`)(createCuratedLifetime, projectClaudeEvent, createCuratedRequestAccountingClient, captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome, createClaudeLifecycleSender);
+const register = new Function("createCuratedLifetime", "projectClaudeEvent", "createCuratedRequestAccountingClient", "captureClaudeStep", "identifyClaudeStep", "projectClaudeStepOutcome", "createClaudeLifecycleSender", "createClaudeUsageGapSender", `${code}\nreturn register;`)(createCuratedLifetime, projectClaudeEvent, createCuratedRequestAccountingClient, captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome, createClaudeLifecycleSender, createClaudeUsageGapSender);
 
 const start = (session = "session-a", extra = {}) => ({ hook_event_name: "SessionStart", session_id: session, source: "startup", ...extra });
 const end = (session = "session-a", extra = {}) => ({ hook_event_name: "SessionEnd", session_id: session, reason: "clear", ...extra });
@@ -42,6 +45,7 @@ function fixture() {
       : capsule.operation === "curated-usage-end"
       ? { accepted: true, durable: true, applied: false, revision: 1,
         coverage: { source: "external-reported", reasoning_known: false } }
+      : capsule.operation === "curated-usage-gap" ? { observed: true, reason: capsule.reason }
       : capsule.operation ? { observed: true, changed: true, sequence: capsule.sequence }
       : { protocol: "external-agent/1", registered: true, controls: [], agent_id: "external-a", generation: 1,
         observer_witness: "a".repeat(64), run_id: 1, observer_epoch: 1, observer_instance: capsule.observer_instance,
@@ -763,7 +767,10 @@ test("Claude request generator fences owner replacement and active pressure", as
   }
   const before = f.calls.length;
   const extra = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 16 }), async function* () { return "unchanged"; });
-  assert.equal((await extra.next()).value, "unchanged"); assert.equal(f.calls.length, before);
+  assert.equal((await extra.next()).value, "unchanged");
+  assert.equal(f.calls.length, before + 1);
+  assert.equal(f.calls.at(-1).operation, "curated-usage-gap");
+  assert.equal(f.calls.at(-1).reason, "capacity");
   await f.invoke(start("session-b"));
   for (const stream of streams) assert.equal((await stream.next()).done, true);
   assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 0);
@@ -798,4 +805,44 @@ test("Claude literal lifecycle captures before next and fences stale status", as
   lateFinish(f.result); await late;
   assert.equal(f.lifecycle.at(-1).external_session_id, "session-b");
   assert.equal(f.lifecycle.at(-1).data.state, "ready");
+});
+
+/** Previously reported expense cannot prove coverage for a later request whose
+ * final counters are absent. The literal delegate/result remain unchanged and
+ * only a fixed metadata-only gap may disclose this loss under the same owner. */
+test("curated Claude missing final counters disclose coverage after prior expense", async () => {
+  const f = fixture();
+  await f.invoke(start());
+  const original = stepResult();
+  let stream = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () { return original; });
+  assert.equal((await stream.next()).value, original);
+  const missing = stepResult({ index: 1, usage: null });
+  stream = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 1 }), async function* () { return missing; });
+  assert.equal((await stream.next()).value, missing);
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 1);
+  const gaps = f.calls.filter(call => call.operation === "curated-usage-gap");
+  assert.equal(gaps.length, 1, "missing current counters were silently ignored");
+  assert.equal(gaps[0].reason, "finalized-counters");
+  assert.equal(gaps[0].external_session_id, "session-a");
+  assert(!JSON.stringify(gaps).includes("PRIVATE"));
+});
+
+/** Missing native readiness still delegates exactly once and cannot invent a
+ * finalized expense. Its original observer receives only the fixed loss reason. */
+test("curated Claude unavailable readiness discloses loss without expense", async () => {
+  const f = fixture(); await f.invoke(start());
+  const run = f.sdk.process.run;
+  f.sdk.process.run = async (argv, options) => {
+    const response = await run(argv, options);
+    return argv[1] === "harness-source" && JSON.parse(argv[2]).operation === "curated-usage-begin"
+      ? { exitCode: 0, stdout: "{}" } : response;
+  };
+  let delegates = 0;
+  const outcome = stepResult();
+  const stream = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () { delegates++; return outcome; });
+  assert.equal((await stream.next()).value, outcome);
+  assert.equal(delegates, 1);
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 0);
+  assert.equal(f.calls.at(-1).operation, "curated-usage-gap");
+  assert.equal(f.calls.at(-1).reason, "request-readiness");
 });
