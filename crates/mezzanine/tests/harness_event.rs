@@ -278,7 +278,7 @@ fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks()
     .unwrap();
     std::fs::write(vendor.join("config.toml"), b"[features]\nhooks = false\n").unwrap();
     let installed = bootstrap(&[]);
-    assert_eq!(installed["manifest_revision"], 4);
+    assert_eq!(installed["manifest_revision"], 5);
     assert_eq!(installed["result"], "installed");
     assert_eq!(installed["runtime_verification"], "not-performed");
     assert_eq!(bootstrap(&[])["result"], "unchanged");
@@ -298,6 +298,23 @@ fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks()
         .as_str()
         .unwrap();
     assert!(!command.contains("MEZ_CODEX_HELPER"));
+    for event in [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PermissionRequest",
+        "PostToolUse",
+        "Stop",
+        "Interrupt",
+        "SessionEnd",
+    ] {
+        let entries = document["hooks"][event].as_array().unwrap();
+        assert_eq!(entries.len(), if event == "SessionStart" { 2 } else { 1 });
+        assert_eq!(
+            entries.last().unwrap()["hooks"][0]["command"].as_str(),
+            Some(command)
+        );
+    }
     for state in ["executable", "nonexecutable", "missing"] {
         if state == "nonexecutable" {
             std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o600)).unwrap();
