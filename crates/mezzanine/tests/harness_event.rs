@@ -278,7 +278,7 @@ fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks()
     .unwrap();
     std::fs::write(vendor.join("config.toml"), b"[features]\nhooks = false\n").unwrap();
     let installed = bootstrap(&[]);
-    assert_eq!(installed["manifest_revision"], 5);
+    assert_eq!(installed["manifest_revision"], 6);
     assert_eq!(installed["result"], "installed");
     assert_eq!(installed["runtime_verification"], "not-performed");
     assert_eq!(bootstrap(&[])["result"], "unchanged");
@@ -307,9 +307,15 @@ fn standalone_codex_bootstrap_pins_literal_helper_and_preserves_authored_hooks()
         "Stop",
         "Interrupt",
         "SessionEnd",
+        "PreModelRequest",
+        "PostModelRequest",
     ] {
         let entries = document["hooks"][event].as_array().unwrap();
         assert_eq!(entries.len(), if event == "SessionStart" { 2 } else { 1 });
+        if matches!(event, "PreModelRequest" | "PostModelRequest") {
+            assert_eq!(entries.last().unwrap()["hooks"][0]["async"], false);
+            assert_eq!(entries.last().unwrap()["hooks"][0]["timeout"], 3);
+        }
         assert_eq!(
             entries.last().unwrap()["hooks"][0]["command"].as_str(),
             Some(command)

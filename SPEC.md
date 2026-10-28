@@ -1246,8 +1246,7 @@ selected-model/error/path/content fields. A child selector MUST remain explicit;
 it grants no parent association. This input has no request ID/index. The pure
 fact MUST NOT allocate a source, pair by nearest/newest turn, invent provider or
 response model, admit an expense, or authorize callback replay. Native original
-request custody remains separate from this pure fact. The internal, not-yet-installed
-model callback adapter MUST qualify the actual direct native helper and original
+request custody remains separate from this pure fact. The installed model callback adapter MUST qualify the actual direct native helper and original
 observer epoch, admit a pre boundary before accepting final counters, retain the
 original origin across bounded retry, conserve same-writer replay, and quarantine
 overlapping pre writers without replacing their origin. Missing counters/readiness,
@@ -1255,8 +1254,14 @@ capacity exhaustion and missing durable acknowledgment MUST expose fixed coverag
 gaps independently of previously recorded expense. Successful delivery of every
 retained report MAY clear its durable-acknowledgment gap, but MUST NOT erase an
 independent readiness/counter/capacity gap. Selected model/provider MUST
-remain unavailable rather than being inferred. Model-hook installation and full
-ordinary-topology qualification remain unfinished.
+remain unavailable rather than being inferred. Codex revision6 MUST install exact
+PreModelRequest/PostModelRequest members with explicit async=false and timeout=3
+seconds; other lifecycle members retain their prior recipe. The helper MUST use
+at most two immutable bounded transport attempts for model callbacks and require
+a positive-revision typed durable ledger acknowledgment for known incurred usage.
+Revision5 and earlier receipts MUST upgrade without adopting unreceipted old
+members or changing authored hook siblings/config/exporters/trust. Full ordinary
+topology and child/source-transition qualification remain unfinished.
 TUI `last_token_usage` context occupancy and accumulated session
 totals MUST NOT be billed as new expense or summed together. OTEL ingestion remains
 unqualified until stable immutable report/request correlation, actual native

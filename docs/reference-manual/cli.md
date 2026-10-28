@@ -72,7 +72,7 @@ case is qualified before adding shared authored members.
 | Harness / ordinary command | Offline installed-source evidence | Accounting boundary |
 | --- | --- | --- |
 | Claude / `claude` | Child discovers installed skill/plugin/hooks metadata; SDK-shaped loader shim executes the installed module, real native helper ingress and local timer cancellation | Synthetic current-request final outcomes commit once on replay; missing usage stays unknown and reports a fixed current-epoch coverage gap after prior expense. Not an actual Claude vendor-loader or paid-request check. Native retirement after creator exit is separate from local SessionEnd. |
-| Codex / `codex` | Child reads installed hooks.json and executes exact commands; native enrollment, lifecycle and exact SessionEnd retirement | Hook counters/selected model/context totals do not bill. Separate OTel counters exist, but requesting-client/request/origin/privacy association is not qualified here. |
+| Codex / `codex` | Child reads installed hooks.json and executes exact commands; native enrollment, lifecycle and exact SessionEnd retirement | Revision6 synchronous model hooks report checked per-request usage under original native readiness. Selected model/context totals do not bill; child/default-daemon/source-transition qualification remains incomplete. |
 | Copilot / `copilot` | Child discovers installed hooks/mezzanine.json exec/args; native lifecycle and exact SessionEnd retirement | `unavailable-safe-activation`: no safe ordinary persistent OTel activation/native correlation is supplied or enabled by this fixture. Existing exporters are preserved. |
 | Cursor / `agent` | Child reads installed hooks.json and executes exact ordinary CLI hook commands; native lifecycle and exact SessionEnd retirement | `unavailable-counter-schema`: exact CLI counter/cache/multiplicity/native-origin evidence remains unqualified. No forced print mode or IDE-counter substitution. |
 | OpenCode / `opencode` | Separate compiled installer/loader fixtures only; not an assembled installed-native case in this four-harness matrix | Ordinary shared-server/client association and durable accounting dependencies remain unresolved; installation is not accounting acceptance. |
@@ -280,8 +280,12 @@ original origin, response model/provider or durable accounting. An internal adap
 and the shared original-origin ledger, with finite custody and replay/overlap
 fences. Retained reports retry after storage refusal without changing their
 original admission; recovery clears their delivery gap while preserving
-independent missing-counter/readiness/capacity gaps. The bootstrap does not yet install these model hooks; installation and
-full ordinary-topology qualification remain unfinished. Separately, OTEL completion events and response spans expose
+independent missing-counter/readiness/capacity gaps. Revision6 installs these two
+model hooks explicitly synchronously with a three-second cap. The helper makes
+at most two immutable bounded delivery attempts and requires a typed durable
+positive-revision ledger acknowledgment for known incurred usage. Revision5 and
+older receipts upgrade while preserving authored hooks/config/exporters/trust.
+Full ordinary topology and child/source-transition qualification remain unfinished. Separately, OTEL completion events and response spans expose
 input/output/cache-read/cache-write/reasoning counters.
 TUI `last_token_usage` can mean active context occupancy, while `total_token_usage`
 is accumulated session usage; neither is an independently qualified new request.

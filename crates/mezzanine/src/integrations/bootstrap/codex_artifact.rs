@@ -2,7 +2,8 @@
 //! Authored callback siblings, config, credentials and trust remain untouched.
 //! The historical whole-file manifest is frozen independently for receipt/journal
 //! qualification. Normal /hooks review is required; native helper admission
-//! supplies lifecycle observations, while accounting remains a separate source.
+//! supplies lifecycle observations; synchronous model boundaries separately admit
+//! original request origins and checked usage through the shared durable ledger.
 //! Installation alone grants no telemetry authority or approval decisions.
 
 use super::{
@@ -20,6 +21,38 @@ pub(crate) fn manifest() -> Option<Manifest> {
 /// preserves one inert pathname; unavailable evidence cannot select PATH or a
 /// launcher environment fallback. This helper reference grants no admission.
 fn manifest_for_helper(helper: &std::path::Path) -> Option<Manifest> {
+    let helper_text = helper.to_str()?;
+    if !helper.is_absolute()
+        || helper_text.len() > 4096
+        || helper_text.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let quoted = shlex::try_quote(helper_text).ok()?;
+    let command = format!("test -x {quoted} && exec {quoted} codex-hook || printf '{{}}\\n'");
+    Some(Manifest {
+        harness: "codex".into(), revision: 6, vendor_version: "best-effort".into(),
+        entries: vec![Entry { path: "hooks.json".into(), artifact: Artifact::JsonArrayEntries {
+            entries: ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop", "Interrupt", "SessionEnd", "PreModelRequest", "PostModelRequest"]
+                .into_iter().map(|name| JsonArrayMember {
+                    pointer: format!("/hooks/{name}"),
+                    value: if matches!(name, "PreModelRequest" | "PostModelRequest") {
+                        // Pairing relies on synchronous completion. The helper
+                        // budgets stdin250ms plus at most two500ms exchanges;
+                        // native work expires within2s, before this3s vendor cap.
+                        serde_json::json!({"hooks":[{"type":"command","command":command,"timeout":3,"async":false}]})
+                    } else {
+                        serde_json::json!({"hooks":[{"type":"command","command":command,"timeout":1}]})
+                    },
+                }).collect(),
+        }}],
+    })
+}
+
+/// Frozen revision5 before synchronous model-request accounting callbacks.
+/// The exact eight-member graph stays independent of current installation.
+pub(super) fn historical_tool_manifest() -> Option<Manifest> {
+    let helper = std::env::current_exe().ok()?;
     let helper_text = helper.to_str()?;
     if !helper.is_absolute()
         || helper_text.len() > 4096
@@ -144,6 +177,7 @@ pub(super) fn has_historical_shared_member(bytes: &[u8]) -> crate::Result<bool> 
         Some(historical_shared_manifest()),
         historical_fixed_manifest(),
         historical_activity_manifest(),
+        historical_tool_manifest(),
     ]
     .into_iter()
     .flatten()
@@ -219,7 +253,7 @@ mod tests {
     #[test]
     fn codex_artifact_command_pins_installer_without_environment() {
         let manifest = super::super::compiled_manifest("codex", None).unwrap();
-        assert_eq!(manifest.revision, 5);
+        assert_eq!(manifest.revision, 6);
         let Artifact::JsonArrayEntries { entries } = &manifest.entries[0].artifact else {
             panic!("Codex must own shared hook members only");
         };
@@ -309,14 +343,14 @@ mod tests {
     fn codex_artifact_activity_revision_preserves_previous_member_graph() {
         let current = super::super::compiled_manifest("codex", None).unwrap();
         let previous = historical_activity_manifest().unwrap();
-        assert_eq!((current.revision, previous.revision), (5, 4));
+        assert_eq!((current.revision, previous.revision), (6, 4));
         let Artifact::JsonArrayEntries { entries: new } = &current.entries[0].artifact else {
             panic!("shared members");
         };
         let Artifact::JsonArrayEntries { entries: old } = &previous.entries[0].artifact else {
             panic!("shared history");
         };
-        assert_eq!((new.len(), old.len()), (8, 5));
+        assert_eq!((new.len(), old.len()), (10, 5));
         let mut hooks = serde_json::Map::new();
         for entry in old {
             assert!(new.contains(entry));
@@ -338,5 +372,108 @@ mod tests {
             );
         }
         assert!(super::super::compiled_history(&current).contains(&previous));
+    }
+    /// Revision6 retains all exact revision5 lifecycle members and adds only
+    /// synchronous model boundaries. A receipt-qualified upgrade preserves user
+    /// sibling order/settings, repeats unchanged, refuses ambiguous member edits
+    /// and repairs a missing owned hooks document.
+    #[test]
+    fn codex_artifact_model_upgrade_preserves_revision5_and_authored_settings() {
+        use super::super::installer::{Operation, plan_private};
+        use std::os::unix::fs::PermissionsExt;
+        let home = std::env::temp_dir().join(format!(
+            "mez-codex-model-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        std::fs::create_dir(&home).unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let root = home.join("vendor");
+        std::fs::create_dir(&root).unwrap();
+        let old = historical_tool_manifest().unwrap();
+        let current = manifest().unwrap();
+        assert_eq!((old.revision, current.revision), (5, 6));
+        let Artifact::JsonArrayEntries { entries: previous } = &old.entries[0].artifact else {
+            panic!("shared history")
+        };
+        let Artifact::JsonArrayEntries { entries: new } = &current.entries[0].artifact else {
+            panic!("shared hooks")
+        };
+        assert_eq!((previous.len(), new.len()), (8, 10));
+        assert!(previous.iter().all(|entry| new.contains(entry)));
+        for name in ["PreModelRequest", "PostModelRequest"] {
+            let entry = new
+                .iter()
+                .find(|entry| entry.pointer == format!("/hooks/{name}"))
+                .unwrap();
+            assert_eq!(entry.value["hooks"][0]["async"], false);
+            assert_eq!(entry.value["hooks"][0]["timeout"], 3);
+        }
+        let authored = serde_json::json!({"hooks":[{"type":"command","command":"authored callback","async":true,"timeout":7}]});
+        let config = b"[features]\nhooks = false\n[otel]\nexporter = 'none'\n";
+        std::fs::write(root.join("config.toml"), config).unwrap();
+        std::fs::write(
+            root.join("hooks.json"),
+            serde_json::json!({"custom":"preserve","hooks":{"PreModelRequest":[authored]}})
+                .to_string(),
+        )
+        .unwrap();
+        plan_private(&root, &home, &old, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        let preview = plan_private(&root, &home, &current, Operation::Install).unwrap();
+        assert!(!preview.changed_paths().is_empty());
+        let old_bytes = std::fs::read(root.join("hooks.json")).unwrap();
+        assert!(has_historical_shared_member(&old_bytes).unwrap());
+        preview.apply().unwrap();
+        assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), config);
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("hooks.json")).unwrap()).unwrap();
+        assert_eq!(document["custom"], "preserve");
+        assert_eq!(document["hooks"]["PreModelRequest"][0], authored);
+        assert_eq!(
+            document["hooks"]["PreModelRequest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            plan_private(&root, &home, &current, Operation::Install)
+                .unwrap()
+                .changed_paths()
+                .is_empty()
+        );
+        document["hooks"]["PostModelRequest"] = serde_json::json!([]);
+        std::fs::write(root.join("hooks.json"), document.to_string()).unwrap();
+        assert!(plan_private(&root, &home, &current, Operation::Install).is_err());
+        assert_eq!(
+            std::fs::read(root.join("hooks.json")).unwrap(),
+            document.to_string().as_bytes()
+        );
+        std::fs::remove_file(root.join("hooks.json")).unwrap();
+        plan_private(&root, &home, &current, Operation::Install)
+            .unwrap()
+            .apply()
+            .unwrap();
+        let repaired: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("hooks.json")).unwrap()).unwrap();
+        assert_eq!(
+            repaired["hooks"]["PostModelRequest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        // The deleted file's authored data is gone; recovery restores only the
+        // receipt-qualified owned graph rather than inventing user content.
+        assert_eq!(
+            repaired["hooks"]["PreModelRequest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        std::fs::remove_dir_all(home).unwrap();
     }
 }

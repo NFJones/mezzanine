@@ -62,6 +62,7 @@ Shared HTTP execution keeps wire payloads out of transport diagnostics. The
 does not activate paid search or change the default backend.
 
 Codex lifecycle observations include permission waits and tool activity.
+Synchronous model hooks report available per-request usage under native readiness.
 Claude child accounting requires a genuine start under the current parent observer.
 Ordinary Claude accounting keeps missing-counter or delivery coverage visible
 after earlier reported usage, without changing vendor requests or recorded expense.
