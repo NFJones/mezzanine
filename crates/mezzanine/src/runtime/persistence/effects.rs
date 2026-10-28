@@ -273,6 +273,9 @@ impl RuntimePersistenceComponent {
         {
             self.reserve_transcript_sequence_at_path(path, &last.conversation_id, last.sequence);
         }
+        if let RuntimeSideEffect::PersistInitialTranscript { path, batch, .. } = &effect {
+            self.reserve_initial_transcript_at_path(path, batch);
+        }
         self.queued_transcript_effects.push(effect);
     }
 
@@ -358,6 +361,9 @@ impl RuntimePersistenceComponent {
                 RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => {
                     entries.retain(|entry| entry.conversation_id != conversation_id);
                     !entries.is_empty()
+                }
+                RuntimeSideEffect::PersistInitialTranscript { batch, .. } => {
+                    batch.conversation_id() != conversation_id
                 }
                 _ => true,
             });
@@ -471,6 +477,7 @@ impl RuntimePersistenceComponent {
                 .filter(|entry| entry.conversation_id == conversation_id)
                 .cloned(),
         );
+        entries.extend(self.pending_initial_transcript_entries(conversation_id));
         entries
     }
 
@@ -526,6 +533,7 @@ impl RuntimePersistenceComponent {
     pub(crate) fn take_transcript_effects(&mut self) -> Vec<RuntimeSideEffect> {
         let effects = std::mem::take(&mut self.queued_transcript_effects);
         for effect in &effects {
+            self.retain_initial_transcript_effect(effect);
             if let RuntimeSideEffect::PersistTranscriptEntries { entries, path, .. } = effect
                 && let Some(first) = entries.first()
             {

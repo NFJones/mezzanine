@@ -139,7 +139,7 @@ fn runtime_agent_history_read(
 
 /// Builds canonical prefix/selective history from one already checked snapshot.
 /// This pure renderer performs no additional archive or epoch reads.
-fn runtime_agent_history_epoch_from_snapshot(
+pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
     mut inputs: RuntimeAgentHistoryEpochInputs,
     epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
     mut entries: Vec<TranscriptEntry>,

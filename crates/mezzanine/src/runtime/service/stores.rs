@@ -117,6 +117,12 @@ impl RuntimeSessionService {
             )),
             _ => None,
         };
+        let completed_initial = match &event {
+            crate::runtime::PersistenceEvent::InitialTranscriptCompleted { batch, path } => {
+                Some((batch.clone(), path.clone()))
+            }
+            _ => None,
+        };
         let mut schedule_next_retention = false;
         let mut queued_retention_rerun = false;
         let mut queued_metadata_retry = false;
@@ -180,6 +186,31 @@ impl RuntimeSessionService {
                     "retryable": retryable,
                 })
                 .to_string()
+            }
+            crate::runtime::PersistenceEvent::InitialTranscriptCompleted { batch, path } => {
+                if !self
+                    .persistence
+                    .owns_initial_transcript_write_at_path(&batch, &path)
+                {
+                    return Ok(crate::runtime::RuntimeTransition::default());
+                }
+                serde_json::json!({"worker":"async-persistence","target":"initial-transcript","conversation_id":batch.conversation_id(),"path":path.to_string_lossy(),"state":"completed","raw_entries":batch.entries().len()}).to_string()
+            }
+            crate::runtime::PersistenceEvent::InitialTranscriptFailed {
+                batch,
+                path,
+                error,
+                retryable,
+            } => {
+                if !self
+                    .persistence
+                    .owns_initial_transcript_write_at_path(&batch, &path)
+                {
+                    return Ok(crate::runtime::RuntimeTransition::default());
+                }
+                self.persistence
+                    .invalidate_transcript_admission_at_path(&path, batch.conversation_id());
+                serde_json::json!({"worker":"async-persistence","target":"initial-transcript","conversation_id":batch.conversation_id(),"path":path.to_string_lossy(),"state":"failed","error":error,"retryable":retryable}).to_string()
             }
             crate::runtime::PersistenceEvent::ExternalSourceRenewalCompleted { work } => {
                 let completed = self.complete_external_source_renewal(&work);
@@ -511,7 +542,7 @@ impl RuntimeSessionService {
         // A completed transcript write is already durable. Diagnostic delivery
         // must not strand its actor-owned receipt when the event log rejects a
         // payload (for example because its configured byte limit is small).
-        if completed_transcript.is_some() {
+        if completed_transcript.is_some() || completed_initial.is_some() {
             let _ = self.append_runtime_diagnostic_event(payload);
         } else {
             self.append_runtime_diagnostic_event(payload)?;
@@ -523,6 +554,10 @@ impl RuntimeSessionService {
                 &path,
                 &entries,
             );
+        }
+        if let Some((batch, path)) = completed_initial {
+            self.persistence
+                .settle_initial_transcript_write_at_path(&batch, &path);
         }
         let mut transition = self.runtime_transition_with_render(
             true,

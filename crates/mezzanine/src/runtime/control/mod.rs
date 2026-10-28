@@ -721,7 +721,13 @@ impl RuntimeSessionService {
         if self
             .agent_shell_store()
             .get(pane_id)
-            .is_some_and(|session| self.persistence.bookkeeping_pending(&session.session_id))
+            .is_some_and(|session| {
+                self.persistence.bookkeeping_pending(&session.session_id)
+                    || session
+                        .ephemeral_transcript_source_conversation_id
+                        .as_deref()
+                        .is_some_and(|cid| self.persistence.bookkeeping_pending(cid))
+            })
         {
             return Err(MezError::conflict(
                 "conversation bookkeeping must settle before history admission",
@@ -765,7 +771,12 @@ impl RuntimeSessionService {
         } else {
             session.transcript_entries
         };
-        if transcript_entries == 0 && session.ephemeral {
+        if transcript_entries == 0
+            && session.ephemeral
+            && session
+                .ephemeral_transcript_source_conversation_id
+                .is_none()
+        {
             return RuntimeAgentPromptHistoryWork {
                 memory_blocks,
                 transcript_work: None,

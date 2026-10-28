@@ -514,3 +514,61 @@ fn initial_projection_receipt_version_shape_mismatch_fails_closed() {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+/// A complete inherited summary remains discoverable with zero raw messages.
+/// Its catalog row may use projection activity time but cannot invent a user
+/// prompt or raw frontier. An ordinary empty archive still has no such history.
+#[test]
+fn initial_projection_empty_archive_remains_discoverable_without_fake_prompt() {
+    let root = temp_root("initial-projection-discovery");
+    let store = AgentTranscriptStore::new(root.clone());
+    let batch = TranscriptAppendBatch::initial_projection(epoch("empty-child"), vec![]).unwrap();
+    store.accept_transcript_append_receipt(&batch, 23).unwrap();
+    store.settle_transcript_append_receipt(&batch, 23).unwrap();
+    let reopened = AgentTranscriptStore::new(root.clone());
+    let summary = reopened.summary("empty-child").unwrap().unwrap();
+    assert_eq!(summary.entries, 0);
+    assert!(summary.initial_prompt.is_none());
+    assert!(summary.latest_user_prompt.is_none());
+    assert!(summary.last_turn_id.is_empty());
+    assert_eq!(
+        reopened
+            .saved_session("empty-child")
+            .unwrap()
+            .unwrap()
+            .summary
+            .entries,
+        0
+    );
+    let ordinary = reopened.transcript_path("ordinary-empty").unwrap();
+    fs::create_dir_all(ordinary.parent().unwrap()).unwrap();
+    fs::write(ordinary, b"").unwrap();
+    assert!(reopened.summary("ordinary-empty").unwrap().is_none());
+    assert!(reopened.saved_session("ordinary-empty").unwrap().is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Discovery cannot mistake a sidecar-before-marker failure for a complete
+/// metadata-only conversation. Its retained receipt repairs the original intent
+/// before the zero-entry catalog record can become available for resume.
+#[test]
+fn initial_projection_empty_discovery_requires_complete_marker() {
+    let root = temp_root("initial-projection-discovery-marker");
+    let store = AgentTranscriptStore::new(root.clone());
+    let batch = TranscriptAppendBatch::initial_projection(epoch("empty-child"), vec![]).unwrap();
+    store.fail_next_compaction_epoch_before_marker();
+    assert!(store.accept_transcript_append_receipt(&batch, 24).is_err());
+    assert!(store.summary("empty-child").is_err());
+    assert!(store.saved_session("empty-child").is_err());
+    store.recover_append_receipts().unwrap();
+    assert_eq!(
+        store
+            .saved_session("empty-child")
+            .unwrap()
+            .unwrap()
+            .summary
+            .entries,
+        0
+    );
+    fs::remove_dir_all(root).unwrap();
+}

@@ -75,6 +75,8 @@ mod enrollment;
 mod events;
 mod external_usage_retry;
 mod handle;
+/// Whole-payload initial fork persistence settlement and startup fencing.
+mod initial_transcripts;
 mod provider_handoff;
 mod provider_retry_handoff;
 mod queue;

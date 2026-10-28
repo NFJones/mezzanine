@@ -658,6 +658,24 @@ pub enum PersistenceEvent {
         /// Whether a later checked attempt may repair an uncertain write.
         retryable: bool,
     },
+    /// Initial fork authority was admitted durably and its exact receipt retired.
+    InitialTranscriptCompleted {
+        /// Complete immutable initial rows and replay projection.
+        batch: crate::storage::transcript::TranscriptAppendBatch,
+        /// Original archive path used for exact ownership fencing.
+        path: PathBuf,
+    },
+    /// Initial fork receipt retirement failed without releasing its owner.
+    InitialTranscriptFailed {
+        /// Complete immutable initial rows and replay projection.
+        batch: crate::storage::transcript::TranscriptAppendBatch,
+        /// Original archive path used for exact ownership fencing.
+        path: PathBuf,
+        /// Diagnostic from checked whole-payload settlement.
+        error: String,
+        /// Whether explicit worker recovery may retry settlement.
+        retryable: bool,
+    },
     /// A persistence write completed.
     Completed {
         /// Persistence family that handled the write.
@@ -1196,6 +1214,17 @@ pub enum RuntimeSideEffect {
         path: PathBuf,
         /// Entries to append in sequence order.
         entries: Vec<TranscriptEntry>,
+    },
+    /// Admit initial fork rows and authority together, then retire its receipt.
+    /// Admission completes the initial publication before this effect is released
+    /// to the persistence worker. An empty tail still has a complete owner.
+    PersistInitialTranscript {
+        /// Store that owns the initial archive, projection and receipt.
+        store: AgentTranscriptStore,
+        /// Exact initial archive target used for ownership and diagnostics.
+        path: PathBuf,
+        /// Complete validated initial payload; must carry an initial epoch.
+        batch: crate::storage::transcript::TranscriptAppendBatch,
     },
     /// Replace one active-session metadata checkpoint on the persistence worker.
     PersistAgentSessionMetadata {

@@ -2928,6 +2928,17 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
         ["captured parent result", "later parent mutation"]
     );
 
+    let compacted_context = service
+        .agent_context_for_pane_prompt(compacted_pane, "continue inherited context", 0)
+        .unwrap();
+    assert!(
+        compacted_context
+            .blocks()
+            .iter()
+            .any(|block| block.content == "summarized first row"),
+        "a fork must preserve its captured authoritative prefix, not only its raw tail"
+    );
+
     let forked_context = service
         .agent_context_for_pane_prompt(&forked_pane, "continue", 0)
         .unwrap();

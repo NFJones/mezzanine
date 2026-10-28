@@ -3,6 +3,8 @@
 mod agent_provider;
 mod clients;
 mod events;
+/// Complete initial fork ownership through actual admission and persistence.
+mod initial_transcripts;
 mod lifecycle;
 mod objective_mirror;
 mod panes;

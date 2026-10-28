@@ -499,11 +499,39 @@ impl AsyncRuntimeSessionActor {
             if let Some(predecessor) = predecessor {
                 let _ = predecessor.await;
             }
-            let ids = receipts.iter().map(|(id, _, _)| *id).collect::<Vec<_>>();
+            let ids = receipts.iter().map(|(id, _)| *id).collect::<Vec<_>>();
             let results = tokio::task::spawn_blocking(move || {
                 receipts
                     .into_iter()
-                    .map(|(id, store, entries)| (id, store.accept_append_receipt(&entries, id)))
+                    .map(|(id, effect)| {
+                        let result = match effect {
+                            RuntimeSideEffect::PersistTranscriptEntries {
+                                store, entries, ..
+                            } => store.accept_append_receipt(&entries, id),
+                            RuntimeSideEffect::PersistInitialTranscript { store, path, batch } => {
+                                if batch.initial_compaction_epoch().is_none() {
+                                    Err(MezError::invalid_args(
+                                        "initial transcript effect has no projection",
+                                    ))
+                                } else {
+                                    store.transcript_path(batch.conversation_id()).and_then(
+                                        |expected| {
+                                            if expected != path {
+                                                return Err(MezError::invalid_state(
+                                                    "initial transcript receipt target changed",
+                                                ));
+                                            }
+                                            store.accept_transcript_append_receipt(&batch, id)
+                                        },
+                                    )
+                                }
+                            }
+                            _ => Err(MezError::invalid_state(
+                                "receipt admission received another persistence family",
+                            )),
+                        };
+                        (id, result)
+                    })
                     .collect::<Vec<_>>()
             })
             .await

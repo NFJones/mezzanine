@@ -54,6 +54,8 @@ Timestamps default off; see [terminal appearance](docs/configuration/appearance-
 Compaction validates summaries against frozen local allowances and complete
 request fit, independently of provider generation controls. OpenAI requests
 always omit `max_output_tokens`; see [context and continuity](docs/agent/context-and-continuity.md).
+Forked subagents retain compacted summaries, including conversations with no
+remaining raw history, before starting their first provider request.
 
 Shared HTTP execution keeps wire payloads out of transport diagnostics. The
 [authenticated-search foundation](docs/reference-manual/agent-actions.md#http-execution-and-authenticated-search-foundation)

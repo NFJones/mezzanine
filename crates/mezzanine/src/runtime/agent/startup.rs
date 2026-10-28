@@ -466,7 +466,13 @@ impl RuntimeSessionService {
             .chain(
                 self.agent_shell_store()
                     .sessions()
-                    .filter(|session| self.persistence.bookkeeping_pending(&session.session_id))
+                    .filter(|session| {
+                        self.persistence.bookkeeping_pending(&session.session_id)
+                            || session
+                                .ephemeral_transcript_source_conversation_id
+                                .as_deref()
+                                .is_some_and(|cid| self.persistence.bookkeeping_pending(cid))
+                    })
                     .map(|session| session.pane_id.clone()),
             )
             .collect()

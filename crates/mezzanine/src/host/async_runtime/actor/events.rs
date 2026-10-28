@@ -1632,6 +1632,13 @@ impl AsyncRuntimeSessionActor {
             PersistenceEvent::TranscriptClaim { claim_id, outcome } => (*outcome, Some(claim_id)),
             event => (event, None),
         };
+        if matches!(
+            &persistence_event,
+            PersistenceEvent::InitialTranscriptCompleted { .. }
+                | PersistenceEvent::InitialTranscriptFailed { .. }
+        ) {
+            return self.apply_initial_transcript_persistence_event(persistence_event, claim_id);
+        }
         if let Some(claim_id) = claim_id {
             let (entries, path) = match &persistence_event {
                 PersistenceEvent::TranscriptCompleted { entries, path, .. }

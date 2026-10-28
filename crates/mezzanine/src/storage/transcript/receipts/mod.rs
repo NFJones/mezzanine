@@ -356,6 +356,18 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
+    /// Reports retained append ownership under the exact conversation lease.
+    /// Failed child setup uses this fence before removing files: an accepted or
+    /// uncertain payload must remain available for checked recovery. Invalid
+    /// routing or damaged selected receipts are errors, never proof of absence.
+    pub(crate) fn has_unsettled_append_receipts(&self, conversation_id: &str) -> Result<bool> {
+        validate_conversation_id(conversation_id)?;
+        let _lease = self.acquire_conversation_lock(conversation_id)?;
+        Ok(!self
+            .read_locked_append_receipts(&[conversation_id])?
+            .is_empty())
+    }
+
     /// Preserves ordinary row-only admission and its v1 recovery contract.
     pub(crate) fn accept_append_receipt(
         &self,

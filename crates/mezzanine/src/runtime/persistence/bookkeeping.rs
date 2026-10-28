@@ -204,9 +204,11 @@ impl RuntimePersistenceComponent {
     /// fences this conversation. Ordinary pending raw rows remain available
     /// for checked logical replay; terminal summary proof must commit first.
     pub(crate) fn bookkeeping_pending(&self, conversation_id: &str) -> bool {
-        self.bookkeeping_candidates
-            .iter()
-            .any(|candidate| candidate.turn.conversation_id == conversation_id)
+        self.initial_transcript_pending(conversation_id)
+            || self
+                .bookkeeping_candidates
+                .iter()
+                .any(|candidate| candidate.turn.conversation_id == conversation_id)
             || self
                 .pending_transcript_entries(conversation_id)
                 .iter()

@@ -815,9 +815,33 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
-        let child_transcript_entries = fork_snapshot
+        let child_batch = match fork_snapshot
             .as_ref()
-            .map_or(0, |snapshot| snapshot.entries.len() as u64);
+            .map(|snapshot| {
+                snapshot.child_batch(&child_conversation_id, current_unix_seconds().max(1))
+            })
+            .transpose()
+        {
+            Ok(batch) => batch.flatten(),
+            Err(error) => {
+                self.cleanup_failed_subagent_spawn(
+                    controller,
+                    &started.pane_id,
+                    &child_agent_id,
+                    None,
+                );
+                return Err(error);
+            }
+        };
+        // Child rows are validated contiguous from one, with a zero-boundary
+        // inherited prefix. This is a physical row count, never model blocks.
+        let child_transcript_entries = child_batch
+            .as_ref()
+            .map_or(0, |batch| batch.entries().len() as u64);
+        let captured_history = child_batch
+            .as_ref()
+            .filter(|batch| batch.initial_compaction_epoch().is_some())
+            .map(|batch| fork_source::child_history(&started.pane_id, batch));
         let child_prompt_cache_lineage_id = fork_snapshot
             .as_ref()
             .map(|snapshot| snapshot.prompt_cache_lineage_id.clone());
@@ -839,13 +863,6 @@ impl RuntimeSessionService {
         {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error.into());
-        }
-        if let Some(snapshot) = fork_snapshot.as_ref()
-            && let Err(error) =
-                self.persist_subagent_fork_snapshot(&child_conversation_id, snapshot)
-        {
-            self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
-            return Err(error);
         }
         // Routed roots are rebound to ephemeral conversations by their
         // workflow controller. Their depth-zero runtime lineage is transient,
@@ -894,6 +911,29 @@ impl RuntimeSessionService {
                 );
                 return Err(error);
             }
+        }
+        // Restrictive child identity is durable before any initial journal or
+        // history can survive failure. Uncertain recovery must never expose an
+        // unclassified root conversation with broader default authority.
+        if let Some(batch) = child_batch.as_ref()
+            && let Err(error) = self.persist_subagent_fork_snapshot(batch)
+        {
+            let retained = self.cleanup_failed_subagent_spawn(
+                controller,
+                &started.pane_id,
+                &child_agent_id,
+                None,
+            );
+            if retained {
+                return Err(MezError::new(
+                    error.kind(),
+                    format!(
+                        "initial fork history {child_conversation_id} retained for checked recovery: {}",
+                        error.message()
+                    ),
+                ));
+            }
+            return Err(error);
         }
         if let Some((parent_conversation_id, objective)) = persistent.as_ref() {
             let message_setup = self
@@ -1134,13 +1174,24 @@ impl RuntimeSessionService {
         let initial_model_profile = initial_selection
             .as_ref()
             .map(|selection| selection.selected_profile_name.clone());
-        let turn = match self.start_agent_prompt_turn_with_cooperation(
-            &started.pane_id,
-            &spawn.task_prompt,
-            Some(runtime_cooperation_mode_name(spawn.cooperation_mode).to_string()),
-            None,
-            initial_selection,
-        ) {
+        let started_turn = if let Some(history) = captured_history {
+            self.start_agent_prompt_turn_with_captured_history(
+                &started.pane_id,
+                &spawn.task_prompt,
+                Some(runtime_cooperation_mode_name(spawn.cooperation_mode).to_string()),
+                initial_selection,
+                history,
+            )
+        } else {
+            self.start_agent_prompt_turn_with_cooperation(
+                &started.pane_id,
+                &spawn.task_prompt,
+                Some(runtime_cooperation_mode_name(spawn.cooperation_mode).to_string()),
+                None,
+                initial_selection,
+            )
+        };
+        let turn = match started_turn {
             Ok(turn) => turn,
             Err(error) => {
                 self.cleanup_failed_subagent_spawn(
@@ -1726,14 +1777,15 @@ impl RuntimeSessionService {
     }
 
     /// Rolls back the pane, model override, turn state, and write scope created
-    /// before a subagent spawn setup step failed.
+    /// before a subagent spawn setup step failed. Returns true when receipt
+    /// ownership requires preserving history instead of claiming its removal.
     pub(crate) fn cleanup_failed_subagent_spawn(
         &mut self,
         controller: Option<&mez_core::ids::ClientId>,
         pane_id: &str,
         child_agent_id: &str,
         turn_id: Option<&str>,
-    ) {
+    ) -> bool {
         let pane_ids = vec![pane_id.to_string()];
         let _ = self.fail_agent_turns_for_pane_shutdown(&pane_ids, "subagent spawn setup failed");
         if let Some(turn_id) = turn_id {
@@ -1770,11 +1822,23 @@ impl RuntimeSessionService {
             self.persistence
                 .cancel_queued_transcript_entries_for_conversation(conversation_id);
         }
+        let mut retained_history = false;
         if let (Some(store), Some(conversation_id)) = (
             self.persistence.cloned_transcript_store(),
             child_conversation_id,
         ) {
-            let _ = store.delete(&conversation_id);
+            match store.has_unsettled_append_receipts(&conversation_id) {
+                Ok(false) => {
+                    let _ = store.delete(&conversation_id);
+                }
+                Ok(true) | Err(_) => {
+                    retained_history = true;
+                    let _ = self.append_runtime_diagnostic_event(serde_json::json!({
+                        "operation":"failed-subagent-history-cleanup","conversation_id":conversation_id,
+                        "state":"retained-for-checked-recovery",
+                    }).to_string());
+                }
+            }
         }
         if let Some(controller) = controller {
             let _ = self.dispatch_runtime_pane_close(
@@ -1784,10 +1848,10 @@ impl RuntimeSessionService {
         } else {
             let focus_before = self.capture_zen_focus_snapshots();
             let Ok(transition) = self.session.kill_pane_session_owned(Some(pane_id), true) else {
-                return;
+                return retained_history;
             };
             let Some(pane) = transition.pane else {
-                return;
+                return retained_history;
             };
             let removed_pane_id = pane.id.to_string();
             let _ = self.stop_active_pane_pipe(&removed_pane_id);
@@ -1796,47 +1860,42 @@ impl RuntimeSessionService {
             let _ = self.sync_pane_resize_effects(&transition.effects);
             self.reconcile_zen_focus_snapshots(focus_before);
         }
+        retained_history
     }
 
-    /// Persists a fork snapshot as an independent child conversation prefix.
+    /// Persists one independently owned child archive and optional initial
+    /// authority. Deferred publication keeps the complete payload as its owner;
+    /// synchronous callers use the same admission and exact settlement contract.
     fn persist_subagent_fork_snapshot(
         &mut self,
-        child_conversation_id: &str,
-        snapshot: &RuntimeSubagentForkSnapshot,
+        batch: &crate::storage::transcript::TranscriptAppendBatch,
     ) -> Result<()> {
-        if snapshot.entries.is_empty() {
-            return Ok(());
-        }
         let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
             MezError::invalid_state(
                 "forked subagent sessions require the child durable transcript store",
             )
         })?;
-        let created_at_unix_seconds = current_unix_seconds().max(1);
-        let entries = snapshot
-            .entries
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| mez_agent::TranscriptEntry {
-                conversation_id: child_conversation_id.to_string(),
-                sequence: u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1),
-                created_at_unix_seconds,
-                role: entry.role,
-                turn_id: entry.turn_id.clone(),
-                agent_id: entry.agent_id.clone(),
-                pane_id: entry.pane_id.clone(),
-                content: entry.content.clone(),
-            })
-            .collect::<Vec<_>>();
-        if self.persistence.transcript_uses_adapter() {
+        if batch.initial_compaction_epoch().is_some() {
+            if self.persistence.transcript_uses_adapter() {
+                self.persistence
+                    .queue_transcript(RuntimeSideEffect::PersistInitialTranscript {
+                        path: store.transcript_path(batch.conversation_id())?,
+                        store,
+                        batch: batch.clone(),
+                    });
+            } else {
+                store.accept_transcript_append_receipt(batch, 1)?;
+                store.settle_transcript_append_receipt(batch, 1)?;
+            }
+        } else if self.persistence.transcript_uses_adapter() {
             self.persistence
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
-                    path: store.transcript_path(child_conversation_id)?,
+                    path: store.transcript_path(batch.conversation_id())?,
                     store,
-                    entries,
+                    entries: batch.entries().to_vec(),
                 });
         } else {
-            self.append_transcript_with_admission_observation(&store, &entries, false)?;
+            self.append_transcript_with_admission_observation(&store, batch.entries(), false)?;
         }
         Ok(())
     }

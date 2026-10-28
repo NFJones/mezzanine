@@ -155,6 +155,11 @@ impl RuntimePersistenceComponent {
                 insert(&mut rows, entries, conversation_id)?;
             }
         }
+        insert(
+            &mut rows,
+            &self.pending_initial_transcript_entries_at_path(path, conversation_id)?,
+            conversation_id,
+        )?;
         Ok(rows.into_values().collect())
     }
 
@@ -313,6 +318,31 @@ impl RuntimePersistenceComponent {
         };
     }
 
+    /// Reserves the next allocation of a complete initial payload. Empty
+    /// projections reserve next=1 without inventing row zero or durable truth.
+    pub(super) fn reserve_initial_transcript_at_path(
+        &mut self,
+        path: &Path,
+        batch: &crate::storage::transcript::TranscriptAppendBatch,
+    ) {
+        if let Some(last) = batch.entries().last() {
+            self.reserve_transcript_sequence_at_path(path, batch.conversation_id(), last.sequence);
+            return;
+        }
+        let slot = self
+            .deferred_transcript_next_sequences
+            .entry((path.to_path_buf(), batch.conversation_id().to_string()))
+            .or_insert_with(TranscriptAdmission::new);
+        slot.identity = AdmissionIdentity(Arc::new(()));
+        slot.next = match slot.next {
+            RuntimeTranscriptNextSequence::Unknown => RuntimeTranscriptNextSequence::Next(1),
+            next => next,
+        };
+        slot.reservation_active = true;
+        slot.legacy_active = true;
+        slot.legacy_next = Some(slot.legacy_next.unwrap_or(1).max(1));
+    }
+
     /// Invalidates work before cancel/error diagnostics can fail. In-flight rows
     /// are not erased and prior confirmed prefix is not rewritten as empty.
     pub(crate) fn invalidate_transcript_admission_at_path(
@@ -407,6 +437,14 @@ impl RuntimePersistenceComponent {
                     let frontier = active_paths.entry(path.clone()).or_insert(0);
                     *frontier = (*frontier).max(last.sequence);
                 }
+            }
+        }
+        if let Some(batches) = self.in_flight_initial_transcripts.get(conversation_id) {
+            for (path, batch) in batches {
+                // Zero is the known empty frontier, not an allocated row.
+                let high = batch.entries().last().map_or(0, |row| row.sequence);
+                let frontier = active_paths.entry(path.clone()).or_insert(0);
+                *frontier = (*frontier).max(high);
             }
         }
         let legacy_in_flight = !active_paths.is_empty();

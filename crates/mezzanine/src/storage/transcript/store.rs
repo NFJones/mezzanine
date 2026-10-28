@@ -4250,7 +4250,60 @@ impl AgentTranscriptStore {
         if let Some(summary) = self.read_summary_sidecar(conversation_id)? {
             return Ok(Some(summary));
         }
-        self.legacy_bounded_summary(conversation_id)
+        if let Some(summary) = self.legacy_bounded_summary(conversation_id)? {
+            return Ok(Some(summary));
+        }
+        self.empty_compaction_summary(conversation_id)
+    }
+
+    /// Describes a genuine empty archive with a complete zero-boundary epoch.
+    /// Discovery uses durable projection activity time, never an invented raw
+    /// message, prompt or turn. Missing/corrupt required authority remains an
+    /// error; ordinary empty files without compaction context stay undiscovered.
+    fn empty_compaction_summary(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<ConversationSummary>> {
+        let archive = self.existing_transcript_path_for(conversation_id)?;
+        if !archive.is_file() || archive.metadata()?.len() != 0 {
+            return Ok(None);
+        }
+        let Some(epoch) = self.compaction_epoch(conversation_id)? else {
+            return Ok(None);
+        };
+        if epoch.through_sequence != 0 {
+            return Err(MezError::invalid_state(
+                "empty archive has a nonempty compaction boundary",
+            ));
+        }
+        if !self.compaction_epoch_marker_is_committed(conversation_id)? {
+            return Err(MezError::invalid_state(
+                "empty compaction projection is not fully committed",
+            ));
+        }
+        let modified = self
+            .session_dir_for(conversation_id)?
+            .join(COMPACTION_EPOCH_FILE_NAME)
+            .metadata()?
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| {
+                MezError::invalid_state("empty compaction projection time predates Unix epoch")
+            })?
+            .as_secs();
+        Ok(Some(ConversationSummary {
+            conversation_id: conversation_id.into(),
+            entries: 0,
+            first_created_at_unix_seconds: modified,
+            last_created_at_unix_seconds: modified,
+            last_turn_id: String::new(),
+            agent_id: String::new(),
+            pane_id: String::new(),
+            directory: None,
+            project_root: None,
+            initial_prompt: None,
+            latest_user_prompt: None,
+        }))
     }
 
     /// Returns the durable active agent-session metadata file for tests.

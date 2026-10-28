@@ -10471,6 +10471,30 @@ truncated; complete summaries and rows wholly beyond it MUST stay excluded.
 Source adoption MUST reject a changed transcript store as well as a changed
 parent identity, replay position or runtime compaction generation. Loop
 restoration and transactional rollback MUST preserve both domains.
+Forked subagents MUST map the captured raw tail into independent contiguous
+child sequences and publish its inherited prefix at child boundary zero, with
+selective anchors rebased over those same rows. A fully compacted source MUST
+retain a genuinely empty child archive and complete summary; metadata receipt
+identity zero MUST NOT advance either raw count or logical row frontier.
+The first child request MUST use the captured canonical projection, preserving
+normal trust, hooks, scope and model-selection preflight. It MUST NOT reread an
+uninitialized child archive or dispatch a provider before initial publication
+settles. Queued and in-flight initial ownership MUST retain the entire payload,
+including an empty tail, and match claim generation, original path and exact
+epoch bytes for admission, retry, cancellation and settlement. A row-only or
+stale outcome MUST NOT release that owner. Immutable authority conflicts MUST
+retain the receipt and startup fence without an automatic retry loop.
+Restrictive child identity MUST be durable before initial publication. Failed
+spawn cleanup MUST retain unsettled receipt-owned history for checked recovery
+rather than deleting uncertain data or recovering it with default root authority.
+Ephemeral forks of a summary-only child MUST retain its captured zero-boundary
+source projection without persisting an ephemeral archive.
+Committed terminal-compaction witnesses before the captured cutoff MUST be
+projected from their exact checked source without mutating the parent. Their
+accepted summaries travel in the child epoch; copied witnesses MUST become
+inert `[mez-inherited-compaction-audit/v1]` provenance rather than publish a
+second transition against renumbered history. Pending witnesses MUST settle
+before fork capture, and source conflicts or incomplete groups MUST fail closed.
 For a manual prefix containing selective replacements, selection MUST preserve
 both complete turn boundaries and complete selective ranges. Budget estimates
 MUST charge the replacement summary rather than covered raw bytes. Model input

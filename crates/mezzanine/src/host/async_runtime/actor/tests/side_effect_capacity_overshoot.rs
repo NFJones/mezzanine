@@ -843,7 +843,10 @@ async fn mixed_committed_refusal_retains_exact_transcript_receipt_claim() {
         .side_effect_routes
         .hold_transcript_receipts_after(previous);
     assert_eq!(admissions.len(), 1);
-    let (id, _, entries) = &admissions[0];
+    let (id, effect) = &admissions[0];
+    let RuntimeSideEffect::PersistTranscriptEntries { entries, .. } = effect else {
+        panic!("held receipt changed persistence family");
+    };
     assert_eq!(entries, &vec![row.clone()]);
     assert!(
         actor

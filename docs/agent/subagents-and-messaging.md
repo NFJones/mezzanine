@@ -30,6 +30,16 @@ moving your focus. Use `explorer` for read-heavy investigation, `worker` for
 bounded implementation, or a configured custom profile. Delegation remains
 subject to policy and to the parent's effective authority.
 
+A forked conversation carries the parent's captured compaction summaries and
+uncovered history, including a summary that has replaced every raw row. Its
+first request uses that same snapshot. Initial work stays queued until the
+child's history and summary are durably ready; later parent changes do not enter
+the child. An initial storage conflict keeps work blocked for diagnosis rather
+than starting a provider with shortened history or replaying old actions.
+If initial history publication fails after its receipt becomes durable, failed-spawn
+cleanup keeps the restricted child identity and uncertain history for checked
+recovery. It reports the retained conversation instead of claiming deletion.
+
 ### Scope and cooperation
 
 | Mode | Intended use |

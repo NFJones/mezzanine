@@ -112,7 +112,7 @@ impl RuntimeSubagentForkReadWork {
             .map(|row| row.sequence)
             .collect::<std::collections::BTreeSet<_>>()
             .len() as u64;
-        let snapshot = self
+        let mut snapshot = self
             .store
             .conversation_replay_snapshot(&self.source_conversation_id, &self.pending, |epoch| {
                 if self.source_high_water > 0 {
@@ -161,6 +161,35 @@ impl RuntimeSubagentForkReadWork {
                 compaction_epoch = None;
             }
         }
+        // A zero-frontier epoch needs an actual empty-archive qualification,
+        // but its read may also observe later rows. Bound both evidence domains
+        // before interpreting terminal witnesses, just as nonzero reads do.
+        snapshot
+            .view
+            .committed
+            .retain(|row| row.sequence <= self.source_high_water);
+        snapshot
+            .view
+            .logical
+            .retain(|row| row.sequence <= self.source_high_water);
+        for row in &snapshot.view.logical {
+            if row.role == mez_agent::TranscriptRole::System
+                && row
+                    .content
+                    .starts_with(crate::storage::transcript::compaction_handoff::MARKER)
+                && !snapshot.view.committed.contains(row)
+            {
+                return Err(MezError::conflict(
+                    "fork terminal handoff must settle before source capture",
+                ));
+            }
+        }
+        compaction_epoch =
+            crate::storage::transcript::compaction_handoff::fork_terminal_projection(
+                &self.source_conversation_id,
+                &snapshot.view.committed,
+                compaction_epoch,
+            )?;
         let mut entries = snapshot.view.logical;
         // Limit by the actor-captured owner before selecting the retained tail.
         if self.source_high_water > 0
@@ -296,4 +325,106 @@ impl RuntimeSessionService {
             prompt_cache_lineage_id: parent_session.prompt_cache_lineage_id,
         }))
     }
+}
+
+impl RuntimeSubagentForkSnapshot {
+    /// Rebinds a checked source into independently sequenced child ownership.
+    /// Prefix-covered raw rows stay excluded; complete selective anchors shift
+    /// with the physical tail. Terminal witnesses become inert provenance only
+    /// after source capture has projected their committed accepted authority.
+    pub(super) fn child_batch(
+        &self,
+        child_cid: &str,
+        created_at: u64,
+    ) -> Result<Option<crate::storage::transcript::TranscriptAppendBatch>> {
+        let prefix = self
+            .compaction_epoch
+            .as_ref()
+            .map_or(0, |epoch| epoch.through_sequence);
+        if let Some(epoch) = &self.compaction_epoch {
+            if self
+                .entries
+                .iter()
+                .any(|row| row.conversation_id != epoch.conversation_id)
+            {
+                return Err(MezError::conflict(
+                    "fork source rows changed conversation identity",
+                ));
+            }
+            let expected = self.source_high_water.checked_sub(prefix).ok_or_else(|| {
+                MezError::conflict("fork source prefix exceeds captured frontier")
+            })?;
+            let actual = self
+                .entries
+                .iter()
+                .filter(|row| row.sequence > prefix && row.sequence <= self.source_high_water)
+                .count() as u64;
+            if actual != expected {
+                return Err(MezError::conflict(
+                    "fork source is missing retained physical rows",
+                ));
+            }
+        }
+        let mut rows = Vec::new();
+        for source in self
+            .entries
+            .iter()
+            .filter(|row| row.sequence > prefix && row.sequence <= self.source_high_water)
+        {
+            let mut child = source.clone();
+            child.conversation_id = child_cid.into();
+            child.sequence = (rows.len() as u64)
+                .checked_add(1)
+                .ok_or_else(|| MezError::invalid_state("fork child sequence is exhausted"))?;
+            child.created_at_unix_seconds = created_at;
+            if child.role == mez_agent::TranscriptRole::System
+                && let Some(content) =
+                    crate::storage::transcript::compaction_handoff::inherited_terminal_audit(
+                        &child.content,
+                    )?
+            {
+                child.content = content;
+            }
+            rows.push(child);
+        }
+        if let Some(mut epoch) = self.compaction_epoch.clone() {
+            epoch.conversation_id = child_cid.into();
+            epoch.through_sequence = 0;
+            for range in &mut epoch.ranges {
+                range.first_sequence =
+                    range.first_sequence.checked_sub(prefix).ok_or_else(|| {
+                        MezError::conflict("fork selective start precedes raw source")
+                    })?;
+                range.through_sequence = range
+                    .through_sequence
+                    .checked_sub(prefix)
+                    .ok_or_else(|| MezError::conflict("fork selective end precedes raw source"))?;
+            }
+            crate::storage::transcript::TranscriptAppendBatch::initial_projection(epoch, rows)
+                .map(Some)
+        } else if rows.is_empty() {
+            Ok(None)
+        } else {
+            crate::storage::transcript::TranscriptAppendBatch::rows(rows).map(Some)
+        }
+    }
+}
+
+/// Renders initial model history from the same captured payload that admission
+/// will persist. This pure projection performs no archive I/O on the actor.
+pub(super) fn child_history(
+    pane_id: &str,
+    batch: &crate::storage::transcript::TranscriptAppendBatch,
+) -> crate::runtime::control::RuntimeAgentTranscriptContext {
+    super::super::context::runtime_agent_history_epoch_from_snapshot(
+        super::super::context::RuntimeAgentHistoryEpochInputs {
+            pane_id: pane_id.into(),
+            conversation_id: batch.conversation_id().into(),
+            ephemeral_source_entries: None,
+            active_entries: Some(batch.entries().len()),
+            pending_entries: Vec::new(),
+        },
+        batch.initial_compaction_epoch().cloned(),
+        batch.entries().to_vec(),
+    )
 }

@@ -1566,6 +1566,42 @@ impl RuntimeSessionService {
         initial_capability: Option<mez_agent::AgentCapability>,
         initial_model_selection: Option<mez_agent::AutoSizingSelection>,
     ) -> Result<RuntimeAgentPromptTurnStart> {
+        self.check_agent_prompt_submission(pane_id, prompt)?;
+        let history = self.runtime_agent_history_epoch_context(pane_id)?;
+        self.start_agent_prompt_turn_with_history(
+            pane_id,
+            prompt,
+            cooperation_mode,
+            initial_capability,
+            initial_model_selection,
+            (history, Vec::new()),
+        )
+    }
+
+    /// Runs the same trust, hook and admission preflight for captured history.
+    /// Only a caller owning the frozen source may supply this initial epoch;
+    /// provider scheduling remains fenced by initial persistence ownership.
+    pub(in crate::runtime) fn start_agent_prompt_turn_with_captured_history(
+        &mut self,
+        pane_id: &str,
+        prompt: &str,
+        cooperation_mode: Option<String>,
+        initial_model_selection: Option<mez_agent::AutoSizingSelection>,
+        history: crate::runtime::control::RuntimeAgentTranscriptContext,
+    ) -> Result<RuntimeAgentPromptTurnStart> {
+        self.check_agent_prompt_submission(pane_id, prompt)?;
+        self.start_agent_prompt_turn_with_history(
+            pane_id,
+            prompt,
+            cooperation_mode,
+            None,
+            initial_model_selection,
+            (history, Vec::new()),
+        )
+    }
+
+    /// Checks prompt submission policy independently of historical storage reads.
+    fn check_agent_prompt_submission(&mut self, pane_id: &str, prompt: &str) -> Result<()> {
         self.ensure_completion_admission_open()?;
         self.refresh_project_config_layers_for_pane(pane_id)?;
         if let Some(project_trust_request) = self
@@ -1591,15 +1627,7 @@ impl RuntimeSessionService {
                 block.hook_id, block.message
             )));
         }
-        let history = self.runtime_agent_history_epoch_context(pane_id)?;
-        self.start_agent_prompt_turn_with_history(
-            pane_id,
-            prompt,
-            cooperation_mode,
-            initial_capability,
-            initial_model_selection,
-            (history, Vec::new()),
-        )
+        Ok(())
     }
 
     /// Accepts one interactive prompt before its immutable history enters a worker.
@@ -1630,6 +1658,18 @@ impl RuntimeSessionService {
         prompt: &str,
         steering_receipts: Vec<crate::runtime::agent::RuntimeSteeringReceipt>,
     ) -> Result<bool> {
+        if self
+            .agent_shell_store()
+            .get(pane_id)
+            .is_some_and(|session| {
+                self.persistence
+                    .initial_transcript_pending(&session.session_id)
+            })
+        {
+            return Err(MezError::conflict(
+                "initial fork publication must settle before another prompt",
+            ));
+        }
         self.ensure_completion_admission_open()?;
         self.refresh_project_config_layers_for_pane(pane_id)?;
         if let Some(project_trust_request) = self

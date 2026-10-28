@@ -28,6 +28,8 @@ pub(crate) use transcript_admission::{
     RuntimeTranscriptAdmissionStamp, RuntimeTranscriptNextSequence,
 };
 mod effects;
+/// Whole-payload ownership of initial fork publication, including empty tails.
+mod initial_transcripts;
 mod objective_mirrors;
 pub use objective_mirrors::RuntimeObjectiveMirrorStatus;
 pub(crate) use objective_mirrors::RuntimeObjectiveMirrorWork;
@@ -75,6 +77,14 @@ pub(crate) struct RuntimePersistenceComponent {
     next_bookkeeping_generation: u64,
     /// Transcript writes handed to the external worker but not yet settled.
     in_flight_transcript_entries: BTreeMap<(String, u64), Vec<InFlightTranscriptBatch>>,
+    /// Initial publication owns its complete batch independently of row count.
+    in_flight_initial_transcripts: BTreeMap<
+        String,
+        Vec<(
+            std::path::PathBuf,
+            crate::storage::transcript::TranscriptAppendBatch,
+        )>,
+    >,
     metadata_checkpoint_generations: BTreeMap<String, u64>,
     pending_session_archive_conversation_ids: BTreeSet<String>,
     pending_session_archive_resumes: BTreeMap<String, (ClientId, String)>,

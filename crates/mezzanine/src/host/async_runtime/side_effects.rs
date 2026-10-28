@@ -1199,6 +1199,71 @@ where
                         }
                     }
                 }
+                RuntimeSideEffect::PersistInitialTranscript {
+                    store,
+                    path,
+                    batch: initial_batch,
+                } => {
+                    let result = if let Some(id) = claim_id.filter(|id| *id != 0) {
+                        let batch = initial_batch.clone();
+                        let worker_path = path.clone();
+                        tokio::task::spawn_blocking(move || {
+                            if batch.initial_compaction_epoch().is_none() {
+                                return Err(MezError::invalid_args(
+                                    "initial transcript effect has no projection",
+                                ));
+                            }
+                            if store.transcript_path(batch.conversation_id())? != worker_path {
+                                return Err(MezError::invalid_state(
+                                    "initial transcript settlement target changed",
+                                ));
+                            }
+                            // Admission already made rows and epoch durable before
+                            // releasing this claim. The worker retires its exact
+                            // receipt; it writes no new historical rows or actions.
+                            store.settle_transcript_append_receipt(&batch, id)
+                        })
+                        .await
+                        .map_err(|error| {
+                            MezError::invalid_state(format!(
+                                "initial transcript settlement worker failed: {error}"
+                            ))
+                        })
+                        .and_then(|result| result)
+                    } else {
+                        Err(MezError::invalid_state(
+                            "initial transcript worker received an unclaimed publication",
+                        ))
+                    };
+                    let outcome = match result {
+                        Ok(()) => {
+                            report.completed = report.completed.saturating_add(1);
+                            PersistenceEvent::InitialTranscriptCompleted {
+                                batch: initial_batch,
+                                path,
+                            }
+                        }
+                        Err(error) => {
+                            report.failed = report.failed.saturating_add(1);
+                            // The publication already passed admission. Only I/O
+                            // can make the same retirement attempt succeed later;
+                            // state/authority mismatches need explicit repair.
+                            let retryable = error.kind() == crate::error::MezErrorKind::Io;
+                            PersistenceEvent::InitialTranscriptFailed {
+                                batch: initial_batch,
+                                path,
+                                error: error.message().to_string(),
+                                retryable,
+                            }
+                        }
+                    };
+                    batch.push(RuntimeEvent::Persistence(
+                        PersistenceEvent::TranscriptClaim {
+                            claim_id: claim_id.unwrap_or(0),
+                            outcome: Box::new(outcome),
+                        },
+                    ));
+                }
                 RuntimeSideEffect::PersistTranscriptEntries {
                     store,
                     path,

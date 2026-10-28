@@ -78,6 +78,10 @@ exact raw rows, including a genuinely empty tail. A partial write remains
 recoverable and cannot acknowledge a complete inherited context or overwrite a
 different saved summary. Recovery does not ask a model to recreate that context
 or execute historical actions again.
+A forked subagent uses that captured projection for its first request as well as
+later replay. Its initial turn waits for complete publication, even when there
+are no raw rows to append. Previously accepted terminal-compaction summaries
+remain summaries; their copied audit records do not execute or compact again.
 
 Rows appended after a compactor's source was captured stay in retained history.
 Runtime counters follow assigned sequence positions, including intervening writers;

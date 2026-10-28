@@ -358,6 +358,7 @@ impl RuntimeSideEffectRouter {
             RuntimeSideEffect::Persist { .. }
                 | RuntimeSideEffect::PersistAuditLog { .. }
                 | RuntimeSideEffect::PersistTranscriptEntries { .. }
+                | RuntimeSideEffect::PersistInitialTranscript { .. }
                 | RuntimeSideEffect::PersistAgentSessionMetadata { .. }
                 | RuntimeSideEffect::PersistPresentationEntries { .. }
                 | RuntimeSideEffect::PersistSteeringPresentation { .. }
@@ -396,7 +397,11 @@ impl RuntimeSideEffectRouter {
             }
             self.persistence.remove(position);
         }
-        let claim_id = if matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { .. }) {
+        let claim_id = if matches!(
+            effect,
+            RuntimeSideEffect::PersistTranscriptEntries { .. }
+                | RuntimeSideEffect::PersistInitialTranscript { .. }
+        ) {
             if self.next_transcript_claim_id == 0 {
                 use rand::RngExt;
                 self.next_transcript_claim_id = rand::rng().random_range(1..=u64::MAX / 2);
@@ -482,25 +487,23 @@ impl RuntimeSideEffectRouter {
     pub(super) fn hold_transcript_receipts_after(
         &mut self,
         previous_id: u64,
-    ) -> Vec<(
-        u64,
-        crate::storage::transcript::AgentTranscriptStore,
-        Vec<mez_agent::transcript::TranscriptEntry>,
-    )> {
+    ) -> Vec<(u64, RuntimeSideEffect)> {
         self.persistence
             .iter_mut()
             .filter_map(|queued| {
                 let id = queued
                     .claim_id
                     .filter(|id| *id > previous_id && !queued.receipt_scheduled)?;
-                let RuntimeSideEffect::PersistTranscriptEntries { store, entries, .. } =
-                    &queued.effect
-                else {
+                if !matches!(
+                    &queued.effect,
+                    RuntimeSideEffect::PersistTranscriptEntries { .. }
+                        | RuntimeSideEffect::PersistInitialTranscript { .. }
+                ) {
                     return None;
-                };
+                }
                 queued.receipt_held = true;
                 queued.receipt_scheduled = true;
-                Some((id, store.clone(), entries.clone()))
+                Some((id, queued.effect.clone()))
             })
             .collect()
     }
@@ -739,6 +742,58 @@ impl RuntimeSideEffectRouter {
         self.claimed_transcripts.iter().any(|claim| {
             !claim.blocked && matches!(&claim.effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
         })
+    }
+
+    /// Matches exact initial payload, path and mandatory physical claim id.
+    pub(super) fn owns_claimed_initial_transcript(
+        &self,
+        id: u64,
+        batch: &crate::storage::transcript::TranscriptAppendBatch,
+        path: &std::path::Path,
+    ) -> bool {
+        self.claimed_transcripts.iter().any(|claim| !claim.blocked
+            && id != 0 && claim.id == id
+            && matches!(&claim.effect, RuntimeSideEffect::PersistInitialTranscript {batch: owned,path: owned_path,..} if owned == batch && owned_path == path))
+    }
+
+    /// Retires one exact completed initial owner, including metadata-only work.
+    pub(super) fn settle_claimed_initial_transcript(
+        &mut self,
+        id: u64,
+        batch: &crate::storage::transcript::TranscriptAppendBatch,
+        path: &std::path::Path,
+    ) -> bool {
+        if !self.owns_claimed_initial_transcript(id, batch, path) {
+            return false;
+        }
+        let Some(position) = self.claimed_transcripts.iter().position(|claim| !claim.blocked
+            && claim.id == id
+            && matches!(&claim.effect, RuntimeSideEffect::PersistInitialTranscript {batch: owned,path: owned_path,..} if owned == batch && owned_path == path)) else {return false;};
+        let Some(claim) = self.claimed_transcripts.remove(position) else {
+            return false;
+        };
+        self.persistence
+            .retain(|queued| queued.recovered_claim != Some(claim.id));
+        true
+    }
+
+    /// Keeps a permanently rejected initial owner visible without worker replay.
+    pub(super) fn block_claimed_initial_transcript(
+        &mut self,
+        id: u64,
+        batch: &crate::storage::transcript::TranscriptAppendBatch,
+        path: &std::path::Path,
+    ) {
+        if !self.owns_claimed_initial_transcript(id, batch, path) {
+            return;
+        }
+        if let Some(claim) = self.claimed_transcripts.iter_mut().find(|claim| !claim.blocked
+            && claim.id == id
+            && matches!(&claim.effect, RuntimeSideEffect::PersistInitialTranscript {batch: owned,path: owned_path,..} if owned == batch && owned_path == path)) {
+            claim.blocked = true;
+            let id = claim.id;
+            self.persistence.retain(|queued| queued.recovered_claim != Some(id));
+        }
     }
 
     /// Retires exact persistence work that no worker has claimed yet.
@@ -1044,5 +1099,64 @@ mod transcript_claim_tests {
             replacement.persistence[0].claim_id
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+    /// Whole initial claims retain metadata through receipt holds and worker
+    /// recovery. Wrong generations, paths or epoch bytes cannot retire even an
+    /// empty owner; an actual admitted and settled batch retires exactly once.
+    #[test]
+    fn initial_transcript_claims_fence_complete_metadata_only_owner() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-initial-claim-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        ));
+        let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+        let epoch = crate::storage::transcript::AgentCompactionEpoch {
+            version: 1,
+            conversation_id: "initial-child".into(),
+            through_sequence: 0,
+            summary: "EXACT_INITIAL".into(),
+            ranges: vec![],
+        };
+        let batch = crate::storage::transcript::TranscriptAppendBatch::initial_projection(
+            epoch.clone(),
+            vec![],
+        )
+        .unwrap();
+        let path = store.transcript_path(batch.conversation_id()).unwrap();
+        let mut route = RuntimeSideEffectRouter::default();
+        route.push_persistence(RuntimeSideEffect::PersistInitialTranscript {
+            store: store.clone(),
+            path: path.clone(),
+            batch: batch.clone(),
+        });
+        assert!(route.drain_persistence_claims(1).is_empty());
+        let held = route.hold_transcript_receipts_after(0);
+        assert_eq!(held.len(), 1);
+        let id = held[0].0;
+        store.accept_transcript_append_receipt(&batch, id).unwrap();
+        assert!(route.finish_transcript_receipt(id, true));
+        assert_eq!(route.drain_persistence_claims(1).len(), 1);
+        assert!(route.owns_claimed_initial_transcript(id, &batch, &path));
+        assert!(!route.owns_claimed_initial_transcript(id + 1, &batch, &path));
+        assert!(!route.owns_claimed_initial_transcript(id, &batch, &path.with_extension("other")));
+        let mut different = epoch;
+        different.summary = "DIFFERENT_INITIAL".into();
+        let different = crate::storage::transcript::TranscriptAppendBatch::initial_projection(
+            different,
+            vec![],
+        )
+        .unwrap();
+        assert!(!route.settle_claimed_initial_transcript(id, &different, &path));
+        assert!(!route.owns_claimed_transcript_id(id, &[], &path));
+        assert_eq!(route.recover_claimed_transcripts(), 1);
+        let recovered = route.drain_persistence_claims(1);
+        assert!(
+            matches!(&recovered[..],[(RuntimeSideEffect::PersistInitialTranscript {batch: actual,..},Some(actual_id))] if actual == &batch && *actual_id == id)
+        );
+        store.settle_transcript_append_receipt(&batch, id).unwrap();
+        assert!(route.settle_claimed_initial_transcript(id, &batch, &path));
+        assert!(!route.settle_claimed_initial_transcript(id, &batch, &path));
+        assert_eq!(route.recover_claimed_transcripts(), 0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
