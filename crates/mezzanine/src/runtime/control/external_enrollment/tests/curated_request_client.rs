@@ -38,6 +38,14 @@ async fn external_claude_bare_bootstrap_installed_module_has_native_durable_usag
         .await;
 }
 
+/// Genuine classic child starts bind separate request identities to one native
+/// creator. Unknown children remain inert and exact child replay cannot recharge.
+#[tokio::test]
+#[ignore = "requires explicit offline Node binary and built mez helper"]
+async fn external_claude_installed_child_requests_preserve_native_owner_and_replay() {
+    qualify_request_client_with_install("claude-child-ordinary-fixture.mjs", true, 24, true).await;
+}
+
 /// A cloud-style response model is metadata rather than a source selector.
 /// Actual installed callbacks and native helper parsing must preserve its exact
 /// spelling through a durable commit/replay and status, without another expense
@@ -87,6 +95,7 @@ async fn qualify_request_client_with_install(
     requests: usize,
     installed: bool,
 ) {
+    let child_scopes = script_name == "claude-child-ordinary-fixture.mjs";
     let paired_clear = script_name == "claude-clear-ordinary-fixture.mjs";
     let pending_recovery = script_name == "claude-pending-ordinary-fixture.mjs";
     let model_metadata = script_name == "claude-model-ordinary-fixture.mjs";
@@ -188,6 +197,14 @@ async fn qualify_request_client_with_install(
         )
         .unwrap();
         std::fs::write(
+            directory.join("claude_child_scopes.mjs"),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/integrations/bootstrap/claude_child_scopes.mjs"
+            )),
+        )
+        .unwrap();
+        std::fs::write(
             directory.join("claude_request.mjs"),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
@@ -270,7 +287,8 @@ async fn qualify_request_client_with_install(
         assert!(connection.caller_client_id().is_none());
         // The genuine missing-counter outcome has completed before the next
         // lifecycle helper. Prior reported expense must not hide that loss.
-        if installed && claude && !pending_recovery && ordinal == 9 {
+        if installed && claude && !pending_recovery && ordinal == if child_scopes { 18 } else { 9 }
+        {
             let status = handle
                 .execute_agent_shell_command(
                     inspection_client.as_ref().unwrap().clone(),
@@ -401,7 +419,9 @@ async fn qualify_request_client_with_install(
                 |row| row.get::<_, i64>(0)
             )
             .unwrap(),
-        if paired_clear || pending_recovery {
+        if child_scopes {
+            48
+        } else if paired_clear || pending_recovery {
             32
         } else if claude {
             16
@@ -417,13 +437,15 @@ async fn qualify_request_client_with_install(
                 |row| row.get::<_, i64>(0)
             )
             .unwrap(),
-        if paired_clear || pending_recovery {
+        if child_scopes {
+            3
+        } else if paired_clear || pending_recovery {
             2
         } else {
             1
         }
     );
-    if paired_clear || pending_recovery {
+    if paired_clear || pending_recovery || child_scopes {
         assert_eq!(
             database
                 .query_row(

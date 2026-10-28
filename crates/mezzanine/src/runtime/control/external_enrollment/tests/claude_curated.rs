@@ -635,6 +635,14 @@ async fn qualify_curated_probe_with_autoload(
             std::fs::write(directory.join("plugin/hooks").join(name), source).unwrap();
         }
         std::fs::write(
+            directory.join("plugin/hooks/claude_child_scopes.mjs"),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/integrations/bootstrap/claude_child_scopes.mjs"
+            )),
+        )
+        .unwrap();
+        std::fs::write(
             directory.join("plugin/hooks/claude_request.mjs"),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),

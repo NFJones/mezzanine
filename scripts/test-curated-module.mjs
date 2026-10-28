@@ -11,19 +11,22 @@ import { captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome } from 
 
 import { createClaudeUsageGapSender } from "../crates/mezzanine/src/integrations/bootstrap/claude_usage_gap.mjs";
 
+import { createClaudeChildScopes } from "../crates/mezzanine/src/integrations/bootstrap/claude_child_scopes.mjs";
+
 const template = readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_module.mjs", import.meta.url), "utf8");
 const source = readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_client.mjs", import.meta.url), "utf8");
 const body = source.replace(/__MEZ_[A-Z]+__/g, marker => ({ __MEZ_OWNED__: "true", __MEZ_LIFETIME__: "observerLifetime",
   __MEZ_INTERVAL__: "10000", __MEZ_HELPER__: JSON.stringify("/owned/mez"), __MEZ_INSTANCE__: "startInstance",
   __MEZ_REPLACING__: "previousObserver !== undefined", __MEZ_PREDECESSOR__: "previousObserver" })[marker]);
 const code = template.replace(/^import .*;\n/gm, "").replace("export function register", "function register")
+  .replace("__MEZ_GAP_INIT_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/claude_usage_gap_runner.mjs", import.meta.url), "utf8").replace("__MEZ_HELPER__", JSON.stringify("/owned/mez")))
   .replace("__MEZ_SOURCE_BODY__", body)
   .replace("__MEZ_LIFECYCLE_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/claude_lifecycle_runner.mjs", import.meta.url), "utf8").replace("__MEZ_HELPER__", JSON.stringify("/owned/mez")))
   .replace("__MEZ_STEP_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/claude_request_step.mjs", import.meta.url), "utf8")
     .replace("__MEZ_GAP_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/claude_usage_gap_runner.mjs", import.meta.url), "utf8").replace("__MEZ_HELPER__", JSON.stringify("/owned/mez")))
     .replace("__MEZ_REQUEST_BODY__", readFileSync(new URL("../crates/mezzanine/src/integrations/bootstrap/curated_request_runner.mjs", import.meta.url), "utf8")
       .replace("__MEZ_HELPER__", JSON.stringify("/owned/mez"))));
-const register = new Function("createCuratedLifetime", "projectClaudeEvent", "createCuratedRequestAccountingClient", "captureClaudeStep", "identifyClaudeStep", "projectClaudeStepOutcome", "createClaudeLifecycleSender", "createClaudeUsageGapSender", `${code}\nreturn register;`)(createCuratedLifetime, projectClaudeEvent, createCuratedRequestAccountingClient, captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome, createClaudeLifecycleSender, createClaudeUsageGapSender);
+const register = new Function("createCuratedLifetime", "projectClaudeEvent", "createCuratedRequestAccountingClient", "captureClaudeStep", "identifyClaudeStep", "projectClaudeStepOutcome", "createClaudeLifecycleSender", "createClaudeUsageGapSender", "createClaudeChildScopes", `${code}\nreturn register;`)(createCuratedLifetime, projectClaudeEvent, createCuratedRequestAccountingClient, captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome, createClaudeLifecycleSender, createClaudeUsageGapSender, createClaudeChildScopes);
 
 const start = (session = "session-a", extra = {}) => ({ hook_event_name: "SessionStart", session_id: session, source: "startup", ...extra });
 const end = (session = "session-a", extra = {}) => ({ hook_event_name: "SessionEnd", session_id: session, reason: "clear", ...extra });
@@ -62,7 +65,7 @@ function fixture() {
  * stops its timer without treating Stop/tool/child observations as retirement. */
 test("curated module owns one main session and filters child or foreign end", async () => {
   const f = fixture();
-  assert.deepEqual([...f.hooks.keys()], ["classic.SessionStart", "classic.SessionEnd", "classic.UserPromptSubmit", "classic.Notification", "classic.Stop", "classic.StopFailure", "turn.step"]);
+  assert.deepEqual([...f.hooks.keys()], ["classic.SessionStart", "classic.SessionEnd", "classic.SubagentStart", "classic.UserPromptSubmit", "classic.Notification", "classic.Stop", "classic.StopFailure", "turn.step"]);
   assert.equal(await f.invoke(start()), f.result);
   assert.equal(await f.invoke(start()), f.result);
   assert.equal(f.calls.length, 1);
@@ -845,4 +848,184 @@ test("curated Claude unavailable readiness discloses loss without expense", asyn
   assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 0);
   assert.equal(f.calls.at(-1).operation, "curated-usage-gap");
   assert.equal(f.calls.at(-1).reason, "request-readiness");
+});
+
+/** A genuine child-start fact can associate future pinned child steps with an
+ * already enrolled parent without changing parent lifecycle/title. Identical
+ * turn/index values across main and child must name separate immutable reports. */
+test("Claude observed child requests report once under their original parent scope", async () => {
+  const f = fixture(); await f.invoke(start());
+  const main = f.hooks.get("turn.step")(f.sdk, stepInput(), async function* () { return stepResult(); });
+  await main.next();
+  const before = f.lifecycle.length;
+  const event = { hook_event_name: "SubagentStart", session_id: "session-a", agent_id: "child-a" };
+  const childStart = f.hooks.get("classic.SubagentStart");
+  if (childStart) assert.equal(await childStart(f.sdk, event, async original => { assert.equal(original, event); return f.result; }), f.result);
+  for (let n = 0; n < 2; n++) {
+    const input = stepInput({ agentId: "child-a" }), final = stepResult();
+    const stream = f.hooks.get("turn.step")(f.sdk, input, async function* original(passed) {
+      assert.equal(passed, input); yield "unchanged"; return final;
+    });
+    assert.equal((await stream.next()).value, "unchanged");
+    assert.equal((await stream.next()).value, final);
+  }
+  const reports = f.calls.filter(call => call.operation === "curated-usage-end");
+  assert.equal(reports.length, 3, "qualified child usage was discarded");
+  assert.notEqual(reports[0].event_id, reports[1].event_id);
+  assert.equal(reports[1].event_id, reports[2].event_id);
+  assert.equal(f.lifecycle.length, before);
+  assert(!JSON.stringify(reports).includes("child-a"));
+});
+
+/** Child-start completion is fenced by the original parent receipt. A delayed
+ * old callback cannot populate the new session, and cross-session child-ID
+ * reuse remains unavailable rather than borrowing whichever parent is current. */
+test("Claude delayed child starts cannot borrow a replacement parent", async () => {
+  const f = fixture(); await f.invoke(start());
+  let finish;
+  const event = { hook_event_name: "SubagentStart", session_id: "session-a", agent_id: "child-a" };
+  const pending = f.invoke(event, () => new Promise(resolve => { finish = resolve; }));
+  await f.invoke(start("session-b"));
+  finish(f.result); assert.equal(await pending, f.result);
+  const before = f.calls.length;
+  const stream = f.hooks.get("turn.step")(f.sdk, stepInput({ agentId: "child-a" }), async function* () { return stepResult(); });
+  await stream.next(); assert.equal(f.calls.length, before);
+  await f.invoke({ ...event, session_id: "session-b" });
+  assert.equal(f.calls.at(-1).operation, "curated-usage-gap");
+  assert.equal(f.calls.at(-1).reason, "request-readiness");
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 0);
+});
+
+/** Failed downstream hooks and mutable input cannot manufacture associations.
+ * Callback fields are snapshotted before waiting; private fields are never read
+ * and the exact original result/error remains the vendor's own value. */
+test("Claude child start captures once and preserves failure and result identity", async () => {
+  const f = fixture(); await f.invoke(start());
+  const failed = { hook_event_name: "SubagentStart", session_id: "session-a", agent_id: "failed" };
+  const error = new Error("PRIVATE");
+  await assert.rejects(f.invoke(failed, async original => { assert.equal(original, failed); throw error; }), value => value === error);
+  const before = f.calls.length;
+  let stream = f.hooks.get("turn.step")(f.sdk, stepInput({ agentId: "failed" }), async function* () { return stepResult(); });
+  await stream.next(); assert.equal(f.calls.length, before);
+  const event = { ...failed, agent_id: "captured" };
+  for (const key of ["cwd", "transcript_path", "agent_transcript_path", "agent_type"]) {
+    Object.defineProperty(event, key, { get() { assert.fail("PRIVATE field read"); } });
+  }
+  assert.equal(await f.invoke(event, async original => { assert.equal(original, event); event.agent_id = "mutated"; return f.result; }), f.result);
+  stream = f.hooks.get("turn.step")(f.sdk, stepInput({ agentId: "mutated" }), async function* () { return stepResult(); });
+  await stream.next(); assert.equal(f.calls.length, before);
+  stream = f.hooks.get("turn.step")(f.sdk, stepInput({ agentId: "captured" }), async function* () { return stepResult(); });
+  await stream.next(); assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 1);
+});
+
+/** A child's Stop can precede more work. It cannot retire/repaint the parent or
+ * discard a request admitted earlier; finalized counters still use its exact
+ * original ticket, while the parent timer/lifecycle remain untouched. */
+test("Claude child Stop leaves parent lifecycle and admitted expense intact", async () => {
+  const f = fixture(); await f.invoke(start());
+  await f.invoke({ hook_event_name: "SubagentStart", session_id: "session-a", agent_id: "child-a" });
+  const lifecycle = f.lifecycle.length, final = stepResult();
+  const stream = f.hooks.get("turn.step")(f.sdk, stepInput({ agentId: "child-a" }), async function* () { yield "chunk"; return final; });
+  assert.equal((await stream.next()).value, "chunk");
+  await f.invoke({ hook_event_name: "Stop", session_id: "session-a", agent_id: "child-a", stop_hook_active: true });
+  assert.equal((await stream.next()).value, final);
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 1);
+  assert.equal(f.lifecycle.length, lifecycle);
+  assert.equal(f.timers[0].cancelled, false);
+});
+
+/** Child metadata has a finite no-eviction fence, separate from the shared
+ * request budget. Exhaustion discloses a fixed gap under the original parent,
+ * keeps existing children usable, and never alters a vendor callback result. */
+test("Claude child association exhaustion discloses loss without evicting history", async () => {
+  const f = fixture(); await f.invoke(start());
+  for (let n = 0; n <= 128; n++) {
+    assert.equal(await f.invoke({ hook_event_name: "SubagentStart", session_id: "session-a", agent_id: `child-${n}` }), f.result);
+  }
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-gap").length, 1);
+  assert.equal(f.calls.at(-1).reason, "capacity");
+  const before = f.calls.length;
+  let stream = f.hooks.get("turn.step")(f.sdk, stepInput({ agentId: "child-128" }), async function* () { return stepResult(); });
+  await stream.next(); assert.equal(f.calls.length, before);
+  stream = f.hooks.get("turn.step")(f.sdk, stepInput({ agentId: "child-0" }), async function* () { return stepResult(); });
+  await stream.next(); assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 1);
+});
+
+/** Parent clear rotates its exact original observer. Child identity metadata
+ * cannot cross that epoch merely because the vendor session label stayed equal;
+ * only a fresh successful child-start observation may refresh the association. */
+test("Claude child scopes require genuine refresh after same-session clear", async () => {
+  const f = fixture(), run = f.sdk.process.run;
+  f.sdk.process.run = async (argv, options) => {
+    const response = await run(argv, options);
+    if (argv[1] === "harness-source" && JSON.parse(argv[2]).predecessor_generation !== undefined) {
+      const value = JSON.parse(response.stdout);
+      return { exitCode: 0, stdout: JSON.stringify({ ...value, generation: 2, observer_epoch: 2, observer_witness: "b".repeat(64) }) };
+    }
+    return response;
+  };
+  await f.invoke(start());
+  const child = { hook_event_name: "SubagentStart", session_id: "session-a", agent_id: "child-a" };
+  await f.invoke(child);
+  await f.invoke(end()); await f.invoke(start("session-a", { source: "clear" }));
+  const before = f.calls.length;
+  let stream = f.hooks.get("turn.step")(f.sdk, stepInput({ agentId: "child-a" }), async function* () { return stepResult(); });
+  await stream.next(); assert.equal(f.calls.length, before);
+  await f.invoke(child);
+  stream = f.hooks.get("turn.step")(f.sdk, stepInput({ agentId: "child-a" }), async function* () { return stepResult(); });
+  await stream.next();
+  const report = f.calls.find(call => call.operation === "curated-usage-end");
+  assert.equal(report.generation, 2); assert.equal(report.observer_witness, "b".repeat(64));
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 1);
+});
+
+/** Child requests share the existing sixteen active/pending slots with main
+ * work. Pressure produces only an original-parent diagnostic while the vendor
+ * request still delegates; draining admitted work preserves every final report. */
+test("Claude qualified children share the bounded request custody budget", async () => {
+  const f = fixture(); await f.invoke(start());
+  await f.invoke({ hook_event_name: "SubagentStart", session_id: "session-a", agent_id: "child-a" });
+  const streams = [];
+  for (let index = 0; index < 16; index++) {
+    const stream = f.hooks.get("turn.step")(f.sdk, stepInput({ index, agentId: "child-a" }), async function* () { yield "chunk"; return stepResult({ index }); });
+    assert.equal((await stream.next()).value, "chunk"); streams.push(stream);
+  }
+  const before = f.calls.filter(call => call.operation === "curated-usage-begin").length;
+  const extra = f.hooks.get("turn.step")(f.sdk, stepInput({ index: 16, agentId: "child-a" }), async function* () { return "unchanged"; });
+  assert.equal((await extra.next()).value, "unchanged");
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-begin").length, before);
+  assert.equal(f.calls.at(-1).reason, "capacity");
+  for (const stream of streams) await stream.next();
+  assert.equal(f.calls.filter(call => call.operation === "curated-usage-end").length, 16);
+});
+
+/** Child expense retains the exact original obligation after lost acknowledgment.
+ * Unknown child work cannot flush it; a later qualified callback can retry it
+ * without replacing counters or charging the same child outcome again. */
+test("Claude child lost ACK retains original report and unknown child cannot retry", async () => {
+  const f = fixture(); await f.invoke(start());
+  await f.hooks.get("classic.SubagentStart")(f.sdk, {
+    session_id: "session-a", hook_event_name: "SubagentStart", agent_id: "child-a",
+  }, async () => f.result);
+  const run = f.sdk.process.run;
+  f.sdk.process.run = async (argv, options) => {
+    const response = await run(argv, options);
+    return JSON.parse(argv[2]).operation === "curated-usage-end"
+      ? { exitCode: 0, stdout: "{}" } : response;
+  };
+  const event = stepInput({ agentId: "child-a" });
+  const first = f.hooks.get("turn.step")(f.sdk, event, async function* () { return stepResult(); });
+  await first.next();
+  const endings = () => f.calls.filter(call => call.operation === "curated-usage-end");
+  assert.equal(endings().length, 2);
+  const original = JSON.stringify(endings()[0]);
+  f.sdk.process.run = run;
+  const before = f.calls.length;
+  const unknown = f.hooks.get("turn.step")(f.sdk, stepInput({ agentId: "unknown" }), async function* () { return stepResult(); });
+  await unknown.next();
+  assert.equal(f.calls.length, before);
+  const replay = f.hooks.get("turn.step")(f.sdk, event, async function* () { return stepResult(); });
+  await replay.next();
+  assert.equal(endings().length, 4);
+  assert(endings().every(call => JSON.stringify(call) === original));
 });

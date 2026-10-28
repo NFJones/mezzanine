@@ -1,5 +1,7 @@
 /** Content-free Claude turn.step projection from public generated mod types.
- * The pinned session/turn/index tuple names one genuine main request; opaque
+ * The pinned session/turn/index tuple names a genuine request; qualified child
+ * loops add their opaque identity in separate hash domains. Main hashes stay
+ * unchanged. Opaque
  * hashes exclude counters/model/time so corrected outcomes conflict. Only final
  * SDK usage is read, never stream chunks, answers, tools or transcripts. SDK
  * ModelUsage reports uncached input plus separate cache read/create counts;
@@ -13,13 +15,15 @@ const label = value => typeof value === 'string' && value.length <= 128 && value
   && new TextEncoder().encode(value).length <= 128
   && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(value);
 
-/** Capture pinned main-loop identity once before hashing or downstream work. */
-export function captureClaudeStep(session, event) {
+/** Capture pinned identity once. Only a caller-qualified original child scope
+ * can admit a child selector; metadata alone grants no native authority. */
+export function captureClaudeStep(session, event, qualifiedChild) {
   try {
     if (!identifier(session) || !event || typeof event !== 'object' || Array.isArray(event)) return;
     const turnId = event.turnId, index = event.index, agentId = event.agentId;
-    if (!identifier(turnId) || !natural(index) || agentId !== undefined) return;
-    return Object.freeze({ session, turnId, index });
+    if (!identifier(turnId) || !natural(index)) return;
+    if (agentId !== undefined && (!identifier(agentId) || typeof qualifiedChild !== "function" || qualifiedChild(agentId) !== true)) return;
+    return Object.freeze({ session, turnId, index, ...(agentId === undefined ? {} : { agentId }) });
   } catch { /* unknown/malformed identity remains unavailable */ }
 }
 
@@ -28,12 +32,15 @@ export function captureClaudeStep(session, event) {
 export async function identifyClaudeStep(captured) {
   if (!captured) return;
   const hash = async domain => {
-    const bytes = new TextEncoder().encode(JSON.stringify([domain, captured.session, captured.turnId, captured.index]));
+    const identity = captured.agentId === undefined
+      ? [domain, captured.session, captured.turnId, captured.index]
+      : [domain, captured.session, captured.agentId, captured.turnId, captured.index];
+    const bytes = new TextEncoder().encode(JSON.stringify(identity));
     const digest = await crypto.subtle.digest('SHA-256', bytes);
     return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
   };
-  const request_id = await hash('claude-turn-step/1');
-  const event_id = await hash('claude-turn-step-outcome/1');
+  const request_id = await hash(captured.agentId === undefined ? 'claude-turn-step/1' : 'claude-child-turn-step/1');
+  const event_id = await hash(captured.agentId === undefined ? 'claude-turn-step-outcome/1' : 'claude-child-turn-step-outcome/1');
   return Object.freeze({ ...captured, request_id, event_id });
 }
 

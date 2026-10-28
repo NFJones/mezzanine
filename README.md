@@ -61,6 +61,7 @@ Shared HTTP execution keeps wire payloads out of transport diagnostics. The
 [authenticated-search foundation](docs/reference-manual/agent-actions.md#http-execution-and-authenticated-search-foundation)
 does not activate paid search or change the default backend.
 
+Claude child accounting requires a genuine start under the current parent observer.
 Ordinary Claude accounting keeps missing-counter or delivery coverage visible
 after earlier reported usage, without changing vendor requests or recorded expense.
 Response-model metadata preserves bounded cloud model labels through durable replay.

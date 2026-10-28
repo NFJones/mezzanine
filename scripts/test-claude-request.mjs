@@ -82,3 +82,20 @@ test('Claude response model labels preserve bounded inert metadata', async () =>
   assert.equal(captureClaudeStep('session@other', input()), undefined);
   assert.equal(captureClaudeStep('session-a', { ...input(), turnId: 'turn@other' }), undefined);
 });
+
+/** Child identity is accepted only with an explicit matching caller-owned
+ * association. It partitions opaque domains without changing original main IDs
+ * or exposing raw agent IDs in normalized expense reports. */
+test('Claude qualified child hashes isolate identical main and child turn positions', async () => {
+  const event = { ...input(), agentId: 'child-a' };
+  assert.equal(captureClaudeStep('session-a', event), undefined);
+  const main = await identifyClaudeStep(captureClaudeStep('session-a', input()));
+  const child = await identifyClaudeStep(captureClaudeStep('session-a', event, id => id === 'child-a'));
+  const other = await identifyClaudeStep(captureClaudeStep('session-a', { ...event, agentId: 'child-b' }, () => true));
+  assert.equal(main.request_id, '7042362f4a84ac30981915be04df27bcfdcb6f1feea2f3b169dbc9a307c564e6');
+  assert.equal(new Set([main.request_id, child.request_id, other.request_id]).size, 3);
+  assert.equal(new Set([main.event_id, child.event_id, other.event_id]).size, 3);
+  assert.equal((await identifyClaudeStep(captureClaudeStep('session-a', event, () => true))).event_id, child.event_id);
+  assert(!JSON.stringify(projectClaudeStepOutcome(child, result(), 101)).includes('child-a'));
+  for (const agentId of [null, '', '../PRIVATE', 1]) assert.equal(captureClaudeStep('session-a', { ...event, agentId }, () => true), undefined);
+});

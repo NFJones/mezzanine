@@ -2158,16 +2158,31 @@ Claude revision6 MUST share sixteen slots between active producers and retained
 unacknowledged normalized outcomes. Failed durable delivery MUST retain only the
 original report, client-local readiness ticket and exact still-live observer;
 callback replay MUST NOT replace its payload or multiply pending obligations.
-A later genuine main step MAY retry at most one retained report before its own
+A later genuine qualified main or bound-child step MAY retry at most one retained report before its own
 delegate, using the existing two-attempt same-report transport contract. Pending
 retry MUST be serialized, failures rotated without eviction, and pressure MUST
 refuse new telemetry rather than discard prior expense or block vendor delegation.
 Stopped/replaced/clear/negative-proof epochs MUST NOT carry pending reports into
-a successor. Unknown/child callbacks MUST NOT trigger retry; missing/cancelled
+a successor. Unknown or unqualified child callbacks MUST NOT trigger retry; missing/cancelled
 final usage MUST NOT fabricate a retained outcome. No timer, store persistence,
 provider replay or no-gap process/reload/restart guarantee is introduced. Exact
 revision1–4 module/client/step inputs MUST remain independently frozen or guarded
 for same-helper upgrades; receipt paths cannot authenticate executable relocation.
+Claude revision9 MAY account for a child `turn.step` only after a successful
+classic SubagentStart binds its captured session_id/agent_id to the exact still
+current parent observer. Downstream failure or parent replacement MUST NOT bind
+it. At most128 child identities MUST retain their original session, including
+failed starts; no eviction or cross-parent reuse may adopt old requests. A fresh
+genuine start is required after a parent observer epoch changes. Qualified child
+request/outcome hashes MUST include child identity in separate domains while
+main hashes stay exact; raw child IDs MUST NOT enter expense transport. All
+producers and pending outcomes share the existing sixteen-slot budget. Child
+Stop MUST NOT retire the parent or discard an admitted expense. Attribution uses
+the qualified native creator's measured cwd, not an unobserved virtual child
+cwd. Unknown, stale, cross-parent and uncorrelated resumed children remain
+unavailable. This grants no lifecycle/title or source-admission authority and
+makes no process/reload persistence claim. Exact revision8 files MUST remain
+recognizable for upgrade and repair.
 Claude revision8 MUST preserve exact bounded inert UTF8 response-model labels,
 including cloud punctuation such as `@`. These labels and provider metadata MUST
 NOT use the opaque session/request/marker selector grammar. The projector and

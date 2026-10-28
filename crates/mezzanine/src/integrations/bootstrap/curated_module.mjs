@@ -11,6 +11,7 @@ import { projectClaudeEvent, createClaudeLifecycleSender } from './claude_observ
 import { createCuratedRequestAccountingClient } from './curated_request_accounting.mjs';
 import { captureClaudeStep, identifyClaudeStep, projectClaudeStepOutcome } from './claude_request.mjs';
 import { createClaudeUsageGapSender } from './claude_usage_gap.mjs';
+import { createClaudeChildScopes } from './claude_child_scopes.mjs';
 
 export function register(on) {
   let observerLifetime = createCuratedLifetime();
@@ -26,6 +27,7 @@ export function register(on) {
   let activeRequestProducers = 0;
   let lifecycleSender;
   let usageGapSender;
+  const childScopes = createClaudeChildScopes();
 
   on('classic.SessionStart', async ($, e, next) => {
     let fact;
@@ -70,6 +72,12 @@ export function register(on) {
         __MEZ_SOURCE_BODY__
       }
       if (handoff && startOwner.receipt !== undefined) endedSessions.delete(fact.session);
+      {
+        const stepOwner = observerLifetime;
+        const stepObserver = stepOwner.receipt;
+        let gap;
+        __MEZ_GAP_INIT_BODY__
+      }
       __MEZ_LIFECYCLE_BODY__
     } catch { /* telemetry cannot change middleware results */ }
     finally {
@@ -107,6 +115,27 @@ export function register(on) {
       }
       try { endingOwner.stop(); } catch { /* local cancellation is neutral */ }
     }
+    return result;
+  });
+  // A child identity is metadata, not another parent registration or title.
+  // Capture its original scope before next; neither late success nor failure
+  // can rebind it to whichever parent happens to be current afterward.
+  on('classic.SubagentStart', async ($, e, next) => {
+    const owner = observerLifetime;
+    const observer = owner.receipt;
+    const session = boundSession;
+    const ticket = childScopes.prepare(session, e, observer);
+    let result;
+    try { result = await next(e); }
+    catch (error) { childScopes.cancel(ticket); throw error; }
+    try {
+      if (observerLifetime === owner && owner.receipt === observer && boundSession === session) {
+        const reason = childScopes.finish(ticket);
+        if (reason && usageGapSender?.owner === owner && usageGapSender.observer === observer) {
+          await usageGapSender.sender.observe(reason);
+        }
+      } else childScopes.cancel(ticket);
+    } catch { /* association/diagnostic loss never changes a child decision */ }
     return result;
   });
   on('classic.UserPromptSubmit', async ($, e, next) => {

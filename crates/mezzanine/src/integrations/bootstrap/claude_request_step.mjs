@@ -1,6 +1,6 @@
 /** Literal generator middleware: one delegate, unchanged chunks/final/error.
  * Active requests and unacknowledged normalized outcomes share sixteen slots.
- * A later genuine main step retries at most one pending original report before
+ * A later genuine qualified step retries at most one pending original report before
  * its own request. Only the exact still-live observer may deliver; no timers,
  * persistence, source handoff, newest lookup or provider replay is introduced. */
 const pendingRequestReports = new Set();
@@ -46,8 +46,8 @@ on('turn.step', async function* ($, e, next) {
   let alreadyPending = false;
   let finalized = false;
   try {
-    __MEZ_GAP_BODY__
-    captured = captureClaudeStep(session, e);
+    gap = usageGapSender?.owner === stepOwner && usageGapSender.observer === stepObserver ? usageGapSender.sender : undefined;
+    captured = captureClaudeStep(session, e, agentId => childScopes.current(session, agentId, stepObserver));
     if (captured) await retryRequestReport(stepOwner, stepObserver);
     if (captured && activeRequestProducers + pendingRequestReports.size >= 16) admissionGap = "capacity";
     if (captured && activeRequestProducers + pendingRequestReports.size < 16 && stepObserver !== undefined
@@ -57,7 +57,8 @@ on('turn.step', async function* ($, e, next) {
       step = await identifyClaudeStep(captured);
       alreadyPending = [...pendingRequestReports].some(pending => pending.owner === stepOwner
         && pending.observer === stepObserver && pending.ticket.request_id === step.request_id);
-      if (!alreadyPending && observerLifetime === stepOwner && boundSession === session && stepOwner.receipt === stepObserver) {
+      if (!alreadyPending && observerLifetime === stepOwner && boundSession === session && stepOwner.receipt === stepObserver
+          && (captured.agentId === undefined || childScopes.current(session, captured.agentId, stepObserver))) {
         const observerLifetime = stepOwner;
         __MEZ_REQUEST_BODY__
         accounting = requestAccounting;

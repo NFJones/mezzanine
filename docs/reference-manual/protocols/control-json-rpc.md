@@ -1881,6 +1881,16 @@ unavailable. Facts contain no prompt, response, error, transcript/cwd, model,
 counter or directive data. Downstream results/errors are preserved and telemetry
 failure cannot turn into an approval, refusal or continuation.
 
+The installed revision9 entry additionally captures only the session_id and
+agent_id of a successful classic.SubagentStart. Its metadata registry binds the
+child to the exact original parent observer, retains at most128 original-session
+identities without eviction, and requires a fresh genuine start after an epoch
+change. This is separate from lifecycle projection: child events cannot repaint
+or retire the parent. Qualified child turn.step requests use distinct opaque
+hash domains and the same sixteen active/pending slots and native creator cwd
+as main requests. Raw child IDs never enter usage capsules; unknown, stale and
+cross-parent children cannot borrow the current binding or trigger pending retry.
+
 The current [mod reference](https://code.claude.com/docs/en/plugins/mods/reference)
 and [public declarations](https://github.com/anthropics/claude-code/blob/main/mods/types/claude-code.d.ts)
 describe a curated no-Node/no-DOM environment. `$.process.run` is one-shot argv

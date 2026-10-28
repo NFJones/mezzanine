@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
 const [directory] = process.argv.slice(2);
+const childScopes = process.argv[1].endsWith('claude-child-ordinary-fixture.mjs');
 const pairedClear = process.argv[1].endsWith('claude-clear-ordinary-fixture.mjs');
 const responseModel = process.argv[1].endsWith('claude-model-ordinary-fixture.mjs')
   ? 'claude-haiku-4-5@20251001' : 'response-model';
@@ -55,10 +56,38 @@ for (let iteration = 0; iteration < 2; iteration++) {
   assert.equal(completed.done, true); assert.equal(completed.value, final);
 }
 assert.equal(helpers, 8);
+if (childScopes) {
+  const unknown = { turnId: 'turn-a', index: 0, agentId: 'unobserved' };
+  const inert = hooks.get('turn.step')(sdk, unknown, async function* (e) {
+    assert.equal(e, unknown); return final;
+  });
+  assert.equal((await inert.next()).value, final);
+  assert.equal(helpers, 8);
+  for (const [agentId, count] of [['child-a', 2], ['child-b', 1]]) {
+    assert.equal(await hooks.get('classic.SubagentStart')(sdk, {
+      session_id: 'session-a', hook_event_name: 'SubagentStart', agent_id: agentId,
+    }, async () => unchanged), unchanged);
+    for (let index = 0; index < count; index++) {
+      const event = Object.freeze({ turnId: 'turn-a', index: 0, agentId });
+      const stream = hooks.get('turn.step')(sdk, event, async function* (e) {
+        assert.equal(e, event); yield chunk; return final;
+      });
+      assert.equal((await stream.next()).value, chunk);
+      const beforeStop = helpers;
+      assert.equal(await hooks.get('classic.Stop')(sdk, {
+        session_id: 'session-a', hook_event_name: 'Stop', agent_id: agentId,
+        stop_hook_active: true,
+      }, async () => unchanged), unchanged);
+      assert.equal(helpers, beforeStop, 'child Stop cannot repaint or retire parent');
+      assert.equal((await stream.next()).value, final);
+    }
+  }
+  assert.equal(helpers, 17);
+}
 const missing = Object.freeze({ ...final, index: 1, usage: null });
 const stream = hooks.get('turn.step')(sdk, { turnId: 'turn-a', index: 1 }, async function* () { return missing; });
 assert.equal((await stream.next()).value, missing);
-assert.equal(helpers, 10);
+assert.equal(helpers, childScopes ? 19 : 10);
 assert.equal(coverageGaps.length, 1);
 assert.equal(coverageGaps[0].reason, "finalized-counters");
 for (const [name, extra] of [
@@ -71,7 +100,7 @@ for (const [name, extra] of [
     { session_id: 'session-a', hook_event_name: name, ...extra }, async () => unchanged), unchanged);
 }
 await hooks.get('classic.SessionEnd')(sdk, { session_id: 'session-a', hook_event_name: 'SessionEnd', reason: 'clear' }, async () => unchanged);
-assert.equal(helpers, 15);
+assert.equal(helpers, childScopes ? 24 : 15);
 assert.equal(cancelled, true);
 if (pairedClear) {
   assert.equal(await hooks.get('classic.SessionStart')(sdk, {

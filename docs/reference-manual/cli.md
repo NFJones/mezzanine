@@ -818,7 +818,7 @@ repair. Versions 2–7 cannot acquire this ownership by relabelling a journal;
 existing historical targets retain their original semantics. Receipt schema stays
 1 and the Mezzanine configuration schema is unchanged.
 
-`mez bootstrap claude` installs a nine-file observational mod at the selected
+`mez bootstrap claude` installs a ten-file observational mod at the selected
 `CLAUDE_CONFIG_DIR` or `~/.claude` root's `skills/mezzanine-telemetry/`. The vendor's
 ordinary skills-directory loader discovers it without `--plugin-dir`, a Mez
 wrapper, fd3 or launcher helper environment. The literal SDK source pins the
@@ -875,6 +875,17 @@ UTF8 bytes and exclude blank/control/bidi-control text; session, request and
 source selectors retain their strict existing grammar. The original expense IDs
 and all shared client bytes remain unchanged. Exact revision7 and earlier graphs
 remain recognized for upgrade/repair, with no extra enablement or setting.
+Revision9 correlates child steps only after a successful classic SubagentStart
+under the exact current main observer. Child IDs retain their original session
+in a bounded128-entry registry; failed starts cannot make an ID reusable by
+another parent. A new genuine start is required after an observer epoch change.
+Child request IDs use separate opaque domains; raw child IDs are not sent to
+accounting. Main and qualified child requests share sixteen active/pending slots,
+exact replays charge once, and child Stop leaves parent lifecycle and admitted
+expense intact. Attribution uses the native creator's measured cwd, not a
+virtual child cwd. Unknown, stale, cross-parent or uncorrelated resumed children
+remain unavailable. No new enablement or configuration is added; revision8 and
+earlier bundles remain recognized for upgrade and repair.
 Focused Linux acceptance qualifies the unchanged bare-installed module's terminal
 negative-proof cancellation/no-helper/no-re-admission behavior while its actual
 Node creator remains alive; deterministic proof/lease aging is not wall-clock

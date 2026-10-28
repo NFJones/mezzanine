@@ -280,11 +280,11 @@ pub(super) fn historical_claude_module_v7(helper: &std::path::Path) -> Result<St
     historical_claude_module_v5(helper)?;
     for (bytes, expected) in [
         (
-            include_bytes!("curated_module.mjs").as_slice(),
+            include_bytes!("history/curated_module_claude_v7.mjs").as_slice(),
             "93a37bc04f78750a32a7ac99c0074a2cd7babc2b1e91fe45b38fe003c30b0d87",
         ),
         (
-            include_bytes!("claude_request_step.mjs").as_slice(),
+            include_bytes!("history/claude_request_step_v7.mjs").as_slice(),
             "77753eb48a40bd2cef5ea0e6037e5eccdcd3f241de530286a49a1976c8bbe010",
         ),
         (
@@ -306,7 +306,15 @@ pub(super) fn historical_claude_module_v7(helper: &std::path::Path) -> Result<St
             ));
         }
     }
-    module_source(helper, 10_000)
+    compose_module(
+        helper,
+        10_000,
+        include_str!("history/curated_module_claude_v7.mjs"),
+        true,
+        true,
+        include_str!("curated_client.mjs"),
+        include_str!("history/claude_request_step_v7.mjs"),
+    )
 }
 
 /// One-pass insertion preserves literal helper filenames even when they contain
@@ -330,18 +338,19 @@ fn compose_module(
         client_template,
     )?;
     let request = request_accounting_body(helper)?;
+    let gap_quoted = serde_json::to_string(
+        helper
+            .to_str()
+            .ok_or_else(|| MezError::invalid_args("Claude helper unavailable"))?,
+    )
+    .map_err(|_| MezError::invalid_args("Claude helper unavailable"))?;
+    let gap_body =
+        include_str!("claude_usage_gap_runner.mjs").replace("__MEZ_HELPER__", &gap_quoted);
     let (step_before, step_after) = step_template
         .split_once("__MEZ_REQUEST_BODY__")
         .ok_or_else(|| MezError::invalid_state("Claude request runner marker unavailable"))?;
     let step_before = if let Some((before, after)) = step_before.split_once("__MEZ_GAP_BODY__") {
-        let quoted = serde_json::to_string(
-            helper
-                .to_str()
-                .ok_or_else(|| MezError::invalid_args("Claude helper unavailable"))?,
-        )
-        .map_err(|_| MezError::invalid_args("Claude helper unavailable"))?;
-        let gap = include_str!("claude_usage_gap_runner.mjs").replace("__MEZ_HELPER__", &quoted);
-        format!("{before}{gap}{after}")
+        format!("{before}{gap_body}{after}")
     } else {
         step_before.to_string()
     };
@@ -366,6 +375,13 @@ fn compose_module(
         )
     } else {
         ("", String::new(), tail)
+    };
+    // Split raw template markers before inserting helper data. An opaque helper
+    // filename containing another marker must never become a second template.
+    let middle = if let Some((before, after)) = middle.split_once("__MEZ_GAP_INIT_BODY__") {
+        format!("{before}{gap_body}{after}")
+    } else {
+        middle.to_string()
     };
     let (step_middle, after) = tail
         .split_once("__MEZ_STEP_BODY__")
@@ -586,12 +602,15 @@ mod tests {
         for helper in [
             "/owned/__MEZ_SOURCE_BODY__",
             "/owned/__MEZ_GAP_BODY__",
+            "/owned/__MEZ_GAP_INIT_BODY__",
+            "/owned/__MEZ_LIFECYCLE_BODY__",
             "/owned/__MEZ_HELPER__",
         ] {
             let source = module_source(std::path::Path::new(helper), 1000).unwrap();
             let quoted = serde_json::to_string(helper).unwrap();
             assert_eq!(source.matches("on('classic.SessionStart'").count(), 1);
             assert_eq!(source.matches("on('classic.SessionEnd'").count(), 1);
+            assert_eq!(source.matches("on('classic.SubagentStart'").count(), 1);
             assert_eq!(source.matches("on('turn.step'").count(), 1);
             assert!(source.contains("yield* next(e)"));
             assert!(!source.contains("on('session.start'"));
