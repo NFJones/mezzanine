@@ -236,6 +236,7 @@ trap 'record "SIGNAL_INT"; exit 9' INT
 trap 'record "SIGNAL_TERM"; exit 9' TERM
 trap 'record "SIGNAL_QUIT"; exit 9' QUIT
 record "FIXTURE_START:pid=$$"
+record "FIXTURE_READY_FOR_INPUT"
 while IFS= read -r line; do
     record "OBSERVED:$line"
     case "$line" in
@@ -613,11 +614,24 @@ async fn run_foreground_spoof_case_observed(
             .write_input_to_pane(primary.clone(), "%1", launch.into_bytes())
             .await
             .unwrap();
-        let fixture_snapshot =
+        // An uncertified foreground can still be starting. Require this
+        // program's reader-ready record before sending bytes, sharing the
+        // original launch budget with the foreground observation. This record
+        // is fixture synchronization only; it conveys no shell authority.
+        let fixture_snapshot = tokio::time::timeout(Duration::from_secs(20), async {
+            wait_for_fixture_log(&log, "FIXTURE_READY_FOR_INPUT", Duration::from_secs(20)).await;
             wait_for_snapshot(&client_handle, "%1", Duration::from_secs(20), |snapshot| {
                 snapshot.foreground_certified_shell == Some(false)
             })
-            .await;
+            .await
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "foreground fixture startup timed out: {:?}",
+                fixture_log(&log)
+            )
+        });
         let fixture_process_group =
             fixture_snapshot.foreground_diagnostic["foreground_process_group_id"].as_u64();
 
@@ -1517,6 +1531,75 @@ fn async_replayed_forgery_settles_without_bootstrap_reentry() {
         FixtureCase::ReplayedForgery,
         &mut std::io::stderr().lock(),
     );
+}
+
+/// Exercises the actual script's startup protocol through a controlled input
+/// pipe. The driver must observe explicit readiness before delivering its probe;
+/// a startup PID alone is insufficient. EOF must terminate the silent reader.
+/// This regression establishes fixture ordering, not native PTY certification.
+#[tokio::test]
+async fn foreground_fixture_announces_readiness_before_probe() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let mut child = tokio::process::Command::new("/bin/sh")
+        .args(["-c", SPOOF_FIXTURE_SCRIPT, "sh", "/dev/stdout", "silent"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let exchange = tokio::time::timeout(Duration::from_secs(20), async {
+        let mut line = String::new();
+        output
+            .read_line(&mut line)
+            .await
+            .map_err(|error| error.to_string())?;
+        if !line.starts_with("FIXTURE_START:pid=") {
+            return Err(format!("missing startup identity: {line:?}"));
+        }
+        line.clear();
+        output
+            .read_line(&mut line)
+            .await
+            .map_err(|error| error.to_string())?;
+        if line.trim_end() != "FIXTURE_READY_FOR_INPUT" {
+            return Err(format!("missing explicit reader readiness: {line:?}"));
+        }
+        input
+            .write_all(format!("{FIXTURE_INTERCEPT_PROBE}\n").as_bytes())
+            .await
+            .map_err(|error| error.to_string())?;
+        drop(input);
+        line.clear();
+        output
+            .read_line(&mut line)
+            .await
+            .map_err(|error| error.to_string())?;
+        if line.trim_end() != format!("OBSERVED:{FIXTURE_INTERCEPT_PROBE}") {
+            return Err(format!("missing observed probe: {line:?}"));
+        }
+        line.clear();
+        output
+            .read_line(&mut line)
+            .await
+            .map_err(|error| error.to_string())?;
+        if line.trim_end() != "FIXTURE_STDIN_CLOSED" {
+            return Err(format!("missing EOF settlement: {line:?}"));
+        }
+        Ok(())
+    })
+    .await;
+    // Reap this exact owned child before reporting protocol/timeout failures.
+    // EOF ends the successful reader; failures explicitly kill before waiting.
+    if !matches!(exchange, Ok(Ok(()))) {
+        let _ = child.start_kill();
+    }
+    let status = child.wait().await.unwrap();
+    assert!(matches!(exchange, Ok(Ok(()))), "{exchange:?}");
+    assert!(status.success(), "{status}");
 }
 
 #[cfg(test)]
