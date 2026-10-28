@@ -793,3 +793,19 @@ test("Pi historical finalized replay cannot invent new auxiliary coverage", asyn
   assert.equal(f.reports.length, 1);
   assert.equal(f.markers.length, 1);
 });
+
+/** A different intervening loss cannot make a fresh auxiliary callback append
+ * another copy of a response-correlation fact already in original queue custody.
+ * The ordinary other reason retains its ordering and no request is admitted. */
+test("Pi fresh auxiliary observations coalesce pending facts across other reasons", async () => {
+  const operations = []; const facts = [];
+  const owned = { session: "session-a", client: { async piObservation(fact) { facts.push(fact); return { delivered: true }; } } };
+  const observer = createPiUsageObserver(owned, operation => { operations.push(operation); return true; }, new Map());
+  observer.auxiliary({ type: "session_compact", compactionEntry: { usage: {} } });
+  observer.turnEnd(event(message())); // No current ticket: a distinct genuine loss class.
+  observer.auxiliary({ type: "session_tree", summaryEntry: { usage: {} } });
+  assert.equal(operations.length, 2);
+  while (operations.length) await operations.shift()();
+  assert.deepEqual(facts, [{ type: "usage_gap", reason: "response-correlation" },
+    { type: "usage_gap", reason: "unmatched-finalized-event" }]);
+});

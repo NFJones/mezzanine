@@ -420,8 +420,12 @@ at most128 tool-result slots and discloses unqualified coverage for larger
 lists. Empty navigation stays inert. Available main assistant usage is still
 recorded normally; the gap takes precedence in coverage status. Startup does
 not duplicate a current pre-readiness gap already queued by its callback.
-Revision18 preserves exact frozen revision17 and older layouts for upgrade and
-repair; no settings or extra accounting enablement are added.
+Revision19 rediscloses a later genuine auxiliary observation after earlier
+diagnostic custody settles, so process-local last-reason metadata cannot hide
+receiver-side state loss. Copies already queued/in flight coalesce; failed or
+stale observers and historical finalized replays stay inert. It preserves exact
+frozen revision18 and earlier layouts. Shared transport, normal failure-retry
+budgets and settings remain unchanged; no extra enablement is added.
 
 Known limits: pending/deferred responses, compaction/branch/tool/cache-warming
 auxiliary calls without a stable current-request counter contract, and durable

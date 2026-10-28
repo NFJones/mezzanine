@@ -4,9 +4,10 @@
 //! process discovers its default factory. Native Unix writer/ancestor evidence
 //! and the actor own every request/commit. A transport wrapper fails the first
 //! real durable/applied reply before writing any bytes, never fabricating ACKs.
-//! Reset stops the actor, retains its same service/control/root/store, clears only
-//! the registration facade, then restarts actor processing. It is not an OS
-//! daemon/root replacement, durable spool, vendor SDK, or invoice qualification.
+//! Registry reset retains the same control owner; full-control reset replaces
+//! that entire component and reopens storage. Both retain actual runtime root
+//! and producer custody. Neither is OS-daemon/root replacement, durable spool,
+//! vendor SDK or invoice qualification.
 //! Unknown warm recovery also checks the shared client's explicit cold attempt:
 //! only the original checkpoint is sent, and retained warm authority must refuse.
 //!
@@ -389,17 +390,37 @@ async fn connection(
     (state, result)
 }
 
+/// Exact fixture-owned state replacement after the original committed ACK loss.
+/// Control replacement retains native runtime/root/producer custody, but none
+/// of the old control owner, registry, source anchors or accounting projection.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecoveryReset {
+    /// Retain every serving owner and only lose the original reply.
+    None,
+    /// Recreate only the ephemeral native registration facade.
+    Registry,
+    /// Replace the entire control component and reopen its durable store.
+    Control,
+}
+
 /// Establishes exact source/readiness/report invariants from the real wire,
 /// excluding changing credentials from immutable expense comparisons. Booleans
 /// avoid printing private tokens/witnesses on a failed comparison.
-fn assert_replay(audit: &Audit, registry: bool, revision: u64) {
+fn assert_replay(audit: &Audit, reset: RecoveryReset, revision: u64) {
     let requests = frames(&audit.requests);
     let replies = frames(&audit.replies);
     let enrolls = requests
         .iter()
         .filter(|row| row["method"] == "agent/external/enroll")
         .collect::<Vec<_>>();
-    assert_eq!(enrolls.len(), 2);
+    assert_eq!(
+        enrolls.len(),
+        if reset == RecoveryReset::Control {
+            3
+        } else {
+            2
+        }
+    );
     let handles = replies
         .iter()
         .filter(|row| row["result"]["registered"] == true)
@@ -425,7 +446,7 @@ fn assert_replay(audit: &Audit, registry: bool, revision: u64) {
             "original enrollment metadata changed"
         );
     }
-    if registry {
+    if reset != RecoveryReset::None {
         assert!(
             enrolls[1]["params"]["source_resume"]["observer_witness"] == old["observer_witness"]
         );
@@ -434,36 +455,73 @@ fn assert_replay(audit: &Audit, registry: bool, revision: u64) {
             current["launch_token"] != old["launch_token"]
                 && current["observer_witness"] != old["observer_witness"]
         );
-        assert!(current["run_id"] == old["run_id"]);
-        assert_eq!(
-            current["observer_epoch"].as_u64().unwrap(),
-            old["observer_epoch"].as_u64().unwrap() + 1
-        );
-        assert!(
-            current["recovery"] == serde_json::json!({"kind":"same-live-source","next_sequence":1})
-        );
+        if reset == RecoveryReset::Control {
+            let cold = &enrolls[2]["params"];
+            assert!(cold["durable_source_resume"]["receipt"] == old["source_receipt"]);
+            assert!(cold.get("source_resume").is_none());
+            assert!(cold.get("predecessor_generation").is_none());
+            let mut expected = enrolls[0]["params"].clone();
+            expected["durable_source_resume"] = cold["durable_source_resume"].clone();
+            assert!(*cold == expected, "cold request changed original metadata");
+            assert!(
+                replies
+                    .iter()
+                    .any(|row| row["id"] == enrolls[1]["id"] && row.get("error").is_some())
+            );
+            assert!(
+                current["source_receipt"]["activation_id"]
+                    == old["source_receipt"]["activation_id"]
+            );
+            assert_eq!(
+                current["source_receipt"]["protocol"],
+                "external-source-activation/1"
+            );
+            let previous = old["source_receipt"]["observer_generation"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap();
+            let accepted = current["source_receipt"]["observer_generation"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap();
+            assert_eq!(accepted, previous + 1);
+            assert_eq!(current["observer_epoch"], 1);
+            assert!(
+                current["recovery"]
+                    == serde_json::json!({"kind":"durable-native-source","next_sequence":1})
+            );
+        } else {
+            assert!(current["run_id"] == old["run_id"]);
+            assert_eq!(
+                current["observer_epoch"].as_u64().unwrap(),
+                old["observer_epoch"].as_u64().unwrap() + 1
+            );
+            assert!(
+                current["recovery"]
+                    == serde_json::json!({"kind":"same-live-source","next_sequence":1})
+            );
+        }
         let facts = requests
             .iter()
-            .skip_while(|row| row["id"] != enrolls[1]["id"])
+            .skip_while(|row| row["id"] != enrolls.last().unwrap()["id"])
             .skip(1)
             .filter(|row| row["method"] == "agent/external/pi-observation")
             .collect::<Vec<_>>();
-        // Ordinary LifecycleOwner accepts a genuine candidate directly. Resume
-        // permits diagnostic gaps, but a successful retry invents neither a
-        // missing-accounting gap nor an SDK SessionStart for this new epoch.
-        assert_eq!(facts.len(), 3);
-        assert_eq!(facts[0]["params"]["sequence"], 1);
-        assert!(
-            facts[0]["params"]["event"]
-                == serde_json::json!({"type":"agent_before_settle","outcome":"completed"})
-        );
-        assert_eq!(facts[1]["params"]["sequence"], 2);
-        assert!(facts[1]["params"]["event"] == serde_json::json!({"type":"agent_settled"}));
-        assert_eq!(facts[2]["params"]["sequence"], 3);
-        assert!(
-            facts[2]["params"]["event"]
-                == serde_json::json!({"type":"session_shutdown","reason":"quit"})
-        );
+        // The first actual post-recovery fact comes from the subsequent
+        // genuine auxiliary callback, not synthetic replay/bootstrap metadata.
+        let expected = [
+            serde_json::json!({"type":"usage_gap","reason":"response-correlation"}),
+            serde_json::json!({"type":"agent_before_settle","outcome":"completed"}),
+            serde_json::json!({"type":"agent_settled"}),
+            serde_json::json!({"type":"session_shutdown","reason":"quit"}),
+        ];
+        assert_eq!(facts.len(), expected.len());
+        for (index, (fact, expected)) in facts.iter().zip(expected).enumerate() {
+            assert_eq!(fact["params"]["sequence"], index + 1);
+            assert!(fact["params"]["event"] == expected);
+        }
     } else {
         assert!(current["launch_token"] == old["launch_token"]);
         assert!(current["observer_epoch"] == old["observer_epoch"]);
@@ -551,12 +609,13 @@ fn bootstrap(helper: &std::path::Path, home: &std::path::Path) {
 }
 
 /// Shared local fixture composes the genuine CLI/producer/actor/ledger chain.
-/// Connected mode isolates ACK loss; registry mode additionally clears ONLY
-/// ephemeral registrations after disconnect, retaining the same control owner.
+/// Connected mode isolates ACK loss; registry mode clears only registrations.
+/// Control mode replaces that complete owner and reopens its store, retaining
+/// native runtime/root/producer custody for independently qualified cold recovery.
 /// The final completion outcome is captured before cleanup, but all inherited
 /// wire/ledger/service assertions still run even for the intentional failure.
 async fn qualify(
-    registry: bool,
+    reset: RecoveryReset,
     unknown: bool,
     fail_child: bool,
 ) -> std::result::Result<(), ChildFailure> {
@@ -592,7 +651,9 @@ async fn qualify(
         home.join("replay-mode"),
         if unknown {
             "unknown"
-        } else if registry {
+        } else if reset == RecoveryReset::Control {
+            "control"
+        } else if reset == RecoveryReset::Registry {
             "registry"
         } else {
             "connected"
@@ -727,7 +788,7 @@ async fn qualify(
         .as_u64()
         .unwrap();
     assert_eq!(committed.streams[0].1 as u64, revision);
-    if registry {
+    if reset != RecoveryReset::None {
         handle.shutdown().await.unwrap();
         let mut returned = actor_task.await.unwrap().service;
         assert_eq!(returned.session().id.to_string(), session);
@@ -747,19 +808,27 @@ async fn qualify(
                 .sum::<u64>(),
             10
         );
-        // The ONLY reset: preserve control/component owner, source anchors,
-        // accounting projection/begins, root process and durable store.
-        *returned.control.external_agents_mut() = Default::default();
+        if reset == RecoveryReset::Control {
+            returned.control = crate::runtime::control::RuntimeControlComponent::new(
+                crate::control::ControlIdempotencyCache::default(),
+                mez_agent::messaging::MessageService::default(),
+                None,
+            );
+        } else {
+            *returned.control.external_agents_mut() = Default::default();
+        }
         returned.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&usage));
-        assert_eq!(
-            returned
-                .external_token_usage(None)
-                .values()
-                .map(|value| value.input_tokens)
-                .sum::<u64>(),
-            10,
-            "registration reset erased committed accounting projection"
-        );
+        if reset == RecoveryReset::Registry {
+            assert_eq!(
+                returned
+                    .external_token_usage(None)
+                    .values()
+                    .map(|value| value.input_tokens)
+                    .sum::<u64>(),
+                10,
+                "registration reset erased committed accounting projection"
+            );
+        }
         assert_eq!(ledger(&usage), committed);
         let (next_handle, next_actor) =
             AsyncRuntimeSessionActor::new(returned, AsyncRuntimeActorConfig::default()).unwrap();
@@ -1024,11 +1093,13 @@ async fn qualify(
                 .execute_agent_shell_command(primary.clone(), "/status".into())
                 .await
                 .unwrap();
-            assert!(
-                status.contains("actual-model")
-                    && status.contains("unavailable-pi-usage-response-correlation")
-            );
-            if registry {
+            assert!(status.contains("actual-model"));
+            assert!(status.contains(if reset == RecoveryReset::Control {
+                "request-bound-external-reported"
+            } else {
+                "unavailable-pi-usage-response-correlation"
+            }));
+            if reset != RecoveryReset::None {
                 // start() restores credentials/ordinal but emits no SDK fact.
                 // The producer is paused before its next lifecycle callback:
                 // do not manufacture a gap from successful durable replay.
@@ -1081,6 +1152,22 @@ async fn qualify(
             assert_eq!(next.events.iter().map(|row| row.2).sum::<i64>(), 20);
             assert!(next.events.contains(&committed.events[0]));
             assert!(next.requests.contains(&committed.requests[0]));
+            handle
+                .execute_terminal_command(primary.clone(), "agent-shell".into())
+                .await
+                .unwrap();
+            let status = handle
+                .execute_agent_shell_command(primary.clone(), "/status".into())
+                .await
+                .unwrap();
+            assert!(
+                status.contains("unavailable-pi-usage-response-correlation"),
+                "fresh auxiliary callback did not disclose under the current receiver"
+            );
+            handle
+                .execute_terminal_command(primary.clone(), "agent-shell".into())
+                .await
+                .unwrap();
             release(&home, "subsequent");
         }
     );
@@ -1114,7 +1201,7 @@ async fn qualify(
         returned.external_usage_reservation_counts_for_tests(),
         (0, 0)
     );
-    assert_replay(&audit.lock().unwrap(), registry, revision);
+    assert_replay(&audit.lock().unwrap(), reset, revision);
     returned.terminate_all_pane_processes().unwrap();
     completion
 }
@@ -1194,24 +1281,31 @@ async fn pi_replay_completion_collector_rejects_invalid_status_and_phase() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit already-installed Node and freshly built sibling mez required; real native ACK-loss acceptance"]
 async fn external_pi_native_committed_ack_loss_without_registry_reset() {
-    tokio::time::timeout(Duration::from_secs(45), qualify(false, false, false))
-        .await
-        .unwrap()
-        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(45),
+        qualify(RecoveryReset::None, false, false),
+    )
+    .await
+    .unwrap()
+    .unwrap();
 }
 
 /// Actual commit-before-lost-ACK plus same-service registry recreation requires
 /// child-originated same-live proof and fresh transport handles. The first real
-/// lifecycle candidate has ordinal one without a synthetic start or gap.
+/// auxiliary callback rediscloses at ordinal one without a synthetic startup
+/// or a gap manufactured by the successful expense replay itself.
 /// Original owner/request/origin/clock/revision remain unchanged,
 /// replay applies zero delta, and the next genuine request charges exactly once.
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit already-installed Node and freshly built sibling mez required; real native registry-reset replay acceptance"]
 async fn external_pi_native_committed_ack_loss_and_registry_reset_replays_once() {
-    tokio::time::timeout(Duration::from_secs(45), qualify(true, false, false))
-        .await
-        .unwrap()
-        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(45),
+        qualify(RecoveryReset::Registry, false, false),
+    )
+    .await
+    .unwrap()
+    .unwrap();
 }
 
 /// A genuine R1 native admission reply lost before bytes cannot authorize a
@@ -1223,10 +1317,13 @@ async fn external_pi_native_committed_ack_loss_and_registry_reset_replays_once()
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit already-installed Node and freshly built sibling mez required; actual unknown-R1 reply loss negative"]
 async fn external_pi_native_unknown_recovery_reply_second_reset_refuses_old_proof() {
-    tokio::time::timeout(Duration::from_secs(45), qualify(true, true, false))
-        .await
-        .unwrap()
-        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(45),
+        qualify(RecoveryReset::Registry, true, false),
+    )
+    .await
+    .unwrap()
+    .unwrap();
 }
 
 /// Every real native recovery path must reject an assertion which runs after
@@ -1237,11 +1334,15 @@ async fn external_pi_native_unknown_recovery_reply_second_reset_refuses_old_proo
 #[ignore = "explicit already-installed Node and freshly built sibling mez required; real post-EOF child failure"]
 async fn external_pi_native_post_eof_assertion_failure_is_rejected() {
     let mut outcomes = Vec::new();
-    for (registry, unknown) in [(false, false), (true, false), (true, true)] {
-        let outcome =
-            tokio::time::timeout(Duration::from_secs(45), qualify(registry, unknown, true))
-                .await
-                .unwrap();
+    for (reset, unknown) in [
+        (RecoveryReset::None, false),
+        (RecoveryReset::Registry, false),
+        (RecoveryReset::Control, false),
+        (RecoveryReset::Registry, true),
+    ] {
+        let outcome = tokio::time::timeout(Duration::from_secs(45), qualify(reset, unknown, true))
+            .await
+            .unwrap();
         outcomes.push(outcome);
     }
     assert_eq!(
@@ -1249,7 +1350,24 @@ async fn external_pi_native_post_eof_assertion_failure_is_rejected() {
         vec![
             Err(ChildFailure::Status(Some(1))),
             Err(ChildFailure::Status(Some(1))),
+            Err(ChildFailure::Status(Some(1))),
             Err(ChildFailure::Status(Some(1)))
         ]
     );
+}
+
+/// Ordinary installed Pi must restore its frozen report through actual native
+/// cold admission after full control replacement, then publish a fresh auxiliary
+/// gap on the next genuine request. Keep root/producer custody, exact original
+/// ledger identity/origin/time, one new expense and separate final retirement.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit installed Node and fresh own mez required; ordinary Pi full-control recovery"]
+async fn external_pi_native_control_replacement_rediscloses_fresh_auxiliary_gap() {
+    tokio::time::timeout(
+        Duration::from_secs(45),
+        qualify(RecoveryReset::Control, false, false),
+    )
+    .await
+    .unwrap()
+    .unwrap();
 }

@@ -100,6 +100,7 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
   let timer;
   let timerGeneration = 0;
   let recoveryBusy = false;
+  const pendingGapFacts = new Map();
   const offsets = [250, 1000, 4000];
   const scheduler = options.retryScheduler ?? { now: () => performance.now(), setTimeout, clearTimeout };
   const healthy = () => !owned.failed && !owned.cancelled && (options.isCurrent?.() ?? true);
@@ -130,18 +131,35 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
     && slot.retries < offsets.length && at <= slot.retryStarted + 5000;
   const due = slot => Math.max(slot.retryStarted + offsets[slot.retries],
     slot.lastRetryCompleted === undefined ? 0 : slot.lastRetryCompleted + offsets[slot.retries] - offsets[slot.retries - 1]);
-  const lose = reason => {
+  /** A process-local last reason is not receiver persistence evidence. Fresh
+   * auxiliary events may redisclose it after prior custody settles. Coalesce
+   * only while that fixed fact is queued/in-flight; keep ordinary loss retries
+   * unchanged, including interleaved reasons with multiple original operations.
+   * Keys are fixed diagnostics and production callback custody is bounded at32. */
+  const lose = (reason, redisclose = false) => {
     owned.usageCoverage = reason;
     const fact = reason.slice("unavailable-".length);
     onGap(fact);
-    if (owned.lastUsageGap !== fact) {
-      owned.lastUsageGap = fact;
-      enqueue(async () => {
-        if (owned.client && !owned.cancelled && !owned.failed) {
-          const receipt = await owned.client.piObservation({ type: "usage_gap", reason: fact });
-          if (!receipt?.delivered) { owned.failed = true; cancelRetries(); }
-        }
+    const changed = owned.lastUsageGap !== fact;
+    // Keep startup's current-versus-inherited marker aligned even when this
+    // actual fact coalesces into an earlier pending copy of the same reason.
+    owned.lastUsageGap = fact;
+    if (redisclose ? !pendingGapFacts.has(fact) : changed) {
+      pendingGapFacts.set(fact, (pendingGapFacts.get(fact) ?? 0) + 1);
+      const release = () => {
+        const count = pendingGapFacts.get(fact) ?? 0;
+        if (count <= 1) pendingGapFacts.delete(fact);
+        else pendingGapFacts.set(fact, count - 1);
+      };
+      const queued = enqueue(async () => {
+        try {
+          if (owned.client && !owned.cancelled && !owned.failed) {
+            const receipt = await owned.client.piObservation({ type: "usage_gap", reason: fact });
+            if (!receipt?.delivered) { owned.failed = true; cancelRetries(); }
+          }
+        } finally { release(); }
       });
+      if (queued === false) release();
     }
   };
   /** Async results can outlive synchronous EOS/lease replacement. They may
@@ -328,7 +346,7 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
         slot.finalized = true; lose("unavailable-immutable-observation-conflict"); abandon(slot); return;
       }
       if (slot.projection && JSON.stringify(slot.projection) !== fingerprint) { lose("unavailable-immutable-observation-conflict"); return; }
-      if (!slot.finalized && hasAuxiliaryCounters(event)) lose("unavailable-response-correlation");
+      if (!slot.finalized && hasAuxiliaryCounters(event)) lose("unavailable-response-correlation", true);
       slot.finalized = true;
       slot.projection ??= projection;
       if (slot.key !== projection.event_id) {
@@ -342,7 +360,7 @@ export function createPiUsageObserver(owned, enqueue, recent, now = () => Math.f
     /** Current summary callbacks may reveal missing auxiliary attribution even
      * while the main agent is idle. A failed/stale source cannot publish it. */
     auxiliary(event) {
-      if (healthy() && hasAuxiliaryCounters(event)) lose("unavailable-response-correlation");
+      if (healthy() && hasAuxiliaryCounters(event)) lose("unavailable-response-correlation", true);
     },
     cancelRetries,
     close() { finishUnreported(); cancelRetries(); },

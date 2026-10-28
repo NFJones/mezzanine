@@ -1,5 +1,6 @@
 # Ordinary Pi auxiliary counters without qualified request attribution remain
-# uncharged and disclose unavailable coverage; no separate enablement is needed.
+# uncharged and disclose unavailable coverage, including fresh observations
+# after receiver state loss; no separate enablement is needed.
 # Mezzanine default-configuration example.
 # This checked-in file mirrors the provider-free source template before
 # first-launch generation selects a platform-specific approval/sandbox pair.

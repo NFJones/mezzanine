@@ -63,6 +63,7 @@ does not activate paid search or change the default backend.
 
 Ordinary Pi accounting reports observed auxiliary counters with missing request
 attribution as unavailable coverage while retaining supported assistant usage.
+Fresh observations can redisclose that gap after receiver-side state loss.
 
 Ordinary Pi/OpenCode integrations installed by bootstrap distinguish logical
 retirement from verified durable source-end acknowledgment, with bounded

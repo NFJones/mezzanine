@@ -1190,12 +1190,10 @@ async fn external_source_resume_missing_control_owner_does_not_adopt_mapping() {
     );
 }
 
-/// A native-qualified warm recovery carries its original diagnostic even before
-/// the successor's first Pi callback allocates a lifecycle projection. Registry
-/// loss cannot briefly report generic/healthy coverage, synthesize presentation
-/// or expense, or require a fabricated callback to restore an already known gap.
-#[tokio::test(flavor = "current_thread")]
-async fn external_source_resume_inherited_pi_gap_is_visible_before_first_callback() {
+/// Exercises a genuinely accepted native diagnostic and original-source warm
+/// recovery with optional explicit metadata maintenance. The false case requires
+/// acceptance itself to retain the gap; neither path grants new source authority.
+async fn assert_inherited_gap_after_registry_reset(refresh: bool) {
     let Some(mut fixture) = fixture("hold").await else {
         return;
     };
@@ -1218,7 +1216,9 @@ async fn external_source_resume_inherited_pi_gap_is_visible_before_first_callbac
     }
     // This bounded metadata refresh is the existing maintenance/commit owner;
     // it copies a genuinely accepted gap without creating source authority.
-    fixture.service.refresh_external_source_diagnostics();
+    if refresh {
+        fixture.service.refresh_external_source_diagnostics();
+    }
     *fixture.service.control.external_agents_mut() = Default::default();
     let recovered = enroll(&mut fixture, &resume(&first, "fixture-instance-a", None)).await;
     assert_eq!(recovered["result"]["recovery"]["kind"], "same-live-source");
@@ -1248,4 +1248,19 @@ async fn external_source_resume_inherited_pi_gap_is_visible_before_first_callbac
         .sum::<u64>();
     assert_eq!(coverage, "unavailable-pi-usage-response-correlation");
     assert_eq!(spent, 0);
+}
+
+/// Qualified inherited diagnostics must render before the first successor Pi
+/// callback, without creating presentation, a request or any expense.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_resume_inherited_pi_gap_is_visible_before_first_callback() {
+    assert_inherited_gap_after_registry_reset(true).await;
+}
+
+/// A typed accepted gap is already known when its reply is published. Immediate
+/// registration loss must not discard that diagnostic while waiting for an
+/// unrelated report commit or periodic metadata refresh to copy the source.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_resume_accepted_gap_survives_registry_loss_without_maintenance() {
+    assert_inherited_gap_after_registry_reset(false).await;
 }

@@ -275,6 +275,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     }
     let current_pi = manifest.harness == "pi"
         && (*manifest == pi_artifact::candidate_manifest()
+            || *manifest == pi_artifact::historical_redisclosure_manifest()
             || *manifest == pi_artifact::historical_auxiliary_manifest()
             || *manifest == pi_artifact::historical_receipt_manifest()
             || *manifest == pi_artifact::historical_bounded_end_manifest()
@@ -410,6 +411,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         }
         if manifest.harness == "pi"
             && (*manifest == pi_artifact::candidate_manifest()
+                || *manifest == pi_artifact::historical_redisclosure_manifest()
                 || *manifest == pi_artifact::historical_auxiliary_manifest()
                 || *manifest == pi_artifact::historical_receipt_manifest()
                 || *manifest == pi_artifact::historical_bounded_end_manifest()
@@ -419,6 +421,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         }
         if manifest.harness == "pi"
             && (*manifest == pi_artifact::candidate_manifest()
+                || *manifest == pi_artifact::historical_redisclosure_manifest()
                 || *manifest == pi_artifact::historical_auxiliary_manifest()
                 || *manifest == pi_artifact::historical_receipt_manifest()
                 || *manifest == pi_artifact::historical_bounded_end_manifest())
@@ -427,6 +430,7 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         }
         if manifest.harness == "pi"
             && (*manifest == pi_artifact::candidate_manifest()
+                || *manifest == pi_artifact::historical_redisclosure_manifest()
                 || *manifest == pi_artifact::historical_auxiliary_manifest()
                 || *manifest == pi_artifact::historical_receipt_manifest())
         {
@@ -434,12 +438,19 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         }
         if manifest.harness == "pi"
             && (*manifest == pi_artifact::candidate_manifest()
+                || *manifest == pi_artifact::historical_redisclosure_manifest()
                 || *manifest == pi_artifact::historical_auxiliary_manifest())
         {
             history.insert(0, pi_artifact::historical_receipt_manifest());
         }
-        if manifest.harness == "pi" && *manifest == pi_artifact::candidate_manifest() {
+        if manifest.harness == "pi"
+            && (*manifest == pi_artifact::candidate_manifest()
+                || *manifest == pi_artifact::historical_redisclosure_manifest())
+        {
             history.insert(0, pi_artifact::historical_auxiliary_manifest());
+        }
+        if manifest.harness == "pi" && *manifest == pi_artifact::candidate_manifest() {
+            history.insert(0, pi_artifact::historical_redisclosure_manifest());
         }
         if opencode_history {
             history.insert(

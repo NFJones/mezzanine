@@ -42,10 +42,26 @@ pub(crate) fn candidate_manifest() -> Manifest {
     entries.extend(super::persistent_client::entries("extensions/mezzanine"));
     Manifest {
         harness: "pi".into(),
-        revision: 18,
+        revision: 19,
         vendor_version: super::pi::RELEASE.into(),
         entries,
     }
+}
+
+/// Exact revision18 before fresh auxiliary facts can redisclose a settled gap.
+/// Only the usage producer changes in revision19; every other owned slot stays
+/// byte-identical, including the ordinary wiring and shared client transport.
+pub(super) fn historical_redisclosure_manifest() -> Manifest {
+    let mut manifest = candidate_manifest();
+    manifest.revision = 18;
+    for entry in &mut manifest.entries {
+        if entry.path == "extensions/mezzanine/pi_usage.mjs" {
+            entry.artifact = Artifact::File {
+                bytes: include_bytes!("history/pi_usage_v18.mjs").to_vec(),
+            };
+        }
+    }
+    manifest
 }
 
 /// Exact revision17 before metadata-only auxiliary attribution disclosure.

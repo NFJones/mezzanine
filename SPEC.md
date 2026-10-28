@@ -1322,6 +1322,12 @@ attribution is unavailable. Presence detection MUST NOT evaluate usage values,
 summary/tool content, selected-model state or aggregate totals, and MUST NOT
 admit another request or expense. Tool-result inspection MUST be bounded at128;
 larger lists MUST disclose unqualified coverage without scanning the tail.
+Each later genuine auxiliary observation MAY redisclose its fixed coverage gap
+after prior queued/in-flight custody settles. A process-local last reason MUST
+NOT stand in for receiver persistence after control replacement. Pending copies
+of that fixed fact MUST remain coalesced; ordinary failure retry budgets and
+historical-finalization fences MUST stay unchanged. Failed delivery MUST retain
+its existing failure latch, not silently revive the observer.
 Navigation or summaries with no advertised usage MUST remain inert. Stale,
 child-session or failed owners MUST NOT publish an auxiliary disclosure. A
 current disclosure queued before enrollment completes MUST be published once;

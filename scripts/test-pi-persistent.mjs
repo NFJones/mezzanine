@@ -398,3 +398,76 @@ test("ordinary Pi auxiliary callbacks retain session and reload lease fences", a
   assert.deepEqual(records[1].events, [{ type: "session_start", reason: "reload" },
     { type: "usage_gap", reason: "response-correlation" }]);
 });
+
+/** Receiver-side control recreation can discard a previously accepted gap.
+ * A later genuine auxiliary callback must redisclose its current unsupported
+ * attribution, rather than treating process-local last-reason metadata as
+ * permanent evidence that the current native receiver still knows the gap.
+ * This models receiver observation only, not a fabricated native recovery grant. */
+test("ordinary fresh Pi auxiliary observations redisclose after receiver state loss", async () => {
+  const owner = {};
+  const { records, create } = clients();
+  const emit = load(owner, create);
+  emit({ type: "session_start", reason: "startup" });
+  await owner.tail;
+  emit({ type: "session_compact", compactionEntry: { usage: {} } });
+  await owner.tail;
+  assert.equal(records[0].events.filter(fact => fact.type === "usage_gap").length, 1);
+  records[0].events.length = 0; // Only the mock receiver loses observations.
+  emit({ type: "session_tree", summaryEntry: { usage: {} } });
+  await owner.tail;
+  assert.deepEqual(records[0].events, [{ type: "usage_gap", reason: "response-correlation" }]);
+});
+
+/** Hold the actual diagnostic operation while many SDK callbacks arrive. They
+ * must retain one queue obligation, then permit a later fresh fact after a real
+ * receipt. A failed receipt latches failure and cannot be revived by callbacks;
+ * no timer, provider request or fabricated native admission is involved. */
+test("ordinary Pi auxiliary redisclosure stays bounded through held and failed receipts", async () => {
+  for (const delivered of [true, false]) {
+    let release; let entered;
+    const held = new Promise(resolve => { release = resolve; });
+    const started = new Promise(resolve => { entered = resolve; });
+    const owner = {}; const { records, create } = clients();
+    const emit = load(owner, options => {
+      const client = create(options);
+      return { ...client, async piObservation(fact) {
+        await client.piObservation(fact);
+        if (fact.type === "usage_gap") { entered(); await held; return { delivered }; }
+        return { delivered: true };
+      } };
+    });
+    emit({ type: "session_start", reason: "startup" });
+    await owner.tail;
+    emit({ type: "session_compact", compactionEntry: { usage: {} } });
+    await started;
+    for (let index = 0; index < 1000; index++) emit({ type: "session_tree", summaryEntry: { usage: {} } });
+    assert.equal(owner.pending, 1);
+    assert.equal(owner.lease.failed, false);
+    release(); await owner.tail;
+    emit({ type: "session_tree", summaryEntry: { usage: {} } });
+    await owner.tail;
+    assert.equal(owner.lease.failed, !delivered);
+    assert.equal(records[0].events.filter(fact => fact.type === "usage_gap").length, delivered ? 2 : 1);
+    assert.equal(owner.pending, 0);
+  }
+});
+
+/** Interleaved pre-readiness diagnostic classes must not make startup mistake
+ * an already queued current auxiliary fact for inherited state. Native startup
+ * publishes each queued fact once, without a duplicate baseline or any expense. */
+test("ordinary startup does not duplicate a coalesced current auxiliary gap", async () => {
+  const owner = {}; const { records, create } = clients();
+  const emit = load(owner, create);
+  emit({ type: "session_start", reason: "startup" });
+  emit({ type: "session_compact", compactionEntry: { usage: {} } });
+  emit({ type: "turn_end", turnIndex: 0, messageEntryId: "unmatched-entry", message: {
+    role: "assistant", provider: "fixture", model: "fixture", stopReason: "stop",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } });
+  emit({ type: "session_tree", summaryEntry: { usage: {} } });
+  await owner.tail;
+  assert.deepEqual(records[0].events.filter(fact => fact.type === "usage_gap"),
+    [{ type: "usage_gap", reason: "response-correlation" },
+      { type: "usage_gap", reason: "unmatched-finalized-event" }]);
+  assert.equal(owner.lease.failed, false);
+});

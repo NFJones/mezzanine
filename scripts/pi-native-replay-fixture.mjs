@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url";
 assert.equal(process.argv.length, 2);
 const home = process.env.HOME;
 const mode = readFileSync(join(home, "replay-mode"), "utf8");
-assert(["connected", "registry", "unknown"].includes(mode));
+assert(["connected", "registry", "control", "unknown"].includes(mode));
 for (const key of ["PI_CODING_AGENT_DIR", "MEZ_HARNESS_SESSION", "MEZ_HARNESS_OBSERVER_FD", "MEZ_HARNESS_HELPER", "MEZ_EXTERNAL_LAUNCH_TOKEN"])
   assert(process.env[key] === undefined, "fixture received an activation input");
 const root = join(home, ".pi", "agent", "extensions");
@@ -121,8 +121,13 @@ try {
     publish("unavailable"); process.exitCode = 1;
   } else {
     assert.equal(starts, 1); assert.equal(finalized, 1);
-    assert.equal(owner.client.status().run, initial.run);
-    assert.equal(owner.client.status().epoch, initial.epoch + (mode === "registry" ? 1 : 0));
+    if (mode === "control") {
+      assert(Number.isSafeInteger(owner.client.status().run) && owner.client.status().run > 0);
+      assert.equal(owner.client.status().epoch, 1);
+    } else {
+      assert.equal(owner.client.status().run, initial.run);
+      assert.equal(owner.client.status().epoch, initial.epoch + (mode === "registry" ? 1 : 0));
+    }
     assert.equal(owner.client.status().usage, "request-bound-external-reported");
     await checkpoint("recovered");
     owner = await finalizedRequest(1);

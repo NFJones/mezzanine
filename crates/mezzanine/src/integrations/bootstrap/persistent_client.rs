@@ -211,13 +211,13 @@ mod tests {
         use super::super::installer::Operation;
         for harness in ["pi", "opencode"] {
             let current = super::super::compiled_manifest(harness, None).unwrap();
-            assert_eq!(current.revision, if harness == "pi" { 18 } else { 15 });
+            assert_eq!(current.revision, if harness == "pi" { 19 } else { 15 });
             let history = super::super::compiled_history(&current);
-            assert_eq!(history.len(), if harness == "pi" { 16 } else { 38 });
+            assert_eq!(history.len(), if harness == "pi" { 17 } else { 38 });
             assert!(history.iter().any(|manifest| manifest.revision == 8));
             let immediate = &history[0];
             assert_eq!(immediate.revision + 1, current.revision);
-            assert_eq!(immediate.revision, if harness == "pi" { 17 } else { 14 });
+            assert_eq!(immediate.revision, if harness == "pi" { 18 } else { 14 });
             let frozen = immediate
                 .entries
                 .iter()
@@ -283,7 +283,7 @@ mod tests {
                     history
                         .iter()
                         .map(|manifest| manifest.revision)
-                        .eq((2..=17).rev())
+                        .eq((2..=18).rev())
                 );
             }
             let request = history

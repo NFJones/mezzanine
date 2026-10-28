@@ -66,7 +66,7 @@ fn pi_usage_revision9_upgrade_and_repair_preserve_exact_owned_history() {
     let previous = historical_manifest();
     let current = candidate_manifest();
     assert_eq!(previous.revision, 9);
-    assert_eq!(current.revision, 18);
+    assert_eq!(current.revision, 19);
     assert_eq!(previous.entries.len(), 10);
     let revision10 = historical_usage_manifest();
     assert_eq!(revision10.revision, 10);
@@ -218,10 +218,10 @@ fn pi_revision13_history_preserves_frozen_slots_and_rejects_tampered_authority()
         }
     }
     let history = super::super::compiled_history(&current);
-    assert_eq!(history.len(), 16);
+    assert_eq!(history.len(), 17);
     assert_eq!(
         history.iter().map(|item| item.revision).collect::<Vec<_>>(),
-        (2..=17).rev().collect::<Vec<_>>()
+        (2..=18).rev().collect::<Vec<_>>()
     );
     for manifest in std::iter::once(current).chain(history) {
         for index in 0..manifest.entries.len() {
@@ -244,7 +244,7 @@ fn pi_revision13_history_preserves_frozen_slots_and_rejects_tampered_authority()
 fn pi_auxiliary_revision18_preserves_frozen_revision17_ownership() {
     use sha2::Digest;
     let old = historical_auxiliary_manifest();
-    let current = candidate_manifest();
+    let current = historical_redisclosure_manifest();
     assert_eq!(old.revision, 17);
     assert_eq!(current.revision, 18);
     assert!(super::super::compiled_history(&current).contains(&old));
@@ -284,4 +284,32 @@ fn pi_auxiliary_revision18_preserves_frozen_revision17_ownership() {
         bytes.push(0);
     }
     assert!(super::super::compiled_history(&forged).is_empty());
+}
+
+/// Revision19 changes only the private usage producer. Its revision18 baseline
+/// remains an exact independent snapshot and every older ownership/tamper fence
+/// still applies, without silently upgrading another harness or shared client.
+#[test]
+fn pi_redisclosure_revision19_preserves_frozen_revision18_ownership() {
+    use sha2::Digest;
+    let previous = historical_redisclosure_manifest();
+    let current = candidate_manifest();
+    assert_eq!(previous.revision, 18);
+    assert_eq!(current.revision, 19);
+    assert!(super::super::compiled_history(&current).contains(&previous));
+    let digest = sha2::Sha256::digest(include_bytes!("../history/pi_usage_v18.mjs"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        digest,
+        "cb8c2d6e52ba6553d76a0b47da6ddcf2dd6ecd97f274d3d183886a24ac4eb212"
+    );
+    let changed = current
+        .entries
+        .iter()
+        .filter(|entry| !previous.entries.contains(entry))
+        .map(|entry| entry.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(changed, ["extensions/mezzanine/pi_usage.mjs"]);
 }
