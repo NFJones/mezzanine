@@ -6,6 +6,63 @@
 
 use super::*;
 
+/// Executes a real installed callback from the isolated native creator. Kernel
+/// writer evidence is consumed on its own socket; absence cases must produce no
+/// IPC at all. The fixture verifies neutral stdout/stderr/exit before its ACK.
+async fn installed_callback(
+    fixture: &mut Fixture,
+    handle: &crate::host::async_runtime::AsyncRuntimeSessionHandle,
+    command: &str,
+    event: serde_json::Value,
+    callback_count: usize,
+) {
+    use crate::host::async_runtime::{
+        AsyncRuntimeControlConnectionConfig, serve_async_runtime_control_connection_loop,
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let launch = serde_json::json!({"command":command,"event":event}).to_string();
+    fixture.socket.write_all(&[9]).await.unwrap();
+    fixture
+        .socket
+        .write_all(&u32::try_from(launch.len()).unwrap().to_be_bytes())
+        .await
+        .unwrap();
+    fixture.socket.write_all(launch.as_bytes()).await.unwrap();
+    for _ in 0..callback_count {
+        let (mut socket, _) =
+            tokio::time::timeout(Duration::from_secs(2), fixture.listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+        let mut connection = ControlConnectionState::new(true, false);
+        serve_async_runtime_control_connection_loop(
+            &mut socket,
+            handle,
+            &mut connection,
+            AsyncRuntimeControlConnectionConfig::new(8192, crate::runtime::current_effective_uid())
+                .unwrap(),
+            |served, _| served >= 1,
+        )
+        .await
+        .unwrap();
+        assert!(!connection.initialized());
+        assert!(connection.unix_origin().unwrap().writer_confirmed());
+        assert!(connection.caller_client_id().is_none());
+    }
+    let mut neutral = [0];
+    // The creator sends this ACK only after wait_with_output has observed the
+    // actual helper exit. Keep polling for forbidden extra IPC until that point,
+    // including delayed connects; queued accepts win over a simultaneous ACK.
+    tokio::select! {
+        biased;
+        _ = fixture.listener.accept() => panic!("installed callback produced unexpected IPC"),
+        completed = tokio::time::timeout(
+            Duration::from_secs(10), fixture.socket.read_exact(&mut neutral),
+        ) => { completed.unwrap().unwrap(); }
+    }
+    assert_eq!(neutral, [1]);
+}
+
 /// A normally invoked creator executes production-installed SessionStart hooks
 /// with no fd3 or launcher secret. Real Unix ingress must register only its
 /// qualified native creator, preserve identity on retry, retain unavailable
@@ -17,11 +74,7 @@ use super::*;
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires freshly built sibling mez binary; real installed Codex helper qualification"]
 async fn external_codex_installed_session_start_admits_native_creator_without_launcher() {
-    use crate::host::async_runtime::{
-        AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
-        serve_async_runtime_control_connection_loop,
-    };
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
     let Some(mut fixture) = fixture("hold").await else {
         panic!("installed Codex helper qualification requires native peer evidence");
     };
@@ -74,46 +127,11 @@ async fn external_codex_installed_session_start_admits_native_creator_without_la
         ("Stop", "a"),
         ("SessionEnd", ""),
     ] {
-        let launch = serde_json::json!({"command":command,"event":{"hook_event_name":event,"session_id":"session-a","source":"startup","turn_id":turn,"stop_hook_active":false,"prompt":"PRIVATE","transcript_path":"PRIVATE","usage":{"input_tokens":999},
+        installed_callback(&mut fixture, &handle, command, serde_json::json!({"hook_event_name":event,"session_id":"session-a","source":"startup","turn_id":turn,"stop_hook_active":false,"prompt":"PRIVATE","transcript_path":"PRIVATE","usage":{"input_tokens":999},
             "model":"selected-not-response","permission_mode":"default","last_assistant_message":"PRIVATE","tool_name":"PRIVATE","tool_input":{"command":"PRIVATE"},"tool_response":"PRIVATE",
             "event.name":"codex.sse_event","event.kind":"response.completed","conversation.id":"unrelated-session",
             "input_token_count":"121","output_token_count":"13","cached_token_count":32,"cache_write_token_count":4,"reasoning_token_count":2,
-            "user.email":"PRIVATE","total_token_usage":{"input_tokens":5000,"total_tokens":6000},"last_token_usage":{"input_tokens":1000,"total_tokens":1000}}}).to_string();
-        fixture.socket.write_all(&[9]).await.unwrap();
-        fixture
-            .socket
-            .write_all(&u32::try_from(launch.len()).unwrap().to_be_bytes())
-            .await
-            .unwrap();
-        fixture.socket.write_all(launch.as_bytes()).await.unwrap();
-        let (mut socket, _) =
-            tokio::time::timeout(Duration::from_secs(2), fixture.listener.accept())
-                .await
-                .unwrap()
-                .unwrap();
-        let mut connection = ControlConnectionState::new(true, false);
-        serve_async_runtime_control_connection_loop(
-            &mut socket,
-            &handle,
-            &mut connection,
-            AsyncRuntimeControlConnectionConfig::new(8192, crate::runtime::current_effective_uid())
-                .unwrap(),
-            |served, _| served >= 1,
-        )
-        .await
-        .unwrap();
-        assert!(!connection.initialized());
-        assert!(connection.unix_origin().unwrap().writer_confirmed());
-        assert!(connection.caller_client_id().is_none());
-        let mut neutral = [0];
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            fixture.socket.read_exact(&mut neutral),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(neutral, [1]);
+            "user.email":"PRIVATE","total_token_usage":{"input_tokens":5000,"total_tokens":6000},"last_token_usage":{"input_tokens":1000,"total_tokens":1000}}), 1).await;
     }
     handle.shutdown().await.unwrap();
     fixture.service = task.await.unwrap().service;
@@ -416,4 +434,151 @@ async fn external_codex_installed_shared_server_callback_is_neutral_without_ipc(
             .is_empty()
     );
     assert!(fixture.service.external_agent_rows().is_empty());
+}
+
+/// Installed callbacks qualify all initial main-session boundaries under the
+/// same living ordinary creator, retaining older threads until all are admitted.
+/// Each session owns one durable namespace and
+/// records one model request. Same-session resume declarations are inert, compact
+/// and child contexts produce no IPC, and later parent facts still work. End
+/// and late model callbacks cannot revive an original retired session or bill
+/// it twice. The next session's clear/fork/resume source cannot import history.
+/// This uses isolated bootstrap and the actual fixed helper, not actual Codex.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires freshly built sibling mez binary; installed session-boundary qualification"]
+async fn external_codex_installed_session_boundaries_preserve_parent_and_accounting() {
+    use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+    let Some(mut fixture) = fixture("hold").await else {
+        panic!("installed Codex session qualification requires native peer evidence");
+    };
+    let helper = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("mez");
+    let home = fixture.directory.join("home");
+    std::fs::create_dir(&home).unwrap();
+    let installed = std::process::Command::new(helper)
+        .args(["--json", "bootstrap", "codex"])
+        .env_clear()
+        .env("HOME", &home)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(installed.status.success(), "{installed:?}");
+    assert!(installed.stderr.is_empty());
+    let document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join(".codex/hooks.json")).unwrap()).unwrap();
+    let usage = fixture.directory.join("usage.sqlite");
+    fixture
+        .service
+        .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&usage));
+    let service = std::mem::replace(&mut fixture.service, RuntimeServiceFixture::new().build());
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let task = tokio::spawn(actor.run());
+    for (index, boundary) in ["startup", "resume", "clear", "fork"]
+        .into_iter()
+        .enumerate()
+    {
+        let session = format!("session-{index}");
+        for (event, source, child, callback_count) in [
+            ("SessionStart", boundary, false, 1),
+            ("SessionStart", boundary, false, 1),
+            ("SessionStart", "resume", false, 1),
+            ("SessionStart", "compact", false, 0),
+            ("SessionStart", "clear", true, 0),
+            ("SessionEnd", boundary, true, 0),
+            ("UserPromptSubmit", boundary, false, 1),
+            ("PreModelRequest", boundary, true, 0),
+            ("PostModelRequest", boundary, true, 0),
+            ("PreModelRequest", boundary, false, 1),
+            ("PostModelRequest", boundary, false, 1),
+            ("Stop", boundary, false, 1),
+        ] {
+            let mut payload = serde_json::json!({"hook_event_name":event,"session_id":session,"source":source,
+                "turn_id":"turn-a","stop_hook_active":false,"status":"completed",
+                "token_usage":{"input_tokens":10,"output_tokens":3},"cwd":"PRIVATE","transcript_path":"PRIVATE"});
+            if child {
+                payload["agent_id"] = "child-a".into();
+                payload["agent_type"] = "worker".into();
+            }
+            let command = document["hooks"][event][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap();
+            installed_callback(&mut fixture, &handle, command, payload, callback_count).await;
+        }
+    }
+    // New threads can coexist in one local creator. Retire in a different order
+    // from admission; every exact session remains separate and no late callback
+    // can adopt another living session or recharge an ended one.
+    for (index, boundary) in ["startup", "resume", "clear", "fork"]
+        .into_iter()
+        .enumerate()
+        .rev()
+    {
+        for (event, callback_count) in [
+            ("SessionEnd", 1),
+            ("SessionStart", 1),
+            ("PostModelRequest", 2),
+        ] {
+            let payload = serde_json::json!({"hook_event_name":event,"session_id":format!("session-{index}"),
+                "source":boundary,"turn_id":"turn-a","stop_hook_active":false,"status":"completed",
+                "token_usage":{"input_tokens":10,"output_tokens":3}});
+            let command = document["hooks"][event][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap();
+            installed_callback(&mut fixture, &handle, command, payload, callback_count).await;
+        }
+    }
+    handle.shutdown().await.unwrap();
+    fixture.service = task.await.unwrap().service;
+    let registry = fixture.service.control.external_agents();
+    assert_eq!(registry.bindings.len(), 4);
+    let mut owners = std::collections::BTreeSet::new();
+    for binding in registry.bindings.values() {
+        assert!(binding.retired);
+        assert_eq!(binding.enrollment.as_ref().unwrap().epoch, 1);
+        assert!(owners.insert(binding.accounting_owner.clone()));
+        let presentation = binding
+            .registration
+            .as_ref()
+            .unwrap()
+            .presentation
+            .as_ref()
+            .unwrap();
+        assert_eq!(presentation.sequence, 2);
+        assert_eq!(presentation.state, "ready");
+    }
+    assert!(registry.enrollments.pending.is_empty());
+    assert!(fixture.service.external_agent_rows().is_empty());
+    assert!(fixture.service.live_pane_harness_status("%1").is_none());
+    assert!(fixture.connection.unix_origin().unwrap().is_live());
+    let database = rusqlite::Connection::open(usage).unwrap();
+    for table in [
+        "external_usage_sources",
+        "external_usage_requests",
+        "token_usage_events",
+    ] {
+        assert_eq!(
+            database
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            4,
+            "{table}"
+        );
+    }
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT sum(input_tokens) FROM token_usage_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        40
+    );
 }
