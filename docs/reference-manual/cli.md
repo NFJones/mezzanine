@@ -368,11 +368,11 @@ producer. Pi work is independent of the retired Gemini harness, not its replacem
 Ordinary `mez bootstrap pi` now also installs finalized assistant request
 accounting. Run normal `pi` in the Mez pane; no `mez pi`, fd3, preselected session,
 `--apply`, version/root gate or separate accounting enable step is required.
-Pi revision 13 recognizes independently frozen revision-12/11 and all earlier
-compiled owned bytes for upgrade/repair/repeat;
-disabled vendor policy, authored entries and trust remain unchanged. Pi13 changes
-only the Pi-owned producer modules; the shared resume transport and OpenCode11
-owned bytes remain unchanged, without adding OpenCode usage behavior.
+Pi revision 19 recognizes independently frozen revision-18 and all earlier
+compiled owned bytes for upgrade/repair/repeat; disabled vendor policy, authored
+entries and trust remain unchanged. The revision-19 redisclosure update changes
+only the Pi usage producer; shared transport and OpenCode15 owned bytes remain
+unchanged, without adding OpenCode usage behavior.
 
 The producer observes genuine `turn_start` readiness, then persisted `turn_end`
 assistant entries. `message_end` is not charged: other extensions may still
@@ -430,7 +430,13 @@ budgets and settings remain unchanged; no extra enablement is added.
 Known limits: pending/deferred responses, compaction/branch/tool/cache-warming
 auxiliary calls without a stable current-request counter contract, and durable
 cross-process unsent-report recovery are unsupported. No transcript backfill or
-invoice/full-spend claim is made. Fixed `unavailable-pi-usage-*` reasons disclose
+invoice/full-spend claim is made. A genuine new/resume/fork callback may enroll
+a distinct, never-retired native session namespace. Returning to the same
+physical producer/session after its actual shutdown retired that namespace stays
+`unavailable-source-continuity`; a new observer name cannot reopen it. This
+protects prior expense identity and does not report resumed-session usage as
+covered. Same-session reload is a separate successor handoff that preserves its
+qualified source. Fixed `unavailable-pi-usage-*` reasons disclose
 missing counters, correlation, readiness, clock or durable ACK through `/status`;
 they leave already recorded totals and lifecycle state intact. A later successful
 report does not erase a sticky gap within the observer epoch. Native transport
