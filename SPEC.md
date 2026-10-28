@@ -1238,7 +1238,16 @@ SessionStart/UserPromptSubmit/Stop/SessionEnd schemas provide lifecycle IDs and
 selected-model metadata, not token counters. Separate OTEL `response.completed`
 events and response spans do expose completion input/output/cache/reasoning
 counters; this available source MUST NOT be described as absent merely because
-hooks lack usage. TUI `last_token_usage` context occupancy and accumulated session
+hooks lack usage. The newer observation-only PreModelRequest/PostModelRequest hook source also
+exposes actual per-request usage. Its pure projection MUST retain valid incurred
+usage even on failed/cancelled status, preserve absent versus zero categories,
+validate inclusive cache/reasoning subsets and redundant totals, and discard
+selected-model/error/path/content fields. A child selector MUST remain explicit;
+it grants no parent association. This input has no request ID/index. The pure
+fact MUST NOT allocate a source, pair by nearest/newest turn, invent provider or
+response model, admit an expense, or authorize callback replay. Native original
+request custody, stable identity and durable typed ACK remain separate work.
+TUI `last_token_usage` context occupancy and accumulated session
 totals MUST NOT be billed as new expense or summed together. OTEL ingestion remains
 unqualified until stable immutable report/request correlation, actual native
 client/source ownership (including ordinary daemon topology), original expense

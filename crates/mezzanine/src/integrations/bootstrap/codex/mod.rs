@@ -1,15 +1,19 @@
 //! Content-free best-effort lifecycle projection from documented Codex fields.
 //!
 //! Sources: released codex-rs/hooks/schema/generated and upstream hook schema,
-//! telemetry emission and TUI token models inspected at 0c329ad2. Ordinary hook
-//! inputs contain lifecycle selectors, not counters. OTEL response completion
-//! counters exist separately; TUI last-token totals may describe context occupancy.
-//! Neither source is reporting authority or original-request accounting readiness.
+//! telemetry emission and TUI token models inspected at 0c329ad2. The lifecycle
+//! events here contain selectors rather than counters. New observation-only model
+//! request hooks expose actual usage through the separate `request` projection;
+//! neither projection grants native source or original-request readiness. TUI
+//! last-token totals may describe context occupancy and are never billed here.
 //! Native admission and presentation sequencing belong to the runtime/helper,
 //! never a session label, daemon exporter or launcher claim. No transcripts,
 //! prompts, tool payloads, credentials or counters leave this lifecycle owner.
 
 use crate::error::{MezError, Result};
+
+/// Pure model-request facts, separate from lifecycle, transport and admission.
+pub(crate) mod request;
 
 /// Exact upstream release whose lifecycle fields were inspected.
 pub(crate) const RELEASE: &str = "0.160.0";

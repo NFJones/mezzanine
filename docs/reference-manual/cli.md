@@ -268,10 +268,17 @@ a child callback, approve a tool or forward tool content. Existing revision4
 members upgrade through the shared-hook reconciler; authored hooks and normal
 vendor trust review remain intact. This lifecycle coverage does not supply token
 accounting or change existing exporters.
-Further source inspection at upstream `openai/codex` commit `0c329ad2` confirms
-ordinary hook schemas have lifecycle IDs/selected model but no usage counters.
-This is not a blanket absence of ordinary-mode counters: OTEL completion events
-and response spans expose input/output/cache-read/cache-write/reasoning counters.
+The previously inspected lifecycle hooks at upstream `openai/codex` commit
+`0c329ad2` have lifecycle IDs/selected model rather than usage counters. Newer
+observation-only `PreModelRequest`/`PostModelRequest` hooks also expose per-request
+usage. The internal pure projector checks inclusive counters, keeps child scope
+explicit, and preserves valid incurred usage after failure or cancellation.
+Missing categories remain unknown and explicit zeros stay known. It drops error,
+path/content and selected-model fields. These hooks have no request ID/index;
+normalization alone does not install them or qualify native request pairing,
+original origin, response model/provider or durable accounting. That adapter work
+remains unfinished. Separately, OTEL completion events and response spans expose
+input/output/cache-read/cache-write/reasoning counters.
 TUI `last_token_usage` can mean active context occupancy, while `total_token_usage`
 is accumulated session usage; neither is an independently qualified new request.
 No OTEL accounting receiver or metadata-only exporter activation is installed by

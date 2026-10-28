@@ -15,7 +15,7 @@ pub(crate) mod claude_artifact;
 pub(crate) mod claude_usage_gap;
 #[allow(
     dead_code,
-    reason = "pinned projection awaits launch-bound vendor qualification"
+    reason = "pure projection consumers are independent of adapter activation"
 )]
 pub(crate) mod codex;
 #[allow(
