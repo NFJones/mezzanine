@@ -2029,12 +2029,18 @@ accounting. Reports must be within the 91-day horizon and not future-dated;
 pruned old sequences cannot become new deltas. High-water checkpoint tombstones
 remain after raw events and receipts are pruned.
 
-Concurrent first opens may contend while enabling SQLite WAL. The ledger retries
-only that idempotent setup step within a finite contention budget, before usage
-transactions begin. It does not automatically replay accounting transactions;
+Concurrent first opens may contend while enabling SQLite WAL or acquiring a
+migration writer. These idempotent setup/admission steps share the original
+finite initialization horizon, before usage transactions begin. It does not automatically replay accounting transactions;
 persistent contention returns an explicit error and leaves replay identity intact.
-Already-current schema inspection does not acquire migration writer ownership;
-actual migrations still recheck the version inside their immediate transaction.
+Already-current schema inspection does not acquire migration writer ownership.
+An older read can become stale when a peer commits migration: the opener probes
+committed version again during bounded writer admission and skips unnecessary
+migration ownership once the schema is current. WAL/schema admission retains the
+original contention horizon; genuinely old blocked schemas and unexpected SQLite
+errors remain failures. Actual migrations still recheck version inside their
+immediate transaction. This does not retry a usage write or change the separate
+request-end retry policy.
 
 SQLite schema v2 migrates legacy rows to harness `mez` without counter backfill.
 The ledger stores harness/model counters and opaque stream identities, not prompt,

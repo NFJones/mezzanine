@@ -1,4 +1,10 @@
-//! SQLite schema, append, retention, and rolling aggregation implementation.
+//! SQLite schema admission, append, retention and rolling token aggregation.
+//!
+//! Setup owns bounded WAL/migration admission, never usage replay authority.
+//! Current committed schema needs no migration writer even when an earlier
+//! observation was stale. Actual migrations recheck version under their writer
+//! transaction; receipt/checkpoint/expense ownership stays in external ingestion.
+//! The original contention horizon remains shared across WAL and admission.
 
 #[cfg(test)]
 use std::collections::BTreeMap;
@@ -298,6 +304,66 @@ fn initialize_wal(
     }
 }
 
+/// Admits a migration writer under the original setup retry horizon. The
+/// caller rechecks version under any returned transaction; no usage operation
+/// is executed or replayed here. A peer-current outcome needs no writer.
+fn schema_migration_transaction<'connection>(
+    connection: &'connection Connection,
+    deadline: std::time::Instant,
+) -> Result<Option<rusqlite::Transaction<'connection>>> {
+    // The caller's old-version read may already be stale. This is a read of
+    // committed schema, not admission to another writer or a usage retry.
+    let mut committed_version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|error| {
+            MezError::from(error).with_context("read token usage schema before migration admission")
+        })?;
+    let transaction = loop {
+        if committed_version == SCHEMA_VERSION {
+            return Ok(None);
+        }
+        match rusqlite::Transaction::new_unchecked(
+            connection,
+            rusqlite::TransactionBehavior::Immediate,
+        ) {
+            Ok(transaction) => break transaction,
+            Err(error) => {
+                if matches!(&error, rusqlite::Error::SqliteFailure(code, _)
+                    if matches!(code.extended_code, rusqlite::ffi::SQLITE_BUSY | rusqlite::ffi::SQLITE_LOCKED))
+                {
+                    // A migration can finish during SQLite's busy wait and an
+                    // unrelated expense writer can acquire immediately after it.
+                    // Recognize that peer's committed schema even at the end of
+                    // the horizon, without another writer attempt or retry grant.
+                    committed_version = connection
+                        .query_row("PRAGMA user_version", [], |row| row.get(0))
+                        .map_err(|error| {
+                            MezError::from(error)
+                                .with_context("recheck token usage schema after writer refusal")
+                        })?;
+                    if committed_version == SCHEMA_VERSION {
+                        return Ok(None);
+                    }
+                    if std::time::Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                }
+                // Content-free diagnostics identify future refused schedules;
+                // these values never grant request or transaction retry rights.
+                let extended_code = match &error {
+                    rusqlite::Error::SqliteFailure(code, _) => Some(code.extended_code),
+                    _ => None,
+                };
+                return Err(MezError::invalid_state(format!(
+                    "token usage schema writer admission failed: {error}; sqlite_extended_code={extended_code:?}; committed_schema_version={committed_version}"
+                )));
+            }
+        }
+    };
+    Ok(Some(transaction))
+}
+
 /// Migrates schema transactionally after bounded WAL setup succeeds.
 fn initialize_schema(
     connection: &Connection,
@@ -312,35 +378,8 @@ fn initialize_schema(
     if observed_version == SCHEMA_VERSION {
         return Ok(());
     }
-    // Concurrent openers of a fresh store must serialize through schema
-    // creation: the loser of this admission is expected to wait, not fail, and
-    // the winner's work is a full WAL setup plus migration rather than a single
-    // statement. SQLite also does not invoke its busy handler for every
-    // writer-admission conflict (a would-deadlock BEGIN IMMEDIATE returns BUSY
-    // immediately), so retry this one idempotent admission within a budget
-    // sized for that initialization work and drawn from the same deadline WAL
-    // setup uses. No usage transaction or committed observation is replayed by
-    // this owner.
-    let transaction = loop {
-        match rusqlite::Transaction::new_unchecked(
-            connection,
-            rusqlite::TransactionBehavior::Immediate,
-        ) {
-            Ok(transaction) => break transaction,
-            Err(rusqlite::Error::SqliteFailure(error, _))
-                if matches!(
-                    error.extended_code,
-                    rusqlite::ffi::SQLITE_BUSY | rusqlite::ffi::SQLITE_LOCKED
-                ) && std::time::Instant::now() < deadline =>
-            {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Err(error) => {
-                return Err(MezError::invalid_state(format!(
-                    "token usage schema writer admission failed: {error}"
-                )));
-            }
-        }
+    let Some(transaction) = schema_migration_transaction(connection, deadline)? else {
+        return Ok(());
     };
     let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     match version {
@@ -516,4 +555,119 @@ fn conversion_error(index: usize, message: &str) -> rusqlite::Error {
         rusqlite::types::Type::Integer,
         Box::new(MezError::invalid_args(message)),
     )
+}
+
+#[cfg(test)]
+mod initialization_tests {
+    //! Real SQLite schedules around stale schema observations and WAL writers.
+    //!
+    //! No usage operation is retried and no synthetic admission error is
+    //! injected. Explicit rollback and connection drop precede assertions and
+    //! remove only the private fixture's database directory.
+
+    use super::*;
+
+    /// Creates only a private path; opening/migrating is controlled by each test.
+    fn fresh_store() -> TokenUsageStore {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "mez-token-schema-{}",
+                super::super::new_token_usage_event_id()
+            ))
+            .join("usage.sqlite");
+        ensure_private_parent(&path).unwrap();
+        TokenUsageStore::new(path)
+    }
+
+    /// A real old-version read can become stale before migration admission.
+    /// Once a peer has committed the current schema, its unrelated WAL expense
+    /// writer must not force the stale opener to obtain a second schema writer.
+    /// This is not permission to retry a usage transaction or extend a deadline.
+    #[test]
+    fn stale_schema_observation_uses_peer_current_version_without_writer() {
+        let store = fresh_store();
+        let stale = Connection::open(store.path()).unwrap();
+        stale.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        let observed: i64 = stale
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(observed, 0);
+        let winner = store.open().unwrap();
+        winner.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        stale.busy_timeout(Duration::from_millis(20)).unwrap();
+        let outcome = schema_migration_transaction(
+            &stale,
+            std::time::Instant::now() + Duration::from_millis(20),
+        )
+        .map(|transaction| transaction.is_none());
+        winner.execute_batch("ROLLBACK;").unwrap();
+        let version: i64 = stale
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        drop(winner);
+        drop(stale);
+        std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert!(
+            outcome.unwrap(),
+            "peer-current schema still required writer ownership"
+        );
+    }
+
+    /// A genuinely old unblocked schema still requires actual writer ownership;
+    /// always returning a successful no-writer result would leave migration and
+    /// later durable accounting broken. Admission alone must not write schema.
+    #[test]
+    fn old_schema_admission_still_returns_actual_writer_transaction() {
+        let store = fresh_store();
+        let connection = Connection::open(store.path()).unwrap();
+        connection
+            .execute_batch("PRAGMA journal_mode=WAL;")
+            .unwrap();
+        let transaction = schema_migration_transaction(
+            &connection,
+            std::time::Instant::now() + STORE_INITIALIZATION_BUDGET,
+        )
+        .unwrap()
+        .unwrap();
+        let owned_writer = !connection.is_autocommit();
+        transaction.rollback().unwrap();
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        drop(connection);
+        std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+        assert!(owned_writer);
+        assert_eq!(version, 0);
+    }
+
+    /// An actually old schema behind a persistent WAL writer remains a bounded
+    /// terminal refusal. A read probe cannot turn old schema into ready state or
+    /// execute migration statements without writer ownership.
+    #[test]
+    fn held_old_schema_writer_remains_refused_without_schema_effects() {
+        let store = fresh_store();
+        let connection = Connection::open(store.path()).unwrap();
+        connection
+            .execute_batch("PRAGMA journal_mode=WAL;")
+            .unwrap();
+        connection.busy_timeout(Duration::from_millis(20)).unwrap();
+        let blocker = Connection::open(store.path()).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        let outcome = schema_migration_transaction(
+            &connection,
+            std::time::Instant::now() + Duration::from_millis(20),
+        );
+        let refused = outcome.is_err();
+        drop(outcome);
+        blocker.execute_batch("ROLLBACK;").unwrap();
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        drop(blocker);
+        drop(connection);
+        std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
+        assert!(refused);
+        assert_eq!(version, 0);
+    }
 }

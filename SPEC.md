@@ -1507,6 +1507,15 @@ Reports admitted before registration retirement MAY finish without reviving the
 registration. Storage failure MUST NOT replay a provider request. Telemetry is
 externally reported, not independently verified billing. Project attribution and
 harness-aware status presentation use frozen accounting provenance, not current focus.
+
+Current token-usage schema inspection MUST NOT require migration writer
+ownership. An opener whose older version read becomes stale MUST recognize a
+peer's committed current schema during bounded migration admission instead of
+requiring another writer merely to confirm it. Actual migrations MUST recheck
+version under their writer transaction. This observation MUST NOT extend the
+existing contention horizon, execute migration without ownership, grant a
+request-end retry after schema failure, or replay any accounting transaction.
+
 Accounting project identity MUST remain separate from trust and MMP audience
 identity. Provider dispatch MUST freeze an opaque project origin or explicit
 unattributed state before request execution; settlement MUST NOT resample cwd or

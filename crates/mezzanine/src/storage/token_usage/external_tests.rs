@@ -252,6 +252,8 @@ fn external_wal_setup_contention_is_bounded_and_retry_safe() {
 /// Concurrent identical reports opening a fresh store must settle one durable
 /// delta and one replay, including schema/WAL initialization. Both workers own
 /// separate connections and begin together, as lost-reply ingress permits.
+/// Every worker is joined before inspecting errors; a reopened exact replay and
+/// durable row counts verify that concurrent setup did not duplicate expense.
 #[test]
 fn external_concurrent_fresh_store_replay_conserves_delta() {
     for _ in 0..20 {
@@ -268,12 +270,36 @@ fn external_concurrent_fresh_store_replay_conserves_delta() {
                 })
             })
             .collect::<Vec<_>>();
-        let results = workers
+        let joined = workers
             .into_iter()
-            .map(|worker| worker.join().unwrap().unwrap())
+            .map(|worker| worker.join())
+            .collect::<Vec<_>>();
+        let results = joined
+            .into_iter()
+            .map(|result| result.unwrap().unwrap())
             .collect::<Vec<_>>();
         assert_eq!(results.iter().filter(|commit| commit.applied).count(), 1);
         assert_eq!(results[0].totals, results[1].totals);
+        let reopened = TokenUsageStore::new(store.path());
+        let replay = reopened.ingest_external(&report, 100).unwrap();
+        assert!(!replay.applied);
+        assert_eq!(replay.revision, results[0].revision);
+        assert_eq!(replay.totals, results[0].totals);
+        let connection = reopened.open().unwrap();
+        for table in [
+            "external_usage_streams",
+            "external_usage_receipts",
+            "token_usage_events",
+        ] {
+            let count: i64 = connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 1, "{table}");
+        }
+        drop(connection);
+        std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
     }
 }
 
