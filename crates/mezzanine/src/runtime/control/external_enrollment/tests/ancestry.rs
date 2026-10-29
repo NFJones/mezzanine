@@ -56,6 +56,28 @@ fn external_enrollment_ancestor_exit_boundary_requires_lifetime_completion() {
 /// is terminated, and the producer's immediate native record stays unchanged.
 pub(super) async fn orphan_middle(fixture: &Fixture) {
     let origin = fixture.connection.unix_origin().unwrap();
+    let root = fixture.service.pane_process_identity("%1").unwrap();
+    let root_record = mez_mux::process::process_parent_identity_for_pid(root.process_id).unwrap();
+    assert_eq!(root_record.start_token, root.start_token);
+    let capture = origin.clone();
+    let budget = Arc::new(UnixAncestryBudget::default());
+    let exit_fence =
+        tokio::task::spawn_blocking(move || capture.capture_ancestry(root_record, &budget))
+            .await
+            .unwrap()
+            .unwrap();
+    orphan_middle_with_ancestry(fixture, &exit_fence).await;
+}
+
+/// Uses the caller's original retained witness to observe exact ancestor exit.
+/// This avoids a second fallible ancestry capture after the behavior under test
+/// already acquired its proof. Reparenting alone still cannot satisfy completion;
+/// missing/dead captured ancestors reject before any fixture process is signaled.
+pub(super) async fn orphan_middle_with_ancestry(
+    fixture: &Fixture,
+    exit_fence: &crate::runtime::UnixAncestryWitness,
+) {
+    let origin = fixture.connection.unix_origin().unwrap();
     let middle =
         mez_mux::process::process_parent_identity_for_pid(origin.identity.parent_process_id)
             .unwrap();
@@ -66,13 +88,12 @@ pub(super) async fn orphan_middle(fixture: &Fixture) {
     assert_eq!(upper.parent_process_id, root.process_id);
     let root_record = mez_mux::process::process_parent_identity_for_pid(root.process_id).unwrap();
     assert_eq!(root_record.start_token, root.start_token);
-    let capture = origin.clone();
-    let budget = Arc::new(UnixAncestryBudget::default());
-    let exit_fence =
-        tokio::task::spawn_blocking(move || capture.capture_ancestry(root_record, &budget))
-            .await
-            .unwrap()
-            .unwrap();
+    assert!(
+        exit_fence
+            .continuity_digest(origin.uid(), origin.identity)
+            .is_ok(),
+        "exit fence must retain this fixture's exact live source"
+    );
     assert_eq!(exit_fence.test_ancestor_is_live(upper), Some(true));
     let pid = libc::pid_t::try_from(upper.process_id).unwrap();
     // SAFETY: native fixture records above identify the deliberately launched

@@ -79,6 +79,8 @@ async fn external_parent_ancestry_survives_helper_but_not_verified_source_exit()
 /// Whole-chain parent-backed polling rejects an orphaned source even when its
 /// own identity and root remain live and unchanged. A later capture also rejects
 /// the now-unrelated tree, without retaining partial reservations or authority.
+/// The original witness also supplies the exact exit-completion fence while
+/// its budget is full; a second capture is neither needed nor permitted.
 #[tokio::test(flavor = "current_thread")]
 async fn external_parent_ancestry_intermediate_exit_fences_live_endpoints() {
     let Some(mut fixture) = fixture("tree").await else {
@@ -102,7 +104,14 @@ async fn external_parent_ancestry_intermediate_exit_fences_live_endpoints() {
     .await
     .unwrap();
     assert_eq!(budget.reserved(), 4);
-    super::ancestry::orphan_middle(&fixture).await;
+    // The original four-descriptor witness is sufficient for the exit fence.
+    // Fill its remaining budget to prove orphaning neither captures another
+    // chain nor releases the proof before observing exact ancestor completion.
+    let held = budget.reserve_for_tests(508).unwrap();
+    super::ancestry::orphan_middle_with_ancestry(&fixture, &witness).await;
+    assert_eq!(budget.reserved(), 512);
+    drop(held);
+    assert_eq!(budget.reserved(), 4);
     assert!(parent.is_live());
     assert!(!witness.is_live());
     drop(witness);
