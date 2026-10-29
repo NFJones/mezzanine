@@ -14770,6 +14770,17 @@ source bytes before canonical context mutation; overflow MUST leave transport
 input unacknowledged. Snapshot/rollback adoption and legacy reconstruction MUST
 apply the same bounds before retaining copies; they MUST NOT drop existing proof.
 
+A snapshot's receiver presentation installation bit describes its previous
+screen and MUST NOT establish installation on a fresh restored screen. Startup
+MUST derive fresh installation evidence from exact received identities actually
+rendered during successful hydration, preserving captured eligibility, label,
+content type and occurrence. Failed hydration MUST NOT replace receipt evidence
+for the rolled-back screen. Exact in-memory rollback MUST retain its own screen
+evidence rather than applying startup's reset. A retained eligible receipt that
+becomes durable before its fresh screen installation MUST keep its display
+obligation and install without another durable append. Recovery MUST NOT use
+payload equality as identity, advance delivery again or restart provider work.
+
 Native transport reconciliation MUST use sealed same-runtime receive proof
 created only after canonical context storage, before fallible cursor/projection
 work. It MUST survive Stop, context cleanup and failed-backing moves until its

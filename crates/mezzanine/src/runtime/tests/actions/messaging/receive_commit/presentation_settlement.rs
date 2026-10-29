@@ -479,7 +479,62 @@ fn runtime_received_peer_receipt_waits_for_queued_presentation_persistence() {
 /// store that already own the recoverable facts.
 #[test]
 fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
-    let root = temp_root("runtime-receipt-failed-persistence-restart");
+    qualify_peer_presentation_restart(true);
+}
+
+/// A row installed on the old screen must appear once on the fresh screen even
+/// when its presentation write never succeeded before snapshot. The acknowledged
+/// transport is evicted, so recovery must use the retained receiver source and
+/// original occurrence/label without another context delivery or resize.
+#[test]
+fn runtime_unsettled_live_peer_presentation_reinstalls_after_restart() {
+    qualify_peer_presentation_restart(false);
+}
+
+/// Late persistence must leave one visible occurrence and one durable source
+/// whether it commits before fresh hydration or after hydration but before
+/// flushing the retained display obligation. Neither value of the old screen's
+/// installation bit can authorize a duplicate or suppress the new screen.
+#[test]
+fn runtime_peer_presentation_restart_reconciles_late_durability() {
+    for old_live_rendered in [false, true] {
+        for durable_before_hydration in [false, true] {
+            qualify_peer_presentation_restart_timing(
+                false,
+                Some(durable_before_hydration),
+                old_live_rendered,
+                false,
+            );
+        }
+    }
+}
+
+/// A fresh screen must install once while asynchronous persistence is pending.
+/// An injected first write failure must retry only storage, preserving the
+/// already installed row and original receipt until its successful settlement.
+#[test]
+fn runtime_unsettled_live_peer_presentation_async_reinstalls_after_restart() {
+    qualify_peer_presentation_restart_timing(false, None, true, true);
+}
+
+/// Preserves the original settled/unsettled restart qualification entry points.
+fn qualify_peer_presentation_restart(settled_before_snapshot: bool) {
+    qualify_peer_presentation_restart_timing(settled_before_snapshot, None, true, false);
+}
+
+/// Qualifies snapshot admission, hydration and late settlement using the same
+/// immutable receiver source and exact original occurrence.
+fn qualify_peer_presentation_restart_timing(
+    settled_before_snapshot: bool,
+    durable_before_hydration: Option<bool>,
+    old_live_rendered: bool,
+    restart_async: bool,
+) {
+    let root = temp_root(if settled_before_snapshot {
+        "runtime-receipt-failed-persistence-restart"
+    } else {
+        "runtime-receipt-unsettled-live-restart"
+    });
     let store = AgentTranscriptStore::new(root.clone());
     let mut service = test_runtime_service();
     service.presentation.occurrence_clock_millis = Some(Some(1234));
@@ -498,9 +553,11 @@ fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
-    service
-        .start_initial_pane_process(Some("cat >/dev/null"))
-        .unwrap();
+    if settled_before_snapshot {
+        service
+            .start_initial_pane_process(Some("cat >/dev/null"))
+            .unwrap();
+    }
     service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 12).unwrap(), 100).unwrap(),
@@ -724,20 +781,41 @@ fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
             .all(|entry| entry.presentation.as_ref().unwrap().occurrence
                 == captured_receipt.occurrence)
     );
-    let retry_bytes = store.append_presentation_many(&retry_entries).unwrap();
-    service
-        .apply_persistence_transition(crate::runtime::PersistenceEvent::PresentationCompleted {
-            conversation_id: service
-                .agent_shell_store()
-                .get("%1")
+    if settled_before_snapshot {
+        let retry_bytes = store.append_presentation_many(&retry_entries).unwrap();
+        service
+            .apply_persistence_transition(crate::runtime::PersistenceEvent::PresentationCompleted {
+                conversation_id: service
+                    .agent_shell_store()
+                    .get("%1")
+                    .unwrap()
+                    .session_id
+                    .clone(),
+                path: retry_path,
+                entries: retry_entries.len(),
+                bytes: retry_bytes,
+            })
+            .unwrap();
+    } else {
+        let receipt = service
+            .snapshot_unsettled_received_peer_message_presentations()
+            .into_iter()
+            .find(|receipt| receipt.identity == identity)
+            .unwrap();
+        assert!(receipt.live_rendered);
+        assert!(receipt.presentation_eligible);
+        assert_eq!(receipt.occurrence, captured_receipt.occurrence);
+        assert!(
+            store
+                .inspect_presentation(&conversation_id)
                 .unwrap()
-                .session_id
-                .clone(),
-            path: retry_path,
-            entries: retry_entries.len(),
-            bytes: retry_bytes,
-        })
-        .unwrap();
+                .iter()
+                .all(|entry| !entry
+                    .source_text
+                    .as_deref()
+                    .is_some_and(|source| source.contains(identity.as_str())))
+        );
+    }
     service.checkpoint_agent_session_metadata().unwrap();
     let metadata_records = service
         .drain_transcript_persistence_transition()
@@ -756,6 +834,9 @@ fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
     snapshot.message_state = Some(service.message_service().snapshot_state());
     snapshot.unsettled_peer_presentations =
         service.snapshot_unsettled_received_peer_message_presentations();
+    for receipt in &mut snapshot.unsettled_peer_presentations {
+        receipt.live_rendered = old_live_rendered;
+    }
     snapshot.agent_sessions = vec![crate::storage::snapshot::SnapshotAgentSession {
         pane_id: "%1".to_string(),
         conversation_id: service
@@ -809,12 +890,21 @@ fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
     let mut restarted = test_runtime_service();
     restarted.session.id = service.session().id.clone();
     restarted.set_agent_transcript_store(store.clone());
+    if restart_async {
+        restarted.use_transcript_effect_adapter();
+    }
     restarted
         .restore_message_state_for_restored_snapshot(&snapshot)
         .unwrap();
+    if durable_before_hydration == Some(true) {
+        store.append_presentation_many(&retry_entries).unwrap();
+    }
     restarted
         .restore_agent_sessions_for_restored_snapshot(false)
         .unwrap();
+    if durable_before_hydration == Some(false) {
+        store.append_presentation_many(&retry_entries).unwrap();
+    }
     assert_eq!(
         restarted
             .deliver_pending_runtime_agent_messages(now_ms.saturating_add(2))
@@ -822,6 +912,95 @@ fn runtime_failed_peer_presentation_persistence_reconstructs_after_restart() {
         0,
         "the retained receipt must settle after its acknowledged transport envelope expires"
     );
+    if restart_async {
+        let mut injected_failure = false;
+        for _ in 0..3 {
+            assert_eq!(
+                peer_echo_pane_lines(&restarted, "%1")
+                    .iter()
+                    .filter(|line| line.contains(payload))
+                    .count(),
+                1
+            );
+            let effects = restarted
+                .drain_transcript_persistence_transition()
+                .side_effects;
+            for effect in effects {
+                if let RuntimeSideEffect::PersistPresentationEntries { path, entries, .. } = effect
+                {
+                    let owns_peer = entries.iter().any(|entry| {
+                        crate::runtime::render::peer_message_presentation_receive_identity(
+                            entry.source_content_type.as_deref().unwrap_or_default(),
+                            entry.source_text.as_deref().unwrap_or_default(),
+                        )
+                        .as_deref()
+                            == Some(identity.as_str())
+                    });
+                    if owns_peer && !injected_failure {
+                        injected_failure = true;
+                        restarted
+                            .apply_persistence_transition(
+                                crate::runtime::PersistenceEvent::PresentationFailed {
+                                    conversation_id: conversation_id.clone(),
+                                    path,
+                                    entries: entries.len(),
+                                    error: "injected restarted presentation failure".to_string(),
+                                },
+                            )
+                            .unwrap();
+                    } else {
+                        let bytes = store.append_presentation_many(&entries).unwrap();
+                        restarted
+                            .apply_persistence_transition(
+                                crate::runtime::PersistenceEvent::PresentationCompleted {
+                                    conversation_id: conversation_id.clone(),
+                                    path,
+                                    entries: entries.len(),
+                                    bytes,
+                                },
+                            )
+                            .unwrap();
+                    }
+                }
+            }
+            restarted
+                .flush_received_peer_message_presentations()
+                .unwrap();
+            if restarted
+                .snapshot_unsettled_received_peer_message_presentations()
+                .is_empty()
+            {
+                break;
+            }
+        }
+        assert!(injected_failure);
+    }
+    let committed_cursor = restarted
+        .message_service()
+        .subscription(&recipient.agent_id)
+        .unwrap()
+        .last_sequence;
+    assert!(
+        restarted
+            .snapshot_unsettled_received_peer_message_presentations()
+            .is_empty()
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            restarted
+                .deliver_pending_runtime_agent_messages(now_ms.saturating_add(3))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            restarted
+                .message_service()
+                .subscription(&recipient.agent_id)
+                .unwrap()
+                .last_sequence,
+            committed_cursor
+        );
+    }
     let conversation_id = restarted
         .agent_shell_store()
         .get("%1")

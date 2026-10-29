@@ -5,6 +5,7 @@
 
 use super::*;
 
+mod fresh_installation;
 mod receipt_capacity;
 
 mod legacy_reconstruction {

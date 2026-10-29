@@ -867,16 +867,16 @@ impl RuntimeSessionService {
     /// The same rule covers the runtime bridge echo: normal mode returns before
     /// any row or record exists, while verbose mode logs the full bounded payload
     /// for every received sender and media type.
-    fn append_agent_peer_message_to_terminal_buffer(
+    fn install_agent_peer_message_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         presentation: &PeerMessagePresentation<'_>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let log_mode = self.agent_peer_message_log_mode();
         if !presentation.presentation_eligible
             && !runtime_peer_message_presentation_is_visible(log_mode, presentation.content_type)
         {
-            return Ok(());
+            return Ok(false);
         }
         let body = peer_message_echo_payload(presentation.payload);
         let display_width = self.agent_terminal_markdown_frame_width(pane_id)?;
@@ -966,6 +966,37 @@ impl RuntimeSessionService {
                 crate::host::terminal::source_copy::CopySourcePlan::Declared
             },
         )
+        .map(|_| true)
+    }
+
+    /// Renders one received source; suppressed media produces no installation.
+    fn append_agent_peer_message_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        presentation: &PeerMessagePresentation<'_>,
+    ) -> Result<()> {
+        self.install_agent_peer_message_to_terminal_buffer(pane_id, presentation)
+            .map(|_| ())
+    }
+
+    /// Installs already durable presentation without another append. Preserve a
+    /// surrounding replay scope and restore its membership on success or error.
+    pub(crate) fn with_agent_presentation_persistence_suppressed<T>(
+        &mut self,
+        pane_id: &str,
+        render: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        let inserted = self
+            .presentation
+            .agent_presentation_replay_panes
+            .insert(pane_id.to_string());
+        let result = render(self);
+        if inserted {
+            self.presentation
+                .agent_presentation_replay_panes
+                .remove(pane_id);
+        }
+        result
     }
 
     /// Queues one retained received-peer source for durable persistence without

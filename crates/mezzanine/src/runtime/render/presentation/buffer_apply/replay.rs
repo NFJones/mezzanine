@@ -13,9 +13,22 @@ impl RuntimeSessionService {
         pane_id: &str,
         entries: &[AgentPresentationEntry],
     ) -> Result<bool> {
+        self.replay_agent_presentation_entries_with_peer_installations(pane_id, entries)
+            .map(|(replayed, _)| replayed)
+    }
+
+    /// Returns exact received identities actually installed by this replay.
+    /// Media-gated rows supply no evidence; repeated copies of one identity
+    /// install once. The caller may adopt evidence only after its screen commit.
+    pub(crate) fn replay_agent_presentation_entries_with_peer_installations(
+        &mut self,
+        pane_id: &str,
+        entries: &[AgentPresentationEntry],
+    ) -> Result<(bool, std::collections::BTreeSet<String>)> {
         if entries.is_empty() {
-            return Ok(false);
+            return Ok((false, Default::default()));
         }
+        let mut installed_peer_identities = std::collections::BTreeSet::new();
         self.validate_agent_presentation_replay_target(pane_id, entries)?;
         let previous_occurrence = self.presentation.occurrence_override.take();
         self.presentation
@@ -148,19 +161,33 @@ impl RuntimeSessionService {
                                     &source,
                                 )?;
                             } else {
-                                self.append_agent_peer_message_to_terminal_buffer(
-                                    pane_id,
-                                    &PeerMessagePresentation {
-                                        receive_identity: encoded.receive_identity.as_deref(),
-                                        peer_label: encoded.peer.as_str(),
-                                        content_type: encoded.content_type.as_deref(),
-                                        payload: encoded.payload.as_str(),
-                                        direct_parent: encoded.direct_parent,
-                                        presentation_eligible: encoded
-                                            .presentation_eligible
-                                            .unwrap_or(false),
-                                    },
-                                )?;
+                                if encoded.direction == "received"
+                                    && encoded.receive_identity.as_ref().is_some_and(|identity| {
+                                        installed_peer_identities.contains(identity)
+                                    })
+                                {
+                                    continue;
+                                }
+                                let installed = self
+                                    .install_agent_peer_message_to_terminal_buffer(
+                                        pane_id,
+                                        &PeerMessagePresentation {
+                                            receive_identity: encoded.receive_identity.as_deref(),
+                                            peer_label: encoded.peer.as_str(),
+                                            content_type: encoded.content_type.as_deref(),
+                                            payload: encoded.payload.as_str(),
+                                            direct_parent: encoded.direct_parent,
+                                            presentation_eligible: encoded
+                                                .presentation_eligible
+                                                .unwrap_or(false),
+                                        },
+                                    )?;
+                                if installed
+                                    && encoded.direction == "received"
+                                    && let Some(identity) = encoded.receive_identity
+                                {
+                                    installed_peer_identities.insert(identity);
+                                }
                             }
                         }
                         continue;
@@ -290,7 +317,7 @@ impl RuntimeSessionService {
         self.presentation
             .agent_presentation_replay_panes
             .remove(pane_id);
-        result
+        result.map(|replayed| (replayed, installed_peer_identities))
     }
 
     /// Projects proven transcript rows with original record provenance. Manual

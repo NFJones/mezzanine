@@ -350,6 +350,8 @@ impl RuntimeSessionService {
     /// an outbox entry, unlike `/resume` rollback which must restore its exact
     /// in-memory receipt set without consulting external state. Filtering here
     /// prevents stale durable receipts from consuming capacity or scheduling.
+    /// The old screen's install bit is discarded; successful fresh hydration
+    /// supplies new evidence independently of exact in-memory rollback restore.
     pub(crate) fn restore_snapshot_unsettled_received_peer_message_presentations(
         &mut self,
         outbox: &[crate::storage::snapshot::SnapshotUnsettledPeerPresentation],
@@ -369,10 +371,29 @@ impl RuntimeSessionService {
                 &entry.conversation_id,
                 &entry.identity,
             )? {
-                unsettled.push(entry.clone());
+                let mut entry = entry.clone();
+                // This bit describes the previous screen, never startup's fresh one.
+                entry.live_rendered = false;
+                unsettled.push(entry);
             }
         }
         self.restore_unsettled_received_peer_message_presentations(&unsettled)
+    }
+
+    /// Commits installation evidence only after a fresh conversation screen
+    /// successfully hydrates. Durable settlement and input delivery are separate;
+    /// failed hydration must retain the previous screen's receipt evidence.
+    pub(crate) fn reconcile_restored_peer_message_installation(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        installed: &BTreeSet<String>,
+    ) {
+        for (identity, receipt) in &mut self.agent.received_peer_message_presentations {
+            if receipt.pane_id == pane_id && receipt.conversation_id == conversation_id {
+                receipt.presentation_attempted = installed.contains(identity);
+            }
+        }
     }
 
     /// Reconstructs unsettled receiver receipts after durable message and pane
@@ -576,6 +597,17 @@ impl RuntimeSessionService {
                 &receipt.conversation_id,
                 identity.as_str(),
             )? {
+                if !receipt.presentation_attempted {
+                    self.with_agent_presentation_persistence_suppressed(
+                        &receipt.pane_id,
+                        |service| {
+                            service.echo_received_peer_message_presentation_to_pane(
+                                &receipt,
+                                identity.as_str(),
+                            )
+                        },
+                    )?;
+                }
                 self.agent
                     .received_peer_message_presentations
                     .remove(&identity);

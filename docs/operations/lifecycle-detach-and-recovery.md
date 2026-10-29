@@ -128,6 +128,16 @@ same-session recovery, startup reports a diagnostic and falls back to ordinary
 user shells. Check pane surfaces and diagnostics before continuing agent work;
 recovered conversation context does not resume an interrupted action.
 
+During matching-session recovery, acknowledged MMP presentation receipts can
+restore a message whose original display succeeded but whose log write failed.
+The old screen's display flag does not prove that the newly built screen has the
+row. Recovery checks exact receipt identities installed by successful history
+replay, then installs any retained eligible missing display once. If its durable
+write finishes first, display recovery does not append the log again. Original
+sender labels and occurrence stamps remain intact; this does not redeliver the
+message to agent context or restart a task. Ordinary in-memory rollback retains
+the installation evidence belonging to its existing screen.
+
 Snapshots are stored under Mezzanine's user-private configuration area. Offline
 snapshot CLI commands use its `snapshots` directory, while live creation and
 session layout commands use the separate `layouts` directory. Neither location

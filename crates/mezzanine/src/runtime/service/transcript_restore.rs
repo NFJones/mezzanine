@@ -420,6 +420,7 @@ impl RuntimeSessionService {
             let previous_presentation = self.snapshot_agent_resume_presentation(&pane_id);
             let previous_transcript_refs = self.persistence.pane_transcript_refs(&pane_id);
             let previous_working_directory = self.pane_current_working_directory(&pane_id);
+            let mut installed_peer_identities = std::collections::BTreeSet::new();
             let hydrate_result = (|| -> Result<()> {
                 #[cfg(test)]
                 store.verify_restart_replay_lease_for_tests(&conversation_id)?;
@@ -435,11 +436,13 @@ impl RuntimeSessionService {
                     .suspend_agent_presentation_state(&pane_id, &previous_presentation)?;
                 self.set_agent_pane_screen(&pane_id, &conversation_id, fresh_screen);
                 self.set_agent_prompt_history_for_pane(&pane_id, prompt_history);
-                if !self.replay_agent_presentation_entries_to_terminal_buffer(
-                    &pane_id,
-                    &presentation_entries,
-                )? && !transcript_fallback_entries.is_empty()
-                {
+                let (replayed, installed) = self
+                    .replay_agent_presentation_entries_with_peer_installations(
+                        &pane_id,
+                        &presentation_entries,
+                    )?;
+                installed_peer_identities = installed;
+                if !replayed && !transcript_fallback_entries.is_empty() {
                     self.replay_agent_transcript_fallback_to_terminal_buffer(
                         &pane_id,
                         Self::runtime_resume_transcript_presentation(
@@ -576,6 +579,11 @@ impl RuntimeSessionService {
                 }
                 return Err(error);
             }
+            self.reconcile_restored_peer_message_installation(
+                &pane_id,
+                &conversation_id,
+                &installed_peer_identities,
+            );
             self.commit_agent_resume_progress_replacement(&pane_id, &previous_presentation);
             self.restore_pane_model_profile_identity(
                 &pane_id,
