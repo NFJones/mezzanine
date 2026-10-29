@@ -177,7 +177,7 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
             history.blocks.insert(
                 0,
                 ContextBlock::reference_event(
-                    ContextSourceKind::Memory,
+                    ContextSourceKind::CompactionPrefix,
                     format!(
                         "memory {} (conversation)",
                         mez_agent::memory::canonical_memory_uuid(&format!(
@@ -327,11 +327,8 @@ fn runtime_agent_prompt_history_from_transcript(
 ) -> RuntimeAgentTranscriptContext {
     if transcript
         .blocks
-        .first()
-        .is_some_and(|block| block.source == ContextSourceKind::Memory)
-        || transcript.blocks.iter().any(|block| {
-            block.source == ContextSourceKind::Memory && block.label == "context compaction summary"
-        })
+        .iter()
+        .any(mez_agent::context_block_is_compaction_summary)
     {
         blocks.clear();
     }
@@ -496,7 +493,7 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
             .find(|range| range.first_sequence == entry.sequence)
         {
             blocks.push(ContextBlock::reference_event(
-                ContextSourceKind::Memory,
+                ContextSourceKind::CompactionSelective,
                 "context compaction summary",
                 range.summary.clone(),
             ));

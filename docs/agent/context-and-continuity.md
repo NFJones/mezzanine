@@ -207,6 +207,24 @@ and owned action/native-tool/MCP evidence together as complete execution groups;
 unrelated exact references keep their original identities and order. The summary
 candidate restores the retained groups with their original execution ownership.
 
+Prefix and selective summaries retain explicit summary identity through saved
+epoch replay and provider projection, including a prefix labelled with its
+canonical memory UUID. An ordinary UUID memory remains ordinary; only its
+owning compaction producer supplies summary identity. Existing labels and
+model-visible summary bytes are unchanged, and known legacy summary labels
+remain recognized. A restored summary alone does not mean a new compactor ran.
+A summary-only segment before exact steering stays anchored while the next
+compaction selects later eligible raw work.
+
+Manual candidate sizing and publication share the same prefix/range projection.
+Absorbed ranges disappear; surviving ranges retain their anchors exactly once.
+The candidate rebuilds owned history rather than retaining a cached summary
+beside the same replayed range, and preserves unrelated optional memory, exact
+references and native group metadata. A split range or backwards boundary is
+rejected without changing the epoch. Fit checks still measure the complete
+provider request with tools, controls and output/headroom allowance; fixing a
+projection does not relax the request limit or replay an action.
+
 If an earlier accepted prompt or command is still preparing its history, a new
 `/compact` is refused before changing the conversation epoch. The earlier input
 continues normally; this also protects guidance resumed after cancelling compaction.

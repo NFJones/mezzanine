@@ -6,7 +6,10 @@
 //! become the new prefix; later ranges retain their exact bytes and positions.
 //! The existing crash-safe sidecar writer owns persistence and version policy.
 
-use super::{AgentCompactionEpoch, AgentTranscriptStore, ConversationTranscriptRead};
+use super::{
+    AgentCompactionEpoch, AgentTranscriptStore, ConversationTranscriptRead,
+    project_compaction_prefix, validate_compaction_prefix_source,
+};
 use crate::{MezError, Result};
 use mez_agent::TranscriptEntry;
 
@@ -47,39 +50,19 @@ impl AgentTranscriptStore {
                 MezError::invalid_state("compaction transcript sequence is exhausted")
             })
         })?;
-        let selected = view
-            .committed
-            .into_iter()
-            .filter(|row| row.sequence > previous_boundary && row.sequence <= through_sequence)
-            .collect::<Vec<_>>();
-        if selected != frozen_rows {
-            return Err(MezError::conflict(
-                "manual compaction physical source changed before publication",
-            ));
-        }
-        let ranges = previous.map_or(Vec::new(), |epoch| epoch.ranges);
-        if ranges.iter().any(|range| {
-            range.first_sequence <= through_sequence && through_sequence < range.through_sequence
-        }) {
-            return Err(MezError::invalid_state(
-                "prefix compaction cannot split a selective execution range",
-            ));
-        }
-        let remaining = ranges
-            .into_iter()
-            .filter(|range| range.first_sequence > through_sequence)
-            .collect::<Vec<_>>();
-        self.save_compaction_projection_locked(
-            AgentCompactionEpoch {
-                version: if remaining.is_empty() { 1 } else { 2 },
-                conversation_id: conversation_id.to_string(),
-                through_sequence,
-                summary: summary.to_string(),
-                ranges: remaining,
-            },
-            None,
-            Some(baseline),
+        validate_compaction_prefix_source(
+            &view.committed,
+            previous_boundary,
+            through_sequence,
+            frozen_rows,
         )?;
+        let projection = project_compaction_prefix(
+            conversation_id,
+            previous.as_ref(),
+            through_sequence,
+            summary,
+        )?;
+        self.save_compaction_projection_locked(projection, None, Some(baseline))?;
         Ok(next_sequence)
     }
 }

@@ -440,7 +440,9 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
         ContextSourceKind::PeerMessage => "peer_message",
         ContextSourceKind::RuntimeHint => "runtime_hint",
         ContextSourceKind::ProjectGuidance => "project_guidance",
-        ContextSourceKind::Memory => "memory",
+        ContextSourceKind::Memory
+        | ContextSourceKind::CompactionPrefix
+        | ContextSourceKind::CompactionSelective => "memory",
         ContextSourceKind::PersistedContextDocument => "persisted_context_document",
         ContextSourceKind::Transcript => "transcript",
         ContextSourceKind::TranscriptUser => "transcript_user",

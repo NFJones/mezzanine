@@ -4,6 +4,9 @@
 //! messages into Responses API `instructions` and `input` material. It also
 //! computes non-model-visible prompt-cache fingerprints used for diagnostics.
 
+#[cfg(test)]
+use crate::ContextSourceKind;
+
 use crate::context::{ContextEpochIdentity, ContextEpochTransition, ProviderRequestEpoch};
 use crate::openai_request::{
     apply_openai_prompt_cache_breakpoint, openai_responses_request_control_shape_with_stream,
@@ -14,13 +17,12 @@ use crate::provider::{
     openai_prompt_cache_key_with_partition,
 };
 use crate::{
-    ContextSourceKind, ModelInteractionKind, ModelRequest, OpenAiPromptCacheDiagnostics,
-    OpenAiPromptCacheGeneration, OpenAiPromptCacheKeyDiagnostics, OpenAiRenderedMessages,
-    ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
-    openai_auto_sizing_response_format, openai_macro_judge_response_format,
-    openai_prompt_cache_diagnostics, openai_render_messages, openai_routed_handoff_response_format,
-    openai_sandbox_failure_assessment_response_format, openai_stable_projection_material,
-    validate_provider_request_required,
+    ModelInteractionKind, ModelRequest, OpenAiPromptCacheDiagnostics, OpenAiPromptCacheGeneration,
+    OpenAiPromptCacheKeyDiagnostics, OpenAiRenderedMessages, ProviderRequestAssemblyError,
+    ProviderRequestAssemblyResult, openai_auto_sizing_response_format,
+    openai_macro_judge_response_format, openai_prompt_cache_diagnostics, openai_render_messages,
+    openai_routed_handoff_response_format, openai_sandbox_failure_assessment_response_format,
+    openai_stable_projection_material, validate_provider_request_required,
 };
 #[cfg(test)]
 use crate::{ModelMessage, ModelMessageRole};
@@ -262,16 +264,7 @@ fn openai_compaction_generation_material(request: &ModelRequest) -> String {
     request
         .messages
         .iter()
-        .filter(|message| {
-            message.source == ContextSourceKind::Memory
-                && (message
-                    .content
-                    .starts_with("[context compaction summary]\n")
-                    || message
-                        .content
-                        .starts_with("[conversation compaction notice]\n")
-                    || message.content.starts_with("[memory compact-"))
-        })
+        .filter(|message| crate::model_message_is_compaction_summary(message))
         .map(|message| {
             format!(
                 "{}:{}:{}",
@@ -463,7 +456,7 @@ pub fn openai_stable_projection_material_for_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AllowedActionSet, ProviderTranscriptEvent};
+    use crate::{AllowedActionSet, ContextPlacement, ProviderTranscriptEvent};
 
     /// Builds one ordinary OpenAI request for exact request-chain tests.
     fn request_chain_fixture(messages: Vec<ModelMessage>) -> ModelRequest {
@@ -489,6 +482,193 @@ mod tests {
             allowed_actions: AllowedActionSet::action_execution_base(),
             stop: None,
             messages: messages.into(),
+        }
+    }
+
+    /// Explicit UUID-labelled summaries must enter both OpenAI and native
+    /// provider generations. Replaying/appending them preserves the generation;
+    /// new summary content changes it, while an ordinary UUID memory rewrite
+    /// remains an advisory rewrite. Provider/model switches retain precedence.
+    /// The native branch uses a controlled messages-shaped comparison envelope,
+    /// not a vendor SDK or transport-acceptance claim.
+    #[test]
+    fn typed_uuid_summary_generations_preserve_replay_and_switch_precedence() {
+        /// Builds deterministic comparison input from the exact canonical messages.
+        fn native_body(request: &ModelRequest) -> String {
+            serde_json::json!({
+                "model": request.model,
+                "messages": request.messages.iter().map(|message| {
+                    let role = match message.role {
+                        ModelMessageRole::System => "system",
+                        ModelMessageRole::Developer => "developer",
+                        ModelMessageRole::User | ModelMessageRole::Context => "user",
+                        ModelMessageRole::Assistant => "assistant",
+                        ModelMessageRole::Tool => "tool",
+                    };
+                    serde_json::json!({"role": role, "content": message.content})
+                }).collect::<Vec<_>>()
+            })
+            .to_string()
+        }
+        /// Executes the real epoch adapter while retaining owned comparison bodies.
+        fn prepare(request: &mut ModelRequest, previous: Option<&ModelRequest>, native: bool) {
+            if native {
+                use crate::provider_continuity::{
+                    ProviderNativeRequestContinuity,
+                    prepare_provider_native_request_prefix_extension,
+                };
+                let body = native_body(request);
+                let previous_body = previous.map(native_body);
+                prepare_provider_native_request_prefix_extension(
+                    request,
+                    previous,
+                    ProviderNativeRequestContinuity {
+                        cache_namespace: "typed-summary-fixture",
+                        provider_label: "fixture",
+                        current_api_shape: "messages/v1",
+                        previous_api_shape: "messages/v1",
+                        input_field: "messages",
+                        current_body: &body,
+                        previous_body: previous_body.as_deref(),
+                    },
+                )
+                .unwrap();
+            } else {
+                prepare_openai_request_prefix_extension(request, previous).unwrap();
+            }
+        }
+        /// Copies only the content-free generation witness from the prepared request.
+        fn generation(request: &ModelRequest) -> String {
+            request
+                .messages
+                .provider_request_epoch()
+                .unwrap()
+                .context_epoch
+                .compaction_generation_sha256
+                .clone()
+        }
+        for native in [false, true] {
+            for source in [
+                ContextSourceKind::CompactionPrefix,
+                ContextSourceKind::CompactionSelective,
+            ] {
+                let summary = format!(
+                    "[memory {} (conversation)]\noriginal summary",
+                    crate::memory::canonical_memory_uuid("compact-fixture")
+                );
+                let mut first = request_chain_fixture(vec![
+                    ModelMessage {
+                        role: ModelMessageRole::System,
+                        source: ContextSourceKind::System,
+                        placement: ContextPlacement::StablePrefix,
+                        content: "stable instructions".into(),
+                    },
+                    ModelMessage {
+                        role: ModelMessageRole::Context,
+                        source,
+                        placement: ContextPlacement::ConversationAppend,
+                        content: summary,
+                    },
+                    ModelMessage {
+                        role: ModelMessageRole::Context,
+                        source: ContextSourceKind::Memory,
+                        placement: ContextPlacement::ConversationAppend,
+                        content: format!(
+                            "[memory {} (conversation)]\nordinary note",
+                            crate::memory::canonical_memory_uuid("ordinary-fixture")
+                        ),
+                    },
+                    ModelMessage {
+                        role: ModelMessageRole::User,
+                        source: ContextSourceKind::UserInstruction,
+                        placement: ContextPlacement::ConversationAppend,
+                        content: "continue".into(),
+                    },
+                ]);
+                prepare(&mut first, None, native);
+                let original_generation = generation(&first);
+                assert_ne!(original_generation, sha256_hex(b""));
+                let mut appended = first.clone();
+                appended.messages.push(ModelMessage {
+                    role: ModelMessageRole::Context,
+                    source: ContextSourceKind::RuntimeHint,
+                    placement: ContextPlacement::ConversationAppend,
+                    content: "later exact state".into(),
+                });
+                prepare(&mut appended, Some(&first), native);
+                assert_eq!(generation(&appended), original_generation);
+                assert_eq!(appended.messages.provider_continuity_warning(), None);
+                let mut ordinary = first.clone();
+                ordinary.messages = first
+                    .messages
+                    .iter()
+                    .cloned()
+                    .map(|mut message| {
+                        if message.source == ContextSourceKind::Memory {
+                            message.content.push_str(" changed");
+                        }
+                        message
+                    })
+                    .collect::<Vec<_>>()
+                    .into();
+                prepare(&mut ordinary, Some(&first), native);
+                assert_eq!(generation(&ordinary), original_generation);
+                assert_eq!(
+                    ordinary.messages.provider_continuity_warning(),
+                    Some("canonical_input_rewritten")
+                );
+                let mut changed = first.clone();
+                changed.messages = first
+                    .messages
+                    .iter()
+                    .cloned()
+                    .map(|mut message| {
+                        if message.source == source {
+                            message.content.push_str(" replacement");
+                        }
+                        message
+                    })
+                    .collect::<Vec<_>>()
+                    .into();
+                prepare(&mut changed, Some(&first), native);
+                assert_ne!(generation(&changed), original_generation);
+                assert_eq!(
+                    changed
+                        .messages
+                        .provider_request_epoch()
+                        .unwrap()
+                        .epoch_transition,
+                    crate::ContextEpochTransition::Changed(
+                        crate::ContextEpochComponent::CompactionGeneration
+                    )
+                );
+                for component in [
+                    crate::ContextEpochComponent::Provider,
+                    crate::ContextEpochComponent::Model,
+                ] {
+                    let mut switched = changed.clone();
+                    if component == crate::ContextEpochComponent::Provider {
+                        switched.provider = "other-provider".into();
+                    } else {
+                        switched.model = "other-model".into();
+                    }
+                    prepare(&mut switched, Some(&first), native);
+                    assert_eq!(
+                        switched
+                            .messages
+                            .provider_request_epoch()
+                            .unwrap()
+                            .epoch_transition,
+                        crate::ContextEpochTransition::Changed(
+                            if component == crate::ContextEpochComponent::Provider && !native {
+                                crate::ContextEpochComponent::ProviderNamespace
+                            } else {
+                                component
+                            }
+                        )
+                    );
+                }
+            }
         }
     }
 

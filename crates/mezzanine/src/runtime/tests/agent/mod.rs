@@ -8,6 +8,8 @@ mod accounting;
 mod commands;
 mod compaction;
 mod compaction_candidate;
+mod compaction_candidate_ranges;
+mod compaction_identity;
 mod context;
 mod conversations;
 mod macros;

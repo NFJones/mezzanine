@@ -47,8 +47,10 @@ mod fs;
 /// Both prompt histories share one SQLite database; the legacy TSV files are
 /// imported once and then left untouched.
 mod history;
+mod prefix_projection;
 /// Atomic manual-prefix publication against frozen epoch and physical rows.
 mod prefix_publication;
+pub(crate) use prefix_projection::{project_compaction_prefix, validate_compaction_prefix_source};
 /// Durable, exact-batch acceptance receipts for uncertain transcript writes.
 mod receipts;
 pub(crate) use append_batch::TranscriptAppendBatch;

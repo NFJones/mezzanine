@@ -10,6 +10,10 @@
 //! Product prompt assets,
 //! transcript persistence, and provider execution remain outside this crate
 //! and adapt these contracts at their composition boundaries.
+//! Prefix and selective summaries carry explicit provenance through ordinary
+//! block/message projection. Their reference semantics and visible bytes remain
+//! unchanged; neither arbitrary memory UUIDs nor summary presence imply a new
+//! compaction operation or a durable publication receipt.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -42,6 +46,8 @@ pub use messages::{
 use projection::context_block_input_token_estimate;
 pub use projection::{PreparedModelContext, model_context_block_header};
 pub use request::ModelRequest;
+mod summary;
+pub use summary::{context_block_is_compaction_summary, model_message_is_compaction_summary};
 pub use validation::{
     context_placement_insertion_index, insert_context_block_by_placement,
     validate_context_placement_order, validate_context_semantics,
@@ -112,6 +118,11 @@ pub enum ContextSourceKind {
     RoutedHandoff,
     /// A current-turn action result.
     ActionResult,
+    /// Controller-owned summary of a conversation prefix. Labels and ordinary
+    /// memory UUIDs never confer this provenance, nor is it a publication receipt.
+    CompactionPrefix,
+    /// Controller-owned summary replacing an anchored selective history range.
+    CompactionSelective,
 }
 
 /// Trust domain assigned to one model-context block.
@@ -152,6 +163,8 @@ impl TrustDomain {
             }
             ContextSourceKind::RuntimeHint => Self::Configuration,
             ContextSourceKind::Memory
+            | ContextSourceKind::CompactionPrefix
+            | ContextSourceKind::CompactionSelective
             | ContextSourceKind::PersistedContextDocument
             | ContextSourceKind::TranscriptUser => Self::UserInput,
             ContextSourceKind::Transcript
@@ -933,6 +946,8 @@ impl ContextBlock {
             ContextSourceKind::LocalMessage
             | ContextSourceKind::PeerMessage
             | ContextSourceKind::Memory
+            | ContextSourceKind::CompactionPrefix
+            | ContextSourceKind::CompactionSelective
             | ContextSourceKind::Transcript
             | ContextSourceKind::RoutedHandoff
             | ContextSourceKind::McpCatalogSnapshot
@@ -980,6 +995,8 @@ impl ContextBlock {
             | ContextSourceKind::ActionResult
             | ContextSourceKind::McpRetrievedManifest => ContextRetention::ExecutionGroup,
             ContextSourceKind::Memory
+            | ContextSourceKind::CompactionPrefix
+            | ContextSourceKind::CompactionSelective
             | ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptUser
             | ContextSourceKind::PeerMessage => ContextRetention::Summarizable,
@@ -991,6 +1008,8 @@ impl ContextBlock {
         matches!(
             self.source,
             ContextSourceKind::Memory
+                | ContextSourceKind::CompactionPrefix
+                | ContextSourceKind::CompactionSelective
                 | ContextSourceKind::Transcript
                 | ContextSourceKind::TranscriptUser
                 | ContextSourceKind::TranscriptAssistant
@@ -1007,16 +1026,6 @@ impl ContextBlock {
                 | ContextSourceKind::McpServerSearchResult
         )
     }
-}
-
-/// Returns whether one chronological memory block is a local or legacy
-/// conversation-compaction block that should participate in rolling summary
-/// replacement.
-pub fn context_block_is_compaction_summary(block: &ContextBlock) -> bool {
-    block.source == ContextSourceKind::Memory
-        && (block.label == "context compaction summary"
-            || block.label == "conversation compaction notice"
-            || block.label.starts_with("memory compact-"))
 }
 
 /// Typed request metadata that never becomes a model-visible context block.

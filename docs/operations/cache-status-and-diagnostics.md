@@ -119,7 +119,10 @@ diagnostic and the preceding change when escalating; repeatedly retrying a task
 does not prove or repair cache behavior.
 
 Local `compaction` means a non-append-only rewrite introduced new content from
-canonical Memory compaction-summary blocks relative to the previous snapshot.
+canonical prefix/selective compaction-summary blocks relative to the previous
+snapshot. They retain explicit identity through durable replay and provider
+projection; a UUID-shaped ordinary Memory label is not summary evidence.
+Known legacy summary labels remain recognized by the same shared classifier.
 Keeping, moving, duplicating, or removing an old summary is not a new compaction
 transition. Such a rewrite reports `new_turn` at a turn boundary, otherwise
 `unexpected_rewrite`; provider/model switches take precedence. A first snapshot

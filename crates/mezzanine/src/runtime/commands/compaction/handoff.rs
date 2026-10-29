@@ -45,8 +45,9 @@ impl RuntimeSessionService {
             };
             if let Some(index) = witnesses.iter().position(|witness| {
                 witness.anchor == sequence.get()
-                    && event.block().source == ContextSourceKind::Memory
-                    && event.block().label == "context compaction summary"
+                    && (event.block().source == ContextSourceKind::CompactionSelective
+                        || (event.block().source == ContextSourceKind::Memory
+                            && event.block().label == "context compaction summary"))
                     && event.block().content == witness.summary
             }) {
                 source.extend(witnesses.remove(index).source);
@@ -143,8 +144,9 @@ impl RuntimeSessionService {
                 .is_none_or(|context| {
                     !context.chronology().iter().any(|event| {
                         event.sequence().get() == witness.anchor
-                            && event.block().source == ContextSourceKind::Memory
-                            && event.block().label == "context compaction summary"
+                            && (event.block().source == ContextSourceKind::CompactionSelective
+                                || (event.block().source == ContextSourceKind::Memory
+                                    && event.block().label == "context compaction summary"))
                             && event.block().content == witness.summary
                     })
                 })

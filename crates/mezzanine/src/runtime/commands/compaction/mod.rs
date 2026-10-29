@@ -7,6 +7,8 @@
 //! command dispatch. Manual model input keeps physical source proofs distinct
 //! from summary replacements, and prefix publication compares the frozen epoch
 //! and rows under the mutation lease before changing durable replay authority.
+//! The candidate component reconstructs prospective history and measures the
+//! complete request; source/preparation owners retain exact publication fences.
 
 use super::{
     AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS, AgentActionPayload, AgentContext,
@@ -39,6 +41,7 @@ use crate::security::auth::AuthProfileCredentialSource;
 use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 use mez_agent::{ProviderErrorRetryClass, apply_model_context_compaction_plan};
 
+mod candidate;
 mod handoff;
 /// Ordered selective-summary projection for model input.
 mod input;
@@ -2474,7 +2477,7 @@ impl RuntimeSessionService {
         let memory_id =
             mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
         let summary_block = ContextBlock::reference_event(
-            ContextSourceKind::Memory,
+            ContextSourceKind::CompactionPrefix,
             format!("memory {memory_id} (conversation)"),
             runtime_model_compact_memory_content(
                 &task.pane_id,
@@ -2503,6 +2506,27 @@ impl RuntimeSessionService {
             label: "MCP compaction re-retrieval guidance".to_string(),
             content: "Conversation compaction cleared previously retrieved MCP tool contracts. Before using mcp_call, retrieve the needed server again with mcp_server_get; existing directory, reference, and search evidence may still make a server referencable.".to_string(),
         });
+        // A prefix preview must render its prospective retained ranges too;
+        // overlaying a new prefix on the old epoch can leave absorbed summaries
+        // behind. A source without a mapped durable boundary keeps the existing
+        // local-only fallback and gains no publication or replay authority.
+        let projection = match (
+            projection,
+            task.compacted_through_sequence,
+            self.persistence.cloned_transcript_store(),
+        ) {
+            (Some(projection), _, _) => Some(projection),
+            (None, Some(boundary), Some(store)) => {
+                let previous = store.compaction_epoch(&task.conversation_id)?;
+                Some(crate::storage::transcript::project_compaction_prefix(
+                    &task.conversation_id,
+                    previous.as_ref(),
+                    boundary,
+                    &summary_block.content,
+                )?)
+            }
+            (None, _, _) => None,
+        };
         let Some(candidate) = self.preview_running_turn_context_after_conversation_compaction(
             &turn.turn_id,
             compacted,
@@ -2552,253 +2576,6 @@ impl RuntimeSessionService {
             Some(mez_agent::ProviderBudgetProjection::new(
                 api,
                 &model_profile.provider,
-            )),
-            estimate.input_tokens,
-            safe_limit,
-        );
-        Ok((estimate.input_tokens, safe_limit, diagnostic))
-    }
-
-    /// Validates the provider request that would follow a manual compaction.
-    ///
-    /// This runs before durable epoch mutation. It reconstructs the active
-    /// summary, retained raw tail (including entries written while the
-    /// compactor was running), current MCP catalog, and accepted steering.
-    fn validate_manual_compaction_candidate(
-        &mut self,
-        task: &RuntimeAgentCompactionTask,
-        summary: &str,
-    ) -> Result<(usize, usize, String)> {
-        let candidate_context = self.manual_compaction_candidate_context(task, summary)?;
-        self.estimate_manual_compaction_candidate(task, candidate_context)
-    }
-
-    /// Builds the prospective manual-compaction context without publishing its epoch.
-    /// Captured base policy and the current retained transcript tail remain distinct.
-    pub(crate) fn manual_compaction_candidate_context(
-        &self,
-        task: &RuntimeAgentCompactionTask,
-        summary: &str,
-    ) -> Result<AgentContext> {
-        let summary_words = model_context_text_word_count(summary);
-        let summary_budget_words = task.summary_correction.manual_words.ok_or_else(|| {
-            MezError::invalid_state("manual compaction frozen word allowance is missing")
-        })?;
-        if summary_words > summary_budget_words {
-            return Err(MezError::invalid_state(format!(
-                "manual compaction summary exceeds its frozen output budget: summary_words={summary_words} summary_budget_words={summary_budget_words}"
-            )));
-        }
-        let Some(base_context) = task.candidate_context.as_ref() else {
-            return Err(MezError::invalid_state(
-                "manual compaction candidate context is unavailable",
-            ));
-        };
-        self.agent_shell_store()
-            .get(&task.pane_id)
-            .filter(|session| session.session_id == task.conversation_id)
-            .ok_or_else(|| MezError::invalid_state("manual compaction session is unavailable"))?;
-        let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
-            MezError::invalid_state("manual compaction candidate requires transcript storage")
-        })?;
-        let pending = self
-            .persistence
-            .pending_transcript_entries(&task.conversation_id);
-        let snapshot =
-            store.conversation_replay_snapshot(&task.conversation_id, &pending, |_| {
-                Some((
-                    crate::storage::transcript::ConversationTranscriptRead::All,
-                    task.transcript_entries > pending.len() as u64,
-                ))
-            })?;
-        let entries = snapshot.view.logical;
-        if task
-            .frozen_compaction_rows
-            .iter()
-            .any(|row| !entries.contains(row))
-        {
-            return Err(MezError::conflict(
-                "summary correction frozen manual source changed",
-            ));
-        }
-        let previous_epoch = snapshot.epoch;
-        if task
-            .frozen_compaction_epoch
-            .as_ref()
-            .is_some_and(|baseline| baseline != &previous_epoch)
-        {
-            return Err(MezError::conflict(
-                "manual compaction source epoch changed before completion",
-            ));
-        }
-        let boundary = task.compacted_through_sequence.unwrap_or_else(|| {
-            previous_epoch
-                .as_ref()
-                .map_or(0, |epoch| epoch.through_sequence)
-        });
-        let first_retained = entries.partition_point(|row| row.sequence <= boundary);
-        let retained_entries = &entries[first_retained..];
-        let ranges = previous_epoch.as_ref().map_or(Vec::new(), |epoch| {
-            epoch
-                .ranges
-                .iter()
-                .filter(|range| range.first_sequence > boundary)
-                .cloned()
-                .collect::<Vec<_>>()
-        });
-        let replay =
-            runtime_agent_compaction_replay_context(&task.pane_id, retained_entries, &ranges);
-        let compact_memory_id =
-            mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
-        let base_context =
-            runtime_compaction_context_without_transcript_blocks(base_context.clone())?;
-        let mut blocks = base_context
-            .blocks()
-            .iter()
-            .filter(|block| {
-                !(block.source == ContextSourceKind::Memory
-                    && block
-                        .label
-                        .starts_with(&format!("memory {compact_memory_id} ")))
-                    && !(block.source == ContextSourceKind::UserInstruction
-                        && block.label == "user prompt")
-                    && block.source != ContextSourceKind::McpCatalogSnapshot
-                    && !runtime_context_block_is_transcript_replay(block)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        blocks.push(ContextBlock::reference_event(
-            ContextSourceKind::Memory,
-            format!("memory {compact_memory_id} (conversation)"),
-            runtime_model_compact_memory_content(
-                &task.pane_id,
-                &task.conversation_id,
-                task.transcript_entries,
-                task.summarized_entries,
-                &task.model_profile_name,
-                &task.model_profile,
-                summary,
-            ),
-        ));
-        blocks.extend(replay.blocks);
-        let steering = self.agent_compaction_steering_for_candidate(
-            &task.pane_id,
-            &task.conversation_id,
-            task.compaction_epoch,
-        );
-        let prompt = if steering.is_empty() {
-            "Continue after conversation compaction.".to_string()
-        } else {
-            steering.join("\n\n")
-        };
-        for block in mez_agent::mcp_server_reference_blocks_for_prompt(
-            &prompt,
-            &self.mcp_registry().prompt_summary(),
-        ) {
-            mez_agent::insert_context_block_by_placement(&mut blocks, block);
-        }
-        if let Some(catalog) = mez_agent::configured_mcp_catalog_snapshot_content(
-            &self.mcp_registry().prompt_summary(),
-            self.integration.always_exposed_mcp_servers(),
-        ) {
-            blocks.push(ContextBlock::reference_event(
-                ContextSourceKind::McpCatalogSnapshot,
-                mez_agent::MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL,
-                catalog,
-            ));
-        }
-        blocks.push(ContextBlock {
-            source: ContextSourceKind::Configuration,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "MCP compaction re-retrieval guidance".to_string(),
-            content: "Conversation compaction cleared previously retrieved MCP tool contracts. Before using mcp_call, retrieve the needed server again with mcp_server_get; existing directory, reference, and search evidence may still make a server referencable.".to_string(),
-        });
-        blocks.push(ContextBlock::user_event("user prompt", prompt));
-        let mut candidate_context = AgentContext::import_durable_blocks(blocks)?
-            .with_metadata(base_context.metadata().clone());
-        candidate_context
-            .restore_imported_execution_events(&replay.execution_events)
-            .map_err(|error| MezError::invalid_state(error.to_string()))?;
-        let mcp_summary = self.mcp_registry().prompt_summary();
-        let configured_servers = self.integration.always_exposed_mcp_servers().to_vec();
-        let candidate_context = mez_agent::append_mcp_context_with_configured(
-            candidate_context,
-            &mcp_summary,
-            &configured_servers,
-        )?;
-        Ok(candidate_context)
-    }
-
-    /// Sizes the complete provider request built from a prospective replay context.
-    fn estimate_manual_compaction_candidate(
-        &self,
-        task: &RuntimeAgentCompactionTask,
-        candidate_context: AgentContext,
-    ) -> Result<(usize, usize, String)> {
-        let mcp_summary = self.mcp_registry().prompt_summary();
-        let configured_servers = self.integration.always_exposed_mcp_servers().to_vec();
-        let available_mcp_tools = mez_agent::invoked_mcp_tools_for_context_with_configured(
-            &candidate_context,
-            &mcp_summary,
-            &configured_servers,
-        );
-        let turn = AgentTurnRecord {
-            turn_id: format!("compact-candidate-{}", task.compaction_epoch),
-            conversation_id: task.conversation_id.clone(),
-            agent_id: format!("agent-{}", task.pane_id),
-            pane_id: task.pane_id.clone(),
-            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
-            started_at_unix_seconds: current_unix_seconds(),
-            deadline_at_unix_millis: 0,
-            policy_profile: "runtime".to_string(),
-            model_profile: task.model_profile_name.clone(),
-            parent_turn_id: None,
-            state: AgentTurnState::Queued,
-            cooperation_mode: None,
-            initial_capability: None,
-        };
-        let provider_config = self
-            .provider_registry()
-            .provider(&task.model_profile.provider)
-            .ok_or_else(|| {
-                MezError::config(format!(
-                    "provider `{}` for manual compaction candidate is not configured",
-                    task.model_profile.provider
-                ))
-            })?;
-        let api = resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
-        let provider_options =
-            runtime_effective_provider_options(provider_config, &task.model_profile);
-        let mut request =
-            assemble_model_request(&task.model_profile, api, &turn, &candidate_context)?;
-        mez_agent::apply_model_request_control(
-            &mut request,
-            Some(task.request.allowed_actions.clone()),
-            Some(ModelInteractionKind::ActionExecution),
-        );
-        mez_agent::apply_default_action_gates(
-            &mut request,
-            &available_mcp_tools,
-            self.runtime_persistent_memory_enabled(),
-            super::runtime_issues_enabled(self),
-        );
-        let estimate =
-            mez_agent::provider_request_input_estimate(&request, api, &provider_options, true)?;
-        let safe_limit = runtime_compaction_safe_input_limit(
-            task.model_profile.max_input_tokens(),
-            task.model_profile.context_window_tokens(),
-            task.model_profile.max_output_tokens(),
-        )
-        .ok_or_else(|| {
-            MezError::invalid_state(
-                "manual compaction candidate has no configured provider input allowance",
-            )
-        })?;
-        let diagnostic = runtime_compaction_candidate_size_diagnostic(
-            &candidate_context,
-            Some(mez_agent::ProviderBudgetProjection::new(
-                api,
-                &task.model_profile.provider,
             )),
             estimate.input_tokens,
             safe_limit,
@@ -2869,31 +2646,23 @@ impl RuntimeSessionService {
                 let frozen =
                     self.frozen_observed_compaction_rows(task, context, plan, summary, projection)?;
                 store.save_compaction_ranges_with_proof(projection.clone(), &frozen)?;
-            } else if let Some(previous) = previous.filter(|epoch| !epoch.ranges.is_empty()) {
-                if previous.ranges.iter().any(|range| {
-                    range.first_sequence <= boundary && boundary < range.through_sequence
-                }) {
-                    return Err(MezError::invalid_state(
-                        "prefix compaction cannot split a selective execution range",
-                    ));
-                }
-                let remaining = previous
-                    .ranges
-                    .into_iter()
-                    .filter(|range| range.first_sequence > boundary)
-                    .collect::<Vec<_>>();
-                if remaining.is_empty() {
+            } else {
+                let proposed = crate::storage::transcript::project_compaction_prefix(
+                    &task.conversation_id,
+                    previous.as_ref(),
+                    boundary,
+                    &content,
+                )?;
+                if proposed.ranges.is_empty() {
                     store.save_compaction_epoch(&task.conversation_id, boundary, &content)?;
                 } else {
                     store.save_compaction_ranges(
                         &task.conversation_id,
                         boundary,
                         &content,
-                        remaining,
+                        proposed.ranges,
                     )?;
                 }
-            } else {
-                store.save_compaction_epoch(&task.conversation_id, boundary, &content)?;
             }
             published_boundary = Some(boundary);
         } else if task.compacted_through_sequence.is_some() {
@@ -3763,7 +3532,9 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
         ContextSourceKind::PeerMessage => "peer-message",
         ContextSourceKind::RuntimeHint => "runtime-hint",
         ContextSourceKind::ProjectGuidance => "project-guidance",
-        ContextSourceKind::Memory => "memory",
+        ContextSourceKind::Memory
+        | ContextSourceKind::CompactionPrefix
+        | ContextSourceKind::CompactionSelective => "memory",
         ContextSourceKind::PersistedContextDocument => "persisted-context-document",
         ContextSourceKind::Transcript => "transcript",
         ContextSourceKind::TranscriptUser => "transcript-user",

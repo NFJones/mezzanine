@@ -10695,6 +10695,13 @@ including intervening rows from other writers, rather than advance a frontier by
 local append cardinality. Retry overlap MUST NOT count the same suffix twice.
 After durable compaction, retained physical row counts and candidate replay MUST
 follow the published boundary and checked logical history, including later rows.
+Prospective manual-prefix sizing and publication MUST use the same prefix/range
+projection: absorb complete covered ranges and preserve later anchors/bytes.
+Foreign conversation ownership, a regressing prefix or a split selective range
+MUST reject before mutation. The candidate MUST reconstruct the owned historical
+projection once, preserve unrelated optional memory/exact-reference metadata and
+restore native ownership only within that reconstructed history. A cached summary
+MUST NOT mask an omitted replay anchor or duplicate its rebuilt replacement.
 Manual-prefix publication MUST carry its checked next logical sequence into MCP
 compaction-control allocation, including captured pending rows, without another
 archive read, a stale cached cursor, or renumbering prior receipts.
@@ -10923,7 +10930,14 @@ in another segment; its summary and intervening exact barriers remain in their
 original chronological positions. Later compaction MAY replace prior local or
 compatible legacy compaction blocks together with other eligible blocks within
 the same segment, but MUST NOT gather source across exact barriers or retained
-ineligible groups. The compact-memory block itself MUST explain that older durable
+ineligible groups. Prefix and selective summaries MUST carry explicit semantic
+provenance from their owning producer through canonical blocks and projected
+model messages. A UUID-shaped ordinary Memory label alone MUST NOT establish a
+summary epoch. The established legacy summary labels remain recognized; the
+shared classifier MUST govern planning, continuity and provider cache generation.
+This provenance MUST preserve reference semantics and existing model-visible
+labels/content, and MUST NOT imply a new compactor operation or durable publication.
+The compact-memory block itself MUST explain that older durable
 transcript entries were summarized, that the summary is lossy, and that only
 the retained recent raw tail remains exact; a separate compaction notice MUST
 NOT be injected.

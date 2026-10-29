@@ -269,7 +269,8 @@ pub use context::{
     StableContextBlock, StableContextSlotId, StableContextSourceFingerprint, TrustDomain,
     context_block_is_compaction_summary, context_placement_insertion_index,
     insert_context_block_by_placement, model_context_block_header,
-    validate_context_placement_order, validate_context_required, validate_context_semantics,
+    model_message_is_compaction_summary, validate_context_placement_order,
+    validate_context_required, validate_context_semantics,
 };
 pub use context_appenders::{
     MCP_CATALOG_REMOVED_CONTEXT, MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL,

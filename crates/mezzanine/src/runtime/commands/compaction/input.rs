@@ -66,8 +66,9 @@ impl<'a> CompactionTranscriptSource<'a> {
         let mut context = runtime_compaction_context_without_transcript_blocks(context)?;
         if self.selective_history {
             context.retain_blocks_with_metadata(|block, _| {
-                !(block.source == ContextSourceKind::Memory
-                    && block.label == "context compaction summary")
+                !(block.source == ContextSourceKind::CompactionSelective
+                    || (block.source == ContextSourceKind::Memory
+                        && block.label == "context compaction summary"))
             })?;
         }
         Ok(context.revalidate()?)

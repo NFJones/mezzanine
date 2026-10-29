@@ -630,7 +630,9 @@ fn runtime_context_source_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::LocalMessage => "local-message",
         ContextSourceKind::PeerMessage => "peer-message",
         ContextSourceKind::ProjectGuidance => "project-guidance",
-        ContextSourceKind::Memory => "memory",
+        ContextSourceKind::Memory
+        | ContextSourceKind::CompactionPrefix
+        | ContextSourceKind::CompactionSelective => "memory",
         ContextSourceKind::PersistedContextDocument => "persisted-context-document",
         ContextSourceKind::Transcript => "transcript",
         ContextSourceKind::TranscriptUser => "transcript-user",

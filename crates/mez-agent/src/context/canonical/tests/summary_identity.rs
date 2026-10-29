@@ -15,12 +15,13 @@ fn durable_replay_summary_label(conversation_id: &str) -> String {
     )
 }
 
-/// A replay-persisted compaction summary must keep its semantic identity.
+/// A replay-persisted compaction summary carries explicit prefix provenance
+/// alongside the unchanged durable UUID label. The actual product producer is
+/// exercised separately; ordinary memories with that label shape stay neutral.
 #[test]
-#[ignore = "RED: the durable memory-UUID conversation label is not recognized as a summary"]
 fn durable_replay_compaction_summary_is_recognized() {
     let block = ContextBlock::reference_event(
-        ContextSourceKind::Memory,
+        ContextSourceKind::CompactionPrefix,
         durable_replay_summary_label("conversation-1"),
         "persisted prefix summary",
     );
@@ -59,5 +60,49 @@ fn legacy_compaction_summary_labels_remain_recognized() {
             context_block_is_compaction_summary(&block),
             "legacy summary label was lost: {label}"
         );
+    }
+}
+
+/// Explicit prefix and selective identities must survive provider projection
+/// while preserving the legacy Memory framing, trust and reference semantics.
+/// Ordinary UUID messages remain non-summaries even with identical content.
+#[test]
+fn typed_summary_identity_survives_projection_without_changing_visible_bytes() {
+    use crate::{ModelMessage, ModelMessageRole, model_message_is_compaction_summary};
+
+    let ordinary = ContextBlock::reference_event(
+        ContextSourceKind::Memory,
+        durable_replay_summary_label("projection-conversation"),
+        "unchanged summary bytes",
+    );
+    for source in [
+        ContextSourceKind::CompactionPrefix,
+        ContextSourceKind::CompactionSelective,
+    ] {
+        let mut summary = ordinary.clone();
+        summary.source = source;
+        assert!(context_block_is_compaction_summary(&summary));
+        assert_eq!(summary.semantic_kind(), ordinary.semantic_kind());
+        assert_eq!(summary.retention(), ordinary.retention());
+        assert_eq!(summary.trust_domain(), ordinary.trust_domain());
+        assert_eq!(
+            crate::model_context_block_header(&summary),
+            crate::model_context_block_header(&ordinary)
+        );
+        let mut message = ModelMessage {
+            role: ModelMessageRole::Context,
+            source,
+            placement: summary.placement,
+            content: format!(
+                "{}{}",
+                crate::model_context_block_header(&summary),
+                summary.content
+            ),
+        };
+        assert!(model_message_is_compaction_summary(&message));
+        message.source = ContextSourceKind::Memory;
+        assert!(!model_message_is_compaction_summary(&message));
+        message.source = ContextSourceKind::TranscriptAssistant;
+        assert!(!model_message_is_compaction_summary(&message));
     }
 }

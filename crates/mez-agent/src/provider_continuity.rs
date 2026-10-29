@@ -292,16 +292,7 @@ fn compaction_generation_material(request: &ModelRequest) -> String {
     request
         .messages
         .iter()
-        .filter(|message| {
-            message.source == crate::ContextSourceKind::Memory
-                && (message
-                    .content
-                    .starts_with("[context compaction summary]\n")
-                    || message
-                        .content
-                        .starts_with("[conversation compaction notice]\n")
-                    || message.content.starts_with("[memory compact-"))
-        })
+        .filter(|message| crate::model_message_is_compaction_summary(message))
         .map(|message| {
             format!(
                 "{}:{:?}:{}",

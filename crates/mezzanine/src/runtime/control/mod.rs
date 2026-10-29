@@ -1,8 +1,15 @@
-//! Runtime Control implementation.
+//! Runtime control composition, command admission and immutable context capture.
 //!
-//! This module owns the runtime control boundary for Mezzanine. It keeps related
-//! state transitions and helper routines localized so neighboring modules
-//! interact through typed APIs instead of duplicating subsystem details.
+//! Focused children own configuration, snapshots, lifecycle, remote routing and
+//! external enrollment. This facade composes them with the serialized runtime
+//! service; transport metadata, focused panes and context labels do not replace
+//! their authentication, source ownership or permission checks.
+//!
+//! Prompt-history methods capture immutable compact-memory/transcript inputs for
+//! worker decoding and adopt checked canonical projections. Prefix/selective
+//! summaries carry producer provenance, while current-turn context and exact
+//! retained events stay separately owned. Canonical mutation uses mez-agent
+//! contracts; durable source and epoch publication remain storage obligations.
 pub(crate) mod agent_browser;
 pub(crate) mod agent_lifecycle;
 mod approval;
@@ -748,7 +755,15 @@ impl RuntimeSessionService {
                 .map(mez_agent::MemoryContextRecord::from)
                 .collect::<Vec<_>>(),
             1,
-        );
+        )
+        .into_iter()
+        .map(|mut block| {
+            // The selection above is restricted to this conversation's exact
+            // controller-owned compact-memory identity, not arbitrary memory.
+            block.source = ContextSourceKind::CompactionPrefix;
+            block
+        })
+        .collect();
 
         let Some(session) = self.agent_shell_store().get(pane_id) else {
             return RuntimeAgentPromptHistoryWork {
@@ -961,7 +976,7 @@ impl RuntimeSessionService {
             return Ok(None);
         }
 
-        let selective_projection = projection.is_some();
+        let projected_history = projection.is_some();
         let history = if let Some(epoch) = projection {
             let mut work = self.prepare_runtime_agent_prompt_history_work(&turn.pane_id);
             let transcript_work = work.transcript_work.take().ok_or_else(|| {
@@ -975,7 +990,7 @@ impl RuntimeSessionService {
             if transcript
                 .blocks
                 .iter()
-                .any(|block| block.source == ContextSourceKind::Memory)
+                .any(mez_agent::context_block_is_compaction_summary)
             {
                 blocks.clear();
             }
@@ -997,15 +1012,16 @@ impl RuntimeSessionService {
             mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", session.session_id));
         let mut refreshed_blocks = history.blocks;
         refreshed_blocks.retain(|block| {
-            !(!selective_projection
-                && block.source == ContextSourceKind::Memory
-                && block
-                    .label
-                    .starts_with(&format!("memory {compact_memory_id} ")))
+            !(!projected_history
+                && (block.source == ContextSourceKind::CompactionPrefix
+                    || (block.source == ContextSourceKind::Memory
+                        && block
+                            .label
+                            .starts_with(&format!("memory {compact_memory_id} ")))))
                 && block.source != ContextSourceKind::McpRetrievedManifest
                 && block.source != ContextSourceKind::McpCatalogSnapshot
         });
-        if !selective_projection {
+        if !projected_history {
             refreshed_blocks.insert(0, compact_summary);
         }
         refreshed_blocks.extend(mcp_epoch_blocks);

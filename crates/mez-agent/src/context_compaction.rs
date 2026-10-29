@@ -543,7 +543,7 @@ fn plan_model_context_compaction_with_projection(
         // text. Reserve the framing of the first block and a nonempty framed
         // block for each later segment before advertising an output ceiling.
         let minimum_summary = ContextBlock::reference_event(
-            ContextSourceKind::Memory,
+            ContextSourceKind::CompactionSelective,
             "context compaction summary",
             "x",
         );
@@ -667,7 +667,7 @@ pub fn apply_model_context_compaction_plan(
     context.compact_execution_ranges_into_summary(
         ranges,
         ContextBlock::reference_event(
-            ContextSourceKind::Memory,
+            ContextSourceKind::CompactionSelective,
             "context compaction summary",
             model_summary,
         ),
