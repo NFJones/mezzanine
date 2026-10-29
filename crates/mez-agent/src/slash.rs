@@ -6,6 +6,9 @@
 
 use std::fmt;
 
+mod cd;
+pub use cd::{CD_USAGE, CdOptions, parse_cd_options};
+
 mod list_agents;
 pub use list_agents::{LIST_AGENTS_USAGE, ListAgentsOptions, parse_list_agents_options};
 mod status;
