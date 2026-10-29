@@ -120,6 +120,8 @@ fn standalone_cursor_bootstrap_shared_members_and_commands_remain_neutral() {
 /// shell metacharacters is inert; every
 /// helper outcome stays neutral without HOME/PATH/routing or session guessing.
 /// Installation remains explicitly distinct from runtime/usage availability.
+/// Revision6 must publish the exact lifetime/projector graph as well as entry
+/// and transport, while explicit authored disabled policy remains unchanged.
 #[test]
 fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
     use std::io::Write;
@@ -159,7 +161,7 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
     assert_eq!(installed["result"], "installed");
     assert_eq!(installed["lifecycle"], "unverified");
     assert_eq!(installed["usage"], "unavailable-safe-activation");
-    assert_eq!(installed["manifest_revision"], 5);
+    assert_eq!(installed["manifest_revision"], 6);
     assert_eq!(bootstrap(&[])["result"], "unchanged");
     let extension = vendor.join("extensions/mezzanine");
     for (name, source) in [
@@ -170,6 +172,14 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
         (
             "copilot_extension.mjs",
             include_str!("../src/integrations/bootstrap/copilot_extension.mjs"),
+        ),
+        (
+            "copilot_lifetime.mjs",
+            include_str!("../src/integrations/bootstrap/copilot_lifetime.mjs"),
+        ),
+        (
+            "copilot_usage.mjs",
+            include_str!("../src/integrations/bootstrap/copilot_usage.mjs"),
         ),
     ] {
         assert_eq!(
