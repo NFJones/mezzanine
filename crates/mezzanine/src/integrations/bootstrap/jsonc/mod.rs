@@ -13,6 +13,22 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::ops::Range;
 
+mod boolean;
+
+/// Shares the same bounded duplicate-refusing parser with default selection.
+pub(super) fn document(bytes: &[u8]) -> Result<Value> {
+    Ok(parse(bytes)?.value())
+}
+
+/// Reconciles only an exact compiled boolean leaf, preserving authored trivia.
+pub(super) fn reconcile_boolean(
+    current: Option<&[u8]>,
+    previous: Option<&Artifact>,
+    desired: Option<&Artifact>,
+) -> Result<Option<Vec<u8>>> {
+    boolean::reconcile(current, previous, desired)
+}
+
 /// One bounded token value and its exact original byte interval.
 struct Node {
     span: Range<usize>,

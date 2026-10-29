@@ -3,6 +3,10 @@
  * ledger evidence belongs to installed Rust fixtures, not these callbacks.
  */
 import test from "node:test";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { setImmediate as settle } from "node:timers/promises";
 import { projectCopilotUsage, createCopilotUsageReporter } from "../crates/mezzanine/src/integrations/bootstrap/copilot_usage.mjs";
@@ -150,4 +154,29 @@ test("Copilot rejects blank models locally and continues valid delivery", async 
   assert.deepEqual(f.gaps, ["invalid-counters"]);
   assert.equal(f.reports.length, 1); assert.equal(f.reports[0].model, "fixture-model");
   assert.equal(f.timers.size, 0); f.reporter.stop();
+});
+
+/** Automatic global installation must remain neutral outside Mez. A local
+ * SDK-shaped package prints on import or join so a swallowed SDK error cannot
+ * masquerade as neutrality. No SDK/provider work or retry timer may begin with
+ * missing/invalid routing; the old entry failed this boundary before repair.
+ */
+test("Copilot global entry neither imports nor joins SDK outside Mez", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mez-copilot-neutral-"));
+  try {
+    const sdk = join(root, "node_modules/@github/copilot-sdk");
+    await mkdir(sdk, { recursive: true });
+    await writeFile(join(sdk, "package.json"), JSON.stringify({ type: "module", exports: { "./extension": "./extension.mjs" } }));
+    await writeFile(join(sdk, "extension.mjs"), 'process.stdout.write("UNEXPECTED_SDK_IMPORT"); export async function joinSession(){process.stdout.write("UNEXPECTED_SDK_JOIN");}');
+    const source = new URL("../crates/mezzanine/src/integrations/bootstrap/", import.meta.url);
+    for (const name of ["copilot_entry.mjs", "copilot_extension.mjs", "copilot_lifetime.mjs", "copilot_usage.mjs"]) {
+      await copyFile(new URL(name, source), join(root, name));
+    }
+    await writeFile(join(root, "peer_helper.mjs"), 'export const peerHelper = "/not-used";');
+    for (const env of [{}, { MEZ: "relative", MEZ_PANE: "%1" }, { MEZ: "/tmp/control.sock", MEZ_PANE: "untrusted" }]) {
+      const child = spawnSync(process.execPath, [join(root, "copilot_entry.mjs")], { env, encoding: "utf8", timeout: 3000 });
+      assert.equal(child.status, 0, child.stderr);
+      assert.equal(child.stdout, ""); assert.equal(child.stderr, "");
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

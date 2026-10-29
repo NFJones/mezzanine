@@ -8,7 +8,7 @@ import { createServer } from "node:net";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { attachCopilotObserver, pulseCopilotObserver, reportCopilotTerminal, reportCopilotUsageGap } from "../crates/mezzanine/src/integrations/bootstrap/copilot_extension.mjs";
+import { attachCopilotObserver, pulseCopilotObserver, reportCopilotTerminal, reportCopilotUsageGap, copilotRoutingConfigured } from "../crates/mezzanine/src/integrations/bootstrap/copilot_extension.mjs";
 
 const type = "application/vnd.mezzanine.control+json; version=1";
 const peerHelper = process.env.MEZ_TEST_PEER_HELPER;
@@ -213,4 +213,16 @@ test("Copilot usage gaps have a fixed content-free vocabulary", async () => {
   assert.deepEqual(response, { observed: true, reason: "queue-pressure" });
   assert.equal(await exchange(null, () => {}, false, peerHelper, 0,
     (options, original) => reportCopilotUsageGap(options, original, "b".repeat(64), "PRIVATE")), undefined);
+});
+
+/** Routing hints only decide whether to attempt SDK setup. They perform no I/O
+ * and never grant source authority; configured but unavailable routes may retry.
+ */
+test("Copilot SDK setup requires bounded ordinary routing hints", () => {
+  assert.equal(copilotRoutingConfigured("/tmp/control.sock\x1fIGNORED", "%1"), true);
+  for (const [mez, pane] of [[undefined, undefined], ["relative", "%1"],
+    ["/tmp/control.sock", "caller-label"], ["/tmp/\nsocket", "%1"],
+    ["/" + "x".repeat(8193), "%1"], ["/tmp/control.sock", "%" + "1".repeat(64)]]) {
+    assert.equal(copilotRoutingConfigured(mez, pane), false);
+  }
 });

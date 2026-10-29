@@ -107,6 +107,7 @@ fn run_with_root_selector<W: Write>(
         let mut planned_preserved_paths = Vec::new();
         let mut adoption_planned = false;
         let outcome;
+        let mut activation = None;
         let operation = if args.recover {
             let report = if args.dry_run {
                 crate::integrations::bootstrap::installer::preview_recovery_private(
@@ -146,6 +147,7 @@ fn run_with_root_selector<W: Write>(
                 .map(str::to_string)
                 .collect();
             outcome = plan.outcome();
+            activation = plan.copilot_activation();
             planned_preserved_paths = plan
                 .preserved_paths()
                 .into_iter()
@@ -193,7 +195,14 @@ fn run_with_root_selector<W: Write>(
                 "support":"best-effort",
                 "lifecycle":"unverified",
                 "shared_server_association":if args.harness == "codex" { serde_json::json!("unavailable-codex-native-client-session-association") } else { serde_json::Value::Null },
-                "usage":if args.harness == "copilot" { "unavailable-safe-activation" } else if args.harness == "cursor" { "unavailable-counter-schema" } else { "unverified" },
+                "activation":activation,
+                "usage":if args.harness == "copilot" { match activation {
+                    Some("owned-default-enabled" | "authored-enabled") => "unverified",
+                    Some("unavailable-invalid-settings") => "unavailable-settings",
+                    Some("removed-owned-default" | "not-installed") => "unavailable-uninstalled",
+                    Some(_) => "unavailable-vendor-policy",
+                    None => "unavailable-safe-activation",
+                } } else if args.harness == "cursor" { "unavailable-counter-schema" } else { "unverified" },
                 "guidance":"Installation is observational only. Use ordinary vendor commands and preserve vendor review/disabled policy. Automatic enrollment and accounting capabilities may still be unavailable; no Mez vendor-launch wrappers exist",
             }),
         );
@@ -234,6 +243,12 @@ fn write_report<W: Write>(
         "bootstrap {}: {result}",
         report["harness"].as_str().unwrap_or("unknown")
     )?;
+    if let Some(activation) = report["activation"].as_str() {
+        writeln!(
+            stdout,
+            "Extension activation: {activation} (vendor loading unverified)"
+        )?;
+    }
     if let Some(planned) = report["planned_outcome"].as_str() {
         if matches!(result, "preview" | "checked") {
             writeln!(stdout, "Planned outcome: {planned} (no writes)")?;

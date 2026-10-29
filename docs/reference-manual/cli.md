@@ -130,27 +130,36 @@ The old `--apply` and `--plan` flags are rejected, not aliases: scripts should
 remove `--apply` for installation and replace `--plan` with `--dry-run` for preview.
 The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
-Copilot revision6 installs `hooks/mezzanine.json` under `COPILOT_HOME` or
+Copilot revision7 installs `hooks/mezzanine.json` under `COPILOT_HOME` or
 `~/.copilot`, using the documented version1 CLI hook format and direct `exec`/`args`
 for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/agentStop/
 errorOccurred/sessionEnd. It also installs a bundled-SDK observer extension in
-`extensions/mezzanine/`. It upgrades exact receipt-owned revision1/2/3/4/5 artifacts,
+`extensions/mezzanine/`. It upgrades exact receipt-owned revision1/2/3/4/5/6 artifacts,
 pins the installing Mez executable and
-does not alter authored sibling hooks, settings.json, disableAllHooks, sandbox
+preserves authored sibling hooks and settings values, disableAllHooks, sandbox
 grants, policy hooks, credentials or exporters. Receipt-proven edits to that owned
 generated document are archived before repair; foreign collisions reject.
 Where Copilot already loads extensions, the entry joins the existing session
 without adding tools, hooks, permissions or log output. A direct Unix request
 attaches to the original classic-hook enrollment only after native writer,
 creator and pane-root verification. It cannot enroll a missing run or refresh
-health, presentation, leases or accounting. Bootstrap does not enable extensions
-or experiments in this revision. Extension attachment is an integration
+health, presentation, leases or accounting. Bootstrap defaults only a missing supported
+`settings.json` `enabledFeatureFlags.EXTENSIONS` boolean totrue. It preserves
+JSONC comments, other flags and authored true/false values without adopting them;
+it never enables the broad experimental setting. Explicit disabled extension
+mode/Mezzanine ID or experiments are preserved. Malformed unowned settings are
+left byte-exact with an unavailable-settings diagnostic. Exact receipt ownership
+removes only an intact owned flag on uninstall, retaining parents and siblings;
+edited owned values refuse overwrite. Preview/check stays nonmutating. Extension attachment is an integration
 foundation. A separate exact-writer pulse loop now supports finite idle health
 where extensions already load. Startup attachment now waits for the original
 classic enrollment: at most32 serialized attempts start within15seconds,500ms
 apart after failure, with a3second bound per exchange. Shutdown fences late
 attachment; first success ends retries. This tolerates initial enrollment or
 transport unavailability without creating a run or asserting health from retries.
+Outside Mez, missing/invalid ordinary routing leaves the globally installed entry
+neutral: it imports no SDK, joins no session and starts no retry timer. Configured
+routing still requires actual native peer/source verification; it is no authority.
 The owned entry now observes live `assistant.usage` before awaiting attachment,
 including subagent metadata, and hashes the full accounting identity. It retains
 at most64 immutable model/counter records and sends only after an actual positive
@@ -158,9 +167,10 @@ pulse ACK, with at most3 attempts per record. Missing metadata, queue pressure
 and unavailable delivery use fixed bounded coverage-gap reasons. Unknown subsets
 stay unknown; cache counters are included in input, and billing multipliers are
 never currency. The canonical ledger deduplicates compatible terminal replays.
-Actual vendor early delivery and default activation remain unqualified. Original
+Actual vendor early delivery and loading remain unqualified. Original
 request time/project remains unknown; terminal observation is not a provider
-dispatch barrier. Safe default activation is still unfinished.
+dispatch barrier. Activation reports describe the captured default/policy plan,
+not proof that Copilot loaded the observer.
 
 The fixed installing-binary peer checker verifies the connected daemon's native
 Unix UID before any metadata is written. It borrows the descriptor read-only;
@@ -891,8 +901,9 @@ new transactions journal privately, and compiled-authorized legacy recovery copi
 exact original bytes durably before removing the old journal. Identical dual copies
 after a copy-boundary interruption can resume; conflicting copies and changed
 inspected source locations reject without choosing a winner. Final journal removal
-checks exact accepted bytes/location. New private transactions use journal version 8,
-with explicit Private receipt placement and qualified prior receipt sources.
+checks exact accepted bytes/location. Ordinary private transactions use journal
+version8; exact JSONC boolean-leaf ownership/removal uses version9. Both retain
+explicit Private receipt placement and qualified prior receipt sources.
 Recognized version-2 intent still finishes its original vendor destinations; it cannot
 authorize private receipt targets. Unknown or altered version/placement/root/effects
 remain non-destructive errors, not new artifact authority.

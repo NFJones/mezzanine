@@ -30,6 +30,9 @@ pub(crate) enum Artifact {
         pointer: String,
         value: serde_json::Value,
     },
+    /// Exact boolean leaf in JSONC; missing object ancestors may be created.
+    /// Ownership never extends to ancestors, comments or authored siblings.
+    JsoncBoolEntry { pointer: String, value: bool },
     /// Bounded exact members in distinct arrays of one shared strict-JSON file.
     JsonArrayEntries { entries: Vec<JsonArrayMember> },
 }
@@ -63,6 +66,10 @@ pub(crate) fn validate(entry: &Entry) -> Result<()> {
         Artifact::JsonEntry { pointer, .. }
         | Artifact::JsonArrayEntry { pointer, .. }
         | Artifact::JsoncArrayEntry { pointer, .. } => {
+            pointer_parts(pointer)?;
+            Ok(())
+        }
+        Artifact::JsoncBoolEntry { pointer, .. } => {
             pointer_parts(pointer)?;
             Ok(())
         }
@@ -192,6 +199,9 @@ pub(crate) fn reconcile(
         }
         Artifact::JsoncArrayEntry { .. } => {
             super::jsonc::reconcile(current, previous, desired, false)
+        }
+        Artifact::JsoncBoolEntry { .. } => {
+            super::jsonc::reconcile_boolean(current, previous, desired)
         }
         Artifact::JsonArrayEntries { .. } => {
             super::shared_arrays::reconcile_arrays(current, previous, desired, false)

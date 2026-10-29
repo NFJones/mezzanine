@@ -7,6 +7,8 @@
 //! Startup attachment retries only within a finite window; neither loading policy
 //! nor accounting is inferred by waiting for the original classic enrollment.
 //! Live per-call metadata is independently bounded and explicitly unattributed.
+//! Exact compiled variants own only a missing supported JSONC activation leaf;
+//! authored flags and vendor loading/disabled/trust policy remain authoritative.
 
 use super::{
     installer::Manifest,
@@ -16,12 +18,39 @@ use super::{
 /// Compiles documented user hooks and the bounded native observer entry.
 /// Unrepresentable installing evidence cannot guess PATH or another user root.
 pub(super) fn manifest() -> Option<Manifest> {
-    extension_manifest(
-        6,
+    activation_manifest(true)
+}
+
+/// Exact current graph with or without ownership of the missing user flag.
+/// Authored values are selected without a settings entry, never adopted.
+pub(super) fn activation_manifest(owned: bool) -> Option<Manifest> {
+    let mut manifest = extension_manifest(
+        7,
         include_bytes!("copilot_entry.mjs"),
         include_bytes!("copilot_extension.mjs"),
         Some(include_bytes!("copilot_lifetime.mjs")),
         Some(include_bytes!("copilot_usage.mjs")),
+    )?;
+    if owned {
+        manifest.entries.push(Entry {
+            path: "settings.json".into(),
+            artifact: Artifact::JsoncBoolEntry {
+                pointer: "/enabledFeatureFlags/EXTENSIONS".into(),
+                value: true,
+            },
+        });
+    }
+    Some(manifest)
+}
+
+/// Frozen revision6 graph before exact missing-default activation ownership.
+pub(super) fn historical_terminal_manifest() -> Option<Manifest> {
+    extension_manifest(
+        6,
+        include_bytes!("history/copilot_entry_v6.mjs"),
+        include_bytes!("history/copilot_extension_v6.mjs"),
+        Some(include_bytes!("history/copilot_lifetime_v6.mjs")),
+        Some(include_bytes!("history/copilot_usage_v6.mjs")),
     )
 }
 
@@ -265,14 +294,52 @@ mod tests {
         }
     }
 
-    /// The metadata extension does not claim default activation or request origin.
+    /// Revision6's live metadata graph remains immutable receipt authority.
+    /// Adding activation cannot redefine historical source bytes or claim that
+    /// the prior revision owned user settings merely because its files match.
+    #[test]
+    fn bootstrap_copilot_terminal_history_uses_frozen_revision6_bytes() {
+        use sha2::Digest;
+        let old = historical_terminal_manifest().unwrap();
+        assert_eq!(old.revision, 6);
+        assert_eq!(old.entries.len(), 6);
+        for (index, expected) in [
+            (
+                1,
+                "a3f553a37b788db2614e46762e671b094b80797f09b2244f60da207517e1e383",
+            ),
+            (
+                2,
+                "62b50abbc45477680654b92749a5c1d7ec553aada172bfb866ef792afa5e52d7",
+            ),
+            (
+                3,
+                "8e9a3a42deb36100de3a7ecfbbc657a5c5032e44d13a7a30b11cea500128e408",
+            ),
+            (
+                4,
+                "2b1a061ea889a297d6ceb59dfb51cf01097cba9e5e84792a1b8dceb5c09dd04c",
+            ),
+        ] {
+            let Artifact::File { bytes } = &old.entries[index].artifact else {
+                panic!("frozen source");
+            };
+            let actual = sha2::Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    /// Default activation ownership does not claim vendor loading or request origin.
     /// Installation is not proof of loaded/enrolled or accounted callbacks.
     #[test]
     fn bootstrap_copilot_manifest_pins_only_metadata_user_hooks() {
         let manifest =
             super::super::compiled_manifest("copilot", None).expect("compiled Copilot hooks");
-        assert_eq!(manifest.entries.len(), 6);
-        assert_eq!(manifest.revision, 6);
+        assert_eq!(manifest.entries.len(), 7);
+        assert_eq!(manifest.revision, 7);
         assert_eq!(manifest.entries[0].path, "hooks/mezzanine.json");
         let Artifact::File { bytes } = &manifest.entries[0].artifact else {
             panic!("owned private hook document");
@@ -354,7 +421,7 @@ mod tests {
         std::fs::remove_dir_all(home).unwrap();
     }
 
-    /// Current hooks and extension automatically upgrade independent revisions1/2/3/4
+    /// Current hooks and extension automatically upgrade independent revisions1–6
     /// deployment bytes and receipt. Authored siblings/settings remain untouched;
     /// repeat and uninstall use the current manifest without adopting a foreign file.
     #[test]
@@ -371,6 +438,7 @@ mod tests {
             historical_attachment_manifest().unwrap(),
             historical_idle_manifest().unwrap(),
             historical_startup_manifest().unwrap(),
+            historical_terminal_manifest().unwrap(),
         ] {
             let root = home.join(format!("vendor-{}", old.revision));
             std::fs::create_dir(&root).unwrap();

@@ -89,7 +89,12 @@ async fn qualify_installed_hooks(extension: bool, terminal: bool, sdk_usage: boo
         assert!(output.stderr.is_empty());
         let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(report["result"], result);
-        assert_eq!(report["usage"], "unavailable-safe-activation");
+        assert_eq!(report["usage"], "unverified");
+        assert_eq!(report["activation"], "owned-default-enabled");
+        let settings: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(vendor.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["enabledFeatureFlags"]["EXTENSIONS"], true);
+        assert!(settings.get("experimental").is_none());
     }
     let document: serde_json::Value =
         serde_json::from_slice(&std::fs::read(vendor.join("hooks/mezzanine.json")).unwrap())

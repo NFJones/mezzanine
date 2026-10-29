@@ -160,8 +160,9 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
     assert_eq!(installed["root_source"], "COPILOT_HOME");
     assert_eq!(installed["result"], "installed");
     assert_eq!(installed["lifecycle"], "unverified");
-    assert_eq!(installed["usage"], "unavailable-safe-activation");
-    assert_eq!(installed["manifest_revision"], 6);
+    assert_eq!(installed["usage"], "unavailable-vendor-policy");
+    assert_eq!(installed["activation"], "vendor-policy-disabled");
+    assert_eq!(installed["manifest_revision"], 7);
     assert_eq!(bootstrap(&[])["result"], "unchanged");
     let extension = vendor.join("extensions/mezzanine");
     for (name, source) in [
@@ -511,5 +512,83 @@ fn standalone_harness_source_invalid_capsule_and_route_are_neutral() {
         assert!(output.status.success());
         assert_eq!(output.stdout, b"{\"registered\":false}\n");
         assert!(output.stderr.is_empty());
+    }
+}
+
+/// Bare production bootstrap defaults the missing supported activation leaf in
+/// both an absent settings file and authored JSONC. Preview/check/repeat do not
+/// mutate preimages, and uninstall retains comments, siblings and containers.
+/// This verifies deployed ownership effects, not vendor discovery or loading.
+#[test]
+fn standalone_copilot_bootstrap_owns_only_missing_jsonc_activation_default() {
+    for authored in [
+        None,
+        Some(br#"{/*authored*/"theme":"dark","enabledFeatureFlags":{"OTHER":false,},}"#.as_slice()),
+    ] {
+        let owner = PublicationRoot::new();
+        let root = owner.path();
+        let home = root.join("home");
+        let vendor = root.join("vendor");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&home)
+            .unwrap();
+        if let Some(bytes) = authored {
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&vendor)
+                .unwrap();
+            std::fs::write(vendor.join("settings.json"), bytes).unwrap();
+        }
+        let bootstrap = |flags: &[&str]| {
+            let output = std::process::Command::new(env!("CARGO_BIN_EXE_mez"))
+                .args(["--json", "bootstrap", "copilot"])
+                .args(flags)
+                .env_clear()
+                .env("HOME", &home)
+                .env("COPILOT_HOME", &vendor)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert!(output.stderr.is_empty());
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+        };
+        let preview = bootstrap(&["--dry-run"]);
+        assert_eq!(preview["result"], "preview");
+        assert!(
+            preview["changed_paths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|path| path == "settings.json")
+        );
+        assert_eq!(
+            std::fs::read(vendor.join("settings.json")).ok().as_deref(),
+            authored
+        );
+        let installed = bootstrap(&[]);
+        assert_eq!(installed["manifest_revision"], 7);
+        assert_eq!(installed["activation"], "owned-default-enabled");
+        assert_eq!(installed["usage"], "unverified");
+        let bytes = std::fs::read(vendor.join("settings.json")).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("\"EXTENSIONS\":true"));
+        assert!(!text.contains("experimental"));
+        if authored.is_some() {
+            assert!(text.contains("/*authored*/") && text.contains("\"OTHER\":false"));
+        }
+        assert_eq!(bootstrap(&["--check"])["result"], "checked");
+        assert_eq!(bootstrap(&[])["result"], "unchanged");
+        assert_eq!(std::fs::read(vendor.join("settings.json")).unwrap(), bytes);
+        let removed = bootstrap(&["--uninstall"]);
+        assert_eq!(removed["activation"], "removed-owned-default");
+        let bytes = std::fs::read(vendor.join("settings.json")).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("EXTENSIONS"));
+        if authored.is_some() {
+            assert!(text.contains("/*authored*/") && text.contains("\"OTHER\":false"));
+        }
+        assert!(text.contains("enabledFeatureFlags"));
     }
 }

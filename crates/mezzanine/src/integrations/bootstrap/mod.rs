@@ -163,8 +163,12 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
         };
     }
     if manifest.harness == "copilot" {
-        return if Some(manifest) == copilot_artifact::manifest().as_ref() {
+        return if copilot_artifact::manifest()
+            .as_ref()
+            .is_some_and(|current| compiled_variant_matches(manifest, current))
+        {
             [
+                copilot_artifact::historical_terminal_manifest(),
                 copilot_artifact::historical_startup_manifest(),
                 copilot_artifact::historical_idle_manifest(),
                 copilot_artifact::historical_attachment_manifest(),
@@ -564,6 +568,14 @@ pub(super) fn compiled_variant_matches(
     candidate: &installer::Manifest,
     target: &installer::Manifest,
 ) -> bool {
+    if candidate.harness == "copilot" && target.harness == "copilot" {
+        let variants = [
+            copilot_artifact::activation_manifest(false),
+            copilot_artifact::activation_manifest(true),
+        ];
+        return variants.iter().flatten().any(|value| value == candidate)
+            && variants.iter().flatten().any(|value| value == target);
+    }
     if candidate.harness != "opencode" || target.harness != "opencode" {
         return false;
     }

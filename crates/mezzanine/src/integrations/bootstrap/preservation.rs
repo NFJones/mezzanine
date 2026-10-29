@@ -24,6 +24,17 @@ pub(super) fn reconcile_preserving(
     desired: Option<&Artifact>,
     journal_version: Option<u32>,
 ) -> Result<(Option<Vec<u8>>, Option<String>)> {
+    if matches!(desired.or(previous), Some(Artifact::JsoncBoolEntry { .. })) {
+        if !journal_version.is_some_and(|version| version >= 9) {
+            return Err(MezError::forbidden(
+                "bootstrap boolean ownership requires journal9",
+            ));
+        }
+        return Ok((
+            super::jsonc::reconcile_boolean(current, previous, desired)?,
+            None,
+        ));
+    }
     let enabled = journal_version.is_some_and(|version| version >= 4);
     if journal_version.is_some_and(|version| version >= 7)
         && harness == "opencode"

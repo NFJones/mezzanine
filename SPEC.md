@@ -855,14 +855,14 @@ cross-process source handoff, restart continuity, macOS execution or full billin
 
 #### Classic hook installation and source limits
 
-Copilot revision6 MAY install the compiled `hooks/mezzanine.json` user file
+Copilot revision7 MAY install the compiled `hooks/mezzanine.json` user file
 under the documented COPILOT_HOME/default root, version1 direct-exec/args hook
 syntax for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/
 agentStop/errorOccurred/sessionEnd and a fixed installing binary, plus the owned
 `extensions/mezzanine/extension.mjs`, `copilot_extension.mjs`,
 `copilot_lifetime.mjs`, `copilot_usage.mjs` and fixed installing-
 binary `peer_helper.mjs` files. Exact
-revision1/2/3/4/5 bytes MUST remain independently recognized for receipt-qualified
+revision1/2/3/4/5/6 bytes MUST remain independently recognized for receipt-qualified
 upgrade/repair. The extension MAY join the existing session using the bundled
 SDK without contributing tools, hooks or permission handlers. It MAY request
 `agent/external/copilot-attach` with only pane/session selectors. Attachment MUST
@@ -878,8 +878,25 @@ MUST fence pending/late attachment before any pulse lifetime starts; successful
 attachment MUST end startup retries permanently. These retries MUST NOT create
 an enrollment, claim early provider admission or supply observer freshness.
 
-This revision MUST NOT enable extensions/experiments or claim idle/accounting
-support from attachment; existing vendor loading/trust/disabled policy applies.
+This revision MAY default only a missing supported
+settings.json /enabledFeatureFlags/EXTENSIONS boolean totrue, never broad
+experimental features. It MUST preserve JSONC comments/trivia, authored flag
+values, extension mode/disabled IDs/trust, exporters and credentials. Matching
+unowned true MUST NOT be adopted. Missing object parents MAY be created but
+ownership MUST remain only the exact leaf. Repeat MUST be inert; uninstall MUST
+remove only an intact owned leaf and retain containers/comments/siblings. Edited
+owned values MUST conflict without overwrite. Invalid unowned settings MUST stay
+byte-exact with unavailable activation, never a false enabled claim.
+Default selection MUST use captured settings and recognized receipt observations
+after virtual pending recovery, fenced again before publication. Only exact
+compiled owned/unowned variants MAY authorize receipts; current source MUST NOT
+redefine historical graphs. New boolean ownership/removal MUST require private
+journal9; older journals MUST NOT gain this authority, and version9 MUST NOT
+reinterpret unrelated version8 transactions. Check/dryrun MUST remain nonmutating.
+Activation diagnostics MUST derive from the captured plan, distinguish owned
+missing defaults, authored enabled/disabled and unavailable policy/settings, and
+MUST NOT claim actual loading, trusted execution, accounting or original origin.
+Existing vendor loading/trust/disabled policy remains authoritative.
 Before sending metadata, the extension MUST qualify its route/helper paths and
 obtain the bounded native same-user peer acknowledgment via `harness-peer`. That
 checker MUST do no socket I/O; the extension MUST remain the actual RPC writer.
@@ -896,6 +913,11 @@ ordering. The daemon alone MAY renew leases from this proof. The installed loop
 MUST serialize10second pulses, retry the same counter after ACK loss and stop on
 shutdown/terminal refusal without reenrolling. It MUST NOT alter vendor state,
 claim expense, or enable extensions/experiments.
+The globally installed entry MUST validate inert ordinary MEZ/pane routing hints
+before importing or joining the bundled SDK. Missing/invalid hints MUST remain
+neutral without SDK work or attachment/pulse retry timers. Syntactically configured
+hints MUST NOT grant authority; actual native peer/source checks remain mandatory,
+and a temporarily unavailable configured route MAY use bounded startup retries.
 The owned entry MUST register live assistant.usage immediately after joining,
 before awaiting attachment. It MUST retain only model and validated per-call
 integer counters, hashing the full sourceSessionId/sequence/usageId accounting
@@ -911,8 +933,8 @@ with the transport's3second deadline. Pressure and exhausted delivery MUST retai
 sticky bounded gap state. Shutdown/terminal refusal MUST fence timers, queued
 work and late completions without erasing already admitted durable expense.
 This terminal observer MUST NOT claim original request time/project provenance
-or a provider dispatch barrier. Safe default extension activation remains a
-separate integration requirement; this revision leaves vendor policy unchanged.
+or a provider dispatch barrier. Exact missing-default activation MUST preserve vendor policy; its installation
+MUST NOT be treated as evidence of actual callback delivery or complete coverage.
 
 Fixed native-only agent/external/copilot-terminal MAY accept original
 pane/session/generation/witness, concrete observer_id, opaque call_id, model and
@@ -1108,8 +1130,9 @@ effects, not silently discard a replaced journal. This is not whole-workflow CAS
 Explicit recovery MUST freeze pending bytes/location before writer acquisition and
 reauthorize the identical snapshot under retained ownership. No pending intent,
 including absent roots, MUST return a truthful no-op without root/state/lock writes.
-New private journal transactions MUST use version 8 and explicit Private receipt
-placement with separately qualified prior private/vendor receipt identities.
+Ordinary new private journal transactions MUST use version8; exact JSONC
+boolean-leaf ownership/removal MUST use version9. Both MUST use explicit Private
+receipt placement with separately qualified prior private/vendor receipt identities.
 Version-2 journals MUST retain original vendor receipt destinations and MUST NOT
 authorize private receipt targets or new receipt-source fields. Unknown versions,
 placement/version mismatches, cross-harness sources and uncompiled identities MUST
@@ -1177,7 +1200,9 @@ Archive collision/failure/loss MUST prevent future file publication or retain pe
 intent after already confirmed effects. Versions 2/3 MUST NOT authorize archive effects
 or relaxed edited-file reconciliation; their original target semantics remain frozen.
 The v4 transaction is bounded to 32 effects with finite payload/journal limits.
-Current private publication MUST use journal version 8, retaining version-5 bounded multi-array
+Ordinary current private publication MUST use journal version8; version9 is
+reserved for exact JSONC boolean-leaf ownership/removal, not unrelated intent.
+Both retain version-5 bounded multi-array
 ownership and Codex receipt-qualified whole-file-to-shared migration. Version 5
 MUST retain v4 archive dependencies/bounds and exact compiled recovery authority
 for its historical targets. Version8 additionally MAY

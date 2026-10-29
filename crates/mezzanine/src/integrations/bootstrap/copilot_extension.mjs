@@ -18,6 +18,25 @@ const contentType = "application/vnd.mezzanine.control+json; version=1";
 const exact = (value, fields) => value && typeof value === "object" && !Array.isArray(value)
   && Object.keys(value).length === fields.length && Object.keys(value).every(key => fields.includes(key));
 
+/** Parse only ordinary inert routing hints; no filesystem or SDK I/O occurs.
+ * Hints never establish daemon, source or native writer authority.
+ */
+function routeFromHints(mez, pane) {
+  if (typeof mez !== "string" || mez.length > 8192 || typeof pane !== "string"
+      || !/^%[0-9]{1,63}$/.test(pane)) return;
+  const route = mez.split("\x1f", 1)[0].trim();
+  if (!route.startsWith("/") || route.length > 4096 || /\p{Cc}/u.test(route)) return;
+  return route;
+}
+
+/** Outside Mez, avoid importing/joining the SDK or starting retry timers.
+ * A configured route may still be unavailable; bounded startup retries and
+ * actual connected-peer/source proof remain independently required.
+ */
+export function copilotRoutingConfigured(mez, pane) {
+  return routeFromHints(mez, pane) !== undefined;
+}
+
 /** Filesystem checks narrow a route/helper before native peer verification.
  * They never substitute for the connected socket's kernel peer UID.
  */
@@ -123,11 +142,9 @@ function observer(raw, session) {
  */
 async function exchangeCopilot({ mez, pane, session, peerHelper } = {}, id, method, extra, project) {
   try {
-    if (typeof mez !== "string" || mez.length > 8192 || !identifier(session)
-        || typeof pane !== "string" || !/^%[0-9]{1,63}$/.test(pane)) return;
-    const route = mez.split("\x1f", 1)[0].trim();
-    if (!route.startsWith("/") || route.length > 4096 || /\p{Cc}/u.test(route)) return;
-    if (!trustedPaths(route, peerHelper)) return;
+    if (!identifier(session)) return;
+    const route = routeFromHints(mez, pane);
+    if (!route || !trustedPaths(route, peerHelper)) return;
     const body = JSON.stringify({ jsonrpc: "2.0", id, method,
       params: { pane_id: pane, external_session_id: session, ...extra } });
     return await new Promise(resolve => {

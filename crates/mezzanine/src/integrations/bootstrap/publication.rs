@@ -687,7 +687,7 @@ impl Publisher {
         })?;
         let root = self.directory.file()?.metadata()?;
         self.validate_root()?;
-        if !matches!(journal.version, 2..=8)
+        if !matches!(journal.version, 2..=9)
             || journal.root_device != root.dev()
             || journal.root_inode != root.ino()
         {
@@ -780,12 +780,40 @@ impl Publisher {
         changes: Vec<Change>,
         intent: serde_json::Value,
     ) -> Result<()> {
+        self.apply_authorized_version(changes, intent, 8)
+    }
+
+    /// Publishes only typed boolean-leaf intent under its new private semantics.
+    pub(super) fn apply_boolean_authorized(
+        &self,
+        changes: Vec<Change>,
+        intent: serde_json::Value,
+    ) -> Result<()> {
+        if !self.uses_private_state() {
+            return Err(MezError::forbidden(
+                "bootstrap boolean ownership requires private owner",
+            ));
+        }
+        self.apply_authorized_version(changes, intent, 9)
+    }
+
+    /// Chooses a code-owned journal version; no public operation accepts it.
+    fn apply_authorized_version(
+        &self,
+        changes: Vec<Change>,
+        intent: serde_json::Value,
+        private_version: u32,
+    ) -> Result<()> {
         self.require_lock()?;
         self.require_no_pending_journal()?;
         self.validate_changes(&changes, false)?;
         let root = self.directory.file()?.metadata()?;
         let bytes = serde_json::to_vec(&Journal {
-            version: if self.uses_private_state() { 8 } else { 2 },
+            version: if self.uses_private_state() {
+                private_version
+            } else {
+                2
+            },
             root_device: root.dev(),
             root_inode: root.ino(),
             intent,

@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+mod copilot;
+
 /// Trusted release-qualified adapter artifacts and required operator guidance.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -116,6 +118,23 @@ struct Intent {
     archives: BTreeMap<String, String>,
 }
 
+/// New leaf semantics are authority only when an exact compiled graph owns one.
+fn has_boolean(intent: &Intent) -> bool {
+    std::iter::once(&intent.manifest)
+        .chain(intent.previous.iter())
+        .chain(intent.previous_private.iter())
+        .chain(intent.previous_vendor.iter())
+        .chain(intent.adopted.iter())
+        .any(|source| {
+            source.entries.iter().any(|entry| {
+                matches!(
+                    entry.artifact,
+                    super::reconciliation::Artifact::JsoncBoolEntry { .. }
+                )
+            })
+        })
+}
+
 /// One read-only inspected plan; publication acquires ownership and revalidates
 /// all captured preimages, including unchanged artifacts and the receipt.
 pub(crate) struct Plan {
@@ -125,6 +144,8 @@ pub(crate) struct Plan {
     intent: Intent,
     pending: Option<PendingRecovery>,
     history: Vec<Manifest>,
+    /// Captured activation plan only, never evidence of actual vendor loading.
+    copilot_activation: Option<&'static str>,
 }
 
 /// Validates bounded registry metadata and one artifact per destination.
@@ -221,7 +242,10 @@ pub(crate) fn plan_private(
     validate_manifest(manifest)?;
     let publisher = Publisher::inspect_private(root, home)?;
     let history = super::compiled_history(manifest);
-    if super::compiled_variant_matches(manifest, manifest) {
+    if manifest.harness == "copilot" && super::compiled_variant_matches(manifest, manifest) {
+        return copilot::plan(publisher, manifest, operation, &history);
+    }
+    if manifest.harness == "opencode" && super::compiled_variant_matches(manifest, manifest) {
         let pending = publisher.inspect_pending_authorized(|version, value, changes| {
             authorize_recovery(&publisher, manifest, &history, version, value, changes)
         })?;
@@ -293,6 +317,7 @@ fn plan_with_publisher(
                 entry.artifact,
                 super::reconciliation::Artifact::JsonArrayEntries { .. }
                     | super::reconciliation::Artifact::JsoncArrayEntry { .. }
+                    | super::reconciliation::Artifact::JsoncBoolEntry { .. }
             )
         })
     {
@@ -440,7 +465,7 @@ fn plan_with_publisher(
             before.as_deref(),
             old.get(&path).copied(),
             desired.get(&path).copied(),
-            (receipt_location == ReceiptLocation::Private).then_some(8),
+            (receipt_location == ReceiptLocation::Private).then_some(9),
         )?;
         if let Some(archive) = archive {
             archive_requirements.insert(path.clone(), archive.clone());
@@ -518,10 +543,16 @@ fn plan_with_publisher(
         },
         pending,
         history: history.to_vec(),
+        copilot_activation: None,
     })
 }
 
 impl Plan {
+    /// Returns the captured default/policy decision without rereading user data.
+    pub(crate) fn copilot_activation(&self) -> Option<&'static str> {
+        self.copilot_activation
+    }
+
     /// Stops a controlled fixture after one confirmed publication boundary.
     /// This test-only seam drives CLI recovery with real accepted engine intent;
     /// no public CLI flag, process-visible manifest, or production fault is added.
@@ -652,10 +683,15 @@ impl Plan {
         if self.changes.is_empty() {
             return Ok(());
         }
-        let intent = serde_json::to_value(self.intent).map_err(|error| {
+        let intent = serde_json::to_value(&self.intent).map_err(|error| {
             MezError::invalid_state(format!("bootstrap intent encoding: {error}"))
         })?;
-        self.publisher.apply_authorized(self.changes, intent)
+        if has_boolean(&self.intent) {
+            self.publisher
+                .apply_boolean_authorized(self.changes, intent)
+        } else {
+            self.publisher.apply_authorized(self.changes, intent)
+        }
     }
 }
 
@@ -842,6 +878,11 @@ fn authorize_recovery(
     }
     // Compiled membership above is authority; the journal only identifies
     // which original immutable target must finish before current refresh.
+    if (version < 9 && has_boolean(&intent)) || (version == 9 && !has_boolean(&intent)) {
+        return Err(MezError::forbidden(
+            "bootstrap journal boolean ownership version mismatch",
+        ));
+    }
     if version < 8
         && std::iter::once(&intent.manifest)
             .chain(intent.previous.iter())
