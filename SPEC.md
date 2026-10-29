@@ -1799,6 +1799,23 @@ aliases. Migration from12 MUST advance only the version in the existing schema
 transaction, retaining all expense, checkpoints, raw receipts, native mappings,
 request metadata and reset facts. Older readers MUST refuse the newer version;
 downgrade MUST NOT let an old per-message writer recharge canonical observations.
+Telemetry schema14 adds the internal external_copilot_calls tombstone table in
+the existing schema transaction, retaining prior expense, observations, request
+origins and native mappings. This storage prerequisite MUST NOT enable ordinary
+terminal ingress, declare request-start readiness or claim extension activation.
+Its fixed internal terminal writer MUST require an already mapped Copilot owner,
+unknown original project, the Copilot-reported provider namespace and a UID-
+separated opaque canonical call identity. Alias, original observation/checkpoint
+and expense MUST commit atomically. Compatible reporter replay MUST preserve
+first source/time and MUST NOT project the original checkpoint into a different
+owner. Changed model/counters/category availability or missing retained original
+observation/alias evidence MUST fail without mutation. Ordinary raw receipt/event
+retention MAY prune payloads without erasing canonical tombstones or their ACK. Unknown optional counters MUST remain unknown;
+explicit zero MAY commit a receipt without nonzero expense. Canonical tombstones
+MUST share finite observation capacity, never be evicted to permit recharge, and
+remain replayable at capacity. Schema migration MUST NOT adopt prior generic
+observations as canonical terminal calls or backfill original request origin.
+
 After current capability/UID/registration/session authorization, normal legacy
 `agent/external/usage` admission MUST recognize the exact established OpenCode
 completed-message delta layout: sequence1, no baseline, `opencode-message:` plus

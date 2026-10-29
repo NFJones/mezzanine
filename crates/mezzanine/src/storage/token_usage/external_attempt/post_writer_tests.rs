@@ -124,3 +124,33 @@ fn external_attempt_post_writer_read_failure_is_terminal_without_expense() {
     drop(connection);
     std::fs::remove_dir_all(store.path().parent().unwrap()).unwrap();
 }
+
+/// The canonical terminal alias uses the same real COMMIT as expense/checkpoint
+/// publication. A SQLite commit-hook veto rolls back all statements and cannot
+/// produce a durable acknowledgment or precommit scheduling permission.
+#[test]
+fn copilot_terminal_real_commit_failure_rolls_back_alias_and_expense() {
+    use super::super::copilot_terminal_tests::{cleanup, counts, fixture, report};
+    let (store, a, _) = fixture();
+    let call = "4".repeat(64);
+    let input = report(&a, 42, &call, 100);
+    let mut witness = ExternalUsageAdmissionWitness {
+        abort_commit: true,
+        ..Default::default()
+    };
+    assert!(
+        store
+            .ingest_copilot_terminal_with_admission(&input, 42, &call, 101, &mut witness,)
+            .is_err()
+    );
+    assert!(witness.refusal.is_none());
+    assert_eq!(counts(&store), [0, 0, 0, 0, 0, 0]);
+    assert!(
+        store
+            .ingest_copilot_terminal(&input, 42, &call, 101)
+            .unwrap()
+            .applied()
+    );
+    assert_eq!(counts(&store), [1, 1, 1, 1, 1, 0]);
+    cleanup(store);
+}

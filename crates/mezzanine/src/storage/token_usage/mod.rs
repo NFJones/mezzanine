@@ -121,6 +121,8 @@ fn sqlite_i64(value: u64, field: &str) -> Result<i64> {
 }
 
 #[cfg(test)]
+mod copilot_terminal_tests;
+#[cfg(test)]
 mod external_tests;
 #[cfg(test)]
 mod history_tests;

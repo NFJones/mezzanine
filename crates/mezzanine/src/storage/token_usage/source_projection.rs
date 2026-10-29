@@ -499,7 +499,7 @@ mod tests {
                 .is_err()
         );
         connection
-            .execute_batch("DROP TABLE external_usage_view_resets; PRAGMA user_version=11;")
+            .execute_batch("DROP TABLE external_copilot_calls; DROP TABLE external_usage_view_resets; PRAGMA user_version=11;")
             .unwrap();
         assert!(
             fixture

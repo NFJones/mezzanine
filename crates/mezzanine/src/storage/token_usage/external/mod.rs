@@ -13,6 +13,8 @@
 //! runtime capability admission. It preserves exact preexisting receipts while
 //! charging fresh completed messages into shared streams, without allocating
 //! native mappings or granting recovery authority.
+//! Copilot terminal aliases share this same transaction while preserving unknown
+//! request origin and keeping cross-reporter replay outside pane projection.
 
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 use rusqlite::{OptionalExtension, params};
@@ -20,6 +22,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{MezError, Result, TokenUsageStore, sqlite_i64};
+
+/// Internal prerequisite for the fixed native terminal ingress, not an active RPC.
+#[allow(
+    dead_code,
+    reason = "Copilot native terminal ingress integration is pending"
+)]
+pub(super) mod copilot_calls;
 
 /// Read-transaction projection prerequisites; never another expense store.
 mod group_snapshot;
@@ -33,6 +42,8 @@ enum GroupPublication<'a> {
     Native(Option<&'a mut Option<ExternalUsageGroupSnapshot>>),
     /// An already-authorized legacy OpenCode launch publishes one coherent group.
     LegacyLaunch(&'a mut Option<ExternalUsageGroupSnapshot>),
+    /// Canonical terminal calls retain native mapping and one first reporter.
+    CopilotTerminal(copilot_calls::Publication<'a>),
 }
 
 impl GroupPublication<'_> {
@@ -614,6 +625,20 @@ impl TokenUsageStore {
                     "external observation requires a mapped native source",
                 ));
             }
+            let replay = match &group {
+                GroupPublication::CopilotTerminal(publication) => {
+                    publication.replay(&tx, report)?
+                }
+                _ => None,
+            };
+            if let Some(replay) = replay {
+                return match group {
+                    GroupPublication::CopilotTerminal(publication) => {
+                        publication.finish_replay(tx, replay)
+                    }
+                    _ => Err(MezError::invalid_state("Copilot replay scope unavailable")),
+                };
+            }
             let legacy_stream = external_usage_stream_id(
                 &report.owner,
                 &format!("opencode-message:{}", report.event_id),
@@ -873,6 +898,9 @@ impl TokenUsageStore {
         let (output, legacy_launch) = match group {
             GroupPublication::Native(output) => (output, false),
             GroupPublication::LegacyLaunch(output) => (Some(output), true),
+            GroupPublication::CopilotTerminal(publication) => {
+                return publication.finish_new(tx, report, commit);
+            }
         };
         if let Some(output) = output {
             let snapshot = if legacy_launch {

@@ -9,7 +9,8 @@ use super::*;
 use crate::integrations::bootstrap::opencode::CompletedObservation;
 use rusqlite::Connection;
 
-/// Schema12 rows survive the version-only13 migration exactly, then a scoped
+/// Schema12 rows survive the version-only13 fence and subsequent empty14 alias
+/// migration exactly, then a scoped
 /// legacy adoption adds no expense. Native observation/snapshot APIs still reject
 /// that owner because legacy receipt possession never creates native provenance.
 #[test]
@@ -17,14 +18,15 @@ fn legacy_launch_schema13_migration_preserves_rows_and_native_refusal() {
     let (store, legacy) = fixture();
     store.ingest_external(&legacy, 100).unwrap();
     let sql = Connection::open(store.path()).unwrap();
-    sql.execute_batch("PRAGMA user_version=12;").unwrap();
+    sql.execute_batch("DROP TABLE external_copilot_calls; PRAGMA user_version=12;")
+        .unwrap();
     let before = contents(&sql);
     store.initialize(100).unwrap();
     assert_eq!(contents(&sql), before);
     assert_eq!(
         sql.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        13
+        super::store::SCHEMA_VERSION
     );
     let pair = CompletedObservation::from_legacy_report(&legacy)
         .unwrap()
@@ -65,8 +67,10 @@ fn legacy_launch_schema13_migration_writer_refusal_preserves_version_and_expense
     let (store, legacy) = fixture();
     store.ingest_external(&legacy, 100).unwrap();
     let sql = Connection::open(store.path()).unwrap();
-    sql.execute_batch("PRAGMA user_version=12; BEGIN IMMEDIATE;")
-        .unwrap();
+    sql.execute_batch(
+        "DROP TABLE external_copilot_calls; PRAGMA user_version=12; BEGIN IMMEDIATE;",
+    )
+    .unwrap();
     let before = contents(&sql);
     assert!(store.initialize(100).is_err());
     assert_eq!(

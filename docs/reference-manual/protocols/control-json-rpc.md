@@ -876,6 +876,18 @@ Expense, native source identities, receipts, request metadata and reset facts
 remain unchanged. Older binaries refuse the newer format rather than interpreting
 shared-stream reports as fresh per-message expense.
 
+Telemetry schema14 adds an internal canonical Copilot-call alias table. It does
+not add a wire method or enable terminal reporting. The storage prerequisite
+commits alias and expense through the same writer, preserves unknown original
+request origin and first observation time, and acknowledges compatible duplicate
+reporters without exposing another owner's pane checkpoint. Optional counters
+remain unknown; zero known totals can receive a durable receipt without an
+expense row. Conflicting metadata and missing retained original observation/alias evidence
+fail closed. Ordinary raw receipt/event pruning retains canonical replay ACKs.
+Old generic observations are preserved, not silently adopted. Native ingress,
+source coverage and safe activation remain separate unfinished work.
+
+
 Normal capability-only `agent/external/usage` admission now recognizes the known
 OpenCode completed-message delta layout after UID/current capability/registration/
 session authorization and server-owned owner/origin assignment. It uses the

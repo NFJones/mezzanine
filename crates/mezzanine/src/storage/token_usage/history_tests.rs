@@ -119,7 +119,7 @@ fn attributed_migration_preserves_legacy_receipts_and_rolls_back_failure() {
     connection
         .execute_batch(
             "DROP INDEX token_usage_events_project_time;
-        DROP TABLE external_usage_view_resets;
+        DROP TABLE external_copilot_calls; DROP TABLE external_usage_view_resets;
         DROP TABLE external_usage_source_activations;
         DROP TABLE external_usage_sources;
         DROP TABLE external_usage_observations;
