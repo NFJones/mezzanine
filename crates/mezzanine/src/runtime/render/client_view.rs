@@ -1156,7 +1156,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .map(|input| input.prompt.clone())
             .unwrap_or_else(|| ReadlinePrompt::new(ReadlinePromptKind::Agent));
-        prompt.set_selector_working_directory(self.pane_current_working_directory(pane_id));
+        prompt.set_selector_working_directory(self.agent_effective_working_directory(pane_id));
         prompt
     }
 

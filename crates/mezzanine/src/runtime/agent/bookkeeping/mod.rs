@@ -1836,6 +1836,9 @@ impl RuntimeSessionService {
     /// Builds the one-time system transcript entry that makes saved sessions
     /// self-describing in `/resume` flows.
     ///
+    /// Native directory references describe the agent workload workspace; pane
+    /// process observations and frozen accounting origins remain independent.
+    ///
     /// # Parameters
     /// - `conversation_id`: The durable transcript conversation id.
     /// - `sequence`: The sequence assigned to the context entry.
@@ -1848,7 +1851,7 @@ impl RuntimeSessionService {
         created_at_unix_seconds: u64,
         turn: &AgentTurnRecord,
     ) -> Option<TranscriptEntry> {
-        let working_directory = self.pane_current_working_directory(&turn.pane_id)?;
+        let working_directory = self.agent_effective_working_directory(&turn.pane_id)?;
         let project_root = discover_project_root(&working_directory);
         let mut content = format!("cwd={}", working_directory.to_string_lossy());
         if !project_root.as_os_str().is_empty() {

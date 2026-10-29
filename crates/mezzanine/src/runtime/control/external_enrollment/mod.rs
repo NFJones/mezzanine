@@ -825,7 +825,7 @@ impl RuntimeSessionService {
             .trusted_project_root_for_pane(&work.pane_id)
             .map(mez_agent::messaging::ProjectMembership::from_canonical_root)
             .map(|membership| membership.scope_id());
-        let accounting_origin = self.capture_accounting_origin_for_pane(&work.pane_id);
+        let accounting_origin = self.capture_pane_process_accounting_origin(&work.pane_id);
         let (registry, next_generation) = self.control.external_agents_and_generation_mut();
         if registry.bindings.len() >= super::external_agents::MAX_BINDINGS {
             return Err(MezError::new(

@@ -109,7 +109,7 @@ impl RuntimeSessionService {
 
     /// Returns the current pane project scope used by runtime memory actions.
     fn memory_action_project_scope(&self, pane_id: &str) -> Option<mez_agent::memory::MemoryScope> {
-        self.pane_current_working_directory(pane_id).map(|root| {
+        self.agent_effective_working_directory(pane_id).map(|root| {
             mez_agent::memory::MemoryScope::Project {
                 root: crate::security::project::discover_project_root(&root)
                     .to_string_lossy()

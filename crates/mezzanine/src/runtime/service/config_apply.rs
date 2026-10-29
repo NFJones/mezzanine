@@ -314,7 +314,7 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<usize> {
         self.refresh_project_trust_store_from_disk_if_changed()?;
-        let Some(current_dir) = self.pane_current_working_directory(pane_id) else {
+        let Some(current_dir) = self.agent_effective_working_directory(pane_id) else {
             return Ok(0);
         };
         let project_root = discover_project_root(&current_dir);

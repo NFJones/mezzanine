@@ -620,12 +620,9 @@ impl RuntimeSessionService {
                 body: agent_project_trust_pending_display(&pending),
             });
         }
-        let pane_current_working_directory = self.pane_current_working_directory(pane_id);
-        let selection = agent_resolve_project_trust_target(
-            args,
-            &pending,
-            pane_current_working_directory.as_deref(),
-        )?;
+        let agent_working_directory = self.agent_effective_working_directory(pane_id);
+        let selection =
+            agent_resolve_project_trust_target(args, &pending, agent_working_directory.as_deref())?;
         let (root, overlays) = match selection {
             AgentProjectTrustTarget::Pending(request) => {
                 (request.project_root, request.overlay_files.len())

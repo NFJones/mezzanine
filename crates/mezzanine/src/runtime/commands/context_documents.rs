@@ -112,7 +112,7 @@ impl RuntimeSessionService {
         config_root: &std::path::Path,
     ) -> String {
         let working_directory = self
-            .pane_current_working_directory(pane_id)
+            .agent_effective_working_directory(pane_id)
             .unwrap_or_else(|| config_root.to_path_buf());
         crate::security::project::discover_project_root(&working_directory)
             .to_string_lossy()

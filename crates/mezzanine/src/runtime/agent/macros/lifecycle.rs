@@ -35,7 +35,7 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `pane_id`: Pane whose working directory determines project scope.
     pub(super) fn trusted_macro_project_root_for_pane(&self, pane_id: &str) -> Option<PathBuf> {
-        self.trusted_project_root_for_pane(pane_id)
+        self.trusted_agent_project_root_for_pane(pane_id)
     }
 
     /// Registers one spawned subagent as macro-managed for one macro run.

@@ -107,7 +107,7 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `pane_id`: Pane whose working directory determines project scope.
     pub(crate) fn trusted_skill_project_root_for_pane(&self, pane_id: &str) -> Option<PathBuf> {
-        self.trusted_project_root_for_pane(pane_id)
+        self.trusted_agent_project_root_for_pane(pane_id)
     }
 
     /// Builds the currently loaded skill context state for one active turn.

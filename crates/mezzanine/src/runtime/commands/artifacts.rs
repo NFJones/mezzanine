@@ -113,7 +113,7 @@ impl RuntimeSessionService {
                 )
             })?;
         let working_directory = self
-            .pane_current_working_directory(pane_id)
+            .agent_effective_working_directory(pane_id)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
         let target = working_directory.join("AGENTS.md");

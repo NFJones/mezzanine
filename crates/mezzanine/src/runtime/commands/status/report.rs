@@ -224,7 +224,7 @@ impl RuntimeSessionService {
         } else {
             None
         };
-        let active_project = self.cached_accounting_project_for_pane(pane);
+        let active_project = self.cached_agent_accounting_project_for_pane(pane);
         if options.scope == StatusScope::Project && active_project.is_none() {
             return Err(MezError::invalid_state(
                 "active-project-unavailable: no eligible qualified accounting project",
@@ -243,7 +243,7 @@ impl RuntimeSessionService {
             terminal_overlay_generation: None,
             terminal: false,
             process,
-            cwd: self.pane_current_working_directory(pane),
+            cwd: self.agent_effective_working_directory(pane),
             active_project,
             options,
             now: self.persistence.token_usage_time(),
@@ -278,8 +278,8 @@ impl RuntimeSessionService {
                         })
                 }
             }
-            && self.pane_current_working_directory(&work.pane) == work.cwd
-            && self.cached_accounting_project_for_pane(&work.pane) == work.active_project
+            && self.agent_effective_working_directory(&work.pane) == work.cwd
+            && self.cached_agent_accounting_project_for_pane(&work.pane) == work.active_project
     }
 }
 

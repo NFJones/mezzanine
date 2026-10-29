@@ -534,7 +534,7 @@ impl RuntimeSessionService {
                 )
             })?;
             let maximum_authority = self.bubblewrap_path_scopes_for_turn(turn, evaluation)?;
-            let trusted_project_root = self.trusted_project_root_for_pane(&turn.pane_id);
+            let trusted_project_root = self.trusted_agent_project_root_for_pane(&turn.pane_id);
             let managed_home = match (
                 self.integration.config_root(),
                 trusted_project_root.as_ref(),
@@ -1431,7 +1431,7 @@ impl RuntimeSessionService {
             };
             return self.with_seatbelt_toolchain_reads(pane_id, status);
         }
-        let Some(provenance) = self.project_trust_provenance_for_pane(pane_id) else {
+        let Some(provenance) = self.agent_project_trust_provenance_for_pane(pane_id) else {
             return RuntimePrimaryPathScopeStatus::none();
         };
         if let ProjectTrustProvenance::TrustedRoot(project_root) = &provenance {
@@ -1467,6 +1467,25 @@ impl RuntimeSessionService {
         let working_directory = self.pane_current_working_directory(pane_id)?;
         let store = self.integration.project_trust_store()?;
         Some(resolve_project_trust_provenance(store, &working_directory))
+    }
+
+    /// Resolves project trust for the agent's current effective workspace.
+    /// Navigation selects a stored decision; it never grants trust to a target.
+    pub(crate) fn agent_project_trust_provenance_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Option<ProjectTrustProvenance> {
+        let directory = self.agent_effective_working_directory(pane_id)?;
+        let store = self.integration.project_trust_store()?;
+        Some(resolve_project_trust_provenance(store, &directory))
+    }
+
+    /// Returns the deepest already trusted agent workspace, independently of
+    /// observed pane cwd used by external harness enrollment and accounting.
+    pub(crate) fn trusted_agent_project_root_for_pane(&self, pane_id: &str) -> Option<PathBuf> {
+        self.agent_project_trust_provenance_for_pane(pane_id)?
+            .trusted_root()
+            .map(Path::to_path_buf)
     }
 
     /// Returns the deepest trusted project containing the pane directory.
@@ -1514,7 +1533,7 @@ impl RuntimeSessionService {
         if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
             return None;
         }
-        let provenance = self.project_trust_provenance_for_pane(pane_id)?;
+        let provenance = self.agent_project_trust_provenance_for_pane(pane_id)?;
         if let Some((root, state)) = provenance.negative_decision() {
             let state = match state {
                 TrustDecision::Revoked => "revoked",

@@ -95,7 +95,7 @@ impl RuntimeSessionService {
         let commands = resolve_external_editor_commands(
             self.external_editor_config(),
             self.pane_environment_path(pane_id).as_deref(),
-            self.pane_current_working_directory(pane_id).as_deref(),
+            self.agent_effective_working_directory(pane_id).as_deref(),
             &planned_draft_path,
         )?;
         let runner_manifest = external_editor_runner_manifest(&commands)?;
@@ -152,7 +152,7 @@ impl RuntimeSessionService {
             ],
             &environment,
             size,
-            self.pane_current_working_directory(pane_id).as_deref(),
+            self.agent_effective_working_directory(pane_id).as_deref(),
             reservation,
         )
         .map_err(|error| {

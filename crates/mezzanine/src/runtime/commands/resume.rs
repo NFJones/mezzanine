@@ -766,7 +766,7 @@ impl RuntimeSessionService {
                 .as_ref()
                 .and_then(|prepared| prepared.project_scope.clone())
                 .or_else(|| {
-                    let working_directory = self.pane_current_working_directory(pane_id)?;
+                    let working_directory = self.agent_effective_working_directory(pane_id)?;
                     let root = crate::security::project::discover_project_root(&working_directory);
                     let root = std::fs::canonicalize(root).ok()?;
                     Some(mez_agent::messaging::ProjectMembership::from_canonical_root(root))
@@ -1158,7 +1158,7 @@ impl RuntimeSessionService {
             });
         };
         let directory = self
-            .pane_current_working_directory(pane_id)
+            .agent_effective_working_directory(pane_id)
             .and_then(|path| {
                 crate::storage::transcript::saved_session_project_root(Some(
                     &path.to_string_lossy(),
@@ -1848,7 +1848,7 @@ impl RuntimeSessionService {
                 "source pane not found",
             )
         })?;
-        let source_start_directory = self.pane_current_working_directory(pane_id);
+        let source_start_directory = self.agent_effective_working_directory(pane_id);
         let prompt_seed = read.prompt_seed.clone();
         let copied_shell_mode = self.agent_shell_mode_override(pane_id);
         let startup_mode = copied_shell_mode.unwrap_or_else(|| self.agent_default_shell_mode());

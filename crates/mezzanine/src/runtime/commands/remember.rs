@@ -436,7 +436,7 @@ impl RuntimeSessionService {
                 .get(pane_id)
                 .map(|session| session.session_id.clone())
                 .unwrap_or_else(|| format!("pane:{pane_id}")),
-            accounting_origin: self.capture_accounting_origin_for_pane(pane_id),
+            accounting_origin: self.capture_agent_accounting_origin_for_pane(pane_id),
             observation_id: crate::storage::token_usage::new_token_usage_event_id(),
             model_profile_name: model_profile_name.clone(),
             model_profile: model_profile.clone(),
@@ -640,7 +640,7 @@ impl RuntimeSessionService {
 
     /// Builds the durable memory scope used for `/remember` records.
     pub(crate) fn runtime_remember_scope_for_pane(&self, pane_id: &str) -> MemoryScope {
-        self.pane_current_working_directory(pane_id)
+        self.agent_effective_working_directory(pane_id)
             .map(|path| MemoryScope::Project {
                 root: discover_project_root(&path).to_string_lossy().into_owned(),
             })

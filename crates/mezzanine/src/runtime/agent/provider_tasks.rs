@@ -204,7 +204,7 @@ impl RuntimeSessionService {
             turn_id.to_string(),
             RuntimeAgentProviderClaim {
                 turn_id: turn_id.to_string(),
-                accounting_origin: self.capture_accounting_origin_for_pane(&turn.pane_id),
+                accounting_origin: self.capture_agent_accounting_origin_for_pane(&turn.pane_id),
                 conversation_id: turn.conversation_id,
                 agent_id: turn.agent_id,
                 provider_owner: None,
@@ -1251,7 +1251,7 @@ impl RuntimeSessionService {
         );
         self.note_completion_optional_error(turn_id, trace);
         Ok(Some(RuntimeAgentProviderDispatch {
-            accounting_origin: self.capture_accounting_origin_for_pane(&turn.pane_id),
+            accounting_origin: self.capture_agent_accounting_origin_for_pane(&turn.pane_id),
             macro_bridge_recipients: self.macro_bridge_message_recipient_ids(&turn.turn_id),
             claim_generation: 0,
             turn_limits: mez_agent::AgentTurnLimits {

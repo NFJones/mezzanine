@@ -381,7 +381,7 @@ impl RuntimeSessionService {
                     );
                 };
                 let working_directory = self
-                    .pane_current_working_directory(pane_id)
+                    .agent_effective_working_directory(pane_id)
                     .unwrap_or_else(|| config_root.clone());
                 RuntimeAgentCommandPrepared::IssueStore {
                     database_path: super::issues::runtime_issue_database_path(self, &config_root),
@@ -406,7 +406,7 @@ impl RuntimeSessionService {
                     );
                 };
                 let working_directory = self
-                    .pane_current_working_directory(pane_id)
+                    .agent_effective_working_directory(pane_id)
                     .unwrap_or_else(|| config_root.clone());
                 RuntimeAgentCommandPrepared::IssueBrowser {
                     database_path: super::issues::runtime_issue_database_path(self, &config_root),
@@ -516,7 +516,7 @@ impl RuntimeSessionService {
                     );
                 };
                 let directory = self
-                    .pane_current_working_directory(pane_id)
+                    .agent_effective_working_directory(pane_id)
                     .and_then(|path| {
                         crate::storage::transcript::saved_session_project_root(Some(
                             &path.to_string_lossy(),
@@ -585,7 +585,7 @@ impl RuntimeSessionService {
                         history_rotate_lines: self.terminal_history_rotate_lines(),
                         agent_session,
                         mezzanine_session_id: self.session.id.as_str().to_string(),
-                        working_directory: self.pane_current_working_directory(pane_id),
+                        working_directory: self.agent_effective_working_directory(pane_id),
                         presentation_source_revision,
                     }),
                 }

@@ -666,7 +666,7 @@ impl RuntimeSessionService {
             RuntimeAgentSessionTitleTask {
                 dispatch_id: crate::storage::token_usage::new_token_usage_event_id(),
                 attempt_id: String::new(),
-                accounting_origin: self.capture_accounting_origin_for_pane(pane_id),
+                accounting_origin: self.capture_agent_accounting_origin_for_pane(pane_id),
                 pane_process: self.pane_process_identity(pane_id).ok(),
                 conversation_id: conversation_id.to_string(),
                 pane_id: pane_id.to_string(),

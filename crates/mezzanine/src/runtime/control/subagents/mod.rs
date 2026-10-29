@@ -1499,7 +1499,7 @@ impl RuntimeSessionService {
     /// Returns the best known working directory for the parent agent pane.
     fn subagent_parent_working_directory(&self, parent_agent_id: &str) -> Option<PathBuf> {
         let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
-        self.pane_current_working_directory(parent_pane_id.as_str())
+        self.agent_effective_working_directory(parent_pane_id.as_str())
     }
 
     /// Returns the genuine parent authority that may be inherited by a new child.
@@ -1524,7 +1524,7 @@ impl RuntimeSessionService {
             return None;
         }
         let current_directory = self
-            .pane_current_working_directory(parent_pane_id.as_str())
+            .agent_effective_working_directory(parent_pane_id.as_str())
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_else(|| ".".to_string());
         let (mut read_scopes, write_scopes) =

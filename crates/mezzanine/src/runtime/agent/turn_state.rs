@@ -3,7 +3,8 @@
 //! These four stores form the mutable core of application-side agent turns.
 //! They are private fields of `RuntimeAgentComponent`; crate-local accessors
 //! keep their ownership explicit while callers migrate toward narrower turn
-//! lifecycle operations.
+//! lifecycle operations. Native workspace intent is selected through the exact
+//! session owner without rewriting observed pane cwd or borrowing another pane.
 
 use super::{RuntimeAgentComponent, RuntimeSessionService};
 use mez_agent::{AgentContext, AgentShellStore, AgentTurnExecution, AgentTurnLedger};
@@ -24,6 +25,27 @@ impl RuntimeSessionService {
     /// Returns pane-scoped agent shell sessions for lifecycle mutation.
     pub(crate) fn agent_shell_store_mut(&mut self) -> &mut AgentShellStore {
         &mut self.agent.agent_shell_store
+    }
+
+    /// Returns the agent workspace directory without rewriting pane observations.
+    /// Exact native navigation intent wins only in Native mode; initial state,
+    /// other modes and panes without an agent retain the existing best-known
+    /// pane-directory fallback. The launch owner independently qualifies its
+    /// initial native root context; this getter grants no filesystem authority.
+    pub(crate) fn agent_effective_working_directory(
+        &self,
+        pane_id: &str,
+    ) -> Option<std::path::PathBuf> {
+        if self.effective_agent_shell_mode_for_pane(pane_id)
+            == crate::runtime::config::ShellMode::Native
+            && let Some(directory) = self
+                .agent_shell_store()
+                .get(pane_id)
+                .and_then(|session| session.native_working_directory())
+        {
+            return Some(directory.to_path_buf());
+        }
+        self.pane_current_working_directory(pane_id)
     }
 
     /// Returns the canonical agent turn ledger for read-only inspection.

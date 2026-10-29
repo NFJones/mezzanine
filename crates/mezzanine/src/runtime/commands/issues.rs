@@ -34,7 +34,7 @@ pub(super) fn execute_agent_shell_issue_command(
         ));
     };
     let working_directory = service
-        .pane_current_working_directory(pane_id)
+        .agent_effective_working_directory(pane_id)
         .unwrap_or_else(|| config_root.clone());
     let project = crate::storage::issues::project_key_for_working_directory(working_directory);
     let store = crate::storage::issues::IssueStore::from_database_path(

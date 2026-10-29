@@ -778,18 +778,18 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn queue_blocked_approval(&mut self, request: BlockedApprovalRequest) -> Result<String> {
-        let binding =
-            self.pane_current_working_directory(&request.pane_id)
-                .map(|working_directory| {
-                    (
-                        crate::security::project::discover_project_root(&working_directory),
-                        working_directory,
-                        exact_command_sha256(
-                            DEFAULT_COMMAND_SHELL_CLASSIFICATION,
-                            &normalize_exact_command_text(&request.action_summary, false),
-                        ),
-                    )
-                });
+        let binding = self
+            .agent_effective_working_directory(&request.pane_id)
+            .map(|working_directory| {
+                (
+                    crate::security::project::discover_project_root(&working_directory),
+                    working_directory,
+                    exact_command_sha256(
+                        DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+                        &normalize_exact_command_text(&request.action_summary, false),
+                    ),
+                )
+            });
         let approval_id = self
             .integration
             .blocked_approvals_mut()

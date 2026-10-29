@@ -320,7 +320,7 @@ pub(super) enum AgentProjectTrustTarget {
 pub(super) fn agent_resolve_project_trust_target(
     args: &str,
     pending: &[AgentProjectTrustRequest],
-    pane_current_working_directory: Option<&Path>,
+    working_directory: Option<&Path>,
 ) -> Result<AgentProjectTrustTarget> {
     let args = args.trim();
     match args {
@@ -345,7 +345,7 @@ pub(super) fn agent_resolve_project_trust_target(
             let requested_path = if path.is_absolute() {
                 path
             } else {
-                pane_current_working_directory
+                working_directory
                     .ok_or_else(|| {
                         MezError::invalid_state(
                             "relative trust paths require the active pane working directory",

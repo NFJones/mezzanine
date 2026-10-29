@@ -334,7 +334,7 @@ impl RuntimeSessionService {
         }
         self.poll_agent_prompt_selector_extra_candidates_refresh(pane_id);
         self.initialize_agent_prompt_in_memory_selector_candidates(pane_id);
-        let selector_working_directory = self.pane_current_working_directory(pane_id);
+        let selector_working_directory = self.agent_effective_working_directory(pane_id);
         let prompt_body_columns = self
             .agent_prompt_editable_body_width(pane_id)
             .unwrap_or(1)

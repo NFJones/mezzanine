@@ -402,7 +402,7 @@ impl RuntimeSessionService {
             ));
         };
         let working_directory = self
-            .pane_current_working_directory(pane_id)
+            .agent_effective_working_directory(pane_id)
             .unwrap_or_else(|| config_root.clone());
         let current_project =
             crate::storage::issues::project_key_for_working_directory(working_directory);
@@ -1904,7 +1904,7 @@ fn record_browser_save_destination(
         return path;
     }
     service
-        .pane_current_working_directory(pane_id)
+        .agent_effective_working_directory(pane_id)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
         .join(path)
 }

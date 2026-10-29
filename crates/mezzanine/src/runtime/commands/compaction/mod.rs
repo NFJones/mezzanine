@@ -840,7 +840,7 @@ impl RuntimeSessionService {
                 selective_history,
                 projection.clone(),
                 retained_transcript_entries,
-                self.capture_accounting_origin_for_pane(pane_id),
+                self.capture_agent_accounting_origin_for_pane(pane_id),
             );
             #[cfg(test)]
             let work = work.with_probe(self.manual_compaction_request_probe_for_tests());
@@ -893,7 +893,7 @@ impl RuntimeSessionService {
                     summary_budget_words,
                 ),
             pane_id: pane_id.to_string(),
-            accounting_origin: self.capture_accounting_origin_for_pane(pane_id),
+            accounting_origin: self.capture_agent_accounting_origin_for_pane(pane_id),
             conversation_id: conversation_id.clone(),
             source: source.to_string(),
             transcript_entries,
@@ -1068,7 +1068,7 @@ impl RuntimeSessionService {
             transport_retry_delay_ms: None,
             summary_correction: Default::default(),
             pane_id: turn.pane_id.clone(),
-            accounting_origin: self.capture_accounting_origin_for_pane(&turn.pane_id),
+            accounting_origin: self.capture_agent_accounting_origin_for_pane(&turn.pane_id),
             conversation_id,
             source: match trigger {
                 RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => {

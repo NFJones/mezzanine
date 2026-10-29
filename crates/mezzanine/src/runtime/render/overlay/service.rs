@@ -1600,7 +1600,7 @@ impl RuntimeSessionService {
                     _ => {
                         let candidates = record_browser_save_path_candidates(
                             &prompt_text,
-                            self.pane_current_working_directory(pane_id).as_deref(),
+                            self.agent_effective_working_directory(pane_id).as_deref(),
                         )
                         .into_iter()
                         .map(|candidate| candidate.value)
@@ -1650,7 +1650,7 @@ impl RuntimeSessionService {
             let save_completion = save_prompt_pane_id.as_ref().and_then(|pane_id| {
                 record_browser_save_path_candidates(
                     &text,
-                    self.pane_current_working_directory(pane_id).as_deref(),
+                    self.agent_effective_working_directory(pane_id).as_deref(),
                 )
                 .into_iter()
                 .find_map(|candidate| candidate.value.strip_prefix(&text).map(str::to_string))

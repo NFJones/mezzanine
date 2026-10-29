@@ -417,7 +417,7 @@ pub(crate) fn issue_action_project(
     config_root: &Path,
 ) -> String {
     service
-        .pane_current_working_directory(&turn.pane_id)
+        .agent_effective_working_directory(&turn.pane_id)
         .unwrap_or_else(|| config_root.to_path_buf())
         .pipe(crate::storage::issues::project_key_for_working_directory)
 }

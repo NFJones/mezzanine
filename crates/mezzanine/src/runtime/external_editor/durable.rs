@@ -384,7 +384,7 @@ impl RuntimeSessionService {
     fn external_editor_issue_store(&self, pane_id: &str) -> Result<(IssueStore, String)> {
         let config_root = self.external_editor_config_root()?;
         let working_directory = self
-            .pane_current_working_directory(pane_id)
+            .agent_effective_working_directory(pane_id)
             .unwrap_or_else(|| config_root.clone());
         let project = crate::storage::issues::project_key_for_working_directory(working_directory);
         let store = IssueStore::from_database_path(runtime_issue_database_path(self, &config_root));

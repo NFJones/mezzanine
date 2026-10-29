@@ -21,7 +21,11 @@ fn runtime_status_scopes_missing_and_nested_denial_fail_without_claim() {
         .unwrap();
     service.set_project_trust_store(trust, None);
     service.set_pane_current_working_directory("%1", nested);
-    assert!(service.cached_accounting_project_for_pane("%1").is_none());
+    assert!(
+        service
+            .cached_agent_accounting_project_for_pane("%1")
+            .is_none()
+    );
     let error = service
         .dispatch_deferred_agent_shell_command(
             &client,

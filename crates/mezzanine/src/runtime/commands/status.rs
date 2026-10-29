@@ -208,7 +208,7 @@ impl RuntimeSessionService {
             .map(|descriptor| descriptor.window_id.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         let current_working_directory = self
-            .pane_current_working_directory(pane_id)
+            .agent_effective_working_directory(pane_id)
             .map(|path| path.to_string_lossy().to_string())
             .unwrap_or_else(|| "unknown".to_string());
         let (model_profile_name, model_profile) =

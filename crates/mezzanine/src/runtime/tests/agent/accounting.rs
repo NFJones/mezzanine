@@ -250,7 +250,7 @@ async fn runtime_accounting_origin_rejects_stale_preparation_inventory() {
     service.apply_agent_provider_preparation(outcome).unwrap();
     assert!(service.persistence.accounting_projects().is_none());
     assert_eq!(
-        service.capture_accounting_origin_for_pane("%1"),
+        service.capture_agent_accounting_origin_for_pane("%1"),
         AccountingOrigin::Unattributed
     );
     fs::remove_dir_all(base).unwrap();
@@ -313,7 +313,10 @@ async fn runtime_accounting_origin_production_dispatch_retains_frozen_project() 
     let frozen = dispatch.accounting_origin.clone();
     assert!(matches!(frozen, AccountingOrigin::Project(_)));
     service.set_pane_current_working_directory("%1".to_string(), b);
-    assert_ne!(service.capture_accounting_origin_for_pane("%1"), frozen);
+    assert_ne!(
+        service.capture_agent_accounting_origin_for_pane("%1"),
+        frozen
+    );
     service
         .record_claimed_agent_provider_task(&dispatch, 7, 30_000)
         .unwrap();
@@ -743,7 +746,7 @@ async fn runtime_accounting_origin_freezes_claim_and_rechecks_current_trust() {
         .start_agent_prompt_turn("%1", "capture accounting origin")
         .unwrap();
     assert_eq!(
-        service.capture_accounting_origin_for_pane("%1"),
+        service.capture_agent_accounting_origin_for_pane("%1"),
         AccountingOrigin::Unattributed
     );
     let preparation = service
@@ -751,13 +754,13 @@ async fn runtime_accounting_origin_freezes_claim_and_rechecks_current_trust() {
         .unwrap();
     let outcome = RuntimeSessionService::execute_agent_provider_preparation(preparation).await;
     service.apply_agent_provider_preparation(outcome).unwrap();
-    let origin_a = service.capture_accounting_origin_for_pane("%1");
+    let origin_a = service.capture_agent_accounting_origin_for_pane("%1");
     assert!(matches!(origin_a, AccountingOrigin::Project(_)));
     service
         .record_claimed_agent_provider_context_for_tests(&started.turn_id, 0)
         .unwrap();
     service.set_pane_current_working_directory("%1".to_string(), b.clone());
-    let origin_b = service.capture_accounting_origin_for_pane("%1");
+    let origin_b = service.capture_agent_accounting_origin_for_pane("%1");
     assert!(matches!(origin_b, AccountingOrigin::Project(_)));
     assert_ne!(origin_a, origin_b);
     assert_eq!(
@@ -769,7 +772,7 @@ async fn runtime_accounting_origin_freezes_claim_and_rechecks_current_trust() {
         service.set_project_trust_store(trust.clone(), None);
         service.set_pane_current_working_directory("%1".to_string(), nested.clone());
         assert_eq!(
-            service.capture_accounting_origin_for_pane("%1"),
+            service.capture_agent_accounting_origin_for_pane("%1"),
             AccountingOrigin::Unattributed
         );
         assert_eq!(
@@ -779,7 +782,7 @@ async fn runtime_accounting_origin_freezes_claim_and_rechecks_current_trust() {
     }
     service.set_project_trust_store(ProjectTrustStore::default(), None);
     assert_eq!(
-        service.capture_accounting_origin_for_pane("%1"),
+        service.capture_agent_accounting_origin_for_pane("%1"),
         AccountingOrigin::Unattributed
     );
     fs::remove_dir_all(base).unwrap();
