@@ -8462,7 +8462,11 @@ configured scopes define maximum filesystem authority and MUST be resolved in
 the pane environment. The live user configuration root's `skills` and `macros`
 directories MUST be added to both effective read and write authority so built-in
 authoring workflows can manage user-scoped artifacts. These code-owned scopes
-MUST be additive and MUST NOT replace explicitly configured scopes. When both
+MUST be additive and MUST NOT replace explicitly configured scopes. Their
+controller-owned provenance MUST remain distinct from user scope declarations;
+adding a managed catalog root MUST NOT suppress trusted-project fallback or
+short-circuit a withheld-project action-admission denial. An actual user scope
+that deliberately names a catalog root remains explicit. When both user
 configured scope arrays are empty, a pane
 within an explicitly trusted project MUST receive that project root as its
 default read-write authority. On macOS, the code-owned Seatbelt runtime profile

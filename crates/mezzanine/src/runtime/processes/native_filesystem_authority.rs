@@ -23,22 +23,19 @@ impl RuntimeSessionService {
     ) -> Result<Option<PathScopes>> {
         self.refresh_project_trust_store_from_disk_if_changed()?;
         let resources = &self.configured_permissions().resources;
-        let (mut reads, writes) =
-            if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
-                (
-                    resources.read_scopes.clone(),
-                    resources.write_scopes.clone(),
-                )
-            } else if let Some(root) = self.integration.project_trust_store().and_then(|store| {
-                crate::security::project::resolve_project_trust_provenance(store, cwd)
-                    .trusted_root()
-                    .map(Path::to_path_buf)
-            }) {
-                let root = root.to_string_lossy().into_owned();
-                (vec![root.clone()], vec![root])
-            } else {
-                return Ok(None);
-            };
+        let trust = if resources.has_user_path_scope_declarations() {
+            None
+        } else {
+            self.project_trust_store()
+                .map(|store| crate::security::project::resolve_project_trust_provenance(store, cwd))
+        };
+        let status = crate::runtime::agent::RuntimePrimaryPathScopeStatus::from_resources_and_trust(
+            resources, trust,
+        );
+        let (mut reads, writes) = (status.read_scopes, status.write_scopes);
+        if reads.is_empty() && writes.is_empty() {
+            return Ok(None);
+        }
         #[cfg(target_os = "macos")]
         for root in self.seatbelt_toolchain_read_scopes_for_pane(&turn.pane_id) {
             // Optional loader reads must not invalidate otherwise authorized

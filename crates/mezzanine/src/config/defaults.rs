@@ -1082,6 +1082,8 @@ sandbox = "bubblewrap"
 # Values remain redacted and are never inherited from the Mez daemon environment.
 env_whitelist = ["PATH", "HOME", "SHELL", "TMPDIR", "XDG_CACHE_HOME"]
 # Add names such as `ACME_HOME` here only when the workload requires them.
+# Managed skills/macros access is additive; it does not count as an explicit
+# user scope list or disable the default grant of an already trusted project.
 # Scope paths may name files or directories. A Unix-domain socket may also be
 # placed in read_scopes for an explicitly trusted service endpoint; a read-only
 # mount does not make requests sent through that socket read-only.

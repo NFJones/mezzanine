@@ -110,7 +110,14 @@ supported workflows, and recheck effective layers and scopes before continuing.
 
 When both `permissions.read_scopes` and `permissions.write_scopes` are empty,
 a trusted root supplies default project read/write authority. The deepest
-stored decision governing the working directory wins:
+stored decision governing the working directory wins. Mez also adds bounded
+read/write access to its managed `skills` and `macros` directories. Those
+controller grants remain separate from user declarations: they do not suppress
+project fallback or bypass a rejected, revoked or pending project's shell/patch
+admission fence. Deliberately naming a catalog root in a user scope list is an
+explicit grant, with the same precedence as any other explicit scope.
+
+For project fallback:
 
 - A deeper trusted root narrows the implicit project root to that root.
 - A deeper rejected or revoked root withholds implicit authority even under a
@@ -125,6 +132,13 @@ nested rejection can stop its overlays even without a separate Git marker.
 Stored records from incompatible trust-policy or configuration-schema versions
 do not count as current decisions. Check effective status after an upgrade
 rather than assuming an old record still grants authority.
+
+Status reports `managed-catalog` when only the automatic catalog contribution
+applies and no stored project decision governs the working directory. It reports
+`trusted-project` when an existing trusted root also supplies project authority.
+Scope intersections still apply to children; catalog access never enlarges a
+child's frozen grants. Configuration reload rebuilds controller provenance for
+the current config root.
 
 Status reports withheld provenance as `project-trust-rejected`,
 `project-trust-revoked`, or `project-trust-pending`, together with its governing

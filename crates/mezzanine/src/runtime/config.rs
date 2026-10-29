@@ -100,11 +100,12 @@ pub(super) use model::{
 pub(crate) use permissions::runtime_configured_permissions_from_config_for_platform;
 pub(crate) use permissions::{
     BubblewrapConfig, ConfiguredPermissions, ConfiguredSandboxEnvironment, ConfiguredSandboxGroups,
-    NetworkPolicy, SandboxBackend, SandboxConfig, SandboxEnvironmentPolicy, SandboxNetworkMode,
-    SandboxUnavailablePolicy, SeatbeltConfig, runtime_approval_decision_name_to_kind,
-    runtime_blocked_approval_request, runtime_config_permission_preset,
-    runtime_configured_permissions_from_config, runtime_message_recipient,
-    runtime_message_recipient_decision, runtime_message_scope, sandbox_applies_to_policy,
+    NetworkPolicy, ResourceAuthorityConfig, SandboxBackend, SandboxConfig,
+    SandboxEnvironmentPolicy, SandboxNetworkMode, SandboxUnavailablePolicy, SeatbeltConfig,
+    runtime_approval_decision_name_to_kind, runtime_blocked_approval_request,
+    runtime_config_permission_preset, runtime_configured_permissions_from_config,
+    runtime_message_recipient, runtime_message_recipient_decision, runtime_message_scope,
+    sandbox_applies_to_policy,
 };
 pub(super) use providers::{
     runtime_default_config_model_records, runtime_preset_registry_from_config,

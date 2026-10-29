@@ -730,23 +730,9 @@ impl RuntimeSessionService {
                         .join(directory_name)
                         .to_string_lossy()
                         .into_owned();
-                    if !configured_permissions
+                    configured_permissions
                         .resources
-                        .read_scopes
-                        .contains(&scope)
-                    {
-                        configured_permissions
-                            .resources
-                            .read_scopes
-                            .push(scope.clone());
-                    }
-                    if !configured_permissions
-                        .resources
-                        .write_scopes
-                        .contains(&scope)
-                    {
-                        configured_permissions.resources.write_scopes.push(scope);
-                    }
+                        .add_managed_catalog_scope(scope);
                 }
             }
             if let Some(active) = self.integration.live_approval_bypass_override() {

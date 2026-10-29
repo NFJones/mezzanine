@@ -82,6 +82,10 @@ pub(crate) struct ResourceAuthorityConfig {
     pub(crate) read_scopes: Vec<String>,
     /// Paths that may be projected read-write into a sandbox.
     pub(crate) write_scopes: Vec<String>,
+    /// Roots added solely for controller-managed catalog maintenance. These
+    /// remain real bounded grants but are not user scope declarations and must
+    /// not suppress implicit deepest-project-trust selection.
+    managed_catalog_scopes: std::collections::BTreeSet<String>,
     /// Authorization policy for commands requiring network access.
     pub(crate) network_policy: NetworkPolicy,
 }
@@ -91,8 +95,35 @@ impl Default for ResourceAuthorityConfig {
         Self {
             read_scopes: Vec::new(),
             write_scopes: Vec::new(),
+            managed_catalog_scopes: std::collections::BTreeSet::new(),
             network_policy: NetworkPolicy::Prompt,
         }
+    }
+}
+
+impl ResourceAuthorityConfig {
+    /// Adds the existing catalog-maintenance grant without relabeling an
+    /// already declared user scope. Explicitly naming a catalog root remains
+    /// an explicit policy choice and therefore continues to suppress fallback.
+    pub(crate) fn add_managed_catalog_scope(&mut self, scope: String) {
+        if !self.read_scopes.contains(&scope) && !self.write_scopes.contains(&scope) {
+            self.managed_catalog_scopes.insert(scope.clone());
+        }
+        if !self.read_scopes.contains(&scope) {
+            self.read_scopes.push(scope.clone());
+        }
+        if !self.write_scopes.contains(&scope) {
+            self.write_scopes.push(scope);
+        }
+    }
+
+    /// Reports whether the user supplied any scope, excluding only paths whose
+    /// sole provenance is this runtime's managed catalog contribution.
+    pub(crate) fn has_user_path_scope_declarations(&self) -> bool {
+        self.read_scopes
+            .iter()
+            .chain(&self.write_scopes)
+            .any(|scope| !self.managed_catalog_scopes.contains(scope))
     }
 }
 
@@ -884,6 +915,7 @@ fn runtime_configured_permissions_from_config_unchecked_for_platform(
         resources: ResourceAuthorityConfig {
             read_scopes,
             write_scopes,
+            managed_catalog_scopes: std::collections::BTreeSet::new(),
             network_policy,
         },
         env_whitelist,

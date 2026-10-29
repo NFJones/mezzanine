@@ -632,6 +632,8 @@ approval_policy = "ask"
 # /usr/bin/sandbox-exec is executable. Either platform uses policy-only when its
 # fixed executable is absent; other platforms always use policy-only.
 sandbox = "bubblewrap"
+# Managed skills/macros access is additive; it does not count as an explicit
+# user scope list or disable the default grant of an already trusted project.
 # Scope paths may name files or directories. A Unix-domain socket may also be
 # placed in read_scopes for an explicitly trusted service endpoint; a read-only
 # mount does not make requests sent through that socket read-only.

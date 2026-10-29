@@ -3,7 +3,9 @@
 //! This module owns pane readiness state, shell action transaction dispatch,
 //! scoped path/permission helpers, and provider-continuation wakeups tied to
 //! shell readiness. It is shared by action execution, process observation, and
-//! command/control paths.
+//! command/control paths. Scope selection distinguishes bounded controller
+//! catalog contributions from explicit user declarations before applying deepest
+//! project trust; all native consumers share that data-only selection rule.
 
 use super::{
     AgentAction, AgentActionPayload, AgentTurnRecord, AgentTurnState, ApplyPatchTransactionPhase,
@@ -40,7 +42,8 @@ pub(crate) struct RuntimePrimaryPathScopeStatus {
     pub(crate) read_scopes: Vec<String>,
     /// Effective write authority before pane-shell canonicalization.
     pub(crate) write_scopes: Vec<String>,
-    /// Stable provenance name: `explicit`, `trusted-project`, or `none`.
+    /// Stable provenance: explicit user, trusted project, managed catalog only,
+    /// no grant, or the deepest stored negative project decision.
     pub(crate) provenance: &'static str,
     /// Selected trusted root when project trust supplied the authority.
     pub(crate) trusted_project_root: Option<String>,
@@ -50,15 +53,52 @@ pub(crate) struct RuntimePrimaryPathScopeStatus {
 }
 
 impl RuntimePrimaryPathScopeStatus {
-    /// Builds the no-authority projection used when no decision applies.
-    fn none() -> Self {
-        Self {
-            read_scopes: Vec::new(),
-            write_scopes: Vec::new(),
-            provenance: "none",
+    /// Selects explicit declarations or deepest project trust, retaining
+    /// additive catalog grants without confusing their provenance with user
+    /// policy. Callers supply their own qualified cwd's trust result, keeping
+    /// agent navigation separate from actual-pane status-provider context.
+    pub(crate) fn from_resources_and_trust(
+        resources: &crate::runtime::config::ResourceAuthorityConfig,
+        trust: Option<ProjectTrustProvenance>,
+    ) -> Self {
+        let mut status = Self {
+            read_scopes: resources.read_scopes.clone(),
+            write_scopes: resources.write_scopes.clone(),
+            provenance: if resources.read_scopes.is_empty() && resources.write_scopes.is_empty() {
+                "none"
+            } else {
+                "managed-catalog"
+            },
             trusted_project_root: None,
             denied_project_root: None,
+        };
+        if resources.has_user_path_scope_declarations() {
+            status.provenance = "explicit";
+            return status;
         }
+        let Some(trust) = trust else { return status };
+        if let ProjectTrustProvenance::TrustedRoot(root) = &trust {
+            let Some(root) = root.to_str() else {
+                status.provenance = "unavailable-project-path";
+                return status;
+            };
+            let root = root.to_string();
+            if !status.read_scopes.contains(&root) {
+                status.read_scopes.push(root.clone());
+            }
+            if !status.write_scopes.contains(&root) {
+                status.write_scopes.push(root.clone());
+            }
+            status.provenance = "trusted-project";
+            status.trusted_project_root = Some(root);
+        } else if let Some(provenance) = trust.withheld_provenance() {
+            status.provenance = provenance;
+            status.denied_project_root = trust
+                .governing_root()
+                .and_then(Path::to_str)
+                .map(str::to_string);
+        }
+        status
     }
 }
 
@@ -1421,41 +1461,16 @@ impl RuntimeSessionService {
     /// reads are appended after that selection, never replacing project trust.
     pub(crate) fn primary_path_scope_status(&self, pane_id: &str) -> RuntimePrimaryPathScopeStatus {
         let resources = &self.configured_permissions().resources;
-        if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
-            let status = RuntimePrimaryPathScopeStatus {
-                read_scopes: resources.read_scopes.clone(),
-                write_scopes: resources.write_scopes.clone(),
-                provenance: "explicit",
-                trusted_project_root: None,
-                denied_project_root: None,
-            };
-            return self.with_seatbelt_toolchain_reads(pane_id, status);
-        }
-        let Some(provenance) = self.agent_project_trust_provenance_for_pane(pane_id) else {
-            return RuntimePrimaryPathScopeStatus::none();
+        let trust = if resources.has_user_path_scope_declarations() {
+            None
+        } else {
+            self.agent_project_trust_provenance_for_pane(pane_id)
         };
-        if let ProjectTrustProvenance::TrustedRoot(project_root) = &provenance {
-            let project_root = project_root.to_string_lossy().into_owned();
-            let status = RuntimePrimaryPathScopeStatus {
-                read_scopes: vec![project_root.clone()],
-                write_scopes: vec![project_root.clone()],
-                provenance: "trusted-project",
-                trusted_project_root: Some(project_root),
-                denied_project_root: None,
-            };
-            return self.with_seatbelt_toolchain_reads(pane_id, status);
-        }
-        let Some(withheld_provenance) = provenance.withheld_provenance() else {
-            return RuntimePrimaryPathScopeStatus::none();
-        };
-        RuntimePrimaryPathScopeStatus {
-            read_scopes: Vec::new(),
-            write_scopes: Vec::new(),
-            provenance: withheld_provenance,
-            trusted_project_root: None,
-            denied_project_root: provenance
-                .governing_root()
-                .map(|root| root.to_string_lossy().into_owned()),
+        let status = RuntimePrimaryPathScopeStatus::from_resources_and_trust(resources, trust);
+        if status.read_scopes.is_empty() && status.write_scopes.is_empty() {
+            status
+        } else {
+            self.with_seatbelt_toolchain_reads(pane_id, status)
         }
     }
 
@@ -1530,7 +1545,7 @@ impl RuntimeSessionService {
     /// failure path.
     fn implicit_project_authority_denial_for_pane(&self, pane_id: &str) -> Option<MezError> {
         let resources = &self.configured_permissions().resources;
-        if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
+        if resources.has_user_path_scope_declarations() {
             return None;
         }
         let provenance = self.agent_project_trust_provenance_for_pane(pane_id)?;

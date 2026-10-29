@@ -262,6 +262,7 @@ mod subagents;
 mod trace;
 mod turn_state;
 
+pub(crate) use shell_state::RuntimePrimaryPathScopeStatus;
 #[cfg(test)]
 pub(crate) use shell_state::shell_transaction_output_max_raw_bytes;
 

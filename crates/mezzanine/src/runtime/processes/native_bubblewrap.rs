@@ -897,18 +897,23 @@ impl crate::runtime::RuntimeSessionService {
     ) -> Result<Option<PathScopes>> {
         self.refresh_project_trust_store_from_disk_if_changed()?;
         let resources = &self.configured_permissions().resources;
-        let (read_scopes, write_scopes) =
-            if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
-                (
-                    resources.read_scopes.clone(),
-                    resources.write_scopes.clone(),
+        let trust = if resources.has_user_path_scope_declarations() {
+            None
+        } else {
+            self.project_trust_store().map(|store| {
+                crate::security::project::resolve_project_trust_provenance(
+                    store,
+                    context.working_directory(),
                 )
-            } else if let Some(project_root) = self.native_trusted_project_root(context) {
-                let project_root = project_root.to_string_lossy().into_owned();
-                (vec![project_root.clone()], vec![project_root])
-            } else {
-                return Ok(None);
-            };
+            })
+        };
+        let status = crate::runtime::agent::RuntimePrimaryPathScopeStatus::from_resources_and_trust(
+            resources, trust,
+        );
+        let (read_scopes, write_scopes) = (status.read_scopes, status.write_scopes);
+        if read_scopes.is_empty() && write_scopes.is_empty() {
+            return Ok(None);
+        }
         let primary = host_resolved_path_scopes(
             context.working_directory(),
             &read_scopes,

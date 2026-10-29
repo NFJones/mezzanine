@@ -14,6 +14,11 @@ Read [Approvals and review](../safety-and-trust/approvals-and-review.md) and
 
 The `permissions` table owns approval policy, command rules, destructive-action
 policy, network policy, sandbox backend, scopes, and the explicit bypass mode.
+Managed `skills` and `macros` roots contribute bounded catalog access separately
+from user scope declarations. They do not turn omitted scope lists into an
+explicit-scope policy or disable an already trusted project's default authority.
+They also do not bypass withheld-project shell/patch admission or child scope
+intersections. See [project trust](../safety-and-trust/project-trust-and-instructions.md#distinguish-trust-from-filesystem-authority).
 `policy-only` provides no operating-system confinement; approval policy and
 optional audit logging remain separate controls. `bubblewrap` provides Linux
 namespace confinement; `seatbelt` provides macOS operation-level confinement

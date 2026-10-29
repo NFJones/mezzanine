@@ -5,6 +5,7 @@
 //! security filesystem owner; assembled patch dispatch remains a later task.
 
 use super::*;
+use crate::MezErrorKind;
 
 /// Minimal running turn for direct authority inspection.
 fn turn() -> AgentTurnRecord {
@@ -203,5 +204,331 @@ fn native_seatbelt_toolchain_reads_preserve_trust_and_child_intersection() {
         .unwrap();
     assert_eq!(narrowed.read_scopes, vec![root.to_str().unwrap()]);
     assert!(narrowed.write_scopes.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Managed catalog access is an additive controller grant, not an explicit
+/// user scope declaration that disables deepest-project-trust fallback. A real
+/// config application with a config root must retain both catalog management
+/// and trusted project authority, while an empty child declaration still denies
+/// inheritance and a deeper rejection still withholds project authority.
+#[test]
+fn managed_catalog_scopes_do_not_mask_implicit_project_trust() {
+    let root = temp_root("catalog-scope-project-trust");
+    let project = root.join("project");
+    let nested = project.join("denied");
+    let config = root.join("config");
+    for path in [
+        &project,
+        &nested,
+        &config.join("skills"),
+        &config.join("macros"),
+    ] {
+        fs::create_dir_all(path).unwrap();
+    }
+    let project = fs::canonicalize(project).unwrap();
+    let nested = fs::canonicalize(nested).unwrap();
+    let config = fs::canonicalize(config).unwrap();
+    let mut service = test_runtime_service();
+    service.set_config_root(config.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "catalog-scope-defaults".into(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[history]\nlines = 10\n".into(),
+        }])
+        .unwrap();
+    let mut trust = ProjectTrustStore::default();
+    trust
+        .decide_at(project.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    trust
+        .decide_at(nested.clone(), TrustDecision::Rejected, None, 2)
+        .unwrap();
+    service.set_project_trust_store(trust, None);
+    service.set_pane_current_working_directory("%1", project.clone());
+    let scopes = service
+        .native_filesystem_scopes_for_turn(&turn(), &project)
+        .unwrap()
+        .unwrap();
+    assert!(
+        scopes
+            .read_scopes
+            .contains(&project.to_str().unwrap().to_string()),
+        "{scopes:?}"
+    );
+    assert!(
+        scopes
+            .write_scopes
+            .contains(&project.to_str().unwrap().to_string())
+    );
+    for name in ["skills", "macros"] {
+        let path = config.join(name).to_str().unwrap().to_string();
+        assert!(scopes.read_scopes.contains(&path));
+        assert!(scopes.write_scopes.contains(&path));
+    }
+    assert_eq!(
+        service.primary_path_scope_status("%1").provenance,
+        "trusted-project"
+    );
+    for decision in [
+        TrustDecision::Rejected,
+        TrustDecision::Revoked,
+        TrustDecision::Pending,
+    ] {
+        let mut trust = ProjectTrustStore::default();
+        trust
+            .decide_at(project.clone(), TrustDecision::Trusted, None, 1)
+            .unwrap();
+        if decision == TrustDecision::Pending {
+            trust
+                .decide_at(nested.clone(), TrustDecision::Trusted, None, 2)
+                .unwrap();
+            let database = root.join("pending-trust.sqlite");
+            trust.save_to_file(&database).unwrap();
+            let connection = rusqlite::Connection::open(&database).unwrap();
+            connection
+                .execute(
+                    "UPDATE project_trust SET state = 'pending' WHERE project_root = ?1",
+                    [nested.to_str().unwrap()],
+                )
+                .unwrap();
+            drop(connection);
+            trust = ProjectTrustStore::load_from_file(&database).unwrap();
+        } else {
+            trust.decide_at(nested.clone(), decision, None, 2).unwrap();
+        }
+        service.set_project_trust_store(trust, None);
+        service.set_pane_current_working_directory("%1", nested.clone());
+        let denied = service
+            .native_filesystem_scopes_for_turn(&turn(), &nested)
+            .unwrap()
+            .unwrap();
+        assert!(
+            !denied
+                .read_scopes
+                .iter()
+                .any(|scope| Path::new(scope).starts_with(&project))
+        );
+        let error = service
+            .ensure_implicit_project_authority_for_action(&turn())
+            .unwrap_err();
+        assert_eq!(error.kind(), MezErrorKind::Forbidden);
+        assert!(
+            error
+                .message()
+                .contains(if decision == TrustDecision::Pending {
+                    "pending"
+                } else if decision == TrustDecision::Revoked {
+                    "revoked"
+                } else {
+                    "rejected"
+                })
+        );
+    }
+    service.set_pane_current_working_directory("%1", project.clone());
+    service.set_subagent_scope_declaration(
+        "agent-%1",
+        mez_agent::SubagentScopeDeclaration {
+            cooperation_mode: CooperationMode::ExploreOnly,
+            approval_provenance: mez_agent::SubagentApprovalProvenance::Requested,
+            current_directory: project.to_str().unwrap().into(),
+            read_scopes: Vec::new(),
+            write_scopes: Vec::new(),
+            permission_preset: None,
+        },
+    );
+    let child = service
+        .native_filesystem_scopes_for_turn(&turn(), &project)
+        .unwrap()
+        .unwrap();
+    assert!(child.read_scopes.is_empty());
+    assert!(child.write_scopes.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Explicit user scope lists retain precedence even when the named scope is
+/// exactly a managed catalog root. Reapplying configuration under another config
+/// root rebuilds provenance rather than retaining obsolete automatic grants.
+#[test]
+fn managed_catalog_scope_provenance_preserves_explicit_grants_and_reload() {
+    let root = temp_root("catalog-scope-explicit-reload");
+    let project = root.join("project");
+    let first = root.join("first-config");
+    let second = root.join("second-config");
+    for path in [
+        &project,
+        &first.join("skills"),
+        &first.join("macros"),
+        &second.join("skills"),
+        &second.join("macros"),
+    ] {
+        fs::create_dir_all(path).unwrap();
+    }
+    let project = fs::canonicalize(project).unwrap();
+    let first = fs::canonicalize(first).unwrap();
+    let second = fs::canonicalize(second).unwrap();
+    let mut service = test_runtime_service();
+    service.set_config_root(first.clone());
+    let mut trust = ProjectTrustStore::default();
+    trust
+        .decide_at(project.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    service.set_project_trust_store(trust, None);
+    service.set_pane_current_working_directory("%1", project.clone());
+    let catalog = first.join("skills");
+    let explicit = format!(
+        "[permissions]\nread_scopes = [{}]\n",
+        serde_json::to_string(catalog.to_str().unwrap()).unwrap()
+    );
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-catalog".into(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: explicit,
+        }])
+        .unwrap();
+    let status = service.primary_path_scope_status("%1");
+    assert_eq!(status.provenance, "explicit");
+    assert!(
+        !status
+            .read_scopes
+            .contains(&project.to_str().unwrap().to_string())
+    );
+    let scopes = service
+        .native_filesystem_scopes_for_turn(&turn(), &project)
+        .unwrap()
+        .unwrap();
+    assert!(
+        scopes
+            .read_scopes
+            .contains(&catalog.to_str().unwrap().to_string())
+    );
+    assert!(
+        !scopes
+            .read_scopes
+            .contains(&project.to_str().unwrap().to_string())
+    );
+    service.set_config_root(second.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "new-catalog-defaults".into(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[history]\nlines = 11\n".into(),
+        }])
+        .unwrap();
+    let status = service.primary_path_scope_status("%1");
+    assert_eq!(status.provenance, "trusted-project");
+    assert!(
+        status
+            .read_scopes
+            .contains(&project.to_str().unwrap().to_string())
+    );
+    assert!(
+        status
+            .read_scopes
+            .iter()
+            .any(|path| Path::new(path).starts_with(&second))
+    );
+    assert!(
+        !status
+            .read_scopes
+            .iter()
+            .any(|path| Path::new(path).starts_with(&first))
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// The shared selector must honor each caller's cwd source. Native agent
+/// workspace intent selects its project, while a pane-status provider using the
+/// observed root context retains that root's project and never borrows intent.
+#[test]
+fn managed_catalog_scope_selection_preserves_agent_and_pane_context_roles() {
+    let root = temp_root("catalog-scope-context-roles");
+    let pane = root.join("pane");
+    let agent = root.join("agent");
+    let config = root.join("config");
+    for path in [
+        &pane,
+        &agent,
+        &config.join("skills"),
+        &config.join("macros"),
+    ] {
+        fs::create_dir_all(path).unwrap();
+    }
+    let pane = fs::canonicalize(pane).unwrap();
+    let agent = fs::canonicalize(agent).unwrap();
+    let config = fs::canonicalize(config).unwrap();
+    let mut service = test_runtime_service();
+    service.set_config_root(config);
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "role-defaults".into(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[history]\nlines = 10\n".into(),
+        }])
+        .unwrap();
+    let mut trust = ProjectTrustStore::default();
+    for path in [&pane, &agent] {
+        trust
+            .decide_at(path.clone(), TrustDecision::Trusted, None, 1)
+            .unwrap();
+    }
+    service.set_project_trust_store(trust, None);
+    service.set_pane_current_working_directory("%1", pane.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_native_shell_mode_for_tests("%1");
+    service
+        .agent_shell_store_mut()
+        .ensure_session("%1")
+        .unwrap()
+        .record_native_working_directory(agent.clone(), 0)
+        .unwrap();
+    let status = service.primary_path_scope_status("%1");
+    assert!(
+        status
+            .read_scopes
+            .contains(&agent.to_str().unwrap().to_string())
+    );
+    assert!(
+        !status
+            .read_scopes
+            .contains(&pane.to_str().unwrap().to_string())
+    );
+    let context = crate::runtime::processes::NativeShellContext::for_test(
+        "/bin/sh".into(),
+        Vec::new(),
+        pane.clone(),
+    );
+    let scopes = service
+        .native_path_scopes_for_pane_status_provider("%1", &context)
+        .unwrap()
+        .unwrap();
+    assert!(
+        scopes
+            .read_scopes
+            .contains(&pane.to_str().unwrap().to_string())
+    );
+    assert!(
+        !scopes
+            .read_scopes
+            .contains(&agent.to_str().unwrap().to_string())
+    );
+    assert_eq!(service.pane_current_working_directory("%1"), Some(pane));
     fs::remove_dir_all(root).unwrap();
 }
