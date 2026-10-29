@@ -1170,3 +1170,89 @@ async fn external_copilot_terminal_revoked_source_cannot_dispatch_queued_expense
         );
     }
 }
+
+/// Replacing all control authority while the original CLI and extension remain
+/// alive must revoke queued instance proof, not treat surviving native processes
+/// or public selectors as a recovered registration. Reopening the same durable
+/// store preserves expense already committed before replacement. A worker that
+/// published before replacement retains its expense but receives no stale ACK;
+/// a worker dispatched afterward must not write at all. This qualifies restart
+/// safety only, without asserting transparent source recovery or new boundaries.
+#[tokio::test(flavor = "current_thread")]
+async fn external_copilot_control_replacement_revokes_work_and_preserves_expense() {
+    for published in [false, true] {
+        let (mut fixture, _socket, connection, enrolled, nonce, path) =
+            terminal_fixture(None).await;
+        let committed = terminal(&enrolled, &nonce, &"4".repeat(64));
+        let work = fixture
+            .service
+            .prepare_external_helper_presentation(&committed, &connection)
+            .unwrap();
+        assert_eq!(
+            settle(&mut fixture, work, &connection).await["result"]["durable"],
+            true
+        );
+        let pending = fixture
+            .service
+            .prepare_external_helper_presentation(
+                &terminal(&enrolled, &nonce, &"5".repeat(64)),
+                &connection,
+            )
+            .unwrap();
+        let observed = if published {
+            let native = pending.clone();
+            let observed = tokio::task::spawn_blocking(move || native.observe())
+                .await
+                .unwrap();
+            assert!(observed.is_ok());
+            Some(observed)
+        } else {
+            None
+        };
+        fixture.service.retire_all_external_source_anchors();
+        fixture.service.control = crate::runtime::control::RuntimeControlComponent::new(
+            crate::control::ControlIdempotencyCache::default(),
+            mez_agent::messaging::MessageService::default(),
+            None,
+        );
+        fixture
+            .service
+            .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&path));
+        assert!(connection.unix_origin().unwrap().is_live());
+        assert!(fixture.connection.unix_origin().unwrap().is_live());
+        let reply = if let Some(observed) = observed {
+            serde_json::from_str(&fixture.service.complete_external_enrollment(
+                pending,
+                observed,
+                &connection,
+            ))
+            .unwrap()
+        } else {
+            settle(&mut fixture, pending, &connection).await
+        };
+        assert!(reply.get("error").is_some());
+        for request in [
+            committed,
+            attachment("session-a"),
+            pulse(&enrolled, &nonce, 2),
+            callback("session-a", "agentStop", 100),
+        ] {
+            assert!(
+                fixture
+                    .service
+                    .prepare_external_helper_presentation(&request, &connection)
+                    .is_err(),
+                "old selectors revived replaced control authority"
+            );
+        }
+        let expenses = if published { 2 } else { 1 };
+        assert_eq!(terminal_counts(&path), (expenses, expenses, 0));
+        assert!(fixture.service.external_agent_rows().is_empty());
+        assert_eq!(
+            fixture
+                .service
+                .external_usage_reservation_counts_for_tests(),
+            (0, 0)
+        );
+    }
+}
