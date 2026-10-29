@@ -5,8 +5,8 @@
 //! actor stop/returned-service inspection so no clone fabricates observer health.
 //! Only this fixture's registration deadline is aged; origin/clock/identity and
 //! accounting are never rewritten. Normal read-only commands emit the real idle
-//! key, and manually delivering that emitted matching timer after its actual
-//! delay runs production reconciliation (not the full daemon timer adapter).
+//! key. The production timer worker drains and fires its own deadlines through
+//! actor ingress; this fixture never supplies a timer key or event for renewal.
 //! Private gates sequence the synthetic vendor only. Separate shell exit status
 //! and post-assert result qualify child completion, not socket EOF. This is not
 //! real SDK, paid-provider, OS-root replacement, spool or zero-invoice evidence.
@@ -14,11 +14,10 @@
 use super::*;
 use crate::host::async_runtime::{
     AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
+    AsyncRuntimeSideEffectServiceConfig, run_async_runtime_timer_side_effect_service,
     serve_authenticated_async_runtime_control_connection_loop_with_snapshots,
 };
-use crate::runtime::{
-    RuntimeEvent, RuntimeEventBatch, RuntimeSideEffect, RuntimeTimerKind, TimerEvent,
-};
+use crate::runtime::{RuntimeSideEffect, RuntimeTimerKind};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -252,8 +251,9 @@ fn release(home: &std::path::Path, phase: &str) {
 }
 
 /// Normal read-only actor status/list calls arm a real idle timer but do not run
-/// lease renewal. Optionally deliver exactly its emitted key after its bounded
-/// real delay; the actor's matching-key handler owns production maintenance.
+/// lease renewal. When requested, the real timer worker owns draining, deadlines
+/// and actor ingress. Five bounded drain polls allow an emitted deadline to fire
+/// without leaving a background worker alive across returned-service inspection.
 async fn inspect_timer(
     service: RuntimeSessionService,
     primary: &mez_core::ids::ClientId,
@@ -287,38 +287,46 @@ async fn inspect_timer(
             .unwrap()
             .is_empty()
     );
-    let timers = handle.drain_timer_side_effects(64).await.unwrap();
-    let matching = timers
-        .into_iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::ScheduleTimer { key, delay_ms }
-                if key.kind == RuntimeTimerKind::IdleCleanup =>
-            {
-                Some((key, delay_ms))
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        matching.len(),
-        1,
-        "external-only idle maintenance must emit one active key"
-    );
     if apply {
-        let (key, delay) = matching.into_iter().next().unwrap();
-        assert!(
-            delay > 0 && delay <= 5000,
-            "maintenance delay is bounded, never a lease-length sleep"
-        );
-        tokio::time::sleep(Duration::from_millis(delay)).await;
-        let mut batch = RuntimeEventBatch::new();
-        batch.push(RuntimeEvent::Timer(TimerEvent {
-            key,
-            now_ms: crate::runtime::current_unix_millis(),
-        }));
+        let report = run_async_runtime_timer_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 5,
+                drain_limit: 64,
+                idle_interval: Duration::from_millis(1),
+            },
+            crate::runtime::current_unix_millis(),
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        assert!(report.scheduled > 0, "timer worker received no deadline");
+        assert!(report.fired > 0, "timer worker did not fire a deadline");
         assert_eq!(
-            handle.submit_runtime_events(batch).await.unwrap().accepted,
-            1
+            report.submitted_events as u64, report.fired,
+            "timer worker did not submit its actual firings"
+        );
+    } else {
+        let timers = handle.drain_timer_side_effects(64).await.unwrap();
+        let matching = timers
+            .into_iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, delay_ms }
+                    if key.kind == RuntimeTimerKind::IdleCleanup =>
+                {
+                    Some(delay_ms)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            matching.len(),
+            1,
+            "external-only idle maintenance must emit one active key"
+        );
+        assert!(
+            matching[0] > 0 && matching[0] <= 5000,
+            "maintenance delay is bounded, never a lease-length sleep"
         );
     }
     handle.shutdown().await.unwrap();

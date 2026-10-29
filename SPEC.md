@@ -1505,6 +1505,14 @@ callbacks, but MUST retain actual installed-path discovery, native Unix writer
 admission and typed durable ACK ownership. Parent fixture gates MUST carry no
 enrollment or usage authority. Passing such a fixture MUST NOT imply real SDK,
 periodic idle renewal, registry/daemon recovery, platform or invoice completeness.
+Separate ordinary Pi idle qualification MUST retain the actual native observer
+adapter while the production timer worker drains scheduled deadlines and submits
+their firings through actor ingress. Read-only discovery MUST NOT renew a lease.
+Observed silent-source renewal, real observer EOF and producer exit under a live
+pane root MUST preserve original accounting and distinguish lost health from
+process death. Finite worker delivery and control-component replacement fixtures
+MUST NOT be presented as full daemon restart, real vendor loading, uninterrupted
+renewal or complete spend coverage.
 Ordinary `mez bootstrap pi` MUST also install the supported finalized assistant
 usage producer without launcher/FD3/manual accounting enablement. Genuine
 `turn_start` opens an original request marker through native usage-begin; it MUST

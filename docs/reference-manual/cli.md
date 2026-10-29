@@ -77,7 +77,7 @@ case is qualified before adding shared authored members.
 | Copilot / `copilot` | Classic exec/args discovery, native lifecycle and exact SessionEnd retirement in this matrix; separate installed SDK-shaped native fixtures cover original pulses, early subagent usage and replay. | Revision7 defaults only a missing `EXTENSIONS` flag and preserves authored exporters/policy. Classic callbacks carry no counters; separate terminal observations commit once with explicit unattributed origin. Genuine pre-dispatch origin and actual vendor loading remain unqualified. |
 | Cursor / `agent` | Child reads installed hooks.json and executes exact ordinary CLI hook commands; native lifecycle and exact SessionEnd retirement | `unavailable-counter-schema`: exact CLI counter/cache/multiplicity/native-origin evidence remains unqualified. No forced print mode or IDE-counter substitution. |
 | OpenCode / `opencode` | Separate installer, TUI route/cache and explicit Bun-native fixture; excluded from this four-creator run | The installed client-local TUI observer selects only its own cached root session. Ordinary usage observations are deliberately dropped until durable source continuity is implemented. The legacy server entry remains descriptor-gated and inert under ordinary launch. |
-| Pi / `pi` | Separate Pi acceptance owner and fixtures | Not qualified by the four-harness matrix. |
+| Pi / `pi` | Separate bare-bootstrap/ordinary-source fixtures cover native lifecycle, finite production-worker idle renewal, EOF/exit and exact retirement. | Separate installed finalized-message accounting, durable ACK-loss/recovery and bounded-stream fixtures; not part of the four-harness matrix or a full-spend claim. |
 
 Public contract/source review: 2026-10-28, with Copilot source/configuration
 follow-up on 2026-10-29. These references describe available
@@ -657,13 +657,30 @@ reports through genuine native Unix origin/writer proof and the production actor
 | Completion and outside Mez | Exact session retirement, a separate typed durable source-end receipt and cleared reservations; outside-Mez callbacks preserve normal output/exit and request no telemetry authority. |
 | Privacy | Only allowlisted observational methods and metadata; prompt/answer/tool/error content and raw upstream response identity stay out of transport. |
 
-This is offline assembled qualification, not a real Pi SDK loader/provider run,
-multi-pane/disabled-policy certification or spend completeness. Same-live-source
-committed-ACK loss with registry reset/reconnect and periodic ordinary idle renewal
-remain separate **source-feasible** acceptance/implementation work, not external
-environment excuses. Real SDK loading, macOS execution and manual/live-provider
-coverage must be recorded independently. Legacy inherited-descriptor fixtures below
-are isolated utilities, not required setup for ordinary Pi commands.
+Separate installed native fixtures now qualify the following additional boundaries:
+
+| Additional offline boundary | Qualified assertion |
+| --- | --- |
+| Finite idle renewal and loss | The production timer worker drains and fires actor-owned deadlines while the real native observer adapter stays held. Silent renewal needs no SDK heartbeat; real observer EOF stops renewal, and actual producer exit retires beneath a still-live shell. Only the fixture's lease deadline is aged. |
+| Durable ACK loss and recovery | Commit-before-lost-reply, same-live registry recovery and whole-control replacement preserve the original expense, request origin and report time. Exact replay adds no expense; a later genuine auxiliary observation rediscloses its coverage gap. |
+| Retained pending report | After both immediate durable replies are lost, the telemetry retry timer recovers the same report without another vendor callback or provider replay. Actual child exit and final assertions are checked separately from socket EOF. |
+| Bounded message streams | A separately selected installed-entry fixture sends 4,105 finalized messages through native readiness and durable ACKs; a separate 4,097-request native workload checks bounded streams, readiness-cache pressure and cold replay. These are distinct from bare-bootstrap discovery. |
+
+For the ordinary installed native fixtures, build the product as above, then run
+the following with explicit paths to the already-installed Node and built helper.
+These variables select offline test prerequisites, not normal Pi setup:
+
+```sh
+MEZ_TEST_NODE_BINARY=/absolute/already-installed/node MEZ_TEST_HELPER_BINARY="$PWD/target/debug/mez" timeout 900s cargo test -p mezzanine --lib --all-features --quiet external_pi_ -- --ignored --test-threads=1
+```
+
+This is offline source-shaped qualification, not a real Pi SDK loader/provider
+run, multi-pane/disabled-policy certification, full OS/daemon restart,
+uninterrupted observer continuity or spend completeness. Remaining applicable
+acceptance work must not be deferred as an environment limitation. Real SDK
+loading, macOS execution and manual/live-provider coverage are recorded
+independently. Legacy inherited-descriptor fixtures below are isolated utilities,
+not required setup for ordinary Pi commands.
 
 Offline callback qualification is available with explicit trusted local paths:
 `MEZ_PI_NODE=/absolute/node MEZ_PI_PACKAGE=/absolute/pi-coding-agent timeout 180s cargo test -p mezzanine --lib --quiet pi_lifecycle_released_loader -- --ignored`.
