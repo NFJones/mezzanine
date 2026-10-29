@@ -36,6 +36,7 @@ pub(crate) use projects::{
     AccountingOrigin, AccountingProjectId, AccountingProjectRecord, accounting_origin_for_root,
 };
 
+pub(crate) use external::copilot_calls::{CopilotTerminalCommit, copilot_terminal_call_id};
 pub(crate) use external::external_observation_epoch;
 pub(crate) use external::external_usage_stream_id;
 pub(crate) use external::{

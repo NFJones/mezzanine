@@ -876,8 +876,8 @@ Expense, native source identities, receipts, request metadata and reset facts
 remain unchanged. Older binaries refuse the newer format rather than interpreting
 shared-stream reports as fresh per-message expense.
 
-Telemetry schema14 adds an internal canonical Copilot-call alias table. It does
-not add a wire method or enable terminal reporting. The storage prerequisite
+Telemetry schema14 adds an internal canonical Copilot-call alias table. Schema migration alone grants no
+wire admission; the separately qualified adapter methods below consume it. The storage prerequisite
 commits alias and expense through the same writer, preserves unknown original
 request origin and first observation time, and acknowledges compatible duplicate
 reporters without exposing another owner's pane checkpoint. Optional counters
@@ -1776,6 +1776,37 @@ finite startup window: at most32 attempts start within15seconds, serialized with
 500ms after unavailable results and a3second transport bound. Shutdown fences a
 late result before pulses start. First success ends attachment retries. This does
 not establish a provider-dispatch barrier or native enrollment by itself.
+
+The adapter-only native method `agent/external/copilot-terminal` accepts exactly
+`pane_id`, `external_session_id`, `generation`, `observer_witness`, `observer_id`,
+`call_id`, `model` and `counters`. The original first-epoch source and an already
+published concrete pulse owner are required. The bounded worker proves the
+actual writer matches that retained process before storage; actor settlement
+rechecks current source/instance. Retirement and epoch replacement revoke queued
+instance snapshots before later storage dispatch, independently of process
+liveness. Already native-admitted expense survives later retirement; stale
+settlement still receives no ACK. Caller UID, project, observed_at, provider,
+paths, text and cost are not accepted. Input/output must be explicit safe
+nonnegative integers; optional cache/reasoning categories remain unknown and
+must fit inclusive totals.
+
+Actual canonical storage publication returns `accepted`, `durable`, `applied`,
+`revision` and coverage with source `terminal-observation-external-reported`,
+origin `unattributed` and `reasoning_known`. Duplicate reporters acknowledge the
+original expense without receiving another owner's pane checkpoint. Native
+retirement can withhold a stale ACK while retaining actual incurred expense.
+Terminal delivery does not refresh pulses, leases or presentation and cannot
+manufacture a pre-request marker. The owned revision5 client does not yet emit
+these calls automatically; source projection and safe activation remain pending.
+
+`agent/external/copilot-usage-gap` uses the same original selectors and concrete
+observer proof, replacing call/model/counters with one fixed `reason` from
+`missing-identity`, `counters-unavailable`, `invalid-counters`, `queue-pressure`,
+`delivery-unavailable`, `observer-lost`. Gaps are sticky, constant-size metadata.
+Source rows distinguish `terminal-observation-external-reported-unattributed`
+from `partial-terminal-observations-unattributed`; neither promises complete
+coverage or a known original request project. This is adapter ingress, not a
+manual accounting-enable workflow.
 
 `agent/external/copilot-attach` accepts exactly `pane_id` and
 `external_session_id` on the same bounded uninitialized Unix ingress. It returns

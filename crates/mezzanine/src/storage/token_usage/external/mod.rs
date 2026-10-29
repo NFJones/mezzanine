@@ -23,11 +23,7 @@ use sha2::{Digest, Sha256};
 
 use super::{MezError, Result, TokenUsageStore, sqlite_i64};
 
-/// Internal prerequisite for the fixed native terminal ingress, not an active RPC.
-#[allow(
-    dead_code,
-    reason = "Copilot native terminal ingress integration is pending"
-)]
+/// Canonical terminal accounting under separately qualified native ingress.
 pub(super) mod copilot_calls;
 
 /// Read-transaction projection prerequisites; never another expense store.

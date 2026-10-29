@@ -896,6 +896,33 @@ ordering. The daemon alone MAY renew leases from this proof. The installed loop
 MUST serialize10second pulses, retry the same counter after ACK loss and stop on
 shutdown/terminal refusal without reenrolling. It MUST NOT alter vendor state,
 claim expense, or enable extensions/experiments.
+Fixed native-only agent/external/copilot-terminal MAY accept original
+pane/session/generation/witness, concrete observer_id, opaque call_id, model and
+allowlisted integer counters after the original first-epoch creator/root/writer
+pipeline. It MUST require a previously published concrete observer and worker
+reobservation of that same native process before ledger dispatch. Public labels
+and hash possession MUST NOT grant source authority. Original source and current
+instance MUST still match at settlement. Source retirement or epoch replacement
+MUST revoke retained instance witnesses before later queued native work can
+dispatch expense. A witness accepted by the native worker before revocation MAY
+retain its original incurred expense, while stale settlement MUST withhold ACK.
+A reconnect MUST compare native birth
+identity rather than Arc equality. The native UID MUST come from the accepted
+binding/transport, not input. Provider namespace MUST be Copilot-reported and
+original request project MUST remain explicitly unknown. Terminal observation
+MUST NOT create request-start readiness, refresh health/lease or alter lifecycle.
+Only actual sealed canonical storage publication MAY acknowledge durability or
+project usage. Compatible cross-owner receipts MUST consume reservations without
+projecting another owner's checkpoint. Already accepted published expense MUST
+survive retirement while a stale helper receives no ACK or revived source.
+Fixed agent/external/copilot-usage-gap MAY record only missing-identity,
+counters-unavailable, invalid-counters, queue-pressure, delivery-unavailable or
+observer-lost under the SAME concrete native instance proof. Gaps MUST remain
+sticky and bounded; subsequent success MUST NOT imply complete coverage. Source
+coverage MUST distinguish terminal observations with unknown request origin from
+genuine request-bound reports. These endpoints alone MUST NOT claim an installed
+usage projector, safe automatic activation or original request-origin support.
+
 It MUST NOT rewrite authored siblings/settings/exporters, disable or sandbox
 policy, credentials, instructions or policy-level hook directories. Only exact
 compiled receipt-proven generated-file edits MAY be archived before repair;

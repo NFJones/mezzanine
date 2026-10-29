@@ -33,6 +33,8 @@ pub(super) struct HelperPresentation {
     pub(super) codex_request: Option<super::codex_requests::RequestWork>,
     /// Separate classic Copilot semantics; only native settlement permits effects.
     pub(super) copilot: Option<super::copilot::CopilotObservation>,
+    /// Snapshot is reobserved on the bounded worker before terminal storage.
+    pub(super) copilot_instance: Option<super::copilot::CopilotInstance>,
     /// Distinct native Cursor generation semantics, without usage forwarding.
     pub(super) cursor: Option<super::cursor::CursorEvent>,
     /// Holds this source's ingress ticket through complete actor settlement.
@@ -51,6 +53,9 @@ impl HelperPresentation {
                 .reobserve()
                 .map_err(|_| MezError::forbidden("Codex native creator changed"))?;
         }
+        if let Some(instance) = &self.copilot_instance {
+            instance.observe(&work.origin)?;
+        }
         if let Some(begin) = &self.usage_begin {
             begin.observe(work)?;
         }
@@ -58,7 +63,11 @@ impl HelperPresentation {
             request.observe();
         }
         if let Some(end) = &self.usage_end {
-            end.execute()?;
+            if end.is_copilot_terminal() {
+                end.execute_copilot_terminal()?;
+            } else {
+                end.execute()?;
+            }
         }
         Ok(())
     }
@@ -99,6 +108,8 @@ impl RuntimeSessionService {
             "agent/external/copilot-observe"
                 | "agent/external/copilot-attach"
                 | "agent/external/copilot-pulse"
+                | "agent/external/copilot-terminal"
+                | "agent/external/copilot-usage-gap"
         ) {
             return self.prepare_external_copilot_observation(request, connection);
         }
@@ -314,6 +325,7 @@ impl RuntimeSessionService {
                 codex: None,
                 codex_request: None,
                 copilot: None,
+                copilot_instance: None,
                 cursor: None,
                 codex_order: None,
             }),
@@ -458,6 +470,7 @@ impl RuntimeSessionService {
                 &work.session_id,
                 event,
                 &work.origin,
+                helper.copilot_instance.as_ref(),
             );
         }
         if let Some(event) = &helper.codex {

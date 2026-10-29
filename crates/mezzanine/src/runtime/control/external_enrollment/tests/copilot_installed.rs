@@ -12,7 +12,7 @@ use super::*;
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires freshly built sibling mez binary; installed Copilot helper qualification"]
 async fn external_copilot_installed_hooks_admit_and_retire_without_launcher() {
-    qualify_installed_hooks(false).await;
+    qualify_installed_hooks(false, false).await;
 }
 
 /// The actual installed extension entry joins a local SDK-shaped session and
@@ -23,13 +23,22 @@ async fn external_copilot_installed_hooks_admit_and_retire_without_launcher() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
 async fn external_copilot_installed_extension_attaches_to_original_native_creator() {
-    qualify_installed_hooks(true).await;
+    qualify_installed_hooks(true, false).await;
+}
+
+/// A test-owned Node writer uses installed attachment/pulse transport, then sends
+/// fixed terminal frames through the actual Unix listener, bounded actor worker
+/// and ledger. This qualifies server ingress, not an owned SDK usage projector.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
+async fn external_copilot_terminal_wire_actor_acks_one_canonical_call() {
+    qualify_installed_hooks(true, true).await;
 }
 
 /// Shares the isolated bare bootstrap, exact installed hooks and real native
 /// actor. Only the extension case adds a test-owned bundled-SDK-shaped module;
 /// neither case rewrites any installed adapter source or runs a provider.
-async fn qualify_installed_hooks(extension: bool) {
+async fn qualify_installed_hooks(extension: bool, terminal: bool) {
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
         serve_async_runtime_control_connection_loop,
@@ -92,6 +101,64 @@ async fn qualify_installed_hooks(extension: bool) {
         let script = fixture.directory.join("installed-extension-assert.mjs");
         std::fs::write(&script,
             "import assert from 'node:assert/strict'; import {pathToFileURL} from 'node:url'; const {observer,lifetime} = await import(pathToFileURL(process.argv[2])); assert.equal(await lifetime.ready,true); await new Promise(resolve=>setTimeout(resolve,11000)); lifetime.stop(); assert.equal(observer.external_session_id, 'session-a'); assert(Object.isFrozen(observer)); assert.equal(Object.keys(observer).length, 6); process.stdout.write('{}\\n');\n").unwrap();
+        if terminal {
+            std::fs::write(&script, r#"
+import assert from 'node:assert/strict';
+import {pathToFileURL} from 'node:url';
+import {dirname, join} from 'node:path';
+import {createConnection} from 'node:net';
+import {spawnSync} from 'node:child_process';
+const root = dirname(process.argv[2]);
+const {attachCopilotObserver, pulseCopilotObserver} = await import(pathToFileURL(join(root,'copilot_extension.mjs')));
+const {peerHelper} = await import(pathToFileURL(join(root,'peer_helper.mjs')));
+const options = {mez:process.env.MEZ,pane:process.env.MEZ_PANE,session:'session-a',peerHelper};
+const original = await attachCopilotObserver(options);
+assert(original);
+const observer_id = 'a'.repeat(64);
+assert.equal((await pulseCopilotObserver(options,original,observer_id,1)).observed,true);
+const body = JSON.stringify({jsonrpc:'2.0',id:'terminal-wire',method:'agent/external/copilot-terminal',params:{
+  pane_id:options.pane,external_session_id:options.session,generation:original.generation,
+  observer_witness:original.observer_witness,observer_id,call_id:'b'.repeat(64),model:'fixture-model',
+  counters:{input_tokens:10,output_tokens:4,cached_input_tokens:3}
+}});
+async function send() {
+  return await new Promise((resolve,reject)=>{
+    const socket = createConnection({path:options.mez.split('\x1f',1)[0].trim()});
+    let bytes = Buffer.alloc(0), done = false;
+    const timer = setTimeout(()=>finish(Error('bounded terminal fixture timeout')),3000);
+    function finish(error,value) {
+      if(done)return; done=true; clearTimeout(timer); socket.destroy();
+      if(error)reject(error);else resolve(value);
+    }
+    socket.pause();
+    socket.on('error',error=>finish(error));
+    socket.on('close',()=>{if(!done)finish(Error('terminal fixture closed'));});
+    socket.on('connect',()=>{
+      try {
+        const peer=spawnSync(peerHelper,['harness-peer'],{stdio:['ignore','pipe','ignore',socket._handle.fd],env:{},timeout:1000});
+        assert.equal(peer.status,0);
+        assert.equal(peer.stdout.toString(),'{"protocol":"external-peer/1","verified":true}\n');
+        socket.write('Content-Length: '+Buffer.byteLength(body)+'\r\nContent-Type: application/vnd.mezzanine.control+json; version=1\r\n\r\n'+body);
+        socket.resume();
+      }catch(error){finish(error);}
+    });
+    socket.on('data',chunk=>{
+      try {
+        assert(bytes.length+chunk.length<=8448);bytes=Buffer.concat([bytes,chunk]);
+        const at=bytes.indexOf('\r\n\r\n');if(at<0)return;
+        const length=Number(/Content-Length: ([0-9]+)/i.exec(bytes.subarray(0,at).toString())[1]);
+        assert(length<=8192);if(bytes.length===at+4+length)finish(undefined,JSON.parse(bytes.subarray(at+4).toString()));
+      }catch(error){finish(error);}
+    });
+  });
+}
+for(const applied of [true,false]) {
+  const reply=await send();assert.equal(reply.result.durable,true);
+  assert.equal(reply.result.applied,applied);assert.equal(reply.result.coverage.origin,'unattributed');
+}
+process.stdout.write('{}\n');
+"#).unwrap();
+        }
         Some(format!(
             "exec {} {} {}",
             shlex::try_quote(node.to_str().unwrap()).unwrap(),
@@ -161,7 +228,7 @@ async fn qualify_installed_hooks(extension: bool) {
                     .await
                     .unwrap_or_else(|_| panic!("missing {event} connection {connection_index}"))
                     .unwrap();
-            if event == "extension" && connection_index == 0 {
+            if event == "extension" && !terminal && connection_index == 0 {
                 // A lost first transport must leave the installed entry able
                 // to attach later. This is transport-loss coverage, not proof
                 // of real vendor startup-hook/extension delivery ordering.
@@ -212,7 +279,7 @@ async fn qualify_installed_hooks(extension: bool) {
                 .extension_snapshot_for_test()
                 .unwrap()
                 .0,
-            2
+            if terminal { 1 } else { 2 }
         );
     }
     assert!(source.producer.matches_parent(
@@ -236,8 +303,45 @@ async fn qualify_installed_hooks(extension: bool) {
             .query_row("SELECT count(*) FROM token_usage_events", [], |row| row
                 .get::<_, i64>(0))
             .unwrap(),
-        0
+        i64::from(terminal)
     );
+    if terminal {
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM external_copilot_calls", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM external_usage_requests", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            database
+                .query_row(
+                    "SELECT sum(input_tokens) FROM token_usage_events",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            10
+        );
+        assert_eq!(
+            database
+                .query_row(
+                    "SELECT count(*) FROM token_usage_events WHERE project_id IS NOT NULL",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
     assert_eq!(
         database
             .query_row("SELECT count(*) FROM external_usage_sources", [], |row| row

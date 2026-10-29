@@ -319,6 +319,15 @@ impl ExternalEnrollmentWork {
 }
 
 impl EnrollmentBinding {
+    /// Logical retirement cannot be replaced by continued publisher liveness.
+    pub(super) fn invalidate_copilot_observer(&self) {
+        self.copilot_events.invalidate_observer();
+    }
+    /// Terminal observation coverage never implies pre-request origin proof.
+    pub(super) fn copilot_usage_coverage(&self) -> Option<&'static str> {
+        self.copilot_events.usage_coverage()
+    }
+
     /// Exposes only the fixed inherited gap diagnostic, never lifecycle state.
     pub(super) fn inherited_usage_gap(
         &self,
@@ -658,17 +667,24 @@ impl RuntimeSessionService {
             .as_ref()
             .and_then(|helper| helper.usage_end.as_ref())
         {
-            match end.published_result() {
-                Ok(commit) => {
-                    let accounting_reply =
-                        self.complete_external_usage((**end).clone(), Ok(commit));
-                    // Already-admitted actual expense settles even if native
-                    // presentation authority changed; stale helpers get no ACK.
-                    if result.is_ok() {
-                        return accounting_reply;
-                    }
+            if end.is_copilot_terminal() {
+                let reply = self.complete_copilot_terminal_usage((**end).clone(), result.is_ok());
+                if result.is_ok() {
+                    return reply;
                 }
-                Err(_) => self.release_unexecuted_external_usage(end),
+            } else {
+                match end.published_result() {
+                    Ok(commit) => {
+                        let accounting_reply =
+                            self.complete_external_usage((**end).clone(), Ok(commit));
+                        // Already-admitted actual expense settles even if native
+                        // presentation authority changed; stale helpers get no ACK.
+                        if result.is_ok() {
+                            return accounting_reply;
+                        }
+                    }
+                    Err(_) => self.release_unexecuted_external_usage(end),
+                }
             }
         }
         #[cfg(test)]

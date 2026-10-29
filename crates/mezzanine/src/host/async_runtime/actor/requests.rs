@@ -339,6 +339,8 @@ impl AsyncRuntimeSessionActor {
                 | "agent/external/copilot-observe"
                 | "agent/external/copilot-attach"
                 | "agent/external/copilot-pulse"
+                | "agent/external/copilot-terminal"
+                | "agent/external/copilot-usage-gap"
                 | "agent/external/cursor-observe"
         ) {
             return None;
@@ -355,6 +357,8 @@ impl AsyncRuntimeSessionActor {
                 | "agent/external/copilot-observe"
                 | "agent/external/copilot-attach"
                 | "agent/external/copilot-pulse"
+                | "agent/external/copilot-terminal"
+                | "agent/external/copilot-usage-gap"
                 | "agent/external/cursor-observe"
                 | "agent/external/curated-heartbeat"
                 | "agent/external/curated-usage-begin"

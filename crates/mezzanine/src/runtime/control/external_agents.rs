@@ -124,6 +124,13 @@ impl LaunchBinding {
         {
             return reason;
         }
+        if let Some(coverage) = self
+            .enrollment
+            .as_ref()
+            .and_then(|source| source.copilot_usage_coverage())
+        {
+            return coverage;
+        }
         if self
             .enrollment
             .as_ref()
@@ -501,6 +508,9 @@ impl RuntimeSessionService {
         };
         if binding.retired {
             return;
+        }
+        if let Some(enrollment) = &binding.enrollment {
+            enrollment.invalidate_copilot_observer();
         }
         binding.retired = true;
         binding.expires = current_unix_seconds().saturating_add(TOMBSTONE_SECONDS);

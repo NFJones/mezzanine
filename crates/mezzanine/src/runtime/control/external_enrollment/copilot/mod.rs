@@ -13,6 +13,9 @@ use super::*;
 
 /// Concrete native extension freshness, independent of classic presentation.
 mod observer;
+/// Coverage facts are separate from lease and presentation clocks.
+mod usage;
+pub(super) use observer::CopilotInstance;
 
 /// One allowlisted coarse fact and its bounded vendor order selector.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +36,13 @@ pub(super) enum CopilotObservation {
         observer_id: String,
         /// Original instance counter; identical replay is time-inert.
         sequence: u64,
+    },
+    /// Accounting work is retained in the common helper reservation.
+    Terminal { observer_id: String },
+    /// Sticky incomplete coverage, never arbitrary vendor text.
+    UsageGap {
+        observer_id: String,
+        reason: usage::UsageGap,
     },
     /// A strictly validated classic event with a positive vendor order fence.
     Event(CopilotEvent),
@@ -80,9 +90,28 @@ pub(super) struct CopilotEvents {
     order: Arc<super::codex_order::CodexOrder>,
     /// One bounded actual extension lifetime and its independent proof clock.
     observer: observer::CopilotObserver,
+    /// An actual durable terminal receipt, not complete session coverage.
+    terminal_reports_seen: bool,
+    /// Finite sticky gap bits; a later success cannot hide missing calls.
+    usage_gaps: u8,
 }
 
 impl CopilotEvents {
+    /// Makes source retirement visible to queued native instance snapshots.
+    pub(super) fn invalidate_observer(&self) {
+        self.observer.invalidate();
+    }
+    /// Terminal arrival never masquerades as genuine request-bound accounting.
+    pub(super) fn usage_coverage(&self) -> Option<&'static str> {
+        if self.usage_gaps != 0 {
+            Some("partial-terminal-observations-unattributed")
+        } else if self.terminal_reports_seen {
+            Some("terminal-observation-external-reported-unattributed")
+        } else {
+            None
+        }
+    }
+
     /// Fixture-only proof aging without manufacturing native ownership.
     #[cfg(test)]
     pub(super) fn age_extension_for_test(&mut self) {
@@ -194,6 +223,14 @@ impl RuntimeSessionService {
                     sequence,
                 }
             }
+            "agent/external/copilot-terminal" => CopilotObservation::Terminal {
+                observer_id: observer_nonce(&params)?,
+            },
+            "agent/external/copilot-usage-gap" => CopilotObservation::UsageGap {
+                observer_id: observer_nonce(&params)?,
+                reason: serde_json::from_value(params["reason"].clone())
+                    .map_err(|_| MezError::invalid_args("Copilot usage gap unavailable"))?,
+            },
             _ => CopilotObservation::Event(CopilotEvent::parse(&params)?),
         };
         let targets = self
@@ -219,14 +256,33 @@ impl RuntimeSessionService {
             .filter(|binding| binding.uid == *uid && binding.pane_id == pane)
             .ok_or_else(|| MezError::forbidden("Copilot callback candidate unavailable"))?;
         let source = original(binding)?;
-        if matches!(event, CopilotObservation::Pulse { .. })
-            && (params["generation"].as_u64() != Some(binding.generation)
-                || text(&params, "observer_witness", 64)? != observer_witness(digest))
+        if matches!(
+            event,
+            CopilotObservation::Pulse { .. }
+                | CopilotObservation::Terminal { .. }
+                | CopilotObservation::UsageGap { .. }
+        ) && (params["generation"].as_u64() != Some(binding.generation)
+            || text(&params, "observer_witness", 64)? != observer_witness(digest))
         {
             return Err(MezError::forbidden(
                 "Copilot original observer selectors changed",
             ));
         }
+        let instance = match &event {
+            CopilotObservation::Terminal { observer_id }
+            | CopilotObservation::UsageGap { observer_id, .. } => {
+                Some(source.copilot_events.observer.capture(observer_id)?)
+            }
+            _ => None,
+        };
+        let terminal = if matches!(event, CopilotObservation::Terminal { .. }) {
+            if !source.usage_owner_is_durable {
+                return Err(MezError::forbidden("Copilot durable source unavailable"));
+            }
+            Some(self.external_copilot_terminal_work(request.id.clone(), binding, &params)?)
+        } else {
+            None
+        };
         let queue = source.copilot_events.order.clone();
         let callback = crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"copilot-internal","method":"agent/external/helper-presentation","params":{
             "launch_token":source.token.expose_secret(),"generation":binding.generation,"external_session_id":session,"sequence":1,"state":"ready",
@@ -246,7 +302,25 @@ impl RuntimeSessionService {
         work.request_id = request.id.clone();
         if let Some(helper) = &mut work.helper {
             helper.copilot = Some(event);
+            helper.copilot_instance = instance;
             helper.codex_order = Some(order);
+        }
+        if let Some(terminal) = terminal {
+            match self.reserve_external_usage_work(terminal) {
+                Ok(terminal) => {
+                    if let Some(helper) = &mut work.helper {
+                        helper.usage_end = Some(Box::new(terminal));
+                    }
+                }
+                Err(error) => {
+                    self.control
+                        .external_agents_mut()
+                        .enrollments
+                        .pending
+                        .remove(&work.admission);
+                    return Err(error);
+                }
+            }
         }
         Ok(work)
     }
@@ -260,6 +334,7 @@ impl RuntimeSessionService {
         session: &str,
         observation: &CopilotObservation,
         origin: &Arc<UnixOriginProcess>,
+        instance: Option<&CopilotInstance>,
     ) -> Result<String> {
         let binding = self
             .control
@@ -287,6 +362,27 @@ impl RuntimeSessionService {
                     .copilot_events
                     .observer
                     .observe(origin, observer_id, *sequence);
+            }
+            CopilotObservation::Terminal { .. } | CopilotObservation::UsageGap { .. } => {
+                if instance.is_none_or(|instance| !source.copilot_events.observer.matches(instance))
+                {
+                    return Err(MezError::forbidden("Copilot current observer changed"));
+                }
+                if let CopilotObservation::UsageGap { reason, .. } = observation {
+                    let reason = *reason;
+                    let owner = binding.accounting_owner.clone();
+                    let source = self
+                        .control
+                        .external_agents_mut()
+                        .bindings
+                        .get_mut(&digest)
+                        .and_then(|binding| binding.enrollment.as_mut())
+                        .ok_or_else(|| MezError::forbidden("Copilot gap source unavailable"))?;
+                    source.copilot_events.usage_gaps |= reason.bit();
+                    self.refresh_external_source_diagnostics_for_owner(&owner);
+                    return Ok(serde_json::json!({"observed":true,"reason":reason}).to_string());
+                }
+                return Ok("{}".into());
             }
             CopilotObservation::Event(event) => event,
         };
@@ -321,6 +417,43 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("Copilot observer unavailable"))?
             .observe(sequence)?;
         Ok(reply)
+    }
+}
+
+/// Only inert fixed-length instance labels can narrow the current native owner.
+fn observer_nonce(params: &serde_json::Value) -> Result<String> {
+    let nonce = text(params, "observer_id", 64)?;
+    if nonce.len() != 64
+        || !nonce
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err(MezError::invalid_args(
+            "Copilot observer instance unavailable",
+        ));
+    }
+    Ok(nonce)
+}
+
+impl RuntimeSessionService {
+    /// Records only actual durable terminal publication under valid settlement.
+    pub(in crate::runtime::control) fn note_copilot_terminal_report(
+        &mut self,
+        work: &super::super::external_usage::ExternalUsageWork,
+    ) {
+        for binding in self.control.external_agents_mut().bindings.values_mut() {
+            if !binding.retired
+                && binding.harness == "copilot"
+                && binding.accounting_owner == work.report.owner
+                && binding.process.same_incarnation(&work.process)
+                && let Some(source) = &mut binding.enrollment
+                && source.epoch == 1
+                && source.instance == "copilot-local-hooks-1"
+            {
+                source.copilot_events.terminal_reports_seen = true;
+            }
+        }
+        self.refresh_external_source_diagnostics_for_owner(&work.report.owner);
     }
 }
 

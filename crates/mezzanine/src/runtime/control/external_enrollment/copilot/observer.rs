@@ -7,6 +7,7 @@
 //! never a new registration or restored source epoch. Replay is time-inert.
 
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// One bounded original extension lifetime; no socket-health inference is used.
 #[derive(Debug, Default)]
@@ -21,9 +22,89 @@ struct ObserverOwner {
     nonce: String,
     sequence: u64,
     observed_at: Instant,
+    /// One-way logical lifetime; native process survival cannot revive it.
+    valid: Arc<AtomicBool>,
+}
+
+impl Drop for ObserverOwner {
+    /// Epoch replacement or owner destruction revokes every queued snapshot.
+    fn drop(&mut self) {
+        self.valid.store(false, Ordering::Release);
+    }
+}
+
+/// Frozen existing instance selector. Only worker reobservation supplies proof;
+/// neither the nonce nor this snapshot authorizes a different native writer.
+#[derive(Debug, Clone)]
+pub(in crate::runtime::control::external_enrollment) struct CopilotInstance {
+    /// Existing kernel lifetime anchor, not a newly claimed process ID.
+    origin: Arc<UnixOriginProcess>,
+    /// Inert original instance selector, checked independently of native proof.
+    nonce: String,
+    /// Private code-owned generation witness, independent of transport anchors.
+    valid: Arc<AtomicBool>,
+}
+
+impl CopilotInstance {
+    /// Runs on the bounded native worker before any accounting dispatch.
+    pub(in crate::runtime::control::external_enrollment) fn observe(
+        &self,
+        writer: &Arc<UnixOriginProcess>,
+    ) -> Result<()> {
+        let retained = self
+            .origin
+            .reobserve()
+            .map_err(|_| MezError::forbidden("Copilot original observer unavailable"))?;
+        let actual = writer
+            .reobserve()
+            .map_err(|_| MezError::forbidden("Copilot reporting writer unavailable"))?;
+        if retained != actual
+            || self.origin.uid() != writer.uid()
+            || !self.origin.writer_confirmed()
+            || !writer.writer_confirmed()
+            || !self.valid.load(Ordering::Acquire)
+        {
+            return Err(MezError::forbidden("Copilot reporting instance changed"));
+        }
+        Ok(())
+    }
 }
 
 impl CopilotObserver {
+    /// Captures only an existing published owner without actor-side native I/O.
+    pub(super) fn capture(&self, nonce: &str) -> Result<CopilotInstance> {
+        let owner = self
+            .owner
+            .as_ref()
+            .filter(|owner| owner.nonce == nonce && owner.valid.load(Ordering::Acquire))
+            .ok_or_else(|| MezError::forbidden("Copilot concrete observer unavailable"))?;
+        Ok(CopilotInstance {
+            origin: owner.origin.clone(),
+            nonce: nonce.into(),
+            valid: owner.valid.clone(),
+        })
+    }
+
+    /// Current native owner must still match after worker publication. Transport
+    /// anchors may change on a real same-process reconnect; Arc equality is wrong.
+    pub(super) fn matches(&self, instance: &CopilotInstance) -> bool {
+        self.owner.as_ref().is_some_and(|owner| {
+            owner.nonce == instance.nonce
+                && owner.valid.load(Ordering::Acquire)
+                && Arc::ptr_eq(&owner.valid, &instance.valid)
+                && owner.origin.uid() == instance.origin.uid()
+                && owner.origin.identity == instance.origin.identity
+                && owner.origin.writer_confirmed()
+        })
+    }
+
+    /// Revokes queued work before source retirement becomes visible. Native
+    /// admission that already passed its final check retains original expense.
+    pub(super) fn invalidate(&self) {
+        if let Some(owner) = &self.owner {
+            owner.valid.store(false, Ordering::Release);
+        }
+    }
     /// Fixture-only clock control; native owner/counter evidence stays intact.
     #[cfg(test)]
     pub(super) fn age_for_test(&mut self) {
@@ -42,7 +123,8 @@ impl CopilotObserver {
     /// A changed positive proof expires after thirty seconds or native death.
     pub(super) fn is_recent(&self) -> bool {
         self.owner.as_ref().is_some_and(|owner| {
-            owner.origin.is_live()
+            owner.valid.load(Ordering::Acquire)
+                && owner.origin.is_live()
                 && owner.origin.writer_confirmed()
                 && owner.observed_at.elapsed() < Duration::from_secs(30)
         })
@@ -70,6 +152,9 @@ impl CopilotObserver {
             return Err(MezError::forbidden("Copilot extension writer unconfirmed"));
         }
         if let Some(owner) = &mut self.owner {
+            if !owner.valid.load(Ordering::Acquire) {
+                return Err(MezError::forbidden("Copilot observer instance revoked"));
+            }
             if owner.origin.is_live() {
                 if owner.nonce != nonce
                     || owner.origin.uid() != origin.uid()
@@ -108,6 +193,7 @@ impl CopilotObserver {
             nonce: nonce.to_owned(),
             sequence,
             observed_at: Instant::now(),
+            valid: Arc::new(AtomicBool::new(true)),
         });
         Ok(serde_json::json!({"observed":true,"sequence":sequence,"changed":true}).to_string())
     }

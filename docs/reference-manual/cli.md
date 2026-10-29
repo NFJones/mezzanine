@@ -152,6 +152,11 @@ apart after failure, with a3second bound per exchange. Shutdown fences late
 attachment; first success ends retries. This tolerates initial enrollment or
 transport unavailability without creating a run or asserting health from retries.
 Actual vendor early delivery, default activation and usage remain unqualified.
+The daemon now provides fixed concrete-writer terminal/gap ingress backed by the
+canonical ledger. The revision5 installed entry still emits attachment/pulses;
+its usage projector and safe activation are unfinished. Terminal records have
+unknown original request project and do not assert a provider-dispatch barrier.
+
 The fixed installing-binary peer checker verifies the connected daemon's native
 Unix UID before any metadata is written. It borrows the descriptor read-only;
 the extension sends the frame itself. No launcher descriptor is required.

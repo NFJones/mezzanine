@@ -1501,6 +1501,8 @@ impl RuntimeSessionService {
                     | "agent/external/copilot-observe"
                     | "agent/external/copilot-attach"
                     | "agent/external/copilot-pulse"
+                    | "agent/external/copilot-terminal"
+                    | "agent/external/copilot-usage-gap"
                     | "agent/external/cursor-observe"
             ) {
                 return runtime_json_rpc_error(

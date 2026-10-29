@@ -640,6 +640,8 @@ pub(crate) const PRIMARY_CONTROL_METHODS: &[&str] = &[
     "agent/external/copilot-observe",
     "agent/external/copilot-attach",
     "agent/external/copilot-pulse",
+    "agent/external/copilot-terminal",
+    "agent/external/copilot-usage-gap",
     "agent/external/cursor-observe",
     "agent/external/pi-observation",
     "client/list",

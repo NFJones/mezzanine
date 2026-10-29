@@ -24,6 +24,9 @@ use crate::storage::token_usage::{
 };
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 
+/// Typed terminal ACKs share reservations, never another owner's projection.
+mod copilot_terminal;
+
 const MAX_PROJECTED_STREAMS: usize = 4096;
 const MAX_IN_FLIGHT: usize = 32;
 
@@ -155,6 +158,8 @@ pub(crate) struct ExternalUsageWork {
     /// The original report/stream reservation remains unchanged; no new source
     /// or request-marker authority is inferred from this migration candidate.
     opencode_handoff: Option<crate::integrations::bootstrap::opencode::CompletedObservation>,
+    /// Fixed native terminal scope; generic storage dispatch must reject it.
+    copilot_terminal: Option<copilot_terminal::TerminalScope>,
     /// Only actual native storage work can publish a durable completion.
     published: Arc<OnceLock<ExternalUsagePublication>>,
     /// Test-only worker start/release barrier, captured with immutable work.
@@ -199,6 +204,11 @@ impl ExternalUsageWork {
         &self,
         mut admission: Option<&mut crate::storage::token_usage::ExternalUsageAdmissionWitness>,
     ) -> Result<ExternalUsageCommit> {
+        if self.copilot_terminal.is_some() {
+            return Err(MezError::forbidden(
+                "Copilot terminal work requires its fixed executor",
+            ));
+        }
         if self.report != self.admitted_report {
             return Err(MezError::conflict("external admitted report changed"));
         }
@@ -551,6 +561,7 @@ impl RuntimeSessionService {
             socket_precommit_retry: false,
             projection_id: None,
             opencode_handoff: pair,
+            copilot_terminal: None,
             published: Arc::new(OnceLock::new()),
             #[cfg(test)]
             worker_gate: self.control.external_usage().worker_gate.clone(),
@@ -697,6 +708,7 @@ impl RuntimeSessionService {
             socket_precommit_retry: false,
             projection_id: None,
             opencode_handoff: None,
+            copilot_terminal: None,
             published: Arc::new(OnceLock::new()),
             #[cfg(test)]
             worker_gate: self.control.external_usage().worker_gate.clone(),
@@ -784,12 +796,22 @@ impl RuntimeSessionService {
     /// Releases an admitted work that failed helper proof before a ledger
     /// publication. Preserves original readiness for the legitimate producer.
     pub(super) fn release_unexecuted_external_usage(&mut self, work: &ExternalUsageWork) {
+        let _ = self.take_external_usage_reservation(work);
+    }
+
+    /// Consumes exactly the original reservation, independently of projection.
+    /// Foreign/duplicate completion never releases a successor's capacity.
+    fn take_external_usage_reservation(&mut self, work: &ExternalUsageWork) -> Result<()> {
         let projection = self.control.external_usage_mut();
         if !Arc::ptr_eq(&projection.incarnation, &work.accounting_incarnation) {
-            return;
+            return Err(MezError::conflict(
+                "external accounting reservation owner changed",
+            ));
         }
         if !projection.pending.remove(&work.admission) {
-            return;
+            return Err(MezError::conflict(
+                "external accounting admission already settled",
+            ));
         }
         if let Some(id) = &work.projection_id
             && let Some(count) = projection.reservations.get_mut(id)
@@ -799,6 +821,7 @@ impl RuntimeSessionService {
                 projection.reservations.remove(id);
             }
         }
+        Ok(())
     }
 
     /// Projects one committed absolute checkpoint even after registration expiry.
@@ -815,33 +838,28 @@ impl RuntimeSessionService {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             probe.completed.notify_one();
         }
-        let projection = self.control.external_usage_mut();
-        if !Arc::ptr_eq(&projection.incarnation, &work.accounting_incarnation) {
+        if let Err(error) = self.take_external_usage_reservation(&work) {
             return crate::runtime::runtime_json_rpc_error(
                 &work.request_id,
-                crate::error::MezErrorKind::Conflict,
-                "external accounting reservation owner changed",
+                error.kind(),
+                error.message(),
             );
-        }
-        if !projection.pending.remove(&work.admission) {
-            return crate::runtime::runtime_json_rpc_error(
-                &work.request_id,
-                crate::error::MezErrorKind::Conflict,
-                "external accounting admission already settled",
-            );
-        }
-        if let Some(id) = &work.projection_id
-            && let Some(count) = projection.reservations.get_mut(id)
-        {
-            *count -= 1;
-            if *count == 0 {
-                projection.reservations.remove(id);
-            }
         }
         let result = if work.report != work.admitted_report {
             Err(MezError::conflict(
                 "external admitted report changed before settlement",
             ))
+        } else if work.is_copilot_terminal() {
+            result.and_then(|commit| {
+                let actual = work.terminal_result()?;
+                if actual.projection() == Some(&commit) {
+                    Ok(commit)
+                } else {
+                    Err(MezError::conflict(
+                        "Copilot terminal checkpoint unpublished or foreign",
+                    ))
+                }
+            })
         } else if work.request_marker.is_some() || work.opencode_handoff.is_some() {
             result.and_then(|commit| {
                 if work.published.get().is_some_and(|publication| {
@@ -877,6 +895,7 @@ impl RuntimeSessionService {
             }
             self.refresh_external_source_diagnostics_for_owner(&work.report.owner);
         }
+        let terminal_report = work.is_copilot_terminal();
         let projection = self.control.external_usage_mut();
         match result {
             Ok(commit) => {
@@ -924,9 +943,14 @@ impl RuntimeSessionService {
                         stream.totals = commit.totals;
                     }
                 }
+                let mut coverage = serde_json::json!({"reasoning_known":commit.totals.reasoning_tokens.is_some(),"source":"external-reported"});
+                if terminal_report {
+                    coverage["source"] = "terminal-observation-external-reported".into();
+                    coverage["origin"] = "unattributed".into();
+                }
                 serde_json::json!({"jsonrpc":"2.0","id":serde_json::from_str::<serde_json::Value>(&work.request_id).unwrap_or_default(),
                     "result":{"accepted":true,"durable":true,"applied":commit.applied,"revision":commit.revision,
-                        "coverage":{"reasoning_known":commit.totals.reasoning_tokens.is_some(),"source":"external-reported"}}}).to_string()
+                        "coverage":coverage}}).to_string()
             }
             Err(error) => crate::runtime::runtime_json_rpc_error(
                 &work.request_id,
