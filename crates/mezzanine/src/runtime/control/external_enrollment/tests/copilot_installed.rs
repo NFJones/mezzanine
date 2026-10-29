@@ -155,12 +155,19 @@ async fn qualify_installed_hooks(extension: bool) {
             .await
             .unwrap();
         fixture.socket.write_all(launch.as_bytes()).await.unwrap();
-        for _ in 0..if event == "extension" { 3 } else { 1 } {
+        for connection_index in 0..if event == "extension" { 4 } else { 1 } {
             let (mut socket, _) =
                 tokio::time::timeout(Duration::from_secs(15), fixture.listener.accept())
                     .await
-                    .unwrap()
+                    .unwrap_or_else(|_| panic!("missing {event} connection {connection_index}"))
                     .unwrap();
+            if event == "extension" && connection_index == 0 {
+                // A lost first transport must leave the installed entry able
+                // to attach later. This is transport-loss coverage, not proof
+                // of real vendor startup-hook/extension delivery ordering.
+                socket.shutdown().await.unwrap();
+                continue;
+            }
             let mut connection = ControlConnectionState::new(true, false);
             serve_async_runtime_control_connection_loop(
                 &mut socket,

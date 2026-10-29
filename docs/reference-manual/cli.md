@@ -130,11 +130,11 @@ The old `--apply` and `--plan` flags are rejected, not aliases: scripts should
 remove `--apply` for installation and replace `--plan` with `--dry-run` for preview.
 The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
-Copilot revision4 installs `hooks/mezzanine.json` under `COPILOT_HOME` or
+Copilot revision5 installs `hooks/mezzanine.json` under `COPILOT_HOME` or
 `~/.copilot`, using the documented version1 CLI hook format and direct `exec`/`args`
 for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/agentStop/
 errorOccurred/sessionEnd. It also installs a bundled-SDK observer extension in
-`extensions/mezzanine/`. It upgrades exact receipt-owned revision1/2/3 artifacts,
+`extensions/mezzanine/`. It upgrades exact receipt-owned revision1/2/3/4 artifacts,
 pins the installing Mez executable and
 does not alter authored sibling hooks, settings.json, disableAllHooks, sandbox
 grants, policy hooks, credentials or exporters. Receipt-proven edits to that owned
@@ -146,8 +146,12 @@ creator and pane-root verification. It cannot enroll a missing run or refresh
 health, presentation, leases or accounting. Bootstrap does not enable extensions
 or experiments in this revision. Extension attachment is an integration
 foundation. A separate exact-writer pulse loop now supports finite idle health
-where extensions already load; default activation, early-loading order and usage
-remain unfinished.
+where extensions already load. Startup attachment now waits for the original
+classic enrollment: at most32 serialized attempts start within15seconds,500ms
+apart after failure, with a3second bound per exchange. Shutdown fences late
+attachment; first success ends retries. This tolerates initial enrollment or
+transport unavailability without creating a run or asserting health from retries.
+Actual vendor early delivery, default activation and usage remain unqualified.
 The fixed installing-binary peer checker verifies the connected daemon's native
 Unix UID before any metadata is written. It borrows the descriptor read-only;
 the extension sends the frame itself. No launcher descriptor is required.

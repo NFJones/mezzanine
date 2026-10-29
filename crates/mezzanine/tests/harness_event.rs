@@ -159,7 +159,7 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
     assert_eq!(installed["result"], "installed");
     assert_eq!(installed["lifecycle"], "unverified");
     assert_eq!(installed["usage"], "unavailable-safe-activation");
-    assert_eq!(installed["manifest_revision"], 4);
+    assert_eq!(installed["manifest_revision"], 5);
     assert_eq!(bootstrap(&[])["result"], "unchanged");
     let extension = vendor.join("extensions/mezzanine");
     for (name, source) in [

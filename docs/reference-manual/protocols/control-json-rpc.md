@@ -1759,6 +1759,12 @@ creator/root and current generation remain mandatory through actor settlement.
 Only bounded async admission supports it; initialized/remote/general control do
 not. Fixed helper stdin is strictly bounded64KiB/250ms; loss returns neutral `{}`.
 
+The revision5 installed entry retries this read-only attachment only during a
+finite startup window: at most32 attempts start within15seconds, serialized with
+500ms after unavailable results and a3second transport bound. Shutdown fences a
+late result before pulses start. First success ends attachment retries. This does
+not establish a provider-dispatch barrier or native enrollment by itself.
+
 `agent/external/copilot-attach` accepts exactly `pane_id` and
 `external_session_id` on the same bounded uninitialized Unix ingress. It returns
 the existing original `external-agent/1` public observer response only after

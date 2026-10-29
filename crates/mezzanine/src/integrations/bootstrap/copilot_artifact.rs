@@ -4,7 +4,8 @@
 //! and CLI-only exec/args. A fixed installing executable receives one known hook
 //! name; no shell, permission decision, trust, exporter or credential is installed.
 //! The bundled-SDK extension attaches only to an existing native-qualified run;
-//! this revision adds idle pulses without enabling extensions or reporting usage.
+//! Startup attachment retries only within a finite window; neither loading policy
+//! nor usage is changed by waiting for the original classic enrollment.
 
 use super::{
     installer::Manifest,
@@ -15,10 +16,20 @@ use super::{
 /// Unrepresentable installing evidence cannot guess PATH or another user root.
 pub(super) fn manifest() -> Option<Manifest> {
     extension_manifest(
-        4,
+        5,
         include_bytes!("copilot_entry.mjs"),
         include_bytes!("copilot_extension.mjs"),
         Some(include_bytes!("copilot_lifetime.mjs")),
+    )
+}
+
+/// Independently frozen revision4 graph before bounded startup ordering.
+pub(super) fn historical_idle_manifest() -> Option<Manifest> {
+    extension_manifest(
+        4,
+        include_bytes!("history/copilot_entry_v4.mjs"),
+        include_bytes!("history/copilot_extension_v4.mjs"),
+        Some(include_bytes!("history/copilot_lifetime_v4.mjs")),
     )
 }
 
@@ -161,6 +172,39 @@ mod tests {
             assert_eq!(actual, expected);
         }
     }
+    /// Revision4's entry, direct client and pulse lifetime are immutable receipt
+    /// authority. Startup retry edits must not redefine the historical graph.
+    #[test]
+    fn bootstrap_copilot_idle_history_uses_frozen_revision4_bytes() {
+        use sha2::Digest;
+        let old = historical_idle_manifest().unwrap();
+        assert_eq!(old.revision, 4);
+        assert_eq!(old.entries.len(), 5);
+        for (index, expected) in [
+            (
+                1,
+                "ca091ed90bd0ae0024c3342fb1777736f649930164bb65a5407599fc5eaeadd6",
+            ),
+            (
+                2,
+                "41329c7e4bd3ab98b7dad26b803af27e991a632087c3b35734173b63eaca0bed",
+            ),
+            (
+                3,
+                "daea5e20758aa68296f3fd978ca618ac7bb931a1b0e5e6d9b004ab6cd659a545",
+            ),
+        ] {
+            let Artifact::File { bytes } = &old.entries[index].artifact else {
+                panic!("frozen source file");
+            };
+            let actual = sha2::Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            assert_eq!(actual, expected);
+        }
+    }
+
     /// Public bootstrap must supply documented version1 direct-exec user hooks,
     /// with no shell interpolation, prompt/permission output or settings owner.
     /// Read-only extension attachment does not claim default activation or usage.
@@ -170,7 +214,7 @@ mod tests {
         let manifest =
             super::super::compiled_manifest("copilot", None).expect("compiled Copilot hooks");
         assert_eq!(manifest.entries.len(), 5);
-        assert_eq!(manifest.revision, 4);
+        assert_eq!(manifest.revision, 5);
         assert_eq!(manifest.entries[0].path, "hooks/mezzanine.json");
         let Artifact::File { bytes } = &manifest.entries[0].artifact else {
             panic!("owned private hook document");
@@ -252,7 +296,7 @@ mod tests {
         std::fs::remove_dir_all(home).unwrap();
     }
 
-    /// Current hooks and extension automatically upgrade independent revisions1/2/3
+    /// Current hooks and extension automatically upgrade independent revisions1/2/3/4
     /// deployment bytes and receipt. Authored siblings/settings remain untouched;
     /// repeat and uninstall use the current manifest without adopting a foreign file.
     #[test]
@@ -267,6 +311,7 @@ mod tests {
             historical_manifest().unwrap(),
             historical_lifecycle_manifest().unwrap(),
             historical_attachment_manifest().unwrap(),
+            historical_idle_manifest().unwrap(),
         ] {
             let root = home.join(format!("vendor-{}", old.revision));
             std::fs::create_dir(&root).unwrap();
