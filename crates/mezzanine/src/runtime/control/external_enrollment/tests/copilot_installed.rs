@@ -12,7 +12,7 @@ use super::*;
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires freshly built sibling mez binary; installed Copilot helper qualification"]
 async fn external_copilot_installed_hooks_admit_and_retire_without_launcher() {
-    qualify_installed_hooks(false, false).await;
+    qualify_installed_hooks(false, false, false).await;
 }
 
 /// The actual installed extension entry joins a local SDK-shaped session and
@@ -23,7 +23,7 @@ async fn external_copilot_installed_hooks_admit_and_retire_without_launcher() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
 async fn external_copilot_installed_extension_attaches_to_original_native_creator() {
-    qualify_installed_hooks(true, false).await;
+    qualify_installed_hooks(true, false, false).await;
 }
 
 /// A test-owned Node writer uses installed attachment/pulse transport, then sends
@@ -32,13 +32,23 @@ async fn external_copilot_installed_extension_attaches_to_original_native_creato
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
 async fn external_copilot_terminal_wire_actor_acks_one_canonical_call() {
-    qualify_installed_hooks(true, true).await;
+    qualify_installed_hooks(true, true, false).await;
+}
+
+/// The owned revision6 entry observes SDK-shaped subagent usage synchronously
+/// before attachment, tolerates initial transport loss and sends bounded fixed
+/// gap/terminal frames after native pulse proof. Duplicate events incur one
+/// durable unattributed expense; payload mutation/content never changes it.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
+async fn external_copilot_installed_usage_projects_early_subagent_metadata_once() {
+    qualify_installed_hooks(true, false, true).await;
 }
 
 /// Shares the isolated bare bootstrap, exact installed hooks and real native
 /// actor. Only the extension case adds a test-owned bundled-SDK-shaped module;
 /// neither case rewrites any installed adapter source or runs a provider.
-async fn qualify_installed_hooks(extension: bool, terminal: bool) {
+async fn qualify_installed_hooks(extension: bool, terminal: bool, sdk_usage: bool) {
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
         serve_async_runtime_control_connection_loop,
@@ -97,7 +107,27 @@ async fn qualify_installed_hooks(extension: bool, terminal: bool) {
         )
         .unwrap();
         std::fs::write(sdk.join("extension.mjs"),
-            "import assert from 'node:assert/strict'; export async function joinSession(config) { assert.deepEqual(config, {}); return {sessionId:'session-a', on:(name, callback)=>{assert.equal(name,'session.shutdown'); assert.equal(typeof callback,'function'); return ()=>{};}}; }\n").unwrap();
+            "import assert from 'node:assert/strict'; export async function joinSession(config) { assert.deepEqual(config, {}); return {sessionId:'session-a', on:(name, callback)=>{assert(['session.shutdown','assistant.usage'].includes(name)); assert.equal(typeof callback,'function'); return ()=>{};}}; }\n").unwrap();
+        if sdk_usage {
+            std::fs::write(sdk.join("extension.mjs"), r#"
+import assert from 'node:assert/strict';
+export async function joinSession(config) {
+ assert.deepEqual(config, {});
+ return {sessionId:'session-a',on:(name,callback)=>{
+  assert(['assistant.usage','session.shutdown'].includes(name));
+  if(name==='assistant.usage') {
+   const event={type:'assistant.usage',agentId:'subagent-a',data:{
+    accounting:{sourceSessionId:'child-source',sequence:1,usageId:'same-call'},
+    model:'fixture-model',inputTokens:10,outputTokens:4,cacheReadTokens:3,cost:999,prompt:'PRIVATE'}};
+   callback(event);callback(event);
+   callback({type:'assistant.usage',data:{inputTokens:999,prompt:'PRIVATE'}});
+   event.data.inputTokens=999;
+  }
+  return ()=>{};
+ }};
+}
+"#).unwrap();
+        }
         let script = fixture.directory.join("installed-extension-assert.mjs");
         std::fs::write(&script,
             "import assert from 'node:assert/strict'; import {pathToFileURL} from 'node:url'; const {observer,lifetime} = await import(pathToFileURL(process.argv[2])); assert.equal(await lifetime.ready,true); await new Promise(resolve=>setTimeout(resolve,11000)); lifetime.stop(); assert.equal(observer.external_session_id, 'session-a'); assert(Object.isFrozen(observer)); assert.equal(Object.keys(observer).length, 6); process.stdout.write('{}\\n');\n").unwrap();
@@ -222,7 +252,11 @@ process.stdout.write('{}\n');
             .await
             .unwrap();
         fixture.socket.write_all(launch.as_bytes()).await.unwrap();
-        for connection_index in 0..if event == "extension" { 4 } else { 1 } {
+        for connection_index in 0..if event == "extension" {
+            if sdk_usage { 7 } else { 4 }
+        } else {
+            1
+        } {
             let (mut socket, _) =
                 tokio::time::timeout(Duration::from_secs(15), fixture.listener.accept())
                     .await
@@ -303,9 +337,9 @@ process.stdout.write('{}\n');
             .query_row("SELECT count(*) FROM token_usage_events", [], |row| row
                 .get::<_, i64>(0))
             .unwrap(),
-        i64::from(terminal)
+        i64::from(terminal || sdk_usage)
     );
-    if terminal {
+    if terminal || sdk_usage {
         assert_eq!(
             database
                 .query_row("SELECT count(*) FROM external_copilot_calls", [], |row| row

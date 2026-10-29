@@ -8,7 +8,7 @@ import { createServer } from "node:net";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { attachCopilotObserver, pulseCopilotObserver } from "../crates/mezzanine/src/integrations/bootstrap/copilot_extension.mjs";
+import { attachCopilotObserver, pulseCopilotObserver, reportCopilotTerminal, reportCopilotUsageGap } from "../crates/mezzanine/src/integrations/bootstrap/copilot_extension.mjs";
 
 const type = "application/vnd.mezzanine.control+json; version=1";
 const peerHelper = process.env.MEZ_TEST_PEER_HELPER;
@@ -60,7 +60,8 @@ async function exchange(reply, check = () => {}, fragmented = false, helper = pe
     await chmod(path, 0o600);
     const options = { mez: `${path}\x1fPRIVATE-UNUSED-DISCOVERY`, pane: "%1", session: "session-a", peerHelper: helper };
     const original = { external_session_id: "session-a", generation: 1, observer_witness: "a".repeat(64), run_id: 2, observer_epoch: 1, agent_id: "agent-a" };
-    const result = operation === "pulse" ? await pulseCopilotObserver(options, original, "b".repeat(64), 1)
+    const result = typeof operation === "function" ? await operation(options, original)
+      : operation === "pulse" ? await pulseCopilotObserver(options, original, "b".repeat(64), 1)
       : await attachCopilotObserver(options);
     if (failure) throw failure;
     assert.equal(requests, expectedRequests, "attachment must not retry or write before native peer qualification");
@@ -168,4 +169,48 @@ test("Copilot pulse transport uses fixed original selectors and typed ACKs", asy
   const error = code => JSON.stringify({ jsonrpc: "2.0", id: "copilot-pulse", error: { code, message: "PRIVATE" } });
   assert.deepEqual(await exchange(frame(error(-32002)), undefined, false, peerHelper, 1, "pulse"), { observed: false, terminal: true });
   assert.equal(await exchange(frame(error(-32000)), undefined, false, peerHelper, 1, "pulse"), undefined);
+});
+
+/** Fixed terminal transport copies only frozen metadata and requires an exact
+ * durable ACK; duplicate receipts remain successful without repeated expense.
+ */
+test("Copilot terminal transport allows only exact metadata and durable ACKs", async () => {
+  const report = Object.freeze({ call_id: "c".repeat(64), model: "fixture-model",
+    counters: Object.freeze({ input_tokens: 10, output_tokens: 4, cached_input_tokens: 3 }) });
+  const result = { accepted: true, durable: true, applied: false, revision: 1,
+    coverage: { source: "terminal-observation-external-reported", origin: "unattributed", reasoning_known: false } };
+  const operation = (options, original) => reportCopilotTerminal(options, original, "b".repeat(64), report);
+  const response = await exchange(frame(JSON.stringify({ jsonrpc: "2.0", id: "copilot-terminal", result })), request => {
+    assert.deepEqual(request, { jsonrpc: "2.0", id: "copilot-terminal", method: "agent/external/copilot-terminal",
+      params: { pane_id: "%1", external_session_id: "session-a", generation: 1,
+        observer_witness: "a".repeat(64), observer_id: "b".repeat(64), ...report } });
+  }, false, peerHelper, 1, operation);
+  assert.deepEqual(response, { accepted: true, durable: true, applied: false, revision: 1 });
+  for (const invalid of [{ ...result, durable: false }, { ...result, revision: 0 },
+    { ...result, content: "PRIVATE" }, { ...result, coverage: { ...result.coverage, origin: "guessed" } }]) {
+    assert.equal(await exchange(frame(JSON.stringify({ jsonrpc: "2.0", id: "copilot-terminal", result: invalid })),
+      () => {}, false, peerHelper, 1, operation), undefined);
+  }
+  for (const invalid of [{ ...report, prompt: "PRIVATE" }, { ...report, model: "   " },
+    { ...report, counters: { ...report.counters, cost: 1 } },
+    { ...report, counters: { ...report.counters, cached_input_tokens: 11 } }]) {
+    assert.equal(await exchange(null, () => {}, false, peerHelper, 0,
+      (options, original) => reportCopilotTerminal(options, original, "b".repeat(64), invalid)), undefined);
+  }
+});
+
+/** Diagnostic transport admits only fixed reasons, with an exact bounded ACK.
+ * It cannot carry a raw vendor error, content or a caller-selected RPC method.
+ */
+test("Copilot usage gaps have a fixed content-free vocabulary", async () => {
+  const response = await exchange(frame(JSON.stringify({ jsonrpc: "2.0", id: "copilot-usage-gap",
+    result: { observed: true, reason: "queue-pressure" } })), request => {
+    assert.equal(request.method, "agent/external/copilot-usage-gap");
+    assert.equal(request.params.reason, "queue-pressure");
+    assert.deepEqual(Object.keys(request.params).sort(),
+      ["external_session_id", "generation", "observer_id", "observer_witness", "pane_id", "reason"]);
+  }, false, peerHelper, 1, (options, original) => reportCopilotUsageGap(options, original, "b".repeat(64), "queue-pressure"));
+  assert.deepEqual(response, { observed: true, reason: "queue-pressure" });
+  assert.equal(await exchange(null, () => {}, false, peerHelper, 0,
+    (options, original) => reportCopilotUsageGap(options, original, "b".repeat(64), "PRIVATE")), undefined);
 });

@@ -130,11 +130,11 @@ The old `--apply` and `--plan` flags are rejected, not aliases: scripts should
 remove `--apply` for installation and replace `--plan` with `--dry-run` for preview.
 The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
-Copilot revision5 installs `hooks/mezzanine.json` under `COPILOT_HOME` or
+Copilot revision6 installs `hooks/mezzanine.json` under `COPILOT_HOME` or
 `~/.copilot`, using the documented version1 CLI hook format and direct `exec`/`args`
 for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/agentStop/
 errorOccurred/sessionEnd. It also installs a bundled-SDK observer extension in
-`extensions/mezzanine/`. It upgrades exact receipt-owned revision1/2/3/4 artifacts,
+`extensions/mezzanine/`. It upgrades exact receipt-owned revision1/2/3/4/5 artifacts,
 pins the installing Mez executable and
 does not alter authored sibling hooks, settings.json, disableAllHooks, sandbox
 grants, policy hooks, credentials or exporters. Receipt-proven edits to that owned
@@ -151,11 +151,16 @@ classic enrollment: at most32 serialized attempts start within15seconds,500ms
 apart after failure, with a3second bound per exchange. Shutdown fences late
 attachment; first success ends retries. This tolerates initial enrollment or
 transport unavailability without creating a run or asserting health from retries.
-Actual vendor early delivery, default activation and usage remain unqualified.
-The daemon now provides fixed concrete-writer terminal/gap ingress backed by the
-canonical ledger. The revision5 installed entry still emits attachment/pulses;
-its usage projector and safe activation are unfinished. Terminal records have
-unknown original request project and do not assert a provider-dispatch barrier.
+The owned entry now observes live `assistant.usage` before awaiting attachment,
+including subagent metadata, and hashes the full accounting identity. It retains
+at most64 immutable model/counter records and sends only after an actual positive
+pulse ACK, with at most3 attempts per record. Missing metadata, queue pressure
+and unavailable delivery use fixed bounded coverage-gap reasons. Unknown subsets
+stay unknown; cache counters are included in input, and billing multipliers are
+never currency. The canonical ledger deduplicates compatible terminal replays.
+Actual vendor early delivery and default activation remain unqualified. Original
+request time/project remains unknown; terminal observation is not a provider
+dispatch barrier. Safe default activation is still unfinished.
 
 The fixed installing-binary peer checker verifies the connected daemon's native
 Unix UID before any metadata is written. It borrows the descriptor read-only;

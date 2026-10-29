@@ -3,8 +3,8 @@
  * from the extension itself: forwarding through a helper would change the native parent
  * relationship. Routing/session values only select a candidate; the daemon
  * independently proves the socket writer, original creator and pane root.
- * No startup boundary, usage, content, vendor decision or provider request
- * is synthesized. Pulses retain an independent original native writer counter. Failure remains unavailable and is never printed.
+ * No startup boundary, content, vendor decision or provider request is
+ * synthesized. Live terminal usage only uses allowlisted fixed methods. Pulses retain an independent original native writer counter. Failure remains unavailable and is never printed.
  */
 import { createConnection } from "node:net";
 import { spawn } from "node:child_process";
@@ -207,5 +207,76 @@ export function pulseCopilotObserver(options = {}, original, observerId, sequenc
           || typeof reply.result.changed !== "boolean") return;
       return Object.freeze({ observed: true, sequence, changed: reply.result.changed });
     });
+  } catch { return Promise.resolve(undefined); }
+}
+
+/** Copy only original public selectors into a fixed terminal/gap method.
+ * Neither a nonce nor these selectors substitutes for native writer proof.
+ */
+function usageSelectors(options, original, observerId) {
+  if (!exact(original, ["external_session_id", "generation", "observer_witness", "run_id", "observer_epoch", "agent_id"])
+      || original.external_session_id !== options.session || !positive(original.generation)
+      || !digest(original.observer_witness) || !positive(original.run_id)
+      || original.observer_epoch !== 1 || !identifier(original.agent_id) || !digest(observerId)) return;
+  return { generation: original.generation, observer_witness: original.observer_witness, observer_id: observerId };
+}
+
+/** A stale fixed native endpoint permanently ends this original reporter.
+ * Arbitrary server text and error data are never returned to the callback.
+ */
+function usageReply(raw, id, project) {
+  const reply = decode(raw);
+  if (reply?.jsonrpc !== "2.0" || reply.id !== id) return;
+  if (exact(reply, ["jsonrpc", "id", "error"]) && [-32002, -32005, -32006].includes(reply.error?.code)) {
+    return Object.freeze({ terminal: true });
+  }
+  if (exact(reply, ["jsonrpc", "id", "result"])) return project(reply.result);
+}
+
+/** Send an immutable allowlisted terminal observation, never a request start.
+ * Strict shape checks prevent callers spreading vendor event/content fields.
+ */
+export function reportCopilotTerminal(options = {}, original, observerId, report) {
+  try {
+    const selectors = usageSelectors(options, original, observerId);
+    const fields = ["input_tokens", "output_tokens", "reasoning_tokens", "cached_input_tokens", "cache_write_input_tokens"];
+    const counters = report?.counters;
+    if (!selectors || !exact(report, ["call_id", "model", "counters"]) || !digest(report.call_id)
+        || typeof report.model !== "string" || report.model.trim().length === 0 || Buffer.byteLength(report.model) > 128
+        || /[\p{Cc}\u202a-\u202e\u2066-\u2069]/u.test(report.model)
+        || !counters || typeof counters !== "object" || Array.isArray(counters)
+        || !Object.keys(counters).every(key => fields.includes(key))
+        || !Object.hasOwn(counters, "input_tokens") || !Object.hasOwn(counters, "output_tokens")
+        || !Object.values(counters).every(value => Number.isSafeInteger(value) && value >= 0)
+        || (counters.reasoning_tokens ?? 0) > counters.output_tokens
+        || (counters.cached_input_tokens ?? 0) > counters.input_tokens
+        || (counters.cache_write_input_tokens ?? 0) > counters.input_tokens
+        || (counters.cached_input_tokens ?? 0) > counters.input_tokens - (counters.cache_write_input_tokens ?? 0)) {
+      return Promise.resolve(undefined);
+    }
+    const params = { ...selectors, call_id: report.call_id, model: report.model, counters: { ...counters } };
+    return exchangeCopilot(options, "copilot-terminal", "agent/external/copilot-terminal", params,
+      raw => usageReply(raw, "copilot-terminal", value => {
+        if (!exact(value, ["accepted", "durable", "applied", "revision", "coverage"])
+            || value.accepted !== true || value.durable !== true || typeof value.applied !== "boolean"
+            || !positive(value.revision) || !exact(value.coverage, ["source", "origin", "reasoning_known"])
+            || value.coverage.source !== "terminal-observation-external-reported"
+            || value.coverage.origin !== "unattributed" || typeof value.coverage.reasoning_known !== "boolean") return;
+        return Object.freeze({ accepted: true, durable: true, applied: value.applied, revision: value.revision });
+      }));
+  } catch { return Promise.resolve(undefined); }
+}
+
+/** Report only one of six fixed missing-coverage reasons, without raw text. */
+export function reportCopilotUsageGap(options = {}, original, observerId, reason) {
+  try {
+    const selectors = usageSelectors(options, original, observerId);
+    if (!selectors || !["missing-identity", "counters-unavailable", "invalid-counters", "queue-pressure",
+      "delivery-unavailable", "observer-lost"].includes(reason)) return Promise.resolve(undefined);
+    return exchangeCopilot(options, "copilot-usage-gap", "agent/external/copilot-usage-gap", { ...selectors, reason },
+      raw => usageReply(raw, "copilot-usage-gap", value => {
+        if (!exact(value, ["observed", "reason"]) || value.observed !== true || value.reason !== reason) return;
+        return Object.freeze({ observed: true, reason });
+      }));
   } catch { return Promise.resolve(undefined); }
 }

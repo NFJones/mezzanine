@@ -5,7 +5,8 @@
 //! name; no shell, permission decision, trust, exporter or credential is installed.
 //! The bundled-SDK extension attaches only to an existing native-qualified run;
 //! Startup attachment retries only within a finite window; neither loading policy
-//! nor usage is changed by waiting for the original classic enrollment.
+//! nor accounting is inferred by waiting for the original classic enrollment.
+//! Live per-call metadata is independently bounded and explicitly unattributed.
 
 use super::{
     installer::Manifest,
@@ -16,10 +17,22 @@ use super::{
 /// Unrepresentable installing evidence cannot guess PATH or another user root.
 pub(super) fn manifest() -> Option<Manifest> {
     extension_manifest(
-        5,
+        6,
         include_bytes!("copilot_entry.mjs"),
         include_bytes!("copilot_extension.mjs"),
         Some(include_bytes!("copilot_lifetime.mjs")),
+        Some(include_bytes!("copilot_usage.mjs")),
+    )
+}
+
+/// Independently frozen revision5 graph before live terminal metadata delivery.
+pub(super) fn historical_startup_manifest() -> Option<Manifest> {
+    extension_manifest(
+        5,
+        include_bytes!("history/copilot_entry_v5.mjs"),
+        include_bytes!("history/copilot_extension_v5.mjs"),
+        Some(include_bytes!("history/copilot_lifetime_v5.mjs")),
+        None,
     )
 }
 
@@ -30,6 +43,7 @@ pub(super) fn historical_idle_manifest() -> Option<Manifest> {
         include_bytes!("history/copilot_entry_v4.mjs"),
         include_bytes!("history/copilot_extension_v4.mjs"),
         Some(include_bytes!("history/copilot_lifetime_v4.mjs")),
+        None,
     )
 }
 
@@ -39,6 +53,7 @@ pub(super) fn historical_attachment_manifest() -> Option<Manifest> {
         3,
         include_bytes!("history/copilot_entry_v3.mjs"),
         include_bytes!("history/copilot_extension_v3.mjs"),
+        None,
         None,
     )
 }
@@ -50,6 +65,7 @@ fn extension_manifest(
     entry: &[u8],
     client: &[u8],
     lifetime: Option<&[u8]>,
+    usage: Option<&[u8]>,
 ) -> Option<Manifest> {
     let mut manifest = historical_lifecycle_manifest()?;
     manifest.revision = revision;
@@ -67,6 +83,14 @@ fn extension_manifest(
     if let Some(bytes) = lifetime {
         manifest.entries.push(Entry {
             path: "extensions/mezzanine/copilot_lifetime.mjs".into(),
+            artifact: Artifact::File {
+                bytes: bytes.to_vec(),
+            },
+        });
+    }
+    if let Some(bytes) = usage {
+        manifest.entries.push(Entry {
+            path: "extensions/mezzanine/copilot_usage.mjs".into(),
             artifact: Artifact::File {
                 bytes: bytes.to_vec(),
             },
@@ -207,14 +231,48 @@ mod tests {
 
     /// Public bootstrap must supply documented version1 direct-exec user hooks,
     /// with no shell interpolation, prompt/permission output or settings owner.
-    /// Read-only extension attachment does not claim default activation or usage.
+    /// Revision5 startup sources remain independent immutable receipt authority.
+    /// Adding terminal delivery must not reinterpret installed old bytes; upgrade
+    /// recognizes the old graph and uninstall removes only its owned artifacts.
+    #[test]
+    fn bootstrap_copilot_startup_history_uses_frozen_revision5_bytes() {
+        use sha2::Digest;
+        let old = historical_startup_manifest().unwrap();
+        assert_eq!(old.revision, 5);
+        assert_eq!(old.entries.len(), 5);
+        for (index, expected) in [
+            (
+                1,
+                "3277d35851f349f1dff2c5e2b6829fe8a573e48feb536815c8ce3e4601819816",
+            ),
+            (
+                2,
+                "41329c7e4bd3ab98b7dad26b803af27e991a632087c3b35734173b63eaca0bed",
+            ),
+            (
+                3,
+                "8e9a3a42deb36100de3a7ecfbbc657a5c5032e44d13a7a30b11cea500128e408",
+            ),
+        ] {
+            let Artifact::File { bytes } = &old.entries[index].artifact else {
+                panic!("frozen source");
+            };
+            let actual = sha2::Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    /// The metadata extension does not claim default activation or request origin.
     /// Installation is not proof of loaded/enrolled or accounted callbacks.
     #[test]
     fn bootstrap_copilot_manifest_pins_only_metadata_user_hooks() {
         let manifest =
             super::super::compiled_manifest("copilot", None).expect("compiled Copilot hooks");
-        assert_eq!(manifest.entries.len(), 5);
-        assert_eq!(manifest.revision, 5);
+        assert_eq!(manifest.entries.len(), 6);
+        assert_eq!(manifest.revision, 6);
         assert_eq!(manifest.entries[0].path, "hooks/mezzanine.json");
         let Artifact::File { bytes } = &manifest.entries[0].artifact else {
             panic!("owned private hook document");
@@ -229,7 +287,7 @@ mod tests {
             "extensions/mezzanine/copilot_extension.mjs"
         );
         assert_eq!(
-            manifest.entries[4].path,
+            manifest.entries[5].path,
             "extensions/mezzanine/peer_helper.mjs"
         );
         assert_eq!(document["version"], 1);
@@ -312,6 +370,7 @@ mod tests {
             historical_lifecycle_manifest().unwrap(),
             historical_attachment_manifest().unwrap(),
             historical_idle_manifest().unwrap(),
+            historical_startup_manifest().unwrap(),
         ] {
             let root = home.join(format!("vendor-{}", old.revision));
             std::fs::create_dir(&root).unwrap();
@@ -352,6 +411,7 @@ mod tests {
                     .exists()
             );
             assert!(!root.join("extensions/mezzanine/peer_helper.mjs").exists());
+            assert!(!root.join("extensions/mezzanine/copilot_usage.mjs").exists());
             assert!(
                 !root
                     .join("extensions/mezzanine/copilot_extension.mjs")

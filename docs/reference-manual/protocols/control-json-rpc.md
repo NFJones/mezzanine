@@ -2455,3 +2455,13 @@ event stream. Transport endpoint authentication alone never authorizes events.
 - [`maap/1` action protocol](maap.md)
 - [`mmp/1` local messages](mmp.md)
 - [Normative control contract](../../../SPEC.md#13-control-endpoint)
+
+
+The owned Copilot revision6 client uses these fixed terminal/gap methods for
+live per-call SDK metadata only. Its bounded64-record queue waits for an actual
+positive concrete pulse ACK (including a later ACK after loss), then serializes
+at most3 attempts per immutable record with500ms retry spacing. Full accounting
+source-session/sequence/usage identity is hashed before transmission. No raw
+identity, content, provider request, history or aggregate is sent; this does not
+establish original dispatch time/project. Vendor loading/trust and safe default
+activation remain separate from native wire acceptance.

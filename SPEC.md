@@ -855,14 +855,14 @@ cross-process source handoff, restart continuity, macOS execution or full billin
 
 #### Classic hook installation and source limits
 
-Copilot revision5 MAY install the compiled `hooks/mezzanine.json` user file
+Copilot revision6 MAY install the compiled `hooks/mezzanine.json` user file
 under the documented COPILOT_HOME/default root, version1 direct-exec/args hook
 syntax for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/
 agentStop/errorOccurred/sessionEnd and a fixed installing binary, plus the owned
 `extensions/mezzanine/extension.mjs`, `copilot_extension.mjs`,
-`copilot_lifetime.mjs` and fixed installing-
+`copilot_lifetime.mjs`, `copilot_usage.mjs` and fixed installing-
 binary `peer_helper.mjs` files. Exact
-revision1/2/3/4 bytes MUST remain independently recognized for receipt-qualified
+revision1/2/3/4/5 bytes MUST remain independently recognized for receipt-qualified
 upgrade/repair. The extension MAY join the existing session using the bundled
 SDK without contributing tools, hooks or permission handlers. It MAY request
 `agent/external/copilot-attach` with only pane/session selectors. Attachment MUST
@@ -896,6 +896,24 @@ ordering. The daemon alone MAY renew leases from this proof. The installed loop
 MUST serialize10second pulses, retry the same counter after ACK loss and stop on
 shutdown/terminal refusal without reenrolling. It MUST NOT alter vendor state,
 claim expense, or enable extensions/experiments.
+The owned entry MUST register live assistant.usage immediately after joining,
+before awaiting attachment. It MUST retain only model and validated per-call
+integer counters, hashing the full sourceSessionId/sequence/usageId accounting
+tuple under a fixed domain. It MUST NOT fall back to event IDs, provider IDs alone,
+current session origin, history, turn/context/shutdown aggregates, billing costs
+or content. Raw input is inclusive; cache and reasoning subsets MUST validate;
+unknown optional counters MUST stay absent, not zero. Missing/invalid required
+identity/counters MUST produce only fixed bounded gap reasons.
+The reporter MUST hold at most64 projected records, serialize delivery, and begin
+only after an actual positive typed pulse ACK of any tick, including duplicate
+ACK recovery. Each immutable record/gap MAY have at most3 attempts,500ms apart,
+with the transport's3second deadline. Pressure and exhausted delivery MUST retain
+sticky bounded gap state. Shutdown/terminal refusal MUST fence timers, queued
+work and late completions without erasing already admitted durable expense.
+This terminal observer MUST NOT claim original request time/project provenance
+or a provider dispatch barrier. Safe default extension activation remains a
+separate integration requirement; this revision leaves vendor policy unchanged.
+
 Fixed native-only agent/external/copilot-terminal MAY accept original
 pane/session/generation/witness, concrete observer_id, opaque call_id, model and
 allowlisted integer counters after the original first-epoch creator/root/writer
