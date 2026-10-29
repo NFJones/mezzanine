@@ -1759,6 +1759,23 @@ creator/root and current generation remain mandatory through actor settlement.
 Only bounded async admission supports it; initialized/remote/general control do
 not. Fixed helper stdin is strictly bounded64KiB/250ms; loss returns neutral `{}`.
 
+`agent/external/copilot-attach` accepts exactly `pane_id` and
+`external_session_id` on the same bounded uninitialized Unix ingress. It returns
+the existing original `external-agent/1` public observer response only after
+the worker and actor revalidate socket writer, direct original creator, native
+pane root and unchanged first epoch. It neither enrolls a missing candidate nor
+rotates/adopts a successor. Repeated attachment is time-inert: no freshness,
+lease, presentation, accounting or client-role mutation. The owned user extension
+writes this request itself, so an intermediary helper cannot accidentally be
+treated as the original native creator. Its reply parser accepts only the exact
+public response, bounded framing and unique JSON keys. Installation does not
+enable extensions or establish continuous observer/accounting capability.
+Before writing, the extension checks private socket-directory/socket ownership
+and its fixed executable reference, then requires the existing bounded
+`harness-peer` native UID acknowledgment on the borrowed descriptor. Path checks
+alone cannot qualify a daemon peer. The checker writes no socket bytes and
+grants no enrollment or observation authority.
+
 Allowlisted facts are userPromptSubmitted/preToolUse/postToolUse (running),
 permission_prompt (approval-wait), elicitation_dialog (input-wait), agentStop (ready),
 unrecoverable errorOccurred (interrupted), and sessionEnd (exact retirement).

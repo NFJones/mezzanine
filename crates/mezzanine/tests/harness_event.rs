@@ -115,8 +115,9 @@ fn standalone_cursor_bootstrap_shared_members_and_commands_remain_neutral() {
 }
 
 /// Bare production Copilot bootstrap resolves COPILOT_HOME, creates only its
-/// owned documented hook file, and leaves authored hook/settings/exporter data
-/// untouched. Direct exec argv containing shell metacharacters is inert; every
+/// owned documented hooks and extension graph, and leaves authored settings,
+/// explicit disabled policy and exporters untouched. Direct exec argv containing
+/// shell metacharacters is inert; every
 /// helper outcome stays neutral without HOME/PATH/routing or session guessing.
 /// Installation remains explicitly distinct from runtime/usage availability.
 #[test]
@@ -150,19 +151,39 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
     assert!(!vendor.exists());
     assert!(!home.join(".config").exists());
     std::fs::create_dir_all(vendor.join("hooks")).unwrap();
-    std::fs::write(
-        vendor.join("settings.json"),
-        b"{\"disableAllHooks\":true,\"authoredExporter\":true}",
-    )
-    .unwrap();
+    let authored_settings = br#"{"disableAllHooks":true,"authoredExporter":true,"enabledFeatureFlags":{"EXTENSIONS":false},"extensions":{"mode":"disabled"}}"#;
+    std::fs::write(vendor.join("settings.json"), authored_settings).unwrap();
     std::fs::write(vendor.join("hooks/authored.json"), b"AUTHORED HOOK").unwrap();
     let installed = bootstrap(&[]);
     assert_eq!(installed["root_source"], "COPILOT_HOME");
     assert_eq!(installed["result"], "installed");
     assert_eq!(installed["lifecycle"], "unverified");
     assert_eq!(installed["usage"], "unavailable-safe-activation");
-    assert_eq!(installed["manifest_revision"], 2);
+    assert_eq!(installed["manifest_revision"], 3);
     assert_eq!(bootstrap(&[])["result"], "unchanged");
+    let extension = vendor.join("extensions/mezzanine");
+    for (name, source) in [
+        (
+            "extension.mjs",
+            include_str!("../src/integrations/bootstrap/copilot_entry.mjs"),
+        ),
+        (
+            "copilot_extension.mjs",
+            include_str!("../src/integrations/bootstrap/copilot_extension.mjs"),
+        ),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(extension.join(name)).unwrap(),
+            source
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(extension.join("peer_helper.mjs")).unwrap(),
+        format!(
+            "export const peerHelper = {};\n",
+            serde_json::json!(helper.to_str().unwrap())
+        )
+    );
     let hooks: serde_json::Value =
         serde_json::from_slice(&std::fs::read(vendor.join("hooks/mezzanine.json")).unwrap())
             .unwrap();
@@ -206,13 +227,16 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
     assert_eq!(bootstrap(&["--check"])["result"], "checked");
     assert_eq!(bootstrap(&["--uninstall"])["result"], "uninstalled");
     assert!(!vendor.join("hooks/mezzanine.json").exists());
+    for name in ["extension.mjs", "copilot_extension.mjs", "peer_helper.mjs"] {
+        assert!(!extension.join(name).exists());
+    }
     assert_eq!(
         std::fs::read(vendor.join("hooks/authored.json")).unwrap(),
         b"AUTHORED HOOK"
     );
     assert_eq!(
         std::fs::read(vendor.join("settings.json")).unwrap(),
-        b"{\"disableAllHooks\":true,\"authoredExporter\":true}"
+        authored_settings
     );
 }
 

@@ -26,6 +26,130 @@ fn callback(session: &str, event: &str, timestamp: u64) -> JsonRpcRequest {
     crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"copilot-test","method":"agent/external/copilot-observe","params":{"pane_id":"%1","external_session_id":session,"event":event,"timestamp":timestamp}}).to_string()).unwrap()
 }
 
+/// Attachment has no event, claimed boundary, generation, credential or PID.
+/// The indexed candidate still needs the worker's original parent/root proof.
+fn attachment(session: &str) -> JsonRpcRequest {
+    crate::control::parse_json_rpc_request(
+        &serde_json::json!({"jsonrpc":"2.0","id":"copilot-attach-test",
+            "method":"agent/external/copilot-attach",
+            "params":{"pane_id":"%1","external_session_id":session}})
+        .to_string(),
+    )
+    .unwrap()
+}
+
+/// A real direct child may read the existing original public observer selectors
+/// after native verification. Repeating attachment cannot allocate another run,
+/// repaint status, refresh freshness, renew a lease or create expense. The pane
+/// root itself and a different session cannot borrow that child's relationship.
+#[tokio::test(flavor = "current_thread")]
+async fn external_copilot_attachment_is_native_and_time_inert() {
+    let mut fixture = fixture("hold").await.expect("native Copilot fixture");
+    let (_socket, connection) = child(&mut fixture).await;
+    assert!(
+        fixture
+            .service
+            .prepare_external_helper_presentation(&attachment("session-a"), &connection,)
+            .is_err()
+    );
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&declaration("session-a"), &connection)
+        .unwrap();
+    let enrolled = settle(&mut fixture, work, &connection).await;
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(
+            &callback("session-a", "userPromptSubmitted", 1),
+            &connection,
+        )
+        .unwrap();
+    settle(&mut fixture, work, &connection).await;
+    let before = {
+        let binding = fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap();
+        let observer = binding
+            .enrollment
+            .as_ref()
+            .unwrap()
+            .curated_observer
+            .as_ref()
+            .unwrap();
+        (
+            binding.generation,
+            binding.accounting_owner.clone(),
+            binding.expires,
+            observer.sequence,
+            observer.observed_at,
+        )
+    };
+    for _ in 0..2 {
+        let work = fixture
+            .service
+            .prepare_external_helper_presentation(&attachment("session-a"), &connection)
+            .unwrap();
+        let reply = settle(&mut fixture, work, &connection).await;
+        assert_eq!(reply["id"], "copilot-attach-test");
+        assert_eq!(reply["result"], enrolled["result"]);
+        assert!(reply["result"].get("launch_token").is_none());
+    }
+    let root = fixture.connection.clone();
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&attachment("session-a"), &root)
+        .unwrap();
+    assert!(
+        settle(&mut fixture, work, &root)
+            .await
+            .get("error")
+            .is_some()
+    );
+    assert!(
+        fixture
+            .service
+            .prepare_external_helper_presentation(&attachment("other-session"), &connection,)
+            .is_err()
+    );
+    let registry = fixture.service.control.external_agents();
+    assert_eq!(registry.bindings.len(), 1);
+    let binding = registry.bindings.values().next().unwrap();
+    let observer = binding
+        .enrollment
+        .as_ref()
+        .unwrap()
+        .curated_observer
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (
+            binding.generation,
+            binding.accounting_owner.clone(),
+            binding.expires,
+            observer.sequence,
+            observer.observed_at
+        ),
+        before
+    );
+    let presentation = binding
+        .registration
+        .as_ref()
+        .unwrap()
+        .presentation
+        .as_ref()
+        .unwrap();
+    assert_eq!(presentation.sequence, 1);
+    assert_eq!(presentation.state, "running");
+    assert!(registry.enrollments.pending.is_empty());
+    assert!(!connection.initialized());
+    assert!(connection.caller_client_id().is_none());
+}
+
 /// Rotation while native lifecycle/end work is pending fences the original
 /// generation. Stateless callbacks cannot adopt the successor even with the same
 /// creator/session metadata; rejection must not retire the live replacement.
@@ -52,6 +176,10 @@ async fn external_copilot_rotation_rejects_pending_and_new_original_callbacks() 
         .service
         .prepare_external_helper_presentation(&callback("session-a", "sessionEnd", 2), &connection)
         .unwrap();
+    let stale_attachment = fixture
+        .service
+        .prepare_external_helper_presentation(&attachment("session-a"), &connection)
+        .unwrap();
     let mut rotation = declaration("session-a");
     let mut params: serde_json::Value =
         serde_json::from_str(rotation.params.as_deref().unwrap()).unwrap();
@@ -66,7 +194,7 @@ async fn external_copilot_rotation_rejects_pending_and_new_original_callbacks() 
         settle(&mut fixture, work, &connection).await["result"]["registered"],
         true
     );
-    for work in [stale, stale_end] {
+    for work in [stale, stale_end, stale_attachment] {
         assert!(
             settle(&mut fixture, work, &connection)
                 .await
@@ -82,6 +210,12 @@ async fn external_copilot_rotation_rejects_pending_and_new_original_callbacks() 
                 .is_err()
         );
     }
+    assert!(
+        fixture
+            .service
+            .prepare_external_helper_presentation(&attachment("session-a"), &connection,)
+            .is_err()
+    );
     let registry = fixture.service.control.external_agents();
     assert_eq!(registry.bindings.len(), 1);
     assert!(registry.bindings.values().all(|b| !b.retired));

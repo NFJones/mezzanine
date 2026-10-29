@@ -130,14 +130,25 @@ The old `--apply` and `--plan` flags are rejected, not aliases: scripts should
 remove `--apply` for installation and replace `--plan` with `--dry-run` for preview.
 The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
-Copilot revision2 installs only `hooks/mezzanine.json` under `COPILOT_HOME` or
+Copilot revision3 installs `hooks/mezzanine.json` under `COPILOT_HOME` or
 `~/.copilot`, using the documented version1 CLI hook format and direct `exec`/`args`
 for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/agentStop/
-errorOccurred/sessionEnd. It upgrades exact receipt-owned revision1 artifacts,
+errorOccurred/sessionEnd. It also installs a read-only bundled-SDK extension in
+`extensions/mezzanine/`. It upgrades exact receipt-owned revision1/2 artifacts,
 pins the installing Mez executable and
 does not alter authored sibling hooks, settings.json, disableAllHooks, sandbox
 grants, policy hooks, credentials or exporters. Receipt-proven edits to that owned
 generated document are archived before repair; foreign collisions reject.
+Where Copilot already loads extensions, the entry joins the existing session
+without adding tools, hooks, permissions or log output. A direct Unix request
+attaches to the original classic-hook enrollment only after native writer,
+creator and pane-root verification. It cannot enroll a missing run or refresh
+health, presentation, leases or accounting. Bootstrap does not enable extensions
+or experiments in this revision. Extension attachment is an integration
+foundation; default activation, idle renewal and usage remain unfinished.
+The fixed installing-binary peer checker verifies the connected daemon's native
+Unix UID before any metadata is written. It borrows the descriptor read-only;
+the extension sends the frame itself. No launcher descriptor is required.
 Run `mez bootstrap copilot`, then ordinary `copilot` in a Mez pane—no wrapper,
 fd3, launch token or separate accounting-enable command. The fixed helper consumes
 at most64KiB/250ms before HOME/config/CPU discovery, returning only `{}`. Classic

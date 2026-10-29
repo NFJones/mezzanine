@@ -855,11 +855,26 @@ cross-process source handoff, restart continuity, macOS execution or full billin
 
 #### Classic hook installation and source limits
 
-Copilot revision2 MAY install only the compiled `hooks/mezzanine.json` user file
+Copilot revision3 MAY install the compiled `hooks/mezzanine.json` user file
 under the documented COPILOT_HOME/default root, version1 direct-exec/args hook
 syntax for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/
-agentStop/errorOccurred/sessionEnd and a fixed installing binary. Exact revision1
-bytes MUST remain independently recognized for receipt-qualified upgrade/repair.
+agentStop/errorOccurred/sessionEnd and a fixed installing binary, plus the owned
+`extensions/mezzanine/extension.mjs`, `copilot_extension.mjs` and fixed installing-
+binary `peer_helper.mjs` files. Exact
+revision1/2 bytes MUST remain independently recognized for receipt-qualified
+upgrade/repair. The extension MAY join the existing session using the bundled
+SDK without contributing tools, hooks or permission handlers. It MAY request
+`agent/external/copilot-attach` with only pane/session selectors. Attachment MUST
+require the original live first-epoch source and actual socket-writer direct-
+parent/pane-root proof through bounded async settlement. It MUST return only
+existing public observer selectors, never create a boundary/run, refresh observer
+health, renew a lease, change presentation or incur usage. Missing enrollment,
+changed epoch/root, wrong native parent or malformed replies MUST fail closed.
+This revision MUST NOT enable extensions/experiments or claim idle/accounting
+support from attachment; existing vendor loading/trust/disabled policy applies.
+Before sending metadata, the extension MUST qualify its route/helper paths and
+obtain the bounded native same-user peer acknowledgment via `harness-peer`. That
+checker MUST do no socket I/O; the extension MUST remain the actual RPC writer.
 It MUST NOT rewrite authored siblings/settings/exporters, disable or sandbox
 policy, credentials, instructions or policy-level hook directories. Only exact
 compiled receipt-proven generated-file edits MAY be archived before repair;

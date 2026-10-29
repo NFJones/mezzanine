@@ -32,7 +32,7 @@ pub(super) struct HelperPresentation {
     /// Original model-request plan; native witness is worker-only.
     pub(super) codex_request: Option<super::codex_requests::RequestWork>,
     /// Separate classic Copilot semantics; only native settlement permits effects.
-    pub(super) copilot: Option<super::copilot::CopilotEvent>,
+    pub(super) copilot: Option<super::copilot::CopilotObservation>,
     /// Distinct native Cursor generation semantics, without usage forwarding.
     pub(super) cursor: Option<super::cursor::CursorEvent>,
     /// Holds this source's ingress ticket through complete actor settlement.
@@ -94,7 +94,10 @@ impl RuntimeSessionService {
         if request.method == "agent/external/codex-observe" {
             return self.prepare_external_codex_observation(request, connection);
         }
-        if request.method == "agent/external/copilot-observe" {
+        if matches!(
+            request.method.as_str(),
+            "agent/external/copilot-observe" | "agent/external/copilot-attach"
+        ) {
             return self.prepare_external_copilot_observation(request, connection);
         }
         if request.method == "agent/external/cursor-observe" {

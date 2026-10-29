@@ -129,7 +129,13 @@ pub(super) fn reconcile_preserving(
         ));
     }
     let generated = match harness {
-        "copilot" => path == "hooks/mezzanine.json",
+        "copilot" => matches!(
+            path,
+            "hooks/mezzanine.json"
+                | "extensions/mezzanine/extension.mjs"
+                | "extensions/mezzanine/copilot_extension.mjs"
+                | "extensions/mezzanine/peer_helper.mjs"
+        ),
         "claude" => {
             journal_version.is_some_and(|version| version >= 8)
                 && (path == "skills/mezzanine-telemetry/.claude-plugin/plugin.json"

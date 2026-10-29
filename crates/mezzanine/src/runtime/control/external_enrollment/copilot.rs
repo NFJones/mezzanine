@@ -5,7 +5,9 @@
 //! the shared helper worker prove writer/direct-parent/root before settlement.
 //! Shared ingress tickets serialize native work; no Codex turn semantics apply.
 //! Equal replay is time-inert, conflicting ties/stale times fail closed, and only
-//! the exact session end retires. Silence does not attest idle observer health.
+//! the exact session end retires. Read-only extension attachment returns existing
+//! public selectors after the same native proof; it cannot create a boundary,
+//! change presentation, refresh health or allocate accounting authority.
 
 use super::*;
 
@@ -14,6 +16,16 @@ use super::*;
 pub(super) struct CopilotEvent {
     kind: String,
     timestamp: u64,
+}
+
+/// Separate read-only attachment from timestamp-ordered classic lifecycle facts.
+/// Only its distinct registered method can request public selector attachment.
+#[derive(Debug, Clone)]
+pub(super) enum CopilotObservation {
+    /// Existing-session public selectors, without freshness or presentation.
+    Attach,
+    /// A strictly validated classic event with a positive vendor order fence.
+    Event(CopilotEvent),
 }
 
 impl CopilotEvent {
@@ -91,7 +103,8 @@ fn original(binding: &LaunchBinding) -> Result<&EnrollmentBinding> {
 
 impl RuntimeSessionService {
     /// Narrows an existing indexed session then uses the common native pipeline.
-    /// No public credential/generation or new enrollment is returned to a helper.
+    /// No credential or new enrollment is returned. Attachment reads existing
+    /// public selectors only after common native worker and actor settlement.
     pub(super) fn prepare_external_copilot_observation(
         &mut self,
         request: &JsonRpcRequest,
@@ -125,7 +138,11 @@ impl RuntimeSessionService {
             .map_err(|_| MezError::invalid_args("Copilot callback requires unique fields"))?;
         let pane = text(&params, "pane_id", 64)?;
         let session = text(&params, "external_session_id", 128)?;
-        let event = CopilotEvent::parse(&params)?;
+        let event = if request.method == "agent/external/copilot-attach" {
+            CopilotObservation::Attach
+        } else {
+            CopilotObservation::Event(CopilotEvent::parse(&params)?)
+        };
         let targets = self
             .control
             .external_agents()
@@ -173,13 +190,14 @@ impl RuntimeSessionService {
         Ok(work)
     }
 
-    /// Publishes a native-qualified new fact and finite observer proof atomically.
-    /// Timestamp replay never refreshes health; session end is not process death.
+    /// Returns existing public selectors or publishes a native-qualified fact.
+    /// Attachment and timestamp replay never refresh health; session end is not
+    /// process death and cannot establish a replacement source.
     pub(super) fn commit_external_copilot_observation(
         &mut self,
         digest: [u8; 32],
         session: &str,
-        event: &CopilotEvent,
+        observation: &CopilotObservation,
     ) -> Result<String> {
         let binding = self
             .control
@@ -188,6 +206,12 @@ impl RuntimeSessionService {
             .get(&digest)
             .ok_or_else(|| MezError::forbidden("Copilot callback owner unavailable"))?;
         let source = original(binding)?;
+        let event = match observation {
+            CopilotObservation::Attach => {
+                return Ok(super::curated::public_response(binding, source, session));
+            }
+            CopilotObservation::Event(event) => event,
+        };
         let previous = binding
             .registration
             .as_ref()

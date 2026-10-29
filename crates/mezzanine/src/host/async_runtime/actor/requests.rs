@@ -337,6 +337,7 @@ impl AsyncRuntimeSessionActor {
                 | "agent/external/helper-observe"
                 | "agent/external/codex-observe"
                 | "agent/external/copilot-observe"
+                | "agent/external/copilot-attach"
                 | "agent/external/cursor-observe"
         ) {
             return None;
@@ -351,6 +352,7 @@ impl AsyncRuntimeSessionActor {
                 | "agent/external/helper-observe"
                 | "agent/external/codex-observe"
                 | "agent/external/copilot-observe"
+                | "agent/external/copilot-attach"
                 | "agent/external/cursor-observe"
                 | "agent/external/curated-heartbeat"
                 | "agent/external/curated-usage-begin"

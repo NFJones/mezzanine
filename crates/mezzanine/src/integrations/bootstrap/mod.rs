@@ -164,9 +164,13 @@ pub(crate) fn compiled_history(manifest: &installer::Manifest) -> Vec<installer:
     }
     if manifest.harness == "copilot" {
         return if Some(manifest) == copilot_artifact::manifest().as_ref() {
-            copilot_artifact::historical_manifest()
-                .into_iter()
-                .collect()
+            [
+                copilot_artifact::historical_lifecycle_manifest(),
+                copilot_artifact::historical_manifest(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect()
         } else {
             Vec::new()
         };

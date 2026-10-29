@@ -12,6 +12,24 @@ use super::*;
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires freshly built sibling mez binary; installed Copilot helper qualification"]
 async fn external_copilot_installed_hooks_admit_and_retire_without_launcher() {
+    qualify_installed_hooks(false).await;
+}
+
+/// The actual installed extension entry joins a local SDK-shaped session and
+/// writes its fixed attachment frame directly as a genuine creator child. The
+/// production actor must return the original public observer receipt. Existing
+/// classic lifecycle/retirement and zero expense remain unchanged; this fixture
+/// does not certify vendor discovery, default activation, idle renewal or usage.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built sibling mez required"]
+async fn external_copilot_installed_extension_attaches_to_original_native_creator() {
+    qualify_installed_hooks(true).await;
+}
+
+/// Shares the isolated bare bootstrap, exact installed hooks and real native
+/// actor. Only the extension case adds a test-owned bundled-SDK-shaped module;
+/// neither case rewrites any installed adapter source or runs a provider.
+async fn qualify_installed_hooks(extension: bool) {
     use crate::host::async_runtime::{
         AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeSessionActor,
         serve_async_runtime_control_connection_loop,
@@ -20,6 +38,16 @@ async fn external_copilot_installed_hooks_admit_and_retire_without_launcher() {
     let Some(mut fixture) = fixture("hold").await else {
         panic!("installed Copilot requires native evidence");
     };
+    if extension {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fixture.directory, std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        std::fs::set_permissions(
+            fixture.directory.join("control.sock"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+    }
     let helper = std::env::current_exe()
         .unwrap()
         .parent()
@@ -47,6 +75,38 @@ async fn external_copilot_installed_hooks_admit_and_retire_without_launcher() {
     let document: serde_json::Value =
         serde_json::from_slice(&std::fs::read(vendor.join("hooks/mezzanine.json")).unwrap())
             .unwrap();
+    let extension_command = if extension {
+        let node = std::path::PathBuf::from(
+            std::env::var_os("MEZ_TEST_NODE_BINARY").expect("explicit offline Node path"),
+        );
+        assert!(node.is_absolute() && node.is_file());
+        let sdk = vendor.join("node_modules/@github/copilot-sdk");
+        std::fs::create_dir_all(&sdk).unwrap();
+        std::fs::write(
+            sdk.join("package.json"),
+            br#"{"type":"module","exports":{"./extension":"./extension.mjs"}}"#,
+        )
+        .unwrap();
+        std::fs::write(sdk.join("extension.mjs"),
+            "import assert from 'node:assert/strict'; export async function joinSession(config) { assert.deepEqual(config, {}); return {sessionId:'session-a'}; }\n").unwrap();
+        let script = fixture.directory.join("installed-extension-assert.mjs");
+        std::fs::write(&script,
+            "import assert from 'node:assert/strict'; import {pathToFileURL} from 'node:url'; const {observer} = await import(pathToFileURL(process.argv[2])); assert.equal(observer.external_session_id, 'session-a'); assert(Object.isFrozen(observer)); assert.equal(Object.keys(observer).length, 6); process.stdout.write('{}\\n');\n").unwrap();
+        Some(format!(
+            "exec {} {} {}",
+            shlex::try_quote(node.to_str().unwrap()).unwrap(),
+            shlex::try_quote(script.to_str().unwrap()).unwrap(),
+            shlex::try_quote(
+                vendor
+                    .join("extensions/mezzanine/extension.mjs")
+                    .to_str()
+                    .unwrap()
+            )
+            .unwrap(),
+        ))
+    } else {
+        None
+    };
     let usage = fixture.directory.join("usage.sqlite");
     fixture
         .service
@@ -55,7 +115,7 @@ async fn external_copilot_installed_hooks_admit_and_retire_without_launcher() {
     let (handle, actor) =
         AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
     let task = tokio::spawn(actor.run());
-    for (event, time) in [
+    let mut events = vec![
         ("sessionStart", 1),
         ("sessionStart", 1),
         ("userPromptSubmitted", 2),
@@ -63,22 +123,30 @@ async fn external_copilot_installed_hooks_admit_and_retire_without_launcher() {
         ("postToolUse", 4),
         ("agentStop", 5),
         ("sessionEnd", 6),
-    ] {
-        let hook = &document["hooks"][event][0];
+    ];
+    if extension {
+        events.insert(2, ("extension", 1));
+    }
+    for (event, time) in events {
         // Only test-owned compiled argv is quoted. exec keeps the production
         // helper a direct child of the genuine fixture creator, not a shell owner.
         let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
-        let command = format!(
-            "exec {} {}",
-            quote(hook["exec"].as_str().unwrap()),
-            hook["args"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|v| quote(v.as_str().unwrap()))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
+        let command = if event == "extension" {
+            extension_command.as_ref().unwrap().clone()
+        } else {
+            let hook = &document["hooks"][event][0];
+            format!(
+                "exec {} {}",
+                quote(hook["exec"].as_str().unwrap()),
+                hook["args"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| quote(v.as_str().unwrap()))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        };
         let launch = serde_json::json!({"command":command,"event":{"sessionId":"session-a","timestamp":time,"source":"startup","notification_type":"permission_prompt","stopReason":"end_turn","stop_hook_active":false,"reason":"user_exit","prompt":"PRIVATE","transcriptPath":"PRIVATE","error":{"message":"PRIVATE"},"usage":{"input_tokens":999}}}).to_string();
         fixture.socket.write_all(&[9]).await.unwrap();
         fixture
