@@ -618,7 +618,7 @@ context_window_tokens = 20000
     assert!(prompt.contains(r#""state":"running""#), "{prompt}");
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::Memory
+        block.source == ContextSourceKind::CompactionPrefix
             && block
                 .label
                 .contains(&mez_agent::memory::canonical_memory_uuid("compact-as1"))
@@ -654,7 +654,7 @@ context_window_tokens = 20000
 }
 
 /// Verifies provider context receives only the active conversation compaction
-/// memory automatically.
+/// memory automatically with explicit prefix-summary provenance.
 ///
 /// Generic session memory should not be injected into every provider request
 /// once transcript replay and compaction summaries already represent the active
@@ -721,10 +721,11 @@ fn runtime_agent_context_injects_only_active_compact_memory() {
     let memory_blocks = context
         .blocks()
         .iter()
-        .filter(|block| block.source == ContextSourceKind::Memory)
+        .filter(|block| block.source.is_memory())
         .collect::<Vec<_>>();
 
     assert_eq!(memory_blocks.len(), 1, "{memory_blocks:?}");
+    assert_eq!(memory_blocks[0].source, ContextSourceKind::CompactionPrefix);
     assert!(
         memory_blocks.iter().any(|block| block
             .label
