@@ -1027,9 +1027,7 @@ impl RuntimeSessionService {
             )
         })?;
         let parent_conversation_id = parent_session.session_id.clone();
-        let parent_native_working_directory = parent_session
-            .native_working_directory()
-            .map(std::path::Path::to_path_buf);
+        let parent_native_directory = parent_session.native_directory_snapshot().cloned();
         let parent_transcript_entries = parent_session.transcript_entries;
         let parent_transcript_high_water = parent_session.transcript_high_water;
         let parent_display_name = parent_session.display_name.clone();
@@ -1048,7 +1046,7 @@ impl RuntimeSessionService {
             goal: parsed.goal,
             mode: parsed.mode,
             parent_conversation_id: parent_conversation_id.clone(),
-            parent_native_working_directory,
+            parent_native_directory,
             work_conversation_id: None,
             parent_transcript_entries,
             parent_transcript_high_water,
@@ -2670,7 +2668,7 @@ mod tests {
             goal: None,
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
-            parent_native_working_directory: None,
+            parent_native_directory: None,
             work_conversation_id: None,
             parent_transcript_entries: 0,
             parent_transcript_high_water: 0,
@@ -2693,7 +2691,7 @@ mod tests {
             goal: None,
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
-            parent_native_working_directory: None,
+            parent_native_directory: None,
             work_conversation_id: None,
             parent_transcript_entries: 0,
             parent_transcript_high_water: 0,
@@ -2769,7 +2767,7 @@ mod tests {
             goal: Some("all checks pass".to_string()),
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
-            parent_native_working_directory: None,
+            parent_native_directory: None,
             work_conversation_id: None,
             parent_transcript_entries: 0,
             parent_transcript_high_water: 0,

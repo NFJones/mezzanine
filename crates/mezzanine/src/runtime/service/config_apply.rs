@@ -35,8 +35,9 @@ use super::{
     runtime_terminal_shell_output_preview_lines_from_config, runtime_terminal_term_from_config,
 };
 use crate::runtime::config::{
-    PaneSpawnPolicy, runtime_pane_spawn_directory_policy_from_config,
-    runtime_pane_spawn_view_policy_from_config, runtime_subagent_name_mode_from_config,
+    PaneSpawnPolicy, instruction_context_max_bytes_from_config,
+    runtime_pane_spawn_directory_policy_from_config, runtime_pane_spawn_view_policy_from_config,
+    runtime_subagent_name_mode_from_config,
 };
 use crate::runtime::{RuntimeConfigAffectedSubsystems, RuntimePreparedConfigReload};
 use crate::security::project::{ProjectTrustProvenance, resolve_project_trust_provenance};
@@ -645,6 +646,8 @@ impl RuntimeSessionService {
             }
         }
         if affected.agents {
+            let instruction_context_max_bytes =
+                instruction_context_max_bytes_from_config(&structured)?;
             let max_concurrent_agents = runtime_max_concurrent_agents_from_config(&structured)?;
             let max_queued_agent_turns = runtime_max_queued_agent_turns_from_config(&structured)?;
             let max_queued_agent_bytes = runtime_max_queued_agent_bytes_from_config(&structured)?;
@@ -675,6 +678,7 @@ impl RuntimeSessionService {
                 runtime_agent_native_shell_timeout_ms_from_config(&structured)?,
             );
             self.set_agent_loop_limit(runtime_agent_loop_limit_from_config(&structured)?);
+            self.set_agent_instruction_context_max_bytes(instruction_context_max_bytes);
             self.set_agent_peer_message_loop_limit(
                 runtime_agent_peer_message_loop_limit_from_config(&structured)?,
             );

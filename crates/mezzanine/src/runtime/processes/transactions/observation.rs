@@ -2154,9 +2154,9 @@ impl RuntimeSessionService {
         if let Some(inventory) = tool_inventory {
             self.record_agent_tool_inventory(signature, inventory);
         }
-        if !instruction_files.is_empty() {
-            self.set_pane_agent_instruction_files(pane_id, instruction_files);
-        }
+        // Accepted empty discovery is a current snapshot, not permission to
+        // keep earlier instructions. Native cwd snapshots remain independent.
+        self.set_pane_agent_instruction_files(pane_id, instruction_files);
         true
     }
 

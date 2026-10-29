@@ -50,6 +50,17 @@ impl RuntimeSessionService {
     /// transcript-source labels, unrelated CIDs and other panes do not inherit
     /// it. This selection grants no filesystem, cleanup or parent-turn rights.
     pub(crate) fn native_agent_working_directory(&self, pane_id: &str) -> Option<&std::path::Path> {
+        self.native_agent_directory_snapshot(pane_id)
+            .map(|snapshot| snapshot.directory())
+    }
+
+    /// Returns one qualified cwd/discovery generation for direct native work or
+    /// an actual same-pane loop binding. Consumers share this lookup so paths
+    /// and instruction sources cannot diverge across private history isolation.
+    pub(crate) fn native_agent_directory_snapshot(
+        &self,
+        pane_id: &str,
+    ) -> Option<&mez_agent::AgentNativeWorkingDirectory> {
         if self.effective_agent_shell_mode_for_pane(pane_id)
             != crate::runtime::config::ShellMode::Native
         {
@@ -59,8 +70,8 @@ impl RuntimeSessionService {
         if session.pane_id != pane_id {
             return None;
         }
-        if let Some(directory) = session.native_working_directory() {
-            return Some(directory);
+        if let Some(snapshot) = session.native_directory_snapshot() {
+            return Some(snapshot);
         }
         let controller = self.agent_loop_state(pane_id)?;
         if !session.ephemeral
@@ -70,7 +81,10 @@ impl RuntimeSessionService {
         {
             return None;
         }
-        controller.parent_native_working_directory.as_deref()
+        controller
+            .parent_native_directory
+            .as_ref()
+            .filter(|snapshot| snapshot.is_owned_by(pane_id, &controller.parent_conversation_id))
     }
 
     /// Returns the canonical agent turn ledger for read-only inspection.

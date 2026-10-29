@@ -531,6 +531,7 @@ pub(crate) fn validate_config_text_with_document(
             || path == "agents.turn_timeout_ms"
             || path == "agents.loop_limit"
             || path == "agents.peer_message_loop_limit"
+            || path == "instructions.max_bytes"
         {
             if let Some(message) = validate_positive_usize_value(&value, &path) {
                 diagnostics.push(ConfigDiagnostic { path, message });

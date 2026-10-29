@@ -160,7 +160,7 @@ pub(crate) struct RuntimeConfigAffectedSubsystems {
     pub(crate) presentation: bool,
     /// Audit persistence settings changed.
     pub(crate) audit: bool,
-    /// Agent scheduling, subagent, or personality settings changed.
+    /// Agent scheduling, subagent, personality, or instruction settings changed.
     pub(crate) agents: bool,
     /// Permission and sandbox settings changed.
     pub(crate) permissions: bool,
@@ -204,7 +204,7 @@ impl RuntimeConfigAffectedSubsystems {
                 "key_presets",
             ]),
             audit: changed(&["audit"]),
-            agents: changed(&["agents", "subagents", "personalities"]),
+            agents: changed(&["agents", "subagents", "personalities", "instructions"]),
             permissions: changed(&["permissions"]),
             providers: changed(&[
                 "agents",

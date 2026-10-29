@@ -388,9 +388,11 @@ impl RuntimeSessionService {
                 ),
             );
         }
-        if let Some(instruction_files) = instruction_files.as_deref()
-            && let Some(block) = project_guidance_context_block(instruction_files, 2)?
-        {
+        if let Some(instruction_files) = instruction_files.as_deref() {
+            let block = project_guidance_context_block(
+                instruction_files,
+                self.agent_instruction_context_max_bytes(),
+            )?;
             insert_context_block_by_placement(&mut blocks, block);
         }
         if let Some(invocation) = parse_skill_prompt_invocation(prompt) {

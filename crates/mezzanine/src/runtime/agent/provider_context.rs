@@ -5,17 +5,43 @@
 //! dispatch selection. Steering and other chronology commit at their actor
 //! receipt boundaries before this module observes a snapshot. The provider
 //! execution loop remains in the facade while these helper decisions stay
-//! grouped by their context-shaping responsibility.
+//! grouped by their context-shaping responsibility. Guidance remains chronological;
+//! cache lineage fingerprints its actual snapshot rather than a removed stable slot.
 
 use super::{
     AgentId, AgentTurnRecord, AgentTurnState, ContextSourceKind, MezError, ModelProfile, Result,
     RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile, RuntimeSessionService,
     invoked_mcp_tools_for_context_with_configured, runtime_cooperation_mode_name,
-    runtime_mezzanine_error_code, set_project_guidance_context,
+    runtime_mezzanine_error_code,
 };
 #[cfg(test)]
 use crate::runtime::RuntimeAutoSizingDecision;
+use mez_agent::set_project_guidance_context;
 use sha2::{Digest, Sha256};
+
+/// Hashes the latest chronological instruction snapshot for cache identity.
+/// A length-prefixed label and exact content distinguish alternative discoveries
+/// without exposing file bodies in diagnostics or reclassifying them as system
+/// policy. Missing prepared guidance is an invariant error, not an absent slot.
+fn project_guidance_source_fingerprint(context: &mez_agent::AgentContext) -> Result<String> {
+    let block = context
+        .chronology()
+        .iter()
+        .rev()
+        .find(|event| event.block().source == ContextSourceKind::ProjectGuidance)
+        .map(|event| event.block())
+        .ok_or_else(|| MezError::invalid_state("prepared project guidance snapshot is missing"))?;
+    let mut digest = Sha256::new();
+    digest.update(b"project-guidance\0");
+    digest.update(format!("{}\0", block.label.len()).as_bytes());
+    digest.update(block.label.as_bytes());
+    digest.update(block.content.as_bytes());
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
 
 /// Renders the bounded safe state that follows an output-token cutoff.
 ///
@@ -130,8 +156,8 @@ impl RuntimeSessionService {
 
     /// Refreshes project guidance blocks on a stored turn context.
     ///
-    /// Before the first accepted provider response, discovery may refresh the
-    /// stable slot and establish a new cache lineage. Once a provider request
+    /// Before the first accepted provider response, discovery may append a
+    /// changed snapshot and establish a new cache lineage. Once a provider request
     /// has been accepted, the turn's front-loaded instructions are frozen;
     /// changed guidance is deferred to the next turn rather than rewriting the
     /// active OpenAI request chain.
@@ -150,14 +176,12 @@ impl RuntimeSessionService {
             .get(&turn.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let previous_fingerprint = previous
-            .stable_slot_source_fingerprint("project-guidance")
-            .map(|fingerprint| fingerprint.as_str().to_string());
-        let mut context = set_project_guidance_context(previous.clone(), &instruction_files, 2)?;
-        let current_fingerprint = context
-            .stable_slot_source_fingerprint("project-guidance")
-            .map(|fingerprint| fingerprint.as_str().to_string());
-        if previous_fingerprint == current_fingerprint && context == previous {
+        let mut context = set_project_guidance_context(
+            previous.clone(),
+            &instruction_files,
+            self.agent_instruction_context_max_bytes(),
+        )?;
+        if context == previous {
             return Ok(());
         }
 
@@ -180,7 +204,7 @@ impl RuntimeSessionService {
             .prompt_cache_lineage_id
             .as_deref()
             .unwrap_or("none");
-        let current_fingerprint_text = current_fingerprint.as_deref().unwrap_or("removed");
+        let current_fingerprint_text = project_guidance_source_fingerprint(&context)?;
         let lineage_material =
             format!("{prior_lineage}\0project-guidance\0{current_fingerprint_text}");
         let lineage_digest = Sha256::digest(lineage_material.as_bytes())

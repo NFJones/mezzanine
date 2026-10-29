@@ -15,8 +15,13 @@ Each turn receives the applicable project instructions, selected guidance, and
 the conversation's ordered prompts, replies, and explicit action results. Mez
 assembles discovered project guidance before provider requests, but freezes it
 once a provider request chain has been accepted; changed guidance is deferred
-to the next turn. This is not a guarantee that files are reread before every
-request. The agent does not
+to the next turn. Each current snapshot represents all discovered scopes, with
+source contents sharing `instructions.max_bytes`; omitted or truncated contents
+are identified. Successfully empty discovery explicitly supersedes earlier
+guidance, retaining earlier snapshots as history. A native directory snapshot
+owns its discovery separately from later pane-root bootstrap updates and keeps
+it through its runtime-owned same-pane loop conversations. This is not a
+guarantee that files are reread before every request. The agent does not
 automatically see terminal scrollback, a full-screen application's contents,
 other panes, or files it has not inspected. Ask it to read a file or run a
 bounded command when current evidence is needed.

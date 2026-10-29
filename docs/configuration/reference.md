@@ -1745,12 +1745,18 @@ credentials.
 
 ### `instructions`
 
-These fields are accepted configuration declarations, but the current pane
-bootstrap does not consume them. It searches for `AGENTS.md` from the pane
-directory toward the detected project root, reads at most 32768 bytes per file,
-and marks truncated content rather than automatically summarizing it. Changing
-`global_files`, `project_filenames`, `max_bytes`, `include_hidden_directories`,
-or `on_truncation` does not customize that bootstrap. Keep essential repository
+`max_bytes` sets the positive total instruction-source byte budget in each
+model-visible snapshot and updates on configuration reload. All discovered
+paths and scopes remain represented; content beyond the budget is marked as
+truncated or omitted at UTF-8 boundaries. Empty discovery explicitly replaces
+earlier guidance for the current workspace while preserving it as history.
+
+The current pane bootstrap separately searches for `AGENTS.md` from the pane
+directory toward the detected project root and reads at most 32768 bytes per
+file. `global_files`, `project_filenames`, `include_hidden_directories`, and
+`on_truncation` remain declarations not consumed by that bootstrap; it marks
+truncation without automatic summarization. Increasing `max_bytes` does not
+reread bytes the bootstrap already omitted. Keep essential repository
 instructions within the limit; use enabled [context documents](../agent/context-and-continuity.md#reuse-guidance-across-conversations)
 for additional project or global guidance.
 
@@ -1758,7 +1764,7 @@ for additional project or global guidance.
 | --- | --- | --- | --- |
 | `instructions.global_files` | string array | `[]` | Declared global instruction file paths; not consumed by pane bootstrap. |
 | `instructions.project_filenames` | string array | `["AGENTS.md"]` | Declared project instruction filenames; bootstrap currently uses only `AGENTS.md`. |
-| `instructions.max_bytes` | integer | `32768` | Declared per-file byte limit; bootstrap currently uses a fixed 32768-byte limit. |
+| `instructions.max_bytes` | positive integer | `32768` | Total source-content byte limit per model-visible instruction snapshot; reloadable. Bootstrap discovery separately retains its fixed 32768-byte per-file read limit. |
 | `instructions.include_hidden_directories` | boolean | `false` | Declared hidden-directory discovery policy; not consumed by pane bootstrap. |
 | `instructions.on_truncation` | string | `"summarize"` | Declared truncation policy; bootstrap marks truncated content without automatic summarization. |
 

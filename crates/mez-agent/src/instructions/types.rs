@@ -5,6 +5,9 @@
 
 use std::path::PathBuf;
 
+/// Default total source-content budget for one model-visible instruction snapshot.
+pub const DEFAULT_INSTRUCTION_CONTEXT_MAX_BYTES: usize = 32_768;
+
 /// Configuration for discovering project instruction files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstructionDiscoveryConfig {

@@ -183,3 +183,31 @@ fn rejects_external_editor_candidate_count_above_runner_limit() {
         validation.diagnostics
     );
 }
+
+/// The active instruction-source budget must be positive during text validation
+/// as well as runtime projection. Invalid limits fail before they can disable
+/// the cap or produce configuration that validates but cannot be applied.
+#[test]
+fn instruction_context_budget_requires_a_positive_integer() {
+    for value in ["0", "-1", "1.5", "'invalid'"] {
+        let result = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[instructions]\nmax_bytes = {value}\n"),
+            ConfigScope::Primary,
+        );
+        assert!(!result.valid, "{value}");
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path == "instructions.max_bytes"
+                    && diagnostic.message.contains("positive integer"))
+        );
+    }
+    let valid = validate_config_text(
+        ConfigFormat::Toml,
+        "[instructions]\nmax_bytes = 7\n",
+        ConfigScope::Primary,
+    );
+    assert!(valid.valid, "{:?}", valid.diagnostics);
+}

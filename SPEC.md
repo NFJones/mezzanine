@@ -9678,13 +9678,13 @@ minimal allowlisted live state defined above. Permission, scheduler, readiness,
 scope, and retry state MUST be enforced by the controller rather than copied
 speculatively into model context.
 
-Every provider request for a running agent turn MUST include the current
-discovered project guidance as a final stable system-prompt suffix after
-invariant built-in and provider-specific policy when present. The earlier
-repository section MUST retain the authority, precedence, and security contract
-without embedding the active file contents there. Provider continuations after
-actions, local messages, or approval decisions MUST refresh the active guidance
-from the discovered instruction files and MUST NOT omit or duplicate it.
+Discovered project guidance MUST enter model context as an exact chronological
+task prelude before the active user prompt, separate from invariant system
+policy. A changed snapshot MUST retain prior snapshots as historical evidence;
+unchanged rediscovery MUST NOT append a duplicate. Once a provider request chain
+has been accepted, its guidance MUST remain frozen and changes MUST apply to a
+later turn. Successfully discovered empty guidance MUST explicitly supersede
+previous snapshots, without deleting history or granting permissions.
 
 Command output, file contents, directory listings, search results, web content,
 and similar external observations MUST enter model context only as results of
@@ -18664,6 +18664,18 @@ over all project instruction files.
 
 The default maximum total project instruction content included in a model turn
 MUST be 32768 bytes.
+The positive `instructions.max_bytes` setting MUST bound the total source
+content in the current model-visible snapshot, independently of discovery's
+per-file read limit and the model's overall context admission. Every discovered
+path and scope MUST remain represented, including empty or omitted content;
+an arbitrary file-count cap MUST NOT silently hide deeper instruction scopes.
+Content truncation MUST preserve UTF-8 boundaries and original size metadata.
+A native directory adoption MUST own its immutable discovery snapshot under
+the same exact pane/conversation and adoption generation. Later pane-root
+bootstrap publication or clearing MUST NOT overwrite that native snapshot.
+Owned same-pane ephemeral loop bindings MUST carry that snapshot with the
+parent workspace. Unknown discovery MUST NOT borrow a different cwd's cache;
+successful empty discovery MUST remain distinguishable from unknown discovery.
 
 When instruction content is omitted or truncated because of a limit, Mezzanine
 MUST make that fact visible to the agent and SHOULD make it visible to the

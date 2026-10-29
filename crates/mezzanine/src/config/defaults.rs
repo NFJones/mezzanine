@@ -1194,15 +1194,16 @@ provider_refresh_leeway_seconds = 86400
 
 # Repository instruction-file discovery and context-size policy.
 [instructions]
-# Additional global instruction files loaded for every project.
+# Declared global instruction files; not consumed by pane bootstrap.
 global_files = []
-# Instruction filenames searched from the project hierarchy.
+# Declared project instruction filenames; bootstrap currently uses AGENTS.md.
 project_filenames = ["AGENTS.md"]
-# Maximum instruction bytes loaded before applying on_truncation.
+# Maximum total instruction-source bytes in a model-visible snapshot.
+# Pane bootstrap separately reads at most 32768 bytes per file.
 max_bytes = 32768
-# Skip hidden directories during instruction discovery by default.
+# Declared hidden-directory discovery policy; not consumed by pane bootstrap.
 include_hidden_directories = false
-# Truncation policy: summarize oversized instruction context.
+# Declared truncation policy; automatic summarization is not currently performed.
 on_truncation = "summarize"
 
 # Named lifecycle hooks. No external command executes by default.

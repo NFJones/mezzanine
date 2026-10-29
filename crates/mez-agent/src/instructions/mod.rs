@@ -12,7 +12,9 @@ pub use error::{
     InstructionDiscoveryError, InstructionDiscoveryErrorKind, InstructionDiscoveryResult,
 };
 pub use planning::plan_instruction_discovery;
-pub use types::{InstructionDiscoveryConfig, InstructionDiscoveryPlan};
+pub use types::{
+    DEFAULT_INSTRUCTION_CONTEXT_MAX_BYTES, InstructionDiscoveryConfig, InstructionDiscoveryPlan,
+};
 
 /// One instruction file decoded from discovery command output.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -756,15 +756,16 @@ env_whitelist = ["PATH", "HOME", "SHELL", "TMPDIR", "XDG_CACHE_HOME"]
 provider_refresh_leeway_seconds = 86400
 
 # Repository instruction-file discovery and context-size policy.
-# These declarations are accepted but not consumed by the current pane bootstrap:
-# it reads AGENTS.md with a fixed 32768-byte limit and marks truncation without
-# automatic summarization. Use enabled context documents for additional guidance.
+# max_bytes bounds total instruction-source content in each current model snapshot.
+# Pane bootstrap separately reads AGENTS.md with a fixed 32768-byte per-file cap;
+# the other discovery declarations below do not customize that bootstrap.
+# Truncation is marked without automatic summarization.
 [instructions]
 # Declared additional global instruction files.
 global_files = []
 # Declared instruction filenames for the project hierarchy.
 project_filenames = ["AGENTS.md"]
-# Declared per-file byte limit; bootstrap currently uses the fixed limit above.
+# Positive total source-byte limit for the current model-visible snapshot.
 max_bytes = 32768
 # Declared hidden-directory discovery policy.
 include_hidden_directories = false

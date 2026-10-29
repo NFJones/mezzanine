@@ -93,7 +93,6 @@ use mez_agent::{
     MacroRunState, ModelInteractionKind, ModelTokenUsage, ModelTokenUsageKey, PreparedModelContext,
     ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, ToolDiscoveryCache, ToolInventory,
     assistant_context_content_for_execution, invoked_mcp_tools_for_context_with_configured,
-    set_project_guidance_context,
 };
 use mez_mux::command::CommandInvocation;
 
@@ -382,6 +381,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_root_routing_policy_overrides: BTreeMap<String, AutoSizingRoutingPolicy>,
     /// Maximum iterations accepted by one loop controller.
     agent_loop_limit: usize,
+    /// Projected total instruction-content budget; absence uses the shared default.
+    instruction_context_max_bytes: Option<usize>,
     /// Maximum peer-message-triggered turns started for one agent.
     agent_peer_message_loop_limit: usize,
     /// Configured source used to derive saved-session display titles.
@@ -1262,29 +1263,34 @@ impl RuntimeSessionService {
         self.agent.tool_discovery_cache.record(signature, inventory);
     }
 
-    /// Returns project instruction files discovered for one pane.
+    /// Returns cwd-qualified native discovery or the observed pane-root cache.
+    /// A native adoption and its loop work retain their immutable snapshot;
+    /// later root bootstrap publication/teardown cannot overwrite that source.
     pub(crate) fn pane_agent_instruction_files(
         &self,
         pane_id: &str,
     ) -> Option<&[mez_agent::instructions::DiscoveredInstructionFile]> {
+        if let Some(snapshot) = self.native_agent_directory_snapshot(pane_id) {
+            // A native adoption owns its discovery, even an explicit empty
+            // result. Unknown discovery never borrows pane-root cache data.
+            return snapshot.instruction_files();
+        }
         self.agent
             .pane_instruction_files
             .get(pane_id)
             .map(Vec::as_slice)
     }
 
-    /// Replaces project instruction files discovered for one pane.
+    /// Replaces observed pane-root discovery. Native adoption snapshots are
+    /// separate immutable data and cannot be changed by this publication.
     pub(crate) fn set_pane_agent_instruction_files(
         &mut self,
         pane_id: impl Into<String>,
         files: Vec<mez_agent::instructions::DiscoveredInstructionFile>,
     ) {
-        let pane_id = pane_id.into();
-        if files.is_empty() {
-            self.agent.pane_instruction_files.remove(&pane_id);
-        } else {
-            self.agent.pane_instruction_files.insert(pane_id, files);
-        }
+        self.agent
+            .pane_instruction_files
+            .insert(pane_id.into(), files);
     }
 
     /// Clears pane-scoped instruction discovery during pane teardown.
@@ -4232,6 +4238,18 @@ impl RuntimeSessionService {
             )?;
         }
         Ok(())
+    }
+
+    /// Returns the applied total instruction-content budget for prompt snapshots.
+    pub(crate) fn agent_instruction_context_max_bytes(&self) -> usize {
+        self.agent
+            .instruction_context_max_bytes
+            .unwrap_or(mez_agent::instructions::DEFAULT_INSTRUCTION_CONTEXT_MAX_BYTES)
+    }
+
+    /// Applies a positive byte budget validated during config preparation.
+    pub(crate) fn set_agent_instruction_context_max_bytes(&mut self, max_bytes: usize) {
+        self.agent.instruction_context_max_bytes = Some(max_bytes);
     }
 
     /// Returns the configured loop iteration limit.
