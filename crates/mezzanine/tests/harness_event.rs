@@ -159,7 +159,7 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
     assert_eq!(installed["result"], "installed");
     assert_eq!(installed["lifecycle"], "unverified");
     assert_eq!(installed["usage"], "unavailable-safe-activation");
-    assert_eq!(installed["manifest_revision"], 3);
+    assert_eq!(installed["manifest_revision"], 4);
     assert_eq!(bootstrap(&[])["result"], "unchanged");
     let extension = vendor.join("extensions/mezzanine");
     for (name, source) in [
@@ -227,7 +227,12 @@ fn standalone_copilot_bootstrap_and_direct_exec_are_neutral_and_preserving() {
     assert_eq!(bootstrap(&["--check"])["result"], "checked");
     assert_eq!(bootstrap(&["--uninstall"])["result"], "uninstalled");
     assert!(!vendor.join("hooks/mezzanine.json").exists());
-    for name in ["extension.mjs", "copilot_extension.mjs", "peer_helper.mjs"] {
+    for name in [
+        "extension.mjs",
+        "copilot_extension.mjs",
+        "copilot_lifetime.mjs",
+        "peer_helper.mjs",
+    ] {
         assert!(!extension.join(name).exists());
     }
     assert_eq!(

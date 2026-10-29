@@ -16,7 +16,7 @@ async fn external_copilot_installed_hooks_admit_and_retire_without_launcher() {
 }
 
 /// The actual installed extension entry joins a local SDK-shaped session and
-/// writes its fixed attachment frame directly as a genuine creator child. The
+/// writes its fixed attachment/pulse frames directly as a genuine creator child. The
 /// production actor must return the original public observer receipt. Existing
 /// classic lifecycle/retirement and zero expense remain unchanged; this fixture
 /// does not certify vendor discovery, default activation, idle renewal or usage.
@@ -88,10 +88,10 @@ async fn qualify_installed_hooks(extension: bool) {
         )
         .unwrap();
         std::fs::write(sdk.join("extension.mjs"),
-            "import assert from 'node:assert/strict'; export async function joinSession(config) { assert.deepEqual(config, {}); return {sessionId:'session-a'}; }\n").unwrap();
+            "import assert from 'node:assert/strict'; export async function joinSession(config) { assert.deepEqual(config, {}); return {sessionId:'session-a', on:(name, callback)=>{assert.equal(name,'session.shutdown'); assert.equal(typeof callback,'function'); return ()=>{};}}; }\n").unwrap();
         let script = fixture.directory.join("installed-extension-assert.mjs");
         std::fs::write(&script,
-            "import assert from 'node:assert/strict'; import {pathToFileURL} from 'node:url'; const {observer} = await import(pathToFileURL(process.argv[2])); assert.equal(observer.external_session_id, 'session-a'); assert(Object.isFrozen(observer)); assert.equal(Object.keys(observer).length, 6); process.stdout.write('{}\\n');\n").unwrap();
+            "import assert from 'node:assert/strict'; import {pathToFileURL} from 'node:url'; const {observer,lifetime} = await import(pathToFileURL(process.argv[2])); assert.equal(await lifetime.ready,true); await new Promise(resolve=>setTimeout(resolve,11000)); lifetime.stop(); assert.equal(observer.external_session_id, 'session-a'); assert(Object.isFrozen(observer)); assert.equal(Object.keys(observer).length, 6); process.stdout.write('{}\\n');\n").unwrap();
         Some(format!(
             "exec {} {} {}",
             shlex::try_quote(node.to_str().unwrap()).unwrap(),
@@ -155,25 +155,30 @@ async fn qualify_installed_hooks(extension: bool) {
             .await
             .unwrap();
         fixture.socket.write_all(launch.as_bytes()).await.unwrap();
-        let (mut socket, _) =
-            tokio::time::timeout(Duration::from_secs(5), fixture.listener.accept())
-                .await
-                .unwrap()
-                .unwrap();
-        let mut connection = ControlConnectionState::new(true, false);
-        serve_async_runtime_control_connection_loop(
-            &mut socket,
-            &handle,
-            &mut connection,
-            AsyncRuntimeControlConnectionConfig::new(8192, crate::runtime::current_effective_uid())
+        for _ in 0..if event == "extension" { 3 } else { 1 } {
+            let (mut socket, _) =
+                tokio::time::timeout(Duration::from_secs(15), fixture.listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            let mut connection = ControlConnectionState::new(true, false);
+            serve_async_runtime_control_connection_loop(
+                &mut socket,
+                &handle,
+                &mut connection,
+                AsyncRuntimeControlConnectionConfig::new(
+                    8192,
+                    crate::runtime::current_effective_uid(),
+                )
                 .unwrap(),
-            |served, _| served >= 1,
-        )
-        .await
-        .unwrap();
-        assert!(!connection.initialized());
-        assert!(connection.caller_client_id().is_none());
-        assert!(connection.unix_origin().unwrap().writer_confirmed());
+                |served, _| served >= 1,
+            )
+            .await
+            .unwrap();
+            assert!(!connection.initialized());
+            assert!(connection.caller_client_id().is_none());
+            assert!(connection.unix_origin().unwrap().writer_confirmed());
+        }
         let mut neutral = [0];
         tokio::time::timeout(
             Duration::from_secs(10),
@@ -193,6 +198,16 @@ async fn qualify_installed_hooks(extension: bool) {
     assert!(binding.retired);
     let source = binding.enrollment.as_ref().unwrap();
     assert!(source.usage_owner_is_durable);
+    if extension {
+        assert_eq!(
+            source
+                .copilot_events
+                .extension_snapshot_for_test()
+                .unwrap()
+                .0,
+            2
+        );
+    }
     assert!(source.producer.matches_parent(
         fixture.connection.unix_origin().unwrap().uid(),
         fixture.connection.unix_origin().unwrap().identity

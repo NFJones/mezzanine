@@ -855,13 +855,14 @@ cross-process source handoff, restart continuity, macOS execution or full billin
 
 #### Classic hook installation and source limits
 
-Copilot revision3 MAY install the compiled `hooks/mezzanine.json` user file
+Copilot revision4 MAY install the compiled `hooks/mezzanine.json` user file
 under the documented COPILOT_HOME/default root, version1 direct-exec/args hook
 syntax for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/
 agentStop/errorOccurred/sessionEnd and a fixed installing binary, plus the owned
-`extensions/mezzanine/extension.mjs`, `copilot_extension.mjs` and fixed installing-
+`extensions/mezzanine/extension.mjs`, `copilot_extension.mjs`,
+`copilot_lifetime.mjs` and fixed installing-
 binary `peer_helper.mjs` files. Exact
-revision1/2 bytes MUST remain independently recognized for receipt-qualified
+revision1/2/3 bytes MUST remain independently recognized for receipt-qualified
 upgrade/repair. The extension MAY join the existing session using the bundled
 SDK without contributing tools, hooks or permission handlers. It MAY request
 `agent/external/copilot-attach` with only pane/session selectors. Attachment MUST
@@ -875,6 +876,19 @@ support from attachment; existing vendor loading/trust/disabled policy applies.
 Before sending metadata, the extension MUST qualify its route/helper paths and
 obtain the bounded native same-user peer acknowledgment via `harness-peer`. That
 checker MUST do no socket I/O; the extension MUST remain the actual RPC writer.
+A separate `agent/external/copilot-pulse` MAY prove finite observer health using
+original pane/session/generation/witness selectors, an opaque instance nonce and
+positive safe-integer counter. Common native parent/root/writer fences MUST still
+hold. One retained native extension process MUST own its nonce/counter; a new
+socket from that same live PID/birth identity MAY continue it. Another child or
+nonce MUST NOT replace a living owner. Only proven writer death MAY permit a new
+nonce starting at counter1, without allocating or reviving a source. Equal/stale
+counters MUST NOT refresh time. Recent positive proof MUST expire after30seconds
+or native writer death; it MUST remain separate from classic event/presentation
+ordering. The daemon alone MAY renew leases from this proof. The installed loop
+MUST serialize10second pulses, retry the same counter after ACK loss and stop on
+shutdown/terminal refusal without reenrolling. It MUST NOT alter vendor state,
+claim expense, or enable extensions/experiments.
 It MUST NOT rewrite authored siblings/settings/exporters, disable or sandbox
 policy, credentials, instructions or policy-level hook directories. Only exact
 compiled receipt-proven generated-file edits MAY be archived before repair;

@@ -1403,11 +1403,17 @@ async fn fail_test_routed_event_task(
         .await
         .unwrap();
     send.flush().await.unwrap();
-    let response = tokio::time::timeout(std::time::Duration::from_secs(10), recv.read_to_end(4096))
-        .await
-        .expect("event failure must end live control")
-        .unwrap();
-    let (body, consumed) = decode_control_frame(&response, 4096).unwrap();
+    // Initialization advertises the growing method registry. Bound the fixture
+    // by the same host frame budget rather than an incidental 4 KiB snapshot.
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        recv.read_to_end(HOST_CONTROL_MAX_CONTENT_LENGTH + 1024),
+    )
+    .await
+    .expect("event failure must end live control")
+    .unwrap();
+    let (body, consumed) =
+        decode_control_frame(&response, HOST_CONTROL_MAX_CONTENT_LENGTH).unwrap();
     assert_eq!(consumed, response.len());
     assert!(body.contains("granted_role"), "{body}");
     tokio::time::timeout(std::time::Duration::from_secs(10), connection.closed())

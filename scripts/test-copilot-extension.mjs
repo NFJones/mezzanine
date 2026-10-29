@@ -8,7 +8,7 @@ import { createServer } from "node:net";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { attachCopilotObserver } from "../crates/mezzanine/src/integrations/bootstrap/copilot_extension.mjs";
+import { attachCopilotObserver, pulseCopilotObserver } from "../crates/mezzanine/src/integrations/bootstrap/copilot_extension.mjs";
 
 const type = "application/vnd.mezzanine.control+json; version=1";
 const peerHelper = process.env.MEZ_TEST_PEER_HELPER;
@@ -25,7 +25,7 @@ const frame = raw => `Content-Length: ${Buffer.byteLength(raw)}\r\nContent-Type:
 /** Serve one synthetic response only after receiving the entire real request.
  * Always close owned sockets/server/tree, including failed assertions.
  */
-async function exchange(reply, check = () => {}, fragmented = false, helper = peerHelper, expectedRequests = 1) {
+async function exchange(reply, check = () => {}, fragmented = false, helper = peerHelper, expectedRequests = 1, operation = "attach") {
   const directory = await mkdtemp("/tmp/mez-copilot-transport-");
   const path = join(directory, "control.sock");
   const sockets = new Set();
@@ -58,7 +58,10 @@ async function exchange(reply, check = () => {}, fragmented = false, helper = pe
   try {
     await new Promise((resolve, reject) => { server.once("error", reject); server.listen(path, resolve); });
     await chmod(path, 0o600);
-    const result = await attachCopilotObserver({ mez: `${path}\x1fPRIVATE-UNUSED-DISCOVERY`, pane: "%1", session: "session-a", peerHelper: helper });
+    const options = { mez: `${path}\x1fPRIVATE-UNUSED-DISCOVERY`, pane: "%1", session: "session-a", peerHelper: helper };
+    const original = { external_session_id: "session-a", generation: 1, observer_witness: "a".repeat(64), run_id: 2, observer_epoch: 1, agent_id: "agent-a" };
+    const result = operation === "pulse" ? await pulseCopilotObserver(options, original, "b".repeat(64), 1)
+      : await attachCopilotObserver(options);
     if (failure) throw failure;
     assert.equal(requests, expectedRequests, "attachment must not retry or write before native peer qualification");
     return result;
@@ -147,4 +150,22 @@ test("Copilot attachment writes nothing without a positive peer check", async ()
     assert.equal(await exchange(frame(JSON.stringify(receipt())), () => assert.fail("metadata sent"), false,
       helper, 0), undefined);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+/** Pulses carry only original public selectors, a nonce and counter. Typed
+ * refusal stops the local loop, while transient errors cannot forge an ACK.
+ */
+test("Copilot pulse transport uses fixed original selectors and typed ACKs", async () => {
+  const envelope = result => JSON.stringify({ jsonrpc: "2.0", id: "copilot-pulse", result });
+  assert.deepEqual(await exchange(frame(envelope({ observed: true, sequence: 1, changed: false })), request => {
+    assert.deepEqual(request, { jsonrpc: "2.0", id: "copilot-pulse", method: "agent/external/copilot-pulse",
+      params: { pane_id: "%1", external_session_id: "session-a", generation: 1,
+        observer_witness: "a".repeat(64), observer_id: "b".repeat(64), sequence: 1 } });
+  }, false, peerHelper, 1, "pulse"), { observed: true, sequence: 1, changed: false });
+  for (const result of [{ observed: true, sequence: 2, changed: true }, { observed: true, sequence: 1, changed: true, title: "PRIVATE" }]) {
+    assert.equal(await exchange(frame(envelope(result)), undefined, false, peerHelper, 1, "pulse"), undefined);
+  }
+  const error = code => JSON.stringify({ jsonrpc: "2.0", id: "copilot-pulse", error: { code, message: "PRIVATE" } });
+  assert.deepEqual(await exchange(frame(error(-32002)), undefined, false, peerHelper, 1, "pulse"), { observed: false, terminal: true });
+  assert.equal(await exchange(frame(error(-32000)), undefined, false, peerHelper, 1, "pulse"), undefined);
 });

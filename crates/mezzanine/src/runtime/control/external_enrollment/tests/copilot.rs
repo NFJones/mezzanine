@@ -38,6 +38,222 @@ fn attachment(session: &str) -> JsonRpcRequest {
     .unwrap()
 }
 
+/// Original public handles and an inert instance/counter, never a supplied PID.
+fn pulse(enrolled: &serde_json::Value, nonce: &str, sequence: u64) -> JsonRpcRequest {
+    crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"copilot-pulse-test",
+        "method":"agent/external/copilot-pulse","params":{"pane_id":"%1","external_session_id":"session-a",
+        "generation":enrolled["result"]["generation"],"observer_witness":enrolled["result"]["observer_witness"],
+        "observer_id":nonce,"sequence":sequence}}).to_string()).unwrap()
+}
+
+/// A real extension child can supply finite proof independently of classic
+/// event/presentation counters. Identical/stale pulses cannot refresh its clock,
+/// another child or nonce cannot borrow its lifetime, and only daemon maintenance
+/// renews the lease. Actual writer death invalidates proof while the CLI survives;
+/// a newly qualified child may replace only that dead observer, not the source.
+#[tokio::test(flavor = "current_thread")]
+async fn external_copilot_idle_pulses_have_exact_writer_and_independent_replay() {
+    use super::helper_presentation::release;
+    let mut fixture = fixture("hold").await.expect("native Copilot fixture");
+    let (mut socket, connection) = child(&mut fixture).await;
+    let work = fixture
+        .service
+        .prepare_external_enrollment(&declaration("session-a"), &connection)
+        .unwrap();
+    let first = settle(&mut fixture, work, &connection).await;
+    let a = "a".repeat(64);
+    let b = "b".repeat(64);
+    for sequence in [0, 2] {
+        let request = pulse(&first, &a, sequence);
+        match fixture
+            .service
+            .prepare_external_helper_presentation(&request, &connection)
+        {
+            Ok(work) => assert!(
+                settle(&mut fixture, work, &connection)
+                    .await
+                    .get("error")
+                    .is_some()
+            ),
+            Err(_) => assert_eq!(sequence, 0),
+        }
+    }
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&pulse(&first, &a, 1), &connection)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &connection).await["result"]["changed"],
+        true
+    );
+    for (event, timestamp) in [("userPromptSubmitted", 1), ("agentStop", 2)] {
+        let work = fixture
+            .service
+            .prepare_external_helper_presentation(
+                &callback("session-a", event, timestamp),
+                &connection,
+            )
+            .unwrap();
+        assert!(
+            settle(&mut fixture, work, &connection)
+                .await
+                .get("error")
+                .is_none()
+        );
+    }
+    let registry = fixture.service.control.external_agents_mut();
+    let binding = registry.bindings.values_mut().next().unwrap();
+    let original = (
+        binding.generation,
+        binding.accounting_owner.clone(),
+        binding.expires,
+    );
+    let source = binding.enrollment.as_mut().unwrap();
+    source.curated_observer.as_mut().unwrap().observed_at =
+        Some(Instant::now() - Duration::from_secs(120));
+    source.copilot_events.age_extension_for_test();
+    let aged = source.copilot_events.extension_snapshot_for_test();
+    assert!(!source.has_live_observer());
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&pulse(&first, &a, 1), &connection)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &connection).await["result"]["changed"],
+        false
+    );
+    let source = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap()
+        .enrollment
+        .as_ref()
+        .unwrap();
+    assert_eq!(source.copilot_events.extension_snapshot_for_test(), aged);
+    assert!(!source.has_live_observer());
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&pulse(&first, &a, 2), &connection)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &connection).await["result"]["changed"],
+        true
+    );
+    let (mut other_socket, other) = child(&mut fixture).await;
+    for (who, nonce, sequence) in [(&other, &a, 3), (&connection, &b, 1), (&connection, &a, 1)] {
+        let work = fixture
+            .service
+            .prepare_external_helper_presentation(&pulse(&first, nonce, sequence), who)
+            .unwrap();
+        assert!(settle(&mut fixture, work, who).await.get("error").is_some());
+    }
+    let binding = fixture
+        .service
+        .control
+        .external_agents()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(
+        (
+            binding.generation,
+            binding.accounting_owner.clone(),
+            binding.expires
+        ),
+        original
+    );
+    let source = binding.enrollment.as_ref().unwrap();
+    assert!(source.has_live_observer());
+    assert_eq!(source.curated_observer.as_ref().unwrap().sequence, 2);
+    assert_eq!(
+        binding
+            .registration
+            .as_ref()
+            .unwrap()
+            .presentation
+            .as_ref()
+            .unwrap()
+            .sequence,
+        2
+    );
+    fixture
+        .service
+        .control
+        .external_agents_mut()
+        .bindings
+        .values_mut()
+        .next()
+        .unwrap()
+        .expires = current_unix_seconds() - 1;
+    fixture.service.renew_connected_external_observers();
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap()
+            .expires
+            > current_unix_seconds()
+    );
+    let late = fixture
+        .service
+        .prepare_external_helper_presentation(&pulse(&first, &a, 3), &connection)
+        .unwrap();
+    release(&mut socket, &connection).await;
+    assert!(
+        !fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap()
+            .enrollment
+            .as_ref()
+            .unwrap()
+            .has_live_observer()
+    );
+    assert!(
+        settle(&mut fixture, late, &connection)
+            .await
+            .get("error")
+            .is_some()
+    );
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&pulse(&first, &b, 1), &other)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &other).await["result"]["changed"],
+        true
+    );
+    release(&mut other_socket, &other).await;
+    assert!(
+        !fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .next()
+            .unwrap()
+            .enrollment
+            .as_ref()
+            .unwrap()
+            .has_live_observer()
+    );
+    assert!(fixture.connection.unix_origin().unwrap().is_live());
+}
+
 /// A real direct child may read the existing original public observer selectors
 /// after native verification. Repeating attachment cannot allocate another run,
 /// repaint status, refresh freshness, renew a lease or create expense. The pane
@@ -165,6 +381,14 @@ async fn external_copilot_rotation_rejects_pending_and_new_original_callbacks() 
         .unwrap();
     let first = settle(&mut fixture, work, &connection).await;
     assert_eq!(first["result"]["registered"], true);
+    let work = fixture
+        .service
+        .prepare_external_helper_presentation(&pulse(&first, &"a".repeat(64), 1), &connection)
+        .unwrap();
+    assert_eq!(
+        settle(&mut fixture, work, &connection).await["result"]["changed"],
+        true
+    );
     let stale = fixture
         .service
         .prepare_external_helper_presentation(
@@ -180,6 +404,10 @@ async fn external_copilot_rotation_rejects_pending_and_new_original_callbacks() 
         .service
         .prepare_external_helper_presentation(&attachment("session-a"), &connection)
         .unwrap();
+    let stale_pulse = fixture
+        .service
+        .prepare_external_helper_presentation(&pulse(&first, &"a".repeat(64), 2), &connection)
+        .unwrap();
     let mut rotation = declaration("session-a");
     let mut params: serde_json::Value =
         serde_json::from_str(rotation.params.as_deref().unwrap()).unwrap();
@@ -194,7 +422,7 @@ async fn external_copilot_rotation_rejects_pending_and_new_original_callbacks() 
         settle(&mut fixture, work, &connection).await["result"]["registered"],
         true
     );
-    for work in [stale, stale_end, stale_attachment] {
+    for work in [stale, stale_end, stale_attachment, stale_pulse] {
         assert!(
             settle(&mut fixture, work, &connection)
                 .await
@@ -219,6 +447,12 @@ async fn external_copilot_rotation_rejects_pending_and_new_original_callbacks() 
     let registry = fixture.service.control.external_agents();
     assert_eq!(registry.bindings.len(), 1);
     assert!(registry.bindings.values().all(|b| !b.retired));
+    assert!(
+        registry
+            .bindings
+            .values()
+            .all(|b| !b.enrollment.as_ref().unwrap().has_live_observer())
+    );
     assert!(registry.enrollments.pending.is_empty());
     assert!(!connection.initialized());
     assert!(connection.caller_client_id().is_none());

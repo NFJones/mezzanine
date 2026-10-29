@@ -11,6 +11,9 @@
 
 use super::*;
 
+/// Concrete native extension freshness, independent of classic presentation.
+mod observer;
+
 /// One allowlisted coarse fact and its bounded vendor order selector.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CopilotEvent {
@@ -24,6 +27,13 @@ pub(super) struct CopilotEvent {
 pub(super) enum CopilotObservation {
     /// Existing-session public selectors, without freshness or presentation.
     Attach,
+    /// Positive freshness only for one original native extension lifetime.
+    Pulse {
+        /// Inert local instance discriminator, never native source authority.
+        observer_id: String,
+        /// Original instance counter; identical replay is time-inert.
+        sequence: u64,
+    },
     /// A strictly validated classic event with a positive vendor order fence.
     Event(CopilotEvent),
 }
@@ -68,9 +78,31 @@ impl CopilotEvent {
 pub(super) struct CopilotEvents {
     last: Option<CopilotEvent>,
     order: Arc<super::codex_order::CodexOrder>,
+    /// One bounded actual extension lifetime and its independent proof clock.
+    observer: observer::CopilotObserver,
 }
 
 impl CopilotEvents {
+    /// Fixture-only proof aging without manufacturing native ownership.
+    #[cfg(test)]
+    pub(super) fn age_extension_for_test(&mut self) {
+        self.observer.age_for_test();
+    }
+
+    /// Reads actual pulse settlement for installed/replay assertions.
+    #[cfg(test)]
+    pub(super) fn extension_snapshot_for_test(&self) -> Option<(u64, Instant)> {
+        self.observer.snapshot_for_test()
+    }
+    /// A real live extension and recent changed counter, not parent survival.
+    pub(super) fn observer_recent(&self) -> bool {
+        self.observer.is_recent()
+    }
+
+    /// Distinguishes an expired concrete proof from never having observed one.
+    pub(super) fn observer_started(&self) -> bool {
+        self.observer.has_started()
+    }
     /// Rejects ambiguous millisecond ties rather than inventing a turn identity.
     fn changed(&self, event: &CopilotEvent) -> Result<bool> {
         if let Some(last) = &self.last {
@@ -138,10 +170,31 @@ impl RuntimeSessionService {
             .map_err(|_| MezError::invalid_args("Copilot callback requires unique fields"))?;
         let pane = text(&params, "pane_id", 64)?;
         let session = text(&params, "external_session_id", 128)?;
-        let event = if request.method == "agent/external/copilot-attach" {
-            CopilotObservation::Attach
-        } else {
-            CopilotObservation::Event(CopilotEvent::parse(&params)?)
+        let event = match request.method.as_str() {
+            "agent/external/copilot-attach" => CopilotObservation::Attach,
+            "agent/external/copilot-pulse" => {
+                let observer_id = text(&params, "observer_id", 64)?;
+                if observer_id.len() != 64
+                    || !observer_id
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                {
+                    return Err(MezError::invalid_args(
+                        "Copilot observer instance unavailable",
+                    ));
+                }
+                let sequence = params["sequence"]
+                    .as_u64()
+                    .filter(|n| *n > 0 && *n <= 9_007_199_254_740_991)
+                    .ok_or_else(|| {
+                        MezError::invalid_args("Copilot observer counter unavailable")
+                    })?;
+                CopilotObservation::Pulse {
+                    observer_id,
+                    sequence,
+                }
+            }
+            _ => CopilotObservation::Event(CopilotEvent::parse(&params)?),
         };
         let targets = self
             .control
@@ -166,6 +219,14 @@ impl RuntimeSessionService {
             .filter(|binding| binding.uid == *uid && binding.pane_id == pane)
             .ok_or_else(|| MezError::forbidden("Copilot callback candidate unavailable"))?;
         let source = original(binding)?;
+        if matches!(event, CopilotObservation::Pulse { .. })
+            && (params["generation"].as_u64() != Some(binding.generation)
+                || text(&params, "observer_witness", 64)? != observer_witness(digest))
+        {
+            return Err(MezError::forbidden(
+                "Copilot original observer selectors changed",
+            ));
+        }
         let queue = source.copilot_events.order.clone();
         let callback = crate::control::parse_json_rpc_request(&serde_json::json!({"jsonrpc":"2.0","id":"copilot-internal","method":"agent/external/helper-presentation","params":{
             "launch_token":source.token.expose_secret(),"generation":binding.generation,"external_session_id":session,"sequence":1,"state":"ready",
@@ -198,6 +259,7 @@ impl RuntimeSessionService {
         digest: [u8; 32],
         session: &str,
         observation: &CopilotObservation,
+        origin: &Arc<UnixOriginProcess>,
     ) -> Result<String> {
         let binding = self
             .control
@@ -209,6 +271,22 @@ impl RuntimeSessionService {
         let event = match observation {
             CopilotObservation::Attach => {
                 return Ok(super::curated::public_response(binding, source, session));
+            }
+            CopilotObservation::Pulse {
+                observer_id,
+                sequence,
+            } => {
+                let source = self
+                    .control
+                    .external_agents_mut()
+                    .bindings
+                    .get_mut(&digest)
+                    .and_then(|binding| binding.enrollment.as_mut())
+                    .ok_or_else(|| MezError::forbidden("Copilot observer source unavailable"))?;
+                return source
+                    .copilot_events
+                    .observer
+                    .observe(origin, observer_id, *sequence);
             }
             CopilotObservation::Event(event) => event,
         };

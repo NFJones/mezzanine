@@ -186,6 +186,9 @@ impl RuntimeSessionService {
             enrollment.codex_requests = Default::default();
             enrollment.codex_children = Default::default();
             enrollment.codex_idle = Default::default();
+            // Concrete extension freshness belongs to the old observer epoch,
+            // even when the same native creator survives this rotation.
+            enrollment.copilot_events = Default::default();
         }
         enrollment.observe_connection(&work.origin);
         if let Some(registration) = &mut binding.registration {

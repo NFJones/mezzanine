@@ -1500,6 +1500,7 @@ impl RuntimeSessionService {
                     | "agent/external/codex-observe"
                     | "agent/external/copilot-observe"
                     | "agent/external/copilot-attach"
+                    | "agent/external/copilot-pulse"
                     | "agent/external/cursor-observe"
             ) {
                 return runtime_json_rpc_error(

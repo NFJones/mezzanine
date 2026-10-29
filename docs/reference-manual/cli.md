@@ -130,11 +130,11 @@ The old `--apply` and `--plan` flags are rejected, not aliases: scripts should
 remove `--apply` for installation and replace `--plan` with `--dry-run` for preview.
 The command is daemon-free and does not perform socket
 cleanup, vendor executable discovery, credential installation or hook-trust bypass.
-Copilot revision3 installs `hooks/mezzanine.json` under `COPILOT_HOME` or
+Copilot revision4 installs `hooks/mezzanine.json` under `COPILOT_HOME` or
 `~/.copilot`, using the documented version1 CLI hook format and direct `exec`/`args`
 for sessionStart/userPromptSubmitted/preToolUse/postToolUse/notification/agentStop/
-errorOccurred/sessionEnd. It also installs a read-only bundled-SDK extension in
-`extensions/mezzanine/`. It upgrades exact receipt-owned revision1/2 artifacts,
+errorOccurred/sessionEnd. It also installs a bundled-SDK observer extension in
+`extensions/mezzanine/`. It upgrades exact receipt-owned revision1/2/3 artifacts,
 pins the installing Mez executable and
 does not alter authored sibling hooks, settings.json, disableAllHooks, sandbox
 grants, policy hooks, credentials or exporters. Receipt-proven edits to that owned
@@ -145,7 +145,9 @@ attaches to the original classic-hook enrollment only after native writer,
 creator and pane-root verification. It cannot enroll a missing run or refresh
 health, presentation, leases or accounting. Bootstrap does not enable extensions
 or experiments in this revision. Extension attachment is an integration
-foundation; default activation, idle renewal and usage remain unfinished.
+foundation. A separate exact-writer pulse loop now supports finite idle health
+where extensions already load; default activation, early-loading order and usage
+remain unfinished.
 The fixed installing-binary peer checker verifies the connected daemon's native
 Unix UID before any metadata is written. It borrows the descriptor read-only;
 the extension sends the frame itself. No launcher descriptor is required.
@@ -160,7 +162,8 @@ not success or completion. Already active Stop continuation is inert. Stale/tied
 conflicting timestamps reject; /clear old sessionEnd cannot retire a different
 replacement session. Detached callbacks work only while their genuine creator
 relationship remains provable. A preexisting shared daemon outside the pane is
-not associated by inherited environment or session labels. Idle silence loses
+not associated by inherited environment or session labels. Without current
+classic activity or concrete extension pulses, idle silence loses
 observer health and may expire the lease; it is not continuous renewal proof.
 Bootstrap reports lifecycle `unverified`, usage `unavailable-safe-activation`.
 OTel is not installed/enabled: official command-reference monitoring supports
@@ -170,7 +173,11 @@ policy, existing exporters or content capture. No unqualified receiver/source is
 accepted as billing evidence. Supported future request usage must use chat spans
 without also summing invoke_agent aggregates; github.copilot.cost is a multiplier,
 and nano_aiu is AI units, neither currency. Vendor loading/trust/disable/sandbox
-policy still applies. This phase does not complete idle renewal or accounting.
+policy still applies. The extension pulse uses its own native process/counter
+clock, separate from classic timestamps and status sequences. Duplicate pulses
+are time-inert; a new connection must prove the same native writer. Writer death
+invalidates extension proof even while the CLI survives. Pulses carry no expense
+or state, and daemon maintenance owns lease renewal. Accounting remains pending.
 Sources: [classic hooks](https://docs.github.com/en/copilot/reference/hooks-reference)
 and [monitoring](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#opentelemetry-monitoring).
 Cursor revision2 owns only exact sessionStart/beforeSubmitPrompt/postToolUse/

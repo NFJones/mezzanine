@@ -667,6 +667,18 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         ]),
     },
     ControlMethodSpec {
+        method: "agent/external/copilot-pulse",
+        dispatch: ControlDispatchKind::ExternalAgent,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "pane_id",
+            "external_session_id",
+            "generation",
+            "observer_witness",
+            "observer_id",
+            "sequence",
+        ]),
+    },
+    ControlMethodSpec {
         method: "agent/external/copilot-attach",
         dispatch: ControlDispatchKind::ExternalAgent,
         params_schema: ControlParamsSchema::Allowed(&["pane_id", "external_session_id"]),

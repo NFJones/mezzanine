@@ -1776,6 +1776,24 @@ and its fixed executable reference, then requires the existing bounded
 alone cannot qualify a daemon peer. The checker writes no socket bytes and
 grants no enrollment or observation authority.
 
+`agent/external/copilot-pulse` accepts only `pane_id`, `external_session_id`,
+`generation`, `observer_witness`, `observer_id` (64lowercase hex instance nonce),
+and `sequence` (positive safe integer). Every call uses common bounded native
+parent/root/writer and original first-epoch proof. One retained kernel extension
+lifetime owns the nonce/counter; reconnections require the same live native
+PID/birth/parent record, never a payload PID or Arc/socket identity. A different
+living child or new nonce cannot replace it. After proven owner death a new
+native child may start a different nonce at counter1 under the same original run.
+
+The result is exactly `{observed:true,sequence,changed}`. Equal sequence is an
+inert ACK retry, lower sequence rejects, and only a greater counter updates the
+extension's local monotonic proof time. This separate proof expires after30s or
+native writer death. Classic timestamps, presentation sequences, expense and
+registration identity remain unchanged. Existing daemon maintenance may renew
+leases while this proof and the original creator/root are live. The installed
+loop sends at10s intervals with one outstanding exchange and the same counter
+until its typed ACK; terminal refusal/shutdown stops it without reenrollment.
+
 Allowlisted facts are userPromptSubmitted/preToolUse/postToolUse (running),
 permission_prompt (approval-wait), elicitation_dialog (input-wait), agentStop (ready),
 unrecoverable errorOccurred (interrupted), and sessionEnd (exact retirement).
@@ -1787,8 +1805,8 @@ stale or conflicting tied timestamps reject rather than inventing a turn ID.
 Exact old /clear end cannot retire another session. Callbacks cannot adopt rotated
 epochs or allocate a missing source. Creator death/root loss still retire through
 the shared maintenance owner. Idle silence is not continuous observer proof;
-lease expiry/shared preexisting daemon association and OTel accounting remain
-outstanding. Bootstrap reports accounting `unavailable-safe-activation` and does
+concrete pulses can preserve finite health while the writer and creator live.
+Shared preexisting daemon association and ordinary accounting remain outstanding. Bootstrap reports accounting `unavailable-safe-activation` and does
 not redirect exporters, enable capture, or create enterprise telemetry policy.
 
 #### Qualified helpers for existing ordinary producers

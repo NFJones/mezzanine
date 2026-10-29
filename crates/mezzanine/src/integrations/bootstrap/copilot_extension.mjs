@@ -1,10 +1,10 @@
-/** Read-only attachment to an already enrolled ordinary Copilot creator.
+/** Original-epoch attachment and concrete idle proof for ordinary Copilot.
  * This module performs no I/O on import. It sends one fixed bounded Unix frame
  * from the extension itself: forwarding through a helper would change the native parent
  * relationship. Routing/session values only select a candidate; the daemon
  * independently proves the socket writer, original creator and pane root.
- * No startup boundary, heartbeat, usage, content, vendor decision or provider
- * request is synthesized. Failure remains unavailable and is never printed.
+ * No startup boundary, usage, content, vendor decision or provider request
+ * is synthesized. Pulses retain an independent original native writer counter. Failure remains unavailable and is never printed.
  */
 import { createConnection } from "node:net";
 import { spawn } from "node:child_process";
@@ -117,19 +117,19 @@ function observer(raw, session) {
     observer_epoch: value.observer_epoch, agent_id: value.agent_id });
 }
 
-/** One non-retrying, content-free attachment exchange with a three-second cap.
+/** One non-retrying, content-free fixed-method exchange with a three-second cap.
  * Only an absolute route from ordinary MEZ discovery is used; there is no PATH,
  * filesystem, process-environment scraping, default-daemon or remote fallback.
  */
-export async function attachCopilotObserver({ mez, pane, session, peerHelper } = {}) {
+async function exchangeCopilot({ mez, pane, session, peerHelper } = {}, id, method, extra, project) {
   try {
     if (typeof mez !== "string" || mez.length > 8192 || !identifier(session)
         || typeof pane !== "string" || !/^%[0-9]{1,63}$/.test(pane)) return;
     const route = mez.split("\x1f", 1)[0].trim();
     if (!route.startsWith("/") || route.length > 4096 || /\p{Cc}/u.test(route)) return;
     if (!trustedPaths(route, peerHelper)) return;
-    const body = JSON.stringify({ jsonrpc: "2.0", id: "copilot-attach",
-      method: "agent/external/copilot-attach", params: { pane_id: pane, external_session_id: session } });
+    const body = JSON.stringify({ jsonrpc: "2.0", id, method,
+      params: { pane_id: pane, external_session_id: session, ...extra } });
     return await new Promise(resolve => {
       let socket, timer, bytes = Buffer.alloc(0), done = false;
       const controller = new AbortController();
@@ -169,11 +169,43 @@ export async function attachCopilotObserver({ mez, pane, session, peerHelper } =
             if (length === 0 || length > 8192 || bytes.length > end + 4 + length) { finish(); return; }
             if (bytes.length === end + 4 + length) {
               const raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(end + 4));
-              finish(observer(raw, session));
+              finish(project(raw));
             }
           } catch { finish(); }
         });
       } catch { finish(); }
     });
   } catch { /* attachment loss never changes vendor behavior */ }
+}
+
+/** Read-only attachment never supplies idle proof by itself. */
+export function attachCopilotObserver(options = {}) {
+  return exchangeCopilot(options, "copilot-attach", "agent/external/copilot-attach", {},
+    raw => observer(raw, options.session));
+}
+
+/** Send only a concrete original writer's fixed pulse, never a lease or state.
+ * Public selectors are copied before I/O; errors expose no vendor/server text.
+ */
+export function pulseCopilotObserver(options = {}, original, observerId, sequence) {
+  try {
+    if (!exact(original, ["external_session_id", "generation", "observer_witness", "run_id", "observer_epoch", "agent_id"])
+        || original.external_session_id !== options.session || !positive(original.generation)
+        || !digest(original.observer_witness) || !positive(original.run_id)
+        || original.observer_epoch !== 1 || !identifier(original.agent_id)
+        || !digest(observerId) || !positive(sequence)) return Promise.resolve(undefined);
+    const params = Object.freeze({ generation: original.generation,
+      observer_witness: original.observer_witness, observer_id: observerId, sequence });
+    return exchangeCopilot(options, "copilot-pulse", "agent/external/copilot-pulse", params, raw => {
+      const reply = decode(raw);
+      if (reply?.jsonrpc !== "2.0" || reply.id !== "copilot-pulse") return;
+      if (exact(reply, ["jsonrpc", "id", "error"]) && [-32002, -32005, -32006].includes(reply.error?.code)) {
+        return Object.freeze({ observed: false, terminal: true });
+      }
+      if (!exact(reply, ["jsonrpc", "id", "result"]) || !exact(reply.result, ["observed", "sequence", "changed"])
+          || reply.result.observed !== true || reply.result.sequence !== sequence
+          || typeof reply.result.changed !== "boolean") return;
+      return Object.freeze({ observed: true, sequence, changed: reply.result.changed });
+    });
+  } catch { return Promise.resolve(undefined); }
 }

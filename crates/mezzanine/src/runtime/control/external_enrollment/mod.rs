@@ -372,7 +372,7 @@ impl EnrollmentBinding {
         if let Some(observer) = &self.curated_observer {
             return matches!(self.producer, ProducerEvidence::VerifiedParent(_))
                 && self.provenance_is_live()
-                && observer.is_recent();
+                && (observer.is_recent() || self.copilot_events.observer_recent());
         }
         self.observers.retain(|observer| {
             observer.upgrade().is_some_and(|observer| {
@@ -391,7 +391,7 @@ impl EnrollmentBinding {
         if let Some(observer) = &self.curated_observer {
             return matches!(self.producer, ProducerEvidence::VerifiedParent(_))
                 && self.provenance_is_live()
-                && observer.is_recent();
+                && (observer.is_recent() || self.copilot_events.observer_recent());
         }
         self.provenance_is_live()
             && self.observers.iter().any(|observer| {
@@ -407,6 +407,7 @@ impl EnrollmentBinding {
         self.curated_observer
             .as_ref()
             .is_some_and(|observer| observer.observed_at.is_none())
+            && !self.copilot_events.observer_started()
     }
 
     /// Requires the same live kernel-qualified producer on every credential use;

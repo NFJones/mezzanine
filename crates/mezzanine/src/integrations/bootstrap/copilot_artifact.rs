@@ -1,33 +1,61 @@
-//! Owned classic Copilot user hooks and read-only extension attachment.
+//! Owned classic Copilot hooks, extension attachment and concrete idle proof.
 //!
 //! Official hooks-reference/use-hooks document version1 JSON in COPILOT_HOME/hooks
 //! and CLI-only exec/args. A fixed installing executable receives one known hook
 //! name; no shell, permission decision, trust, exporter or credential is installed.
 //! The bundled-SDK extension attaches only to an existing native-qualified run;
-//! this revision does not enable extensions or implement usage/idle renewal.
+//! this revision adds idle pulses without enabling extensions or reporting usage.
 
 use super::{
     installer::Manifest,
     reconciliation::{Artifact, Entry},
 };
 
-/// Compiles documented user hooks and the independently inert extension entry.
+/// Compiles documented user hooks and the bounded native observer entry.
 /// Unrepresentable installing evidence cannot guess PATH or another user root.
 pub(super) fn manifest() -> Option<Manifest> {
+    extension_manifest(
+        4,
+        include_bytes!("copilot_entry.mjs"),
+        include_bytes!("copilot_extension.mjs"),
+        Some(include_bytes!("copilot_lifetime.mjs")),
+    )
+}
+
+/// Independently frozen revision3 graph before concrete idle source proof.
+pub(super) fn historical_attachment_manifest() -> Option<Manifest> {
+    extension_manifest(
+        3,
+        include_bytes!("history/copilot_entry_v3.mjs"),
+        include_bytes!("history/copilot_extension_v3.mjs"),
+        None,
+    )
+}
+
+/// Compiles only enumerated fixed graph slots; historical bytes never depend on
+/// changed active source. The native installing executable supplies peer checks.
+fn extension_manifest(
+    revision: u32,
+    entry: &[u8],
+    client: &[u8],
+    lifetime: Option<&[u8]>,
+) -> Option<Manifest> {
     let mut manifest = historical_lifecycle_manifest()?;
-    manifest.revision = 3;
+    manifest.revision = revision;
     for (path, bytes) in [
-        (
-            "extensions/mezzanine/extension.mjs",
-            include_bytes!("copilot_entry.mjs").as_slice(),
-        ),
-        (
-            "extensions/mezzanine/copilot_extension.mjs",
-            include_bytes!("copilot_extension.mjs").as_slice(),
-        ),
+        ("extensions/mezzanine/extension.mjs", entry),
+        ("extensions/mezzanine/copilot_extension.mjs", client),
     ] {
         manifest.entries.push(Entry {
             path: path.into(),
+            artifact: Artifact::File {
+                bytes: bytes.to_vec(),
+            },
+        });
+    }
+    if let Some(bytes) = lifetime {
+        manifest.entries.push(Entry {
+            path: "extensions/mezzanine/copilot_lifetime.mjs".into(),
             artifact: Artifact::File {
                 bytes: bytes.to_vec(),
             },
@@ -103,6 +131,36 @@ fn build(revision: u32, events: &[&str]) -> Option<Manifest> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shipped revision3 attachment entry/client are independent immutable
+    /// inputs. Active pulse edits must never redefine an old receipt's authority;
+    /// the historical graph has no lifetime module or pulse activation.
+    #[test]
+    fn bootstrap_copilot_attachment_history_uses_frozen_revision3_bytes() {
+        use sha2::Digest;
+        let old = historical_attachment_manifest().unwrap();
+        assert_eq!(old.revision, 3);
+        assert_eq!(old.entries.len(), 4);
+        for (index, expected) in [
+            (
+                1,
+                "7d245415649144f2660e691189b9a253efb8d7b2d94678d1a9e37b9f31f0557a",
+            ),
+            (
+                2,
+                "34b0c8ff57d75a4abaf372940ba0bd0830dbce6c376d0c54223cdc058261656a",
+            ),
+        ] {
+            let Artifact::File { bytes } = &old.entries[index].artifact else {
+                panic!("frozen source file");
+            };
+            let actual = sha2::Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            assert_eq!(actual, expected);
+        }
+    }
     /// Public bootstrap must supply documented version1 direct-exec user hooks,
     /// with no shell interpolation, prompt/permission output or settings owner.
     /// Read-only extension attachment does not claim default activation or usage.
@@ -111,8 +169,8 @@ mod tests {
     fn bootstrap_copilot_manifest_pins_only_metadata_user_hooks() {
         let manifest =
             super::super::compiled_manifest("copilot", None).expect("compiled Copilot hooks");
-        assert_eq!(manifest.entries.len(), 4);
-        assert_eq!(manifest.revision, 3);
+        assert_eq!(manifest.entries.len(), 5);
+        assert_eq!(manifest.revision, 4);
         assert_eq!(manifest.entries[0].path, "hooks/mezzanine.json");
         let Artifact::File { bytes } = &manifest.entries[0].artifact else {
             panic!("owned private hook document");
@@ -127,7 +185,7 @@ mod tests {
             "extensions/mezzanine/copilot_extension.mjs"
         );
         assert_eq!(
-            manifest.entries[3].path,
+            manifest.entries[4].path,
             "extensions/mezzanine/peer_helper.mjs"
         );
         assert_eq!(document["version"], 1);
@@ -194,7 +252,7 @@ mod tests {
         std::fs::remove_dir_all(home).unwrap();
     }
 
-    /// Current hooks and extension automatically upgrade independent revisions1/2
+    /// Current hooks and extension automatically upgrade independent revisions1/2/3
     /// deployment bytes and receipt. Authored siblings/settings remain untouched;
     /// repeat and uninstall use the current manifest without adopting a foreign file.
     #[test]
@@ -208,6 +266,7 @@ mod tests {
         for old in [
             historical_manifest().unwrap(),
             historical_lifecycle_manifest().unwrap(),
+            historical_attachment_manifest().unwrap(),
         ] {
             let root = home.join(format!("vendor-{}", old.revision));
             std::fs::create_dir(&root).unwrap();
@@ -242,6 +301,11 @@ mod tests {
                 .unwrap();
             assert!(!root.join("hooks/mezzanine.json").exists());
             assert!(!root.join("extensions/mezzanine/extension.mjs").exists());
+            assert!(
+                !root
+                    .join("extensions/mezzanine/copilot_lifetime.mjs")
+                    .exists()
+            );
             assert!(!root.join("extensions/mezzanine/peer_helper.mjs").exists());
             assert!(
                 !root

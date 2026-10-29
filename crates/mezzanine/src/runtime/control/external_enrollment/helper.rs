@@ -96,7 +96,9 @@ impl RuntimeSessionService {
         }
         if matches!(
             request.method.as_str(),
-            "agent/external/copilot-observe" | "agent/external/copilot-attach"
+            "agent/external/copilot-observe"
+                | "agent/external/copilot-attach"
+                | "agent/external/copilot-pulse"
         ) {
             return self.prepare_external_copilot_observation(request, connection);
         }
@@ -455,6 +457,7 @@ impl RuntimeSessionService {
                 helper.digest,
                 &work.session_id,
                 event,
+                &work.origin,
             );
         }
         if let Some(event) = &helper.codex {

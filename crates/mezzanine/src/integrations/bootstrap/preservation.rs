@@ -134,6 +134,7 @@ pub(super) fn reconcile_preserving(
             "hooks/mezzanine.json"
                 | "extensions/mezzanine/extension.mjs"
                 | "extensions/mezzanine/copilot_extension.mjs"
+                | "extensions/mezzanine/copilot_lifetime.mjs"
                 | "extensions/mezzanine/peer_helper.mjs"
         ),
         "claude" => {
