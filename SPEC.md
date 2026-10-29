@@ -1513,6 +1513,15 @@ pane root MUST preserve original accounting and distinguish lost health from
 process death. Finite worker delivery and control-component replacement fixtures
 MUST NOT be presented as full daemon restart, real vendor loading, uninterrupted
 renewal or complete spend coverage.
+Separate two-pane ordinary Pi qualification MUST retain distinct native pane
+roots and distinct installed user/project module paths. Equal vendor session and
+persisted-message labels MUST preserve separate source owners and expenses;
+retiring one source MUST NOT retire its live neighbor. Completion evidence MUST
+check the actual child exit independently of observer EOF and reject a deliberate
+post-retirement child failure. Modeled project-trust and exact disabled-path
+fixtures MUST disclose their subset; they do not certify the vendor trust store
+or general discovery rules. Test-only HOME containment MUST NOT constrain normal
+`PI_CODING_AGENT_DIR` locations.
 Ordinary `mez bootstrap pi` MUST also install the supported finalized assistant
 usage producer without launcher/FD3/manual accounting enablement. Genuine
 `turn_start` opens an original request marker through native usage-begin; it MUST

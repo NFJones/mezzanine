@@ -661,6 +661,8 @@ Separate installed native fixtures now qualify the following additional boundari
 
 | Additional offline boundary | Qualified assertion |
 | --- | --- |
+| Two panes and distinct module copies | Bare default/custom-root installs and separate user/project module factories yield one native client per process. Equal vendor session/message labels retain separate owners and expenses; retiring one pane leaves the other live. Actual child status is checked independently, including deliberate failure after retirement. |
+| Modeled discovery policy and neutrality | Source-shaped loading covers a project-trust decision and the exact disabled-entry override, custom roots with spaces, unchanged authored settings, outside-Mez operation and unavailable-daemon output/exit. This subset does not implement the vendor trust store or general discovery rules. Fixture HOME containment protects tests and does not restrict normal custom roots. |
 | Finite idle renewal and loss | The production timer worker drains and fires actor-owned deadlines while the real native observer adapter stays held. Silent renewal needs no SDK heartbeat; real observer EOF stops renewal, and actual producer exit retires beneath a still-live shell. Only the fixture's lease deadline is aged. |
 | Durable ACK loss and recovery | Commit-before-lost-reply, same-live registry recovery and whole-control replacement preserve the original expense, request origin and report time. Exact replay adds no expense; a later genuine auxiliary observation rediscloses its coverage gap. |
 | Retained pending report | After both immediate durable replies are lost, the telemetry retry timer recovers the same report without another vendor callback or provider replay. Actual child exit and final assertions are checked separately from socket EOF. |
@@ -675,7 +677,7 @@ MEZ_TEST_NODE_BINARY=/absolute/already-installed/node MEZ_TEST_HELPER_BINARY="$P
 ```
 
 This is offline source-shaped qualification, not a real Pi SDK loader/provider
-run, multi-pane/disabled-policy certification, full OS/daemon restart,
+run, complete vendor discovery-policy certification, full OS/daemon restart,
 uninterrupted observer continuity or spend completeness. Remaining applicable
 acceptance work must not be deferred as an environment limitation. Real SDK
 loading, macOS execution and manual/live-provider coverage are recorded

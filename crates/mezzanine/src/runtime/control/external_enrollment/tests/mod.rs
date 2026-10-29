@@ -1395,6 +1395,7 @@ mod observer_epochs;
 mod parent_ancestry;
 mod persistent_client;
 mod pi_assembled;
+mod pi_discovery;
 mod pi_idle;
 mod pi_observation;
 mod pi_pending_recovery;

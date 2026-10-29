@@ -16,15 +16,15 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 /// Records bounded private fixture wire bytes for schema/privacy assertions.
 /// Captured capability replies stay in test memory and never enter diagnostics.
 #[derive(Default)]
-struct WireAudit {
-    requests: Vec<u8>,
-    replies: Vec<u8>,
+pub(super) struct WireAudit {
+    pub(super) requests: Vec<u8>,
+    pub(super) replies: Vec<u8>,
 }
 
 /// Wraps an already native-qualified stream without fabricating origin or ACKs.
-struct AuditedIo<S> {
-    inner: S,
-    audit: Arc<std::sync::Mutex<WireAudit>>,
+pub(super) struct AuditedIo<S> {
+    pub(super) inner: S,
+    pub(super) audit: Arc<std::sync::Mutex<WireAudit>>,
 }
 
 impl<S: AsyncRead + Unpin> AsyncRead for AuditedIo<S> {
@@ -75,7 +75,7 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for AuditedIo<S> {
 }
 
 /// Decodes completed actual control frames without printing private wire values.
-fn wire_frames(mut bytes: &[u8]) -> Vec<serde_json::Value> {
+pub(super) fn wire_frames(mut bytes: &[u8]) -> Vec<serde_json::Value> {
     let mut frames = Vec::new();
     while !bytes.is_empty() {
         let (body, consumed) = crate::control_client::decode_control_frame(bytes, 8192).unwrap();
@@ -106,7 +106,7 @@ async fn wait_phase(home: &std::path::Path, phase: &str) {
 
 /// Uses only the actual product command and ordinary HOME root selection.
 /// Installation reporting remains distinct from live lifecycle/accounting proof.
-fn bare_bootstrap(
+pub(super) fn bare_bootstrap(
     helper: &std::path::Path,
     home: &std::path::Path,
     dry_run: bool,
