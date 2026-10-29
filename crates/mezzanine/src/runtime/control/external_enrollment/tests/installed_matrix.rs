@@ -209,7 +209,10 @@ async fn install(matrix: &Matrix, harness: &str, helper: &Path) -> PathBuf {
     assert_eq!(installed["scope_root"], root.to_str().unwrap());
     assert_eq!(installed["runtime_verification"], "not-performed");
     match harness {
-        "copilot" => assert_eq!(installed["usage"], "unavailable-safe-activation"),
+        "copilot" => {
+            assert_eq!(installed["usage"], "unverified");
+            assert_eq!(installed["activation"], "owned-default-enabled");
+        }
         "cursor" => assert_eq!(installed["usage"], "unavailable-counter-schema"),
         _ => {}
     }
@@ -267,7 +270,20 @@ async fn install(matrix: &Matrix, harness: &str, helper: &Path) -> PathBuf {
         settled,
         "authored callbacks and installed preview must remain inert"
     );
-    assert_eq!(std::fs::read(root.join("settings.json")).unwrap(), settings);
+    let actual_settings = std::fs::read(root.join("settings.json")).unwrap();
+    if harness == "copilot" {
+        // Revision7 owns only the missing activation leaf. All authored fields
+        // retain their original bytes/values; no broad experiment is enabled.
+        assert!(actual_settings.starts_with(&settings[..settings.len() - 1]));
+        let mut expected: serde_json::Value = serde_json::from_slice(settings).unwrap();
+        expected["enabledFeatureFlags"] = serde_json::json!({"EXTENSIONS": true});
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&actual_settings).unwrap(),
+            expected
+        );
+    } else {
+        assert_eq!(actual_settings, settings);
+    }
     assert_eq!(
         std::fs::read(root.join("author-hooks/callback.json")).unwrap(),
         b"AUTHOR CALLBACK"
@@ -454,7 +470,10 @@ fn inspect_browser(service: &mut RuntimeSessionService, primary: &mez_core::ids:
 /// durably charged once and missing counters stay unknown. Unqualified classic
 /// counters never create expense. Exact retirement removes only its own row,
 /// retaining the other live providers and historical incurred Claude expense.
-/// This qualifies existing paths, not a newly fixed behavior or live vendor.
+/// Copilot's missing activation default is the only authorized settings delta;
+/// this classic callback matrix does not synthesize SDK counters or original
+/// request origin. Dedicated SDK-shaped native fixtures own that source coverage.
+/// This qualifies existing paths, not a live vendor or paid provider.
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit offline Node and freshly built sibling mez; installed-native supported subset"]
 async fn external_installed_matrix_supported_subset_two_panes_four_creators() {

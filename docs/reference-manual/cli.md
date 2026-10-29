@@ -64,8 +64,9 @@ daemon; add
 The dedicated installed-source acceptance fixture runs the actual CLI in cleared
 environments with temporary HOME/default roots: absent-root dry-run, install,
 repeat, recognized missing-file repair, and read-only installed preview/check.
-Authored settings/statusline/exporter bytes and sibling callbacks survive repair;
-shared Codex/Cursor authored members survive repeat and preview. Whole-file
+Authored settings/statusline/exporter content and sibling callbacks survive repair;
+Copilot revision7 adds only its missing receipt-owned activation leaf.
+Shared Codex/Cursor authored members survive repeat and preview. Whole-file
 absence repair cannot preserve callbacks already deleted with that file, so that
 case is qualified before adding shared authored members.
 
@@ -73,19 +74,20 @@ case is qualified before adding shared authored members.
 | --- | --- | --- |
 | Claude / `claude` | Child discovers installed skill/plugin/hooks metadata; SDK-shaped loader shim executes the installed module, real native helper ingress and local timer cancellation | Synthetic current-request final outcomes commit once on replay; missing usage stays unknown and reports a fixed current-epoch coverage gap after prior expense. Not an actual Claude vendor-loader or paid-request check. Native retirement after creator exit is separate from local SessionEnd. |
 | Codex / `codex` | Child reads installed hooks.json and executes exact commands; native enrollment, lifecycle and exact SessionEnd retirement | Revision7 synchronous model hooks report checked per-request usage with original native readiness/project origin, separate parent/child custody and durable replay. Native producer replacement under a retained pane root is qualified separately. All known app-server modes require unavailable requesting-client association; this is not default-daemon support. |
-| Copilot / `copilot` | Child discovers installed hooks/mezzanine.json exec/args; native lifecycle and exact SessionEnd retirement | `unavailable-safe-activation`: no safe ordinary persistent OTel activation/native correlation is supplied or enabled by this fixture. Existing exporters are preserved. |
+| Copilot / `copilot` | Classic exec/args discovery, native lifecycle and exact SessionEnd retirement in this matrix; separate installed SDK-shaped native fixtures cover original pulses, early subagent usage and replay. | Revision7 defaults only a missing `EXTENSIONS` flag and preserves authored exporters/policy. Classic callbacks carry no counters; separate terminal observations commit once with explicit unattributed origin. Genuine pre-dispatch origin and actual vendor loading remain unqualified. |
 | Cursor / `agent` | Child reads installed hooks.json and executes exact ordinary CLI hook commands; native lifecycle and exact SessionEnd retirement | `unavailable-counter-schema`: exact CLI counter/cache/multiplicity/native-origin evidence remains unqualified. No forced print mode or IDE-counter substitution. |
 | OpenCode / `opencode` | Separate installer, TUI route/cache and explicit Bun-native fixture; excluded from this four-creator run | The installed client-local TUI observer selects only its own cached root session. Ordinary usage observations are deliberately dropped until durable source continuity is implemented. The legacy server entry remains descriptor-gated and inert under ordinary launch. |
 | Pi / `pi` | Separate Pi acceptance owner and fixtures | Not qualified by the four-harness matrix. |
 
-Public contract/source review: 2026-10-28. These references describe available
+Public contract/source review: 2026-10-28, with Copilot source/configuration
+follow-up on 2026-10-29. These references describe available
 extension surfaces; they do not attest that a vendor loaded Mezzanine's bytes.
 
 | Harness | Primary reference | Local evidence and remaining scope |
 | --- | --- | --- |
 | Claude | [Mods and policy](https://code.claude.com/docs/en/plugins/mods/overview) | Installed module/native matrix and separate request/child controls; actual SDK loading remains unverified. |
 | Codex | [Inspected hook source](https://github.com/openai/codex/tree/1cc3cf8060c5f1dbd4e3a4d75e1a77b523e0c1ad/codex-rs/hooks) | `codex_` native/projector/installed controls cover the supported direct-source subset; positive shared-daemon requesting-client association is unavailable. The source revision is evidence, not a required runtime version. |
-| Copilot | [Hook locations and events](https://docs.github.com/en/copilot/reference/hooks-reference) | Installed classic callback/native matrix; OTel activation, native request correlation and durable ordinary accounting remain separate work. |
+| Copilot | [Hook locations and events](https://docs.github.com/en/copilot/reference/hooks-reference) and [bundled-SDK extensions](https://docs.github.com/en/copilot/tutorials/create-an-extension) | Classic/native matrix plus separate SDK-shaped per-call projector, durable canonical replay, bounded gaps and exact missing-default activation controls. Original request/project provenance and actual vendor loading remain unqualified. |
 | Cursor | [Hook schema](https://cursor.com/docs/hooks) | Installed CLI callback/native matrix; exact CLI usage/counter multiplicity and broader client continuity remain unqualified. IDE samples do not qualify CLI billing. |
 | OpenCode | [Plugin discovery](https://opencode.ai/docs/plugins/) and [ordinary TUI](https://opencode.ai/docs/tui/) | `scripts/test-opencode-tui.mjs` checks client-local selection, waits and disposal. `external_enrollment_installed_opencode_tui_uses_client_local_association` is a separate explicit native fixture requiring an existing Bun host; it was not run in this review. Actual vendor loading and ordinary durable usage remain unverified/unavailable respectively. |
 | Pi | [Extension source](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md) | Separate lifecycle/accounting and assembled acceptance scope; this matrix does not certify it. |
@@ -189,21 +191,27 @@ relationship remains provable. A preexisting shared daemon outside the pane is
 not associated by inherited environment or session labels. Without current
 classic activity or concrete extension pulses, idle silence loses
 observer health and may expire the lease; it is not continuous renewal proof.
-Bootstrap reports lifecycle `unverified`, usage `unavailable-safe-activation`.
-OTel is not installed/enabled: official command-reference monitoring supports
-process environment, VS Code, or enterprise managed settings, not an ordinary
-user hook setting. Bootstrap does not alter parent shell environment, enterprise
-policy, existing exporters or content capture. No unqualified receiver/source is
-accepted as billing evidence. Supported future request usage must use chat spans
-without also summing invoke_agent aggregates; github.copilot.cost is a multiplier,
-and nano_aiu is AI units, neither currency. Vendor loading/trust/disable/sandbox
-policy still applies. The extension pulse uses its own native process/counter
-clock, separate from classic timestamps and status sequences. Duplicate pulses
-are time-inert; a new connection must prove the same native writer. Writer death
-invalidates extension proof even while the CLI survives. Pulses carry no expense
-or state, and daemon maintenance owns lease renewal. Accounting remains pending.
-Sources: [classic hooks](https://docs.github.com/en/copilot/reference/hooks-reference)
+Normal bootstrap reports lifecycle `unverified` and a captured activation decision.
+Enabled authored/default flags report usage `unverified`; disabled policy or
+invalid settings report their corresponding unavailable reason. Installation
+never proves actual loading or complete accounting coverage. Bootstrap leaves
+OTel/exporter configuration, parent shell environment, enterprise policy and
+content capture unchanged. Current accounting uses only live SDK per-call
+terminal metadata, with canonical durable replay and explicit unattributed
+request/project origin. It never sums parent/context/turn/shutdown aggregates
+with individual calls or treats github.copilot.cost/nano_aiu as currency.
+Vendor loading/trust/disable/sandbox policy still applies. The extension pulse
+uses its own native process/counter clock, separate from classic timestamps and
+status sequences. Duplicate pulses are time-inert; a new connection must prove
+the same native writer. Writer death invalidates extension proof even while the
+CLI survives. Pulses carry no expense or state, and daemon maintenance owns lease
+renewal. Terminal receipts use the separate accounting path; genuine original
+pre-request attribution and preexisting shared-daemon association remain
+unqualified.
+Sources: [classic hooks](https://docs.github.com/en/copilot/reference/hooks-reference),
+[bundled-SDK extensions](https://docs.github.com/en/copilot/tutorials/create-an-extension)
 and [monitoring](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#opentelemetry-monitoring).
+
 Cursor revision2 owns only exact sessionStart/beforeSubmitPrompt/postToolUse/
 preCompact/afterAgentResponse/stop/sessionEnd members of shared
 `hooks.json` under the selected CLI configuration root. A new document receives

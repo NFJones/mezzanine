@@ -884,8 +884,11 @@ reporters without exposing another owner's pane checkpoint. Optional counters
 remain unknown; zero known totals can receive a durable receipt without an
 expense row. Conflicting metadata and missing retained original observation/alias evidence
 fail closed. Ordinary raw receipt/event pruning retains canonical replay ACKs.
-Old generic observations are preserved, not silently adopted. Native ingress,
-source coverage and safe activation remain separate unfinished work.
+Old generic observations are preserved, not silently adopted. Current revision7
+supplies the separately fenced native terminal ingress, bounded live SDK
+projection and exact missing-default activation described below. The schema alone
+still grants none of that authority; original pre-request provenance and actual
+vendor loading remain unqualified.
 
 
 Normal capability-only `agent/external/usage` admission now recognizes the known
@@ -1771,7 +1774,10 @@ creator/root and current generation remain mandatory through actor settlement.
 Only bounded async admission supports it; initialized/remote/general control do
 not. Fixed helper stdin is strictly bounded64KiB/250ms; loss returns neutral `{}`.
 
-The revision5 installed entry retries this read-only attachment only during a
+The revision7 installed entry retains the read-only startup retry introduced in
+revision5. It validates inert ordinary routing before importing/joining the SDK;
+missing/invalid routing starts no SDK work or timers. Configured hints still grant
+no native authority. Attachment retries occur only during a
 finite startup window: at most32 attempts start within15seconds, serialized with
 500ms after unavailable results and a3second transport bound. Shutdown fences a
 late result before pulses start. First success ends attachment retries. This does
@@ -1796,8 +1802,13 @@ origin `unattributed` and `reasoning_known`. Duplicate reporters acknowledge the
 original expense without receiving another owner's pane checkpoint. Native
 retirement can withhold a stale ACK while retaining actual incurred expense.
 Terminal delivery does not refresh pulses, leases or presentation and cannot
-manufacture a pre-request marker. The owned revision5 client does not yet emit
-these calls automatically; source projection and safe activation remain pending.
+manufacture a pre-request marker. The owned revision7 client automatically
+projects only live assistant.usage per-call metadata after an actual positive
+pulse ACK. It hashes the full source-session/sequence/usage identity, preserves
+unknown subsets, bounds queued records/retries and reports fixed coverage gaps.
+Bootstrap defaults only a missing supported activation leaf while preserving
+JSONC and authored policy; neither activation nor terminal delivery proves
+original pre-request/project provenance or actual vendor loading.
 
 `agent/external/copilot-usage-gap` uses the same original selectors and concrete
 observer proof, replacing call/model/counters with one fixed `reason` from
@@ -1855,8 +1866,12 @@ Exact old /clear end cannot retire another session. Callbacks cannot adopt rotat
 epochs or allocate a missing source. Creator death/root loss still retire through
 the shared maintenance owner. Idle silence is not continuous observer proof;
 concrete pulses can preserve finite health while the writer and creator live.
-Shared preexisting daemon association and ordinary accounting remain outstanding. Bootstrap reports accounting `unavailable-safe-activation` and does
-not redirect exporters, enable capture, or create enterprise telemetry policy.
+Shared preexisting daemon association and genuine pre-request/project origin
+remain unqualified. The supported direct-source subset has terminal accounting
+with explicit unattributed origin and bounded coverage gaps. Bootstrap reports
+its captured activation decision and unverified/unavailable accounting state;
+it does not redirect exporters, enable capture or create enterprise telemetry
+policy. These are integration capabilities, not a vendor-loading attestation.
 
 #### Qualified helpers for existing ordinary producers
 
@@ -2457,7 +2472,7 @@ event stream. Transport endpoint authentication alone never authorizes events.
 - [Normative control contract](../../../SPEC.md#13-control-endpoint)
 
 
-The owned Copilot revision6 client uses these fixed terminal/gap methods for
+The owned Copilot revision7 client uses these fixed terminal/gap methods for
 live per-call SDK metadata only. Its bounded64-record queue waits for an actual
 positive concrete pulse ACK (including a later ACK after loss), then serializes
 at most3 attempts per immutable record with500ms retry spacing. Full accounting
