@@ -1664,7 +1664,7 @@ impl RuntimeSessionService {
         {
             self.clear_deferred_agent_subshell_entry(pane_id);
             self.clear_pane_bootstrap_pending(pane_id);
-            self.native_shell_context_for_pane(pane_id)?;
+            self.native_agent_shell_context_for_pane(pane_id)?;
             return Ok(false);
         }
         if self.agent_subshell_is_active(pane_id)

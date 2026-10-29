@@ -169,7 +169,7 @@ impl RuntimeSessionService {
             )?;
             return Ok(false);
         }
-        if let Err(error) = self.native_shell_context_for_pane(pane_id) {
+        if let Err(error) = self.native_agent_shell_context_for_pane(pane_id) {
             self.fail_runtime_agent_surface_startup(
                 pane_id,
                 &format!(

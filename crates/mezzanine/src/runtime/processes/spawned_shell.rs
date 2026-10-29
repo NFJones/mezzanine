@@ -2631,6 +2631,55 @@ mod tests {
         );
     }
 
+    /// Each independent native launch must consume the same captured agent cwd
+    /// and derived PWD without changing the source context or daemon cwd. The
+    /// path enters through the process API, never a shell-injected cd command.
+    /// Existing executor ownership supplies bounded child wait and retirement.
+    #[test]
+    fn spawned_executor_uses_agent_directory_override_for_each_launch() {
+        /// Owns only this successfully and exclusively created empty fixture.
+        struct DirectoryGuard(PathBuf);
+        impl Drop for DirectoryGuard {
+            /// Removes the fixture after native executor ownership has settled.
+            fn drop(&mut self) {
+                let _ = fs::remove_dir(&self.0);
+            }
+        }
+        let path = std::env::temp_dir().join(format!(
+            "mez-agent-cwd-{}-{}",
+            std::process::id(),
+            crate::runtime::runtime_random_marker_token("native-agent-directory-fixture")
+                .unwrap()
+                .as_str()
+        ));
+        fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        let directory = DirectoryGuard(path);
+        let target = fs::canonicalize(&directory.0).unwrap();
+        let daemon_directory = std::env::current_dir().unwrap();
+        let root = NativeShellContext::for_test(
+            PathBuf::from("/bin/sh"),
+            vec![RawEnvironmentEntry {
+                key: b"PWD".to_vec(),
+                value: b"/".to_vec(),
+            }],
+            PathBuf::from("/"),
+        );
+        let moved = root.clone().with_agent_working_directory(&target).unwrap();
+        for _ in 0..2 {
+            let mut executor = SpawnedShellExecutor::new(moved.clone());
+            let output = executor
+                .execute_shell(&request("pwd; printf '%s\\n' \"$PWD\"", Some(5_000)))
+                .unwrap();
+            assert_eq!(output.exit_code, Some(0));
+            assert_eq!(
+                output.stdout.lines().collect::<Vec<_>>(),
+                vec![target.to_str().unwrap(); 2]
+            );
+        }
+        assert_eq!(root.working_directory(), Path::new("/"));
+        assert_eq!(std::env::current_dir().unwrap(), daemon_directory);
+    }
+
     /// Verifies the timeout kills the child process group and reports the
     /// outcome as timed out rather than as a shell exit.
     #[test]

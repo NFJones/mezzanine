@@ -336,6 +336,7 @@ impl RuntimeSessionService {
             let target_session = AgentShellSession {
                 session_id: conversation_id.clone(),
                 pane_id: pane_id.clone(),
+                native_working_directory: None,
                 project_scope: target_project_scope.clone(),
                 conversation_kind,
                 display_name: store

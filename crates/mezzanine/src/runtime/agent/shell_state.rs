@@ -216,7 +216,7 @@ impl RuntimeSessionService {
             MezError::invalid_state("agent turn deadline expired before shell dispatch")
         })?;
         let native_context = native_mode
-            .then(|| self.native_shell_context_for_pane(&turn.pane_id))
+            .then(|| self.native_agent_shell_context_for_pane(&turn.pane_id))
             .transpose()?;
         let subagent_scope = self.subagent_scope_declaration_for_turn(turn);
         let path_scopes = if subagent_scope.is_some() {
@@ -1303,7 +1303,7 @@ impl RuntimeSessionService {
         }
         let scopes = if self.effective_agent_shell_mode_for_pane(&turn.pane_id) == ShellMode::Native
         {
-            let context = self.native_shell_context_for_pane(&turn.pane_id)?;
+            let context = self.native_agent_shell_context_for_pane(&turn.pane_id)?;
             self.native_bubblewrap_maximum_path_scopes_for_turn(turn, &context)?
         } else {
             self.bubblewrap_maximum_path_scopes_for_turn(turn)?

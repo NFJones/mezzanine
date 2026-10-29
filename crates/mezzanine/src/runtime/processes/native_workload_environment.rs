@@ -238,6 +238,9 @@ impl NativeLaunchEnvironmentRequirement {
         Self::launcher_fallback("launcher_search_path", "PATH", true);
     /// Pane identity required by one admitted pane-status provider launch.
     pub(crate) const PANE_IDENTITY: Self = Self::workload_required("pane_identity", "MEZ_PANE_ID");
+    /// Runtime-owned agent cwd for workload `PWD`, without changing root evidence.
+    pub(crate) const AGENT_WORKING_DIRECTORY: Self =
+        Self::workload_required("agent_working_directory", "PWD");
 }
 
 /// One fully composed native launch environment.

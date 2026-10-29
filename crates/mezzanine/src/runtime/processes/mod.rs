@@ -3140,6 +3140,27 @@ impl RuntimeSessionService {
         )
     }
 
+    /// Captures native agent launch context with its exact conversation's cwd
+    /// intent. Observed pane-root cwd remains independently available to status
+    /// providers through `native_shell_context_for_pane`; navigation never writes
+    /// the pane's process metadata or process-global working directory.
+    pub(crate) fn native_agent_shell_context_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Result<NativeShellContext> {
+        let context = self.native_shell_context_for_pane(pane_id)?;
+        if self.effective_agent_shell_mode_for_pane(pane_id)
+            == crate::runtime::config::ShellMode::Native
+            && let Some(directory) = self
+                .agent_shell_store()
+                .get(pane_id)
+                .and_then(|session| session.native_working_directory())
+        {
+            return context.with_agent_working_directory(directory);
+        }
+        Ok(context)
+    }
+
     /// Runs the shell classification for pane operation for this subsystem.
     ///
     /// Rendering projects the current evidence epoch without resolving fresh

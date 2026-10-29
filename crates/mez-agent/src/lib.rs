@@ -18,11 +18,13 @@ pub mod action_recovery;
 pub mod action_result;
 /// Provider-independent action-result context and transcript rendering.
 pub mod action_result_context;
+/// Provider-independent agent-shell session state and display policy.
+mod agent_directory;
 /// Agent discovery vocabulary and bounds for the `list_agents` action.
 pub mod agent_discovery;
 /// Provider-independent agent-shell session error contracts.
 pub mod agent_shell;
-/// Provider-independent agent-shell session state and display policy.
+pub use agent_directory::AgentNativeWorkingDirectory;
 pub mod agent_shell_session;
 /// Provider-independent Anthropic Messages request shaping.
 pub mod anthropic;

@@ -6,6 +6,8 @@
 //! sequence frontiers and active raw replay counts are independent: compaction
 //! changes the latter, admitted appends advance both, and restoration installs a
 //! checked pair without deriving sequence identity from provider block counts.
+//! Native navigation intent is runtime-only, belongs to an exact pane and
+//! conversation, and stays separate from observed pane-process cwd and grants.
 
 use std::collections::BTreeMap;
 
@@ -209,6 +211,10 @@ pub struct AgentShellSession {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub pane_id: String,
+    /// Runtime-only native navigation intent, distinct from pane-process cwd.
+    /// Exact pane and conversation identities must match before this value is used;
+    /// durable snapshot/session codecs do not persist or restore this intent.
+    pub native_working_directory: Option<crate::AgentNativeWorkingDirectory>,
     /// Trusted project membership captured when the runtime first binds this
     /// conversation to a canonical project root.
     ///
@@ -341,6 +347,7 @@ impl AgentShellStore {
                 AgentShellSession {
                     session_id: new_agent_session_uuid(),
                     pane_id: pane_id.clone(),
+                    native_working_directory: None,
                     project_scope: None,
                     conversation_kind: AgentConversationKind::Root,
                     display_name: None,
@@ -886,6 +893,7 @@ impl AgentShellStore {
             AgentShellSession {
                 session_id: new_agent_session_uuid(),
                 pane_id: pane_id.to_string(),
+                native_working_directory: None,
                 project_scope: None,
                 conversation_kind: AgentConversationKind::Root,
                 display_name: None,

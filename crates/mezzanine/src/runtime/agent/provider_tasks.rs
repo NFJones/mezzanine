@@ -850,7 +850,7 @@ impl RuntimeSessionService {
         let native_mode = self.effective_agent_shell_mode_for_pane(&turn.pane_id)
             == crate::runtime::config::ShellMode::Native;
         let native_context = native_mode
-            .then(|| self.native_shell_context_for_pane(&turn.pane_id))
+            .then(|| self.native_agent_shell_context_for_pane(&turn.pane_id))
             .transpose()?;
         if !native_mode && self.pane_has_uncertified_foreign_shell_boundary(&turn.pane_id) {
             if self.pane_foreign_shell_bootstrap_has_bounded_progress_owner(&turn.pane_id) {

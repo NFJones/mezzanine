@@ -3,10 +3,11 @@
 //! Native shell mode executes agent actions in a freshly spawned shell
 //! process without writing to or reading from the pane PTY. This module
 //! derives that process's shell path, grammar, environment, and working
-//! directory from the pane's root process through host process inspection
-//! alone. No command is ever executed through the pane shell to build this
-//! context, so the mode keeps working while an alternative screen application
-//! occupies the pane.
+//! initial directory from the pane's root process through host inspection.
+//! An exact runtime agent owner may apply its validated navigation intent to
+//! workload cwd and derived PWD, independently of the root-process observation
+//! used by pane-status providers. Root environment evidence and launcher buckets
+//! remain unchanged. Building a context never executes through the pane PTY.
 
 use std::path::{Path, PathBuf};
 
@@ -20,7 +21,7 @@ use super::native_workload_environment::compose_native_workload_environment;
 #[cfg(test)]
 use super::native_workload_environment::native_ambient_environment;
 use super::native_workload_environment::{
-    NativeLaunchEnvironmentRole, NativeWorkloadEnvironment,
+    NativeLaunchEnvironmentRequirement, NativeLaunchEnvironmentRole, NativeWorkloadEnvironment,
     compose_native_workload_environment_with_whitelist,
 };
 
@@ -42,7 +43,7 @@ pub(crate) struct NativeShellContext {
     classification: ShellClassification,
     /// Composed native workload environment for this launch.
     environment: NativeWorkloadEnvironment,
-    /// Root-process working directory for the spawned shell.
+    /// Initial root-process cwd or explicit owned agent cwd for the spawned shell.
     working_directory: PathBuf,
     /// Environment bucket consumed by the launched process.
     role: NativeLaunchEnvironmentRole,
@@ -86,6 +87,24 @@ impl NativeShellContext {
     /// Returns the working directory for the spawned shell.
     pub(crate) fn working_directory(&self) -> &Path {
         &self.working_directory
+    }
+
+    /// Applies already validated agent navigation without altering root-process
+    /// environment evidence, shell selection or launcher credentials. Runtime
+    /// ownership/mode/filesystem checks remain with the caller. Invalid or
+    /// unrepresentable absolute paths and environment-budget failures reject
+    /// before returning a launch context; this method performs no I/O.
+    pub(crate) fn with_agent_working_directory(mut self, directory: &Path) -> Result<Self> {
+        let text = directory.to_str().filter(|text| !text.chars().any(char::is_control))
+            .filter(|_| directory.is_absolute()).ok_or_else(|| {
+                MezError::invalid_state("agent working directory must be an absolute representable path without controls")
+            })?;
+        self.environment = self.environment.with_required_workload_value(
+            NativeLaunchEnvironmentRequirement::AGENT_WORKING_DIRECTORY,
+            text,
+        )?;
+        self.working_directory = directory.to_path_buf();
+        Ok(self)
     }
 
     /// Returns a copy whose launched process receives one launch-role bucket.
@@ -557,5 +576,58 @@ mod tests {
         )
         .expect_err("missing cwd must fail");
         assert!(error.to_string().contains("working directory"));
+    }
+    /// Native navigation changes only the workload directory and derived PWD.
+    /// Exact root evidence, workload credentials, shell grammar and the launcher
+    /// bucket retain their original ownership rather than becoming cwd evidence.
+    #[test]
+    fn agent_directory_context_preserves_root_and_launcher_evidence() {
+        let original = NativeShellContext::for_test(
+            PathBuf::from("/bin/sh"),
+            vec![entry("PWD", "/pane-root"), entry("TOKEN", "pane-evidence")],
+            PathBuf::from("/pane-root"),
+        );
+        let before = original.clone();
+        let moved = original
+            .with_agent_working_directory(Path::new("/agent-target"))
+            .unwrap();
+        assert_eq!(moved.working_directory(), Path::new("/agent-target"));
+        assert_eq!(
+            moved.workload_environment().workload_value("PWD"),
+            Some("/agent-target")
+        );
+        assert_eq!(
+            moved.workload_environment().workload_value("TOKEN"),
+            Some("pane-evidence")
+        );
+        assert_eq!(moved.environment(), before.environment());
+        assert_eq!(
+            moved.workload_environment().launcher(),
+            before.workload_environment().launcher()
+        );
+        assert_eq!(moved.shell_path(), before.shell_path());
+        assert_eq!(moved.classification(), before.classification());
+        assert_eq!(before.working_directory(), Path::new("/pane-root"));
+    }
+
+    /// The context factory cannot accept a relative or control-bearing path as
+    /// native navigation intent even if a caller bypasses the session recorder.
+    /// No process or filesystem operation is needed to reject these inputs.
+    #[test]
+    fn agent_directory_context_rejects_invalid_launch_directories() {
+        let original = NativeShellContext::for_test(
+            PathBuf::from("/bin/sh"),
+            Vec::new(),
+            PathBuf::from("/pane-root"),
+        );
+        for path in ["relative", "", "/bad\npath", "/bad\0path"] {
+            assert!(
+                original
+                    .clone()
+                    .with_agent_working_directory(Path::new(path))
+                    .is_err(),
+                "{path:?}"
+            );
+        }
     }
 }
